@@ -2,8 +2,6 @@
 
 **Ralph** is a plan-driven agent workflow kit for **Cursor**, **Claude Code**, and **OpenAI Codex**. One markdown plan with `- [ ]` / `- [x]` checklists; runners loop until the plan is done. A shared **orchestrator** runs multi-stage pipelines across any mix of those runtimes.
 
-Install this repo into your project and get the same scripts we use in production.
-
 ## What you get
 
 | Path | Purpose |
@@ -14,7 +12,7 @@ Install this repo into your project and get the same scripts we use in productio
 | `.codex/ralph/` | Codex `exec` plan loop + templates |
 | `ralph-dashboard/` | Optional local UI for plans, artifacts, and logs (same path in this repo and after install) |
 
-Logs and artifacts typically land under `.agents/logs/` and `.agents/artifacts/` (see each runner README under `bundle/`).
+Logs and artifacts typically land under `.agents/logs/` and `.agents/artifacts/` (see each runner README: [.cursor/ralph/README.md](.cursor/ralph/README.md), [.codex/ralph/README.md](.codex/ralph/README.md), or the [bundle](bundle/) tree).
 
 **`repo-context`** is a generic template: edit each runtime's `skills/repo-context/SKILL.md` with your layout, stack, and commands (or merge into one shared path if you prefer).
 
@@ -79,7 +77,7 @@ Requires **bash** and **rsync** (standard on macOS/Linux).
 ## After install
 
 1. **Plan file** &mdash; start from `.ralph/plan.template` or set `"plan"` in each `plan-runner.json`.
-2. **CLIs** &mdash; [Cursor CLI](https://cursor.com/docs/cli/installation), `claude` (Claude Code), or `codex` as needed.
+2. **CLIs** &mdash; [Cursor CLI](https://cursor.com/docs/cli/installation), [Claude Code](https://code.claude.com/docs/en/quickstart) (`claude`), or [Codex CLI](https://developers.openai.com/codex/cli) (`codex`) as needed.
 3. **Prebuilt agents** &mdash; The bundle includes **`ralph-starter`** (minimal) plus role agents aligned with multi-stage workflows: **`research`**, **`architect`**, **`implementation`**, **`code-review`**, **`qa`**, and **`security`** (under `.cursor/agents`, `.claude/agents`, and `.codex/agents` where each runtime ships configs). Use `--agent <name>` with `run-plan.sh` or orchestration JSON. Run `bash .ralph/new-agent.sh` to add more.
 
 ### Ralph dashboard
@@ -97,18 +95,23 @@ Open **http://127.0.0.1:8123** (defaults; use `--host` / `--port` to change). Re
 ## Workflow overview
 
 ```mermaid
-flowchart TD
-    plan["Markdown plan (`- [ ]` todo items)"]
-    runner["Plan runner (Cursor / Claude / Codex)"]
-    agent["Agent (`--agent` folder + context)"]
-    logs["Logs + cleanup (`.agents/logs`, `.ralph/cleanup-plan.sh`)"]
-    plan --> runner
-    runner --> agent
-    agent --> runner
-    runner --> logs
-    logs --> runner
-    runner -->|checks todos| plan
+flowchart LR
+    subgraph loop["Ralph plan loop"]
+        direction TB
+        P[("Markdown plan and todo checkboxes")]
+        R[("Plan runner Cursor Claude Codex")]
+        A[("Agent folder and context")]
+        LG[("Logs and cleanup-plan script")]
+    end
+    P -->|1 read plan pick next open todo| R
+    R -->|2 hand off prompt skills repo context| A
+    A -->|3 replies and tool results next step| R
+    R -->|4 append stdout stderr progress| LG
+    LG -->|5 inspect or resume after failure| R
+    R -->|6 write back checked todos repeat| P
 ```
+
+Follow **1 through 4** and **6** on every todo cycle; use **5** when you need logs to debug or resume.
 
 The runner repeatedly pulls the next unchecked checkbox, summarizes progress in the logs, and optionally hands the prompt to a configured agent before looping until every `- [ ]` becomes `- [x]`. You can find the full checklist-to-loop logic (and supporting scripts) in [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md).
 
@@ -120,7 +123,7 @@ The runner repeatedly pulls the next unchecked checkbox, summarizes progress in 
    cp .ralph/plan.template PLAN.md
    ```
 
-2. Use assets like `.agents/artifacts/README.md` to describe required sections for research, architecture, implementation, QA, or security handoffs.
+2. Use assets like `.agents/artifacts/README.md` (created when you install or scaffold artifacts) to describe required sections for research, architecture, implementation, QA, or security handoffs.
 
 3. If you need a research → implementation → review pipeline, break the work into stage plans (`.agents/orchestration-plans/*.plan.md`) and declare them in a JSON `.orch.json` using `.ralph/orchestration.template.json`.
 
@@ -157,10 +160,10 @@ Each stage can run Cursor, Claude, or Codex independently; the orchestrator enfo
 
 ## Documentation in the bundle
 
-- **[docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)** &mdash; plan loop, orchestrator, new-agent, cleanup  
-- `.cursor/ralph/README.md` &mdash; Cursor runner internals and portability notes  
-- `.codex/ralph/README.md` &mdash; Codex runner and env  
-- Per-runtime `run-plan.sh --help` where supported  
+- [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) &mdash; plan loop, orchestrator, new-agent, cleanup  
+- [.cursor/ralph/README.md](.cursor/ralph/README.md) &mdash; Cursor runner internals and portability notes  
+- [.codex/ralph/README.md](.codex/ralph/README.md) &mdash; Codex runner and env  
+- Per-runtime `run-plan.sh --help` where supported (under `.cursor/ralph/`, `.claude/ralph/`, `.codex/ralph/`)  
 
 For orchestration JSON shape, read the header of `.ralph/orchestrator.sh` and `.ralph/orchestration.template.json`.
 

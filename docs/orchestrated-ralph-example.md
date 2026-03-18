@@ -102,3 +102,45 @@ After every stage:
 - Check `.agents/logs/orchestrator-<namespace>.log` for per-stage stdout/stderr.
 - Confirm artifacts under `.agents/artifacts/{{ARTIFACT_NS}}/` are created and contain the sections described in `.agents/artifacts/README.md`.
 - Use `.ralph/cleanup-plan.sh <namespace>` before rerunning the orchestrator if you need to reset logs/artifacts.
+
+## 5. Orchestration lifecycle (sequence)
+
+The diagram below shows a minimal chain: research, implementation (fed by research), then code review. **Code review** rejection uses `loopControl.loopBackTo: implementation` until pass or `maxIterations`. Stages can use different `runtime` values (Cursor, Claude, Codex).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Operator
+    participant O as Orchestrator
+    participant RS as Research stage
+    participant IM as Implementation stage
+    participant CR as Code review stage
+    participant FS as Artifact files
+
+    U->>O: orchestrator.sh --orchestration *.orch.json
+    O->>RS: Run research plan (runtime + research agent)
+    RS->>FS: Write research artifact file
+    RS-->>O: Stage exit
+    O->>O: Verify research artifact non-empty
+
+    O->>IM: Run implementation plan uses research artifact
+    IM->>FS: Write implementation handoff artifact
+    IM-->>O: Stage exit
+    O->>O: Verify implementation handoff artifact
+
+    Note over O,CR: Code review rejection loops back to implementation until pass or maxIterations
+
+    O->>CR: Run code-review plan uses implementation handoff
+    CR->>FS: Write code-review artifact file
+    CR-->>O: Stage exit
+    alt Code review rejects PR changes-required
+        O->>IM: loopBackTo implementation
+        IM->>FS: Update implementation handoff artifact
+        IM-->>O: Stage exit
+        O->>CR: Re-run code-review plan
+        CR->>FS: Update code-review artifact file
+        CR-->>O: Stage exit
+    else Code review passes
+        O-->>U: Pipeline complete (check orchestrator log)
+    end
+```

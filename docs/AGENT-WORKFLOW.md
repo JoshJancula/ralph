@@ -161,4 +161,4 @@ Each runtime includes `select-model.sh` next to `run-plan.sh`. Runners respect `
 
 ## Cleanup
 
-After a run: `.ralph/cleanup-plan.sh <artifact-namespace>` to purge logs and artifacts before retrying a plan or pipeline.
+After a run you can: `.ralph/cleanup-plan.sh <artifact-namespace>` to purge logs and artifacts.
