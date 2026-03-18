@@ -1,0 +1,13 @@
+{
+  "name": "security",
+  "model": "claude-sonnet-4-5",
+  "description": "Reviews changed code scanning for security vulnerabilities. Writes security.md summarizing findings and blocking issues.",
+  "rules": [".claude/rules/no-emoji.md"],
+  "skills": [".claude/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/security.md",
+      "required": true
+    }
+  ]
+}

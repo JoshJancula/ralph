@@ -1,0 +1,13 @@
+{
+  "name": "security",
+  "description": "audits code for security vulnerabilities",
+  "model": "gpt-5.1-codex-mini",
+  "rules": [".codex/rules/no-emoji.md"],
+  "skills": [".codex/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/security.md",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "implementation",
+  "model": "claude-sonnet-4",
+  "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks.",
+  "rules": [".claude/rules/no-emoji.md"],
+  "skills": [".claude/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+      "required": true
+    },
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": false
+    }
+  ]
+}

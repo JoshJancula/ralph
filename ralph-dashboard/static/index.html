@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ralph Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local operator dashboard</p>
+          <h1>Ralph Dashboard</h1>
+        </div>
+        <div class="controls">
+          <button id="refresh-button" type="button">Refresh</button>
+          <label class="toggle" for="auto-refresh">
+            <input id="auto-refresh" type="checkbox" />
+            Auto-refresh logs
+          </label>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="section">
+            <p class="section-label">Roots</p>
+            <nav class="root-tabs">
+              <button class="root-tab active" data-root="plans" type="button">
+                Orchestration Plans
+              </button>
+              <button class="root-tab" data-root="artifacts" type="button">
+                Artifacts
+              </button>
+              <button class="root-tab" data-root="logs" type="button">
+                Logs
+              </button>
+            </nav>
+          </div>
+
+          <div class="section">
+            <div class="section-heading">
+              <p class="section-label">Browser</p>
+              <button id="up-button" type="button">Up</button>
+            </div>
+            <p id="current-path" class="path-display"></p>
+            <ul id="entry-list" class="entry-list"></ul>
+          </div>
+        </aside>
+
+        <section class="viewer">
+          <div class="viewer-header">
+            <div>
+              <p class="section-label">File</p>
+              <p id="file-path" class="path-display">Select a file to view its contents.</p>
+            </div>
+            <p id="status" class="status"></p>
+          </div>
+          <pre id="file-content" class="file-content"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

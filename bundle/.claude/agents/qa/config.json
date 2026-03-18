@@ -1,0 +1,17 @@
+{
+  "name": "qa",
+  "model": "claude-sonnet-4",
+  "description": "Tests code changes. Produces qa-handoff.md summarizing if the changes meet the acceptance criteria",
+  "rules": [".claude/rules/no-emoji.md"],
+  "skills": [".claude/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/qa-handoff.md",
+      "required": true
+    },
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": false
+    }
+  ]
+}

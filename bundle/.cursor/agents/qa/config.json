@@ -1,0 +1,13 @@
+{
+  "name": "qa",
+  "description": "Tests code changes and reports back if the changes indeed do what the task asked for.",
+  "model": "gpt-5.1-codex-mini",
+  "rules": [".cursor/rules/no-emoji.mdc"],
+  "skills": [".cursor/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "name": "example-pipeline",
+  "namespace": "example",
+  "description": "Example multi-stage orchestration pipeline: research, architect, implementation, code-review, qa",
+  "stages": [
+    {
+      "id": "research",
+      "agent": "research",
+      "runtime": "cursor",
+      "planTemplate": ".ralph/plan.template",
+      "plan": ".agents/orchestration-plans/example-01-research.plan.md",
+      "inputArtifacts": [],
+      "outputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "required": true,
+          "description": "Research summary, findings, open questions, and suggested next steps."
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "architect",
+      "agent": "architect",
+      "runtime": "cursor",
+      "planTemplate": ".ralph/plan.template",
+      "plan": ".agents/orchestration-plans/example-02-architect.plan.md",
+      "inputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+          "required": true,
+          "description": "Technical architecture and design decisions derived from research."
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "implementation",
+      "agent": "implementation",
+      "runtime": "cursor",
+      "planTemplate": ".ralph/plan.template",
+      "plan": ".agents/orchestration-plans/example-03-implementation.plan.md",
+      "inputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md"
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+          "required": true,
+          "description": "Implementation handoff: what changed, how to verify, and follow-ups."
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "code-review",
+      "agent": "code-review",
+      "runtime": "cursor",
+      "planTemplate": ".ralph/plan.template",
+      "plan": ".agents/orchestration-plans/example-04-code-review.plan.md",
+      "inputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+          "required": true,
+          "description": "Code review findings, risks, and required or suggested fixes."
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+          "required": true
+        }
+      ],
+      "loopControl": {
+        "loopBackTo": "implementation",
+        "maxIterations": 3
+      }
+    },
+    {
+      "id": "qa",
+      "agent": "qa",
+      "runtime": "cursor",
+      "planTemplate": ".ralph/plan.template",
+      "plan": ".agents/orchestration-plans/example-05-qa.plan.md",
+      "inputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"
+        }
+      ],
+      "outputArtifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/qa.md",
+          "required": true,
+          "description": "QA verification notes, test coverage, and sign-off or blocking issues."
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".agents/artifacts/{{ARTIFACT_NS}}/qa.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

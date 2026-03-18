@@ -1,0 +1,17 @@
+{
+  "name": "architect",
+  "model": "claude-sonnet-4",
+  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Does not implement application code unless explicitly scoped.",
+  "rules": [".claude/rules/no-emoji.md"],
+  "skills": [".claude/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": true
+    },
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|MultiEdit|Glob|Grep|LS",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/block-env-reads.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

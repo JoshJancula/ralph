@@ -1,0 +1,11 @@
+# PLAN_TITLE_HERE
+
+Execute one TODO at a time. After each, run the verification steps this project expects (build, test, lint, or equivalents as documented in README or below); fix until they pass, then mark `[x]` and continue. For additional context see the original plan at PATH_TO_PLAN (if exists)
+
+# Environment
+- Use the language versions, tools, and setup steps this repository documents (README, CONTRIBUTING, container config, etc.).
+
+## TODOs
+
+- [ ] This is a task to do something.
+- [ ] This is a task to do something else.

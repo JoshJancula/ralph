@@ -1,0 +1,13 @@
+{
+  "name": "research",
+  "model": "auto",
+  "description": "Explores the codebase and docs, summarizes findings, and produces research.md for downstream agents. Read-heavy; avoids large refactors or implementation.",
+  "rules": [".codex/rules/no-emoji.md"],
+  "skills": [".codex/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+      "required": true
+    }
+  ]
+}
