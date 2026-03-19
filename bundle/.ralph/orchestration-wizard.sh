@@ -123,6 +123,9 @@ read_pipeline_info() {
   [[ -n "$ns" ]] || { echo "Namespace cannot be empty after sanitization" >&2; exit 1; }
   pipeline_name="$name"
   namespace="$ns"
+  pipeline_description_default="Multi-stage pipeline for $pipeline_name"
+  read -rp "Description [default $pipeline_description_default]: " description_input
+  pipeline_description="${description_input:-$pipeline_description_default}"
 }
 
 read_stages() {
@@ -139,6 +142,56 @@ read_stages() {
     raw="$(echo "$raw" | tr -d '[:space:]')"
     [[ -n "$raw" ]] || continue
     selected_stages+=("$raw")
+  done
+}
+
+choose_stage_id_from_list() {
+  local prompt="$1"
+  local allow_empty="${2:-0}"
+  local stage_opts=("$@")
+  stage_opts=("${stage_opts[@]:2}")
+  local answer picked
+  local idx=1
+  local stage
+  echo "Available stages: ${stage_opts[*]}" >&2
+  if [[ "$allow_empty" == "1" ]]; then
+    printf '   0) none\n' >&2
+  fi
+  for stage in "${stage_opts[@]}"; do
+    printf '  %2d) %s\n' "$idx" "$stage" >&2
+    idx=$((idx + 1))
+  done
+  while true; do
+    read -rp "$prompt" answer
+    if [[ -z "$answer" ]]; then
+      if [[ "$allow_empty" == "1" ]]; then
+        printf ''
+        return
+      fi
+      echo "Selection is required." >&2
+      continue
+    fi
+    if [[ "$allow_empty" == "1" && "$answer" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
+      printf ''
+      return
+    fi
+    if [[ "$allow_empty" == "1" && "$answer" == "0" ]]; then
+      printf ''
+      return
+    fi
+    if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= ${#stage_opts[@]} )); then
+      picked="${stage_opts[$((answer - 1))]}"
+      printf '%s' "$picked"
+      return
+    fi
+    answer="$(sanitize "$answer")"
+    for stage in "${stage_opts[@]}"; do
+      if [[ "$answer" == "$stage" ]]; then
+        printf '%s' "$stage"
+        return
+      fi
+    done
+    echo "Invalid stage selection. Choose a listed number or stage id." >&2
   done
 }
 
@@ -235,34 +288,45 @@ select_agent() {
     agents+=("$line")
   done < <(list_agents "$runtime")
 
-  if [[ ${#agents[@]} -eq 0 ]]; then
-    local custom_model
-    echo "No existing $runtime agents found. Using implicit custom agent id: custom." >&2
-    echo "Custom agent will use default $runtime runner skills and rules." >&2
-    custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
-    printf '%s\t1\t%s' "custom" "$custom_model"
-    return
-  fi
-
   printf 'Available %s agents:\n' "$runtime" >&2
   local idx=1
   local default_index=1
   local agent
-  for agent in "${agents[@]}"; do
-    [[ "$agent" == "$default" ]] && default_index="$idx"
-    printf '  %2d) %s\n' "$idx" "$agent" >&2
-    idx=$((idx + 1))
-  done
+  if [[ ${#agents[@]} -gt 0 ]]; then
+    for agent in "${agents[@]}"; do
+      [[ "$agent" == "$default" ]] && default_index="$idx"
+      printf '  %2d) %s\n' "$idx" "$agent" >&2
+      idx=$((idx + 1))
+    done
+  else
+    echo "  (no prebuilt agents found)" >&2
+  fi
+  local custom_index="$idx"
+  printf '  %2d) custom\n' "$custom_index" >&2
+  echo "Pick custom to use runtime defaults and choose a model." >&2
 
   local answer
   while true; do
     read -rp "Select existing agent number [default $default_index]: " answer
     answer="${answer:-$default_index}"
+    if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer == custom_index )); then
+      local custom_model
+      custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
+      printf '%s\t1\t%s' "custom" "$custom_model"
+      return
+    fi
     if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= ${#agents[@]} )); then
       printf '%s\t0\t' "${agents[$((answer - 1))]}"
       return
     fi
-    echo "Invalid selection. Enter a number from 1 to ${#agents[@]}." >&2
+    answer="$(sanitize "$answer")"
+    if [[ "$answer" == "custom" ]]; then
+      local custom_model
+      custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
+      printf '%s\t1\t%s' "custom" "$custom_model"
+      return
+    fi
+    echo "Invalid selection. Enter a listed number or 'custom'." >&2
   done
 }
 
@@ -284,15 +348,52 @@ PY
 }
 
 escape_json() {
-  python3 - <<'PY'
+  python3 - <<'PY' "${1-}"
 import json,sys
-print(json.dumps(sys.stdin.read()))
+print(json.dumps(sys.argv[1]))
 PY
+}
+
+supports_color=0
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+  colors="$(tput colors 2>/dev/null || printf '0')"
+  if [[ "${colors:-0}" -ge 8 ]]; then
+    supports_color=1
+  fi
+fi
+if (( supports_color == 1 )); then
+  c_reset="$(tput sgr0)"
+  c_bold="$(tput bold)"
+  c_blue="$(tput setaf 4)"
+  c_yellow="$(tput setaf 3)"
+else
+  c_reset=""
+  c_bold=""
+  c_blue=""
+  c_yellow=""
+fi
+
+print_info() {
+  printf '%s%s%s%s\n' "$c_blue" "$c_bold" "$1" "$c_reset"
+}
+
+print_hint() {
+  printf '%s%s%s\n' "$c_yellow" "$1" "$c_reset"
+}
+
+print_step() {
+  printf '\n%s%s[%s]%s %s\n' "$c_blue" "$c_bold" "$1" "$c_reset" "$2"
 }
 
 echo "Note: this wizard copies .ralph/plan.template and scaffolds .agents/orchestration-plans/<namespace> plus artifacts."
 
+print_step "1/6" "Pipeline metadata"
+print_hint "- Pick a short name we can use in file paths."
 read_pipeline_info
+
+print_step "2/6" "Stage list"
+print_hint "- Type stage names with commas, like: plan,test,qa"
+print_hint "- Press Enter if you want the default stage list."
 read_stages
 stages=()
 if [[ ${#selected_stages[@]} -gt 0 ]]; then
@@ -309,11 +410,15 @@ stage_agents=()
 stage_agent_sources=()
 stage_descriptions=()
 stage_models=()
+stage_input_sources=()
 
+print_step "3/6" "Configure each stage"
+print_hint "- For each stage, pick where it runs and which helper agent to use."
+print_hint "- Pick 'custom' if you want to choose a model yourself."
 for stage in "${stages[@]}"; do
   stage_id="$(sanitize "$stage")"
   [[ -n "$stage_id" ]] || { echo "Stage \"$stage\" sanitizes to empty; skip" >&2; exit 1; }
-  printf '\nConfiguring stage "%s"\n' "$stage_id"
+  print_info "Configuring stage \"$stage_id\""
   runtime="$(select_runtime "$stage_id")"
   agent_selection="$(select_agent "$runtime" "$stage_id")"
   IFS=$'\t' read -r agent agent_is_custom custom_model_from_picker <<< "$agent_selection"
@@ -333,50 +438,201 @@ for stage in "${stages[@]}"; do
   stage_models+=("$stage_model")
 done
 
-pipeline_description_default="Multi-stage pipeline for $pipeline_name"
-read -rp "Description (press enter to use default): " description
-description="${description:-$pipeline_description_default}"
+description="${pipeline_description:-Multi-stage pipeline for $pipeline_name}"
+if [[ -z "$pipeline_name" ]]; then
+  pipeline_name="$namespace"
+fi
+if [[ -z "$namespace" ]]; then
+  namespace="$(sanitize "$pipeline_name")"
+fi
 
-loop_stage=""
-loop_back=""
-loop_iterations=2
-read -rp "Add loop control for a stage? [y/N]: " loop_choice
-if [[ "$loop_choice" =~ ^[Yy] ]]; then
-  echo "Available stages: ${stages[*]}"
-  read -rp "Stage that should loop (id): " loop_stage_input
-  loop_stage="$(sanitize "$loop_stage_input")"
-  if [[ -z "$loop_stage" ]]; then
-    loop_stage=""
-  else
-    read -rp "Loop back to which stage (id): " loop_back_input
-    loop_back="$(sanitize "$loop_back_input")"
-    if [[ -z "$loop_back" ]]; then
-      loop_stage=""
+stage_ids=()
+for stage in "${stages[@]}"; do
+  stage_ids+=("$(sanitize "$stage")")
+done
+
+print_step "4/6" "Stage input dependencies"
+print_info "Choose stage inputs (writes to: inputFromStages)"
+print_hint "- Use this so a stage knows which earlier artifacts to read."
+print_hint "- This is how one agent uses output from a previous agent."
+print_hint "- Example: plan stage artifacts -> implementation stage."
+print_hint "- Example: implementation artifacts -> qa or code-review stage."
+print_hint "- Type numbers or stage names, with commas or spaces."
+print_hint "- Type 'none' for no handoff, or Enter for the default."
+read -rp "Set custom stage inputs? (inputFromStages) [y/N]: " handoff_choice
+if [[ "$handoff_choice" =~ ^[Yy] ]]; then
+  print_info "Available stages for stage inputs (inputFromStages)"
+  for idx in "${!stage_ids[@]}"; do
+    printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}"
+  done
+  print_hint "Type numbers or stage names. Commas and spaces both work."
+  for idx in "${!stage_ids[@]}"; do
+    current_stage="${stage_ids[$idx]}"
+    default_input=""
+    if (( idx > 0 )); then
+      default_input="${stage_ids[$((idx - 1))]}"
+    fi
+    read -rp "Which earlier stages should \"$current_stage\" read from? (inputFromStages${default_input:+, default $default_input}; use 'none' for no input): " input_line
+    if [[ -z "$input_line" ]]; then
+      input_line="$default_input"
+    fi
+    parsed_inputs=()
+    normalized_input="$(printf '%s' "$input_line" | tr ',' ' ')"
+    if [[ -n "$normalized_input" ]]; then
+      IFS=' ' read -r -a raw_inputs <<< "$normalized_input"
+      for raw_input in "${raw_inputs[@]-}"; do
+        raw_input="$(printf '%s' "$raw_input" | tr -d '[:space:]')"
+        if [[ "$raw_input" =~ ^[0-9]+$ ]] && (( raw_input >= 1 && raw_input <= ${#stage_ids[@]} )); then
+          candidate="${stage_ids[$((raw_input - 1))]}"
+        else
+          candidate="$(sanitize "$raw_input")"
+        fi
+        [[ -n "$candidate" ]] || continue
+        if [[ "$candidate" == "none" || "$candidate" == "no-input" || "$candidate" == "no-inputs" ]]; then
+          parsed_inputs=()
+          break
+        fi
+        if [[ "$candidate" == "$current_stage" ]]; then
+          echo "Ignoring self-reference for $current_stage in inputFromStages." >&2
+          continue
+        fi
+        is_valid=0
+        for stage_opt in "${stage_ids[@]}"; do
+          if [[ "$candidate" == "$stage_opt" ]]; then
+            is_valid=1
+            break
+          fi
+        done
+        if (( is_valid == 1 )); then
+          already_added=0
+          for existing in "${parsed_inputs[@]-}"; do
+            if [[ "$existing" == "$candidate" ]]; then
+              already_added=1
+              break
+            fi
+          done
+          (( already_added == 0 )) && parsed_inputs+=("$candidate")
+        else
+          echo "Ignoring unknown stage id \"$candidate\" for $current_stage input mapping." >&2
+        fi
+      done
+    fi
+    if [[ ${#parsed_inputs[@]} -gt 0 ]]; then
+      stage_input_sources+=("$(IFS=,; printf '%s' "${parsed_inputs[*]}")")
     else
-      read -rp "Max iterations [default 2]: " loop_iterations_input
+      stage_input_sources+=("")
+    fi
+  done
+else
+  for idx in "${!stage_ids[@]}"; do
+    if (( idx == 0 )); then
+      stage_input_sources+=("")
+    else
+      stage_input_sources+=("${stage_ids[$((idx - 1))]}")
+    fi
+  done
+fi
+
+loop_sources=()
+loop_targets=()
+loop_max_iterations=()
+print_step "5/6" "Optional loop rules"
+print_hint "- Use loop rules for review/testing stages that may find issues."
+print_hint "- If a review/test stage finds a problem, it can send work back."
+print_hint "- If review/test says everything is good, pipeline moves forward."
+print_hint "- This writes to loopControl (loopBackTo + maxIterations) in JSON."
+print_hint "- You can set loops quickly with a list, or go stage-by-stage."
+print_hint "- Quick list examples: 2,4 or review,qa (choose loop source stages)."
+print_hint "- Then pick where each source stage should send work back."
+print_hint "- In loop prompts, Enter (or 0/none) means no loop."
+read -rp "Add loop rules? (loopControl) [y/N]: " loop_choice
+if [[ "$loop_choice" =~ ^[Yy] ]]; then
+  print_info "Loop setup mode (loopControl)"
+  print_hint "1) Pick source stages in one line, then configure each picked stage."
+  print_hint "2) Walk every stage one-by-one and choose loop targets."
+  read -rp "Choose mode [2]: " loop_mode
+  loop_mode="${loop_mode:-2}"
+  if [[ "$loop_mode" == "1" ]]; then
+    echo "Available stages for loop sources:" >&2
+    for idx in "${!stage_ids[@]}"; do
+      printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}" >&2
+    done
+    read -rp "Stages that should loop (numbers/names, comma or space; Enter/none for no loops): " loop_sources_line
+    loop_sources_line="${loop_sources_line:-none}"
+    normalized_sources="$(printf '%s' "$loop_sources_line" | tr ',' ' ')"
+    selected_loop_sources=()
+    IFS=' ' read -r -a source_tokens <<< "$normalized_sources"
+    for source_token in "${source_tokens[@]-}"; do
+      source_token="$(printf '%s' "$source_token" | tr -d '[:space:]')"
+      [[ -n "$source_token" ]] || continue
+      if [[ "$source_token" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
+        selected_loop_sources=()
+        break
+      fi
+      if [[ "$source_token" =~ ^[0-9]+$ ]] && (( source_token >= 1 && source_token <= ${#stage_ids[@]} )); then
+        source_stage="${stage_ids[$((source_token - 1))]}"
+      else
+        source_stage="$(sanitize "$source_token")"
+      fi
+      is_valid=0
+      for stage_opt in "${stage_ids[@]}"; do
+        if [[ "$source_stage" == "$stage_opt" ]]; then
+          is_valid=1
+          break
+        fi
+      done
+      if (( is_valid == 0 )); then
+        echo "Ignoring unknown loop source \"$source_token\"." >&2
+        continue
+      fi
+      already_added=0
+      for existing_source in "${selected_loop_sources[@]-}"; do
+        if [[ "$existing_source" == "$source_stage" ]]; then
+          already_added=1
+          break
+        fi
+      done
+      (( already_added == 0 )) && selected_loop_sources+=("$source_stage")
+    done
+
+    for loop_stage in "${selected_loop_sources[@]-}"; do
+      echo "" >&2
+      loop_back="$(choose_stage_id_from_list "Send \"$loop_stage\" back to which stage? (loopBackTo, number/id, Enter for none): " 1 "${stage_ids[@]}")"
+      if [[ -z "$loop_back" ]]; then
+        echo "No loop target set for $loop_stage. Skipping this loop rule." >&2
+        continue
+      fi
+      read -rp "Max iterations for \"$loop_stage\" [default 2]: " loop_iterations_input
       loop_iterations="${loop_iterations_input:-2}"
       if ! [[ "$loop_iterations" =~ ^[0-9]+$ ]]; then
+        echo "Invalid number. Using 2." >&2
         loop_iterations=2
       fi
-    fi
+      loop_sources+=("$loop_stage")
+      loop_targets+=("$loop_back")
+      loop_max_iterations+=("$loop_iterations")
+    done
+  else
+    for loop_stage in "${stage_ids[@]}"; do
+      echo "" >&2
+      loop_back="$(choose_stage_id_from_list "Send \"$loop_stage\" back to which stage? (loopBackTo, number/id, Enter for none): " 1 "${stage_ids[@]}")"
+      if [[ -z "$loop_back" ]]; then
+        continue
+      fi
+      read -rp "Max iterations for \"$loop_stage\" [default 2]: " loop_iterations_input
+      loop_iterations="${loop_iterations_input:-2}"
+      if ! [[ "$loop_iterations" =~ ^[0-9]+$ ]]; then
+        echo "Invalid number. Using 2." >&2
+        loop_iterations=2
+      fi
+      loop_sources+=("$loop_stage")
+      loop_targets+=("$loop_back")
+      loop_max_iterations+=("$loop_iterations")
+    done
   fi
 fi
 
-if [[ -n "$loop_stage" ]]; then
-  loop_stage_found=0
-  loop_back_found=0
-  for stage in "${stages[@]}"; do
-    sanitized_stage="$(sanitize "$stage")"
-    [[ "$loop_stage" == "$sanitized_stage" ]] && loop_stage_found=1
-    [[ "$loop_back" == "$sanitized_stage" ]] && loop_back_found=1
-  done
-  if (( loop_stage_found == 0 || loop_back_found == 0 )); then
-    echo "Loop control targets not found in configured stages; ignoring loop control."
-    loop_stage=""
-    loop_back=""
-  fi
-fi
-
+print_step "6/6" "Generate orchestration files"
 plan_dir="$workspace/.agents/orchestration-plans/$namespace"
 artifact_dir="$workspace/.agents/artifacts/$namespace"
 orch_file="$plan_dir/$namespace.orch.json"
@@ -402,12 +658,14 @@ for idx in "${!stages[@]}"; do
 
   stage_desc="${stage_descriptions[$idx]}"
   stage_model="${stage_models[$idx]}"
+  stage_input_list="${stage_input_sources[$idx]}"
   if [[ ! -f "$plan_abs_path" ]]; then
     plan_title="$(printf '%s %s stage plan for %s' "$namespace" "$stage_label" "$pipeline_name")"
     sed "s/PLAN_TITLE_HERE/$(escape_sed "$plan_title")/" "$plan_template" > "$plan_abs_path"
     {
       printf '\n## Stage overview\n- Stage: %s\n- Runtime: %s\n- Agent: %s\n' "$stage_label" "$runtime" "$agent"
       [[ -n "$stage_desc" ]] && printf '%s\n' "- Description: $stage_desc"
+      [[ -n "$stage_input_list" ]] && printf '%s\n' "- Input from stages: $stage_input_list"
       [[ -n "$stage_model" ]] && printf '%s\n' "- Model: $stage_model"
     } >> "$plan_abs_path"
     echo "Created plan $plan_rel_path"
@@ -417,25 +675,41 @@ for idx in "${!stages[@]}"; do
 
   entry="    {\n      \"id\": \"$stage_label\",\n      \"runtime\": \"$runtime\",\n      \"agent\": \"$agent\",\n      \"agentSource\": \"$agent_source\",\n      \"plan\": \"$plan_rel_path\",\n      \"artifacts\": [\n        {\n          \"path\": \"$artifact_path\",\n          \"required\": true\n        }\n      ]"
   if [[ -n "$stage_desc" ]]; then
-    desc_json="$(printf '%s' "$stage_desc" | escape_json)"
+    desc_json="$(escape_json "$stage_desc")"
     entry="$entry,\n      \"description\": $desc_json"
   fi
   if [[ -n "$stage_model" ]]; then
-    model_json="$(printf '%s' "$stage_model" | escape_json)"
+    model_json="$(escape_json "$stage_model")"
     entry="$entry,\n      \"model\": $model_json"
   fi
 
-  if [[ "$stage_label" == "$loop_stage" ]]; then
-    entry="$entry,\n      \"loopControl\": {\n        \"loopBackTo\": \"$loop_back\",\n        \"maxIterations\": $loop_iterations\n      }"
+  if [[ -n "$stage_input_list" ]]; then
+    input_json_items=()
+    IFS=',' read -r -a input_stage_arr <<< "$stage_input_list"
+    for input_stage in "${input_stage_arr[@]}"; do
+      input_stage="$(sanitize "$input_stage")"
+      [[ -n "$input_stage" ]] || continue
+      input_json_items+=("\"$input_stage\"")
+    done
+    if [[ ${#input_json_items[@]} -gt 0 ]]; then
+      entry="$entry,\n      \"inputFromStages\": [$(IFS=', '; printf '%s' "${input_json_items[*]}")]"
+    fi
   fi
+
+  for loop_idx in "${!loop_sources[@]}"; do
+    if [[ "$stage_label" == "${loop_sources[$loop_idx]}" ]]; then
+      entry="$entry,\n      \"loopControl\": {\n        \"loopBackTo\": \"${loop_targets[$loop_idx]}\",\n        \"maxIterations\": ${loop_max_iterations[$loop_idx]}\n      }"
+      break
+    fi
+  done
 
   entry="$entry\n    }"
   stage_entries+=("$entry")
 done
 
-name_json="$(printf '%s' "$pipeline_name" | escape_json)"
-namespace_json="$(printf '%s' "$namespace" | escape_json)"
-description_json="$(printf '%s' "$description" | escape_json)"
+name_json="$(escape_json "$pipeline_name")"
+namespace_json="$(escape_json "$namespace")"
+description_json="$(escape_json "$description")"
 
 printf '{\n  "name": %s,\n  "namespace": %s,\n  "description": %s,\n  "stages": [\n' "$name_json" "$namespace_json" "$description_json" > "$orch_file"
 
@@ -450,7 +724,7 @@ done
 
 printf '  ]\n}\n' >> "$orch_file"
 
-echo -e "\nCreated orchestration $orch_file with ${total_steps} stage(s)."
+print_info "Created orchestration $orch_file with ${total_steps} stage(s)."
 echo "Edit the plans under $plan_dir, add TODOs, and run:"
 echo ".ralph/orchestrator.sh --orchestration $orch_file"
 echo ""

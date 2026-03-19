@@ -284,8 +284,29 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   # Parse each stage from JSON array
   num_stages="$(jq '.stages | length' "$ORCH_FILE" 2>/dev/null || echo 0)"
-  for ((idx = 0; idx < num_stages; idx++)); do
+  declare -A stage_index_by_id=()
+  declare -A stage_iteration_by_id=()
+  for ((map_idx = 0; map_idx < num_stages; map_idx++)); do
+    map_stage_id="$(jq -r ".stages[$map_idx].id // empty" "$ORCH_FILE" 2>/dev/null || echo "")"
+    map_stage_id="$(printf '%s' "$map_stage_id" | tr '[:upper:]' '[:lower:]')"
+    map_stage_id="$(printf '%s' "$map_stage_id" | tr -c 'a-z0-9-' '-')"
+    map_stage_id="$(printf '%s' "$map_stage_id" | sed 's/-\+/-/g; s/^-//; s/-$//')"
+    [[ -n "$map_stage_id" ]] && stage_index_by_id["$map_stage_id"]="$map_idx"
+  done
+
+  idx=0
+  while (( idx < num_stages )); do
     stage="$(jq ".stages[$idx]" "$ORCH_FILE" 2>/dev/null)" || continue
+    stage_id="$(echo "$stage" | jq -r '.id // empty' 2>/dev/null || echo "")"
+    stage_id="$(printf '%s' "$stage_id" | tr '[:upper:]' '[:lower:]')"
+    stage_id="$(printf '%s' "$stage_id" | tr -c 'a-z0-9-' '-')"
+    stage_id="$(printf '%s' "$stage_id" | sed 's/-\+/-/g; s/^-//; s/-$//')"
+    if [[ -n "$stage_id" ]]; then
+      stage_iter="${stage_iteration_by_id[$stage_id]:-1}"
+    else
+      stage_iter=1
+    fi
+    export STAGE_ITERATION="$stage_iter"
 
     runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
     if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
@@ -443,6 +464,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     if [[ -n "$_dry_ack" ]]; then
       echo "  humanAck (only if ORCHESTRATOR_HUMAN_ACK=1): $(expand_artifact_tokens "$_dry_ack")"
     fi
+    idx=$((idx + 1))
     continue
   fi
 
@@ -591,8 +613,8 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     log "humanAck OK: $human_ack_abs"
   fi
 
-  # Check for loop control (feedback loops for code review, etc.)
-  # (Must not use "local" here: this block is in a top-level for-loop, not a function.)
+  # Check for loop control (feedback loops for review stages).
+  # Loop-back happens only when review status is not approved and iteration budget remains.
   loop_decision="proceed"
   if [[ "$agent" == "code-review" ]] || echo "$stage" | jq -e '.loopControl' >/dev/null 2>&1; then
     loop_artifact="${EXPECTED_ARTIFACT_PATHS[0]-}"
@@ -600,19 +622,28 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
     if [[ "$loop_result" == loop:* ]]; then
       loop_decision="$loop_result"
-      IFS=: read -r _ loop_back_agent loop_iter <<< "$loop_result"
-      log "step $step_index triggers loop back to $loop_back_agent (iteration $loop_iter)"
+      IFS=: read -r _ loop_back_stage loop_iter <<< "$loop_result"
+      loop_back_stage="$(printf '%s' "$loop_back_stage" | tr '[:upper:]' '[:lower:]')"
+      loop_back_stage="$(printf '%s' "$loop_back_stage" | tr -c 'a-z0-9-' '-')"
+      loop_back_stage="$(printf '%s' "$loop_back_stage" | sed 's/-\+/-/g; s/^-//; s/-$//')"
+      if [[ -n "$stage_id" ]]; then
+        stage_iteration_by_id["$stage_id"]="$loop_iter"
+      fi
+      log "step $step_index triggers loop back to $loop_back_stage (iteration $loop_iter)"
       echo -e "${C_Y}Step $step_index completed with feedback loop.${C_RST}"
-      echo -e "${C_Y}Looping back to: $loop_back_agent (iteration $loop_iter)${C_RST}"
-
-      # Mark this for resuming at the loop-back stage on next run
-      # (In practice, user would re-run orchestrator; the JSON would stay the same)
-      continue  # Skip to next stage in array (will be processed in order)
+      echo -e "${C_Y}Looping back to: $loop_back_stage (iteration $loop_iter)${C_RST}"
+      if [[ -n "${stage_index_by_id[$loop_back_stage]:-}" ]]; then
+        idx="${stage_index_by_id[$loop_back_stage]}"
+        continue
+      fi
+      log "loop target '$loop_back_stage' not found in stages; continuing forward"
+      echo -e "${C_Y}Loop target '$loop_back_stage' not found; continuing forward.${C_RST}"
     fi
   fi
 
   log "step $step_index OK"
   echo -e "${C_G}Step $step_index completed.${C_RST}"
+  idx=$((idx + 1))
   done
 else
   log "FAIL: orchestration file must be JSON (.orch.json)"
