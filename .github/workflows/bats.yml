@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Bats
-        uses: bats-core/bats-action@v2
+        uses: bats-core/bats-action@v4
 
       - name: Run Bats suite
         run: bats tests/bats/*.bats

@@ -75,7 +75,7 @@ Break the task into discrete TODOs (`- [ ]`). For each item, mention the files t
 **Stage plan prompt for orchestrations**
 
 ```
-Create three stage plans (research, architecture, implementation) using `.ralph/plan.template`. Save each to `.agents/orchestration-plans/<namespace>-01-research.plan.md`, `.agents/orchestration-plans/<namespace>-02-architecture.plan.md`, etc.
+Create three stage plans (research, architecture, implementation) using `.ralph/plan.template`. Save each to `.agents/orchestration-plans/<namespace>/<namespace>-01-research.plan.md`, `.agents/orchestration-plans/<namespace>/<namespace>-02-architecture.plan.md`, etc.
 
 Include:
 - Research tasks that explore modules/files, gather questions, and capture findings in `.agents/artifacts/{{ARTIFACT_NS}}/research.md`.
@@ -95,7 +95,7 @@ Include:
       "id": "research",
       "runtime": "cursor",
       "agent": "research",
-      "plan": ".agents/orchestration-plans/my-feature-01-research.plan.md",
+      "plan": ".agents/orchestration-plans/my-feature/my-feature-01-research.plan.md",
       "artifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
@@ -107,7 +107,7 @@ Include:
       "id": "implementation",
       "runtime": "claude",
       "agent": "implementation",
-      "plan": ".agents/orchestration-plans/my-feature-02-implementation.plan.md",
+      "plan": ".agents/orchestration-plans/my-feature/my-feature-02-implementation.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
@@ -124,7 +124,7 @@ Include:
       "id": "code-review",
       "runtime": "codex",
       "agent": "code-review",
-      "plan": ".agents/orchestration-plans/my-feature-03-code-review.plan.md",
+      "plan": ".agents/orchestration-plans/my-feature/my-feature-03-code-review.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"

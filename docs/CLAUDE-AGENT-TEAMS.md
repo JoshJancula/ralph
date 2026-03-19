@@ -157,7 +157,7 @@ Example `.codex/orchestrator.sh` stage using Codex agents:
 [[stages]]
 name = "research"
 type = "codex_agent"
-config = { agent = "research", plan = ".agents/orchestration-plans/notifications-01-research.plan.md" }
+config = { agent = "research", plan = ".agents/orchestration-plans/notifications/notifications-01-research.plan.md" }
 outputArtifacts = ["notifications/research.md"]
 
 [[stages]]

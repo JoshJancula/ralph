@@ -36,7 +36,7 @@
 #
 # Usage:
 #   .ralph/orchestrator.sh --orchestration PATH [WORKSPACE]
-#   .ralph/orchestrator.sh .agents/orchestration-plans/my-feature.orch.json
+#   .ralph/orchestrator.sh .agents/orchestration-plans/my-feature/my-feature.orch.json
 #
 # Env:
 #   ORCHESTRATOR_VERBOSE=1           log each step start to stderr as well as log file

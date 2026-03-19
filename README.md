@@ -118,7 +118,7 @@ The runner repeatedly pulls the next unchecked checkbox, summarizes progress in 
 
 2. Use assets like `.agents/artifacts/README.md` (created when you install or scaffold artifacts) to describe required sections for research, architecture, implementation, QA, or security handoffs.
 
-3. If you need a research → implementation → review pipeline, break the work into stage plans (`.agents/orchestration-plans/*.plan.md`) and declare them in a JSON `.orch.json` using `.ralph/orchestration.template.json`.
+3. If you need a research → implementation → review pipeline, break the work into stage plans (`.agents/orchestration-plans/<namespace>/*.plan.md`) and declare them in a JSON `.orch.json` using `.ralph/orchestration.template.json`.
 
 ### Run a single-agent plan
 
@@ -141,7 +141,7 @@ The runner repeatedly pulls the next unchecked checkbox, summarizes progress in 
 Use `.ralph/orchestrator.sh` with a JSON spec containing stages, runtimes, agents, and artifact contracts:
 
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature.orch.json
+.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
 Each stage can run Cursor, Claude, or Codex independently; the orchestrator enforces artifact existence/non-empty values before advancing. Review the walkthrough and artifacts schema in [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md), especially sections on stage plans, `loopControl`, and feedback loops. For guided examples (full worker run and a multi-stage orchestrated pipeline), see [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md) and [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md).

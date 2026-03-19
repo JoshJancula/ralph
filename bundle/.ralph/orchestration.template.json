@@ -8,7 +8,7 @@
       "agent": "research",
       "runtime": "cursor",
       "planTemplate": ".ralph/plan.template",
-      "plan": ".agents/orchestration-plans/example-01-research.plan.md",
+      "plan": ".agents/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-01-research.plan.md",
       "inputArtifacts": [],
       "outputArtifacts": [
         {
@@ -29,7 +29,7 @@
       "agent": "architect",
       "runtime": "cursor",
       "planTemplate": ".ralph/plan.template",
-      "plan": ".agents/orchestration-plans/example-02-architect.plan.md",
+      "plan": ".agents/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-02-architect.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
@@ -54,7 +54,7 @@
       "agent": "implementation",
       "runtime": "cursor",
       "planTemplate": ".ralph/plan.template",
-      "plan": ".agents/orchestration-plans/example-03-implementation.plan.md",
+      "plan": ".agents/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-03-implementation.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md"
@@ -79,7 +79,7 @@
       "agent": "code-review",
       "runtime": "cursor",
       "planTemplate": ".ralph/plan.template",
-      "plan": ".agents/orchestration-plans/example-04-code-review.plan.md",
+      "plan": ".agents/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-04-code-review.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"
@@ -108,7 +108,7 @@
       "agent": "qa",
       "runtime": "cursor",
       "planTemplate": ".ralph/plan.template",
-      "plan": ".agents/orchestration-plans/example-05-qa.plan.md",
+      "plan": ".agents/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-05-qa.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"

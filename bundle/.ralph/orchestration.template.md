@@ -5,11 +5,11 @@ runners can execute multiple agents in sequence. Use **`.ralph/orchestrator.sh`*
 with a single JSON `.orch.json` file. Set each stage's `"runtime"` to `cursor`,
 `claude`, or `codex` to run that stage with the matching `run-plan.sh`.
 
-Copy the JSON template to `.agents/orchestration-plans/my-feature.orch.json`,
+Copy the JSON template to `.agents/orchestration-plans/my-feature/my-feature.orch.json`,
 adjust the stage plan paths, and then run one of the orchestrators:
 
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature.orch.json
+.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
 See `.agents/artifacts/README.md` for the required sections inside each handoff
@@ -44,7 +44,7 @@ unless absolute.
   per-stage.)
 
 `PATH_TO_STAGE_PLAN` is the Ralph task plan (markdown with `- [ ]` TODOs). Use one
-small plan per stage, for example under `.agents/orchestration-plans/`.
+small plan per stage, for example under `.agents/orchestration-plans/{{ARTIFACT_NS}}/`.
 
 ---
 
@@ -75,7 +75,7 @@ JSON example (copy from `.ralph/orchestration.template.json` and edit):
       "id": "research",
       "agent": "research",
       "runtime": "cursor",
-      "plan": ".agents/orchestration-plans/my-feature-01-research.plan.md",
+      "plan": ".agents/orchestration-plans/my-feature/my-feature-01-research.plan.md",
       "artifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",

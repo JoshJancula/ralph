@@ -8,9 +8,10 @@ This guide demonstrates building a multi-stage pipeline using `.ralph/orchestrat
 1. Copy `.ralph/plan.template` into stage files:
 
    ```bash
-   cp .ralph/plan.template .agents/orchestration-plans/feature-01-research.plan.md
-   cp .ralph/plan.template .agents/orchestration-plans/feature-02-architecture.plan.md
-   cp .ralph/plan.template .agents/orchestration-plans/feature-03-implementation.plan.md
+   mkdir -p .agents/orchestration-plans/feature
+   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-01-research.plan.md
+   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-02-architecture.plan.md
+   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-03-implementation.plan.md
    ```
 
 2. Populate each plan:
@@ -35,7 +36,7 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "research",
       "runtime": "cursor",
       "agent": "research",
-      "plan": ".agents/orchestration-plans/feature-01-research.plan.md",
+      "plan": ".agents/orchestration-plans/feature/feature-01-research.plan.md",
       "artifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
@@ -47,7 +48,7 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "architecture",
       "runtime": "claude",
       "agent": "architect",
-      "plan": ".agents/orchestration-plans/feature-02-architecture.plan.md",
+      "plan": ".agents/orchestration-plans/feature/feature-02-architecture.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
@@ -64,7 +65,7 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "implementation",
       "runtime": "codex",
       "agent": "implementation",
-      "plan": ".agents/orchestration-plans/feature-03-implementation.plan.md",
+      "plan": ".agents/orchestration-plans/feature/feature-03-implementation.plan.md",
       "inputArtifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md"
@@ -90,7 +91,7 @@ Set `runtime` per stage to decide if Cursor/Claude/Codex runs that piece. Use `l
 ## 3. Running the orchestrator
 
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/notifications-pipeline.orch.json
+.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/feature/notifications-pipeline.orch.json
 ```
 
 Each stage executes the referenced plan with its runtime CLI. The orchestrator checks that required artifacts exist and are non-empty before moving to the next stage, so ensure plans write the expected artifact files.
