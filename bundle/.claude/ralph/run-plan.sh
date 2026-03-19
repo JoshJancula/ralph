@@ -16,7 +16,7 @@
 #   - requires --agent <name> (errors if missing)
 #   - errors if resolved plan file is missing
 #
-# Config (first match): .claude/ralph/plan-runner.json, else .cursor/ralph/plan-runner.json
+# Config (first match): .claude/ralph/plan-runner.json, else shared .ralph/plan-runner.json
 #   { "plan": "PLAN.md", "model": "sonnet" }   plan path and optional default model
 #
 # Native agent teams (multi-session Claude Code): enable with
@@ -117,15 +117,15 @@ WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 # shellcheck source=select-model.sh
 source "$SCRIPT_DIR/select-model.sh"
 # shellcheck source=/dev/null
-source "$WORKSPACE/.cursor/ralph/ralph-env-safety.sh"
-AGENT_CONFIG_TOOL="$WORKSPACE/.cursor/ralph/agent-config-tool.sh"
+source "$WORKSPACE/.ralph/ralph-env-safety.sh"
+AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
 AGENTS_ROOT_REL=".claude/agents"
 
-# Same config discovery ergonomics as Cursor: prefer Claude config, else shared .cursor config
+# Shared config discovery: prefer runtime config, then `.ralph/plan-runner.json`.
 if [[ -f "$WORKSPACE/.claude/ralph/plan-runner.json" ]]; then
   CONFIG_FILE="$WORKSPACE/.claude/ralph/plan-runner.json"
-elif [[ -f "$WORKSPACE/.cursor/ralph/plan-runner.json" ]]; then
-  CONFIG_FILE="$WORKSPACE/.cursor/ralph/plan-runner.json"
+elif [[ -f "$WORKSPACE/.ralph/plan-runner.json" ]]; then
+  CONFIG_FILE="$WORKSPACE/.ralph/plan-runner.json"
 else
   CONFIG_FILE="$WORKSPACE/.claude/ralph/plan-runner.json"
 fi
@@ -422,7 +422,7 @@ fi
 if [[ ! -f "$PLAN_PATH" ]]; then
   log "ERROR: plan file not found: $PLAN_PATH"
   echo -e "${C_R}${C_BOLD}Plan file not found:${C_RST} ${C_R}$PLAN_PATH${C_RST}"
-  echo -e "${C_DIM}Create it, set .claude/ralph/plan-runner.json (or .cursor/ralph/plan-runner.json), or pass --plan <path>.${C_RST}"
+  echo -e "${C_DIM}Create it, set .claude/ralph/plan-runner.json (or .ralph/plan-runner.json), or pass --plan <path>.${C_RST}"
   exit 1
 fi
 
@@ -458,7 +458,7 @@ fi
 
 if [[ -n "$PREBUILT_AGENT" ]]; then
   if [[ ! -f "$AGENT_CONFIG_TOOL" ]]; then
-    echo -e "${C_R}.cursor/ralph/agent-config-tool.sh is required for prebuilt agents.${C_RST}" >&2
+    echo -e "${C_R}.ralph/agent-config-tool.sh is required for prebuilt agents.${C_RST}" >&2
     log "ERROR: agent tooling missing for $PREBUILT_AGENT"
     exit 1
   fi

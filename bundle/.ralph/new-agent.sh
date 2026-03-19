@@ -20,6 +20,8 @@ source "$REPO_ROOT/.cursor/ralph/select-model.sh"
 source "$REPO_ROOT/.claude/ralph/select-model.sh"
 # shellcheck source=../.codex/ralph/select-model.sh
 source "$REPO_ROOT/.codex/ralph/select-model.sh"
+# shellcheck source=./bash-lib/new-agent.sh
+source "$REPO_ROOT/.ralph/bash-lib/new-agent.sh"
 CURSOR_AGENTS="$REPO_ROOT/.cursor/agents"
 CLAUDE_AGENTS="$REPO_ROOT/.claude/agents"
 CODEX_AGENTS="$REPO_ROOT/.codex/agents"
@@ -36,6 +38,21 @@ json_string() {
   fi
 }
 
+print_help() {
+  cat <<'EOF'
+Usage: bash .ralph/new-agent.sh [--no-interactive] [--help]
+
+Creates a matching agent scaffold under
+  .cursor/agents/<id>/
+  .claude/agents/<id>/
+  .codex/agents/<id>/
+
+Options:
+  --no-interactive  use pre-set CURSOR_PLAN_MODEL / CLAUDE_PLAN_MODEL / CODEX_PLAN_MODEL
+  --help            show this help text and exit
+EOF
+}
+
 prompt_agent_id() {
   while true; do
     read -rp "Agent ID (lowercase letters, digits, hyphens): " AGENT_ID
@@ -43,7 +60,7 @@ prompt_agent_id() {
       echo "Agent ID cannot be empty."
       continue
     fi
-    if [[ "$AGENT_ID" =~ ^[a-z0-9-]+$ ]]; then
+    if new_agent_is_valid_id "$AGENT_ID"; then
       break
     fi
     echo "Invalid agent ID. Only lowercase letters, digits, and hyphens are allowed."
@@ -202,6 +219,10 @@ main() {
         NO_INTERACTIVE=1
         shift
         ;;
+      --help)
+        print_help
+        exit 0
+        ;;
       *)
         break
         ;;
@@ -218,9 +239,9 @@ main() {
   prompt_agent_id
   read -rp "Description (one line recommended): " DESCRIPTION
 
-  CURSOR_DIR="$CURSOR_AGENTS/$AGENT_ID"
-  CLAUDE_DIR="$CLAUDE_AGENTS/$AGENT_ID"
-  CODEX_DIR="$CODEX_AGENTS/$AGENT_ID"
+  CURSOR_DIR="$(new_agent_workspace_path "$REPO_ROOT" ".cursor" "agents" "$AGENT_ID")"
+  CLAUDE_DIR="$(new_agent_workspace_path "$REPO_ROOT" ".claude" "agents" "$AGENT_ID")"
+  CODEX_DIR="$(new_agent_workspace_path "$REPO_ROOT" ".codex" "agents" "$AGENT_ID")"
 
   resolve_runtimes
   confirm_overwrite_all

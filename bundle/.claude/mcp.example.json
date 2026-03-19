@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ralph": {
+      "command": "bash",
+      "args": [
+        "/path/to/workspace/.ralph/mcp-server.sh"
+      ],
+      "env": {
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        "RALPH_MCP_WORKSPACE": "/path/to/workspace"
+      }
+    }
+  }
+}

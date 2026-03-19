@@ -66,6 +66,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
 fi
 # shellcheck source=ralph-env-safety.sh
 source "$SCRIPT_DIR/ralph-env-safety.sh"
+source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
 AGENT_CONFIG_TOOL="$SCRIPT_DIR/agent-config-tool.sh"
 AGENTS_ROOT_REL=".cursor/agents"
 
@@ -120,6 +121,7 @@ if [[ "$NON_INTERACTIVE_FLAG" == "1" && "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" 
 fi
 
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+HUMAN_ACTION_FILE="$WORKSPACE/HUMAN_ACTION_REQUIRED.md"
 
 # shellcheck source=select-model.sh
 source "$SCRIPT_DIR/select-model.sh"
@@ -155,34 +157,7 @@ log() {
   fi
 }
 
-# Resolve plan file path from config or default (used when no --plan override)
-get_plan_path() {
-  if [[ -f "$CONFIG_FILE" ]]; then
-    local plan
-    plan="$(grep -o '"plan"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | sed 's/.*"\([^"]*\)".*/\1/')"
-    if [[ -n "$plan" ]]; then
-      # Absolute path or ~: use as-is (expand ~); otherwise relative to workspace
-      if [[ "$plan" == /* ]]; then
-        echo "$plan"
-      elif [[ "$plan" == ~* ]]; then
-        echo "${plan/#\~/$HOME}"
-      else
-        echo "$WORKSPACE/$plan"
-      fi
-      return
-    fi
-  fi
-  echo "$WORKSPACE/$DEFAULT_PLAN"
-}
-
-# Derive a safe log suffix from plan path (e.g. PLAN.md -> PLAN, docs/my-plan.md -> my-plan)
-plan_log_basename() {
-  local path="$1"
-  local base
-  base="$(basename "$path" | sed 's/\.[^.]*$//')"
-  echo "$base" | sed 's/[^A-Za-z0-9_.-]/_/g'
-}
-
+#
 # Read optional "model" from config (agent/model id for cursor-agent)
 get_config_model() {
   if [[ -f "$CONFIG_FILE" ]]; then
@@ -329,46 +304,9 @@ prompt_agent_source_mode() {
   esac
 }
 
-# Find first unchecked TODO line; output is "line_number|full_line_text"
-get_next_todo() {
-  local plan_path="$1"
-  local line_num=0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line_num=$((line_num + 1))
-    # Match "- [ ]" or "- [ ] " (optional space in bracket)
-    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]*(.*) ]]; then
-      echo "${line_num}|${line}"
-      return 0
-    fi
-  done < "$plan_path"
-  return 1
-}
-
-# Count TODOs for display (lines like "- [ ]" or "- [x]")
-count_todos() {
-  local plan_path="$1"
-  local total=0
-  local done=0
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]] ]]; then
-      total=$((total + 1))
-    elif [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[x\][[:space:]] ]]; then
-      total=$((total + 1))
-      done=$((done + 1))
-    fi
-  done < "$plan_path"
-  echo "$done $total"
-}
-
 # Resolve plan path: --plan override takes precedence over config
 if [[ -n "$PLAN_OVERRIDE" ]]; then
-  if [[ "$PLAN_OVERRIDE" == /* ]]; then
-    PLAN_PATH="$PLAN_OVERRIDE"
-  elif [[ "$PLAN_OVERRIDE" == ~* ]]; then
-    PLAN_PATH="${PLAN_OVERRIDE/#\~/$HOME}"
-  else
-    PLAN_PATH="$WORKSPACE/$PLAN_OVERRIDE"
-  fi
+  PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
 else
   PLAN_PATH="$(get_plan_path)"
 fi
@@ -461,6 +399,17 @@ ralph_path_to_file_uri() {
   fi
 }
 
+ralph_restart_command_hint() {
+  if [[ -n "${RALPH_ORCH_FILE:-}" ]]; then
+    printf '.ralph/orchestrator.sh --orchestration %s' "$(printf '%q' "$RALPH_ORCH_FILE")"
+  else
+    printf '.cursor/ralph/run-plan.sh --non-interactive --plan %s --agent %s %s' \
+      "$(printf '%q' "$PLAN_PATH")" \
+      "$(printf '%q' "${PREBUILT_AGENT:-agent}")" \
+      "$(printf '%q' "$WORKSPACE")"
+  fi
+}
+
 ralph_operator_has_real_answer() {
   [[ -s "$OPERATOR_RESPONSE_FILE" ]] || return 1
   local _p _ph
@@ -469,6 +418,55 @@ ralph_operator_has_real_answer() {
   [[ "$_p" == "$_ph" ]] && return 1
   [[ -z "$_p" ]] && return 1
   return 0
+}
+
+ralph_remove_human_action_file() {
+  if [[ -f "$HUMAN_ACTION_FILE" ]]; then
+    rm -f "$HUMAN_ACTION_FILE"
+    log "Removed human action file: $HUMAN_ACTION_FILE"
+  fi
+}
+
+ralph_write_human_action_file() {
+  local question="${1:-}"
+  if [[ -z "$question" && -f "$PENDING_HUMAN" ]]; then
+    question="$(cat "$PENDING_HUMAN")"
+  fi
+  [[ -n "$question" ]] || return 0
+
+  local history="(no operator replies recorded yet)"
+  if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
+    history="$(cat "$HUMAN_CONTEXT")"
+  fi
+
+  local restart_hint
+  restart_hint="$(ralph_restart_command_hint)"
+
+  {
+    printf '# HUMAN ACTION REQUIRED\n\n'
+    printf 'The agent paused this plan step until your response.\n\n'
+    printf '## Plan file\n%s\n\n' "$PLAN_PATH"
+    printf '## Question from the agent\n\n%s\n\n' "$question"
+    printf '## What to do\n'
+    printf '1. Open %s and replace the placeholder line with your full answer.\n' "$OPERATOR_RESPONSE_FILE"
+    printf '2. Save the file and leave pending-human.txt untouched; it will clear automatically after the answer is applied.\n'
+    printf '3. Restart the same command so the agent can continue: %s\n\n' "$restart_hint"
+    printf '## Session\n'
+    printf '- Pending question: %s\n' "$PENDING_HUMAN"
+    printf '- Session directory: %s\n' "$RALPH_SESSION_DIR"
+    printf '- Plan log: %s\n' "$LOG_FILE"
+    printf '- Output log: %s\n\n' "$OUTPUT_LOG"
+    printf '## Previous operator replies\n\n%s\n' "$history"
+  } >"$HUMAN_ACTION_FILE"
+  log "Wrote human action file: $HUMAN_ACTION_FILE"
+}
+
+ralph_sync_human_action_file_state() {
+  if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
+    ralph_write_human_action_file
+  else
+    ralph_remove_human_action_file
+  fi
 }
 
 ralph_try_consume_human_response() {
@@ -495,11 +493,7 @@ ralph_human_input_required_exit() {
   local _iu _ir _cmd_hint
   _iu="$(ralph_path_to_file_uri "$HUMAN_INPUT_MD")"
   _ir="$(ralph_path_to_file_uri "$OPERATOR_RESPONSE_FILE")"
-  if [[ -n "${RALPH_ORCH_FILE:-}" ]]; then
-    _cmd_hint=".ralph/orchestrator.sh --orchestration $(printf '%q' "$RALPH_ORCH_FILE")"
-  else
-    _cmd_hint=".cursor/ralph/run-plan.sh --non-interactive --plan $(printf '%q' "$PLAN_PATH") --agent $(printf '%q' "${PREBUILT_AGENT:-agent}") $(printf '%q' "$WORKSPACE")"
-  fi
+  _cmd_hint="$(ralph_restart_command_hint)"
   {
     echo "# Human input required"
     echo ""
@@ -530,6 +524,7 @@ ralph_human_input_required_exit() {
   } >"$HUMAN_INPUT_MD"
 
   printf '%s\n' '(Replace this line with your answer to the question above, then save.)' >"$OPERATOR_RESPONSE_FILE"
+  ralph_write_human_action_file
 
   log "EXIT 4: human input required (no TTY). Wrote $HUMAN_INPUT_MD"
   echo "" >&2
@@ -558,6 +553,8 @@ elif [[ ! -f "$PENDING_HUMAN" ]]; then
   rm -f "$OPERATOR_RESPONSE_FILE" "$HUMAN_INPUT_MD"
 fi
 
+ralph_sync_human_action_file_state
+
 if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
   if [[ -t 0 ]] && [[ -t 1 ]]; then
     echo "" >&2
@@ -571,6 +568,7 @@ if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
     done
     printf '%s\n' "${_hb:-(empty reply)}" >"$OPERATOR_RESPONSE_FILE"
     ralph_try_consume_human_response || true
+    ralph_sync_human_action_file_state
   else
     ralph_human_input_required_exit
   fi
@@ -874,6 +872,8 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
       break
     fi
 
+    ralph_sync_human_action_file_state
+
     if [[ -f "$PENDING_HUMAN" ]]; then
       if [[ "${CURSOR_PLAN_DISABLE_HUMAN_PROMPT:-0}" == "1" ]]; then
         log "ERROR: $PENDING_HUMAN exists but CURSOR_PLAN_DISABLE_HUMAN_PROMPT=1"
@@ -906,6 +906,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
           echo "$human_block"
         } >>"$HUMAN_CONTEXT"
         log "human reply recorded (TTY); re-invoking agent for line $line_num"
+        ralph_sync_human_action_file_state
         echo -e "${C_G}Answer recorded. Re-running agent for this TODO...${C_RST}" >&2
         attempts_on_line=0
         sleep 1

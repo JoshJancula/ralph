@@ -185,6 +185,12 @@ button:disabled {
   flex-direction: column;
 }
 
+.viewer-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
 .status[data-error="true"] {
   color: var(--error);
 }
@@ -197,10 +203,147 @@ button:disabled {
   background: #1d1f24;
   color: #f7f1e8;
   overflow: auto;
-  white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.45;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.file-content.rendered-markdown {
+  background: #fdfbf7;
+  color: #1f1307;
+  border-color: rgba(31, 19, 7, 0.12);
+}
+
+.file-content.markdown-content h1,
+.file-content.markdown-content h2,
+.file-content.markdown-content h3,
+.file-content.markdown-content h4,
+.file-content.markdown-content h5 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.file-content.rendered-markdown p {
+  margin: 0 0 0.85rem 0;
+  line-height: 1.6;
+}
+
+.file-content.rendered-markdown ul,
+.file-content.rendered-markdown ol {
+  padding-left: 1.25rem;
+  margin: 0 0 0.85rem 0;
+}
+
+.file-content.rendered-markdown pre {
+  margin: 0.5rem 0;
+  padding: 1rem;
+  background: #111;
+  color: #f7f1e8;
+  border-radius: 0.75rem;
+  overflow: auto;
+}
+
+.file-content.rendered-markdown code {
+  background: rgba(black, 0.05);
+  padding: 0.15rem 0.28rem;
+  border-radius: 0.35rem;
+}
+
+.file-content.raw-markdown {
+  background: #111;
+  color: #f7f1e8;
+  font-family: "IBM Plex Mono", "Menlo", monospace;
+  font-size: 0.95rem;
+  white-space: pre-wrap;
+}
+
+.workflow-type {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8c7a59;
+}
+
+.panel-note {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #c3b9a6;
+  line-height: 1.3;
+}
+
+.editor-panel {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: #11141a;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.editor-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.editor-panel textarea {
+  width: 100%;
+  min-height: 16rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0b0d12;
+  color: #f7f1e8;
+  font-family: "Menlo", "Monaco", monospace;
+  font-size: 0.95rem;
+  padding: 1rem;
+  resize: vertical;
+}
+
+.skills-section {
+  margin-top: 1rem;
+}
+
+.skill-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.skill-list li {
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.65rem;
+  background: linear-gradient(135deg, #fff, #f3ede6);
+  color: #3b2a1f;
+  font-family: "Menlo", "Monaco", monospace;
+  font-size: 0.85rem;
+}
+
+.agent-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.agent-config-actions select {
+  min-width: 200px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  color: #f7f1e8;
+  padding: 0.4rem 0.9rem;
+}
+
+.agent-config-actions button {
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {

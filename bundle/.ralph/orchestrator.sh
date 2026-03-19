@@ -104,12 +104,12 @@ if [[ ! -f "$ORCH_FILE" ]]; then
 fi
 
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
-if [[ ! -f "$WORKSPACE/.cursor/ralph/ralph-env-safety.sh" ]]; then
-  echo "Orchestrator error: expected $WORKSPACE/.cursor/ralph/ralph-env-safety.sh (repo Ralph tooling)." >&2
+if [[ ! -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
+  echo "Orchestrator error: expected $WORKSPACE/.ralph/ralph-env-safety.sh (repo Ralph tooling)." >&2
   exit 1
 fi
 # shellcheck source=/dev/null
-source "$WORKSPACE/.cursor/ralph/ralph-env-safety.sh"
+source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
 AGENTS_SHARED_DIR="$WORKSPACE/.agents"
 RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs"
@@ -124,75 +124,15 @@ EXPECTED_ARTIFACT_PATHS=()
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
-# Trim whitespace (bash 3.2+).
-trim() {
-  local s="$1"
-  s="${s#"${s%%[![:space:]]*}"}"
-  s="${s%"${s##*[![:space:]]}"}"
-  echo -n "$s"
-}
-
-# Agent config tool (shared under .cursor/ralph).
-if [[ -f "$WORKSPACE/.cursor/ralph/agent-config-tool.sh" ]]; then
-  AGENT_CONFIG_TOOL_SH="$WORKSPACE/.cursor/ralph/agent-config-tool.sh"
+# Agent config tool (shared under .ralph).
+if [[ -f "$WORKSPACE/.ralph/agent-config-tool.sh" ]]; then
+  AGENT_CONFIG_TOOL_SH="$WORKSPACE/.ralph/agent-config-tool.sh"
 else
   AGENT_CONFIG_TOOL_SH=""
 fi
 
-# Split comma-separated artifact paths into global EXPECTED_ARTIFACT_PATHS array.
-parse_artifact_csv() {
-  EXPECTED_ARTIFACT_PATHS=()
-  local csv="$1"
-  [[ -z "$csv" ]] && return 0
-  local IFS=,
-  local piece
-  for piece in $csv; do
-    piece="$(trim "$piece")"
-    [[ -n "$piece" ]] && EXPECTED_ARTIFACT_PATHS+=("$piece")
-  done
-}
-
-expand_artifact_tokens() {
-  local p="$1"
-  local ns="${RALPH_ARTIFACT_NS:-$ORCH_BASENAME}"
-  p="${p//\{\{ARTIFACT_NS\}\}/$ns}"
-  p="${p//\{\{PLAN_KEY\}\}/$ns}"
-  echo -n "$p"
-}
-
-# Append path if not already in EXPECTED_ARTIFACT_PATHS.
-artifact_paths_append_unique() {
-  local new
-  new="$(expand_artifact_tokens "$1")"
-  local ex
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
-    for ex in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
-    [[ "$ex" == "$new" ]] && return 0
-  done
-  fi
-  EXPECTED_ARTIFACT_PATHS+=("$new")
-}
-
-# Merge required output_artifact paths from agent config (cursor, codex, or claude agents root).
-merge_required_artifacts_from_agent() {
-  local agent_id="$1"
-  local runtime="$2"
-  local agents_root
-  if [[ "$runtime" == "cursor" ]]; then
-    agents_root="$WORKSPACE/.cursor/agents"
-  elif [[ "$runtime" == "codex" ]]; then
-    agents_root="$WORKSPACE/.codex/agents"
-  else
-    agents_root="$WORKSPACE/.claude/agents"
-  fi
-  [[ -z "$AGENT_CONFIG_TOOL_SH" ]] && return 0
-  [[ ! -f "$agents_root/$agent_id/config.json" ]] && return 0
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -z "$line" ]] && continue
-    artifact_paths_append_unique "$line"
-  done < <(bash "$AGENT_CONFIG_TOOL_SH" required-artifacts "$agents_root" "$agent_id" 2>/dev/null) || true
-}
+# shellcheck source=/dev/null
+source "$WORKSPACE/.ralph/bash-lib/orchestrator-lib.sh"
 
 artifact_remediation_text() {
   echo "  Remediation:"
@@ -347,7 +287,13 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   for ((idx = 0; idx < num_stages; idx++)); do
     stage="$(jq ".stages[$idx]" "$ORCH_FILE" 2>/dev/null)" || continue
 
-    runtime="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
+    runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
+    if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
+      log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, or codex)"
+      echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, or codex.${C_RST}" >&2
+      echo "  Log: $LOG_FILE" >&2
+      exit 1
+    fi
     agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
     plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
 
@@ -365,26 +311,14 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
     merge_required_artifacts_from_agent "$agent" "$runtime"
 
-  if [[ "$runtime" != "cursor" && "$runtime" != "claude" && "$runtime" != "codex" ]]; then
-    log "FAIL parse: invalid RUNTIME '$runtime' (use cursor, claude, or codex)"
-    echo -e "${C_R}Invalid RUNTIME '${runtime}'. Use cursor, claude, or codex.${C_RST}" >&2
-    echo "  Log: $LOG_FILE" >&2
-    exit 1
-  fi
+    if ! orchestrator_validate_stage_agent_plan "$agent" "$plan_rel"; then
+      log "FAIL parse: empty agent or plan for stage JSON: $stage"
+      echo -e "${C_R}Empty agent or plan path.${C_RST} Log: $LOG_FILE" >&2
+      exit 1
+    fi
 
-  if [[ -z "$agent" || -z "$plan_rel" ]]; then
-    log "FAIL parse: empty agent or plan for stage JSON: $stage"
-    echo -e "${C_R}Empty agent or plan path.${C_RST} Log: $LOG_FILE" >&2
-    exit 1
-  fi
-
-  step_index=$((step_index + 1))
-
-  if [[ "$plan_rel" == /* ]]; then
-    plan_abs="$plan_rel"
-  else
-    plan_abs="$WORKSPACE/$plan_rel"
-  fi
+    step_index=$((step_index + 1))
+    plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
 
   if [[ "$runtime" == "cursor" ]]; then
     runner="$CURSOR_RUNNER"
@@ -593,12 +527,11 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   echo -e "${C_G}Step $step_index completed.${C_RST}"
   done
 else
-  # Old markdown format fallback (for compatibility during transition)
-  log "WARN: unsupported orchestration file format (expected .orch.json)"
-  echo -e "${C_R}${C_BOLD}Error: unsupported orchestration format${C_RST}" >&2
+  log "FAIL: orchestration file must be JSON (.orch.json)"
+  echo -e "${C_R}${C_BOLD}Error: orchestration file must be JSON${C_RST}" >&2
   echo "  Expected: .orch.json (JSON format)" >&2
   echo "  Got: $(basename "$ORCH_FILE")" >&2
-  echo "  Use JSON format instead. See .ralph/orchestration.template.json" >&2
+  echo "  See .ralph/orchestration.template.json" >&2
   echo "  Log: $LOG_FILE" >&2
   exit 1
 fi

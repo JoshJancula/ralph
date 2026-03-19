@@ -1,0 +1,23 @@
+name: Bats tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  bats:
+    name: Run Bats harness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bats
+        uses: bats-core/bats-action@v2
+
+      - name: Run Bats suite
+        run: bats tests/bats/*.bats

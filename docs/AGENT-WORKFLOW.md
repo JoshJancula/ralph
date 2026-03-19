@@ -9,7 +9,7 @@
    - Claude: `.claude/ralph/run-plan.sh --plan ...`
    - Codex: `.codex/ralph/run-plan.sh --non-interactive --plan ...`
 
-3. With **`--agent <id>`**, the runner loads that id under `.cursor/agents/`, `.claude/agents/`, or `.codex/agents/`. Try **`ralph-starter`** after install (no-emoji + repo-context). The **agent-config-tool** under `.cursor/ralph/` validates and builds context for all runtimes.
+3. With **`--agent <id>`**, the runner loads that id under `.cursor/agents/`, `.claude/agents/`, or `.codex/agents/`. Try **`architect`** or **`research`** after install. The **agent-config-tool** under `.ralph/` validates and builds context for all runtimes.
 
 ## Multi-stage orchestration
 
@@ -43,7 +43,7 @@ Each stage drives the runtime-specific plan runner, which in turn writes logs an
    - `.codex/ralph/run-plan.sh` for Codex (`--non-interactive` by default, honoring `CODEX_PLAN_MODEL`).
 3. **Handle human input**: the runner may exit with artifacts like `HUMAN-INPUT-REQUIRED.md`. Write the response, reopen the CLI, and rerun the same plan so the first unchecked todo is replayed.
 4. **Logs and artifacts**: After each run, inspect `.agents/logs/plan-runner-*.log` for stdout and error details, and `.agents/artifacts/{{ARTIFACT_NS}}/` for generated docs. Use `.ralph/cleanup-plan.sh <namespace>` to wipe logs/artifacts before a fresh run.
-5. **Subagents and teams**: Refer to the README’s links (Cursor subagents, Claude subagents, Claude agent teams, Codex subagents/multi-agent) to understand how to delegate work inside your plan or orchestrator stages.
+5. **Subagents and teams**: Refer to the README’s links (Cursor subagents, Claude subagents, Claude agent teams, Codex subagents/multi-agent) to understand how to delegate work inside your plan or orchestrator stages. For using Claude Code agent teams with Ralph (spawning teammates for tasks, artifact handoffs, and when to use teams vs orchestrator), see [Claude Code agent teams with Ralph](CLAUDE-AGENT-TEAMS.md).
 
 ### Claude headless stalls on permission or new files
 
@@ -54,7 +54,7 @@ Claude Code in `-p` mode only auto-approves tools in `--allowedTools`. New files
 - Cursor’s Ralph runner internals: `bundle/.cursor/ralph/README.md`
 - Cursor subagent architecture: [https://cursor.com/docs/subagents](https://cursor.com/docs/subagents)
 - Claude subagents doc: [https://docs.anthropic.com/en/docs/claude-code/subagents](https://docs.anthropic.com/en/docs/claude-code/subagents)
-- Claude agent teams overview: [https://docs.anthropic.com/en/docs/claude-code/agent-teams](https://docs.anthropic.com/en/docs/claude-code/agent-teams)
+- Claude agent teams: [https://code.claude.com/docs/en/agent-teams](https://code.claude.com/docs/en/agent-teams); using them with Ralph: [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md)
 - Codex subagent concepts: [https://developers.openai.com/codex/concepts/subagents](https://developers.openai.com/codex/concepts/subagents)
 - Codex multi-agent guide: [https://developers.openai.com/codex/multi-agent](https://developers.openai.com/codex/multi-agent)
 - Worker example walkthrough: [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md)

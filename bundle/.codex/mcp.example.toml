@@ -1,0 +1,13 @@
+# Ralph MCP server for Codex (stdio)
+# Copy this block into ~/.codex/config.toml or into .codex/config.toml at your project root.
+# Replace /path/to/workspace with your workspace root (where .ralph/ lives).
+# Ensure PATH includes your Cursor/Claude/Codex binaries so the server can spawn runners.
+# See docs/MCP.md and: codex mcp --help
+
+[mcp_servers.ralph]
+command = "bash"
+args = ["/path/to/workspace/.ralph/mcp-server.sh"]
+
+[mcp_servers.ralph.env]
+PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+RALPH_MCP_WORKSPACE = "/path/to/workspace"

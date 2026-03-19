@@ -8,34 +8,39 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NAMESPACE="${1:-${RALPH_ARTIFACT_NS:-}}"
-shift || true
+source "$SCRIPT_DIR/bash-lib/cleanup-plan.sh"
 
-if [[ -z "$NAMESPACE" ]]; then
+cleanup_plan_usage() {
   echo "Usage: $0 <artifact-namespace> [workspace]" >&2
-  exit 1
-fi
+}
 
-if [[ $# -ge 1 ]]; then
-  WORKSPACE_ROOT="$(cd "$1" && pwd)"
-else
-  WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/../" && pwd)"
-fi
+main() {
+  local namespace_arg="${1:-}"
+  shift || true
+  local workspace_arg="${1:-}"
+  local namespace
 
-LOG_DIR="$WORKSPACE_ROOT/.agents/logs/$NAMESPACE"
-ARTIFACT_DIR="$WORKSPACE_ROOT/.agents/artifacts/$NAMESPACE"
+  namespace="$(cleanup_plan_namespace_from_arg_or_env "$namespace_arg" "${RALPH_ARTIFACT_NS:-}")"
 
-if [[ -d "$LOG_DIR" ]]; then
-  find "$LOG_DIR" -maxdepth 1 -type f -name 'plan-runner-*' -delete
-  find "$LOG_DIR" -maxdepth 1 -type f -name '.plan-runner-exit.*' -delete
-  echo "Cleaned logs in $LOG_DIR"
-else
-  echo "Log directory does not exist: $LOG_DIR" >&2
-fi
+  if ! cleanup_plan_validate_namespace "$namespace"; then
+    cleanup_plan_usage
+    exit 1
+  fi
 
-if [[ -d "$ARTIFACT_DIR" ]]; then
-  rm -rf "$ARTIFACT_DIR"
-  echo "Removed artifacts in $ARTIFACT_DIR"
-else
-  echo "Artifact directory does not exist: $ARTIFACT_DIR" >&2
+  local workspace_root
+  workspace_root="$(cleanup_plan_workspace_root "$SCRIPT_DIR" "$workspace_arg")"
+
+  local log_dir
+  log_dir="$(cleanup_plan_log_dir "$workspace_root" "$namespace")"
+
+  local artifact_dir
+  artifact_dir="$(cleanup_plan_artifact_dir "$workspace_root" "$namespace")"
+
+  cleanup_plan_delete_log_files "$log_dir"
+  cleanup_plan_delete_artifact_dir "$artifact_dir"
+  cleanup_plan_remove_human_action_file "$workspace_root"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi

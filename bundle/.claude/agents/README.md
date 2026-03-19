@@ -4,6 +4,22 @@ This directory holds **prebuilt agent** definitions for Claude CLI-driven runs. 
 
 The same schema applies under `.cursor/agents/` for Cursor runs so tooling can validate and apply configuration consistently.
 
+## Dual-purpose agents
+
+Every agent in this directory currently serves two runtimes. The existing `config.json` files are used by Ralph tooling (`run-plan.sh`, `orchestrator.sh`, MCP) while Claude Code native sessions consume the peer `.md` files with YAML frontmatter (e.g., `research.md`). The six agents (`research`, `architect`, `implementation`, `code-review`, `qa`, `security`) share both representations, so keep values in sync when you edit an agent’s name, description, model, rules, or skills.
+
+| Purpose | `config.json` | `<agent-id>.md` frontmatter |
+|---------|---------------|-----------------------------|
+| Identifier | `name` field | `name` field (must match directory) |
+| Role summary | `description` | `description` |
+| Model selection | `model` | `model` |
+| Constraints | `rules` | frontmatter `rules` array |
+| Skill references | `skills` | frontmatter `skills` array |
+| Allowed tooling | `allowed_tools` (Claude headless) | `tools` |
+| Artifacts | `output_artifacts` | body instructions referencing `.agents/artifacts/{{ARTIFACT_NS}}/...` |
+
+When touching any of the shared values above, update both the JSON and the Markdown files so Ralph and Claude Code stay aligned.
+
 ## File location
 
 - **Claude:** `.claude/agents/<agent-id>/config.json`

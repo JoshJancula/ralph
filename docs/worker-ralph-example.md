@@ -23,9 +23,9 @@ This example walks through creating a worker plan, running it, and inspecting ou
 
 1. Pick a runtime:
 
-   - Cursor: `.cursor/ralph/run-plan.sh --plan PLAN.md --agent ralph-starter`
-   - Claude: `.claude/ralph/run-plan.sh --plan PLAN.md --agent ralph-starter`
-   - Codex: `.codex/ralph/run-plan.sh --plan PLAN.md --agent ralph-starter --non-interactive`
+   - Cursor: `.cursor/ralph/run-plan.sh --plan PLAN.md --agent research`
+   - Claude: `.claude/ralph/run-plan.sh --plan PLAN.md --agent research`
+   - Codex: `.codex/ralph/run-plan.sh --plan PLAN.md --agent research --non-interactive`
 
 2. Supply overrides as needed:
 

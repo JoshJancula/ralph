@@ -15,6 +15,7 @@
         </div>
         <div class="controls">
           <button id="refresh-button" type="button">Refresh</button>
+          <button id="new-workflow-button" type="button">New workflow</button>
           <label class="toggle" for="auto-refresh">
             <input id="auto-refresh" type="checkbox" />
             Auto-refresh logs
@@ -24,20 +25,32 @@
 
       <main class="workspace">
         <aside class="sidebar">
-          <div class="section">
-            <p class="section-label">Roots</p>
-            <nav class="root-tabs">
-              <button class="root-tab active" data-root="plans" type="button">
-                Orchestration Plans
-              </button>
-              <button class="root-tab" data-root="artifacts" type="button">
-                Artifacts
-              </button>
-              <button class="root-tab" data-root="logs" type="button">
-                Logs
-              </button>
-            </nav>
-          </div>
+        <div class="section">
+              <p class="section-label">Roots</p>
+              <nav class="root-tabs">
+                <button class="root-tab active" data-root="docs" type="button">
+                  Docs
+                </button>
+                <button class="root-tab" data-root="plans" type="button">
+                  Orchestration Plans
+                </button>
+                <button class="root-tab" data-root="artifacts" type="button">
+                  Artifacts
+                </button>
+                <button class="root-tab" data-root="logs" type="button">
+                  Logs
+                </button>
+                <button class="root-tab" data-root="cursor_agents" type="button">
+                  Cursor agents
+                </button>
+                <button class="root-tab" data-root="claude_agents" type="button">
+                  Claude agents
+                </button>
+                <button class="root-tab" data-root="codex_agents" type="button">
+                  Codex agents
+                </button>
+              </nav>
+        </div>
 
           <div class="section">
             <div class="section-heading">
@@ -47,6 +60,10 @@
             <p id="current-path" class="path-display"></p>
             <ul id="entry-list" class="entry-list"></ul>
           </div>
+          <!-- <div class="section skills-section" hidden>
+            <p class="section-label">Skills</p>
+            <ul id="skill-list" class="skill-list"></ul>
+          </div> -->
         </aside>
 
         <section class="viewer">
@@ -54,14 +71,37 @@
             <div>
               <p class="section-label">File</p>
               <p id="file-path" class="path-display">Select a file to view its contents.</p>
+              <p id="workflow-type" class="workflow-type" hidden></p>
             </div>
-            <p id="status" class="status"></p>
+            <div class="viewer-actions">
+              <button id="markdown-toggle" type="button" hidden>Show rendered</button>
+              <p id="status" class="status"></p>
+            </div>
           </div>
-          <pre id="file-content" class="file-content"></pre>
+          <div id="file-content" class="file-content"></div>
+          <!-- <div id="agent-config-panel" class="editor-panel" hidden>
+            <div class="editor-panel-header agent-config-header">
+              <p class="section-label">Agent config</p>
+              <div class="agent-config-actions">
+                <select id="agent-skill-select">
+                  <option value="">Pick a skill</option>
+                </select>
+                <button id="agent-add-skill" type="button">Add skill</button>
+                <button id="agent-config-save" type="button">Save agent config</button>
+              </div>
+            </div>
+            <textarea
+              id="agent-config-textarea"
+              spellcheck="false"
+              aria-label="Agent config JSON editor"
+            ></textarea>
+          </div> -->
         </section>
       </main>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

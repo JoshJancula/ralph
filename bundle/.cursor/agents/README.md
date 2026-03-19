@@ -4,7 +4,17 @@ This directory holds **prebuilt agent** definitions for Cursor-driven runs. Each
 
 The same schema applies under `.claude/agents/` for Claude CLI runs so tooling can validate and apply configuration consistently.
 
-## File location
+## Official Cursor subagents (native)
+
+So that Cursor's built-in agent can delegate to these roles, each agent is also defined in **official Cursor subagent format**: a single Markdown file with YAML frontmatter in this directory (e.g. `research.md`, `architect.md`). See [Cursor Subagents](https://cursor.com/docs/subagents).
+
+- **File:** `.cursor/agents/<name>.md` (e.g. `.cursor/agents/code-review.md`)
+- **Frontmatter:** `name`, `description`, optional `model`, `readonly`, `is_background`
+- **Body:** Prompt/instructions for the subagent
+
+Ralph orchestration continues to use `<agent-id>/config.json`. The `.md` files are for Cursor's native subagent discovery and slash invocation (e.g. `/code-review` or "use the code-review subagent").
+
+## File location (Ralph schema)
 
 - **Cursor:** `.cursor/agents/<agent-id>/config.json`
 - **Claude:** `.claude/agents/<agent-id>/config.json`
