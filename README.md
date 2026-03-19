@@ -6,13 +6,13 @@
 
 | Path | Purpose |
 |------|---------|
-| [.ralph/](.ralph/) | Orchestrator (`orchestrator.sh`), cleanup, `plan.template`, `new-agent.sh`, orchestration templates |
-| [.cursor/ralph/](.cursor/ralph/) | Cursor CLI plan loop, templates, model selection, agent-config helper |
-| [.claude/ralph/](.claude/ralph/) | Claude headless plan loop + templates |
-| [.codex/ralph/](.codex/ralph/) | Codex `exec` plan loop + templates |
+| [.ralph/](/bundle/.ralph/) | Orchestrator (`orchestrator.sh`), cleanup, `plan.template`, `new-agent.sh`, orchestration templates |
+| [.cursor/ralph/](/bundle/.cursor/ralph/) | Cursor CLI plan loop, templates, model selection, agent-config helper |
+| [.claude/ralph/](/bundle/.claude/ralph/) | Claude headless plan loop + templates |
+| [.codex/ralph/](/bundle/.codex/ralph/) | Codex `exec` plan loop + templates |
 | [ralph-dashboard/](ralph-dashboard/) | Optional local UI for plans, artifacts, and logs (same path in this repo and after install) |
 
-Logs and artifacts typically land under `.agents/logs/` and `.agents/artifacts/` (see each runner README: [.cursor/ralph/README.md](.cursor/ralph/README.md), [.codex/ralph/README.md](.codex/ralph/README.md), or the [bundle](bundle/) tree).
+Logs and artifacts typically land under `.agents/logs/` and `.agents/artifacts/` (see each runner README: [.cursor/ralph/README.md](.cursor/ralph/README.md), [.codex/ralph/README.md](/bundle/.codex/ralph/README.md), or the [bundle](bundle/) tree).
 
 **`repo-context`** is a generic template: edit each runtime's `skills/repo-context/SKILL.md` with your layout, stack, and commands (or merge into one shared path if you prefer).
 
@@ -42,7 +42,7 @@ git submodule update --init
 ### Option B: One-time copy
 
 ```bash
-git clone <YOUR_RALPH_REPO_URL> /tmp/ralph
+git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
 /tmp/ralph/install.sh /path/to/your-repo
 rm -rf /tmp/ralph
 ```
@@ -50,7 +50,7 @@ rm -rf /tmp/ralph
 ### Option C: Subtree (vendored history)
 
 ```bash
-git subtree add --prefix vendor/ralph https://github.com/you/ralph.git main --squash
+git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash
 ./vendor/ralph/install.sh
 ```
 
@@ -168,12 +168,12 @@ RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh
 
 - [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) &mdash; plan loop, orchestrator, new-agent, cleanup  
 - [docs/CLAUDE-AGENT-TEAMS.md](docs/CLAUDE-AGENT-TEAMS.md) &mdash; Claude Code agent teams with Ralph (teammates, tasks, artifacts)  
-- [.cursor/ralph/README.md](.cursor/ralph/README.md) &mdash; Cursor runner internals and portability notes  
-- [.codex/ralph/README.md](.codex/ralph/README.md) &mdash; Codex runner and env  
+- [.cursor/ralph/README.md](/bundle/.cursor/ralph/README.md) &mdash; Cursor runner internals and portability notes  
+- [.codex/ralph/README.md](/bundle/.codex/ralph/README.md) &mdash; Codex runner and env  
 - [docs/MCP.md](docs/MCP.md) &mdash; MCP server resources, prompts, and host configuration guide  
 - Per-runtime `run-plan.sh --help` where supported (under `.cursor/ralph/`, `.claude/ralph/`, `.codex/ralph/`)  
 
-For orchestration JSON shape, read the header of `.ralph/orchestrator.sh` and `.ralph/orchestration.template.json`.
+For orchestration JSON shape, read the header of [.ralph/orchestrator.sh](/bundle/.ralph/orchestrator.sh) and [.ralph/orchestration.template.json](/bundle/.ralph/orchestration.template.json).
 
 ## License
 

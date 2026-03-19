@@ -200,7 +200,7 @@ This hybrid approach leverages Claude Code's strength in parallel exploration an
 2. **Align tasks with the plan**: If the lead is driving from a Ralph plan, make the shared task list map to plan TODOs or clear sub-goals so completion is easy to reconcile.
 3. **Give teammates context**: In the spawn prompt, include the plan path, artifact paths (e.g. `.agents/artifacts/<namespace>/...`), and any Ralph rules/skills (e.g. no emoji, repo-context). Mention which files or areas each teammate owns to avoid conflicts.
 4. **Avoid file conflicts**: Assign different files or modules to different teammates so two agents don’t edit the same file and overwrite each other.
-5. **Shut down and clean up**: Ask the lead to shut down teammates when done, then “Clean up the team” so the shared team resources are removed. Use the lead for cleanup; teammates should not run cleanup themselves.
+5. **Shut down and clean up**: Ask the lead to shut down teammates when done, then “Clean up the team” so the shared team resources are removed. Use the lead for cleanup; teammates should not run cleanup themselves
 
 ## References
 

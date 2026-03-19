@@ -155,10 +155,6 @@ bash .ralph/new-agent.sh
 
 Scaffolds agent folders under `.cursor/agents/`, `.claude/agents/`, and `.codex/agents/` when those CLIs exist. Non-interactive: `bash .ralph/new-agent.sh --non-interactive` with `CURSOR_PLAN_MODEL` (and Claude/Codex model envs if needed).
 
-## Model selection
-
-Each runtime includes `select-model.sh` next to `run-plan.sh`. Runners respect `CURSOR_PLAN_MODEL`, `CLAUDE_PLAN_MODEL`, `CODEX_PLAN_MODEL` for automation.
-
 ## Cleanup
 
 After a run you can: `.ralph/cleanup-plan.sh <artifact-namespace>` to purge logs and artifacts.
