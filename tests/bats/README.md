@@ -23,6 +23,4 @@ After installing, verify `which bats` points to the expected binary and `bats --
 bats tests/bats/*.bats
 ```
 
-This single command runs every spec in the `tests/bats` directory (including `tests/bats/smoke.bats`). Stub tests are acceptable until the bash helpers are refactored into libraries. Document any future helpers required by new tests in this README and keep the README synced with the root `README.md` Testing guidance.
-
-The `Bats tests` workflow in `.github/workflows/bats.yml` runs `bats tests/bats/*.bats` on pushes and pull requests so the harness stays exercised automatically.
+This command runs every spec in the `tests/bats` directory (including `tests/bats/smoke.bats`). Stub tests are acceptable until the bash helpers are refactored into libraries. 

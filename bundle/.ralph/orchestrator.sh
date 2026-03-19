@@ -295,6 +295,19 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       exit 1
     fi
     agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
+    agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+    stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
+    agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
+    case "$agent_source" in
+      ""|prebuilt|custom) ;;
+      *)
+        log "FAIL parse: invalid agentSource '$agent_source_raw' (use prebuilt or custom)"
+        echo -e "${C_R}Invalid agentSource '${agent_source_raw}'. Use prebuilt or custom.${C_RST}" >&2
+        echo "  Log: $LOG_FILE" >&2
+        exit 1
+        ;;
+    esac
+    [[ -z "$agent_source" ]] && agent_source="prebuilt"
     plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
     planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
 
@@ -310,7 +323,9 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       artifact_paths_append_unique "$artifact_path"
     done < <(echo "$stage" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
 
-    merge_required_artifacts_from_agent "$agent" "$runtime"
+    if [[ "$agent_source" == "prebuilt" ]]; then
+      merge_required_artifacts_from_agent "$agent" "$runtime"
+    fi
 
     if ! orchestrator_validate_stage_agent_plan "$agent" "$plan_rel"; then
       log "FAIL parse: empty agent or plan for stage JSON: $stage"
@@ -413,10 +428,14 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
     art_log="${EXPECTED_ARTIFACT_PATHS[*]}"
   fi
-  log "step $step_index: runtime=$runtime agent=$agent plan=$plan_abs expected_artifacts=$art_log"
+  log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
 
   if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
-    echo "DRY RUN step $step_index: $runner_label  --agent $agent --plan $plan_rel"
+    if [[ "$agent_source" == "prebuilt" ]]; then
+      echo "DRY RUN step $step_index: $runner_label  --agent $agent --plan $plan_rel"
+    else
+      echo "DRY RUN step $step_index: $runner_label  --plan $plan_rel (custom agent: $agent)"
+    fi
     if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
       echo "  expected artifacts: ${EXPECTED_ARTIFACT_PATHS[*]}"
     fi
@@ -427,7 +446,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     continue
   fi
 
-  echo -e "${C_B}Step ${step_index}${C_RST} ${C_G}$runtime${C_RST} agent=${C_BOLD}$agent${C_RST} plan=$plan_rel"
+  echo -e "${C_B}Step ${step_index}${C_RST} ${C_G}$runtime${C_RST} agent=${C_BOLD}$agent${C_RST} source=${C_BOLD}$agent_source${C_RST} plan=$plan_rel"
 
   _plan_tag_stream="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
   _plan_tag_stream="${_plan_tag_stream//[^A-Za-z0-9_.-]/_}"
@@ -441,7 +460,11 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   echo "" >&2
   echo -e "${C_DIM}Invoking:${C_RST} $runner_label" >&2
-  echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --plan <plan> --agent $agent <workspace>" >&2
+  if [[ "$agent_source" == "prebuilt" ]]; then
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --plan <plan> --agent $agent <workspace>" >&2
+  else
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --plan <plan> <workspace>" >&2
+  fi
   echo -e "${C_DIM}  orchestrator log (append):${C_RST} $LOG_FILE" >&2
   echo -e "${C_DIM}  per-plan agent output log:${C_RST} $_runner_stream_log" >&2
   echo -e "${C_DIM}--- runner / agent output follows ---${C_RST}" >&2
@@ -452,11 +475,30 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     RALPH_PLAN_KEY="$(basename "$plan_abs" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
     RALPH_ORCH_FILE="$RALPH_ORCH_FILE"
   )
+  if [[ -n "$stage_model" ]]; then
+    if [[ "$runtime" == "cursor" ]]; then
+      _runner_env+=(CURSOR_PLAN_MODEL="$stage_model")
+    elif [[ "$runtime" == "codex" ]]; then
+      _runner_env+=(CODEX_PLAN_MODEL="$stage_model")
+    else
+      _runner_env+=(CLAUDE_PLAN_MODEL="$stage_model")
+    fi
+  fi
+  _runner_args=(--non-interactive --plan "$plan_abs")
+  if [[ "$agent_source" == "prebuilt" ]]; then
+    _runner_args+=(--agent "$agent")
+  elif [[ -z "$stage_model" ]]; then
+    log "FAIL step $step_index: custom agent '$agent' requires stage model"
+    echo -e "${C_R}${C_BOLD}Step $step_index failed (missing model for custom agent)${C_RST}" >&2
+    echo "  Add \"model\" to this stage in $ORCH_FILE or choose a prebuilt agent." >&2
+    echo "  Log: $LOG_FILE" >&2
+    exit 1
+  fi
   if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] && [[ -t 1 ]] && command -v tee >/dev/null 2>&1; then
-    env "${_runner_env[@]}" bash "$runner" --non-interactive --plan "$plan_abs" --agent "$agent" "$WORKSPACE" 2>&1 | tee -a "$LOG_FILE"
+    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" "$WORKSPACE" 2>&1 | tee -a "$LOG_FILE"
     rc=${PIPESTATUS[0]}
   else
-    env "${_runner_env[@]}" bash "$runner" --non-interactive --plan "$plan_abs" --agent "$agent" "$WORKSPACE" >>"$LOG_FILE" 2>&1
+    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" "$WORKSPACE" >>"$LOG_FILE" 2>&1
     rc=$?
   fi
   set -e

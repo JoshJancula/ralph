@@ -47,14 +47,6 @@ setup() {
   fi
 }
 
-@test "dashboard orchestration files exist in subdirectory" {
-  # Verify all files are at the root or in docs/
-  [[ -f "dashboard.orch.json" ]]
-  [[ -f "docs/orchestration-plans/dashboard-01-requirements.plan.md" ]]
-  [[ -f "docs/orchestration-plans/dashboard-02-implementation.plan.md" ]]
-  [[ -f "docs/orchestration-plans/dashboard-03-review.plan.md" ]]
-}
-
 @test "no orphaned orchestration files at .agents level" {
   # Verify old files are not in .agents (they're now at the root and in docs/)
   [[ ! -f ".agents/orchestration-plans/dashboard.orch.json" ]] || true

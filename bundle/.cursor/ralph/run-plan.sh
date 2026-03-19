@@ -367,9 +367,9 @@ mkdir -p "$(dirname "$OUTPUT_LOG")"
   echo "################################################################################"
 } >> "$OUTPUT_LOG"
 
-if [[ "$NON_INTERACTIVE_FLAG" == "1" && -z "$PREBUILT_AGENT" ]]; then
-  log "ERROR: --non-interactive requires --agent <name>"
-  echo -e "${C_R}${C_BOLD}Non-interactive mode requires an explicit agent.${C_RST} Use --agent <name>." >&2
+if [[ "$NON_INTERACTIVE_FLAG" == "1" && -z "$PREBUILT_AGENT" && -z "${CURSOR_PLAN_MODEL:-}" ]]; then
+  log "ERROR: --non-interactive requires --agent <name> or CURSOR_PLAN_MODEL"
+  echo -e "${C_R}${C_BOLD}Non-interactive mode requires either a prebuilt agent or CURSOR_PLAN_MODEL.${C_RST}" >&2
   exit 1
 fi
 
