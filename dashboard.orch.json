@@ -1,15 +1,7 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-mkdir -p .agents/artifacts/dashboard
-mkdir -p .agents/logs
-
-cat > dashboard.orch.json << 'EOF'
 {
   "name": "dashboard-three-runtime",
   "namespace": "dashboard",
-  "description": "Single orchestration across Cursor (research), Codex (implementation), and Claude (code-review) for a local dashboard.",
+  "description": "Single orchestration across Cursor (research), Codex (implementation), and Claude (code-review) for a local dashboard that browses .agents plans and artifacts and tails logs. Dashboard must be plain HTML/CSS/JS only: no Node.js, no npm, no node_modules, no bundlers. Uses boilerplate-aligned agents: research, implementation, code-review.",
   "stages": [
     {
       "id": "research",
@@ -22,7 +14,7 @@ cat > dashboard.orch.json << 'EOF'
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true,
-          "description": "Research and requirements for the dashboard."
+          "description": "Research and requirements for the dashboard (include product constraints: generic HTML/JS, no Node/npm/node_modules)."
         }
       ],
       "artifacts": [
@@ -87,20 +79,3 @@ cat > dashboard.orch.json << 'EOF'
     }
   ]
 }
-EOF
-
-
-cat > .agents/artifacts/dashboard/research.md << 'EOF'
-# Research Output
-Placeholder research artifact.
-EOF
-
-cat > .agents/artifacts/dashboard/implementation-handoff.md << 'EOF'
-# Implementation Handoff
-Placeholder implementation artifact.
-EOF
-
-cat > .agents/artifacts/dashboard/code-review.md << 'EOF'
-# Code Review Output
-Placeholder code review artifact.
-EOF

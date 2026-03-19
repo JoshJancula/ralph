@@ -5,15 +5,16 @@ runners can execute multiple agents in sequence. Use **`.ralph/orchestrator.sh`*
 with a single JSON `.orch.json` file. Set each stage's `"runtime"` to `cursor`,
 `claude`, or `codex` to run that stage with the matching `run-plan.sh`.
 
-Copy the JSON template to `.agents/orchestration-plans/my-feature/my-feature.orch.json`,
-adjust the stage plan paths, and then run one of the orchestrators:
+Copy the JSON template to `my-feature.orch.json` at the repository root,
+adjust the stage plan paths to point to your docs (e.g., `docs/orchestration-plans/my-feature-01-research.plan.md`), and then run one of the orchestrators:
 
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
+.ralph/orchestrator.sh my-feature.orch.json
 ```
 
 See `.agents/artifacts/README.md` for the required sections inside each handoff
-file.
+file. Stage plans should be kept in version control (e.g., under `docs/orchestration-plans/`)
+since `.agents/` is git-ignored and only contains generated outputs.
 
 ---
 
@@ -44,7 +45,7 @@ unless absolute.
   per-stage.)
 
 `PATH_TO_STAGE_PLAN` is the Ralph task plan (markdown with `- [ ]` TODOs). Use one
-small plan per stage, for example under `.agents/orchestration-plans/{{ARTIFACT_NS}}/`.
+small plan per stage, for example under `docs/orchestration-plans/` so plans stay in version control.
 
 ---
 
@@ -64,7 +65,7 @@ handoff file to write:
 
 ## Example pipelines
 
-JSON example (copy from `.ralph/orchestration.template.json` and edit):
+JSON example (see `dashboard.orch.json` at the repository root as a complete example):
 
 ```json
 {
@@ -75,7 +76,7 @@ JSON example (copy from `.ralph/orchestration.template.json` and edit):
       "id": "research",
       "agent": "research",
       "runtime": "cursor",
-      "plan": ".agents/orchestration-plans/my-feature/my-feature-01-research.plan.md",
+      "plan": "docs/orchestration-plans/my-feature-01-research.plan.md",
       "artifacts": [
         {
           "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",

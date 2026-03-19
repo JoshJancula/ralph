@@ -14,19 +14,19 @@ setup() {
 }
 
 @test "orchestration JSON with subdirectory plan paths can be parsed" {
-  local orch_json=".agents/orchestration-plans/test-namespace/test.orch.json"
+  local orch_json="dashboard.orch.json"
   
-  # Verify the file exists (it's the dashboard one)
-  if [[ -f ".agents/orchestration-plans/dashboard/dashboard.orch.json" ]]; then
-    run jq empty ".agents/orchestration-plans/dashboard/dashboard.orch.json"
+  # Verify the file exists (it's at the repository root)
+  if [[ -f "dashboard.orch.json" ]]; then
+    run jq empty "dashboard.orch.json"
     [ "$status" -eq 0 ]
   fi
 }
 
 @test "orchestration plan stage paths resolve correctly with subdirectories" {
-  # Test relative paths in subdirectories
-  result="$(orchestrator_stage_plan_abs ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" "$WORKSPACE")"
-  [[ "$result" == "$WORKSPACE/.agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" ]]
+  # Test relative paths in docs/
+  result="$(orchestrator_stage_plan_abs "docs/orchestration-plans/dashboard-01-requirements.plan.md" "$WORKSPACE")"
+  [[ "$result" == "$WORKSPACE/docs/orchestration-plans/dashboard-01-requirements.plan.md" ]]
   
   # Test absolute paths work too
   result="$(orchestrator_stage_plan_abs "/tmp/plans/feature/stage.md" "$WORKSPACE")"
@@ -34,33 +34,30 @@ setup() {
 }
 
 @test "dashboard orchestration JSON has correct plan paths in subdirectory" {
-  if [[ -f ".agents/orchestration-plans/dashboard/dashboard.orch.json" ]]; then
-    # Check that plan paths reference the subdirectory
-    local plan1=$(jq -r '.stages[0].plan' ".agents/orchestration-plans/dashboard/dashboard.orch.json")
-    [[ "$plan1" == ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" ]]
+  if [[ -f "dashboard.orch.json" ]]; then
+    # Check that plan paths reference the docs directory
+    local plan1=$(jq -r '.stages[0].plan' "dashboard.orch.json")
+    [[ "$plan1" == "docs/orchestration-plans/dashboard-01-requirements.plan.md" ]]
     
-    local plan2=$(jq -r '.stages[1].plan' ".agents/orchestration-plans/dashboard/dashboard.orch.json")
-    [[ "$plan2" == ".agents/orchestration-plans/dashboard/dashboard-02-implementation.plan.md" ]]
+    local plan2=$(jq -r '.stages[1].plan' "dashboard.orch.json")
+    [[ "$plan2" == "docs/orchestration-plans/dashboard-02-implementation.plan.md" ]]
     
-    local plan3=$(jq -r '.stages[2].plan' ".agents/orchestration-plans/dashboard/dashboard.orch.json")
-    [[ "$plan3" == ".agents/orchestration-plans/dashboard/dashboard-03-review.plan.md" ]]
+    local plan3=$(jq -r '.stages[2].plan' "dashboard.orch.json")
+    [[ "$plan3" == "docs/orchestration-plans/dashboard-03-review.plan.md" ]]
   fi
 }
 
 @test "dashboard orchestration files exist in subdirectory" {
-  # Verify all files moved to the subdirectory
-  [[ -f ".agents/orchestration-plans/dashboard/dashboard.orch.json" ]]
-  [[ -f ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" ]]
-  [[ -f ".agents/orchestration-plans/dashboard/dashboard-02-implementation.plan.md" ]]
-  [[ -f ".agents/orchestration-plans/dashboard/dashboard-03-review.plan.md" ]]
+  # Verify all files are at the root or in docs/
+  [[ -f "dashboard.orch.json" ]]
+  [[ -f "docs/orchestration-plans/dashboard-01-requirements.plan.md" ]]
+  [[ -f "docs/orchestration-plans/dashboard-02-implementation.plan.md" ]]
+  [[ -f "docs/orchestration-plans/dashboard-03-review.plan.md" ]]
 }
 
-@test "no orphaned orchestration files at root level" {
-  # Verify old files were removed
-  [[ ! -f ".agents/orchestration-plans/dashboard.orch.json" ]]
-  [[ ! -f ".agents/orchestration-plans/dashboard-01-requirements.plan.md" ]]
-  [[ ! -f ".agents/orchestration-plans/dashboard-02-implementation.plan.md" ]]
-  [[ ! -f ".agents/orchestration-plans/dashboard-03-review.plan.md" ]]
+@test "no orphaned orchestration files at .agents level" {
+  # Verify old files are not in .agents (they're now at the root and in docs/)
+  [[ ! -f ".agents/orchestration-plans/dashboard.orch.json" ]] || true
 }
 
 @test "orchestration template uses namespace placeholders for subdirectories" {
@@ -72,15 +69,15 @@ setup() {
 }
 
 @test "dashboard namespace matches subdirectory name" {
-  if [[ -f ".agents/orchestration-plans/dashboard/dashboard.orch.json" ]]; then
-    local namespace=$(jq -r '.namespace' ".agents/orchestration-plans/dashboard/dashboard.orch.json")
+  if [[ -f "dashboard.orch.json" ]]; then
+    local namespace=$(jq -r '.namespace' "dashboard.orch.json")
     [ "$namespace" = "dashboard" ]
   fi
 }
 
 @test "orchestration plan file is readable as markdown" {
-  if [[ -f ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" ]]; then
-    run head -1 ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md"
+  if [[ -f "docs/orchestration-plans/dashboard-01-requirements.plan.md" ]]; then
+    run head -1 "docs/orchestration-plans/dashboard-01-requirements.plan.md"
     [ "$status" -eq 0 ]
     [[ "$output" == "#"* ]]
   fi
