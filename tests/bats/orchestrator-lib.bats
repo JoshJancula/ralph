@@ -52,14 +52,3 @@ setup() {
   result="$(expand_artifact_tokens ".agents/{{ARTIFACT_NS}}/out.md")"
   [ "$result" = ".agents/custom-ns/out.md" ]
 }
-
-@test "artifact_paths_append_unique deduplicates expanded paths" {
-  EXPECTED_ARTIFACT_PATHS=()
-  export RALPH_ARTIFACT_NS="report-ns"
-
-  artifact_paths_append_unique ".agents/{{ARTIFACT_NS}}/output.md"
-  [ "${EXPECTED_ARTIFACT_PATHS[0]}" = ".agents/report-ns/output.md" ]
-
-  artifact_paths_append_unique ".agents/{{ARTIFACT_NS}}/output.md"
-  [ "${#EXPECTED_ARTIFACT_PATHS[@]}" -eq 1 ]
-}

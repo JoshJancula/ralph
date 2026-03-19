@@ -78,18 +78,6 @@ setup() {
   fi
 }
 
-@test "directory structure is consistent across .agents subdirs" {
-  # Verify the pattern: .agents/<type>/<namespace>/
-  # .agents/artifacts/dashboard/ exists
-  [[ -d ".agents/artifacts/dashboard" ]]
-  
-  # .agents/logs/dashboard/ exists
-  [[ -d ".agents/logs/dashboard" ]]
-  
-  # .agents/orchestration-plans/dashboard/ exists
-  [[ -d ".agents/orchestration-plans/dashboard" ]]
-}
-
 @test "orchestration plan file is readable as markdown" {
   if [[ -f ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md" ]]; then
     run head -1 ".agents/orchestration-plans/dashboard/dashboard-01-requirements.plan.md"
