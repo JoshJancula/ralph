@@ -26,5 +26,8 @@ jobs:
       - name: Set up Bats
         uses: bats-core/bats-action@4.0.0
 
+      - name: Generate test fixtures for .agents/
+        run: bash scripts/setup-test-fixtures.sh
+
       - name: Run Bats suite
         run: bats tests/bats/*.bats
