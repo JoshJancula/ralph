@@ -14,6 +14,7 @@
 ## Multi-stage orchestration
 
 1. Copy `.ralph/orchestration.template.json` and `.ralph/orchestration.template.md`.
+   Alternatively, run `.ralph/orchestration-wizard.sh` to choose a pipeline name/namespace, pick runtimes and agents for each stage, and let the wizard scaffold the plan files plus `.orch.json` under `.agents/orchestration-plans/<namespace>/`.
 2. Each stage has `"runtime": "cursor" | "claude" | "codex"`, `"agent"`, and `"plan"`.
 3. Run: `.ralph/orchestrator.sh path/to/pipeline.orch.json`
 
@@ -81,6 +82,12 @@ Include:
 - Research tasks that explore modules/files, gather questions, and capture findings in `.agents/artifacts/{{ARTIFACT_NS}}/research.md`.
 - Architecture tasks that produce design docs, interfaces, and artifact handoffs like `.agents/artifacts/{{ARTIFACT_NS}}/architecture.md`.
 - Implementation tasks that list files/commands, include verification steps (`npm run lint`, `npm run test`), and mention QA or rollback notes.
+```
+
+**Orchestration spec prompt**
+
+```
+I am coordinating [FEATURE] across Cursor, Claude, and Codex. Each stage plan already exists under `.agents/orchestration-plans/<namespace>/`. Produce a `.agents/orchestration-plans/<namespace>/<namespace>.orch.json` that wires those plans together, assigns a runtime and agent for each stage, and lists the required artifact files (research.md, architecture.md, implementation-handoff.md, etc.). If a reviewer should send work back to an earlier stage, include `loopControl`.
 ```
 
 ### Orchestration JSON example

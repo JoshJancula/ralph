@@ -144,6 +144,8 @@ Use `.ralph/orchestrator.sh` with a JSON spec containing stages, runtimes, agent
 .ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
+If writing the JSON by hand feels tedious, run `.ralph/orchestration-wizard.sh` first. The wizard interactively asks for the pipeline name, namespace, runtimes, and agents, then copies `.ralph/plan.template` into `.agents/orchestration-plans/<namespace>/` for each stage, publishes matching artifact directories, and writes a starter `.orch.json`. Review the generated plans, use the prompts in `docs/AGENT-WORKFLOW.md` to tell an agent exactly what to do, and rerun the wizard any time you need a new pipeline layout.
+
 Each stage can run Cursor, Claude, or Codex independently; the orchestrator enforces artifact existence/non-empty values before advancing. Review the walkthrough and artifacts schema in [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md), especially sections on stage plans, `loopControl`, and feedback loops. For guided examples (full worker run and a multi-stage orchestrated pipeline), see [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md) and [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md).
 
 ### Runtime and agent references

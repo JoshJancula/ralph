@@ -86,17 +86,42 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
 }
 ```
 
+## 7. Prompting an agent
+
+Use these prompts after the wizard scaffolds the files to ask an agent to fill the TODOs and write the orchestration spec. Paste the prompt at the top of a plan or JSON file so the agent knows exactly where to write.
+
+**Stage plan prompt**
+
+```
+I need a stage plan for [STAGE-TYPE] that lives in `.agents/orchestration-plans/<namespace>/<namespace>-<NN>-<stage>.plan.md`. Base it on `.ralph/plan.template`, break the work into discrete `- [ ]` TODOs, mention the files or modules touched, include validation commands (lint/test/build), and surface the artifact file under `.agents/artifacts/<namespace>/` that you will deliver. The plan should be detailed enough that the orchestrator can run the stage and verify the artifacts automatically.
+```
+
+**Orchestration spec prompt**
+
+```
+I am coordinating [FEATURE] across multiple runtimes. Each stage plan already exists under `.agents/orchestration-plans/<namespace>/`. Produce a `.agents/orchestration-plans/<namespace>/<namespace>.orch.json` that wires those plans together in order, sets a runtime (Cursor/Claude/Codex) and agent for each, points to the correct plan paths, lists the required artifact files (research.md, architecture.md, implementation-handoff.md, etc.), and includes `loopControl` when a reviewer should send work back to an earlier stage.
+```
+
 Set `runtime` per stage to decide if Cursor/Claude/Codex runs that piece. Use `loopControl` to rerun implementation if the review stage signals `status: changes-required`.
 
-## 3. Running the orchestrator
+## 3. Scaffold the pipeline
 
+Before you run the orchestrator, let `.ralph/orchestration-wizard.sh` walk you through the tedious parts. The wizard asks for a pipeline name, namespace, stage runtimes, and agent IDs, then copies `.ralph/plan.template` into `.agents/orchestration-plans/<namespace>/<namespace>-NN-<stage>.plan.md`, creates the artifact directory under `.agents/artifacts/<namespace>/`, and writes a starter orchestration spec that matches your selections. Answer the prompts, replace the placeholder TODOs with the tasks you need, and verify each plan mentions the files to touch, validation commands, and artifact handoffs so the orchestrator can validate output.
+
+```bash
+.ralph/orchestration-wizard.sh
+```
+
+After the wizard finishes, edit each stage plan and follow the prompts in `docs/AGENT-WORKFLOW.md` when you ask an agent to complete the TODOs.
+
+## 4. Running the orchestrator
 ```bash
 .ralph/orchestrator.sh --orchestration .agents/orchestration-plans/feature/notifications-pipeline.orch.json
 ```
 
 Each stage executes the referenced plan with its runtime CLI. The orchestrator checks that required artifacts exist and are non-empty before moving to the next stage, so ensure plans write the expected artifact files.
 
-## 4. Artifact contract verification
+## 5. Artifact contract verification
 
 After every stage:
 
@@ -104,7 +129,7 @@ After every stage:
 - Confirm artifacts under `.agents/artifacts/{{ARTIFACT_NS}}/` are created and contain the sections described in `.agents/artifacts/README.md`.
 - Use `.ralph/cleanup-plan.sh <namespace>` before rerunning the orchestrator if you need to reset logs/artifacts.
 
-## 5. Orchestration lifecycle (sequence)
+## 6. Orchestration lifecycle (sequence)
 
 The diagram below shows a minimal chain: research, implementation (fed by research), then code review. **Code review** rejection uses `loopControl.loopBackTo: implementation` until pass or `maxIterations`. Stages can use different `runtime` values (Cursor, Claude, Codex).
 
