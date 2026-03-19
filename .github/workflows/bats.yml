@@ -16,6 +16,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Restore symlinks from bundle
+        run: |
+          ln -s bundle/.ralph .ralph
+          ln -s bundle/.cursor .cursor
+          ln -s bundle/.codex .codex
+          ln -s bundle/.claude .claude
+
       - name: Set up Bats
         uses: bats-core/bats-action@4.0.0
 
