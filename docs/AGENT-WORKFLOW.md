@@ -76,7 +76,13 @@ Break the task into discrete TODOs (`- [ ]`). For each item, mention the files t
 **Stage plan prompt for orchestrations**
 
 ```
-Create three stage plans (research, architecture, implementation) using `.ralph/plan.template`. Save each to `.agents/orchestration-plans/<namespace>/<namespace>-01-research.plan.md`, `.agents/orchestration-plans/<namespace>/<namespace>-02-architecture.plan.md`, etc.
+Create three stage plans (research, architecture, implementation)
+using `.ralph/plan.template`.
+
+Save each plan under `.agents/orchestration-plans/<namespace>/`:
+- `<namespace>-01-research.plan.md`
+- `<namespace>-02-architecture.plan.md`
+- `<namespace>-03-implementation.plan.md`
 
 Include:
 - Research tasks that explore modules/files, gather questions, and capture findings in `.agents/artifacts/{{ARTIFACT_NS}}/research.md`.
@@ -87,7 +93,19 @@ Include:
 **Orchestration spec prompt**
 
 ```
-I am coordinating [FEATURE] across Cursor, Claude, and Codex. Each stage plan already exists under `.agents/orchestration-plans/<namespace>/`. Produce a `.agents/orchestration-plans/<namespace>/<namespace>.orch.json` that wires those plans together, assigns a runtime and agent for each stage, and lists the required artifact files (research.md, architecture.md, implementation-handoff.md, etc.). If a reviewer should send work back to an earlier stage, include `loopControl`.
+I am coordinating [FEATURE] across Cursor, Claude, and Codex.
+Each stage plan already exists under
+`.agents/orchestration-plans/<namespace>/`.
+
+Produce `.agents/orchestration-plans/<namespace>/<namespace>.orch.json`
+that:
+- wires those stage plans together,
+- assigns a runtime and agent for each stage,
+- lists required artifact files (research.md, architecture.md,
+  implementation-handoff.md, etc.).
+
+If a reviewer should send work back to an earlier stage,
+include `loopControl`.
 ```
 
 ### Orchestration JSON example

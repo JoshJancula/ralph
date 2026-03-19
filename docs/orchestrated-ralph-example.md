@@ -112,6 +112,22 @@ Before you run the orchestrator, let `.ralph/orchestration-wizard.sh` walk you t
 .ralph/orchestration-wizard.sh
 ```
 
+Typical wizard flow:
+
+1. Start the wizard from repo root:
+
+   ```bash
+   .ralph/orchestration-wizard.sh
+   ```
+
+2. Enter a pipeline name and namespace (for example `notifications`), then pick runtimes and agents for each stage. The wizard writes:
+   - `.agents/orchestration-plans/<namespace>/<namespace>-01-*.plan.md`
+   - `.agents/orchestration-plans/<namespace>/<namespace>.orch.json`
+   - `.agents/artifacts/<namespace>/` with starter artifact docs
+3. Open each generated stage plan and replace placeholder TODOs with concrete tasks, expected artifact outputs, and verification commands (`npm run lint`, `npm run test`, etc.).
+4. If needed, edit the generated `.orch.json` to add extra stages, enforce required artifacts, or configure `loopControl` for review/rework cycles.
+5. Run the orchestrator using that generated spec and inspect `.agents/logs/` plus `.agents/artifacts/<namespace>/` after each stage.
+
 After the wizard finishes, edit each stage plan and follow the prompts in `docs/AGENT-WORKFLOW.md` when you ask an agent to complete the TODOs.
 
 ## 4. Running the orchestrator
