@@ -211,6 +211,30 @@ List Codex-relevant skills and workflows for this agent.
 EOF
 }
 
+write_codex_toml() {
+  local desc_json
+  desc_json="$(json_string "$DESCRIPTION")"
+  mkdir -p "$REPO_ROOT/.codex/agents"
+  cat <<EOF >"$REPO_ROOT/.codex/agents/$AGENT_ID.toml"
+# Codex custom agent: official subagent format (developers.openai.com/codex/subagents)
+
+name = "$AGENT_ID"
+description = $desc_json
+
+sandbox_mode = "read-only"
+
+developer_instructions = """
+You are the $AGENT_ID agent. $DESCRIPTION
+
+When invoked:
+1. Follow the plan or prompt instructions and respect the no-emoji rule defined in .codex/rules/no-emoji.md.
+2. Use the repo-context skill when you need build/test/run information.
+3. Deliver the primary output to .agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md as specified by the orchestrator plan.
+Do not use emojis in any output.
+"""
+EOF
+}
+
 main() {
   local NO_INTERACTIVE=0
   while [[ $# -gt 0 ]]; do
@@ -273,6 +297,7 @@ main() {
   write_cursor_agent
   [[ "$SCAFFOLD_CLAUDE" -eq 1 ]] && write_claude_agent
   [[ "$SCAFFOLD_CODEX" -eq 1 ]] && write_codex_agent
+  [[ "$SCAFFOLD_CODEX" -eq 1 ]] && write_codex_toml
 
   echo ""
   echo "Done. Created agent '$AGENT_ID' at:"

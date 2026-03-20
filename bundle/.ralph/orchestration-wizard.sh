@@ -684,15 +684,25 @@ for idx in "${!stages[@]}"; do
   fi
 
   if [[ -n "$stage_input_list" ]]; then
-    input_json_items=()
+    input_artifact_entries=()
     IFS=',' read -r -a input_stage_arr <<< "$stage_input_list"
     for input_stage in "${input_stage_arr[@]}"; do
       input_stage="$(sanitize "$input_stage")"
-      [[ -n "$input_stage" ]] || continue
-      input_json_items+=("\"$input_stage\"")
+      [[ -z "$input_stage" ]] && continue
+      input_artifact_base="$(artifact_file_for_stage "$input_stage")"
+      input_artifact_entries+=("        {\n          \"path\": \".agents/artifacts/$namespace/$input_artifact_base\"\n        }")
     done
-    if [[ ${#input_json_items[@]} -gt 0 ]]; then
-      entry="$entry,\n      \"inputFromStages\": [$(IFS=', '; printf '%s' "${input_json_items[*]}")]"
+    if (( ${#input_artifact_entries[@]} > 0 )); then
+      entry="$entry,\n      \"inputArtifacts\": [\n"
+      for idx in "${!input_artifact_entries[@]}"; do
+        entry="$entry${input_artifact_entries[$idx]}"
+        if (( idx < ${#input_artifact_entries[@]} - 1 )); then
+          entry="$entry,\n"
+        else
+          entry="$entry\n"
+        fi
+      done
+      entry="$entry      ]"
     fi
   fi
 
