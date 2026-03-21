@@ -1,84 +1,131 @@
 #!/usr/bin/env bash
-# Run one plan TODO at a time; loops until all TODOs are complete.
-# Requires Cursor CLI (agent or cursor-agent); see https://cursor.com/docs/cli/installation
-# Switch plans by editing .cursor/ralph/plan-runner.json or pass --plan.
+#
+# Unified multi-runtime runner for Cursor, Claude, and Codex.
+# Usage examples:
+#   .ralph/run-plan.sh --runtime cursor --plan PLAN.md
+#   .ralph/run-plan.sh --runtime claude --plan PLAN.md --agent research --non-interactive
+#   .ralph/run-plan.sh --runtime cursor --model <id> --plan PLAN.md
+#   RALPH_PLAN_RUNTIME=codex .ralph/run-plan.sh --plan PLAN.md /path/to/workspace
+# The flags (including `--runtime`, optional when interactive) must be supplied before the optional
+# workspace positional argument; the workspace path is the final positional argument.
+# CLIs required by runtime:
+#   Cursor: https://cursor.com/docs/cli/installation
+#   Claude:  https://code.claude.com/docs/en/overview
+#   Codex:   https://developers.openai.com/codex/cli/reference
+# Aggregated env vars (runtime-specific pipeline merges Cursor → Claude → Codex):
+#   Verbose:      CURSOR_PLAN_VERBOSE / CLAUDE_PLAN_VERBOSE / CODEX_PLAN_VERBOSE
+#   Color:        CURSOR_PLAN_NO_COLOR / CLAUDE_PLAN_NO_COLOR / CODEX_PLAN_NO_COLOR
+#   Logs:         CURSOR_PLAN_LOG / CURSOR_PLAN_OUTPUT_LOG +
+#                 CLAUDE_PLAN_LOG / CLAUDE_PLAN_OUTPUT_LOG +
+#                 CODEX_PLAN_LOG / CODEX_PLAN_OUTPUT_LOG
+#   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER
+#   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER
+#   Progress:     CURSOR_PLAN_PROGRESS_INTERVAL / CLAUDE_PLAN_PROGRESS_INTERVAL / CODEX_PLAN_PROGRESS_INTERVAL
+#   Caffeinate:   CURSOR_PLAN_NO_CAFFEINATE / CLAUDE_PLAN_NO_CAFFEINATE / CODEX_PLAN_NO_CAFFEINATE
+#   Human prompts: CURSOR_PLAN_DISABLE_HUMAN_PROMPT / CLAUDE_PLAN_DISABLE_HUMAN_PROMPT / CODEX_PLAN_DISABLE_HUMAN_PROMPT
+#                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN
+#   Human offline (no TTY): RALPH_HUMAN_POLL_INTERVAL (default 2), RALPH_HUMAN_OFFLINE_EXIT=1 to exit 4 instead of waiting
+# A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
-#   .cursor/ralph/run-plan.sh                    # run from repo root (plan from config)
-#   .cursor/ralph/run-plan.sh /path/repo         # run from specific repo
-#   .cursor/ralph/run-plan.sh --plan OTHER.md    # use OTHER.md as plan (repo root)
-#   .cursor/ralph/run-plan.sh --plan docs/plan.md /path/repo
-#   .cursor/ralph/run-plan.sh --agent research    # use prebuilt agent model + context from .cursor/agents/research/
-#   .cursor/ralph/run-plan.sh --select-agent      # interactive pick of prebuilt agent (TTY)
-#   .cursor/ralph/run-plan.sh --non-interactive --agent research --plan PLAN.md
-#   (--no-interactive is an alias for --non-interactive; no model menu when agent/config supplies model)
+#   .ralph/run-plan.sh --runtime cursor --plan PLAN.md
+#   .ralph/run-plan.sh --runtime claude --plan PLAN.md /path/repo
+#   .ralph/run-plan.sh --runtime codex --plan OTHER.md
+#   .ralph/run-plan.sh --runtime cursor --plan docs/plan.md /path/repo
+#   .ralph/run-plan.sh --runtime cursor --plan PLAN.md --agent research
+#   .ralph/run-plan.sh --runtime cursor --select-agent --plan PLAN.md
+#   .ralph/run-plan.sh --runtime claude --non-interactive --agent research --plan PLAN.md
+#   .ralph/run-plan.sh --runtime cursor --model gpt-5 --plan PLAN.md
+#   .ralph/run-plan.sh --runtime cursor --plan PLAN.md --agent research --model other-id
+#   (--no-interactive is an alias for --non-interactive; no model menu when agent/config/--model supplies model)
 # Non-interactive mode:
-#   - disables all prompts (agent/model selection and cleanup prompt)
-#   - requires --agent <name> (errors if missing)
-#   - errors if resolved plan file is missing
-# Without --agent or --select-agent: CURSOR_PLAN_MODEL, config model, or the same interactive model menu as .ralph/new-agent.sh.
-#
-# Config: .cursor/ralph/plan-runner.json
-#   { "plan": "PLAN.md", "model": "sonnet-4.6" }   plan path and optional default model
-#
-# Claude Code product agent teams are configured in .claude/settings.json for
-# users of the Claude CLI; this Cursor CLI runner does not use that feature.
-#
-# Logging:
-#   Per-plan log files: .agents/logs/<artifact-namespace>/plan-runner-<planname>.log and
-#   .agents/logs/<artifact-namespace>/plan-runner-<planname>-output.log
-#   Set CURSOR_PLAN_VERBOSE=1 to also print script events to stderr.
-#   Override: CURSOR_PLAN_LOG=/path/to.log  CURSOR_PLAN_OUTPUT_LOG=/path/to-output.log
-#   Disable colored terminal output: CURSOR_PLAN_NO_COLOR=1
-#
-# Gutter: If stuck on the same TODO for 10+ iterations without completing, script exits.
-#   Override: CURSOR_PLAN_GUTTER_ITER=20
-#
-# Human-in-the-loop: The agent writes .cursor/ralph/.session/<plan-key>/pending-human.txt when it needs you.
-# With a TTY: the runner prompts; answer (end with a line containing only .).
-# Without a TTY: the runner exits 4, writes HUMAN-INPUT-REQUIRED.md (question + clickable file:// links),
-# ensures operator-response.txt exists. You edit operator-response.txt with your answer, then restart the
-# same command (orchestrator or run-plan). On restart, Q&A is merged into agent context and the run continues.
-#   macOS: opens the instruction file unless CURSOR_PLAN_NO_OPEN=1
-#   Disable: CURSOR_PLAN_DISABLE_HUMAN_PROMPT=1 (exit 4 if pending exists)
-#
-# Progress: While the agent runs, the script prints when the agent produced first output and
-#   periodically "Agent still working (elapsed ...)". Interval: CURSOR_PLAN_PROGRESS_INTERVAL (default 30s).
-#
-# Caffeinate (macOS): On Darwin, the script runs under `caffeinate` so the system does not sleep
-#   during execution. Disable with CURSOR_PLAN_NO_CAFFEINATE=1.
 
 set -euo pipefail
 
+# On macOS, re-exec under caffeinate so the system does not sleep during the plan run.
+# Guard variables are normalized so we only re-exec once per invocation.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+RALPH_DIR="$SCRIPT_DIR"
 
-# On macOS, re-exec under caffeinate so the system does not sleep during the plan run.
-# CURSOR_PLAN_CAFFEINATED is set so we do not re-exec again when the script runs as caffeinate's child.
-# Use bash explicitly: the orchestrator often runs `bash run-plan.sh` without +x; caffeinate would
-# exec "$0" as a program and fail with "Permission denied" (exit 126) if the file is not executable.
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-env.sh
+source "$SCRIPT_DIR/bash-lib/run-plan-env.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/menu-select.sh
+source "$SCRIPT_DIR/bash-lib/menu-select.sh"
+
+CAFFEINATE_RUNTIME="${RALPH_PLAN_RUNTIME:-}"
+if [[ -z "$CAFFEINATE_RUNTIME" ]]; then
+  cmdline_args=("$@")
+  for idx in "${!cmdline_args[@]}"; do
+    if [[ "${cmdline_args[idx]}" == "--runtime" ]]; then
+      next_idx=$((idx + 1))
+      if [[ $next_idx -lt ${#cmdline_args[@]} ]]; then
+        CAFFEINATE_RUNTIME="${cmdline_args[next_idx]}"
+      fi
+      break
+    fi
+  done
+fi
+
+case "$CAFFEINATE_RUNTIME" in
+  cursor|claude|codex)
+    ralph_run_plan_load_env_for_runtime "$CAFFEINATE_RUNTIME"
+    ;;
+esac
+
+# Normalize the human prompt overrides so RALPH helpers can reuse the legacy names.
+# Prefer explicit RALPH_PLAN_* values but fall back to CURSOR_PLAN_* for backwards compatibility.
+HUMAN_PROMPT_DISABLE_FLAG="${RALPH_PLAN_DISABLE_HUMAN_PROMPT:-${CURSOR_PLAN_DISABLE_HUMAN_PROMPT:-0}}"
+HUMAN_PROMPT_NO_OPEN_FLAG="${RALPH_PLAN_NO_OPEN:-${CURSOR_PLAN_NO_OPEN:-0}}"
+
+RALPH_PLAN_NO_CAFFEINATE="${RALPH_PLAN_NO_CAFFEINATE:-0}"
+RALPH_PLAN_CAFFEINATED="${RALPH_PLAN_CAFFEINATED:-0}"
+
+# CURSOR_PLAN_CAFFEINATED / CLAUDE_PLAN_CAFFEINATED / CODEX_PLAN_CAFFEINATED
+# ensure legacy scripts also notice the guard state.
 if [[ "$(uname -s)" == "Darwin" ]] && \
    command -v caffeinate &>/dev/null && \
-   [[ "${CURSOR_PLAN_NO_CAFFEINATE:-0}" != "1" ]] && \
-   [[ "${CURSOR_PLAN_CAFFEINATED:-0}" != "1" ]]; then
+   [[ "${RALPH_PLAN_NO_CAFFEINATE}" != "1" ]] && \
+   [[ "${RALPH_PLAN_CAFFEINATED}" != "1" ]]; then
+  export RALPH_PLAN_CAFFEINATED=1
   export CURSOR_PLAN_CAFFEINATED=1
+  export CLAUDE_PLAN_CAFFEINATED=1
+  export CODEX_PLAN_CAFFEINATED=1
   exec caffeinate -s -i -- /usr/bin/env bash "$SCRIPT_PATH" "$@"
 fi
-# shellcheck source=ralph-env-safety.sh
-source "$SCRIPT_DIR/ralph-env-safety.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/ralph-env-safety.sh
+source "$RALPH_DIR/ralph-env-safety.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/plan-todo.sh
 source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
-AGENT_CONFIG_TOOL="$SCRIPT_DIR/agent-config-tool.sh"
-AGENTS_ROOT_REL=".cursor/agents"
 
 WORKSPACE="$(pwd)"
 PLAN_OVERRIDE=""
 PREBUILT_AGENT=""
+PLAN_MODEL_CLI=""
 INTERACTIVE_SELECT_AGENT_FLAG=0
 NON_INTERACTIVE_FLAG=0
+RUNTIME=""
+CLAUDE_TOOLS_FROM_AGENT=""
 
-# Parse arguments: --plan, --agent, --select-agent, --non-interactive, optional workspace positional
+# Parse arguments: --plan, --model, --agent, --select-agent, --non-interactive, optional workspace positional
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --runtime)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --runtime requires an argument (cursor, claude, or codex)." >&2
+        exit 1
+      fi
+      case "$2" in
+        cursor|claude|codex)
+          RUNTIME="$2"
+          ;;
+        *)
+          echo "Error: --runtime must be one of cursor, claude, or codex." >&2
+          exit 1
+          ;;
+      esac
+      shift 2
+      ;;
     --plan)
       if [[ -z "${2:-}" ]]; then
         echo "Error: --plan requires a plan file path." >&2
@@ -87,9 +134,17 @@ while [[ $# -gt 0 ]]; do
       PLAN_OVERRIDE="$2"
       shift 2
       ;;
+    --model)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --model requires a model id string." >&2
+        exit 1
+      fi
+      PLAN_MODEL_CLI="$2"
+      shift 2
+      ;;
     --agent)
       if [[ -z "${2:-}" ]]; then
-        echo "Error: --agent requires a prebuilt agent name (subdirectory of .cursor/agents/)." >&2
+        echo "Error: --agent requires a prebuilt agent name (subdirectory of .<runtime>/agents/)." >&2
         exit 1
       fi
       PREBUILT_AGENT="$2"
@@ -121,13 +176,75 @@ if [[ "$NON_INTERACTIVE_FLAG" == "1" && "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" 
 fi
 
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+
+if [[ -z "$PLAN_OVERRIDE" ]]; then
+  echo "Error: --plan <path> is required." >&2
+  exit 1
+fi
+
+AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
+
+# When --runtime and RALPH_PLAN_RUNTIME are both unset, interactive TTY sessions get a menu;
+# non-interactive and non-TTY runs must set runtime explicitly.
+prompt_select_runtime() {
+  if [[ "$NON_INTERACTIVE_FLAG" == "1" ]]; then
+    echo "Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME (cursor, claude, or codex)." >&2
+    return 1
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME when stdin is not a terminal." >&2
+    return 1
+  fi
+  echo "" >&2
+  echo "Select plan runner runtime:" >&2
+  echo "  1) Cursor (cursor-agent)" >&2
+  echo "  2) Claude Code (claude)" >&2
+  echo "  3) Codex" >&2
+  local runtime_choice
+  read -r -p "Selection [1]: " runtime_choice </dev/tty 2>/dev/null || runtime_choice="1"
+  runtime_choice="${runtime_choice:-1}"
+  case "$runtime_choice" in
+    1) printf '%s' "cursor" ;;
+    2) printf '%s' "claude" ;;
+    3) printf '%s' "codex" ;;
+    cursor|claude|codex) printf '%s' "$runtime_choice" ;;
+    *)
+      echo "Error: invalid runtime selection (use 1-3 or cursor, claude, or codex)." >&2
+      return 1
+      ;;
+  esac
+}
+
+if [[ -z "$RUNTIME" ]]; then
+  if [[ -n "${RALPH_PLAN_RUNTIME:-}" ]]; then
+    case "${RALPH_PLAN_RUNTIME}" in
+      cursor|claude|codex)
+        RUNTIME="${RALPH_PLAN_RUNTIME}"
+        ;;
+      *)
+        echo "Error: RALPH_PLAN_RUNTIME must be one of cursor, claude, or codex." >&2
+        exit 1
+        ;;
+    esac
+  else
+    RUNTIME="$(prompt_select_runtime)" || exit 1
+  fi
+fi
 HUMAN_ACTION_FILE="$WORKSPACE/HUMAN_ACTION_REQUIRED.md"
 
-# shellcheck source=select-model.sh
-source "$SCRIPT_DIR/select-model.sh"
+AGENTS_ROOT_REL=".${RUNTIME}/agents"
 
-CONFIG_FILE="$WORKSPACE/.cursor/ralph/plan-runner.json"
-DEFAULT_PLAN="PLAN.md"
+RALPH_RUN_PLAN_RELATIVE=".ralph/run-plan.sh --runtime ${RUNTIME}"
+
+SELECT_MODEL_SCRIPT="$WORKSPACE/.${RUNTIME}/ralph/select-model.sh"
+if [[ -f "$SELECT_MODEL_SCRIPT" ]]; then
+  # shellcheck disable=SC1090
+  source "$SELECT_MODEL_SCRIPT"
+else
+  echo "Error: select-model script not found for runtime $RUNTIME ($SELECT_MODEL_SCRIPT)." >&2
+  exit 1
+fi
+
 MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
 GUTTER_ITERATIONS="${CURSOR_PLAN_GUTTER_ITER:-10}"
 
@@ -138,12 +255,11 @@ if [[ -t 1 && "${CURSOR_PLAN_NO_COLOR:-0}" != "1" ]]; then
   C_Y="\033[33m"
   C_B="\033[34m"
   C_C="\033[36m"
-  C_M="\033[35m"
   C_BOLD="\033[1m"
   C_DIM="\033[2m"
   C_RST="\033[0m"
 else
-  C_R="" C_G="" C_Y="" C_B="" C_C="" C_M="" C_BOLD="" C_DIM="" C_RST=""
+  C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
 fi
 
 # Log to file and optionally stdout (if CURSOR_PLAN_VERBOSE=1)
@@ -157,23 +273,86 @@ log() {
   fi
 }
 
-#
-# Read optional "model" from config (agent/model id for cursor-agent)
-get_config_model() {
-  if [[ -f "$CONFIG_FILE" ]]; then
-    local model
-    model="$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | sed 's/.*"\([^"]*\)".*/\1/')"
-    if [[ -n "$model" ]]; then
-      echo "$model"
-    fi
+ralph_ensure_cursor_cli() {
+  CURSOR_CLI=""
+  if command -v cursor-agent &>/dev/null; then
+    CURSOR_CLI="cursor-agent"
+  elif command -v agent &>/dev/null; then
+    CURSOR_CLI="agent"
+  else
+    log "ERROR: Cursor CLI not found (neither cursor-agent nor agent in PATH)"
+    echo -e "${C_R}${C_BOLD}Cursor CLI is not installed or not logged in.${C_RST}"
+    echo ""
+    echo -e "This script requires the Cursor CLI. Please:"
+    echo -e "  1. Install the CLI"
+    echo -e "  2. Log in (e.g. run \`agent\` or \`cursor-agent\` and complete sign-in)"
+    echo ""
+    echo -e "Official installation and login instructions:"
+    echo -e "  ${C_C}https://cursor.com/docs/cli/installation${C_RST}"
+    echo ""
+    echo -e "${C_DIM}After installing, add ~/.local/bin to your PATH, then run \`agent\` to log in and re-run this script.${C_RST}"
+    exit 1
   fi
 }
 
-# Model id on stdout. Shared select_model_cursor from .cursor/ralph/select-model.sh.
+ralph_ensure_claude_cli() {
+  local cli="${CLAUDE_PLAN_CLI:-}"
+  if [[ -z "$cli" && -n "$(command -v claude 2>/dev/null)" ]]; then
+    cli="claude"
+  fi
+  if [[ -z "$cli" ]] || ! command -v "$cli" &>/dev/null; then
+    log "ERROR: Claude CLI not found (set CLAUDE_PLAN_CLI or install claude)"
+    echo -e "${C_R}${C_BOLD}Claude Code CLI is not installed or not on PATH.${C_RST}"
+    echo ""
+    echo "Install Claude Code, then ensure \`claude\` is available:"
+    echo -e "  ${C_C}https://code.claude.com/docs/en/overview${C_RST}"
+    echo -e "  ${C_C}https://code.claude.com/docs/en/headless${C_RST}"
+    echo ""
+    exit 1
+  fi
+  CLAUDE_CLI="$cli"
+  : "$CLAUDE_CLI"
+}
+
+ralph_ensure_codex_cli() {
+  local cli="${CODEX_PLAN_CLI:-}"
+  if [[ -z "$cli" && -n "$(command -v codex 2>/dev/null)" ]]; then
+    cli="codex"
+  fi
+  if [[ -z "$cli" ]] || ! command -v "$cli" &>/dev/null; then
+    log "ERROR: Codex CLI not found (set CODEX_PLAN_CLI or install codex)"
+    echo -e "${C_R}${C_BOLD}Codex CLI is not installed or not on PATH.${C_RST}"
+    echo ""
+    echo "Install the Codex CLI and authenticate. Non-interactive runs use: codex exec"
+    echo -e "  ${C_C}https://developers.openai.com/codex/noninteractive${C_RST}"
+    echo -e "  ${C_C}https://developers.openai.com/codex/cli/reference${C_RST}"
+    echo ""
+    exit 1
+  fi
+  CODEX_CLI="$cli"
+  : "$CODEX_CLI"
+}
+
+# Model id on stdout. Shared select_model_* from runtime-specific select-model.sh.
 prompt_for_agent() {
-  local cfg
-  cfg="$(get_config_model)"
-  tr -d '\r' <<<"$(select_model_cursor --batch "$NON_INTERACTIVE_FLAG" "${CURSOR_PLAN_MODEL:-}" "$cfg")"
+  local cfg="" em
+  case "$RUNTIME" in
+    cursor)
+      tr -d '\r' <<<"$(select_model_cursor --batch "$NON_INTERACTIVE_FLAG" "${CURSOR_PLAN_MODEL:-}" "$cfg")"
+      ;;
+    claude)
+      em="${CLAUDE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}"
+      tr -d '\r' <<<"$(select_model_claude --batch "$NON_INTERACTIVE_FLAG" "$em" "$cfg")"
+      ;;
+    codex)
+      em="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}"
+      tr -d '\r' <<<"$(select_model_codex --batch "$NON_INTERACTIVE_FLAG" "$em" "$cfg")"
+      ;;
+    *)
+      echo "Error: unsupported runtime for model selection: $RUNTIME" >&2
+      return 1
+      ;;
+  esac
 }
 
 # Prebuilt agents live under WORKSPACE/.cursor/agents/<id>/config.json
@@ -235,7 +414,7 @@ prompt_select_prebuilt_agent() {
   fi
   if command -v fzf &>/dev/null; then
     local selected
-    selected="$(echo "$list" | fzf --no-sort --height=20 --prompt="Prebuilt agent: " --header="Discovered under $AGENTS_ROOT_REL/" </dev/tty 2>/dev/null)" || true
+  selected="$(printf '%s\n' "$list" | fzf --no-sort --height=20 --prompt="Prebuilt agent: " --header="Discovered under $AGENTS_ROOT_REL/" 2>/dev/null)" || true
     if [[ -z "$selected" ]]; then
       echo "Error: no prebuilt agent selected." >&2
       return 1
@@ -257,13 +436,13 @@ prompt_select_prebuilt_agent() {
     n=$((n + 1))
   done <<< "$list"
   echo "" >&2
-  local choice
-  read -r -p "Pick prebuilt agent (1-$((n - 1))): " choice </dev/tty 2>/dev/null || true
-  if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 || "$choice" -ge "$n" ]]; then
-    echo "Error: invalid selection." >&2
+  local selection
+  selection="$(ralph_menu_select --prompt "Pick prebuilt agent (discovered under $AGENTS_ROOT_REL)" --default 1 -- "${ids[@]}" || true)"
+  if [[ -z "$selection" ]]; then
+    echo "Error: no prebuilt agent selected." >&2
     return 1
   fi
-  echo "${ids[$((choice - 1))]}"
+  printf '%s' "$selection"
 }
 
 # If prebuilt agents exist and no explicit selection flags were passed, ask whether
@@ -281,9 +460,13 @@ prompt_agent_source_mode() {
   if [[ -n "$PREBUILT_AGENT" || "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" ]]; then
     return 0
   fi
+  # Direct model from CLI: skip "prebuilt vs model" menu (--select-agent returns above first).
+  if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
+    return 0
+  fi
 
   echo "" >&2
-  echo "Prebuilt agents detected under $AGENTS_ROOT_REL/." >&2
+  echo "Prebuilt agents detected under $AGENTS_ROOT_REL." >&2
   echo "Choose how to run this plan:" >&2
   echo "  1) Use a prebuilt agent (recommended)" >&2
   echo "  2) Select a model directly" >&2
@@ -304,12 +487,7 @@ prompt_agent_source_mode() {
   esac
 }
 
-# Resolve plan path: --plan override takes precedence over config
-if [[ -n "$PLAN_OVERRIDE" ]]; then
-  PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
-else
-  PLAN_PATH="$(get_plan_path)"
-fi
+PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
 
 # Per-plan log files under .agents/logs/<artifact-namespace> (unless overridden by env)
 AGENTS_SHARED_DIR="$WORKSPACE/.agents"
@@ -317,6 +495,8 @@ PLAN_LOG_NAME="$(plan_log_basename "$PLAN_PATH")"
 export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-$PLAN_LOG_NAME}"
 export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-$RALPH_PLAN_KEY}"
 RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs/$RALPH_ARTIFACT_NS"
+AGENTS_SESSION_ROOT="$AGENTS_SHARED_DIR/sessions"
+RALPH_SESSION_DIR="$AGENTS_SESSION_ROOT/${RALPH_PLAN_KEY}"
 if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
 else
@@ -332,29 +512,27 @@ ralph_assert_path_not_env_secret "Plan file" "$PLAN_PATH"
 ralph_assert_path_not_env_secret "Plan log" "$LOG_FILE"
 ralph_assert_path_not_env_secret "Output log" "$OUTPUT_LOG"
 
-# Check for Cursor CLI (agent or cursor-agent); exit early if not installed
-CURSOR_CLI=""
-if command -v cursor-agent &>/dev/null; then
-  CURSOR_CLI="cursor-agent"
-elif command -v agent &>/dev/null; then
-  CURSOR_CLI="agent"
-else
-  log "ERROR: Cursor CLI not found (neither cursor-agent nor agent in PATH)"
-  echo -e "${C_R}${C_BOLD}Cursor CLI is not installed or not logged in.${C_RST}"
-  echo ""
-  echo -e "This script requires the Cursor CLI. Please:"
-  echo -e "  1. Install the CLI"
-  echo -e "  2. Log in (e.g. run \`agent\` or \`cursor-agent\` and complete sign-in)"
-  echo ""
-  echo -e "Official installation and login instructions:"
-  echo -e "  ${C_C}https://cursor.com/docs/cli/installation${C_RST}"
-  echo ""
-  echo -e "${C_DIM}After installing, add ~/.local/bin to your PATH, then run \`agent\` to log in and re-run this script.${C_RST}"
-  exit 1
-fi
+case "$RUNTIME" in
+  cursor)
+    ralph_ensure_cursor_cli
+    ;;
+  claude)
+    ralph_ensure_claude_cli
+    ;;
+  codex)
+    ralph_ensure_codex_cli
+    ;;
+esac
+
+RALPH_INVOKED_CLI=""
+case "$RUNTIME" in
+  cursor) RALPH_INVOKED_CLI="$CURSOR_CLI" ;;
+  claude) RALPH_INVOKED_CLI="$CLAUDE_CLI" ;;
+  codex) RALPH_INVOKED_CLI="$CODEX_CLI" ;;
+esac
 
 log "run-plan.sh started (workspace=$WORKSPACE plan=$PLAN_PATH)"
-log "config=$CONFIG_FILE plan_path=$PLAN_PATH output_log=$OUTPUT_LOG log_file=$LOG_FILE"
+log "plan_path=$PLAN_PATH output_log=$OUTPUT_LOG log_file=$LOG_FILE"
 log "artifact namespace: RALPH_ARTIFACT_NS=$RALPH_ARTIFACT_NS RALPH_PLAN_KEY=$RALPH_PLAN_KEY"
 
 # Startup banner in output log (per-plan)
@@ -367,23 +545,21 @@ mkdir -p "$(dirname "$OUTPUT_LOG")"
   echo "################################################################################"
 } >> "$OUTPUT_LOG"
 
-if [[ "$NON_INTERACTIVE_FLAG" == "1" && -z "$PREBUILT_AGENT" && -z "${CURSOR_PLAN_MODEL:-}" ]]; then
-  log "ERROR: --non-interactive requires --agent <name> or CURSOR_PLAN_MODEL"
-  echo -e "${C_R}${C_BOLD}Non-interactive mode requires either a prebuilt agent or CURSOR_PLAN_MODEL.${C_RST}" >&2
+if [[ "$NON_INTERACTIVE_FLAG" == "1" && -z "$PREBUILT_AGENT" && -z "${CURSOR_PLAN_MODEL:-}" && -z "${PLAN_MODEL_CLI:-}" ]]; then
+  log "ERROR: --non-interactive requires --agent <name>, --model <id>, or CURSOR_PLAN_MODEL"
+  echo -e "${C_R}${C_BOLD}Non-interactive mode requires a prebuilt agent, --model <id>, or CURSOR_PLAN_MODEL.${C_RST}" >&2
   exit 1
 fi
 
 if [[ ! -f "$PLAN_PATH" ]]; then
   log "ERROR: plan file not found: $PLAN_PATH"
   echo -e "${C_R}${C_BOLD}Plan file not found:${C_RST} ${C_R}$PLAN_PATH${C_RST}"
-  echo -e "${C_DIM}Create it, set .cursor/ralph/plan-runner.json, or pass --plan <path> to use a different plan.${C_RST}"
+  echo -e "${C_DIM}Create the plan file or pass a valid path with --plan <path>.${C_RST}"
   exit 1
 fi
 
 log "plan file found: $PLAN_PATH"
 
-_SESSION_KEY="${RALPH_PLAN_KEY//[^A-Za-z0-9_.-]/_}"
-RALPH_SESSION_DIR="$WORKSPACE/.cursor/ralph/.session/$_SESSION_KEY"
 mkdir -p "$RALPH_SESSION_DIR"
 PENDING_HUMAN="$RALPH_SESSION_DIR/pending-human.txt"
 HUMAN_CONTEXT="$RALPH_SESSION_DIR/human-replies.md"
@@ -395,15 +571,24 @@ ralph_path_to_file_uri() {
   if command -v python3 &>/dev/null; then
     python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$1" 2>/dev/null || echo "file://localhost$1"
   else
-    echo "file://$(echo "$1" | sed 's/ /%20/g')"
+    local encoded="${1// /%20}"
+    echo "file://$encoded"
   fi
+}
+
+ralph_should_persist_human_files() {
+  if [[ -t 0 && -t 1 ]]; then
+    return 1
+  fi
+  return 0
 }
 
 ralph_restart_command_hint() {
   if [[ -n "${RALPH_ORCH_FILE:-}" ]]; then
     printf '.ralph/orchestrator.sh --orchestration %s' "$(printf '%q' "$RALPH_ORCH_FILE")"
   else
-    printf '.cursor/ralph/run-plan.sh --non-interactive --plan %s --agent %s %s' \
+    printf '%s --non-interactive --plan %s --agent %s %s' \
+      "$RALPH_RUN_PLAN_RELATIVE" \
       "$(printf '%q' "$PLAN_PATH")" \
       "$(printf '%q' "${PREBUILT_AGENT:-agent}")" \
       "$(printf '%q' "$WORKSPACE")"
@@ -450,7 +635,7 @@ ralph_write_human_action_file() {
     printf '## What to do\n'
     printf '1. Open %s and replace the placeholder line with your full answer.\n' "$OPERATOR_RESPONSE_FILE"
     printf '2. Save the file and leave pending-human.txt untouched; it will clear automatically after the answer is applied.\n'
-    printf '3. Restart the same command so the agent can continue: %s\n\n' "$restart_hint"
+    printf '3. If the plan runner is still running, it continues when you save. Otherwise restart: %s\n\n' "$restart_hint"
     printf '## Session\n'
     printf '- Pending question: %s\n' "$PENDING_HUMAN"
     printf '- Session directory: %s\n' "$RALPH_SESSION_DIR"
@@ -463,7 +648,11 @@ ralph_write_human_action_file() {
 
 ralph_sync_human_action_file_state() {
   if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
-    ralph_write_human_action_file
+    if ralph_should_persist_human_files; then
+      ralph_write_human_action_file
+    else
+      ralph_remove_human_action_file
+    fi
   else
     ralph_remove_human_action_file
   fi
@@ -489,15 +678,15 @@ ralph_try_consume_human_response() {
   return 1
 }
 
-ralph_human_input_required_exit() {
+ralph_human_input_write_offline_instructions() {
   local _iu _ir _cmd_hint
   _iu="$(ralph_path_to_file_uri "$HUMAN_INPUT_MD")"
   _ir="$(ralph_path_to_file_uri "$OPERATOR_RESPONSE_FILE")"
   _cmd_hint="$(ralph_restart_command_hint)"
   {
-    echo "# Human input required"
+    echo "# Paused for human input"
     echo ""
-    echo "The agent stopped this plan step until you answer."
+    echo "The plan runner is waiting in this same process until you answer (same behavior as an interactive TTY prompt)."
     echo ""
     echo "## Question from the agent"
     echo ""
@@ -505,8 +694,9 @@ ralph_human_input_required_exit() {
     echo ""
     echo "## What to do"
     echo ""
-    echo "1. Open **operator-response.txt** in this same folder, write your full answer, and save."
-    echo "2. Restart the same command you ran (orchestrator or run-plan). Do not delete pending-human.txt before restarting; it will be cleared automatically after your answer is applied."
+    echo "1. Open **operator-response.txt** in this folder, write your full answer, and save."
+    echo "2. The runner detects the save and continues automatically. Do not delete pending-human.txt; it clears after your answer is applied."
+    echo "3. If this process is no longer running, restart with: ${_cmd_hint}"
     echo ""
     echo "## Clickable links (terminal or browser address bar)"
     echo ""
@@ -517,33 +707,55 @@ ralph_human_input_required_exit() {
     echo ""
     echo "- Session directory: $RALPH_SESSION_DIR"
     echo "- Plan file: $PLAN_PATH"
-    echo ""
-    echo "## Example restart"
-    echo ""
-    echo "${_cmd_hint}"
   } >"$HUMAN_INPUT_MD"
 
-  printf '%s\n' '(Replace this line with your answer to the question above, then save.)' >"$OPERATOR_RESPONSE_FILE"
+  if [[ ! -f "$OPERATOR_RESPONSE_FILE" ]] || [[ ! -s "$OPERATOR_RESPONSE_FILE" ]]; then
+    printf '%s\n' '(Replace this line with your answer to the question above, then save.)' >"$OPERATOR_RESPONSE_FILE"
+  fi
   ralph_write_human_action_file
+  log "Wrote offline human instructions: $HUMAN_INPUT_MD"
 
-  log "EXIT 4: human input required (no TTY). Wrote $HUMAN_INPUT_MD"
   echo "" >&2
-  echo -e "${C_Y}${C_BOLD}Human input required -- exiting so you can answer offline.${C_RST}" >&2
-  echo "" >&2
-  echo "  Instruction page (open in editor or click if your terminal supports file links):" >&2
-  echo "    ${_iu}" >&2
-  echo "" >&2
-  echo "  Write your answer here, then save:" >&2
-  echo "    ${_ir}" >&2
-  echo "" >&2
-  echo "  Then restart the same script (orchestrator or run-plan)." >&2
+  echo -e "${C_Y}${C_BOLD}Paused for human input (no TTY).${C_RST}" >&2
+  echo "  Instruction page: ${_iu}" >&2
+  echo "  Answer file: ${_ir}" >&2
   echo "  Log: $LOG_FILE" >&2
 
-  if [[ "$(uname -s)" == "Darwin" ]] && [[ "${CURSOR_PLAN_NO_OPEN:-0}" != "1" ]] && command -v open &>/dev/null; then
+  if [[ "$(uname -s)" == "Darwin" ]] && [[ "$HUMAN_PROMPT_NO_OPEN_FLAG" != "1" ]] && command -v open &>/dev/null; then
     open "$HUMAN_INPUT_MD" 2>/dev/null || true
     echo "  (Opened HUMAN-INPUT-REQUIRED.md in your default app.)" >&2
   fi
-  exit 4
+}
+
+# When stdin is not a TTY, block until operator-response.txt has a real answer (orchestrator and CI can wait in-process).
+ralph_human_pause_for_operator_offline() {
+  if [[ "${RALPH_HUMAN_OFFLINE_EXIT:-0}" == "1" ]]; then
+    ralph_human_input_write_offline_instructions
+    log "EXIT 4: human input required (RALPH_HUMAN_OFFLINE_EXIT=1)"
+    exit 4
+  fi
+
+  ralph_human_input_write_offline_instructions
+
+  local interval="${RALPH_HUMAN_POLL_INTERVAL:-2}"
+  local n=0
+  log "Paused (no TTY): polling every ${interval}s for answer in $OPERATOR_RESPONSE_FILE"
+  echo -e "${C_DIM}Waiting for a saved answer in operator-response.txt (poll every ${interval}s)...${C_RST}" >&2
+
+  while ! ralph_operator_has_real_answer; do
+    sleep "$interval"
+    n=$((n + 1))
+    if (( n % 15 == 0 )); then
+      echo -e "${C_DIM}Still paused; edit and save ${OPERATOR_RESPONSE_FILE}${C_RST}" >&2
+      log "still waiting for operator-response (elapsed ~$((n * interval))s)"
+    fi
+  done
+
+  if ralph_try_consume_human_response; then
+    ralph_sync_human_action_file_state
+    log "Operator response applied; resuming plan run"
+    echo -e "${C_G}Answer received. Continuing.${C_RST}" >&2
+  fi
 }
 
 if ralph_try_consume_human_response; then
@@ -570,7 +782,7 @@ if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
     ralph_try_consume_human_response || true
     ralph_sync_human_action_file_state
   else
-    ralph_human_input_required_exit
+    ralph_human_pause_for_operator_offline
   fi
 fi
 
@@ -634,12 +846,26 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
     log "ERROR: model read failed for $PREBUILT_AGENT"
     exit 1
   }
+  if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
+    SELECTED_MODEL="$PLAN_MODEL_CLI"
+    log "CLI --model overrides prebuilt agent default model (agent=$PREBUILT_AGENT)"
+  fi
   PREBUILT_AGENT_CONTEXT="$(format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
     echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
     log "ERROR: context build failed for $PREBUILT_AGENT"
     exit 1
   }
   log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
+  if [[ "$RUNTIME" == "claude" ]]; then
+    _agents_root_for_tools="$(prebuilt_agents_root "$WORKSPACE")"
+    CLAUDE_TOOLS_FROM_AGENT="$(bash "$AGENT_CONFIG_TOOL" allowed-tools "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
+    [[ -n "$CLAUDE_TOOLS_FROM_AGENT" ]] && log "allowed_tools from agent config: $CLAUDE_TOOLS_FROM_AGENT"
+  else
+    CLAUDE_TOOLS_FROM_AGENT=""
+  fi
+elif [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
+  SELECTED_MODEL="$PLAN_MODEL_CLI"
+  log "using CLI --model: $SELECTED_MODEL"
 else
   SELECTED_MODEL="$(prompt_for_agent)"
   if [[ -n "$SELECTED_MODEL" ]]; then
@@ -651,16 +877,16 @@ total_invocations=0
 
 while true; do
   if ! next=$(get_next_todo "$PLAN_PATH"); then
-    read -r done total <<< "$(count_todos "$PLAN_PATH")"
-    log "all complete (done=$done total=$total) after $total_invocations agent invocation(s)"
+    read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+    log "all complete (done=$done_count total=$total_count) after $total_invocations agent invocation(s)"
     {
       echo ""
       echo "################################################################################"
-      echo "# All TODOs complete ($done/$total) - $(date '+%Y-%m-%d %H:%M:%S')"
+      echo "# All TODOs complete ($done_count/$total_count) - $(date '+%Y-%m-%d %H:%M:%S')"
       echo "################################################################################"
     } >> "$OUTPUT_LOG"
     echo ""
-    echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done/$total)${C_RST}."
+    echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done_count/$total_count)${C_RST}."
     echo -e "${C_DIM}Output log: $OUTPUT_LOG${C_RST}"
     EXIT_STATUS="complete"
     exit 0
@@ -668,7 +894,7 @@ while true; do
 
   line_num="${next%%|*}"
   full_line="${next#*|}"
-  todo_text="$(echo "$full_line" | sed -E 's/^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]*//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  todo_text="$(plan_open_todo_body "$full_line")"
 
   attempts_on_line=0
   while true; do
@@ -680,15 +906,15 @@ while true; do
     fi
     iteration=$total_invocations
 
-    read -r done total <<< "$(count_todos "$PLAN_PATH")"
-    remaining=$((total - done))
+    read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+    remaining=$((total_count - done_count))
 
-    log "invocation=$iteration next_todo line=$line_num done=$done total=$total remaining=$remaining attempts_on_line=$attempts_on_line"
+    log "invocation=$iteration next_todo line=$line_num done=$done_count total=$total_count remaining=$remaining attempts_on_line=$attempts_on_line"
     log "todo_text: $todo_text"
 
     echo ""
     echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════${C_RST}"
-    echo -e "${C_C}Building plan:${C_RST} $PLAN_PATH  ${C_DIM}|${C_RST}  ${C_G}$done/$total${C_RST}  ${C_DIM}|${C_RST}  ${C_Y}invoke $iteration${C_RST} (line $line_num)"
+    echo -e "${C_C}Building plan:${C_RST} $PLAN_PATH  ${C_DIM}|${C_RST}  ${C_G}$done_count/$total_count${C_RST}  ${C_DIM}|${C_RST}  ${C_Y}invoke $iteration${C_RST} (line $line_num)"
     echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════${C_RST}"
     echo -e "${C_BOLD}$todo_text${C_RST}"
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
@@ -704,9 +930,9 @@ while true; do
 3. Follow verification steps written in the plan file. If the plan says how to handle failing checks (revert, document in a named file, etc.), follow those instructions.
 4. Then open the plan file \`$PLAN_PATH\`, find the line with this TODO (the first unchecked \`- [ ]\`), change \`[ ]\` to \`[x]\`, save the file, and stop.
 5. Do not do the next TODO; only this one.
-6. Human input: If you cannot complete this TODO without a policy or technical decision from the human operator, do NOT mark the checkbox. Write only your question (plain text, be specific) to this file (create parent directories if needed):
+6. Human input (file only -- the runner does not read your chat): If the operator must answer or choose before you can complete this TODO, do NOT mark [x]. Questions you ask only in your assistant message do not pause the run; the same TODO will be dispatched again. You MUST write your question as plain text to this path (create parent directories if needed):
    $PENDING_ABS
-   Then stop. With a terminal the operator answers interactively. Without a terminal the runner exits, writes HUMAN-INPUT-REQUIRED.md with links, and the operator edits operator-response.txt in the same session folder then restarts the script; you will run again with their answer. If you can finish without asking, mark [x] and do not create that file.
+   Overwrite that file with your question, then stop this turn without checking the box. With a TTY the operator may answer inline; without a TTY the runner waits in-process for operator-response.txt. If you can finish without asking, mark [x] and do not create pending-human.txt.
 
 The plan file is at: $PLAN_PATH
 The TODO to complete and then mark [x] is on line $line_num.
@@ -768,7 +994,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
       fi
     fi
 
-    log "invoking $CURSOR_CLI (model=${SELECTED_MODEL:-default})${PREBUILT_AGENT:+ prebuilt_agent=$PREBUILT_AGENT}"
+    log "invoking $RALPH_INVOKED_CLI (model=${SELECTED_MODEL:-default})${PREBUILT_AGENT:+ prebuilt_agent=$PREBUILT_AGENT}"
     start_ts="$(date '+%Y-%m-%d %H:%M:%S')"
     echo -e "${C_G}Starting agent ${C_BOLD}(${SELECTED_MODEL:-default})${C_RST}${C_G} for this TODO at ${start_ts}...${C_RST}"
     echo ""
@@ -790,17 +1016,28 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
     FIRST_RESPONSE_SHOWN=0
     LAST_PROGRESS_AT=0
 
-    run_agent() {
-      if [[ -n "${SELECTED_MODEL:-}" ]]; then
-        "$CURSOR_CLI" -p --force --model "$SELECTED_MODEL" "$PROMPT" 2>&1 | tee -a "$OUTPUT_LOG"
-      else
-        "$CURSOR_CLI" -p --force "$PROMPT" 2>&1 | tee -a "$OUTPUT_LOG"
-      fi
-      echo "${PIPESTATUS[0]}" >"$EXIT_CODE_FILE"
-    }
-
     set +e
-    run_agent &
+    case "$RUNTIME" in
+      cursor)
+        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-cursor.sh
+        source "$SCRIPT_DIR/bash-lib/run-plan-invoke-cursor.sh"
+        ralph_run_plan_invoke_cursor &
+        ;;
+      claude)
+        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-claude.sh
+        source "$SCRIPT_DIR/bash-lib/run-plan-invoke-claude.sh"
+        ralph_run_plan_invoke_claude &
+        ;;
+      codex)
+        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-codex.sh
+        source "$SCRIPT_DIR/bash-lib/run-plan-invoke-codex.sh"
+        ralph_run_plan_invoke_codex &
+        ;;
+      *)
+        echo "Error: unsupported runtime for invocation: $RUNTIME" >&2
+        exit 1
+        ;;
+    esac
     AGENT_PID=$!
 
     while kill -0 "$AGENT_PID" 2>/dev/null; do
@@ -844,22 +1081,22 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
       rm -f "$EXIT_CODE_FILE"
     fi
     set -e
-    log "$CURSOR_CLI finished (exit=$exit_code)"
+    log "$RALPH_INVOKED_CLI finished (exit=$exit_code)"
 
     echo "" >>"$OUTPUT_LOG"
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
 
     if ! next_after=$(get_next_todo "$PLAN_PATH"); then
-      read -r done total <<< "$(count_todos "$PLAN_PATH")"
-      log "all complete (done=$done total=$total)"
+      read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+      log "all complete (done=$done_count total=$total_count)"
       {
         echo ""
         echo "################################################################################"
-        echo "# All TODOs complete ($done/$total) - $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# All TODOs complete ($done_count/$total_count) - $(date '+%Y-%m-%d %H:%M:%S')"
         echo "################################################################################"
       } >>"$OUTPUT_LOG"
       echo ""
-      echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done/$total)${C_RST}."
+      echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done_count/$total_count)${C_RST}."
       echo -e "${C_DIM}Output log: $OUTPUT_LOG${C_RST}"
       EXIT_STATUS="complete"
       exit 0
@@ -875,9 +1112,9 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
     ralph_sync_human_action_file_state
 
     if [[ -f "$PENDING_HUMAN" ]]; then
-      if [[ "${CURSOR_PLAN_DISABLE_HUMAN_PROMPT:-0}" == "1" ]]; then
-        log "ERROR: $PENDING_HUMAN exists but CURSOR_PLAN_DISABLE_HUMAN_PROMPT=1"
-        echo -e "${C_R}Agent requested human input; prompts disabled. Remove pending file or unset CURSOR_PLAN_DISABLE_HUMAN_PROMPT.${C_RST}" >&2
+      if [[ "$HUMAN_PROMPT_DISABLE_FLAG" == "1" ]]; then
+        log "ERROR: $PENDING_HUMAN exists but human prompt disable flag is active"
+        echo -e "${C_R}Agent requested human input; prompts disabled. Remove pending file or unset CURSOR_PLAN_DISABLE_HUMAN_PROMPT or RALPH_PLAN_DISABLE_HUMAN_PROMPT.${C_RST}" >&2
         exit 4
       fi
       _saved_q="$(cat "$PENDING_HUMAN")"
@@ -888,7 +1125,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
         echo -e "${C_Y}${C_BOLD}--- Agent question (TODO stays open until resolved) ---${C_RST}" >&2
         echo "$_saved_q" >&2
         echo "" >&2
-        echo -e "${C_B}Your answer (finish with a line containing only a dot):${C_RST}" >&2
+      echo -e "${C_B}Your answer (finish with a line containing only a dot):${C_RST}" >&2
         while IFS= read -r _hl </dev/tty; do
           [[ "$_hl" == "." ]] && break
           human_block+="${_hl}"$'\n'
@@ -912,7 +1149,10 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
         sleep 1
         continue
       fi
-      ralph_human_input_required_exit
+      ralph_human_pause_for_operator_offline
+      attempts_on_line=0
+      sleep 1
+      continue
     fi
 
     attempts_on_line=$((attempts_on_line + 1))

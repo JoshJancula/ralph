@@ -1,24 +1,38 @@
 # Ralph
 
-**Ralph** is a plan-driven agent workflow kit for **Cursor**, **Claude Code**, and **OpenAI Codex**. One markdown plan with `- [ ]` / `- [x]` checklists; runners loop until the plan is done. A shared **orchestrator** runs multi-stage pipelines across any mix of those runtimes.
+**Ralph** helps you work with AI coding assistants in an organized way. You keep a simple to-do list in a markdown file; a script runs an agent via Cursor, Claude Code, or OpenAI Codex over and over until every item is checked off. For bigger projects, a separate orchestrator can chain several stages and pass files between them.
 
-## What you get
+If you already use those tools and are comfortable in a terminal, Ralph adds structure. If you are newer to this, skim the sections below, then use [the docs folder](docs/README.md) when you need step-by-step detail.
 
-| Path | Purpose |
-|------|---------|
-| [.ralph/](/bundle/.ralph/) | Orchestrator (`orchestrator.sh`), cleanup, `plan.template`, `new-agent.sh`, orchestration templates |
-| [.cursor/ralph/](/bundle/.cursor/ralph/) | Cursor CLI plan loop, templates, model selection, agent-config helper |
-| [.claude/ralph/](/bundle/.claude/ralph/) | Claude headless plan loop + templates |
-| [.codex/ralph/](/bundle/.codex/ralph/) | Codex `exec` plan loop + templates |
-| [ralph-dashboard/](ralph-dashboard/) | Optional local UI for plans, artifacts, and logs (same path in this repo and after install) |
+## In short
 
-Logs and artifacts typically land under `.agents/logs/` and `.agents/artifacts/` (see each runner README: [.cursor/ralph/README.md](.cursor/ralph/README.md), [.codex/ralph/README.md](/bundle/.codex/ralph/README.md), or the [bundle](bundle/) tree).
+| Idea | What it means |
+|------|----------------|
+| **Plan** | A markdown file with lines like `- [ ] Do this` and `- [x] Done`. Only that checkbox style counts as a task. |
+| **Runner** | A shell script that reads the next open task, runs your chosen AI tool, updates the plan, and repeats. |
+| **Orchestrator** | Optional multi-step pipelines (for example research, then design, then implementation) with checks between steps. |
 
-**`repo-context`** is a generic template: edit each runtime's `skills/repo-context/SKILL.md` with your layout, stack, and commands (or merge into one shared path if you prefer).
+Logs and output files usually go under `.agents/logs/` and `.agents/artifacts/`. Optional: a small local web UI in `ralph-dashboard/` to browse plans and logs.
 
-## Install into your repository
+## What gets installed
 
-### Option A: Git submodule (easy updates)
+After you run the installer (below), these folders appear at **your project root** (not inside a `vendor/` folder unless you put the Ralph repo there yourself):
+
+| Folder | Role |
+|--------|------|
+| [.ralph](bundle/.ralop) | Shared scripts: orchestrator, cleanup, plan template, MCP server, unified `run-plan.sh` |
+| [.cursor/ralph](bundle/.cursor/ralph/) | Cursor-specific runner and config |
+| [.claude/ralph](bundle/.claude/ralph) | Claude Code runner and config |
+| [.codex/ralph](bundle/.codex/ralph) | Codex runner and config |
+| [ralph-dashboard](ralph-dashboard) | Optional dashboard (Python 3) |
+| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex) | also get rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) where those stacks are installed |
+
+
+**`repo-context`:** Each runtime ships a template skill describing your repo layout and commands. Edit the `skills/repo-context/SKILL.md` files after install so assistants know how to build and test your project.
+
+## Install (pick one)
+
+**Submodule (easy updates):**
 
 ```bash
 cd /path/to/your-repo
@@ -32,14 +46,9 @@ git add .ralph ralph-dashboard \
 git commit -m "Add Ralph agent workflows"
 ```
 
-Teammates after clone:
+Teammates after clone: `git submodule update --init` then `./vendor/ralph/install.sh` if the bundle changed.
 
-```bash
-git submodule update --init
-./vendor/ralph/install.sh   # re-sync if bundle changed
-```
-
-### Option B: One-time copy
+**One-time copy:**
 
 ```bash
 git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
@@ -47,139 +56,95 @@ git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
 rm -rf /tmp/ralph
 ```
 
-### Option C: Subtree (vendored history)
+**Subtree:**
 
 ```bash
 git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash
 ./vendor/ralph/install.sh
 ```
 
-### Install flags
+### Installer options
+
+With **no flags**, the installer copies the full stack (same as `--all`): `.ralph`, Cursor, Claude, and Codex pieces, plus the dashboard.
 
 ```text
-./install.sh                  # everything (recommended)
-./install.sh --cursor         # ralph runner + Cursor rules/skills/agents
-./install.sh --codex --claude # Codex & Claude runtimes only, skip Cursor pieces
-./install.sh --dry-run .      # print actions only
-./install.sh --no-dashboard   # skip ralph-dashboard/ (everything else unchanged)
+./install.sh                      # full install (default)
+./install.sh --all                # same as default
+./install.sh --cursor             # Cursor runner + rules/skills/agents only (plus shared if you combine flags)
+./install.sh --codex --claude     # Codex and Claude only
+./install.sh --shared             # only .ralph/ (orchestrator, templates, shared runners)
+./install.sh --no-dashboard       # skip ralph-dashboard/
+./install.sh -n /path/to/repo     # dry-run: print actions only
 ```
 
-Omit the runtime flags to install the entire bundle. Provide one or more of
-`--cursor`, `--claude`, `--codex`, or `--shared` when you only want to copy
-those directories and avoid consuming the rest of `bundle/`. By default, the
-installer also copies this repo's `ralph-dashboard/` into your project. Use `--no-dashboard` to skip.
+Use `--cursor`, `--claude`, `--codex`, and/or `--shared` together to limit what is copied.
 
-**Note:** Codex and Claude runners expect **`.ralph/agent-config-tool.sh`** when using `--agent` with prebuilt agents. Install **at least** `.ralph` alongside them, or use full `./install.sh`.
+**Partial installs:** `--cursor` alone does **not** copy `.ralph/` (no orchestrator, unified `run-plan.sh`, or `.ralph/plan.template` in your tree). Add `--shared` if you want those. **Claude and Codex** runners require **`.ralph/agent-config-tool.sh`** for `--agent`; use `./install.sh --claude --shared` (or `--codex --shared`) or a full install so `.ralph/` is present.
 
 ## After install
 
-1. **Plan file** &mdash; start from `.ralph/plan.template` or set `"plan"` in each `plan-runner.json`.
-2. **CLIs** &mdash; [Cursor CLI](https://cursor.com/docs/cli/installation), [Claude Code](https://code.claude.com/docs/en/quickstart) (`claude`), or [Codex CLI](https://developers.openai.com/codex/cli) (`codex`) as needed.
-3. **Prebuilt agents** &mdash; The bundle includes role agents aligned with multi-stage workflows: **`research`**, **`architect`**, **`implementation`**, **`code-review`**, **`qa`**, and **`security`** (under `.cursor/agents`, `.claude/agents`, and `.codex/agents` where each runtime ships configs). Use `--agent <name>` with `run-plan.sh` or orchestration JSON. Run `bash .ralph/new-agent.sh` to add more.
+1. **Plan file** -- Copy `.ralph/plan.template` to something like `PLAN.md`, then pass it with **`--plan`** when you run `.ralph/run-plan.sh` (see [.cursor/ralph/README.md](.cursor/ralph/README.md) for the Cursor stack).
+2. **CLI tools** -- Install what you use: [Cursor CLI](https://cursor.com/docs/cli/installation), [Claude Code](https://code.claude.com/docs/en/quickstart) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`).
+3. **Extra agents** -- Run `bash .ralph/new-agent.sh` to scaffold more agent profiles.
 
-### Ralph dashboard
+### Dashboard
 
-**`ralph-dashboard/`** lives at your repo root (here and in projects that run `install.sh`). The UI reads `.agents/orchestration-plans`, `.agents/artifacts`, and `.agents/logs` relative to the repo root (the parent of `ralph-dashboard/`).
-
-From the project root:
+From your project root:
 
 ```bash
 python3 ralph-dashboard/server.py
 ```
 
-Open **http://127.0.0.1:8123** (defaults; use `--host` / `--port` to change). Requires Python 3 only.
+Open **http://127.0.0.1:8123** by default. The UI reads `.agents/orchestration-plans`, `.agents/artifacts`, and `.agents/logs` next to your repo root.
 
-## Workflow overview
+## Run a plan (typical commands)
 
-```mermaid
-sequenceDiagram
-    participant P as Plan (Markdown)
-    participant R as Runner (Cursor/Claude)
-    participant A as Agent Context
-    participant LG as Logs
+**Typical invocations (repo root, after `.ralph/` is installed):**
 
-    P->>R: Read next open todo
-    R->>A: Send prompt + skills + repo
-    A-->>R: Return results / next step
-    R->>LG: Append logs (stdout/stderr)
-    LG-->>R: Resume / inspect if needed
-    R->>P: Mark todo complete
-```
+- Cursor: `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
+- Claude: `.ralph/run-plan.sh --runtime claude --plan PLAN.md --model claude-haiku-4-5`
+- Codex: `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --agent architect`
 
-The runner repeatedly pulls the next unchecked checkbox, summarizes progress in the logs, and optionally hands the prompt to a configured agent before looping until every `- [ ]` becomes `- [x]`. You can find the full checklist-to-loop logic (and supporting scripts) in [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md).
 
-### Prepare a plan
+**Checklist syntax:** Use `- [ ]` for open tasks (space before `]`). The form `- []` is ignored, so the run could stop early while lines still look unfinished.
 
-1. Copy the template, fill in TODOs, and explain the desired outcome plus any validation commands (lint/test steps, artifact reviewers, manual verifications):
+### When the runner needs a human
 
-   ```bash
-   cp .ralph/plan.template PLAN.md
-   ```
+- The runner follows an **interactive-first flow**: in a normal terminal session, it usually prompts you there and continues.
+- When there is no interactive terminal, the runner writes files such as `pending-human.txt` and `operator-response.txt` and **waits** while you add your answer (it polls; you do not have to restart unless you choose the optional exit behavior). Exchanges are also recorded under `.agents/<artifact-namespace>/human`. Optional hooks (`RALPH_HUMAN_ACK_TOOL`, `.ralph/orchestrator.sh --human-ack`) and `RALPH_HUMAN_OFFLINE_EXIT=1` are covered in [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md).
 
-2. Use assets like `.agents/artifacts/README.md` (created when you install or scaffold artifacts) to describe required sections for research, architecture, implementation, QA, or security handoffs.
-
-3. If you need a research → implementation → review pipeline, break the work into stage plans (`.agents/orchestration-plans/<namespace>/*.plan.md`) and declare them in a JSON `.orch.json` using `.ralph/orchestration.template.json`.
-
-### Run a single-agent plan
-
-1. Choose a runtime:
-
-   - **Cursor**: `.cursor/ralph/run-plan.sh --plan PLAN.md --agent architect`
-   - **Claude**: `.claude/ralph/run-plan.sh --plan PLAN.md --agent architect`
-   - **Codex**: `.codex/ralph/run-plan.sh --plan PLAN.md --agent architect --non-interactive`
-
-2. Override defaults with `--plan`, `--agent`, `--select-agent`, and `--model` flags supported by each runtime. Cursor’s runner accepts `CURSOR_PLAN_MODEL`, Claude reads `CLAUDE_PLAN_MODEL`, and Codex reads `CODEX_PLAN_MODEL`.
-3. If an agent writes `pending-human.txt` (Cursor) or `HUMAN-INPUT-REQUIRED.md` (deferred mode), provide the answer and rerun the same command so the runner resumes from the first unchecked todo.
-
-4. After each run, inspect:
-   - `.agents/logs/plan-runner-*.log` for stdout/stderr across runtimes
-   - `.agents/artifacts/{{ARTIFACT_NS}}/` for research/architecture/implementation handoffs
-   - `.ralph/cleanup-plan.sh <namespace>` if you need to wipe logs/artifacts before reruns
-
-### Orchestrate multiple agents
-
-Use `.ralph/orchestrator.sh` with a JSON spec containing stages, runtimes, agents, and artifact contracts:
+### Orchestration (multi-stage)
 
 ```bash
 .ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
-Start with `.ralph/orchestration-wizard.sh` to scaffold stages, plans, and a starter `.orch.json`; then update the generated plans and run `.ralph/orchestrator.sh`. For the full step-by-step wizard flow, see [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md).
+You can also pass the `.orch.json` path as the first argument with no flag; see the header of [.ralph/orchestrator.sh](bundle/.ralph/orchestrator.sh). To generate starter files, run `.ralph/orchestration-wizard.sh`.
 
-Each stage can run Cursor, Claude, or Codex independently; the orchestrator enforces artifact existence/non-empty values before advancing. Review the walkthrough and artifacts schema in [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md), especially sections on stage plans, `loopControl`, and feedback loops. For guided examples (full worker run and a multi-stage orchestrated pipeline), see [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md) and [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md).
+Full walkthroughs: [docs/orchestrated-ralph-example.md](docs/orchestrated-ralph-example.md), [docs/worker-ralph-example.md](docs/worker-ralph-example.md).
 
-### Runtime and agent references
+## Documentation
 
-- [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md) — guided walk-through covering one-worker plan life cycle, runner usage, and log/artifact inspections.
-- [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md) — multi-stage example showing plan prep, JSON spec, orchestrator run, and artifact verification.
-- [`docs/CLAUDE-AGENT-TEAMS.md`](docs/CLAUDE-AGENT-TEAMS.md) — using Claude Code agent teams with Ralph: spawning teammates for parallel tasks, artifact handoffs, and when to use teams vs the orchestrator or subagents.
+Start here for depth and copy-paste examples:
 
-`bats tests/bats/*.bats` runs the bash harness defined under `tests/bats/README.md`.
+- **[docs/README.md](docs/README.md)** -- Index of all guides
+- **[docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)** -- Plan loop, orchestrator, cleanup, prompts, human-input details
+- **[docs/MCP.md](docs/MCP.md)** -- MCP server and host configuration
+- **[docs/CLAUDE-AGENT-TEAMS.md](docs/CLAUDE-AGENT-TEAMS.md)** -- Claude Code agent teams with Ralph
 
-## MCP server
+Runner-specific notes: [.cursor/ralph/README.md](bundle/.cursor/ralph/README.md), [.codex/ralph/README.md](bundle/.codex/ralph/README.md) (same content as `.codex/ralph/README.md` after install). Orchestration JSON shape: comments in `.ralph/orchestrator.sh` and `.ralph/orchestration.template.json`.
 
-The canonical MCP server is the bash script under `.ralph/`. From a workspace root where Ralph is installed, start it with:
+**MCP server:**
 
 ```bash
 RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh
 ```
 
- See [`docs/MCP.md`](docs/MCP.md) for Cursor/Claude/Codex configuration templates.
+Requires `jq`. See [docs/MCP.md](docs/MCP.md).
 
-## Documentation in the bundle
-
-- [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) &mdash; plan loop, orchestrator, new-agent, cleanup  
-- [docs/CLAUDE-AGENT-TEAMS.md](docs/CLAUDE-AGENT-TEAMS.md) &mdash; Claude Code agent teams with Ralph (teammates, tasks, artifacts)  
-- [.cursor/ralph/README.md](/bundle/.cursor/ralph/README.md) &mdash; Cursor runner internals and portability notes  
-- [.codex/ralph/README.md](/bundle/.codex/ralph/README.md) &mdash; Codex runner and env  
-- [docs/MCP.md](docs/MCP.md) &mdash; MCP server resources, prompts, and host configuration guide  
-- Per-runtime `run-plan.sh --help` where supported (under `.cursor/ralph/`, `.claude/ralph/`, `.codex/ralph/`)  
-
-For orchestration JSON shape, read the header of [.ralph/orchestrator.sh](/bundle/.ralph/orchestrator.sh) and [.ralph/orchestration.template.json](/bundle/.ralph/orchestration.template.json).
 
 ## License
 
-MIT &mdash; see [LICENSE](LICENSE).
+MIT -- see [LICENSE](LICENSE).
 
-<img src="./public/ralph-coding.jpeg" />
-
+<img src="./public/ralph-coding.jpeg" alt="" />

@@ -23,9 +23,9 @@ This example walks through creating a worker plan, running it, and inspecting ou
 
 1. Pick a runtime:
 
-   - Cursor: `.cursor/ralph/run-plan.sh --plan PLAN.md --agent research`
-   - Claude: `.claude/ralph/run-plan.sh --plan PLAN.md --agent research`
-   - Codex: `.codex/ralph/run-plan.sh --plan PLAN.md --agent research --non-interactive`
+   - Cursor: `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
+   - Claude: `.ralph/run-plan.sh --runtime claude --plan PLAN.md --agent research`
+   - Codex: `.ralph/run-plan.sh --runtime codex --plan PLAN.md --model gpt-5.4 --non-interactive`
 
 2. Supply overrides as needed:
 
@@ -33,7 +33,7 @@ This example walks through creating a worker plan, running it, and inspecting ou
    - Set `CURSOR_PLAN_MODEL`, `CLAUDE_PLAN_MODEL`, or `CODEX_PLAN_MODEL` to pin models.
    - Provide `--select-agent` to trigger an interactive chooser (if in a TTY).
 
-3. If the runner stops for human input (files like `pending-human.txt` or `HUMAN-INPUT-REQUIRED.md`), answer the question in the provided file, then rerun the same command so the first unchecked checkbox is retried.
+3. If the runner pauses for human input: `.ralph/run-plan.sh` (always pass **`--plan`**) follows an **interactive-first flow** where TTY-attached runs prompt you inline. Without a TTY, it polls `operator-response.txt` in-process (set `RALPH_HUMAN_OFFLINE_EXIT=1` to use exit 4 and restart instead). Optional escalation via `.ralph/orchestrator.sh --human-ack` or `RALPH_HUMAN_ACK_TOOL` still applies when configured. Every human exchange is persisted under `.agents/<artifact-namespace>/human` for audit and replay purposes.
 
 ## 3. Review outputs
 

@@ -37,7 +37,7 @@ After enabling, you can ask Claude to create an agent team in natural language; 
 
 ## Using agent teams with Ralph
 
-Ralph provides **plan-driven runs** (one markdown plan with `- [ ]` / `- [x]` TODOs, driven by `run-plan.sh`) and **multi-stage orchestration** (`.ralph/orchestrator.sh` with JSON stages and artifact handoffs). Agent teams add **parallel, multi-agent work inside a single Claude Code session**, with a shared task list and direct communication between teammates.
+Ralph provides **plan-driven runs** (one markdown plan with `- [ ]` / `- [x]` TODOs, driven by `.ralph/run-plan.sh` with required **`--plan`**) and **multi-stage orchestration** (`.ralph/orchestrator.sh` with JSON stages and artifact handoffs). Agent teams add **parallel, multi-agent work inside a single Claude Code session**, with a shared task list and direct communication between teammates.
 
 ### How they fit together
 
@@ -85,7 +85,7 @@ For exploration or debugging, use the team so that teammates can challenge each 
 We need to implement the notification feature described in .agents/orchestration-plans/notifications-01-research.plan.md. Create an agent team: one teammate researches backend options, one researches frontend patterns, one plays devil’s advocate and pokes holes in both. They should message each other and agree on .agents/artifacts/notifications/research.md before we move to the architecture stage.
 ```
 
-The lead can then run the next Ralph stage (e.g. architecture) using that artifact, via `run-plan.sh` or the orchestrator.
+The lead can then run the next Ralph stage (e.g. architecture) using that artifact, via `.ralph/run-plan.sh --plan <path> ...` or the orchestrator (which passes `--plan` per stage).
 
 ### Artifacts and handoffs
 

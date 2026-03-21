@@ -3,7 +3,7 @@
 This document explains how to create an **orchestration plan** so the Ralph
 runners can execute multiple agents in sequence. Use **`.ralph/orchestrator.sh`**
 with a single JSON `.orch.json` file. Set each stage's `"runtime"` to `cursor`,
-`claude`, or `codex` to run that stage with the matching `run-plan.sh`.
+`claude`, or `codex` to run that stage via `.ralph/run-plan.sh --runtime <name> --plan <stage-plan-path>` (the orchestrator supplies `--plan` from each stage in the JSON).
 
 Copy the JSON template to `my-feature.orch.json` at the repository root,
 adjust the stage plan paths to point to your docs (e.g., `docs/orchestration-plans/my-feature-01-research.plan.md`), and then run one of the orchestrators:
