@@ -1,34 +1,33 @@
 # Ralph
 
-**Ralph** helps you work with AI coding assistants in an organized way. You keep a simple to-do list in a markdown file; a script runs an agent via Cursor, Claude Code, or OpenAI Codex over and over until every item is checked off. For bigger projects, a separate orchestrator can chain several stages and pass files between them.
+Ralph helps you work with AI coding assistants in an organized way. You keep a markdown to-do list; a small shell loop calls **Cursor**, **Claude Code**, or **OpenAI Codex** for each open task until every box is checked. When a job is too big for one pass, an optional **orchestrator** runs stages in sequence (research, design, implementation, review) and hands artifacts from one step to the next.
 
-If you already use those tools and are comfortable in a terminal, Ralph adds structure. If you are newer to this, skim the sections below, then use [the docs folder](docs/README.md) when you need step-by-step detail.
+For detailed breakdowns (human-in-the-loop behavior, MCP, security, worked examples), use the **[documentation index](docs/README.md)**. If you installed Ralph into your own repo, those guides are also copied to **`.ralph/docs/`** so they live next to `run-plan.sh` and the rest of the tooling.
 
 ## In short
 
 | Idea | What it means |
 |------|----------------|
 | **Plan** | A markdown file with lines like `- [ ] Do this` and `- [x] Done`. Only that checkbox style counts as a task. |
-| **Runner** | A shell script that reads the next open task, runs your chosen AI tool, updates the plan, and repeats. |
-| **Orchestrator** | Optional multi-step pipelines (for example research, then design, then implementation) with checks between steps. |
+| **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. |
+| **Orchestrator** | Optional multi-stage pipelines with checks between steps. |
 
-Logs and output files usually go under `.agents/logs/` and `.agents/artifacts/`. Optional: a small local web UI in `ralph-dashboard/` to browse plans and logs.
+While plans run, logs and generated files usually land under **`.agents/logs/`** and **`.agents/artifacts/`**. The optional **ralph-dashboard** app (Python 3) gives you a simple local UI over plans and logs.
 
 ## What gets installed
 
-After you run the installer (below), these folders appear at **your project root** (not inside a `vendor/` folder unless you put the Ralph repo there yourself):
+After you run the installer, these pieces appear at **your project root** (the app or library you are building), not inside `vendor/ralph` unless you put Ralph there on purpose:
 
 | Folder | Role |
 |--------|------|
-| [.ralph](bundle/.ralop) | Shared scripts: orchestrator, cleanup, plan template, MCP server, unified `run-plan.sh` |
+| [.ralph](bundle/.ralph) | Shared scripts: unified `run-plan.sh`, orchestrator, cleanup, plan templates, MCP server, and **`.ralph/docs/`** (the same guides as `docs/` in this package) |
 | [.cursor/ralph](bundle/.cursor/ralph/) | Cursor-specific runner and config |
 | [.claude/ralph](bundle/.claude/ralph) | Claude Code runner and config |
 | [.codex/ralph](bundle/.codex/ralph) | Codex runner and config |
-| [ralph-dashboard](ralph-dashboard) | Optional dashboard (Python 3) |
-| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex) | also get rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) where those stacks are installed |
+| [ralph-dashboard](ralph-dashboard) | Optional local dashboard |
+| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex) | Rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) for each stack you install |
 
-
-**`repo-context`:** Each runtime ships a template skill describing your repo layout and commands. Edit the `skills/repo-context/SKILL.md` files after install so assistants know how to build and test your project.
+**repo-context:** Each runtime includes a template skill so assistants know how your repo is laid out and how you build it. After install, edit **`skills/repo-context/SKILL.md`** under `.cursor`, `.claude`, or `.codex` to match your project.
 
 ## Install (pick one)
 
@@ -46,7 +45,7 @@ git add .ralph ralph-dashboard \
 git commit -m "Add Ralph agent workflows"
 ```
 
-Teammates after clone: `git submodule update --init` then `./vendor/ralph/install.sh` if the bundle changed.
+Teammates: after `git clone`, run `git submodule update --init` and, if the Ralph bundle changed, `./vendor/ralph/install.sh` again.
 
 **One-time copy:**
 
@@ -65,53 +64,47 @@ git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git m
 
 ### Installer options
 
-With **no flags**, the installer copies the full stack (same as `--all`): `.ralph`, Cursor, Claude, and Codex pieces, plus the dashboard.
+With **no flags**, you get the full stack (same as **`--all`**): shared **`.ralph`**, Cursor, Claude, and Codex pieces, plus the dashboard.
 
 ```text
 ./install.sh                      # full install (default)
 ./install.sh --all                # same as default
-./install.sh --cursor             # Cursor runner + rules/skills/agents only (plus shared if you combine flags)
+./install.sh --cursor             # Cursor runner + rules/skills/agents (combine with --shared if you need .ralph)
 ./install.sh --codex --claude     # Codex and Claude only
-./install.sh --shared             # only .ralph/ (orchestrator, templates, shared runners)
+./install.sh --shared             # only .ralph/ (orchestrator, templates, runners, docs)
 ./install.sh --no-dashboard       # skip ralph-dashboard/
 ./install.sh -n /path/to/repo     # dry-run: print actions only
 ```
 
-Use `--cursor`, `--claude`, `--codex`, and/or `--shared` together to limit what is copied.
+You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`** to trim what is copied.
 
-**Partial installs:** `--cursor` alone does **not** copy `.ralph/` (no orchestrator, unified `run-plan.sh`, or `.ralph/plan.template` in your tree). Add `--shared` if you want those. **Claude and Codex** runners require **`.ralph/agent-config-tool.sh`** for `--agent`; use `./install.sh --claude --shared` (or `--codex --shared`) or a full install so `.ralph/` is present.
+**Partial installs:** **`--cursor`** alone does **not** install **`.ralph/`**, so you will not get the unified runner, orchestrator, plan template, or in-tree docs. Add **`--shared`** (or do a full install) when you need those. The Claude and Codex runners expect **`.ralph/agent-config-tool.sh`** when you use **`--agent`**; use **`./install.sh --claude --shared`**, **`./install.sh --codex --shared`**, or a full install.
 
 ## After install
 
-1. **Plan file** -- Copy `.ralph/plan.template` to something like `PLAN.md`, then pass it with **`--plan`** when you run `.ralph/run-plan.sh` (see [.cursor/ralph/README.md](.cursor/ralph/README.md) for the Cursor stack).
-2. **CLI tools** -- Install what you use: [Cursor CLI](https://cursor.com/docs/cli/installation), [Claude Code](https://code.claude.com/docs/en/quickstart) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`).
-3. **Extra agents** -- Run `bash .ralph/new-agent.sh` to scaffold more agent profiles.
+1. **Plan file** -- Copy **`.ralph/plan.template`** to something like **`PLAN.md`**, then pass it with **`--plan`** whenever you run **`.ralph/run-plan.sh`**. Cursor-specific notes: [.cursor/ralph/README.md](.cursor/ralph/README.md).
+2. **CLIs** -- Install the tools you actually use: [Cursor CLI](https://cursor.com/docs/cli/installation), [Claude Code](https://code.claude.com/docs/en/quickstart), [Codex CLI](https://developers.openai.com/codex/cli).
+3. **More agents** -- From your project root: **`bash .ralph/new-agent.sh`** to scaffold extra agent profiles.
 
 ### Dashboard
-
-From your project root:
 
 ```bash
 python3 ralph-dashboard/server.py
 ```
 
-Open **http://127.0.0.1:8123** by default. The UI reads `.agents/orchestration-plans`, `.agents/artifacts`, and `.agents/logs` next to your repo root.
+By default the UI is at **http://127.0.0.1:8123**. It reads **`.agents/orchestration-plans`**, **`.agents/artifacts`**, and **`.agents/logs`** next to your repo root.
 
 ## Run a plan (typical commands)
 
-**Examples:**
+- **Cursor:** `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
+- **Claude:** `.ralph/run-plan.sh --runtime claude --plan PLAN.md --model claude-haiku-4-5`
+- **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --agent architect`
 
-- Cursor: `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
-- Claude: `.ralph/run-plan.sh --runtime claude --plan PLAN.md --model claude-haiku-4-5`
-- Codex: `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --agent architect`
+**Checklist syntax:** Open tasks must look like **`- [ ]`** (space before **`]`**). The form **`- []`** is ignored, so the runner may stop while lines still look unfinished.
 
+### When the runner needs you
 
-**Checklist syntax:** Use `- [ ]` for open tasks (space before `]`). The form `- []` is ignored, so the run could stop early while lines still look unfinished.
-
-### When the runner needs a human
-
-- The runner follows an **interactive-first flow**: in a normal terminal session, it usually prompts you there and continues.
-- When there is no interactive terminal, the runner writes files such as `pending-human.txt` and `operator-response.txt` and **waits** while you add your answer (it polls; you do not have to restart unless you choose the optional exit behavior). Exchanges are also recorded under `.agents/<artifact-namespace>/human`. Optional hooks (`RALPH_HUMAN_ACK_TOOL`, `.ralph/orchestrator.sh --human-ack`) and `RALPH_HUMAN_OFFLINE_EXIT=1` are covered in [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md).
+In a normal terminal, it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** and waits while you edit them. Questions and answers are also kept under **`.agents/<artifact-namespace>/human`**. Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
 ### Orchestration (multi-stage)
 
@@ -119,41 +112,37 @@ Open **http://127.0.0.1:8123** by default. The UI reads `.agents/orchestration-p
 .ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
-You can also pass the `.orch.json` path as the first argument with no flag; see the header of [.ralph/orchestrator.sh](bundle/.ralph/orchestrator.sh). To generate starter files, run `.ralph/orchestration-wizard.sh`.
+You can pass the **`.orch.json`** path as the first argument with no flag; details are in the header of **`.ralph/orchestrator.sh`** (see [bundle copy](bundle/.ralph/orchestrator.sh) on GitHub). To scaffold a pipeline, run **`.ralph/orchestration-wizard.sh`**.
 
-Full walkthroughs: [docs/orchestrated-ralph-example.md](docs/orchestrated-ralph-example.md), [docs/worker-ralph-example.md](docs/worker-ralph-example.md).
+**Walkthroughs:** [Orchestrated example](docs/orchestrated-ralph-example.md) and [single-runner example](docs/worker-ralph-example.md).
 
 ## Documentation
 
-Start here for depth and copy-paste examples:
+| Guide | What you get |
+|-------|----------------|
+| [Index](docs/README.md) | Map of all topics and quick reference |
+| [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup, sample prompts |
+| [MCP](docs/MCP.md) | Bash MCP server, host config, guard rails |
+| [Claude agent teams](docs/CLAUDE-AGENT-TEAMS.md) | Using Claude Code teams alongside Ralph |
+| [Security](docs/SECURITY.md) | Sandboxing reality, `.cursorignore`, hooks, practical caution |
 
-- **[docs/README.md](docs/README.md)** -- Index of all guides
-- **[docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)** -- Plan loop, orchestrator, cleanup, prompts, human-input details
-- **[docs/MCP.md](docs/MCP.md)** -- MCP server and host configuration
-- **[docs/CLAUDE-AGENT-TEAMS.md](docs/CLAUDE-AGENT-TEAMS.md)** -- Claude Code agent teams with Ralph
+Runtime-specific READMEs: [.cursor/ralph](bundle/.cursor/ralph/README.md), [.codex/ralph](bundle/.codex/ralph/README.md). Orchestration JSON shape: comments in **`.ralph/orchestrator.sh`** and **`.ralph/orchestration.template.json`**.
 
-Runner-specific notes: [.cursor/ralph/README.md](bundle/.cursor/ralph/README.md), [.codex/ralph/README.md](bundle/.codex/ralph/README.md) (same content as `.codex/ralph/README.md` after install). Orchestration JSON shape: comments in `.ralph/orchestrator.sh` and `.ralph/orchestration.template.json`.
-
-**MCP server:**
+**MCP server (needs `jq`):**
 
 ```bash
 RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh
 ```
 
-Requires `jq`. See [docs/MCP.md](docs/MCP.md).
-
+Details: [MCP.md](docs/MCP.md).
 
 ## Be Safe
 
-Ralph loops AI agents endlessly trying to resolve a task. Treat that as powerful and risky: bad prompts or bugs can edit files, run shell commands, or leak what is on disk.
-
-Use it when you understand that tradeoff. **[docs/SECURITY.md](docs/SECURITY.md)** covers what Ralph actually sandboxes, what it does not, and practical hardening.
+Ralph can run **many** agent turns in a row. That is powerful and risky: bad prompts or bugs can change files, run shell commands, or expose what is on disk. Use it when you understand that tradeoff. **[Security](docs/SECURITY.md)** explains what is actually sandboxed, what is not, and how to harden your workspace.
 
 ## Monitor your token usage
 
-Ralph runs **many** agent turns in a row. Pricing depends on the **model** you pick (or that your prebuilt agent pins) and on **how large and vague each TODO is**. A premium model on a long plan or a loosely scoped task list can add up quickly.
-
-Pick a model that matches the work, keep tasks concrete, and watch usage in your Cursor, Anthropic, or OpenAI billing surfaces so you are not surprised.
+Cost depends on the **model** you choose (or that a prebuilt agent pins) and on **how big and vague each task is**. Prefer a model that fits the job, keep TODOs concrete, and watch Cursor, Anthropic, or OpenAI billing so you are not surprised.
 
 ## License
 

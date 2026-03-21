@@ -1,7 +1,7 @@
 <!--- Documented example for single-agent loop workflow -->
 # Worker Ralph walkthrough
 
-This example walks through creating a worker plan, running it, and inspecting outputs with the Cursor/Claude/Codex loops shared in this bundle.
+This example walks through creating a worker plan, running it, and inspecting outputs with the Cursor/Claude/Codex loops in your Ralph install.
 
 ## 1. Draft the plan
 

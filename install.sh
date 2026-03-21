@@ -8,7 +8,7 @@
 #
 # Options:
 #   --all       Install everything (default)
-#   --shared    Only .ralph/ (orchestrator, cleanup, plan.template)
+#   --shared    Only .ralph/ (orchestrator, cleanup, plan.template, docs -> .ralph/docs/)
 #   --cursor    .cursor/ralph + rules/skills/agents (no-emoji, repo-context)
 #   --codex     .codex/ralph + rules/skills/agents (same)
 #   --claude    .claude/ralph + rules/skills/agents (same)
@@ -62,6 +62,7 @@ install_dashboard() {
 }
 
 echo "Ralph install -> $TARGET"
+export RALPH_INSTALL_SOURCE_ROOT="$SCRIPT_DIR"
 install_ops_execute_plan
 
 if install_ops_should_install_dashboard; then
@@ -72,5 +73,8 @@ if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
   echo ""
   echo "Next: python3 ralph-dashboard/server.py for the local dashboard; optional package.json scripts (docs/package-scripts.snippet.json); add PLAN.md from .ralph/plan.template as needed."
   echo "The canonical bash MCP server is bundled in .ralph/mcp-server.sh; run it with RALPH_MCP_WORKSPACE=\$PWD bash .ralph/mcp-server.sh once jq is installed."
-  echo "Docs: $SCRIPT_DIR/README.md"
+  if [[ -d "$TARGET/.ralph/docs" ]]; then
+    echo "Docs: $TARGET/.ralph/docs/"
+  fi
+  echo "Package README: $SCRIPT_DIR/README.md"
 fi

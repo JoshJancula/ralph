@@ -121,6 +121,9 @@ install_ops_add_optional_copy() {
 install_ops_build_copy_plan() {
   if [[ "$INSTALL_SHARED" -eq 1 ]]; then
     install_ops_emit_copy "$BUNDLE/.ralph" "$TARGET/.ralph" "shared"
+    if [[ -n "${RALPH_INSTALL_SOURCE_ROOT:-}" && -d "$RALPH_INSTALL_SOURCE_ROOT/docs" ]]; then
+      install_ops_emit_copy "$RALPH_INSTALL_SOURCE_ROOT/docs" "$TARGET/.ralph/docs" "ralph-docs"
+    fi
   fi
 
   if [[ "$INSTALL_CURSOR" -eq 1 ]]; then

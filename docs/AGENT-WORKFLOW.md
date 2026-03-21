@@ -37,14 +37,14 @@ Each stage drives the runtime-specific plan runner, which in turn writes logs an
 
 ### Using the runners
 
-1. **Create plans** (single agent or per stage) from `.ralph/plan.template`. Todo items must use `- [ ]` or `- [x]`; `get_next_todo` matches only those shapes (not `- []`).
-2. **Run the appropriate CLI** noted in `README.md`:
-   - **`.ralph/run-plan.sh --runtime cursor|claude|codex --plan <path>`** is the only plan runner (**`--plan` is required**); each runtime honors its own env prefix (`CURSOR_PLAN_*`, `CLAUDE_PLAN_*`, `CODEX_PLAN_*`) and the same optional flags (`--agent`, `--select-agent`, `--non-interactive`, `--model`, etc.).
+1. **Create plans** (single agent or per stage) from `.ralph/plan.template`. Todo items must use `- [ ]` or `- [x]`; other checkbox shapes (for example `- []`) are ignored.
+2. **Install the vendor CLI** you use (Cursor agent, `claude`, or `codex`) so the runner can invoke it. Then run:
+   - **`.ralph/run-plan.sh --runtime cursor|claude|codex --plan <path>`** -- the single plan runner (**`--plan` is required**). Each runtime has its own env prefix (`CURSOR_PLAN_*`, `CLAUDE_PLAN_*`, `CODEX_PLAN_*`) and supports the same optional flags (`--agent`, `--select-agent`, `--non-interactive`, `--model`, etc.).
 3. **Handle human input**: The runner follows an **interactive-first flow**: TTY-attached runs prompt inline on `/dev/tty` and continue in the same process (multiline answers may include blank lines; end input with a line containing only `.`). When stdin/stdout are not a TTY (for example under the orchestrator), `.ralph/run-plan.sh` still **pauses in-process**: it writes `pending-human.txt`, `HUMAN-INPUT-REQUIRED.md`, and a placeholder `operator-response.txt`, then polls until you save a real answer (override poll interval with `RALPH_HUMAN_POLL_INTERVAL`). Optional escalation to `.ralph/orchestrator.sh --human-ack` or `RALPH_HUMAN_ACK_TOOL` can run first for bridges. Set `RALPH_HUMAN_OFFLINE_EXIT=1` only if you need the old behavior (exit 4 and restart after editing files).
 
    Every human exchange (question + answer) is also persisted under `.agents/<artifact-namespace>/human`, giving you a namespace- scoped audit trail to review what was asked, who answered it, and what needs to be replayed before resuming the plan.
 4. **Logs and artifacts**: After each run, inspect `.agents/logs/plan-runner-*.log` for stdout and error details, and `.agents/artifacts/{{ARTIFACT_NS}}/` for generated docs. Use `.ralph/cleanup-plan.sh <namespace>` to wipe logs/artifacts before a fresh run.
-5. **Subagents and teams**: Refer to the README’s links (Cursor subagents, Claude subagents, Claude agent teams, Codex subagents/multi-agent) to understand how to delegate work inside your plan or orchestrator stages. For using Claude Code agent teams with Ralph (spawning teammates for tasks, artifact handoffs, and when to use teams vs orchestrator), see [Claude Code agent teams with Ralph](CLAUDE-AGENT-TEAMS.md).
+5. **Subagents and teams**: The vendor docs for Cursor, Claude, and Codex explain subagents and multi-agent flows; use those when you split work inside a plan or a stage. For Claude Code **agent teams** specifically (teammates, handoffs, teams vs orchestrator), see [Claude Code agent teams with Ralph](CLAUDE-AGENT-TEAMS.md).
 
 ### Claude headless stalls on permission or new files
 
@@ -52,14 +52,14 @@ Claude Code in `-p` mode only auto-approves tools in `--allowedTools`. New files
 
 ### Helpful references
 
-- Cursor’s Ralph runner internals: `bundle/.cursor/ralph/README.md`
+- Cursor’s Ralph runner internals: `.cursor/ralph/README.md`
 - Cursor subagent architecture: [https://cursor.com/docs/subagents](https://cursor.com/docs/subagents)
 - Claude subagents doc: [https://docs.anthropic.com/en/docs/claude-code/subagents](https://docs.anthropic.com/en/docs/claude-code/subagents)
 - Claude agent teams: [https://code.claude.com/docs/en/agent-teams](https://code.claude.com/docs/en/agent-teams); using them with Ralph: [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md)
 - Codex subagent concepts: [https://developers.openai.com/codex/concepts/subagents](https://developers.openai.com/codex/concepts/subagents)
 - Codex multi-agent guide: [https://developers.openai.com/codex/multi-agent](https://developers.openai.com/codex/multi-agent)
-- Worker example walkthrough: [`docs/worker-ralph-example.md`](docs/worker-ralph-example.md)
-- Orchestrated example walkthrough: [`docs/orchestrated-ralph-example.md`](docs/orchestrated-ralph-example.md)
+- Worker example walkthrough: [worker-ralph-example.md](worker-ralph-example.md)
+- Orchestrated example walkthrough: [orchestrated-ralph-example.md](orchestrated-ralph-example.md)
 
 ### Sample prompts & templates
 
@@ -172,7 +172,7 @@ include `loopControl`.
 
 ## New prebuilt agent
 
-From repo root (after you have `.ralph/new-agent.sh` from this bundle):
+From your project root (where `.ralph/` lives):
 
 ```bash
 bash .ralph/new-agent.sh

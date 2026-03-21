@@ -55,13 +55,17 @@ setup() {
 @test "copy plan lists the selected stacks and optional dirs" {
   bundle_dir="$(mktemp -d)"
   target_dir="$(mktemp -d)"
+  pkg_root="$(mktemp -d)"
   mkdir -p "$bundle_dir/.ralph"
   mkdir -p "$bundle_dir/.cursor/ralph" "$bundle_dir/.cursor/rules"
   mkdir -p "$bundle_dir/.codex/ralph"
   mkdir -p "$bundle_dir/.claude/ralph"
+  mkdir -p "$pkg_root/docs"
 
   BUNDLE="$bundle_dir"
   TARGET="$target_dir"
+  RALPH_INSTALL_SOURCE_ROOT="$pkg_root"
+  export RALPH_INSTALL_SOURCE_ROOT
   INSTALL_SHARED=1
   INSTALL_CURSOR=1
   INSTALL_CODEX=1
@@ -69,12 +73,15 @@ setup() {
 
   run install_ops_build_copy_plan
   [ "$status" -eq 0 ]
+  [[ "$output" == *"$bundle_dir/.ralph|$target_dir/.ralph|shared"* ]]
+  [[ "$output" == *"$pkg_root/docs|$target_dir/.ralph/docs|ralph-docs"* ]]
   [[ "$output" == *"$bundle_dir/.cursor/ralph|$target_dir/.cursor/ralph|cursor-ralph"* ]]
   [[ "$output" == *"$bundle_dir/.cursor/rules|$target_dir/.cursor/rules|cursor-rules"* ]]
   [[ "$output" == *"$bundle_dir/.codex/ralph|$target_dir/.codex/ralph|codex-ralph"* ]]
   [[ "$output" == *"$bundle_dir/.claude/ralph|$target_dir/.claude/ralph|claude-ralph"* ]]
 
-  rm -rf "$bundle_dir" "$target_dir"
+  rm -rf "$bundle_dir" "$target_dir" "$pkg_root"
   BUNDLE=""
   TARGET=""
+  unset RALPH_INSTALL_SOURCE_ROOT
 }

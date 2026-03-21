@@ -207,4 +207,4 @@ This hybrid approach leverages Claude Code's strength in parallel exploration an
 - **Claude Code agent teams**: [Orchestrate teams of Claude Code sessions](https://code.claude.com/docs/en/agent-teams) (enable, control, best practices, limitations)
 - **Ralph workflow**: [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) (plan-first loop, orchestrator, runners, subagents/teams overview)
 - **Ralph MCP**: [MCP.md](MCP.md) (Ralph MCP server and workspace config)
-- **Claude agents in this repo**: `bundle/.claude/agents/README.md` (dual-purpose config: `config.json` for Ralph, `.md` for Claude Code)
+- **Claude agents in your workspace**: `.claude/agents/README.md` (dual-purpose config: `config.json` for Ralph, `.md` for Claude Code)

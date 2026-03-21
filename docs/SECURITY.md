@@ -4,7 +4,7 @@ Ralph drives **Cursor**, **Claude Code**, or **Codex** against a workspace you c
 
 ## Workspace sandboxing (what Ralph does)
 
-**Codex:** Ralph always invokes the Codex CLI through **`.codex/ralph/codex-exec-prompt.sh`**, which runs `codex exec` with **`--sandbox`** (default mode **`workspace-write`**). Override the mode with **`CODEX_PLAN_SANDBOX`** if your CLI supports other values. By default the script also passes **`--add-dir`** for **`.agents/`** so logs, sessions, and human-prompt files stay reachable inside the sandbox. Details: [.codex/ralph/README.md](../bundle/.codex/ralph/README.md), [.codex/ralph/codex-exec-prompt.sh](../bundle/.codex/ralph/codex-exec-prompt.sh).
+**Codex:** Ralph always invokes the Codex CLI through **`.codex/ralph/codex-exec-prompt.sh`**, which runs `codex exec` with **`--sandbox`** (default mode **`workspace-write`**). Override the mode with **`CODEX_PLAN_SANDBOX`** if your CLI supports other values. By default the script also passes **`--add-dir`** for **`.agents/`** so logs, sessions, and human-prompt files stay reachable inside the sandbox. Details: **`.codex/ralph/README.md`** and **`.codex/ralph/codex-exec-prompt.sh`** under your workspace after install.
 
 That is **Codex-specific**. It does not stop every way secrets could leave the machine; it is the one path where Ralph wires in the vendor’s sandbox flag for you.
 
@@ -22,7 +22,7 @@ Add **`.cursorignore`** at the repo root (`.gitignore`-style patterns). Cursor u
 
 ### Claude Code: hooks
 
-Use **hooks** (e.g. pre-tool-use) to block reads or edits you care about. Example in this repo: **[`bundle/.claude/hooks/block-env-reads.sh`](../bundle/.claude/hooks/block-env-reads.sh)** (blocks reads of `.env*`). Copy into your project, make it executable, register it in **`.claude/settings.json`**: [Claude Code hooks](https://code.claude.com/docs/en/hooks).
+Use **hooks** (e.g. pre-tool-use) to block reads or edits you care about. Ralph ships an example at **`.claude/hooks/block-env-reads.sh`** (blocks reads of `.env*`). Copy or adapt it in your project, make it executable, register it in **`.claude/settings.json`**: [Claude Code hooks](https://code.claude.com/docs/en/hooks).
 
 ### Codex: ignore lists vs sandbox
 

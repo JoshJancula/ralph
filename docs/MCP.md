@@ -8,9 +8,9 @@ RALPH_MCP_WORKSPACE=/path/to/your/workspace bash .ralph/mcp-server.sh
 
 Configure your MCP host (e.g. Cursor) to start that command over stdio.
 
-## Install bundle coverage
+## Prerequisites in your project
 
-Running `./install.sh` with the default stack (or `--shared`) copies `.ralph/` straight into your workspace, so the bash MCP server (`.ralph/mcp-server.sh`) is available out of the box.
+A normal install drops **`.ralph/`** into your workspace, which includes **`mcp-server.sh`** and the rest of the shared scripts. You do not need Python or Node for this server, only **`bash`** and **`jq`**. The guides in this folder are also copied to **`.ralph/docs/`** if you used an install that includes shared **`.ralph`**.
 
 ---
 
@@ -68,9 +68,9 @@ Use `prompts/get` with the prompt name and arguments to pull the textual templat
 
 4. **Confirm connectivity.** Run `cursor mcp list` (or your client's equivalent) to ensure the server responds.
 
-For Claude Code, the host expects a project-scoped `.mcp.json` at the workspace root. Copy `bundle/.claude/mcp.example.json` into your project root as `.mcp.json` (just like Cursor’s `.cursor/mcp.example.json` templates), update the script path, `RALPH_MCP_WORKSPACE`, and `PATH` for your environment, then rerun `claude mcp list` to confirm the entry is available.
+For Claude Code, the host expects a project-scoped `.mcp.json` at the workspace root. Copy **`.claude/mcp.example.json`** (in your workspace after install) to `.mcp.json` (same idea as Cursor’s `.cursor/mcp.example.json` templates), update the script path, `RALPH_MCP_WORKSPACE`, and `PATH` for your environment, then rerun `claude mcp list` to confirm the entry is available.
 
-For Codex, MCP servers are configured in `config.toml` (`~/.codex/config.toml` or project-scoped `.codex/config.toml`). Copy the `[mcp_servers.ralph]` block from `bundle/.codex/mcp.example.toml` into your config, set `args` to the path of `.ralph/mcp-server.sh` in your workspace, and set `RALPH_MCP_WORKSPACE` and `PATH` in `[mcp_servers.ralph.env]`. Then run `codex mcp --help` or use `/mcp` in the Codex TUI to confirm the server is available.
+For Codex, MCP servers are configured in `config.toml` (`~/.codex/config.toml` or project-scoped `.codex/config.toml`). Copy the `[mcp_servers.ralph]` block from **`.codex/mcp.example.toml`** into your config, set `args` to the path of `.ralph/mcp-server.sh` in your workspace, and set `RALPH_MCP_WORKSPACE` and `PATH` in `[mcp_servers.ralph.env]`. Then run `codex mcp --help` or use `/mcp` in the Codex TUI to confirm the server is available.
 
 ### Environment guard rails
 
