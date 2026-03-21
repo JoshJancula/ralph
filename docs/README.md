@@ -11,6 +11,7 @@ These guides assume Ralph is already [installed in your project](../README.md#in
 | [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipeline: stage plans under `.agents/orchestration-plans/`, `.orch.json`, running `orchestrator.sh`, checking artifacts |
 | [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Using Claude Code **agent teams** next to Ralph (parallel teammates vs single plan vs orchestrator) |
 | [MCP.md](MCP.md) | Bash MCP server (`jq`), resources and prompts, Cursor / Claude / Codex configuration, path guard rails |
+| [SECURITY.md](SECURITY.md) | Workspace trust, `.cursorignore`, Claude hooks example, Codex caveats |
 
 ## Quick reference
 

@@ -99,7 +99,7 @@ Open **http://127.0.0.1:8123** by default. The UI reads `.agents/orchestration-p
 
 ## Run a plan (typical commands)
 
-**Typical invocations (repo root, after `.ralph/` is installed):**
+**Examples:**
 
 - Cursor: `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
 - Claude: `.ralph/run-plan.sh --runtime claude --plan PLAN.md --model claude-haiku-4-5`
@@ -142,6 +142,18 @@ RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh
 
 Requires `jq`. See [docs/MCP.md](docs/MCP.md).
 
+
+## Be Safe
+
+Ralph loops AI agents endlessly trying to resolve a task. Treat that as powerful and risky: bad prompts or bugs can edit files, run shell commands, or leak what is on disk.
+
+Use it when you understand that tradeoff. **[docs/SECURITY.md](docs/SECURITY.md)** covers what Ralph actually sandboxes, what it does not, and practical hardening.
+
+## Monitor your token usage
+
+Ralph runs **many** agent turns in a row. Pricing depends on the **model** you pick (or that your prebuilt agent pins) and on **how large and vague each TODO is**. A premium model on a long plan or a loosely scoped task list can add up quickly.
+
+Pick a model that matches the work, keep tasks concrete, and watch usage in your Cursor, Anthropic, or OpenAI billing surfaces so you are not surprised.
 
 ## License
 
