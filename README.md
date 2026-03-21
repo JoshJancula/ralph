@@ -104,7 +104,7 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.agents/orchestra
 
 ### When the runner needs you
 
-In a normal terminal, it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** and waits while you edit them. Questions and answers are also kept under **`.agents/<artifact-namespace>/human`**. Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
+**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** (fallback artifacts) and waits while you edit them. Questions and answers are also kept under **`.agents/<artifact-namespace>/human`**. Orchestrated runs can escalate human input via **`.ralph/orchestrator.sh --human-ack`** (or **`RALPH_HUMAN_ACK_TOOL`**). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
 ### Orchestration (multi-stage)
 
