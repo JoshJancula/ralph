@@ -6,7 +6,7 @@ The same schema applies under `.cursor/agents/` for Cursor runs so tooling can v
 
 ## Dual-purpose agents
 
-Every agent in this directory currently serves two runtimes. The existing `config.json` files are used by Ralph tooling (`run-plan.sh`, `orchestrator.sh`, MCP) while Claude Code native sessions consume the peer `.md` files with YAML frontmatter (e.g., `research.md`). The six agents (`research`, `architect`, `implementation`, `code-review`, `qa`, `security`) share both representations, so keep values in sync when you edit an agent’s name, description, model, rules, or skills.
+Every agent in this directory currently serves two runtimes. The existing `config.json` files are used by Ralph tooling (`.ralph/run-plan.sh` with **`--plan`**, `orchestrator.sh`, MCP) while Claude Code native sessions consume the peer `.md` files with YAML frontmatter (e.g., `research.md`). The six agents (`research`, `architect`, `implementation`, `code-review`, `qa`, `security`) share both representations, so keep values in sync when you edit an agent’s name, description, model, rules, or skills.
 
 | Purpose | `config.json` | `<agent-id>.md` frontmatter |
 |---------|---------------|-----------------------------|

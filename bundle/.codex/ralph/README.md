@@ -1,6 +1,6 @@
 # Codex Ralph runner
 
-Runs the same plan-loop contract as `.cursor/ralph/run-plan.sh` and `.claude/ralph/run-plan.sh`: one unchecked TODO per `codex exec` invocation until the plan checklist is complete.
+Codex support for the unified plan loop: **`.ralph/run-plan.sh --runtime codex --plan <path>`** drives one unchecked TODO per `codex exec` invocation until the plan checklist is complete (same contract as Cursor and Claude runtimes).
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Runs the same plan-loop contract as `.cursor/ralph/run-plan.sh` and `.claude/ral
 From repo root:
 
 ```bash
-.codex/ralph/run-plan.sh --non-interactive --agent implementation --plan PATH/to/plan.md
+.ralph/run-plan.sh --runtime codex --non-interactive --agent implementation --plan PATH/to/plan.md
 ```
 
 Logs: `.agents/logs/<artifact-namespace>/plan-runner-<plan-basename>.log` and `-output.log`.
@@ -24,6 +24,7 @@ Logs: `.agents/logs/<artifact-namespace>/plan-runner-<plan-basename>.log` and `-
 |----------|------|
 | `CODEX_PLAN_CLI` | Path to `codex` binary |
 | `CODEX_PLAN_SANDBOX` | `codex exec --sandbox` value (default `workspace-write`) |
+| `CODEX_PLAN_NO_ADD_AGENTS_DIR` | Set to `1` to omit `codex exec --add-dir <workspace>/.agents` (on by default so human-prompt and artifact paths under `.agents/` stay writable in the sandbox) |
 | `CODEX_PLAN_MODEL` / `CURSOR_PLAN_MODEL` | Optional `--model` (skip if unset or `auto`) |
 | `CODEX_PLAN_VERBOSE` | `1` mirrors script log lines to stderr |
 | `CODEX_PLAN_LOG` / `CODEX_PLAN_OUTPUT_LOG` | Override log paths |

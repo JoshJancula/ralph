@@ -520,22 +520,14 @@ handle_run_plan() {
   fi
   local runtime_lower
   runtime_lower="$(tr '[:upper:]' '[:lower:]' <<<"$runtime_arg" | tr -d '\r\n')"
-  local runner_rel
   case "$runtime_lower" in
-    cursor)
-      runner_rel=".cursor/ralph/run-plan.sh"
-      ;;
-    claude)
-      runner_rel=".claude/ralph/run-plan.sh"
-      ;;
-    codex)
-      runner_rel=".codex/ralph/run-plan.sh"
-      ;;
+    cursor|claude|codex) ;;
     *)
       send_error "$id_present" "$id_raw" "-32602" "unsupported runtime: $runtime_arg"
       return
       ;;
   esac
+  local runner_rel=".ralph/run-plan.sh"
   local runner_path
   runner_path="$(canonicalize_path "$workspace_path/$runner_rel")" || {
     send_error "$id_present" "$id_raw" "-32602" "runner script not found for runtime: $runtime_lower"
@@ -549,7 +541,7 @@ handle_run_plan() {
   if [[ "$non_interactive_arg" != "false" && "$non_interactive_arg" != "0" ]]; then
     command+=("--non-interactive")
   fi
-  command+=("--plan" "$plan_path" "--agent" "$agent_arg" "$workspace_path")
+  command+=("--runtime" "$runtime_lower" "--plan" "$plan_path" "--agent" "$agent_arg" "$workspace_path")
   local exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc
   execute_tool_command exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc "${command[@]}"
   local command_text

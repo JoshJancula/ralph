@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Canonical Ralph orchestrator (repo root: .ralph/orchestrator.sh). Dispatches each JSON
-# stage to Cursor, Claude, or Codex run-plan.sh via per-stage "runtime".
+# stage to `.ralph/run-plan.sh` with per-stage `--runtime`, `--plan` (from the stage), and `--agent`.
 # Master orchestrator: read a JSON orchestration plan, run each step in order via Ralph
-# (Cursor, Claude, or Codex run-plan.sh with --agent and --plan). Stops on first failure
+# (unified run-plan; `--plan` is always passed). Stops on first failure
 # and writes actionable logs under .agents/logs/orchestrator-*.log.
 #
 # Orchestration plan format (JSON file with .orch.json extension):
@@ -51,7 +51,7 @@
 # Optional per-stage JSON field humanAck: enforced only when ORCHESTRATOR_HUMAN_ACK=1. See .agents/artifacts/README.md.
 #
 # When stdout is a TTY and ORCHESTRATOR_RUNNER_TO_CONSOLE is not 0, each step streams the Ralph runner
-# (run-plan.sh and Cursor/Claude agent output) to the console as well as appending to the orchestrator log.
+# (.ralph/run-plan.sh and agent CLI output) to the console as well as appending to the orchestrator log.
 
 set -euo pipefail
 
@@ -117,9 +117,7 @@ mkdir -p "$RALPH_LOG_DIR"
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
 ORCH_BASENAME="${ORCH_BASENAME//[^A-Za-z0-9_.-]/_}"
 LOG_FILE="$RALPH_LOG_DIR/orchestrator-${ORCH_BASENAME}.log"
-CURSOR_RUNNER="$WORKSPACE/.cursor/ralph/run-plan.sh"
-CLAUDE_RUNNER="$WORKSPACE/.claude/ralph/run-plan.sh"
-CODEX_RUNNER="$WORKSPACE/.codex/ralph/run-plan.sh"
+RALPH_RUN_PLAN="$WORKSPACE/.ralph/run-plan.sh"
 EXPECTED_ARTIFACT_PATHS=()
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -357,22 +355,14 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     step_index=$((step_index + 1))
     plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
 
-  if [[ "$runtime" == "cursor" ]]; then
-    runner="$CURSOR_RUNNER"
-    runner_label="Cursor (.cursor/ralph/run-plan.sh)"
-  elif [[ "$runtime" == "codex" ]]; then
-    runner="$CODEX_RUNNER"
-    runner_label="Codex (.codex/ralph/run-plan.sh)"
-  else
-    runner="$CLAUDE_RUNNER"
-    runner_label="Claude (.claude/ralph/run-plan.sh)"
-  fi
+  runner="$RALPH_RUN_PLAN"
+  runner_label=".ralph/run-plan.sh (runtime=$runtime)"
 
   if [[ ! -f "$runner" ]]; then
     log "FAIL step $step_index: runner missing: $runner"
     echo -e "${C_R}${C_BOLD}Orchestrator aborted before step $step_index${C_RST}" >&2
     echo "  Runner not found: $runner" >&2
-    echo "  Install or add the Ralph runner for $runtime, then retry." >&2
+    echo "  Install Ralph shared bundle (.ralph/) so run-plan.sh exists, then retry." >&2
     echo "  Log: $LOG_FILE" >&2
     exit 1
   fi
@@ -483,9 +473,9 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   echo "" >&2
   echo -e "${C_DIM}Invoking:${C_RST} $runner_label" >&2
   if [[ "$agent_source" == "prebuilt" ]]; then
-    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --plan <plan> --agent $agent <workspace>" >&2
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --plan <plan> --agent $agent <workspace>" >&2
   else
-    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --plan <plan> <workspace>" >&2
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --plan <plan> <workspace>" >&2
   fi
   echo -e "${C_DIM}  orchestrator log (append):${C_RST} $LOG_FILE" >&2
   echo -e "${C_DIM}  per-plan agent output log:${C_RST} $_runner_stream_log" >&2
@@ -506,7 +496,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       _runner_env+=(CLAUDE_PLAN_MODEL="$stage_model")
     fi
   fi
-  _runner_args=(--non-interactive --plan "$plan_abs")
+  _runner_args=(--non-interactive --runtime "$runtime" --plan "$plan_abs")
   if [[ "$agent_source" == "prebuilt" ]]; then
     _runner_args+=(--agent "$agent")
   elif [[ -z "$stage_model" ]]; then

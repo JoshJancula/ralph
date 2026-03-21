@@ -305,7 +305,7 @@ main() {
   [[ "$SCAFFOLD_CLAUDE" -eq 1 ]] && echo "  $CLAUDE_DIR"
   [[ "$SCAFFOLD_CODEX" -eq 1 ]] && echo "  $CODEX_DIR"
   echo ""
-  echo "Next: add this agent to plan-runner / orchestration JSON if you use Ralph plans."
+  echo "Next: run .ralph/run-plan.sh with required --plan <path> and --agent <name> (or add the agent to orchestration JSON for multi-stage pipelines)."
 }
 
 main "$@"

@@ -2,12 +2,12 @@
 
 ## Plan-first loop
 
-1. Write a markdown plan with checkboxes: `- [ ]` todo, `- [x]` done.
+1. Write a markdown plan with checkboxes: `- [ ]` todo, `- [x]` done. Open tasks must use that exact `- [ ]` form (space inside the brackets). `- []` is not a task line and is ignored by the runners.
 2. Run a runner until all items are checked:
 
-   - Cursor: `.cursor/ralph/run-plan.sh --plan PLAN.md`
-   - Claude: `.claude/ralph/run-plan.sh --plan ...`
-   - Codex: `.codex/ralph/run-plan.sh --non-interactive --plan ...`
+   - Cursor: `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
+   - Claude: `.ralph/run-plan.sh --runtime claude --plan ...`
+   - Codex: `.ralph/run-plan.sh --runtime codex --non-interactive --plan ...`
 
 3. With **`--agent <id>`**, the runner loads that id under `.cursor/agents/`, `.claude/agents/`, or `.codex/agents/`. Try **`architect`** or **`research`** after install. The **agent-config-tool** under `.ralph/` validates and builds context for all runtimes.
 
@@ -16,7 +16,7 @@
 1. Copy `.ralph/orchestration.template.json` and `.ralph/orchestration.template.md`.
    Alternatively, run `.ralph/orchestration-wizard.sh` to choose a pipeline name/namespace, pick runtimes and agents for each stage, and let the wizard scaffold the plan files plus `.orch.json` under `.agents/orchestration-plans/<namespace>/`.
 2. Each stage has `"runtime": "cursor" | "claude" | "codex"`, `"agent"`, and `"plan"`.
-3. Run: `.ralph/orchestrator.sh path/to/pipeline.orch.json`
+3. Run: `.ralph/orchestrator.sh --orchestration path/to/pipeline.orch.json` or `.ralph/orchestrator.sh path/to/pipeline.orch.json` (both forms are supported; see the usage block in `.ralph/orchestrator.sh`).
 
 ## Visual flow
 
@@ -37,12 +37,12 @@ Each stage drives the runtime-specific plan runner, which in turn writes logs an
 
 ### Using the runners
 
-1. **Create plans** (single agent or per stage) from `.ralph/plan.template`. Todo items must use `- [ ]` or `- [x]` because `get_next_todo` matches that exact syntax.
+1. **Create plans** (single agent or per stage) from `.ralph/plan.template`. Todo items must use `- [ ]` or `- [x]`; `get_next_todo` matches only those shapes (not `- []`).
 2. **Run the appropriate CLI** noted in `README.md`:
-   - `.cursor/ralph/run-plan.sh` for Cursor (honors `CURSOR_PLAN_MODEL`, `--agent`, `--plan`, `--select-agent`).
-   - `.claude/ralph/run-plan.sh` for Claude (respecting `CLAUDE_PLAN_MODEL` and similar flags).
-   - `.codex/ralph/run-plan.sh` for Codex (`--non-interactive` by default, honoring `CODEX_PLAN_MODEL`).
-3. **Handle human input**: the runner may exit with artifacts like `HUMAN-INPUT-REQUIRED.md`. Write the response, reopen the CLI, and rerun the same plan so the first unchecked todo is replayed.
+   - **`.ralph/run-plan.sh --runtime cursor|claude|codex --plan <path>`** is the only plan runner (**`--plan` is required**); each runtime honors its own env prefix (`CURSOR_PLAN_*`, `CLAUDE_PLAN_*`, `CODEX_PLAN_*`) and the same optional flags (`--agent`, `--select-agent`, `--non-interactive`, `--model`, etc.).
+3. **Handle human input**: The runner follows an **interactive-first flow**: TTY-attached runs prompt inline on `/dev/tty` and continue in the same process (multiline answers may include blank lines; end input with a line containing only `.`). When stdin/stdout are not a TTY (for example under the orchestrator), `.ralph/run-plan.sh` still **pauses in-process**: it writes `pending-human.txt`, `HUMAN-INPUT-REQUIRED.md`, and a placeholder `operator-response.txt`, then polls until you save a real answer (override poll interval with `RALPH_HUMAN_POLL_INTERVAL`). Optional escalation to `.ralph/orchestrator.sh --human-ack` or `RALPH_HUMAN_ACK_TOOL` can run first for bridges. Set `RALPH_HUMAN_OFFLINE_EXIT=1` only if you need the old behavior (exit 4 and restart after editing files).
+
+   Every human exchange (question + answer) is also persisted under `.agents/<artifact-namespace>/human`, giving you a namespace- scoped audit trail to review what was asked, who answered it, and what needs to be replayed before resuming the plan.
 4. **Logs and artifacts**: After each run, inspect `.agents/logs/plan-runner-*.log` for stdout and error details, and `.agents/artifacts/{{ARTIFACT_NS}}/` for generated docs. Use `.ralph/cleanup-plan.sh <namespace>` to wipe logs/artifacts before a fresh run.
 5. **Subagents and teams**: Refer to the README’s links (Cursor subagents, Claude subagents, Claude agent teams, Codex subagents/multi-agent) to understand how to delegate work inside your plan or orchestrator stages. For using Claude Code agent teams with Ralph (spawning teammates for tasks, artifact handoffs, and when to use teams vs orchestrator), see [Claude Code agent teams with Ralph](CLAUDE-AGENT-TEAMS.md).
 
@@ -75,7 +75,7 @@ Break the task into discrete TODOs (`- [ ]`). For each item, mention the files t
 
 **Stage plan prompt for orchestrations**
 
-```
+```text
 Create three stage plans (research, architecture, implementation)
 using `.ralph/plan.template`.
 
@@ -92,7 +92,7 @@ Include:
 
 **Orchestration spec prompt**
 
-```
+```text
 I am coordinating [FEATURE] across Cursor, Claude, and Codex.
 Each stage plan already exists under
 `.agents/orchestration-plans/<namespace>/`.
