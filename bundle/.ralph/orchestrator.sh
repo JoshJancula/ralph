@@ -45,6 +45,7 @@
 #   ORCHESTRATOR_HUMAN_ACK=1         enforce per-stage humanAck gates (default: off; pipeline does not pause)
 #   RALPH_ARTIFACT_NS                override artifact namespace (default: from JSON or filename)
 #   RALPH_ORCH_FILE                  path to the orchestration plan currently being processed
+#   RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skip first-run usage-risk prompt (same marker file as run-plan; for CI/automation)
 #
 # Exit codes: 0 success, 1 failure, 3 human acknowledgment required (only when ORCHESTRATOR_HUMAN_ACK=1 and ack file missing)
 #
@@ -111,6 +112,9 @@ fi
 # shellcheck source=/dev/null
 source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
+# shellcheck source=/dev/null
+source "$WORKSPACE/.ralph/bash-lib/usage-risk-ack.sh"
+ralph_require_usage_risk_acknowledgment
 AGENTS_SHARED_DIR="$WORKSPACE/.agents"
 RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs"
 mkdir -p "$RALPH_LOG_DIR"

@@ -30,4 +30,6 @@ jobs:
         run: bash scripts/setup-test-fixtures.sh
 
       - name: Run Bats suite
+        env:
+          RALPH_USAGE_RISKS_ACKNOWLEDGED: "1"
         run: bats tests/bats/*.bats

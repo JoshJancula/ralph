@@ -25,6 +25,7 @@
 #   Human prompts: CURSOR_PLAN_DISABLE_HUMAN_PROMPT / CLAUDE_PLAN_DISABLE_HUMAN_PROMPT / CODEX_PLAN_DISABLE_HUMAN_PROMPT
 #                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN
 #   Human offline (no TTY): RALPH_HUMAN_POLL_INTERVAL (default 2), RALPH_HUMAN_OFFLINE_EXIT=1 to exit 4 instead of waiting
+#   Usage risk (first run): interactive YES prompt once; marker under ${XDG_CONFIG_HOME:-~/.config}/ralph/usage-risk-acknowledgment; RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skips (CI/automation)
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
@@ -181,6 +182,10 @@ if [[ -z "$PLAN_OVERRIDE" ]]; then
   echo "Error: --plan <path> is required." >&2
   exit 1
 fi
+
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/usage-risk-ack.sh"
+ralph_require_usage_risk_acknowledgment
 
 AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
 
