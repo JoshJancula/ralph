@@ -30,7 +30,25 @@ cleanup_plan_workspace_root() {
 cleanup_plan_log_dir() {
   local workspace_root="$1"
   local namespace="$2"
+  printf '%s/.ralph-workspace/logs/%s' "$workspace_root" "$namespace"
+}
+
+cleanup_plan_legacy_plan_log_dir() {
+  local workspace_root="$1"
+  local namespace="$2"
   printf '%s/.agents/logs/%s' "$workspace_root" "$namespace"
+}
+
+cleanup_plan_session_dir() {
+  local workspace_root="$1"
+  local namespace="$2"
+  printf '%s/.ralph-workspace/sessions/%s' "$workspace_root" "$namespace"
+}
+
+cleanup_plan_legacy_plan_session_dir() {
+  local workspace_root="$1"
+  local namespace="$2"
+  printf '%s/.agents/sessions/%s' "$workspace_root" "$namespace"
 }
 
 cleanup_plan_artifact_dir() {

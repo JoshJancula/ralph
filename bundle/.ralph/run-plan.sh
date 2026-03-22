@@ -18,6 +18,7 @@
 #   Logs:         CURSOR_PLAN_LOG / CURSOR_PLAN_OUTPUT_LOG +
 #                 CLAUDE_PLAN_LOG / CLAUDE_PLAN_OUTPUT_LOG +
 #                 CODEX_PLAN_LOG / CODEX_PLAN_OUTPUT_LOG
+#   Plan state dir: RALPH_PLAN_WORKSPACE_ROOT (default: <workspace>/.ralph-workspace) holds plan logs + sessions
 #   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER
 #   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER
 #   Progress:     CURSOR_PLAN_PROGRESS_INTERVAL / CLAUDE_PLAN_PROGRESS_INTERVAL / CODEX_PLAN_PROGRESS_INTERVAL
@@ -26,6 +27,13 @@
 #                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN
 #   Human offline (no TTY): RALPH_HUMAN_POLL_INTERVAL (default 2), RALPH_HUMAN_OFFLINE_EXIT=1 to exit 4 instead of waiting
 #   Usage risk (first run): interactive YES prompt once; marker under ${XDG_CONFIG_HOME:-~/.config}/ralph/usage-risk-acknowledgment; RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skips (CI/automation)
+#   CLI session resume (optional): RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
+#     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt and, when that file exists, passes --resume <id> (or runtime
+#     equivalent) with a compact prompt (TODO + plan path + human-replies only). Interactive TTY runs ask unless
+#     you set the env var or pass --cli-resume / --no-cli-resume.
+#   Unsafe bare resume: RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 or --allow-unsafe-resume is required before the runner
+#     passes resume without a stored session id (e.g. Codex resume --last). Invoke helpers ignore bare resume without
+#     this flag so ad-hoc RALPH_RUN_PLAN_RESUME_BARE cannot resume the wrong session during interactive use.
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
@@ -45,13 +53,58 @@ set -euo pipefail
 
 # On macOS, re-exec under caffeinate so the system does not sleep during the plan run.
 # Guard variables are normalized so we only re-exec once per invocation.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+#
+# Shared Ralph (run-plan.sh, bash-lib/, ralph-env-safety.sh, ...) lives under .ralph/.
+# Per-runtime trees (.claude/ralph, .cursor/ralph, .codex/ralph) only hold thin wrappers
+# and templates. If run-plan.sh is invoked from a runtime ralph dir (or that path is
+# what dirname resolves to), use the workspace .ralph copy that contains bash-lib.
+ralph_shared_ralph_dir_complete() {
+  local d="$1"
+  if [[ -f "$d/bash-lib/run-plan-env.sh" && -f "$d/ralph-env-safety.sh" \
+    && -f "$d/bash-lib/run-plan-invoke-cursor.sh" \
+    && -f "$d/bash-lib/run-plan-invoke-claude.sh" \
+    && -f "$d/bash-lib/run-plan-invoke-codex.sh" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+ralph_resolve_shared_ralph_dir() {
+  local d="$1"
+  local ancestor cand2
+  if ralph_shared_ralph_dir_complete "$d"; then
+    printf '%s\n' "$d"
+    return 0
+  fi
+  # Partial trees under .cursor/ralph, .claude/ralph, or .codex/ralph (or nested layouts)
+  # may include some bash-lib files but not invoke helpers; walk up until we find a
+  # complete sibling .ralph/ (e.g. workspace/.ralph next to workspace/.cursor).
+  ancestor="$(dirname "$d")"
+  while [[ "$ancestor" != "/" ]]; do
+    cand2="$ancestor/.ralph"
+    if ralph_shared_ralph_dir_complete "$cand2"; then
+      printf '%s\n' "$(cd "$cand2" && pwd)"
+      return 0
+    fi
+    ancestor="$(dirname "$ancestor")"
+  done
+  printf '%s\n' "$d"
+}
+
+_THIS_RUN_PLAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_THIS_RUN_PLAN_FILE="$_THIS_RUN_PLAN_DIR/$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(ralph_resolve_shared_ralph_dir "$_THIS_RUN_PLAN_DIR")"
+_RESOLVED_RUN_PLAN="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+if [[ -f "$_RESOLVED_RUN_PLAN" ]]; then
+  SCRIPT_PATH="$_RESOLVED_RUN_PLAN"
+else
+  SCRIPT_PATH="$_THIS_RUN_PLAN_FILE"
+fi
 RALPH_DIR="$SCRIPT_DIR"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-env.sh
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-env.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-env.sh"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/menu-select.sh
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/menu-select.sh
 source "$SCRIPT_DIR/bash-lib/menu-select.sh"
 
 CAFFEINATE_RUNTIME="${RALPH_PLAN_RUNTIME:-}"
@@ -105,8 +158,14 @@ PREBUILT_AGENT=""
 PLAN_MODEL_CLI=""
 INTERACTIVE_SELECT_AGENT_FLAG=0
 NON_INTERACTIVE_FLAG=0
+CLI_RESUME_FLAG=0
+NO_CLI_RESUME_FLAG=0
+ALLOW_UNSAFE_RESUME_FLAG=0
+RESUME_SESSION_ID_OVERRIDE=""
 RUNTIME=""
 CLAUDE_TOOLS_FROM_AGENT=""
+_RALPH_CLI_RESUME_ENV_WAS_SET=0
+[[ "${RALPH_PLAN_CLI_RESUME+x}" == x ]] && _RALPH_CLI_RESUME_ENV_WAS_SET=1
 
 # Parse arguments: --plan, --model, --agent, --select-agent, --non-interactive, optional workspace positional
 while [[ $# -gt 0 ]]; do
@@ -159,6 +218,26 @@ while [[ $# -gt 0 ]]; do
       NON_INTERACTIVE_FLAG=1
       shift
       ;;
+    --cli-resume)
+      CLI_RESUME_FLAG=1
+      shift
+      ;;
+    --no-cli-resume)
+      NO_CLI_RESUME_FLAG=1
+      shift
+      ;;
+    --allow-unsafe-resume)
+      ALLOW_UNSAFE_RESUME_FLAG=1
+      shift
+      ;;
+    --resume)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --resume requires a session id." >&2
+        exit 1
+      fi
+      RESUME_SESSION_ID_OVERRIDE="$2"
+      shift 2
+      ;;
     *)
       WORKSPACE="$1"
       shift
@@ -183,6 +262,47 @@ if [[ -z "$PLAN_OVERRIDE" ]]; then
   exit 1
 fi
 
+if [[ "$NO_CLI_RESUME_FLAG" == "1" ]]; then
+  RALPH_PLAN_CLI_RESUME=0
+elif [[ "$CLI_RESUME_FLAG" == "1" ]]; then
+  RALPH_PLAN_CLI_RESUME=1
+elif [[ "$_RALPH_CLI_RESUME_ENV_WAS_SET" == "1" ]]; then
+  case "${RALPH_PLAN_CLI_RESUME:-0}" in
+    1|true|yes|on) RALPH_PLAN_CLI_RESUME=1 ;;
+    *) RALPH_PLAN_CLI_RESUME=0 ;;
+  esac
+else
+  RALPH_PLAN_CLI_RESUME=0
+  if [[ -t 0 ]] && [[ -t 1 ]]; then
+    _RALPH_PROMPT_CLI_RESUME_INTERACTIVE=1
+  fi
+fi
+
+RALPH_PLAN_ALLOW_UNSAFE_RESUME="${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}"
+if [[ "$ALLOW_UNSAFE_RESUME_FLAG" == "1" ]]; then
+  RALPH_PLAN_ALLOW_UNSAFE_RESUME=1
+fi
+case "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" in
+  1|true|yes|on) RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 ;;
+  *) RALPH_PLAN_ALLOW_UNSAFE_RESUME=0 ;;
+esac
+export RALPH_PLAN_ALLOW_UNSAFE_RESUME
+
+# Colors before any interactive menu (runtime picker runs before log() exists).
+# Disable with CURSOR_PLAN_NO_COLOR=1 (honored across runtimes).
+if [[ -t 1 && "${CURSOR_PLAN_NO_COLOR:-0}" != "1" ]]; then
+  C_R=$'\033[31m'
+  C_G=$'\033[32m'
+  C_Y=$'\033[33m'
+  C_B=$'\033[34m'
+  C_C=$'\033[36m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RST=$'\033[0m'
+else
+  C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+fi
+
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/usage-risk-ack.sh"
 ralph_require_usage_risk_acknowledgment
@@ -201,12 +321,15 @@ prompt_select_runtime() {
     return 1
   fi
   echo "" >&2
-  echo "Select plan runner runtime:" >&2
-  echo "  1) Cursor (cursor-agent)" >&2
-  echo "  2) Claude Code (claude)" >&2
-  echo "  3) Codex" >&2
+  echo -e "${C_C}${C_BOLD}Plan runner${C_RST} ${C_DIM}--${C_RST} ${C_BOLD}which CLI runs each TODO?${C_RST}" >&2
+  echo "" >&2
+  echo -e "  ${C_G}1)${C_RST} Cursor" >&2
+  echo -e "  ${C_G}2)${C_RST} Claude Code" >&2
+  echo -e "  ${C_G}3)${C_RST} Codex" >&2
+  echo "" >&2
   local runtime_choice
-  read -r -p "Selection [1]: " runtime_choice </dev/tty 2>/dev/null || runtime_choice="1"
+  printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
+  read -r runtime_choice </dev/tty 2>/dev/null || runtime_choice="1"
   runtime_choice="${runtime_choice:-1}"
   case "$runtime_choice" in
     1) printf '%s' "cursor" ;;
@@ -252,20 +375,6 @@ fi
 
 MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
 GUTTER_ITERATIONS="${CURSOR_PLAN_GUTTER_ITER:-10}"
-
-# Colors (only when stdout is a TTY); set CURSOR_PLAN_NO_COLOR=1 to disable
-if [[ -t 1 && "${CURSOR_PLAN_NO_COLOR:-0}" != "1" ]]; then
-  C_R="\033[31m"
-  C_G="\033[32m"
-  C_Y="\033[33m"
-  C_B="\033[34m"
-  C_C="\033[36m"
-  C_BOLD="\033[1m"
-  C_DIM="\033[2m"
-  C_RST="\033[0m"
-else
-  C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-fi
 
 # Log to file and optionally stdout (if CURSOR_PLAN_VERBOSE=1)
 log() {
@@ -428,7 +537,8 @@ prompt_select_prebuilt_agent() {
     return 0
   fi
   echo "" >&2
-  echo "Prebuilt agents:" >&2
+  echo -e "${C_C}${C_BOLD}Prebuilt agents${C_RST} ${C_DIM}(${AGENTS_ROOT_REL})${C_RST}" >&2
+  echo "" >&2
   local n=1
   local line
   local -a ids=()
@@ -437,17 +547,19 @@ prompt_select_prebuilt_agent() {
     ids+=("$line")
     local m
     m="$(read_prebuilt_agent_model "$ws" "$line" 2>/dev/null)" || m="?"
-    printf "  %2d) %s  (model: %s)\n" "$n" "$line" "${m:-?}" >&2
+    printf "  ${C_G}%2d)${C_RST} %s  ${C_DIM}(model: %s)${C_RST}\n" "$n" "$line" "${m:-?}" >&2
     n=$((n + 1))
   done <<< "$list"
   echo "" >&2
-  local selection
-  selection="$(ralph_menu_select --prompt "Pick prebuilt agent (discovered under $AGENTS_ROOT_REL)" --default 1 -- "${ids[@]}" || true)"
-  if [[ -z "$selection" ]]; then
-    echo "Error: no prebuilt agent selected." >&2
+  local selection_idx
+  printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
+  read -r selection_idx </dev/tty 2>/dev/null || selection_idx="1"
+  selection_idx="${selection_idx:-1}"
+  if ! [[ "$selection_idx" =~ ^[0-9]+$ ]] || [[ "$selection_idx" -lt 1 ]] || [[ "$selection_idx" -gt ${#ids[@]} ]]; then
+    echo "Error: invalid selection." >&2
     return 1
   fi
-  printf '%s' "$selection"
+  printf '%s' "${ids[$((selection_idx - 1))]}"
 }
 
 # If prebuilt agents exist and no explicit selection flags were passed, ask whether
@@ -471,13 +583,16 @@ prompt_agent_source_mode() {
   fi
 
   echo "" >&2
-  echo "Prebuilt agents detected under $AGENTS_ROOT_REL." >&2
-  echo "Choose how to run this plan:" >&2
-  echo "  1) Use a prebuilt agent (recommended)" >&2
-  echo "  2) Select a model directly" >&2
+  echo -e "${C_C}${C_BOLD}Agent setup${C_RST}" >&2
+  echo -e "${C_DIM}Prebuilt agents under ${AGENTS_ROOT_REL}${C_RST}" >&2
+  echo "" >&2
+  echo -e "  ${C_G}1)${C_RST} Use a prebuilt agent ${C_DIM}(recommended)${C_RST}" >&2
+  echo -e "  ${C_G}2)${C_RST} Select a model directly" >&2
+  echo "" >&2
 
   local mode_choice
-  read -r -p "Selection [1]: " mode_choice </dev/tty 2>/dev/null || mode_choice="1"
+  printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
+  read -r mode_choice </dev/tty 2>/dev/null || mode_choice="1"
   mode_choice="${mode_choice:-1}"
   case "$mode_choice" in
     1)
@@ -486,7 +601,7 @@ prompt_agent_source_mode() {
     2)
       ;;
     *)
-      echo "Invalid selection; defaulting to prebuilt agent." >&2
+      echo -e "${C_Y}Invalid selection; defaulting to prebuilt agent.${C_RST}" >&2
       INTERACTIVE_SELECT_AGENT_FLAG=1
       ;;
   esac
@@ -494,13 +609,14 @@ prompt_agent_source_mode() {
 
 PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
 
-# Per-plan log files under .agents/logs/<artifact-namespace> (unless overridden by env)
-AGENTS_SHARED_DIR="$WORKSPACE/.agents"
+# Per-plan logs and session files under .ralph-workspace/ (override with RALPH_PLAN_WORKSPACE_ROOT).
+# Keeps agent-writable paths (pending-human.txt, etc.) out of .agents, which some CLIs sandbox or restrict.
 PLAN_LOG_NAME="$(plan_log_basename "$PLAN_PATH")"
 export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-$PLAN_LOG_NAME}"
 export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-$RALPH_PLAN_KEY}"
-RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs/$RALPH_ARTIFACT_NS"
-AGENTS_SESSION_ROOT="$AGENTS_SHARED_DIR/sessions"
+RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
+RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+AGENTS_SESSION_ROOT="$RALPH_PLAN_WORKSPACE_ROOT/sessions"
 RALPH_SESSION_DIR="$AGENTS_SESSION_ROOT/${RALPH_PLAN_KEY}"
 if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
@@ -512,6 +628,7 @@ if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
 else
   OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
 fi
+export OUTPUT_LOG
 
 ralph_assert_path_not_env_secret "Plan file" "$PLAN_PATH"
 ralph_assert_path_not_env_secret "Plan log" "$LOG_FILE"
@@ -566,11 +683,33 @@ fi
 log "plan file found: $PLAN_PATH"
 
 mkdir -p "$RALPH_SESSION_DIR"
+SESSION_ID_FILE="$RALPH_SESSION_DIR/session-id.txt"
+export SESSION_ID_FILE
 PENDING_HUMAN="$RALPH_SESSION_DIR/pending-human.txt"
 HUMAN_CONTEXT="$RALPH_SESSION_DIR/human-replies.md"
 OPERATOR_RESPONSE_FILE="$RALPH_SESSION_DIR/operator-response.txt"
 HUMAN_INPUT_MD="$RALPH_SESSION_DIR/HUMAN-INPUT-REQUIRED.md"
 PENDING_ABS="$PENDING_HUMAN"
+
+_legacy_plan_sess="$WORKSPACE/.agents/sessions/${RALPH_PLAN_KEY}"
+if [[ -d "$_legacy_plan_sess" ]]; then
+  if [[ ! -s "$SESSION_ID_FILE" && -s "$_legacy_plan_sess/session-id.txt" ]]; then
+    cp "$_legacy_plan_sess/session-id.txt" "$SESSION_ID_FILE"
+    log "Migrated session-id.txt from $_legacy_plan_sess to $RALPH_SESSION_DIR"
+  fi
+  _mig_f=""
+  for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md; do
+    if [[ ! -e "$RALPH_SESSION_DIR/$_mig_f" && -e "$_legacy_plan_sess/$_mig_f" ]]; then
+      cp -a "$_legacy_plan_sess/$_mig_f" "$RALPH_SESSION_DIR/$_mig_f"
+      log "Migrated $_mig_f from legacy .agents session dir"
+    fi
+  done
+fi
+
+if [[ -n "$RESUME_SESSION_ID_OVERRIDE" ]]; then
+  printf '%s\n' "$RESUME_SESSION_ID_OVERRIDE" > "$SESSION_ID_FILE"
+  log "Manual resume session id provided via --resume; recorded in $SESSION_ID_FILE"
+fi
 
 ralph_path_to_file_uri() {
   if command -v python3 &>/dev/null; then
@@ -793,6 +932,44 @@ fi
 
 log "session dir=$RALPH_SESSION_DIR"
 
+if [[ "${_RALPH_PROMPT_CLI_RESUME_INTERACTIVE:-0}" == "1" ]]; then
+  if [[ "$NON_INTERACTIVE_FLAG" != "1" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+    _cr_runtime_label=""
+    case "$RUNTIME" in
+      cursor) _cr_runtime_label="Cursor" ;;
+      claude) _cr_runtime_label="Claude Code" ;;
+      codex) _cr_runtime_label="Codex" ;;
+      *) _cr_runtime_label="this agent" ;;
+    esac
+    echo "" >&2
+    echo -e "${C_C}${C_BOLD}Session reuse${C_RST}" >&2
+    echo -e "${C_BOLD}Keep one ${_cr_runtime_label} session for every TODO in this plan?${C_RST}" >&2
+    echo "" >&2
+    echo -e "${C_DIM}Use one session for the whole plan when it is short (about five TODOs or fewer). Ralph keeps each step narrow so history does not balloon; a leaner thread costs less in tokens and tends to run faster.${C_RST}" >&2
+    echo -e "${C_DIM}For longer plans, prefer a new session per TODO.${C_RST}" >&2
+    echo "" >&2
+    echo -e "  ${C_G}y${C_RST}  ${C_BOLD}Yes${C_RST} -- same conversation across TODOs ${C_DIM}(remembers context)${C_RST}" >&2
+    echo -e "  ${C_G}n${C_RST}  ${C_BOLD}No${C_RST}  -- new session per TODO ${C_DIM}(simpler; default: press Enter)${C_RST}" >&2
+    echo "" >&2
+    echo -e "${C_DIM}If Yes, an id is saved to:${C_RST}" >&2
+    echo -e "${C_DIM}  ${SESSION_ID_FILE}${C_RST}" >&2
+    echo -e "${C_DIM}Python 3 on PATH is required to capture that id from tool output.${C_RST}" >&2
+    echo "" >&2
+    printf '%s' "${C_Y}${C_BOLD}Your answer${C_RST}${C_DIM} -- type y or n, then Enter [y/N]${C_RST}: " >&2
+    _cr_ans=""
+    read -r _cr_ans </dev/tty 2>/dev/null || _cr_ans=""
+    _cr_ans="$(echo "${_cr_ans:-}" | tr '[:upper:]' '[:lower:]')"
+    unset _cr_runtime_label
+    if [[ "$_cr_ans" == "y" || "$_cr_ans" == "yes" ]]; then
+      RALPH_PLAN_CLI_RESUME=1
+    else
+      RALPH_PLAN_CLI_RESUME=0
+    fi
+  fi
+  unset _RALPH_PROMPT_CLI_RESUME_INTERACTIVE
+fi
+export RALPH_PLAN_CLI_RESUME
+
 # After this point, offer optional cleanup on exit (logs and Ralph artifacts).
 ALLOW_CLEANUP_PROMPT=1
 CLEANUP_SCRIPT="$WORKSPACE/.ralph/cleanup-plan.sh"
@@ -814,14 +991,16 @@ prompt_cleanup_on_exit() {
   fi
   if [[ -t 0 && -t 1 ]]; then
     local ans
-    read -r -p "Run cleanup now? [y/N] " ans </dev/tty 2>/dev/null || ans=""
+    echo -e "${C_C}${C_BOLD}Cleanup${C_RST}" >&2
+    printf '%s' "${C_Y}${C_BOLD}Run cleanup now?${C_RST}${C_DIM} [y/N]${C_RST}: " >&2
+    read -r ans </dev/tty 2>/dev/null || ans=""
     ans="$(echo "$ans" | tr '[:upper:]' '[:lower:]')"
     if [[ "$ans" == "y" || "$ans" == "yes" ]]; then
-  "$CLEANUP_SCRIPT" "${RALPH_ARTIFACT_NS:-}" "$WORKSPACE"
+      "$CLEANUP_SCRIPT" "${RALPH_ARTIFACT_NS:-}" "$WORKSPACE"
       return 0
     fi
   fi
-  echo "Cleanup command: .ralph/cleanup-plan.sh ${RALPH_ARTIFACT_NS:-<artifact-namespace>} ${WORKSPACE}"
+  echo -e "${C_DIM}Cleanup command:${C_RST} ${C_C}.ralph/cleanup-plan.sh ${RALPH_ARTIFACT_NS:-<artifact-namespace>} ${WORKSPACE}${C_RST}"
 }
 trap prompt_cleanup_on_exit EXIT
 
@@ -902,6 +1081,7 @@ while true; do
   todo_text="$(plan_open_todo_body "$full_line")"
 
   attempts_on_line=0
+  human_gate_satisfied_for_line=0
   while true; do
     total_invocations=$((total_invocations + 1))
     if [[ $total_invocations -gt $MAX_ITERATIONS ]]; then
@@ -916,16 +1096,74 @@ while true; do
 
     log "invocation=$iteration next_todo line=$line_num done=$done_count total=$total_count remaining=$remaining attempts_on_line=$attempts_on_line"
     log "todo_text: $todo_text"
+    _session_label="none"
+    if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+      _session_label="${RALPH_RUN_PLAN_RESUME_SESSION_ID}"
+    elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
+      _session_label="bare"
+    fi
+    log "current task line=$line_num session=$_session_label"
+
+    task_ordinal="$(plan_todo_ordinal_at_line "$PLAN_PATH" "$line_num")"
 
     echo ""
-    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════${C_RST}"
-    echo -e "${C_C}Building plan:${C_RST} $PLAN_PATH  ${C_DIM}|${C_RST}  ${C_G}$done_count/$total_count${C_RST}  ${C_DIM}|${C_RST}  ${C_Y}invoke $iteration${C_RST} (line $line_num)"
-    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════${C_RST}"
+    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════════════${C_RST}"
+    echo -e "${C_C}Building plan:${C_RST} $PLAN_PATH"
+    echo -e "  ${C_DIM}${C_RST}  ${C_BOLD}TASK ${task_ordinal}${C_RST}  ${C_DIM}|${C_RST}  Complete ${C_G}$done_count/$total_count |${C_RST} Skipped: 0 ${C_DIM}|${C_RST}  ${C_Y}invoke $iteration${C_RST} (line $line_num)"
+    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════════════${C_RST}"
     echo -e "${C_BOLD}$todo_text${C_RST}"
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
     echo ""
 
-    PROMPT="You are executing a single step of a plan. Do exactly this and nothing else:
+    unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+    unset RALPH_RUN_PLAN_RESUME_BARE
+    if [[ -n "$RESUME_SESSION_ID_OVERRIDE" ]]; then
+      export RALPH_RUN_PLAN_RESUME_SESSION_ID="$RESUME_SESSION_ID_OVERRIDE"
+    elif [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -s "$SESSION_ID_FILE" ]]; then
+      _resume_sid=""
+      if read -r _resume_sid < "$SESSION_ID_FILE"; then
+        _resume_sid="${_resume_sid//$'\r'/}"
+        _resume_sid="${_resume_sid//$'\n'/}"
+        _resume_sid="${_resume_sid#"${_resume_sid%%[![:space:]]*}"}"
+        _resume_sid="${_resume_sid%"${_resume_sid##*[![:space:]]}"}"
+      fi
+      if [[ -n "$_resume_sid" ]]; then
+        export RALPH_RUN_PLAN_RESUME_SESSION_ID="$_resume_sid"
+        log "RALPH_PLAN_CLI_RESUME: using stored session id and compact prompt (--resume on the CLI)"
+      fi
+    fi
+    if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
+      export RALPH_RUN_PLAN_RESUME_BARE=1
+      log "RALPH_PLAN_ALLOW_UNSAFE_RESUME: no stored session id; using bare resume (wrong session possible on a busy host)"
+      echo "Warning: bare CLI resume without a stored session id can attach to the wrong session when several projects use the same CLI on one machine. Prefer isolated CI or fix session capture." >&2
+    fi
+
+    if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
+      if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+        _resume_intro="You are continuing the same CLI session for this workspace (runner session id is on file; the CLI is invoked with --resume)."
+      else
+        _resume_intro="You are continuing this workspace run using bare CLI resume (no session id on file; the CLI uses last-session semantics). This is unsafe on a shared workstation; typical in isolated CI."
+      fi
+      PROMPT="$_resume_intro
+
+**Current TODO only (line $line_num):** $todo_text
+
+**Plan file:** $PLAN_PATH
+Open it, finish this TODO, change only the matching \`- [ ]\` to \`- [x]\`, save, and stop. Do not start the next unchecked item. Use the repo toolchain as documented (README, AGENTS.md, etc.).
+
+**Artifact namespace:** RALPH_ARTIFACT_NS=$RALPH_ARTIFACT_NS  RALPH_PLAN_KEY=$RALPH_PLAN_KEY
+
+**Human input (file only -- the runner does not read your assistant output):** If the operator must answer or choose before you can complete this TODO, do NOT mark [x]. Questions you ask only in your assistant message do not pause the run; the same TODO will be dispatched again. You MUST write your question as plain text to this path (create parent directories if needed):
+$PENDING_ABS
+Overwrite that file with your question, then stop this turn without checking the box. With a TTY the operator may answer inline; without a TTY the runner waits in-process for operator-response.txt. If you can finish without asking, mark [x] and do not create pending-human.txt.
+
+If this TODO tells you to ask or confirm something with the user, you still must use that file first; marking [x] without a recorded operator reply from the runner is incorrect."
+
+      if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
+        PROMPT+=$'\n\n## Human operator answers (this plan run -- use them)\n'"$(cat "$HUMAN_CONTEXT")"
+      fi
+    else
+      PROMPT="You are executing a single step of a plan. Do exactly this and nothing else:
 
 **TODO:** $todo_text
 
@@ -948,66 +1186,80 @@ Artifact namespace for this run:
 
 When writing handoff artifacts, use the namespace-aware paths from the prebuilt agent context."
 
-    if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
-      PROMPT+=$'\n\n## Human operator answers (this plan run -- use them)\n'"$(cat "$HUMAN_CONTEXT")"
-    fi
+      if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
+        PROMPT+=$'\n\n## Human operator answers (this plan run -- use them)\n'"$(cat "$HUMAN_CONTEXT")"
+      fi
 
-    if [[ -n "$PREBUILT_AGENT_CONTEXT" ]]; then
-      PROMPT+=$'\n'"$PREBUILT_AGENT_CONTEXT"
-    fi
-    if [[ -n "${RALPH_ORCH_FILE:-}" && -f "${RALPH_ORCH_FILE}" && -n "$PREBUILT_AGENT" && -f "$AGENT_CONFIG_TOOL" ]]; then
-      _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
-      if [[ -n "$_downstream_raw" ]]; then
-        PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
-        PROMPT+=$'\n'"The downstream stages below rely on you to populate their templates before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
-        _ds_stage_entries=()
-        _ds_stage_id=""
-        _ds_plan_path=""
-        _ds_plan_template=""
-        while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
-          if [[ "$_ds_line" == "---" ]]; then
-            if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
-              _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
-              _ds_stage_id=""
-              _ds_plan_path=""
-              _ds_plan_template=""
+      if [[ -n "$PREBUILT_AGENT_CONTEXT" ]]; then
+        PROMPT+=$'\n'"$PREBUILT_AGENT_CONTEXT"
+      fi
+      if [[ -n "${RALPH_ORCH_FILE:-}" && -f "${RALPH_ORCH_FILE}" && -n "$PREBUILT_AGENT" && -f "$AGENT_CONFIG_TOOL" ]]; then
+        _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
+        if [[ -n "$_downstream_raw" ]]; then
+          PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
+          PROMPT+=$'\n'"The downstream stages below rely on you to populate their templates before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
+          _ds_stage_entries=()
+          _ds_stage_id=""
+          _ds_plan_path=""
+          _ds_plan_template=""
+          while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
+            if [[ "$_ds_line" == "---" ]]; then
+              if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
+                _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
+                _ds_stage_id=""
+                _ds_plan_path=""
+                _ds_plan_template=""
+              fi
+              continue
             fi
-            continue
+            case "$_ds_line" in
+              STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
+              PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
+              PLAN_TEMPLATE=*) _ds_plan_template="${_ds_line#PLAN_TEMPLATE=}";;
+            esac
+          done <<< "$_downstream_raw"
+          if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
+            _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
           fi
-          case "$_ds_line" in
-            STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
-            PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
-            PLAN_TEMPLATE=*) _ds_plan_template="${_ds_line#PLAN_TEMPLATE=}";;
-          esac
-        done <<< "$_downstream_raw"
-        if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
-          _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
-        fi
-        if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
-          _ds_stage_list=""
-          for _ds_entry in "${_ds_stage_entries[@]}"; do
-            _ds_stage_id="${_ds_entry%%|*}"
-            _ds_rest="${_ds_entry#*|}"
-            _ds_plan_path="${_ds_rest%%|*}"
-            _ds_plan_template="${_ds_rest#*|}"
-            PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}, template path: ${_ds_plan_template:-none}"
-            _ds_stage_list+="${_ds_stage_id:-unknown}, "
-          done
-          _ds_stage_list="${_ds_stage_list%, }"
-          log "downstream stage plan context appended for: ${_ds_stage_list:-none}"
+          if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
+            _ds_stage_list=""
+            for _ds_entry in "${_ds_stage_entries[@]}"; do
+              _ds_stage_id="${_ds_entry%%|*}"
+              _ds_rest="${_ds_entry#*|}"
+              _ds_plan_path="${_ds_rest%%|*}"
+              _ds_plan_template="${_ds_rest#*|}"
+              PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}, template path: ${_ds_plan_template:-none}"
+              _ds_stage_list+="${_ds_stage_id:-unknown}, "
+            done
+            _ds_stage_list="${_ds_stage_list%, }"
+            log "downstream stage plan context appended for: ${_ds_stage_list:-none}"
+          fi
         fi
       fi
     fi
 
-    log "invoking $RALPH_INVOKED_CLI (model=${SELECTED_MODEL:-default})${PREBUILT_AGENT:+ prebuilt_agent=$PREBUILT_AGENT}"
+    _invoke_resume_note=""
+    _banner_resume_note=""
+    if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+      _invoke_resume_note=" session_id=${RALPH_RUN_PLAN_RESUME_SESSION_ID}"
+      _banner_resume_note=", session ${RALPH_RUN_PLAN_RESUME_SESSION_ID}"
+    elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
+      _invoke_resume_note=" resume=bare"
+      _banner_resume_note=", bare resume"
+    fi
+    log "invoking $RALPH_INVOKED_CLI (model=${SELECTED_MODEL:-default})${_invoke_resume_note}${PREBUILT_AGENT:+ prebuilt_agent=$PREBUILT_AGENT}"
     start_ts="$(date '+%Y-%m-%d %H:%M:%S')"
-    echo -e "${C_G}Starting agent ${C_BOLD}(${SELECTED_MODEL:-default})${C_RST}${C_G} for this TODO at ${start_ts}...${C_RST}"
+    echo -e "${C_G}Starting agent ${C_BOLD}(${SELECTED_MODEL:-default})${C_RST}${C_G}${_banner_resume_note} for this TODO at ${start_ts}...${C_RST}"
     echo ""
 
     {
       echo ""
       echo "================================================================================"
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Invocation $iteration | TODO (line $line_num): $todo_text"
+      _olog_inv="[$(date '+%Y-%m-%d %H:%M:%S')] Invocation $iteration | TODO (line $line_num): $todo_text"
+      if [[ -n "$_invoke_resume_note" ]]; then
+        _olog_inv+=" |${_invoke_resume_note# }"
+      fi
+      echo "$_olog_inv"
       echo "================================================================================"
       echo ""
     } >> "$OUTPUT_LOG"
@@ -1034,7 +1286,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
         ralph_run_plan_invoke_claude &
         ;;
       codex)
-        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-codex.sh
+        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-invoke-codex.sh
         source "$SCRIPT_DIR/bash-lib/run-plan-invoke-codex.sh"
         ralph_run_plan_invoke_codex &
         ;;
@@ -1109,9 +1361,23 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
     next_line="${next_after%%|*}"
 
     if [[ "$next_line" != "$line_num" ]]; then
-      log "TODO line $line_num completed; next open TODO is line $next_line"
-      rm -f "$PENDING_HUMAN"
-      break
+      if plan_todo_implies_operator_dialog "$todo_text" && [[ "$human_gate_satisfied_for_line" -eq 0 ]]; then
+        log "TODO line $line_num implies operator dialog but advanced without a recorded human reply; reopening checklist line and pausing"
+        echo "" >&2
+        echo -e "${C_Y}${C_BOLD}This TODO asks the user for input, but the agent marked it done without using pending-human.txt.${C_RST}" >&2
+        echo -e "${C_DIM}Reopening the item and pausing for your reply (same rules as a normal agent question).${C_RST}" >&2
+        if ! plan_reopen_todo_at_line "$PLAN_PATH" "$line_num"; then
+          log "ERROR: could not reopen TODO at line $line_num after missing human gate"
+          echo -e "${C_R}Could not reopen plan line $line_num; fix PLAN.md manually.${C_RST}" >&2
+          exit 1
+        fi
+        printf '%s\n' "$todo_text" >"$PENDING_HUMAN"
+        ralph_sync_human_action_file_state
+      else
+        log "TODO line $line_num completed; next open TODO is line $next_line"
+        rm -f "$PENDING_HUMAN"
+        break
+      fi
     fi
 
     ralph_sync_human_action_file_state
@@ -1150,11 +1416,13 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
         log "human reply recorded (TTY); re-invoking agent for line $line_num"
         ralph_sync_human_action_file_state
         echo -e "${C_G}Answer recorded. Re-running agent for this TODO...${C_RST}" >&2
+        human_gate_satisfied_for_line=1
         attempts_on_line=0
         sleep 1
         continue
       fi
       ralph_human_pause_for_operator_offline
+      human_gate_satisfied_for_line=1
       attempts_on_line=0
       sleep 1
       continue

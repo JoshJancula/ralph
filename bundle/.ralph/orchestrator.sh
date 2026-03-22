@@ -45,7 +45,6 @@
 #   ORCHESTRATOR_HUMAN_ACK=1         enforce per-stage humanAck gates (default: off; pipeline does not pause)
 #   RALPH_ARTIFACT_NS                override artifact namespace (default: from JSON or filename)
 #   RALPH_ORCH_FILE                  path to the orchestration plan currently being processed
-#   RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skip first-run usage-risk prompt (same marker file as run-plan; for CI/automation)
 #
 # Exit codes: 0 success, 1 failure, 3 human acknowledgment required (only when ORCHESTRATOR_HUMAN_ACK=1 and ack file missing)
 #
@@ -112,9 +111,6 @@ fi
 # shellcheck source=/dev/null
 source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
-# shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/bash-lib/usage-risk-ack.sh"
-ralph_require_usage_risk_acknowledgment
 AGENTS_SHARED_DIR="$WORKSPACE/.agents"
 RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs"
 mkdir -p "$RALPH_LOG_DIR"
@@ -247,13 +243,13 @@ log() {
 log "orchestrator started workspace=$WORKSPACE orchestration=$ORCH_FILE"
 
 if [[ -t 1 && "${ORCHESTRATOR_NO_COLOR:-0}" != "1" ]]; then
-  C_R="\033[31m"
-  C_G="\033[32m"
-  C_Y="\033[33m"
-  C_B="\033[34m"
-  C_DIM="\033[2m"
-  C_BOLD="\033[1m"
-  C_RST="\033[0m"
+  C_R=$'\033[31m'
+  C_G=$'\033[32m'
+  C_Y=$'\033[33m'
+  C_B=$'\033[34m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RST=$'\033[0m'
 else
   C_R="" C_G="" C_Y="" C_B="" C_DIM="" C_BOLD="" C_RST=""
 fi

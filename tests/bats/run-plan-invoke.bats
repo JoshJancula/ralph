@@ -85,3 +85,128 @@ EOF
   [[ "$captured" == *"Bash,Read,Edit"* ]]
   [ "$(cat "$stdin_cap")" = "claude-prompt" ]
 }
+
+@test "claude stream-json path writes session_id to SESSION_ID_FILE" {
+  cat <<'EOF' >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+echo '{"session_id":"sid-from-stream","message":{"text":"done"}}'
+exit 0
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  export SESSION_ID_FILE="$TEST_TMPDIR/session-id.txt"
+  export RALPH_PLAN_CLI_RESUME=1
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SESSION_ID_FILE" | tr -d '\n')" = "sid-from-stream" ]
+}
+
+@test "cursor json path writes session_id to SESSION_ID_FILE" {
+  cat <<'EOF' >"$BIN_DIR/cursor-agent"
+#!/usr/bin/env bash
+echo '{"session_id":"cursor-sid-9","content":"ok"}'
+exit 0
+EOF
+  chmod +x "$BIN_DIR/cursor-agent"
+
+  export SESSION_ID_FILE="$TEST_TMPDIR/cursor-sid.txt"
+  export RALPH_PLAN_CLI_RESUME=1
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SESSION_ID_FILE" | tr -d '\n')" = "cursor-sid-9" ]
+}
+
+@test "claude bare resume passes --resume without session id argument when unsafe allowed" {
+  local record="$TEST_TMPDIR/claude-bare.args"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  export RALPH_RUN_PLAN_RESUME_BARE=1
+  export RALPH_PLAN_ALLOW_UNSAFE_RESUME=1
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  export RALPH_PLAN_CLI_RESUME=0
+  PROMPT="x"
+  export PROMPT
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--resume" "$record"
+  ! grep -Fxq -- "some-uuid" "$record"
+}
+
+@test "claude omits bare --resume when unsafe resume is not allowed" {
+  local record="$TEST_TMPDIR/claude-no-unsafe.args"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  export RALPH_RUN_PLAN_RESUME_BARE=1
+  export RALPH_PLAN_ALLOW_UNSAFE_RESUME=0
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  export RALPH_PLAN_CLI_RESUME=0
+  PROMPT="x"
+  export PROMPT
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  ! grep -Fxq -- "--resume" "$record"
+}
+
+@test "cursor bare resume passes --resume and --continue when unsafe allowed" {
+  local record="$TEST_TMPDIR/cursor-bare.args"
+  cat <<EOF >"$BIN_DIR/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/cursor-agent"
+
+  export RALPH_RUN_PLAN_RESUME_BARE=1
+  export RALPH_PLAN_ALLOW_UNSAFE_RESUME=1
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  export RALPH_PLAN_CLI_RESUME=0
+  PROMPT="x"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--resume" "$record"
+  grep -Fxq -- "--continue" "$record"
+}
+
+@test "codex-exec-prompt uses resume --last when bare and unsafe resume allowed" {
+  local record="$TEST_TMPDIR/codex.args"
+  cat <<EOF >"$BIN_DIR/codex"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local pf="$TEST_TMPDIR/prompt.txt"
+  echo "prompt-body" >"$pf"
+  export CODEX_PLAN_CLI=codex
+  export CODEX_PLAN_NO_ADD_AGENTS_DIR=1
+  export RALPH_RUN_PLAN_RESUME_BARE=1
+  export RALPH_PLAN_ALLOW_UNSAFE_RESUME=1
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  export RALPH_PLAN_CLI_RESUME=0
+
+  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$pf" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "resume" "$record"
+  grep -Fxq -- "--last" "$record"
+}

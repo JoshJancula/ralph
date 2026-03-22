@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+_SELECT_MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_INTERACTIVE_LIB="$_SELECT_MODEL_DIR/../../.ralph/bash-lib/interactive-select.sh"
+if [[ -r "$_INTERACTIVE_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_INTERACTIVE_LIB"
+fi
 # Codex runtime: shared model selection for new-agent and run-plan.
 
 _codex_read_rp() {
@@ -52,7 +58,8 @@ except Exception:
 
 _codex_select_model_interactive() {
   echo "" >&2
-  echo "--- Codex (.codex/agents) ---" >&2
+  echo -e "${C_C:-}${C_BOLD:-}--- Codex (.codex/agents) ---${C_RST:-}" >&2
+  echo -e "${C_DIM:-}Pick a model for the Codex CLI (API list when logged in, else defaults below).${C_RST:-}" >&2
   local models=() m
   models+=("auto")
   while IFS= read -r m || [[ -n "$m" ]]; do
@@ -72,38 +79,28 @@ _codex_select_model_interactive() {
     fi
   done
 
-  local custom_index=$(( ${#models[@]} + 1 ))
-  echo "Model for Codex CLI agent (from API when logged into Codex CLI, else defaults):" >&2
-  for ((i = 0; i < ${#models[@]}; i++)); do
-    if [[ $((i + 1)) -eq "$default_index" ]]; then
-      echo "  $((i + 1))) ${models[$i]} (default)" >&2
-    else
-      echo "  $((i + 1))) ${models[$i]}" >&2
-    fi
-  done
-  echo "  $custom_index) Enter custom model id" >&2
-
-  local choice custom_model
+  local placeholder="Enter custom model id"
+  local selection custom_model
   while true; do
-    if ! _codex_read_rp "Select model [$default_index]: " choice; then
-      echo ""; return 0
+    selection="$(ralph_menu_select --prompt "Model for Codex CLI agent (from API when logged into Codex CLI, else defaults)" --default "$default_index" -- "${models[@]}" "$placeholder")"
+    if [[ -z "$selection" ]]; then
+      echo ""
+      return 0
     fi
-    choice="${choice:-$default_index}"
-    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#models[@]})); then
-      echo "${models[$((choice - 1))]}"; return 0
-    fi
-    if [[ "$choice" == "$custom_index" ]]; then
+    if [[ "$selection" == "$placeholder" ]]; then
       if ! _codex_read_rp "Enter custom model id: " custom_model; then
-        echo ""; return 0
+        echo ""
+        return 0
       fi
       if [[ -z "$custom_model" ]]; then
-        echo "Model cannot be empty." >&2
-      else
-        echo "$custom_model"; return 0
+        echo -e "${C_R:-}Model cannot be empty.${C_RST:-}" >&2
+        continue
       fi
-    else
-      echo "Invalid selection." >&2
+      echo "$custom_model"
+      return 0
     fi
+    echo "$selection"
+    return 0
   done
 }
 

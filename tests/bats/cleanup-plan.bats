@@ -52,7 +52,7 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
 @test "log path builder composes namespace directory" {
   run cleanup_plan_log_dir "/tmp/ws" "alpha"
   [ "$status" -eq 0 ]
-  [ "$output" = "/tmp/ws/.agents/logs/alpha" ]
+  [ "$output" = "/tmp/ws/.ralph-workspace/logs/alpha" ]
 }
 
 @test "artifact path builder composes namespace directory" {

@@ -104,8 +104,34 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.agents/orchestra
 
 ### When the runner needs you
 
-**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** (fallback artifacts) and waits while you edit them. Questions and answers are also kept under **`.agents/<artifact-namespace>/human`**. Orchestrated runs can escalate human input via **`.ralph/orchestrator.sh --human-ack`** (or **`RALPH_HUMAN_ACK_TOOL`**). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
+**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input via **`.ralph/orchestrator.sh --human-ack`** (or **`RALPH_HUMAN_ACK_TOOL`**). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
+### CLI session resume
+
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and supplies that ID plus a compact prompt (TODO, plan path, and human replies only) to the next runtime invocation so the session continues where it left off.
+
+**Enable CLI session resume (pick one):**
+
+- Set `RALPH_PLAN_CLI_RESUME=1` before invoking `.ralph/run-plan.sh`.
+- Pass `--cli-resume` to the runner command.
+- Answer `yes` to the interactive prompt (TTY-attached runs ask unless you already set `RALPH_PLAN_CLI_RESUME`, supplied `--cli-resume`, or explicitly opt out with `--no-cli-resume`).
+
+**Storage and prerequisites:**
+
+- `session-id.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`, and each invocation rewrites or updates the file so future restarts always read the newest ID for that namespace.
+- Python 3 is required for `.ralph/bash-lib/run-plan-cli-json-demux.py`, the helper that pulls the session ID from the CLI’s JSON demux stream. If Python 3 is unavailable, CLI resume is skipped and the plan starts from a fresh session.
+
+**Manual resume from a known session id:**
+
+If you already captured a session id (for example from `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` or the earlier prompt that confirmed session reuse), pass `--resume <session-id>` to `.ralph/run-plan.sh`. The runner reuses that CLI session without requiring `--cli-resume`, and it writes whichever session id you use back into `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` so it stays available for future runs or automation.
+
+**Optional unsafe bare resume:**
+
+In CI or isolated environments where you trust there will not be session mix-ups, you can resume without relying on the stored ID:
+
+- Set `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` or pass `--allow-unsafe-resume` to `.ralph/run-plan.sh`.
+- The runner will attempt to resume directly (e.g., Codex `--last` semantics) even if `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` is absent.
+- **Warning:** Bare resume without a stored session ID may attach to the wrong session on a shared workstation; prefer isolated CI or the session files above for safety.
 ### Orchestration (multi-stage)
 
 ```bash

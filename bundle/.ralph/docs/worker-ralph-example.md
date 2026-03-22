@@ -48,4 +48,3 @@ This example walks through creating a worker plan, running it, and inspecting ou
 - [ ] Update `client/src/components/NotificationList.tsx` to support throttled refresh requests (lint: `npm run lint:ui`; tests: `npm run test:ui`).
 - [ ] Write implementation handoff `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md` summarizing changes and verification steps.
 ```
-we need to ensure that whenever a user does a `ctrl+c` to terminate @bundle/.ralph/orchestrator.sh or @bundle/.ralph/run-plan.sh we are terminating any process we started with the runtime (cursor/cluade)

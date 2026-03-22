@@ -83,3 +83,37 @@ EOF
   [ "$result" = "1 1" ]
   rm "$plan_file"
 }
+
+@test "plan_todo_ordinal_at_line is 1-based file order through line" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+intro
+- [x] first
+- [x] second
+- [ ] third
+- [ ] fourth
+EOF
+  [ "$(plan_todo_ordinal_at_line "$plan_file" 4)" = "3" ]
+  [ "$(plan_todo_ordinal_at_line "$plan_file" 2)" = "1" ]
+  rm "$plan_file"
+}
+
+@test "plan_todo_implies_operator_dialog matches ask the user" {
+  plan_todo_implies_operator_dialog "Ask the user if they want to run tests."
+  plan_todo_implies_operator_dialog "ask the user for approval"
+  run plan_todo_implies_operator_dialog "Tell the user to have a nice day."
+  [ "$status" -ne 0 ]
+}
+
+@test "plan_reopen_todo_at_line turns [x] into [ ] on that line" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+- [x] done
+- [x] reopen me
+- [ ] next
+EOF
+  plan_reopen_todo_at_line "$plan_file" 2
+  line2="$(sed -n '2p' "$plan_file")"
+  [[ "$line2" == "- [ ] reopen me" ]]
+  rm "$plan_file"
+}

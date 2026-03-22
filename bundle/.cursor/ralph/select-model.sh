@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+_SELECT_MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_INTERACTIVE_LIB="$_SELECT_MODEL_DIR/../../.ralph/bash-lib/interactive-select.sh"
+if [[ -r "$_INTERACTIVE_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_INTERACTIVE_LIB"
+fi
 # Cursor runtime: shared model selection for new-agent and run-plan.
 # Source: source "$SCRIPT_DIR/select-model.sh"
 #
@@ -58,7 +64,8 @@ _cursor_list_models() {
 
 _cursor_select_model_interactive() {
   echo "" >&2
-  echo "--- Cursor (.cursor/agents) ---" >&2
+  echo -e "${C_C:-}${C_BOLD:-}--- Cursor (.cursor/agents) ---${C_RST:-}" >&2
+  echo -e "${C_DIM:-}Pick a model for the Cursor CLI.${C_RST:-}" >&2
   local models=() model
   _cursor_detect_cli
   while IFS= read -r model || [[ -n "$model" ]]; do
@@ -77,38 +84,28 @@ _cursor_select_model_interactive() {
     fi
   done
 
-  local custom_index=$(( ${#models[@]} + 1 ))
-  echo "Model for Cursor agent:" >&2
-  for ((i = 0; i < ${#models[@]}; i++)); do
-    if [[ $((i + 1)) -eq "$default_index" ]]; then
-      echo "  $((i + 1))) ${models[$i]} (default)" >&2
-    else
-      echo "  $((i + 1))) ${models[$i]}" >&2
-    fi
-  done
-  echo "  $custom_index) Enter custom model" >&2
-
-  local choice custom_model
+  local placeholder="Enter custom model"
+  local custom_model selection
   while true; do
-    if ! _cursor_read_rp "Select model [$default_index]: " choice; then
-      echo ""; return 0
+    selection="$(ralph_menu_select --prompt "Model for Cursor agent" --default "$default_index" -- "${models[@]}" "$placeholder")"
+    if [[ -z "$selection" ]]; then
+      echo ""
+      return 0
     fi
-    choice="${choice:-$default_index}"
-    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#models[@]})); then
-      echo "${models[$((choice - 1))]}"; return 0
-    fi
-    if [[ "$choice" == "$custom_index" ]]; then
-      if ! _cursor_read_rp "Enter custom model name: " custom_model; then
-        echo ""; return 0
+    if [[ "$selection" == "$placeholder" ]]; then
+      if ! _cursor_read_rp "${C_Y:-}${C_BOLD:-}Enter custom model name${C_RST:-}: " custom_model; then
+        echo ""
+        return 0
       fi
       if [[ -z "$custom_model" ]]; then
-        echo "Custom model cannot be empty." >&2
-      else
-        echo "$custom_model"; return 0
+        echo -e "${C_R:-}Custom model cannot be empty.${C_RST:-}" >&2
+        continue
       fi
-    else
-      echo "Invalid selection." >&2
+      echo "$custom_model"
+      return 0
     fi
+    echo "$selection"
+    return 0
   done
 }
 

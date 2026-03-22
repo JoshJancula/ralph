@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+_SELECT_MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_INTERACTIVE_LIB="$_SELECT_MODEL_DIR/../../.ralph/bash-lib/interactive-select.sh"
+if [[ -r "$_INTERACTIVE_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_INTERACTIVE_LIB"
+fi
 # Claude runtime: shared model selection for new-agent and run-plan.
 # Source: source "$SCRIPT_DIR/select-model.sh"
 
@@ -14,34 +20,31 @@ _claude_read_rp() {
 
 _claude_select_model_interactive() {
   echo "" >&2
-  echo "--- Claude (.claude/agents) ---" >&2
-  echo "Model for Claude Code agent:" >&2
-  echo "  1) claude-haiku-4-5 (lighter / fast)" >&2
-  echo "  2) claude-sonnet-4 (default)" >&2
-  echo "  3) claude-sonnet-4-5" >&2
-  echo "  4) Enter custom model id" >&2
-  local choice custom_model
+  echo -e "${C_C:-}${C_BOLD:-}--- Claude (.claude/agents) ---${C_RST:-}" >&2
+  echo -e "${C_DIM:-}Pick a model for the Claude Code CLI.${C_RST:-}" >&2
+  local choices=("claude-haiku-4-5" "claude-sonnet-4" "claude-sonnet-4-5")
+  local placeholder="Enter custom model id"
+  local selection custom_model
   while true; do
-    if ! _claude_read_rp "Select model [2]: " choice; then
-      echo ""; return 0
+    selection="$(ralph_menu_select --prompt "Model for Claude Code agent" --default 2 -- "${choices[@]}" "$placeholder")"
+    if [[ -z "$selection" ]]; then
+      echo ""
+      return 0
     fi
-    choice="${choice:-2}"
-    case "$choice" in
-      1) echo "claude-haiku-4-5"; return 0 ;;
-      2) echo "claude-sonnet-4"; return 0 ;;
-      3) echo "claude-sonnet-4-5"; return 0 ;;
-      4)
-        if ! _claude_read_rp "Enter custom model id: " custom_model; then
-          echo ""; return 0
-        fi
-        if [[ -z "$custom_model" ]]; then
-          echo "Model cannot be empty." >&2
-        else
-          echo "$custom_model"; return 0
-        fi
-        ;;
-      *) echo "Invalid selection." >&2 ;;
-    esac
+    if [[ "$selection" == "$placeholder" ]]; then
+      if ! _claude_read_rp "${C_Y:-}${C_BOLD:-}Enter custom model id${C_RST:-}: " custom_model; then
+        echo ""
+        return 0
+      fi
+      if [[ -z "$custom_model" ]]; then
+        echo -e "${C_R:-}Model cannot be empty.${C_RST:-}" >&2
+        continue
+      fi
+      echo "$custom_model"
+      return 0
+    fi
+    echo "$selection"
+    return 0
   done
 }
 
