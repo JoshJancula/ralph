@@ -17,6 +17,29 @@ setup() {
   [[ "$output" == *"Answer in-line."* ]]
 }
 
+@test "human ack helper falls back to orchestrator script" {
+  local tmpdir orchestrator
+  tmpdir="$(mktemp -d)"
+  mkdir -p "$tmpdir/.ralph"
+  orchestrator="$tmpdir/.ralph/orchestrator.sh"
+  cat <<'EOF' >"$orchestrator"
+#!/usr/bin/env bash
+printf 'ok'
+EOF
+  chmod +x "$orchestrator"
+
+  WORKSPACE="$tmpdir"
+  RALPH_ORCH_FILE="dummy"
+
+  run ralph_human_ack_tool_path
+  [ "$status" -eq 0 ]
+  [ "$output" = "$orchestrator" ]
+
+  unset WORKSPACE
+  unset RALPH_ORCH_FILE
+  rm -rf "$tmpdir"
+}
+
 @test "human exchange persistence writes artifact" {
   local tmpdir
   tmpdir="$(mktemp -d)"

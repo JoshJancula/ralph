@@ -45,8 +45,28 @@ EOF
   rm "$plan_file"
 }
 
+@test "get_next_todo skips comments and blank lines before the first open entry" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+# introduction
+- [x] done already
+
+# more context
+- [ ] first open
+- [ ] second
+EOF
+  result="$(get_next_todo "$plan_file")"
+  [ "$result" = "5|- [ ] first open" ]
+  rm "$plan_file"
+}
+
 @test "plan_open_todo_body strips open checkbox prefix" {
   [ "$(plan_open_todo_body '- [ ] do thing')" = "do thing" ]
+}
+
+@test "plan_open_todo_body keeps inline text and trims whitespace" {
+  result="$(plan_open_todo_body '  - [ ]  update docs  # inline note  ')"
+  [ "$result" = "update docs  # inline note" ]
 }
 
 @test "get_next_todo fails when no unchecked entries" {
@@ -115,5 +135,18 @@ EOF
   plan_reopen_todo_at_line "$plan_file" 2
   line2="$(sed -n '2p' "$plan_file")"
   [[ "$line2" == "- [ ] reopen me" ]]
+  rm "$plan_file"
+}
+
+@test "plan_reopen_todo_at_line fails when the specified line is not closed" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+- [ ] still open
+- [x] done
+EOF
+  run plan_reopen_todo_at_line "$plan_file" 1
+  [ "$status" -ne 0 ]
+  [ "$(sed -n '1p' "$plan_file")" = "- [ ] still open" ]
+  [ "$(sed -n '2p' "$plan_file")" = "- [x] done" ]
   rm "$plan_file"
 }

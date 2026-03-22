@@ -81,3 +81,56 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
   [ "$output" = "Removed artifacts in $artifact_dir" ]
   [ ! -d "$artifact_dir" ]
 }
+
+@test "cleanup reports missing targets without error (dry-run edge path)" {
+  workspace_root="$(mktemp -d)"
+  log_dir="$workspace_root/logs"
+  artifact_dir="$workspace_root/artifacts"
+
+  run cleanup_plan_delete_log_files "$log_dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Log directory does not exist: $log_dir" ]
+
+  run cleanup_plan_delete_artifact_dir "$artifact_dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Artifact directory does not exist: $artifact_dir" ]
+
+  rm -rf "$workspace_root"
+}
+
+@test "cleanup-plan wrapper removes namespace data and rejects missing namespace" {
+  workspace="$(mktemp -d)"
+  cleanup_script="$BATS_TEST_DIRNAME/../../bundle/.ralph/cleanup-plan.sh"
+  namespace="wrapper"
+
+  log_dir="$workspace/.ralph-workspace/logs/$namespace"
+  legacy_log_dir="$workspace/.agents/logs/$namespace"
+  session_dir="$workspace/.ralph-workspace/sessions/$namespace"
+  legacy_session_dir="$workspace/.agents/sessions/$namespace"
+  artifact_dir="$workspace/.agents/artifacts/$namespace"
+
+  mkdir -p "$log_dir" "$legacy_log_dir" "$session_dir" "$legacy_session_dir" "$artifact_dir"
+  touch "$log_dir/plan-runner-1" "$legacy_log_dir/plan-runner-old" "$artifact_dir/file"
+  touch "$workspace/HUMAN_ACTION_REQUIRED.md"
+
+  run "$cleanup_script" "$namespace" "$workspace"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cleaned logs in $log_dir"* ]]
+  [[ "$output" == *"Cleaned logs in $legacy_log_dir"* ]]
+  [[ "$output" == *"Removed session directory $session_dir"* ]]
+  [[ "$output" == *"Removed legacy session directory $legacy_session_dir"* ]]
+  [[ "$output" == *"Removed artifacts in $artifact_dir"* ]]
+  [[ "$output" == *"Removed human action file: $workspace/HUMAN_ACTION_REQUIRED.md"* ]]
+  [ ! -f "$log_dir/plan-runner-1" ]
+  [ ! -f "$legacy_log_dir/plan-runner-old" ]
+  [ ! -d "$session_dir" ]
+  [ ! -d "$legacy_session_dir" ]
+  [ ! -d "$artifact_dir" ]
+  [ ! -f "$workspace/HUMAN_ACTION_REQUIRED.md" ]
+
+  run env -u RALPH_ARTIFACT_NS "$cleanup_script" "" "$workspace"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Usage: $cleanup_script <artifact-namespace> [workspace]"* ]]
+
+  rm -rf "$workspace"
+}

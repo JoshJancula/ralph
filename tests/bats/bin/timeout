@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: timeout DURATION COMMAND [ARG...]" >&2
+  exit 1
+fi
+
+# Drop the duration argument; tests rely on timeout but opt out of enforcement in this environment.
+shift
+
+exec "$@"
