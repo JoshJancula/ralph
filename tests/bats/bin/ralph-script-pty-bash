@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run "bash RUNNER_SCRIPT" under a pseudo-TTY (read /dev/tty works in tests).
+# GNU util-linux script requires -c; BSD/macOS uses "script file command ...".
+set -euo pipefail
+runner="${1:?runner script path required}"
+if script --version 2>/dev/null | grep -q util-linux; then
+  exec script -q -c "bash $(printf '%q' "$runner")" /dev/null
+else
+  exec script -q /dev/null bash "$runner"
+fi

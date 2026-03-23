@@ -49,7 +49,7 @@ main() {
     rm -rf "$session_dir"
     echo "Removed session directory $session_dir"
   fi
-  if [[ -d "$legacy_session_dir" ]]; then
+  if [[ -d "$legacy_session_dir" && "$legacy_session_dir" != "$session_dir" ]]; then
     rm -rf "$legacy_session_dir"
     echo "Removed legacy session directory $legacy_session_dir"
   fi

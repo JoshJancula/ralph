@@ -540,7 +540,7 @@ EOF
   cat <<'EOF' > "$helper"
 C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_RST="" C_DIM=""
 log(){ :; }
-ralph_path_to_file_uri(){ printf "%s" "file://%s" "$1"; }
+ralph_path_to_file_uri(){ printf 'file://%s' "$1"; }
 ralph_restart_command_hint(){ printf "%s" "restart hint"; }
 ralph_write_human_action_file(){ :; }
 EOF
@@ -783,7 +783,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "auto" ]
 
-  run bash -c '
+  run env RALPH_ARTIFACT_NS=PLAN bash -c '
     set -euo pipefail
     source "$1"
     AGENTS_ROOT_REL=".cursor/agents"
@@ -797,7 +797,7 @@ EOF
   [[ "$output" == *"**Skill paths"* ]]
   [[ "$output" == *"**Declared output artifacts:**"* ]]
   [[ "$output" == *"**Rules (read and follow; full text inlined below):**"* ]]
-  [[ "$output" == *"(none configured)"* ]]
+  [[ "$output" == *".cursor/skills/repo-context/SKILL.md"* ]]
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/architecture.md"* ]]
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/research.md"* ]]
   [[ "$output" == *"**Agent config:**"* ]]
@@ -806,62 +806,67 @@ EOF
 @test "prompt_select_prebuilt_agent accepts scripted TTY selection" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
-  local prompt_funcs
+  local prompt_funcs runner
   prompt_funcs="$(mktemp)"
+  runner="$(mktemp)"
   awk 'BEGIN{flag=0} /^prebuilt_agents_root\(\)/ { flag=1 } flag { if (/^# If prebuilt agents exist/) exit; print }' "$RUN_PLAN_SH" > "$prompt_funcs"
 
-  run script -q /dev/null env PREBUILT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" bash -c '
-    set -euo pipefail
-    source "$PREBUILT_FUNCS_FILE"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$REPO_ROOT/.ralph/agent-config-tool.sh"
-    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-    selected="$(prompt_select_prebuilt_agent "$REPO_ROOT")"
-    printf "\n"
-    printf "%s\n" "$selected"
-  ' <<'EOF'
+  cat <<'EOS' > "$runner"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$PREBUILT_FUNCS_FILE"
+AGENTS_ROOT_REL=".cursor/agents"
+AGENT_CONFIG_TOOL="$REPO_ROOT/.ralph/agent-config-tool.sh"
+C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+selected="$(prompt_select_prebuilt_agent "$REPO_ROOT")"
+printf "\n"
+printf "%s\n" "$selected"
+EOS
+  chmod +x "$runner"
+
+  run env PREBUILT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
 2
 EOF
 
   [ "$status" -eq 0 ]
   final_line="$(printf '%s\n' "$output" | awk 'NF { last=$0 } END { printf "%s\n", last }' | tr -d '\r')"
-  rm -f "$prompt_funcs"
+  rm -f "$prompt_funcs" "$runner"
   [ "$final_line" = "code-review" ]
 }
 
 @test "prompt_agent_source_mode accepts scripted selection" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
-  local prompt_funcs
+  local prompt_funcs runner
   prompt_funcs="$(mktemp)"
-  python3 - <<'PY' > "$prompt_funcs"
-with open("bundle/.ralph/run-plan.sh") as f:
-    for idx, line in enumerate(f, 1):
-        if 602 <= idx <= 643:
-            print(line, end="")
-PY
+  runner="$(mktemp)"
+  awk '/^prompt_agent_source_mode\(\)/,/^PLAN_PATH=/ { if (/^PLAN_PATH=/) exit; print }' "$RUN_PLAN_SH" > "$prompt_funcs"
 
-  run script -q /dev/null env PROMPT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" bash -c '
-    set -euo pipefail
-    source "$PROMPT_FUNCS_FILE"
-    list_prebuilt_agent_ids() {
-      printf "%s\n" "architect"
-    }
-    AGENTS_ROOT_REL=".cursor/agents"
-    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-    NON_INTERACTIVE_FLAG=0
-    PREBUILT_AGENT=""
-    INTERACTIVE_SELECT_AGENT_FLAG=0
-    PLAN_MODEL_CLI=""
-    prompt_agent_source_mode "$REPO_ROOT"
-    printf "\\nflag=%s\\n" "$INTERACTIVE_SELECT_AGENT_FLAG"
-  ' <<'EOF'
+  cat <<'EOS' > "$runner"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$PROMPT_FUNCS_FILE"
+list_prebuilt_agent_ids() {
+  printf "%s\n" "architect"
+}
+AGENTS_ROOT_REL=".cursor/agents"
+C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+NON_INTERACTIVE_FLAG=0
+PREBUILT_AGENT=""
+INTERACTIVE_SELECT_AGENT_FLAG=0
+PLAN_MODEL_CLI=""
+prompt_agent_source_mode "$REPO_ROOT"
+printf "\nflag=%s\n" "$INTERACTIVE_SELECT_AGENT_FLAG"
+EOS
+  chmod +x "$runner"
+
+  run env PROMPT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
 2
 EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"flag=0"* ]]
-  rm -f "$prompt_funcs"
+  rm -f "$prompt_funcs" "$runner"
 }
 
 @test "prompt_cleanup_on_exit prompts for yes and no answers via scripted TTY input" {
@@ -885,7 +890,19 @@ EOF
   output_log="$workspace/output.log"
   log_file="$workspace/plan.log"
 
-  run script -q /dev/null env \
+  local cleanup_runner
+  cleanup_runner="$(mktemp)"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""\n'
+    printf 'source %q\n' "$helper"
+    printf 'prompt_cleanup_on_exit\n'
+    printf 'prompt_cleanup_on_exit\n'
+  } >"$cleanup_runner"
+  chmod +x "$cleanup_runner"
+
+  run env \
     HELPER="$helper" \
     CLEANUP_SCRIPT="$cleanup_script" \
     CLEANUP_MARKER="$cleanup_marker" \
@@ -897,13 +914,7 @@ EOF
     NON_INTERACTIVE_FLAG=0 \
     ALLOW_CLEANUP_PROMPT=1 \
     EXIT_STATUS="incomplete" \
-    bash -c '
-      set -euo pipefail
-      C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-      source "$HELPER"
-      prompt_cleanup_on_exit
-      prompt_cleanup_on_exit
-    ' <<'EOF'
+    ralph-script-pty-bash "$cleanup_runner" <<'EOF'
 y
 n
 EOF
@@ -913,7 +924,7 @@ EOF
   [[ "$output" == *"Cleanup command:"* ]]
 
   rm -rf "$workspace"
-  rm -f "$helper" "$cleanup_script" "$cleanup_marker"
+  rm -f "$helper" "$cleanup_script" "$cleanup_marker" "$cleanup_runner"
 }
 
 @test "ralph path to file uri uses sample paths" {
@@ -1003,11 +1014,17 @@ EOF
   sed -n '/^ralph_should_persist_human_files()/,/^}/p' "$RUN_PLAN_SH" > "$helper"
   out_file="$(mktemp)"
 
-  run script -q /dev/null bash -c '
-    set -euo pipefail
-    source "$1"
-    ralph_should_persist_human_files
-  ' _ "$helper"
+  local persist_runner
+  persist_runner="$(mktemp)"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'source %q\n' "$helper"
+    printf 'ralph_should_persist_human_files\n'
+  } >"$persist_runner"
+  chmod +x "$persist_runner"
+
+  run ralph-script-pty-bash "$persist_runner"
 
   [ "$status" -eq 1 ]
 
@@ -1029,5 +1046,5 @@ EOF
 
   [ "$status" -eq 0 ]
 
-  rm -f "$helper" "$out_file"
+  rm -f "$helper" "$out_file" "$persist_runner"
 }
