@@ -114,7 +114,8 @@ fi
 # shellcheck source=/dev/null
 source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
-export RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
+# Orchestrator state/logs are always anchored in workspace .ralph-workspace.
+export RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
@@ -148,7 +149,7 @@ artifact_remediation_text() {
 verify_step_artifacts() {
   local step_n="$1"
   local ap abs
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
     if [[ "$ap" == /* ]]; then
       abs="$ap"
@@ -403,19 +404,28 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       fi
     fi
 
-    # Parse artifacts from JSON array
+    # Export stage id so {{STAGE_ID}} tokens resolve correctly in artifact paths.
+    export RALPH_STAGE_ID="$stage_id"
+
+    # Parse artifacts from JSON array. Track whether the stage declares any of its own
+    # required artifacts — when it does, agent config output_artifacts are NOT merged in,
+    # so each stage is fully scoped to what the orchestration defines.
     EXPECTED_ARTIFACT_PATHS=()
+    _stage_has_artifacts=0
     artifacts_array="$(echo "$stage" | jq '.artifacts // []' 2>/dev/null)" || artifacts_array="[]"
     while IFS= read -r artifact_path; do
       [[ -z "$artifact_path" ]] && continue
       artifact_paths_append_unique "$artifact_path"
+      _stage_has_artifacts=1
     done < <(echo "$artifacts_array" | jq -r '.[] | select(.required == true) | .path' 2>/dev/null)
     while IFS= read -r artifact_path; do
       [[ -z "$artifact_path" ]] && continue
       artifact_paths_append_unique "$artifact_path"
+      _stage_has_artifacts=1
     done < <(echo "$stage" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
 
-    if [[ "$agent_source" == "prebuilt" ]]; then
+    # Only fall back to agent config output_artifacts when the stage defines none of its own.
+    if [[ "$agent_source" == "prebuilt" && "$_stage_has_artifacts" -eq 0 ]]; then
       merge_required_artifacts_from_agent "$agent" "$runtime"
     fi
 
@@ -442,7 +452,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   ralph_assert_path_not_env_secret "Step plan" "$plan_abs"
 
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for _art_check in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       ralph_assert_path_not_env_secret "Expected artifact" "$_art_check"
     done
@@ -509,7 +519,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   fi
 
   art_log="(none)"
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     art_log="${EXPECTED_ARTIFACT_PATHS[*]}"
   fi
   log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
@@ -524,7 +534,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     else
       echo "DRY RUN step $step_index: $runner_label --workspace <path> --plan $plan_rel${_dry_sr} (custom agent: $agent)"
     fi
-    if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+    if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
       echo "  expected artifacts: ${EXPECTED_ARTIFACT_PATHS[*]}"
     fi
     _dry_ack="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || _dry_ack=""
@@ -628,12 +638,12 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     exit "$rc"
   fi
 
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     if ! verify_step_artifacts "$step_index"; then
       log "FAIL step $step_index: artifact verification failed (see log for remediation)"
       exit 1
     fi
-    log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]:-0} file(s))"
+    log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]} file(s))"
   fi
 
   human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""

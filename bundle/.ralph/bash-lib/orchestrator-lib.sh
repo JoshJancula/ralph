@@ -27,8 +27,10 @@ parse_artifact_csv() {
 expand_artifact_tokens() {
   local p="$1"
   local ns="${RALPH_ARTIFACT_NS:-$ORCH_BASENAME}"
+  local stage_id="${RALPH_STAGE_ID:-}"
   p="${p//\{\{ARTIFACT_NS\}\}/$ns}"
   p="${p//\{\{PLAN_KEY\}\}/$ns}"
+  p="${p//\{\{STAGE_ID\}\}/$stage_id}"
   printf '%s' "$p"
 }
 
@@ -36,7 +38,7 @@ artifact_paths_append_unique() {
   local new
   new="$(expand_artifact_tokens "$1")"
   local ex
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for ex in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       [[ "$ex" == "$new" ]] && return 0
     done

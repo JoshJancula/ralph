@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This file provides guidance to Claude Code (claude.ai/code), Cursor (cursor-agent), Codex and any AI agents when working with code in this repository.
 
@@ -11,6 +11,8 @@ Ralph is a framework for organizing AI coding assistant workflows. It provides:
 - **Dashboard:** Optional Python UI for monitoring plan execution and artifact generation
 
 Ralph is installed into projects via `./install.sh`. The installer copies shared scripts to `.ralph/`, runtime-specific runners to `.cursor/ralph`, `.claude/ralph`, `.codex/ralph`, and agents/rules/skills to `.cursor/agents`, `.claude/agents`, etc.
+
+> **Symlink note (this repo only):** `.cursor`, `.claude`, and `.codex` at the repo root are symlinks to `bundle/.cursor`, `bundle/.claude`, and `bundle/.codex`. Editing files under `bundle/.cursor/` (or `bundle/.claude/`, `bundle/.codex/`) automatically updates the symlinked paths — no manual copy or sync is needed. Similarly, `.ralph/` files are hardlinked to `bundle/.ralph/`, so edits there are also immediately reflected.
 
 ## Key Commands
 
@@ -116,7 +118,7 @@ Both must be kept in sync. Agents declare:
 - **rules:** Paths to constraint files (e.g., `.claude/rules/no-emoji.md` prevents emoji in code/logs)
 - **skills:** Paths to skill definitions (e.g., `.claude/skills/repo-context/SKILL.md` teaches the agent about the project structure)
 - **allowed_tools:** (Claude headless only) Comma-separated tool names or JSON array
-- **output_artifacts:** Declared deliverables (supports `{{ARTIFACT_NS}}` and `{{PLAN_KEY}}` templates)
+- **output_artifacts:** Default deliverable paths (supports `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` templates). These are only used as a fallback when the orchestration stage does not define its own `artifacts` or `outputArtifacts`. When the stage declares its own required artifacts, the agent config `output_artifacts` are ignored entirely for that run.
 
 Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtimes).
 
@@ -129,9 +131,13 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
    - `runtime`: "cursor" | "claude" | "codex"
    - `agent`: agent name to load
    - `plan`: path to that stage's plan file
-   - `outputArtifacts`: declared outputs (e.g., `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md`)
+   - `artifacts`: required outputs for this stage (array of `{ "path": "...", "required": true }`). This is the primary artifact declaration and overrides the agent config's `output_artifacts` entirely. Paths support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` tokens.
+   - `outputArtifacts`: alternative/additional artifact declarations (same format; merged with `artifacts`). Wizard-generated files use `artifacts`; use `outputArtifacts` for documentation or legacy compatibility.
+   - `inputArtifacts`: paths to artifacts from earlier stages that this stage should read (not verified, only provided as context). Array of `{ "path": "..." }`.
+   - `model`: optional model override for this stage; sets `CURSOR_PLAN_MODEL` / `CLAUDE_PLAN_MODEL` / `CODEX_PLAN_MODEL` for the runner invocation.
+   - `sessionResume`: boolean; forwards `--cli-resume` or `--no-cli-resume` to `run-plan.sh`.
 
-   The orchestrator runs stages sequentially, verifying artifacts exist before advancing.
+   The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
 
 3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` and reuses the same CLI session on future runs (skips context setup, continues where assistant left off).
 
@@ -167,11 +173,17 @@ Keep config.json and the .md file in sync when editing agent metadata.
 
 ### Artifact namespace placeholders
 
-Use `{{ARTIFACT_NS}}` and `{{PLAN_KEY}}` in agent output_artifacts and orchestration stage outputArtifacts:
-- `{{ARTIFACT_NS}}` → resolves from `RALPH_ARTIFACT_NS` env var (or plan basename fallback)
-- `{{PLAN_KEY}}` → resolves from `RALPH_PLAN_KEY` env var (or plan basename fallback)
+Use these tokens in `artifacts`, `outputArtifacts`, and agent `output_artifacts` paths:
 
-Example: `".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md"` becomes `".ralph-workspace/artifacts/my-feature/architecture.md"`.
+| Token | Env var | Example value | Typical use |
+|-------|---------|---------------|-------------|
+| `{{ARTIFACT_NS}}` | `RALPH_ARTIFACT_NS` | `code-review` | Namespace from the orchestration JSON or plan basename |
+| `{{PLAN_KEY}}` | `RALPH_PLAN_KEY` | `code-review-01-cr1` | Plan file basename (same as `ARTIFACT_NS` when not overridden) |
+| `{{STAGE_ID}}` | `RALPH_STAGE_ID` | `cr1` | Sanitized stage `id` from the orchestration JSON |
+
+Examples:
+- `".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md"` → `".ralph-workspace/artifacts/my-feature/architecture.md"`
+- `".ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{STAGE_ID}}.md"` → `".ralph-workspace/artifacts/code-review/cr1.md"` (when run as stage `cr1`)
 
 ### MCP server
 

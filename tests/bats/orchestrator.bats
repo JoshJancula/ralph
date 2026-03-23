@@ -170,6 +170,19 @@ BAD
   rm -rf "$workspace"
 }
 
+@test "orchestrator ignores inherited workspace root env override" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file
+  orch_file="$(create_dry_run_orchestration "$workspace")"
+  run env ORCHESTRATOR_DRY_RUN=1 RALPH_PLAN_WORKSPACE_ROOT="$workspace/.agents" bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || return 1
+  local expected_log="$workspace/.ralph-workspace/logs/orchestrator-dry-run.orch.log"
+  [ -f "$expected_log" ] || return 1
+  [ ! -e "$workspace/.agents/logs/orchestrator-dry-run.orch.log" ] || return 1
+  rm -rf "$workspace"
+}
+
 @test "orchestrator dry-run prints cli-resume when sessionResume true" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
   local workspace
@@ -248,6 +261,341 @@ BAD
     && [[ "$output" == *"Step 2 completed with feedback loop"* ]] \
     && [[ "$output" == *"Looping back to: start (iteration 2)"* ]] \
     || return 1
+  rm -rf "$workspace"
+}
+
+create_agent_config_workspace() {
+  local workspace="$1"
+  local agent_id="$2"
+  local artifact_path="$3"
+  local runtime="${4:-cursor}"
+  local agents_dir
+  if [[ "$runtime" == "cursor" ]]; then
+    agents_dir="$workspace/.cursor/agents"
+  elif [[ "$runtime" == "codex" ]]; then
+    agents_dir="$workspace/.codex/agents"
+  else
+    agents_dir="$workspace/.claude/agents"
+  fi
+  mkdir -p "$agents_dir/$agent_id"
+  cat > "$agents_dir/$agent_id/config.json" <<CFG
+{
+  "name": "$agent_id",
+  "model": "test-model",
+  "description": "test agent for bats",
+  "rules": [],
+  "skills": [],
+  "output_artifacts": [
+    {
+      "path": "$artifact_path",
+      "required": true
+    }
+  ]
+}
+CFG
+  cp "$REPO_ROOT/.ralph/agent-config-tool.sh" "$workspace/.ralph/"
+}
+
+setup_model_capture_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  # Override stub to capture env vars set by orchestrator for each stage invocation
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf 'RUNTIME=%s\n' "${1:-}"
+  printf 'CURSOR_PLAN_MODEL=%s\n' "${CURSOR_PLAN_MODEL:-}"
+  printf 'CLAUDE_PLAN_MODEL=%s\n' "${CLAUDE_PLAN_MODEL:-}"
+  printf 'CODEX_PLAN_MODEL=%s\n' "${CODEX_PLAN_MODEL:-}"
+} >> "${MODEL_CAPTURE_FILE:-/dev/null}"
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
+  printf '%s' "$workspace"
+}
+
+@test "orchestrator sets CURSOR_PLAN_MODEL env var for cursor stage with model field" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_model_capture_workspace)"
+  capture_file="$(mktemp)"
+
+  local orch_file="$workspace/model-cursor.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats model cursor",
+  "namespace": "model-cursor",
+  "stages": [
+    {
+      "id": "stage1",
+      "agent": "test-agent",
+      "runtime": "cursor",
+      "plan": "stages/stage1.plan.md",
+      "model": "gpt-5.4-mini-medium",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/model-cursor/stage1.md", "required": true }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/stage1.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-cursor/stage1.md"
+
+  run env MODEL_CAPTURE_FILE="$capture_file" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  local captured
+  captured="$(cat "$capture_file")"
+  [[ "$captured" == *"CURSOR_PLAN_MODEL=gpt-5.4-mini-medium"* ]] \
+    || { echo "FAIL: expected CURSOR_PLAN_MODEL=gpt-5.4-mini-medium in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator sets CLAUDE_PLAN_MODEL for claude stage and CODEX_PLAN_MODEL for codex stage" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_model_capture_workspace)"
+  capture_file="$(mktemp)"
+
+  local orch_file="$workspace/model-multi.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats model multi",
+  "namespace": "model-multi",
+  "stages": [
+    {
+      "id": "claude-stage",
+      "agent": "claude-agent",
+      "runtime": "claude",
+      "plan": "stages/claude-stage.plan.md",
+      "model": "claude-sonnet-4-5",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/model-multi/claude-stage.md", "required": true }
+      ]
+    },
+    {
+      "id": "codex-stage",
+      "agent": "codex-agent",
+      "runtime": "codex",
+      "plan": "stages/codex-stage.plan.md",
+      "model": "gpt-5.1-codex-mini",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/model-multi/codex-stage.md", "required": true }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/claude-stage.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-multi/claude-stage.md"
+  write_plan_file "$workspace" "stages/codex-stage.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-multi/codex-stage.md"
+
+  run env MODEL_CAPTURE_FILE="$capture_file" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  local captured
+  captured="$(cat "$capture_file")"
+  [[ "$captured" == *"CLAUDE_PLAN_MODEL=claude-sonnet-4-5"* ]] \
+    || { echo "FAIL: missing CLAUDE_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CODEX_PLAN_MODEL=gpt-5.1-codex-mini"* ]] \
+    || { echo "FAIL: missing CODEX_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator does not set model env var when stage omits model field" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_model_capture_workspace)"
+  capture_file="$(mktemp)"
+
+  local orch_file="$workspace/no-model.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats no model",
+  "namespace": "no-model",
+  "stages": [
+    {
+      "id": "no-model-stage",
+      "agent": "no-model-agent",
+      "runtime": "cursor",
+      "plan": "stages/no-model.plan.md",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/no-model/out.md", "required": true }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/no-model.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/no-model/out.md"
+
+  run env MODEL_CAPTURE_FILE="$capture_file" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  local captured
+  captured="$(cat "$capture_file")"
+  # CURSOR_PLAN_MODEL should be empty (no override) when stage has no model field
+  [[ "$captured" == *"CURSOR_PLAN_MODEL="$'\n'* ]] || [[ "$captured" == *"CURSOR_PLAN_MODEL="$'\r'* ]] \
+    || [[ "$captured" =~ CURSOR_PLAN_MODEL=$'\n' ]] || [[ "$captured" == *"CURSOR_PLAN_MODEL="* && "$captured" != *"CURSOR_PLAN_MODEL=g"* ]] \
+    || { echo "unexpected CURSOR_PLAN_MODEL set: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator uses stage artifacts and skips agent config merge when stage defines artifacts" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+
+  # Agent config declares a different artifact than the stage
+  create_agent_config_workspace "$workspace" "test-agent" \
+    ".ralph-workspace/artifacts/skip-merge/agent-default.md" "cursor"
+
+  local orch_file="$workspace/skip-merge.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats skip merge",
+  "namespace": "skip-merge",
+  "stages": [
+    {
+      "id": "step1",
+      "agent": "test-agent",
+      "agentSource": "prebuilt",
+      "runtime": "cursor",
+      "plan": "stages/step1.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/skip-merge/stage-defined.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/step1.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/skip-merge/stage-defined.md"
+  # Do NOT create agent-default.md — if it is added as required, the run will fail
+
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
+  rm -rf "$workspace"
+}
+
+@test "orchestrator falls back to agent config artifacts when stage defines none" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+
+  create_agent_config_workspace "$workspace" "fallback-agent" \
+    ".ralph-workspace/artifacts/fallback-ns/fallback.md" "cursor"
+
+  local orch_file="$workspace/fallback.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats fallback",
+  "namespace": "fallback-ns",
+  "stages": [
+    {
+      "id": "fallback-stage",
+      "agent": "fallback-agent",
+      "agentSource": "prebuilt",
+      "runtime": "cursor",
+      "plan": "stages/fallback.plan.md"
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/fallback.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/fallback-ns/fallback.md"
+
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
+  rm -rf "$workspace"
+}
+
+@test "orchestrator expands STAGE_ID token in stage artifacts" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+
+  local orch_file="$workspace/stage-id-token.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats stage id",
+  "namespace": "stage-id-ns",
+  "stages": [
+    {
+      "id": "my-step",
+      "agent": "id-agent",
+      "runtime": "cursor",
+      "plan": "stages/my-step.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/stage-id-ns/{{STAGE_ID}}.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/my-step.plan.md"
+  # Artifact path should expand to my-step.md
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/stage-id-ns/my-step.md"
+
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
+  rm -rf "$workspace"
+}
+
+@test "orchestrator dry-run shows STAGE_ID-expanded artifact paths" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+
+  local orch_file="$workspace/stage-id-dry.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats stage id dry",
+  "namespace": "sid-dry",
+  "stages": [
+    {
+      "id": "cr1",
+      "agent": "dry-agent",
+      "runtime": "cursor",
+      "plan": "stages/cr1.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/sid-dry/{{STAGE_ID}}.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/cr1.plan.md"
+
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"expected artifacts:"*"cr1.md"* ]] \
+    || { echo "FAIL output: $output"; return 1; }
   rm -rf "$workspace"
 }
 
