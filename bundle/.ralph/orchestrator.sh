@@ -149,7 +149,7 @@ artifact_remediation_text() {
 verify_step_artifacts() {
   local step_n="$1"
   local ap abs
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
     if [[ "$ap" == /* ]]; then
       abs="$ap"
@@ -452,7 +452,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   ralph_assert_path_not_env_secret "Step plan" "$plan_abs"
 
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for _art_check in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       ralph_assert_path_not_env_secret "Expected artifact" "$_art_check"
     done
@@ -519,7 +519,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   fi
 
   art_log="(none)"
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     art_log="${EXPECTED_ARTIFACT_PATHS[*]}"
   fi
   log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
@@ -534,7 +534,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     else
       echo "DRY RUN step $step_index: $runner_label --workspace <path> --plan $plan_rel${_dry_sr} (custom agent: $agent)"
     fi
-    if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+    if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
       echo "  expected artifacts: ${EXPECTED_ARTIFACT_PATHS[*]}"
     fi
     _dry_ack="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || _dry_ack=""
@@ -638,12 +638,12 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     exit "$rc"
   fi
 
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     if ! verify_step_artifacts "$step_index"; then
       log "FAIL step $step_index: artifact verification failed (see log for remediation)"
       exit 1
     fi
-    log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]:-0} file(s))"
+    log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]} file(s))"
   fi
 
   human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""

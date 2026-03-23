@@ -38,7 +38,7 @@ artifact_paths_append_unique() {
   local new
   new="$(expand_artifact_tokens "$1")"
   local ex
-  if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for ex in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       [[ "$ex" == "$new" ]] && return 0
     done
