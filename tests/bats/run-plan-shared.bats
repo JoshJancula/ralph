@@ -1013,6 +1013,252 @@ EOF
   rm -f "$helper"
 }
 
+@test "prebuilt agent CURSOR_PLAN_MODEL env var overrides agent config model" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
+
+  local tmp_dir agents_root cfg_dir
+  tmp_dir="$(mktemp -d)"
+  agents_root="$tmp_dir/.cursor/agents"
+  cfg_dir="$agents_root/test-agent"
+  mkdir -p "$cfg_dir"
+  cat > "$cfg_dir/config.json" <<'CFG'
+{
+  "name": "test-agent",
+  "model": "agent-default-model",
+  "description": "regression test agent",
+  "rules": [],
+  "skills": [],
+  "output_artifacts": [
+    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
+  ]
+}
+CFG
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".cursor/agents"
+    AGENT_CONFIG_TOOL="$3"
+    RUNTIME=cursor
+    export CURSOR_PLAN_MODEL="env-override-model"
+    unset PLAN_MODEL_CLI
+    ws="$2"
+    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
+    _runtime_env_model=""
+    case "$RUNTIME" in
+      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
+    esac
+    if [[ -n "$_runtime_env_model" ]]; then
+      SELECTED_MODEL="$_runtime_env_model"
+    fi
+    printf "%s" "$SELECTED_MODEL"
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "env-override-model" ]
+  rm -rf "$tmp_dir"
+}
+
+@test "prebuilt agent PLAN_MODEL_CLI takes priority over CURSOR_PLAN_MODEL and config" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
+
+  local tmp_dir agents_root cfg_dir
+  tmp_dir="$(mktemp -d)"
+  agents_root="$tmp_dir/.cursor/agents"
+  cfg_dir="$agents_root/test-agent"
+  mkdir -p "$cfg_dir"
+  cat > "$cfg_dir/config.json" <<'CFG'
+{
+  "name": "test-agent",
+  "model": "agent-default-model",
+  "description": "regression test agent",
+  "rules": [],
+  "skills": [],
+  "output_artifacts": [
+    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
+  ]
+}
+CFG
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".cursor/agents"
+    AGENT_CONFIG_TOOL="$3"
+    RUNTIME=cursor
+    export CURSOR_PLAN_MODEL="env-override-model"
+    PLAN_MODEL_CLI="cli-flag-model"
+    ws="$2"
+    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
+    _runtime_env_model=""
+    case "$RUNTIME" in
+      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
+    esac
+    if [[ -n "$_runtime_env_model" ]]; then
+      SELECTED_MODEL="$_runtime_env_model"
+    fi
+    if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
+      SELECTED_MODEL="$PLAN_MODEL_CLI"
+    fi
+    printf "%s" "$SELECTED_MODEL"
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "cli-flag-model" ]
+  rm -rf "$tmp_dir"
+}
+
+@test "prebuilt agent falls back to config model when no env or CLI override" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
+
+  local tmp_dir agents_root cfg_dir
+  tmp_dir="$(mktemp -d)"
+  agents_root="$tmp_dir/.cursor/agents"
+  cfg_dir="$agents_root/test-agent"
+  mkdir -p "$cfg_dir"
+  cat > "$cfg_dir/config.json" <<'CFG'
+{
+  "name": "test-agent",
+  "model": "agent-default-model",
+  "description": "regression test agent",
+  "rules": [],
+  "skills": [],
+  "output_artifacts": [
+    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
+  ]
+}
+CFG
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".cursor/agents"
+    AGENT_CONFIG_TOOL="$3"
+    RUNTIME=cursor
+    unset CURSOR_PLAN_MODEL
+    unset PLAN_MODEL_CLI
+    ws="$2"
+    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
+    _runtime_env_model=""
+    case "$RUNTIME" in
+      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
+    esac
+    if [[ -n "$_runtime_env_model" ]]; then
+      SELECTED_MODEL="$_runtime_env_model"
+    fi
+    printf "%s" "$SELECTED_MODEL"
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "agent-default-model" ]
+  rm -rf "$tmp_dir"
+}
+
+@test "CLAUDE_PLAN_MODEL env var overrides config model for claude runtime" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
+
+  local tmp_dir agents_root cfg_dir
+  tmp_dir="$(mktemp -d)"
+  agents_root="$tmp_dir/.claude/agents"
+  cfg_dir="$agents_root/test-agent"
+  mkdir -p "$cfg_dir"
+  cat > "$cfg_dir/config.json" <<'CFG'
+{
+  "name": "test-agent",
+  "model": "claude-default",
+  "description": "regression test agent",
+  "rules": [],
+  "skills": [],
+  "output_artifacts": [
+    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
+  ]
+}
+CFG
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".claude/agents"
+    AGENT_CONFIG_TOOL="$3"
+    RUNTIME=claude
+    export CLAUDE_PLAN_MODEL="claude-sonnet-4-5"
+    unset CURSOR_PLAN_MODEL
+    unset PLAN_MODEL_CLI
+    ws="$2"
+    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
+    _runtime_env_model=""
+    case "$RUNTIME" in
+      claude) _runtime_env_model="${CLAUDE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
+    esac
+    if [[ -n "$_runtime_env_model" ]]; then
+      SELECTED_MODEL="$_runtime_env_model"
+    fi
+    printf "%s" "$SELECTED_MODEL"
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "claude-sonnet-4-5" ]
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_write_human_action_file succeeds without printf wrapper on format strings with leading dash" {
+  # Regression: printf '- text' crashed on macOS bash 3.2 with "invalid option" because
+  # the leading '-' was misinterpreted as a flag. Fixed by adding '--' to those calls.
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" ] || skip "human action helper unavailable"
+
+  local tmp_dir human_action pending human_context plan_file operator_response log_file output_log
+  tmp_dir="$(mktemp -d)"
+  plan_file="$tmp_dir/PLAN.md"
+  printf 'plan instructions\n' >"$plan_file"
+  pending="$tmp_dir/pending-human.txt"
+  printf 'operator question\n' >"$pending"
+  human_context="$tmp_dir/HUMAN-CONTEXT.md"
+  printf '### history entry\n' >"$human_context"
+  human_action="$tmp_dir/HUMAN-ACTION.md"
+  operator_response="$tmp_dir/operator-response.txt"
+  log_file="$tmp_dir/log.txt"
+  output_log="$tmp_dir/output.log"
+
+  # Deliberately do NOT override printf — this tests the actual fixed code path
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    HUMAN_ACTION_FILE="$3"
+    PENDING_HUMAN="$4"
+    HUMAN_CONTEXT="$5"
+    PLAN_PATH="$6"
+    OPERATOR_RESPONSE_FILE="$7"
+    RALPH_SESSION_DIR="$8"
+    LOG_FILE="$9"
+    OUTPUT_LOG="${10}"
+    PREBUILT_AGENT="agent"
+    WORKSPACE="${11}"
+    RALPH_RUN_PLAN_REL="run-plan.sh"
+    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
+    ralph_restart_command_hint(){ printf "restart %s" "$PLAN_PATH"; }
+    ralph_write_human_action_file ""
+  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" \
+    "$human_action" "$pending" "$human_context" "$plan_file" "$operator_response" \
+    "$tmp_dir" "$log_file" "$output_log" "$tmp_dir"
+
+  [ "$status" -eq 0 ]
+  [ -f "$human_action" ]
+  local content
+  content="$(<"$human_action")"
+  [[ "$content" == *"- Pending question:"* ]]
+  [[ "$content" == *"- Session directory:"* ]]
+  [[ "$content" == *"- Plan log:"* ]]
+  [[ "$content" == *"- Output log:"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
 @test "ralph should persist human files only when tty attached" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

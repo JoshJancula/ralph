@@ -114,7 +114,8 @@ fi
 # shellcheck source=/dev/null
 source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
-export RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
+# Orchestrator state/logs are always anchored in workspace .ralph-workspace.
+export RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
@@ -403,19 +404,28 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       fi
     fi
 
-    # Parse artifacts from JSON array
+    # Export stage id so {{STAGE_ID}} tokens resolve correctly in artifact paths.
+    export RALPH_STAGE_ID="$stage_id"
+
+    # Parse artifacts from JSON array. Track whether the stage declares any of its own
+    # required artifacts — when it does, agent config output_artifacts are NOT merged in,
+    # so each stage is fully scoped to what the orchestration defines.
     EXPECTED_ARTIFACT_PATHS=()
+    _stage_has_artifacts=0
     artifacts_array="$(echo "$stage" | jq '.artifacts // []' 2>/dev/null)" || artifacts_array="[]"
     while IFS= read -r artifact_path; do
       [[ -z "$artifact_path" ]] && continue
       artifact_paths_append_unique "$artifact_path"
+      _stage_has_artifacts=1
     done < <(echo "$artifacts_array" | jq -r '.[] | select(.required == true) | .path' 2>/dev/null)
     while IFS= read -r artifact_path; do
       [[ -z "$artifact_path" ]] && continue
       artifact_paths_append_unique "$artifact_path"
+      _stage_has_artifacts=1
     done < <(echo "$stage" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
 
-    if [[ "$agent_source" == "prebuilt" ]]; then
+    # Only fall back to agent config output_artifacts when the stage defines none of its own.
+    if [[ "$agent_source" == "prebuilt" && "$_stage_has_artifacts" -eq 0 ]]; then
       merge_required_artifacts_from_agent "$agent" "$runtime"
     fi
 

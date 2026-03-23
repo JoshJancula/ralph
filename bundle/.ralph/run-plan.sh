@@ -816,10 +816,10 @@ ralph_write_human_action_file() {
     printf '2. Save the file and leave pending-human.txt untouched; it will clear automatically after the answer is applied.\n'
     printf '3. If the plan runner is still running, it continues when you save. Otherwise restart: %s\n\n' "$restart_hint"
     printf '## Session\n'
-    printf '- Pending question: %s\n' "$PENDING_HUMAN"
-    printf '- Session directory: %s\n' "$RALPH_SESSION_DIR"
-    printf '- Plan log: %s\n' "$LOG_FILE"
-    printf '- Output log: %s\n\n' "$OUTPUT_LOG"
+    printf -- '- Pending question: %s\n' "$PENDING_HUMAN"
+    printf -- '- Session directory: %s\n' "$RALPH_SESSION_DIR"
+    printf -- '- Plan log: %s\n' "$LOG_FILE"
+    printf -- '- Output log: %s\n\n' "$OUTPUT_LOG"
     printf '## Previous operator replies\n\n%s\n' "$history"
   } >"$HUMAN_ACTION_FILE"
   log "Wrote human action file: $HUMAN_ACTION_FILE"
@@ -1065,6 +1065,18 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
     log "ERROR: model read failed for $PREBUILT_AGENT"
     exit 1
   }
+  # Runtime-specific model env vars set by the orchestrator for per-stage overrides
+  # take precedence over the agent config default, but yield to an explicit --model flag.
+  _runtime_env_model=""
+  case "$RUNTIME" in
+    cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
+    claude) _runtime_env_model="${CLAUDE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
+    codex)  _runtime_env_model="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
+  esac
+  if [[ -n "$_runtime_env_model" ]]; then
+    SELECTED_MODEL="$_runtime_env_model"
+    log "runtime env model override: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
+  fi
   if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
     SELECTED_MODEL="$PLAN_MODEL_CLI"
     log "CLI --model overrides prebuilt agent default model (agent=$PREBUILT_AGENT)"

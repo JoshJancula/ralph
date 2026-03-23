@@ -567,16 +567,16 @@ for stage in "${stages[@]}"; do
 done
 
 print_step "4/6" "Stage input dependencies"
-print_info "Choose stage inputs (writes to: inputFromStages)"
+print_info "Choose stage inputs (writes to: inputArtifacts in the JSON)"
 print_hint "- Use this so a stage knows which earlier artifacts to read."
 print_hint "- This is how one agent uses output from a previous agent."
 print_hint "- Example: plan stage artifacts -> implementation stage."
 print_hint "- Example: implementation artifacts -> qa or code-review stage."
 print_hint "- Type numbers or stage names, with commas or spaces."
 print_hint "- Type 'none' for no handoff, or Enter for the default."
-read -rp "Set custom stage inputs? (inputFromStages) [y/N]: " handoff_choice
+read -rp "Set custom stage inputs? (inputArtifacts) [y/N]: " handoff_choice
 if [[ "$handoff_choice" =~ ^[Yy] ]]; then
-  print_info "Available stages for stage inputs (inputFromStages)"
+  print_info "Available stages for stage inputs (inputArtifacts)"
   for idx in "${!stage_ids[@]}"; do
     printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}"
   done
@@ -587,7 +587,7 @@ if [[ "$handoff_choice" =~ ^[Yy] ]]; then
     if (( idx > 0 )); then
       default_input="${stage_ids[$((idx - 1))]}"
     fi
-    read -rp "Which earlier stages should \"$current_stage\" read from? (inputFromStages${default_input:+, default $default_input}; use 'none' for no input): " input_line
+    read -rp "Which earlier stages should \"$current_stage\" read from? (inputArtifacts${default_input:+, default $default_input}; use 'none' for no input): " input_line
     if [[ -z "$input_line" ]]; then
       input_line="$default_input"
     fi
@@ -608,7 +608,7 @@ if [[ "$handoff_choice" =~ ^[Yy] ]]; then
           break
         fi
         if [[ "$candidate" == "$current_stage" ]]; then
-          echo "Ignoring self-reference for $current_stage in inputFromStages." >&2
+          echo "Ignoring self-reference for $current_stage in inputArtifacts." >&2
           continue
         fi
         is_valid=0

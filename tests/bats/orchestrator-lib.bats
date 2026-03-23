@@ -53,6 +53,41 @@ setup() {
   [ "$result" = ".ralph-workspace/custom-ns/out.md" ]
 }
 
+@test "expand_artifact_tokens resolves STAGE_ID token" {
+  export RALPH_ARTIFACT_NS="my-ns"
+  export RALPH_STAGE_ID="cr1"
+  result="$(expand_artifact_tokens ".ralph-workspace/{{ARTIFACT_NS}}/{{STAGE_ID}}.md")"
+  [ "$result" = ".ralph-workspace/my-ns/cr1.md" ]
+  unset RALPH_STAGE_ID
+}
+
+@test "expand_artifact_tokens leaves STAGE_ID empty when env var unset" {
+  export RALPH_ARTIFACT_NS="my-ns"
+  unset RALPH_STAGE_ID
+  result="$(expand_artifact_tokens ".ralph-workspace/{{ARTIFACT_NS}}/{{STAGE_ID}}.md")"
+  [ "$result" = ".ralph-workspace/my-ns/.md" ]
+}
+
+@test "expand_artifact_tokens resolves all three tokens together" {
+  export RALPH_ARTIFACT_NS="pipeline"
+  export RALPH_STAGE_ID="sr2"
+  ORCH_BASENAME="pipeline"
+  result="$(expand_artifact_tokens "{{ARTIFACT_NS}}/{{PLAN_KEY}}/{{STAGE_ID}}.md")"
+  [ "$result" = "pipeline/pipeline/sr2.md" ]
+  unset RALPH_STAGE_ID
+}
+
+@test "artifact_paths_append_unique deduplicates after token expansion" {
+  export RALPH_ARTIFACT_NS="dedup-ns"
+  export RALPH_STAGE_ID="step1"
+  EXPECTED_ARTIFACT_PATHS=()
+  artifact_paths_append_unique ".ralph-workspace/{{ARTIFACT_NS}}/{{STAGE_ID}}.md"
+  artifact_paths_append_unique ".ralph-workspace/dedup-ns/step1.md"
+  [ "${#EXPECTED_ARTIFACT_PATHS[@]}" -eq 1 ]
+  [ "${EXPECTED_ARTIFACT_PATHS[0]}" = ".ralph-workspace/dedup-ns/step1.md" ]
+  unset RALPH_STAGE_ID
+}
+
 @test "parse_artifact_csv trims entries and resets state" {
   EXPECTED_ARTIFACT_PATHS=("preexisting")
   parse_artifact_csv " first ,second, ,  third  "
