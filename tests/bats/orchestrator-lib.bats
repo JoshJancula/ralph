@@ -49,6 +49,18 @@ setup() {
 
 @test "expand_artifact_tokens honors namespace" {
   export RALPH_ARTIFACT_NS="custom-ns"
-  result="$(expand_artifact_tokens ".agents/{{ARTIFACT_NS}}/out.md")"
-  [ "$result" = ".agents/custom-ns/out.md" ]
+  result="$(expand_artifact_tokens ".ralph-workspace/{{ARTIFACT_NS}}/out.md")"
+  [ "$result" = ".ralph-workspace/custom-ns/out.md" ]
+}
+
+@test "parse_artifact_csv trims entries and resets state" {
+  EXPECTED_ARTIFACT_PATHS=("preexisting")
+  parse_artifact_csv " first ,second, ,  third  "
+  [ "${#EXPECTED_ARTIFACT_PATHS[@]}" -eq 3 ]
+  [ "${EXPECTED_ARTIFACT_PATHS[0]}" = "first" ]
+  [ "${EXPECTED_ARTIFACT_PATHS[1]}" = "second" ]
+  [ "${EXPECTED_ARTIFACT_PATHS[2]}" = "third" ]
+
+  parse_artifact_csv ""
+  [ "${#EXPECTED_ARTIFACT_PATHS[@]}" -eq 0 ]
 }

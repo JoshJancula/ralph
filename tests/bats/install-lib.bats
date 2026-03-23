@@ -85,3 +85,12 @@ setup() {
   TARGET=""
   unset RALPH_INSTALL_SOURCE_ROOT
 }
+
+@test "copy tree skips missing source directories" {
+  local missing_dir="$BATS_TMPDIR/missing-source"
+  local dest_dir="$BATS_TMPDIR/unused-dest"
+  run install_ops_copy_tree "$missing_dir" "$dest_dir" 2>&1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skip (missing): $missing_dir"* ]]
+  [ ! -d "$dest_dir" ]
+}

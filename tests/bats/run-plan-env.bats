@@ -37,3 +37,10 @@ teardown() {
   [ "$RALPH_PLAN_DISABLE_HUMAN_PROMPT" = "1" ]
   [ "$RALPH_PLAN_NO_OPEN" = "1" ]
 }
+
+@test "missing runtime fails validation" {
+  run ralph_run_plan_load_env_for_runtime
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"RUNTIME must be set before calling ralph_run_plan_load_env_for_runtime."* ]]
+}

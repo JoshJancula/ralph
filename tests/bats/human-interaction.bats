@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
-source "$BATS_TEST_DIRNAME/../../.cursor/ralph/bash-lib/human-interaction.sh"
+source "$BATS_TEST_DIRNAME/../../.ralph/bash-lib/human-interaction.sh"
 
 setup() {
   TTY_HUMAN_HISTORY=""
@@ -15,6 +15,27 @@ setup() {
   [[ "$output" == *"Operator answered"* ]]
   [[ "$output" == *"What should I do?"* ]]
   [[ "$output" == *"Answer in-line."* ]]
+}
+
+@test "human ack helper uses the configured tool" {
+  local tmpdir tool
+  tmpdir="$(mktemp -d)"
+  tool="$tmpdir/ack-tool.sh"
+  cat <<'EOF' >"$tool"
+#!/usr/bin/env bash
+printf 'ready'
+EOF
+  chmod +x "$tool"
+
+  unset RALPH_HUMAN_ACK_TOOL
+  export RALPH_HUMAN_ACK_TOOL="$tool"
+
+  run ralph_human_ack_tool_path
+  [ "$status" -eq 0 ]
+  [ "$output" = "$tool" ]
+
+  unset RALPH_HUMAN_ACK_TOOL
+  rm -rf "$tmpdir"
 }
 
 @test "human exchange persistence writes artifact" {

@@ -14,7 +14,7 @@ This example walks through creating a worker plan, running it, and inspecting ou
 2. Replace placeholder sections with TODOs specific to your task. A plan entry should look like:
 
    ```markdown
-   - [ ] Update `server/modules/auth/session.ts` to include an `issuedAt` timestamp (lint: `npm run lint`; test: `npm run test:server`). Expected artifact: `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
+   - [ ] Update `server/modules/auth/session.ts` to include an `issuedAt` timestamp (lint: `npm run lint`; test: `npm run test:server`). Expected artifact: `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
    ```
 
 3. Include verification steps, files touched, and artifact outputs so that rerunning the loop can clearly mark completion.
@@ -33,18 +33,19 @@ This example walks through creating a worker plan, running it, and inspecting ou
    - Set `CURSOR_PLAN_MODEL`, `CLAUDE_PLAN_MODEL`, or `CODEX_PLAN_MODEL` to pin models.
    - Provide `--select-agent` to trigger an interactive chooser (if in a TTY).
 
-3. If the runner pauses for human input: `.ralph/run-plan.sh` (always pass **`--plan`**) follows an **interactive-first flow** where TTY-attached runs prompt you inline. Without a TTY, it polls `operator-response.txt` in-process (set `RALPH_HUMAN_OFFLINE_EXIT=1` to use exit 4 and restart instead). Optional escalation via `.ralph/orchestrator.sh --human-ack` or `RALPH_HUMAN_ACK_TOOL` still applies when configured. Every human exchange is persisted under `.agents/<artifact-namespace>/human` for audit and replay purposes.
+3. If the runner pauses for human input: `.ralph/run-plan.sh` (always pass **`--plan`**) follows an **interactive-first flow** where TTY-attached runs prompt you inline. Without a TTY, it polls `operator-response.txt` in-process (set `RALPH_HUMAN_OFFLINE_EXIT=1` to use exit 4 and restart instead). Optional escalation via `RALPH_HUMAN_ACK_TOOL` still applies when configured (the orchestrator script itself does not provide `--human-ack`). Human exchanges are persisted under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/human-replies.md`** (and related files in that directory) for audit and replay purposes.
 
 ## 3. Review outputs
 
-- Logs: `.agents/logs/plan-runner-<agent>-*.log` contains combined stdout/stderr from the agent run.
-- Artifacts: `.agents/artifacts/{{ARTIFACT_NS}}/` stores research, implementation handoffs, QA notes, or other docs referenced by your plan.
-- Cleanup: `.ralph/cleanup-plan.sh <namespace>` removes `.agents/logs/<namespace>` and `.agents/artifacts/<namespace>/`. Use this before repeated runs if you need a clean slate.
+- Logs: `.ralph-workspace/logs/<namespace>/plan-runner-*.log` contains combined stdout/stderr from the agent run.
+- Artifacts: `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/` stores research, implementation handoffs, QA notes, or other docs referenced by your plan.
+- Cleanup: `.ralph/cleanup-plan.sh <namespace>` removes `.ralph-workspace/logs/<namespace>` and `.ralph-workspace/artifacts/<namespace>/`. Use this before repeated runs if you need a clean slate.
 
 ## 4. Sample plan snippet
 
 ```markdown
-- [ ] Analyze existing notification flow (`server/modules/notifications/**/*`). Document findings in `.agents/artifacts/{{ARTIFACT_NS}}/research.md` (lint: none; tests: none; validation: review notes).
+- [ ] Analyze existing notification flow (`server/modules/notifications/**/*`). Document findings in `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md` (lint: none; tests: none; validation: review notes).
 - [ ] Update `client/src/components/NotificationList.tsx` to support throttled refresh requests (lint: `npm run lint:ui`; tests: `npm run test:ui`).
-- [ ] Write implementation handoff `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md` summarizing changes and verification steps.
+- [ ] Write implementation handoff `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md` summarizing changes and verification steps.
 ```
+we need to ensure that whenever a user does a `ctrl+c` to terminate @bundle/.ralph/orchestrator.sh or @bundle/.ralph/run-plan.sh we are terminating any process we started with the runtime (cursor/cluade)

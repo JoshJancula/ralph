@@ -9,6 +9,41 @@ IFS=$'\n'
 
 readonly SCRIPT_NAME="$(basename "$0")"
 
+setup_colors() {
+  if [[ -t 1 ]]; then
+    C_G=$'\033[32m'
+    C_B=$'\033[34m'
+    C_Y=$'\033[33m'
+    C_BOLD=$'\033[1m'
+    C_RST=$'\033[0m'
+  else
+    C_G="" C_B="" C_Y="" C_BOLD="" C_RST=""
+  fi
+}
+
+setup_colors
+
+print_usage() {
+  cat <<EOF
+${C_BOLD}${C_G}Usage:${C_RST} RALPH_MCP_WORKSPACE=<workspace-root> $SCRIPT_NAME
+
+${C_BOLD}Environment variables:${C_RST}
+  ${C_G}RALPH_MCP_WORKSPACE${C_RST}   Required path to the repo workspace the MCP server exposes.
+  ${C_G}RALPH_MCP_ALLOWLIST${C_RST}   Optional comma-separated dirs (relative to workspace) to allow in requests.
+
+${C_BOLD}Options:${C_RST}
+  ${C_G}--help${C_RST}                Show this help message and exit.
+
+${C_BOLD}Dependencies:${C_RST}
+  ${C_Y}jq${C_RST}                     Required for parsing MCP JSON-RPC payloads.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  print_usage
+  exit 0
+fi
+
 log() {
   printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SCRIPT_NAME" "$*" >&2
 }
@@ -113,13 +148,6 @@ tail_text() {
 }
 
 execute_tool_command() {
-  local -n exit_ref="$1"
-  local -n duration_ref="$2"
-  local -n stdout_ref="$3"
-  local -n stderr_ref="$4"
-  local -n stdout_trunc_ref="$5"
-  local -n stderr_trunc_ref="$6"
-  shift 6
   local command=("$@")
   local stdout_file stderr_file
   stdout_file="$(mktemp)"
@@ -131,11 +159,19 @@ execute_tool_command() {
   local exit_code=$?
   set -e
   end_time="$(date +%s.%N)"
-  duration_ref="$(awk "BEGIN {printf \"%.3f\", $end_time - $start_time}")"
-  tail_text "$stdout_file" "$MAX_TOOL_TAIL_BYTES" stdout_ref stdout_trunc_ref
-  tail_text "$stderr_file" "$MAX_TOOL_TAIL_BYTES" stderr_ref stderr_trunc_ref
+  local duration_value
+  duration_value="$(awk "BEGIN {printf \"%.3f\", $end_time - $start_time}")"
+  local stdout_value stderr_value
+  local stdout_trunc_value stderr_trunc_value
+  tail_text "$stdout_file" "$MAX_TOOL_TAIL_BYTES" stdout_value stdout_trunc_value
+  tail_text "$stderr_file" "$MAX_TOOL_TAIL_BYTES" stderr_value stderr_trunc_value
   rm -f "$stdout_file" "$stderr_file"
-  exit_ref="$exit_code"
+  EXECUTE_TOOL_COMMAND_EXIT_CODE="$exit_code"
+  EXECUTE_TOOL_COMMAND_DURATION_SECONDS="$duration_value"
+  EXECUTE_TOOL_COMMAND_STDOUT_TAIL="$stdout_value"
+  EXECUTE_TOOL_COMMAND_STDERR_TAIL="$stderr_value"
+  EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED="$stdout_trunc_value"
+  EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED="$stderr_trunc_value"
 }
 
 canonicalize_path() {
@@ -542,8 +578,13 @@ handle_run_plan() {
     command+=("--non-interactive")
   fi
   command+=("--runtime" "$runtime_lower" "--plan" "$plan_path" "--agent" "$agent_arg" "$workspace_path")
-  local exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc
-  execute_tool_command exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc "${command[@]}"
+  execute_tool_command "${command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
   local command_text
   command_text="$(printf '%s ' "${command[@]}")"
   command_text="${command_text%" "}"
@@ -623,8 +664,13 @@ handle_orchestrator_run() {
   if [[ "$dry_run_arg" == "true" ]]; then
     command=("env" "ORCHESTRATOR_DRY_RUN=1" "${command[@]}")
   fi
-  local exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc
-  execute_tool_command exit_code duration stdout_tail stderr_tail stdout_trunc stderr_trunc "${command[@]}"
+  execute_tool_command "${command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
   local command_text
   command_text="$(printf '%s ' "${command[@]}")"
   command_text="${command_text%" "}"

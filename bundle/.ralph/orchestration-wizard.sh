@@ -25,6 +25,7 @@ if [[ -f "$bundle_root/.codex/ralph/select-model.sh" ]]; then
 fi
 
 default_stages=("research" "architecture" "implementation" "code-review" "qa")
+pipeline_resume_all_stages="false"
 
 runtime_default() {
   case "$1" in
@@ -126,6 +127,16 @@ read_pipeline_info() {
   pipeline_description_default="Multi-stage pipeline for $pipeline_name"
   read -rp "Description [default $pipeline_description_default]: " description_input
   pipeline_description="${description_input:-$pipeline_description_default}"
+  read -rp "Enable session resume for all stages? (y/N) " session_resume_input
+  session_resume_input="${session_resume_input:-N}"
+  if [[ "$session_resume_input" =~ ^[Yy] ]]; then
+    pipeline_resume_all_stages="true"
+  else
+    pipeline_resume_all_stages="false"
+  fi
+  if [[ "$pipeline_resume_all_stages" != "true" ]]; then
+    print_hint "You can enable session resume per stage while configuring each stage."
+  fi
 }
 
 read_stages() {
@@ -385,7 +396,94 @@ print_step() {
   printf '\n%s%s[%s]%s %s\n' "$c_blue" "$c_bold" "$1" "$c_reset" "$2"
 }
 
-echo "Note: this wizard copies .ralph/plan.template and scaffolds .agents/orchestration-plans/<namespace> plus artifacts."
+offer_prompt_execution() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    return
+  fi
+  local answer
+  read -rp "Execute the generated prompt now to populate these stage plans? (y/N): " answer
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    return
+  fi
+
+  local prompt_plan_abs="$plan_dir/${namespace}-todo-prompt.plan.md"
+  local prompt_plan_rel
+  if [[ "$prompt_plan_abs" == "$workspace/"* ]]; then
+    prompt_plan_rel="${prompt_plan_abs#$workspace/}"
+  else
+    prompt_plan_rel="$prompt_plan_abs"
+  fi
+
+  {
+    cat <<EOF
+# Generate TODO checklists for $pipeline_name
+Create actionable TODO checklists for this orchestration pipeline using .ralph/plan.template as the checklist style reference.
+Fill these stage plan files with concrete TODOs (- [ ] / - [x]), files to edit, validation commands, and expected artifacts:
+EOF
+    for plan_path in "${generated_plan_paths[@]}"; do
+      printf '%s\n' "- $plan_path"
+    done
+    cat <<EOF
+
+Namespace: $namespace
+Orchestration JSON: $orch_file
+Artifact directory: .ralph-workspace/artifacts/$namespace/
+
+Each stage plan should include:
+- Implementation steps tied to real files or modules
+- Verification commands (lint/tests/build as applicable)
+- Clear handoff expectations for the next stage
+- Artifact expectations under .ralph-workspace/artifacts/$namespace/
+
+## Stage context
+EOF
+    for idx in "${!generated_plan_paths[@]}"; do
+      local stage_label stage_loc stage_runtime stage_agent stage_model stage_desc stage_input artifact_path
+      stage_label="${stage_ids[$idx]}"
+      stage_loc="${generated_plan_paths[$idx]}"
+      stage_runtime="${stage_runtimes[$idx]}"
+      stage_agent="${stage_agents[$idx]}"
+      stage_model="${stage_models[$idx]}"
+      stage_desc="${stage_descriptions[$idx]}"
+      stage_input="${stage_input_sources[$idx]}"
+      artifact_path=".ralph-workspace/artifacts/$namespace/$(artifact_file_for_stage "$stage_label")"
+      printf -- '- `%s`: stage %s (runtime %s, agent %s' "$stage_loc" "$stage_label" "$stage_runtime" "$stage_agent"
+      if [[ -n "$stage_model" ]]; then
+        printf ', model %s' "$stage_model"
+      fi
+      printf ')\n'
+      if [[ -n "$stage_desc" ]]; then
+        printf '  Description: %s\n' "$stage_desc"
+      fi
+      if [[ -n "$stage_input" ]]; then
+        printf '  Input from stages: %s\n' "$stage_input"
+      fi
+      printf '  Artifact: %s\n' "$artifact_path"
+    done
+    printf '\n## TODOs\n'
+    for idx in "${!generated_plan_paths[@]}"; do
+      local stage_label stage_loc artifact_path stage_input
+      stage_label="${stage_ids[$idx]}"
+      stage_loc="${generated_plan_paths[$idx]}"
+      artifact_path=".ralph-workspace/artifacts/$namespace/$(artifact_file_for_stage "$stage_label")"
+      stage_input="${stage_input_sources[$idx]}"
+      printf -- '- [ ] Update `%s` with actionable TODOs for stage %s: mention the files or modules that will be touched, list validation commands, and describe the artifact at %s. Input stage(s): %s. Follow .ralph/plan.template formatting so the orchestrator can verify outputs.\n' "$stage_loc" "$stage_label" "$artifact_path" "${stage_input:-none}"
+    done
+  } > "$prompt_plan_abs"
+
+  print_info "Starting run-plan for the TODO prompt plan (same runner, agent, and model prompts as a normal plan)."
+  print_hint "You will choose Cursor vs Claude vs Codex, then prebuilt agent vs direct model, then model if needed."
+  if [[ ! -f "$script_dir/run-plan.sh" ]]; then
+    echo "run-plan.sh not found at $script_dir/run-plan.sh" >&2
+    return 1
+  fi
+  (
+    cd "$workspace" || exit 1
+    bash "$script_dir/run-plan.sh" --plan "$prompt_plan_rel"
+  )
+}
+
+echo "Note: this wizard copies .ralph/plan.template and scaffolds .ralph-workspace/orchestration-plans/<namespace> plus artifacts."
 
 print_step "1/6" "Pipeline metadata"
 print_hint "- Pick a short name we can use in file paths."
@@ -410,6 +508,7 @@ stage_agents=()
 stage_agent_sources=()
 stage_descriptions=()
 stage_models=()
+stage_session_resume=()
 stage_input_sources=()
 
 print_step "3/6" "Configure each stage"
@@ -436,6 +535,22 @@ for stage in "${stages[@]}"; do
   stage_agent_sources+=("$stage_agent_source")
   stage_descriptions+=("$stage_desc")
   stage_models+=("$stage_model")
+  if [[ "$pipeline_resume_all_stages" == "true" ]]; then
+    stage_session_resume+=("true")
+  else
+    read -rp "Enable session resume for \"$stage_id\"? (y/N) " sr_one_stage
+    sr_one_stage="${sr_one_stage:-N}"
+    if [[ "$sr_one_stage" =~ ^[Yy] ]]; then
+      stage_session_resume+=("true")
+    else
+      stage_session_resume+=("false")
+    fi
+  fi
+done
+
+orch_session_resume_enabled="true"
+for sr in "${stage_session_resume[@]}"; do
+  [[ "$sr" == "true" ]] || orch_session_resume_enabled="false"
 done
 
 description="${pipeline_description:-Multi-stage pipeline for $pipeline_name}"
@@ -633,8 +748,8 @@ if [[ "$loop_choice" =~ ^[Yy] ]]; then
 fi
 
 print_step "6/6" "Generate orchestration files"
-plan_dir="$workspace/.agents/orchestration-plans/$namespace"
-artifact_dir="$workspace/.agents/artifacts/$namespace"
+plan_dir="$workspace/.ralph-workspace/orchestration-plans/$namespace"
+artifact_dir="$workspace/.ralph-workspace/artifacts/$namespace"
 orch_file="$plan_dir/$namespace.orch.json"
 
 mkdir -p "$plan_dir" "$artifact_dir"
@@ -650,14 +765,15 @@ for idx in "${!stages[@]}"; do
   agent="${stage_agents[$idx]}"
   agent_source="${stage_agent_sources[$idx]}"
 
-  plan_rel_path=".agents/orchestration-plans/$namespace/${namespace}-${step_number}-${stage_label}.plan.md"
+  plan_rel_path=".ralph-workspace/orchestration-plans/$namespace/${namespace}-${step_number}-${stage_label}.plan.md"
   plan_abs_path="$workspace/$plan_rel_path"
   generated_plan_paths+=("$plan_rel_path")
   artifact_base="$(artifact_file_for_stage "$stage_label")"
-  artifact_path=".agents/artifacts/$namespace/$artifact_base"
+  artifact_path=".ralph-workspace/artifacts/$namespace/$artifact_base"
 
   stage_desc="${stage_descriptions[$idx]}"
   stage_model="${stage_models[$idx]}"
+  stage_resume_json="${stage_session_resume[$idx]}"
   stage_input_list="${stage_input_sources[$idx]}"
   if [[ ! -f "$plan_abs_path" ]]; then
     plan_title="$(printf '%s %s stage plan for %s' "$namespace" "$stage_label" "$pipeline_name")"
@@ -682,6 +798,7 @@ for idx in "${!stages[@]}"; do
     model_json="$(escape_json "$stage_model")"
     entry="$entry,\n      \"model\": $model_json"
   fi
+  entry="$entry,\n      \"sessionResume\": $stage_resume_json"
 
   if [[ -n "$stage_input_list" ]]; then
     input_artifact_entries=()
@@ -690,7 +807,7 @@ for idx in "${!stages[@]}"; do
       input_stage="$(sanitize "$input_stage")"
       [[ -z "$input_stage" ]] && continue
       input_artifact_base="$(artifact_file_for_stage "$input_stage")"
-      input_artifact_entries+=("        {\n          \"path\": \".agents/artifacts/$namespace/$input_artifact_base\"\n        }")
+      input_artifact_entries+=("        {\n          \"path\": \".ralph-workspace/artifacts/$namespace/$input_artifact_base\"\n        }")
     done
     if (( ${#input_artifact_entries[@]} > 0 )); then
       entry="$entry,\n      \"inputArtifacts\": [\n"
@@ -721,7 +838,7 @@ name_json="$(escape_json "$pipeline_name")"
 namespace_json="$(escape_json "$namespace")"
 description_json="$(escape_json "$description")"
 
-printf '{\n  "name": %s,\n  "namespace": %s,\n  "description": %s,\n  "stages": [\n' "$name_json" "$namespace_json" "$description_json" > "$orch_file"
+printf '{\n  "name": %s,\n  "namespace": %s,\n  "description": %s,\n  "sessionResumeEnabled": %s,\n  "stages": [\n' "$name_json" "$namespace_json" "$description_json" "$orch_session_resume_enabled" > "$orch_file"
 
 for idx in "${!stage_entries[@]}"; do
   printf '%b' "${stage_entries[$idx]}" >> "$orch_file"
@@ -738,13 +855,13 @@ print_info "Created orchestration $orch_file with ${total_steps} stage(s)."
 echo "Edit the plans under $plan_dir, add TODOs, and run:"
 echo ".ralph/orchestrator.sh --orchestration $orch_file"
 echo ""
-echo "Generated prompt for creating TODOs in stage plans:"
+print_hint "Generated prompt for creating TODOs in stage plans:"
 echo "-----"
 echo "Create actionable TODO checklists for this orchestration pipeline using .ralph/plan.template as the checklist style reference."
 echo ""
 echo "Namespace: $namespace"
 echo "Orchestration JSON: $orch_file"
-echo "Artifact directory: .agents/artifacts/$namespace/"
+echo "Artifact directory: .ralph-workspace/artifacts/$namespace/"
 echo ""
 echo "Fill these stage plan files with concrete TODOs (- [ ] / - [x]), files to edit, validation commands, and expected artifacts:"
 for p in "${generated_plan_paths[@]}"; do
@@ -755,5 +872,6 @@ echo "Each stage plan should include:"
 echo "- Implementation steps tied to real files or modules"
 echo "- Verification commands (lint/tests/build as applicable)"
 echo "- Clear handoff expectations for the next stage"
-echo "- Artifact expectations under .agents/artifacts/$namespace/"
+echo "- Artifact expectations under .ralph-workspace/artifacts/$namespace/"
 echo "-----"
+offer_prompt_execution

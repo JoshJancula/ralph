@@ -3,7 +3,7 @@
 # stage to `.ralph/run-plan.sh` with per-stage `--runtime`, `--plan` (from the stage), and `--agent`.
 # Master orchestrator: read a JSON orchestration plan, run each step in order via Ralph
 # (unified run-plan; `--plan` is always passed). Stops on first failure
-# and writes actionable logs under .agents/logs/orchestrator-*.log.
+# and writes actionable logs under .ralph-workspace/logs/orchestrator-*.log.
 #
 # Orchestration plan format (JSON file with .orch.json extension):
 #   {
@@ -17,13 +17,14 @@
 #         "runtime": "cursor", "claude", or "codex" (optional, default: cursor),
 #         "plan": "path/to/stage-plan.md",
 #         "planTemplate": "path/to/stage-plan.template.md (optional)",
+#         "sessionResume": true or false (optional JSON boolean; forwards --cli-resume / --no-cli-resume to run-plan),
 #         "inputArtifacts": ["path/to/{{ARTIFACT_NS}}/input.md"],
 #         "outputArtifacts": [
 #           "path/to/{{ARTIFACT_NS}}/output.md"
 #         ],
 #         "artifacts": [
 #           {
-#             "path": ".agents/artifacts/{{ARTIFACT_NS}}/output.md",
+#             "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/output.md",
 #             "required": true
 #           }
 #         ]
@@ -36,7 +37,7 @@
 #
 # Usage:
 #   .ralph/orchestrator.sh --orchestration PATH [WORKSPACE]
-#   .ralph/orchestrator.sh .agents/orchestration-plans/my-feature/my-feature.orch.json
+#   .ralph/orchestrator.sh docs/orchestration-plans/my-feature/my-feature.orch.json
 #
 # Env:
 #   ORCHESTRATOR_VERBOSE=1           log each step start to stderr as well as log file
@@ -45,11 +46,10 @@
 #   ORCHESTRATOR_HUMAN_ACK=1         enforce per-stage humanAck gates (default: off; pipeline does not pause)
 #   RALPH_ARTIFACT_NS                override artifact namespace (default: from JSON or filename)
 #   RALPH_ORCH_FILE                  path to the orchestration plan currently being processed
-#   RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skip first-run usage-risk prompt (same marker file as run-plan; for CI/automation)
 #
 # Exit codes: 0 success, 1 failure, 3 human acknowledgment required (only when ORCHESTRATOR_HUMAN_ACK=1 and ack file missing)
 #
-# Optional per-stage JSON field humanAck: enforced only when ORCHESTRATOR_HUMAN_ACK=1. See .agents/artifacts/README.md.
+# Optional per-stage JSON field humanAck: enforced only when ORCHESTRATOR_HUMAN_ACK=1. Artifacts live under .ralph-workspace/artifacts/.
 #
 # When stdout is a TTY and ORCHESTRATOR_RUNNER_TO_CONSOLE is not 0, each step streams the Ralph runner
 # (.ralph/run-plan.sh and agent CLI output) to the console as well as appending to the orchestrator log.
@@ -73,7 +73,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      usage
+      echo "Usage: $0 --orchestration <orchestration_plan.orch.json> [workspace_dir]"
+      echo "   or: $0 <orchestration_plan.orch.json>   (workspace is current directory)"
+      exit 0
       ;;
     *)
       if [[ -z "$ORCH_FILE" && -f "$1" ]]; then
@@ -112,11 +114,8 @@ fi
 # shellcheck source=/dev/null
 source "$WORKSPACE/.ralph/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
-# shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/bash-lib/usage-risk-ack.sh"
-ralph_require_usage_risk_acknowledgment
-AGENTS_SHARED_DIR="$WORKSPACE/.agents"
-RALPH_LOG_DIR="$AGENTS_SHARED_DIR/logs"
+export RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
+RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
 ORCH_BASENAME="${ORCH_BASENAME//[^A-Za-z0-9_.-]/_}"
@@ -139,7 +138,7 @@ source "$WORKSPACE/.ralph/bash-lib/orchestrator-lib.sh"
 artifact_remediation_text() {
   echo "  Remediation:"
   echo "    1. Open the step plan and ensure the agent finished every TODO (agent should write declared outputs)."
-  echo "    2. Create or fill the missing path under the repo root (see .agents/artifacts/README.md for handoff names)."
+  echo "    2. Create or fill the missing path under the repo root (see .ralph-workspace/artifacts/ for handoff files)."
   echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage"
   echo "       or adjust output_artifacts in the agent config."
   echo "    4. Re-run from repo root: $0 --orchestration \"$ORCH_FILE\" \"$WORKSPACE\""
@@ -237,6 +236,58 @@ check_loop_condition() {
   fi
 }
 
+# Bash 3.2 (macOS /bin/bash): no associative arrays. Parallel-array maps for stage id lookups.
+ORCH_STAGE_INDEX_KEYS=()
+ORCH_STAGE_INDEX_VALS=()
+ORCH_STAGE_ITER_KEYS=()
+ORCH_STAGE_ITER_VALS=()
+
+orch_stage_index_map_set() {
+  local key="$1" val="$2" i
+  for ((i = 0; i < ${#ORCH_STAGE_INDEX_KEYS[@]}; i++)); do
+    if [[ "${ORCH_STAGE_INDEX_KEYS[$i]}" == "$key" ]]; then
+      ORCH_STAGE_INDEX_VALS[$i]="$val"
+      return 0
+    fi
+  done
+  ORCH_STAGE_INDEX_KEYS+=("$key")
+  ORCH_STAGE_INDEX_VALS+=("$val")
+}
+
+orch_stage_index_map_get() {
+  local key="$1" i
+  for ((i = 0; i < ${#ORCH_STAGE_INDEX_KEYS[@]}; i++)); do
+    if [[ "${ORCH_STAGE_INDEX_KEYS[$i]}" == "$key" ]]; then
+      printf '%s\n' "${ORCH_STAGE_INDEX_VALS[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+orch_stage_iteration_map_set() {
+  local key="$1" val="$2" i
+  for ((i = 0; i < ${#ORCH_STAGE_ITER_KEYS[@]}; i++)); do
+    if [[ "${ORCH_STAGE_ITER_KEYS[$i]}" == "$key" ]]; then
+      ORCH_STAGE_ITER_VALS[$i]="$val"
+      return 0
+    fi
+  done
+  ORCH_STAGE_ITER_KEYS+=("$key")
+  ORCH_STAGE_ITER_VALS+=("$val")
+}
+
+orch_stage_iteration_map_get() {
+  local key="$1" i
+  for ((i = 0; i < ${#ORCH_STAGE_ITER_KEYS[@]}; i++)); do
+    if [[ "${ORCH_STAGE_ITER_KEYS[$i]}" == "$key" ]]; then
+      printf '%s\n' "${ORCH_STAGE_ITER_VALS[$i]}"
+      return 0
+    fi
+  done
+  printf '%s\n' "1"
+}
+
 log() {
   echo "[$(ts)] $*" >> "$LOG_FILE"
   if [[ "${ORCHESTRATOR_VERBOSE:-0}" == "1" ]]; then
@@ -247,13 +298,13 @@ log() {
 log "orchestrator started workspace=$WORKSPACE orchestration=$ORCH_FILE"
 
 if [[ -t 1 && "${ORCHESTRATOR_NO_COLOR:-0}" != "1" ]]; then
-  C_R="\033[31m"
-  C_G="\033[32m"
-  C_Y="\033[33m"
-  C_B="\033[34m"
-  C_DIM="\033[2m"
-  C_BOLD="\033[1m"
-  C_RST="\033[0m"
+  C_R=$'\033[31m'
+  C_G=$'\033[32m'
+  C_Y=$'\033[33m'
+  C_B=$'\033[34m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RST=$'\033[0m'
 else
   C_R="" C_G="" C_Y="" C_B="" C_DIM="" C_BOLD="" C_RST=""
 fi
@@ -286,14 +337,16 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   # Parse each stage from JSON array
   num_stages="$(jq '.stages | length' "$ORCH_FILE" 2>/dev/null || echo 0)"
-  declare -A stage_index_by_id=()
-  declare -A stage_iteration_by_id=()
+  ORCH_STAGE_INDEX_KEYS=()
+  ORCH_STAGE_INDEX_VALS=()
+  ORCH_STAGE_ITER_KEYS=()
+  ORCH_STAGE_ITER_VALS=()
   for ((map_idx = 0; map_idx < num_stages; map_idx++)); do
     map_stage_id="$(jq -r ".stages[$map_idx].id // empty" "$ORCH_FILE" 2>/dev/null || echo "")"
     map_stage_id="$(printf '%s' "$map_stage_id" | tr '[:upper:]' '[:lower:]')"
     map_stage_id="$(printf '%s' "$map_stage_id" | tr -c 'a-z0-9-' '-')"
     map_stage_id="$(printf '%s' "$map_stage_id" | sed 's/-\+/-/g; s/^-//; s/-$//')"
-    [[ -n "$map_stage_id" ]] && stage_index_by_id["$map_stage_id"]="$map_idx"
+    [[ -n "$map_stage_id" ]] && orch_stage_index_map_set "$map_stage_id" "$map_idx"
   done
 
   idx=0
@@ -304,7 +357,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     stage_id="$(printf '%s' "$stage_id" | tr -c 'a-z0-9-' '-')"
     stage_id="$(printf '%s' "$stage_id" | sed 's/-\+/-/g; s/^-//; s/-$//')"
     if [[ -n "$stage_id" ]]; then
-      stage_iter="${stage_iteration_by_id[$stage_id]:-1}"
+      stage_iter="$(orch_stage_iteration_map_get "$stage_id")"
     else
       stage_iter=1
     fi
@@ -333,6 +386,22 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     [[ -z "$agent_source" ]] && agent_source="prebuilt"
     plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
     planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
+
+    _session_resume_cli=()
+    if echo "$stage" | jq -e 'has("sessionResume")' >/dev/null 2>&1; then
+      _sr_type="$(echo "$stage" | jq -r '.sessionResume | type' 2>/dev/null || echo "")"
+      if [[ "$_sr_type" != "boolean" ]]; then
+        log "FAIL parse: sessionResume must be a JSON boolean (got type ${_sr_type})"
+        echo -e "${C_R}Invalid sessionResume: must be a JSON boolean (true or false), not ${_sr_type}.${C_RST}" >&2
+        echo "  Log: $LOG_FILE" >&2
+        exit 1
+      fi
+      if echo "$stage" | jq -e '.sessionResume == true' >/dev/null 2>&1; then
+        _session_resume_cli=(--cli-resume)
+      else
+        _session_resume_cli=(--no-cli-resume)
+      fi
+    fi
 
     # Parse artifacts from JSON array
     EXPECTED_ARTIFACT_PATHS=()
@@ -446,10 +515,14 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
 
   if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
+    _dry_sr=""
+    if ((${#_session_resume_cli[@]} > 0)); then
+      _dry_sr=" ${_session_resume_cli[*]}"
+    fi
     if [[ "$agent_source" == "prebuilt" ]]; then
-      echo "DRY RUN step $step_index: $runner_label  --agent $agent --plan $plan_rel"
+      echo "DRY RUN step $step_index: $runner_label --workspace <path> --agent $agent --plan $plan_rel${_dry_sr}"
     else
-      echo "DRY RUN step $step_index: $runner_label  --plan $plan_rel (custom agent: $agent)"
+      echo "DRY RUN step $step_index: $runner_label --workspace <path> --plan $plan_rel${_dry_sr} (custom agent: $agent)"
     fi
     if ((${#EXPECTED_ARTIFACT_PATHS[@]:-0} > 0)); then
       echo "  expected artifacts: ${EXPECTED_ARTIFACT_PATHS[*]}"
@@ -466,20 +539,14 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   _plan_tag_stream="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
   _plan_tag_stream="${_plan_tag_stream//[^A-Za-z0-9_.-]/_}"
-  if [[ "$runtime" == "cursor" ]]; then
-    _runner_stream_log="$RALPH_LOG_DIR/cursor/plan-runner-${_plan_tag_stream}-output.log"
-  elif [[ "$runtime" == "codex" ]]; then
-    _runner_stream_log="$RALPH_LOG_DIR/codex/plan-runner-${_plan_tag_stream}-output.log"
-  else
-    _runner_stream_log="$RALPH_LOG_DIR/claude/plan-runner-${_plan_tag_stream}-output.log"
-  fi
+  _runner_stream_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${_plan_tag_stream}-output.log"
 
   echo "" >&2
   echo -e "${C_DIM}Invoking:${C_RST} $runner_label" >&2
   if [[ "$agent_source" == "prebuilt" ]]; then
-    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --plan <plan> --agent $agent <workspace>" >&2
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --workspace <path> --plan <plan> --agent $agent" >&2
   else
-    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --plan <plan> <workspace>" >&2
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --workspace <path> --plan <plan>" >&2
   fi
   echo -e "${C_DIM}  orchestrator log (append):${C_RST} $LOG_FILE" >&2
   echo -e "${C_DIM}  per-plan agent output log:${C_RST} $_runner_stream_log" >&2
@@ -500,7 +567,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       _runner_env+=(CLAUDE_PLAN_MODEL="$stage_model")
     fi
   fi
-  _runner_args=(--non-interactive --runtime "$runtime" --plan "$plan_abs")
+  _runner_args=(--non-interactive --runtime "$runtime" --workspace "$WORKSPACE" --plan "$plan_abs")
+  if ((${#_session_resume_cli[@]} > 0)); then
+    _runner_args+=("${_session_resume_cli[@]}")
+  fi
   if [[ "$agent_source" == "prebuilt" ]]; then
     _runner_args+=(--agent "$agent")
   elif [[ -z "$stage_model" ]]; then
@@ -511,10 +581,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     exit 1
   fi
   if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] && [[ -t 1 ]] && command -v tee >/dev/null 2>&1; then
-    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" "$WORKSPACE" 2>&1 | tee -a "$LOG_FILE"
+    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" 2>&1 | tee -a "$LOG_FILE"
     rc=${PIPESTATUS[0]}
   else
-    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" "$WORKSPACE" >>"$LOG_FILE" 2>&1
+    env "${_runner_env[@]}" bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1
     rc=$?
   fi
   set -e
@@ -525,16 +595,8 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   if [[ $rc -ne 0 ]]; then
     plan_tag="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
     plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
-    if [[ "$runtime" == "cursor" ]]; then
-      hint_log="$RALPH_LOG_DIR/cursor/plan-runner-${plan_tag}.log"
-      hint_out="$RALPH_LOG_DIR/cursor/plan-runner-${plan_tag}-output.log"
-    elif [[ "$runtime" == "codex" ]]; then
-      hint_log="$RALPH_LOG_DIR/codex/plan-runner-${plan_tag}.log"
-      hint_out="$RALPH_LOG_DIR/codex/plan-runner-${plan_tag}-output.log"
-    else
-      hint_log="$RALPH_LOG_DIR/claude/plan-runner-${plan_tag}.log"
-      hint_out="$RALPH_LOG_DIR/claude/plan-runner-${plan_tag}-output.log"
-    fi
+    hint_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}.log"
+    hint_out="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log"
 
     log "FAIL step $step_index exit=$rc agent=$agent plan=$plan_abs"
     {
@@ -621,13 +683,13 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       loop_back_stage="$(printf '%s' "$loop_back_stage" | tr -c 'a-z0-9-' '-')"
       loop_back_stage="$(printf '%s' "$loop_back_stage" | sed 's/-\+/-/g; s/^-//; s/-$//')"
       if [[ -n "$stage_id" ]]; then
-        stage_iteration_by_id["$stage_id"]="$loop_iter"
+        orch_stage_iteration_map_set "$stage_id" "$loop_iter"
       fi
       log "step $step_index triggers loop back to $loop_back_stage (iteration $loop_iter)"
       echo -e "${C_Y}Step $step_index completed with feedback loop.${C_RST}"
       echo -e "${C_Y}Looping back to: $loop_back_stage (iteration $loop_iter)${C_RST}"
-      if [[ -n "${stage_index_by_id[$loop_back_stage]:-}" ]]; then
-        idx="${stage_index_by_id[$loop_back_stage]}"
+      if back_idx="$(orch_stage_index_map_get "$loop_back_stage")"; then
+        idx="$back_idx"
         continue
       fi
       log "loop target '$loop_back_stage' not found in stages; continuing forward"

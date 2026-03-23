@@ -67,3 +67,50 @@ count_todos() {
   done < "$plan_path"
   printf '%s %s\n' "$done" "$total"
 }
+
+# 1-based index of the checklist item at plan_path line plan_line (counts both open and done
+# items in file order through that line). The current open TODO line from get_next_todo always matches.
+plan_todo_ordinal_at_line() {
+  local plan_path="$1"
+  local plan_line="$2"
+  awk -v ln="$plan_line" '
+    NR > ln { exit }
+    /^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]*/ { c++; next }
+    /^[[:space:]]*-[[:space:]]+\[x\][[:space:]]/ { c++; next }
+    END { print c + 0 }
+  ' "$plan_path"
+}
+
+# True when TODO wording means the operator should be consulted via the runner (pending-human),
+# not only via assistant chat (which the runner does not treat as blocking).
+plan_todo_implies_operator_dialog() {
+  local t="$1"
+  # "Tell the user ..." is usually a one-way message via assistant output; do not require a gate.
+  [[ "$t" =~ [Aa]sk[[:space:]]+the[[:space:]]+user ]] && return 0
+  return 1
+}
+
+# Reopen the checklist item at 1-based plan_line (change [x] to [ ]). Returns 0 if a line was changed.
+plan_reopen_todo_at_line() {
+  local plan_path="$1"
+  local plan_line="$2"
+  local tmp line_nr=0 changed=0 line
+
+  [[ -f "$plan_path" ]] || return 1
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-plan-reopen.XXXXXX")" || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_nr=$((line_nr + 1))
+    if (( line_nr == plan_line )) && [[ "$line" =~ ^([[:space:]]*-[[:space:]]+)\[[xX]\]([[:space:]]*)(.*)$ ]]; then
+      printf '%s[ ]%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" >>"$tmp"
+      changed=1
+    else
+      printf '%s\n' "$line" >>"$tmp"
+    fi
+  done <"$plan_path"
+  if (( changed == 0 )); then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$plan_path"
+  return 0
+}

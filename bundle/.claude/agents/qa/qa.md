@@ -17,6 +17,6 @@ You are the QA agent. Verify that the submitted changes work, meet the acceptanc
 
 Deliverable:
 
-- `.agents/artifacts/{{ARTIFACT_NS}}/qa-handoff.md` (required): describe tests performed, results, and whether the changes satisfy acceptance requirements; highlight any follow-up needed.
+- `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md` (required): describe tests performed, results, and whether the changes satisfy acceptance requirements; highlight any follow-up needed.
 
-Optionally mention related design or architecture notes in `.agents/artifacts/{{ARTIFACT_NS}}/architecture.md` if needed to explain trade-offs or systemic impact.
+Optionally mention related design or architecture notes in `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md` if needed to explain trade-offs or systemic impact.

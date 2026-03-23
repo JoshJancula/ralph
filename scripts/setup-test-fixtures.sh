@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-mkdir -p .agents/artifacts/dashboard
-mkdir -p .agents/logs
+mkdir -p .ralph-workspace/artifacts/dashboard
+mkdir -p .ralph-workspace/logs
 
 cat > dashboard.orch.json << 'EOF'
 {
@@ -20,14 +20,14 @@ cat > dashboard.orch.json << 'EOF'
       "inputArtifacts": [],
       "outputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true,
           "description": "Research and requirements for the dashboard."
         }
       ],
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true
         }
       ]
@@ -40,19 +40,19 @@ cat > dashboard.orch.json << 'EOF'
       "plan": "docs/orchestration-plans/dashboard-02-implementation.plan.md",
       "inputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md"
         }
       ],
       "outputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
           "required": true,
           "description": "Implementation handoff: what was built, paths, how to run and verify."
         }
       ],
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
           "required": true
         }
       ]
@@ -65,22 +65,22 @@ cat > dashboard.orch.json << 'EOF'
       "plan": "docs/orchestration-plans/dashboard-03-review.plan.md",
       "inputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md"
         },
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md"
         }
       ],
       "outputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
           "required": true,
           "description": "Code review vs requirements and implementation handoff."
         }
       ],
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
           "required": true
         }
       ]
@@ -90,17 +90,17 @@ cat > dashboard.orch.json << 'EOF'
 EOF
 
 
-cat > .agents/artifacts/dashboard/research.md << 'EOF'
+cat > .ralph-workspace/artifacts/dashboard/research.md << 'EOF'
 # Research Output
 Placeholder research artifact.
 EOF
 
-cat > .agents/artifacts/dashboard/implementation-handoff.md << 'EOF'
+cat > .ralph-workspace/artifacts/dashboard/implementation-handoff.md << 'EOF'
 # Implementation Handoff
 Placeholder implementation artifact.
 EOF
 
-cat > .agents/artifacts/dashboard/code-review.md << 'EOF'
+cat > .ralph-workspace/artifacts/dashboard/code-review.md << 'EOF'
 # Code Review Output
 Placeholder code review artifact.
 EOF

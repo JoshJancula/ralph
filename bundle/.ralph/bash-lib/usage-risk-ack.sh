@@ -13,14 +13,14 @@ RALPH_USAGE_RISK_ACK_VERSION=1
 ralph_usage_risk_ack_init_colors() {
   UR_C_R="" UR_C_Y="" UR_C_G="" UR_C_C="" UR_C_B="" UR_C_DIM="" UR_C_BOLD="" UR_C_RST=""
   if [[ -t 2 ]] && [[ -z "${NO_COLOR:-}" ]] && [[ "${RALPH_PLAN_NO_COLOR:-${CURSOR_PLAN_NO_COLOR:-0}}" != "1" ]]; then
-    UR_C_R="\033[31m"
-    UR_C_Y="\033[33m"
-    UR_C_G="\033[32m"
-    UR_C_C="\033[36m"
-    UR_C_B="\033[34m"
-    UR_C_DIM="\033[2m"
-    UR_C_BOLD="\033[1m"
-    UR_C_RST="\033[0m"
+    UR_C_R=$'\033[31m'
+    UR_C_Y=$'\033[33m'
+    UR_C_G=$'\033[32m'
+    UR_C_C=$'\033[36m'
+    UR_C_B=$'\033[34m'
+    UR_C_DIM=$'\033[2m'
+    UR_C_BOLD=$'\033[1m'
+    UR_C_RST=$'\033[0m'
   fi
 }
 

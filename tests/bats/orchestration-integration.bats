@@ -9,7 +9,7 @@ setup() {
 
 teardown() {
   # Clean up test logs
-  rm -f "$WORKSPACE/.agents/logs/orchestrator-test-*.log" 2>/dev/null || true
+  rm -f "$WORKSPACE/.ralph-workspace/logs/orchestrator-test-*.log" 2>/dev/null || true
   rm -f "$WORKSPACE/dashboard.orch.json" 2>/dev/null || true
 }
 

@@ -23,4 +23,6 @@ After installing, verify `which bats` points to the expected binary and `bats --
 bats tests/bats/*.bats
 ```
 
-This command runs every spec in the `tests/bats` directory (including `tests/bats/smoke.bats`). Stub tests are acceptable until the bash helpers are refactored into libraries. 
+This command runs every spec in the `tests/bats` directory (including `tests/bats/smoke.bats`). Stub tests are acceptable until the bash helpers are refactored into libraries.
+
+For operator-only runtime smoke tests that reach out to `cursor`, `claude`, or `codex`, see `tests/bats/local/README.md`. Those specs live under `tests/bats/local/` and are not executed by the default GitHub Actions harness.

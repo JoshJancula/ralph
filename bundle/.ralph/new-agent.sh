@@ -131,7 +131,7 @@ write_cursor_agent() {
   "skills": [".cursor/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
       "required": true
     }
   ]
@@ -162,7 +162,7 @@ write_claude_agent() {
   "skills": [".claude/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
       "required": true
     }
   ]
@@ -193,7 +193,7 @@ write_codex_agent() {
   "skills": [".codex/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
       "required": true
     }
   ]
@@ -229,7 +229,7 @@ You are the $AGENT_ID agent. $DESCRIPTION
 When invoked:
 1. Follow the plan or prompt instructions and respect the no-emoji rule defined in .codex/rules/no-emoji.md.
 2. Use the repo-context skill when you need build/test/run information.
-3. Deliver the primary output to .agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md as specified by the orchestrator plan.
+3. Deliver the primary output to .ralph-workspace/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md as specified by the orchestrator plan.
 Do not use emojis in any output.
 """
 EOF

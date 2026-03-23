@@ -25,16 +25,16 @@ generate_orch() {
       "id": "stage-one",
       "runtime": "cursor",
       "agent": "architect",
-      "plan": ".agents/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
       "artifacts": [
         {
-          "path": ".agents/artifacts/schema-test/stage-one.md",
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.md",
           "required": true
         }
       ],
       "inputArtifacts": [
         {
-          "path": ".agents/artifacts/schema-test/seed.md"
+          "path": ".ralph-workspace/artifacts/schema-test/seed.md"
         }
       ],
       "loopControl": {
@@ -70,10 +70,10 @@ EOF
       "id": "stage-two",
       "runtime": "cursor",
       "agent": "research",
-      "plan": ".agents/orchestration-plans/schema-test/schema-test-02-stage-two.plan.md",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-02-stage-two.plan.md",
       "artifacts": [
         {
-          "path": ".agents/artifacts/schema-test/stage-two.md"
+          "path": ".ralph-workspace/artifacts/schema-test/stage-two.md"
         }
       ],
       "inputFromStages": [

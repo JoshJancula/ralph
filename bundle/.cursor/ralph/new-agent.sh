@@ -137,7 +137,7 @@ cat <<EOF >"$AGENT_DIR/config.json"
   "skills": [],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$AGENT_ID.md",
       "required": true
     }
   ]

@@ -44,7 +44,8 @@ ralph_menu_select() {
   fi
 
   local raw
-  read -r -p "$prompt [${default_idx}]: " raw </dev/tty 2>/dev/null || raw=""
+  printf '%s' "${C_Y:-}${C_BOLD:-}${prompt}${C_RST:-} ${C_DIM:-}[${default_idx}]${C_RST:-}: " >&2
+  read -r raw </dev/tty 2>/dev/null || raw=""
   raw="${raw:-$default_idx}"
 
   if ! [[ "$raw" =~ ^[0-9]+$ ]]; then
