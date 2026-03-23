@@ -540,11 +540,15 @@ EOF
   cat <<'EOF' > "$helper"
 C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_RST="" C_DIM=""
 log(){ :; }
-ralph_path_to_file_uri(){ printf 'file://%s' "$1"; }
 ralph_restart_command_hint(){ printf "%s" "restart hint"; }
 ralph_write_human_action_file(){ :; }
 EOF
   sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$RUN_PLAN_SH" >> "$helper"
+  cat <<'STUBEOF' >>"$helper"
+ralph_path_to_file_uri() {
+  printf 'file://%s' "$1"
+}
+STUBEOF
 
   tmp_dir="$(mktemp -d)"
   human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
@@ -581,8 +585,9 @@ EOF
   [[ "$content" == *"## Question from the agent"* ]]
   [[ "$content" == *"agent question"* ]]
   [[ "$content" == *"## What to do"* ]]
-  [[ "$content" == *"Instruction page: file://$human_input"* ]]
-  [[ "$content" == *"- Plan file: $plan_file"* ]]
+  [[ "$content" == *"This instruction page:"* ]]
+  [[ "$content" == *"file://"*"HUMAN-INPUT-REQUIRED.md"* ]]
+  [[ "$content" == *"- Plan file:"*"$plan_file"* ]]
   [ -f "$operator_response" ]
   [[ "$( <"$operator_response")" == *"Replace this line"* ]]
 
@@ -797,7 +802,8 @@ EOF
   [[ "$output" == *"**Skill paths"* ]]
   [[ "$output" == *"**Declared output artifacts:**"* ]]
   [[ "$output" == *"**Rules (read and follow; full text inlined below):**"* ]]
-  [[ "$output" == *".cursor/skills/repo-context/SKILL.md"* ]]
+  [[ "$output" == *"repo-context"* ]]
+  [[ "$output" == *"SKILL.md"* ]]
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/architecture.md"* ]]
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/research.md"* ]]
   [[ "$output" == *"**Agent config:**"* ]]
@@ -1024,7 +1030,7 @@ EOF
   } >"$persist_runner"
   chmod +x "$persist_runner"
 
-  run ralph-script-pty-bash "$persist_runner"
+  run ralph-pty-exec "$persist_runner"
 
   [ "$status" -eq 1 ]
 

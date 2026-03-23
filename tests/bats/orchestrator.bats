@@ -148,9 +148,7 @@ HUM_ORCH
   cat <<'BAD' > "$bad_orch"
 {
 BAD
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$bad_orch" "$workspace"
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$bad_orch" "$workspace" 2>&1
   [ "$status" -ne 0 ] \
     && [[ "$output" == *"Orchestrator parse error: invalid JSON"* ]] \
     || return 1
@@ -162,9 +160,7 @@ BAD
   workspace="$(setup_orchestrator_workspace)"
   local orch_file
   orch_file="$(create_dry_run_orchestration "$workspace")"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] \
     && [[ "$output" == *"DRY RUN step 1: .ralph/run-plan.sh (runtime=cursor)"* ]] \
     && [[ "$output" == *"--agent dry-runner --plan stages/dry-plan.md"* ]] \
@@ -200,9 +196,7 @@ BAD
 RESUME
   write_plan_file "$workspace" "stages/resume.plan.md"
   write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-resume/resume-output.md"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] \
     && [[ "$output" == *"--cli-resume"* ]] \
     && [[ "$output" != *"--no-cli-resume"* ]] \
@@ -231,9 +225,7 @@ RESUME
 }
 BAD
   write_plan_file "$workspace" "stages/invalid-session.plan.md"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   local output_lc
   output_lc="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
   [ "$status" -ne 0 ] \
@@ -248,9 +240,7 @@ BAD
   workspace="$(setup_orchestrator_workspace)"
   local orch_file
   orch_file="$(create_loop_orchestration "$workspace")"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] \
     && [[ "$output" == *"Step 2 completed with feedback loop"* ]] \
     && [[ "$output" == *"Looping back to: start (iteration 2)"* ]] \
@@ -263,18 +253,14 @@ BAD
   workspace="$(setup_orchestrator_workspace)"
   local orch_file
   orch_file="$(create_human_ack_orchestration "$workspace")"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 3 ] \
     && [[ "$output" == *"Human acknowledgment required"* ]] \
     || return 1
   local ack_file="$workspace/.ralph-workspace/artifacts/bats-human-ack/human-ack.txt"
   mkdir -p "$(dirname "$ack_file")"
   : >"$ack_file"
-  run env REPO_ROOT="$REPO_ROOT" bash -c 'exec 2>&1
-    env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$1" "$2"
-  ' _ "$orch_file" "$workspace"
+  run env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || return 1
   rm -rf "$workspace"
 }
