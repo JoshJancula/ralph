@@ -6,11 +6,11 @@
   "skills": [".claude/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/qa-handoff.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md",
       "required": true
     },
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
       "required": false
     }
   ]

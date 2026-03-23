@@ -16,7 +16,7 @@ Every agent in this directory currently serves two runtimes. The existing `confi
 | Constraints | `rules` | frontmatter `rules` array |
 | Skill references | `skills` | frontmatter `skills` array |
 | Allowed tooling | `allowed_tools` (Claude headless) | `tools` |
-| Artifacts | `output_artifacts` | body instructions referencing `.agents/artifacts/{{ARTIFACT_NS}}/...` |
+| Artifacts | `output_artifacts` | body instructions referencing `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/...` |
 
 When touching any of the shared values above, update both the JSON and the Markdown files so Ralph and Claude Code stay aligned.
 
@@ -130,7 +130,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
   "skills": [".claude/skills/repo-context/SKILL.md"],
   "allowed_tools": "Bash,Read,Edit,Write,Grep,Glob",
   "output_artifacts": [
-    { "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": true }
+    { "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": true }
   ]
 }
 ```

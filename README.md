@@ -12,7 +12,7 @@ For detailed breakdowns (human-in-the-loop behavior, MCP, security, worked examp
 | **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. |
 | **Orchestrator** | Optional multi-stage pipelines with checks between steps. |
 
-While plans run, logs and generated files usually land under **`.agents/logs/`** and **`.agents/artifacts/`**. The optional **ralph-dashboard** app (Python 3) gives you a simple local UI over plans and logs.
+While plans run, logs and generated files usually land under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional **ralph-dashboard** app (Python 3) gives you a simple local UI over plans and logs.
 
 ## What gets installed
 
@@ -92,7 +92,7 @@ You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`*
 python3 ralph-dashboard/server.py
 ```
 
-By default the UI is at **http://127.0.0.1:8123**. It reads **`.agents/orchestration-plans`**, **`.agents/artifacts`**, and **`.agents/logs`** next to your repo root.
+By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
 
 ## Run a plan (typical commands)
 
@@ -104,7 +104,7 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.agents/orchestra
 
 ### When the runner needs you
 
-**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input via **`.ralph/orchestrator.sh --human-ack`** (or **`RALPH_HUMAN_ACK_TOOL`**). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
+**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input through a helper script configured via **`RALPH_HUMAN_ACK_TOOL`** (the orchestrator script itself does not provide `--human-ack`). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
 ### CLI session resume
 
@@ -135,7 +135,7 @@ In CI or isolated environments where you trust there will not be session mix-ups
 ### Orchestration (multi-stage)
 
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/my-feature/my-feature.orch.json
+.ralph/orchestrator.sh --orchestration .ralph-workspace/orchestration-plans/my-feature/my-feature.orch.json
 ```
 
 You can pass the **`.orch.json`** path as the first argument with no flag; details are in the header of **`.ralph/orchestrator.sh`** (see [bundle copy](bundle/.ralph/orchestrator.sh) on GitHub). To scaffold a pipeline, run **`.ralph/orchestration-wizard.sh`**.
@@ -164,7 +164,7 @@ Details: [MCP.md](docs/MCP.md).
 
 ## Be Safe
 
-Ralph can run **many** agent turns in a row. That is powerful and risky: bad prompts or bugs can change files, run shell commands, or expose what is on disk. Use it when you understand that tradeoff. **[Security](docs/SECURITY.md)** explains what is actually sandboxed, what is not, and how to harden your workspace.
+Ralph can run **many** agent turns in a row, repeatedly without human intervention. That is powerful and risky: bad prompts or bugs can change files, run shell commands, or expose what is on disk. Use it when you understand that tradeoff. **[Security](docs/SECURITY.md)** explains what is actually sandboxed, what is not, and how to harden your workspace.
 
 ## Monitor your token usage
 

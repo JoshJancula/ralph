@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 # Test orchestration plan path resolution with subdirectories
-# Verifies that .agents/orchestration-plans/<namespace>/<files> structure is correctly parsed
+# Verifies that .ralph-workspace/orchestration-plans/<namespace>/<files> structure is correctly parsed
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 source "$RALPH_LIB_ROOT/orchestrator-lib.sh"
@@ -47,9 +47,9 @@ setup() {
   fi
 }
 
-@test "no orphaned orchestration files at .agents level" {
-  # Verify old files are not in .agents (they're now at the root and in docs/)
-  [[ ! -f ".agents/orchestration-plans/dashboard.orch.json" ]] || true
+@test "no orphaned orchestration files at .ralph-workspace level" {
+  # Verify old files are not in .ralph-workspace (they're now at the root and in docs/)
+  [[ ! -f ".ralph-workspace/orchestration-plans/dashboard.orch.json" ]] || true
 }
 
 @test "orchestration template uses namespace placeholders for subdirectories" {
@@ -78,6 +78,6 @@ setup() {
 @test "expand_artifact_tokens works with namespace subdirectory paths" {
   export RALPH_ARTIFACT_NS="my-feature"
   
-  result="$(expand_artifact_tokens ".agents/orchestration-plans/{{ARTIFACT_NS}}/stage-01.plan.md")"
-  [ "$result" = ".agents/orchestration-plans/my-feature/stage-01.plan.md" ]
+  result="$(expand_artifact_tokens ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/stage-01.plan.md")"
+  [ "$result" = ".ralph-workspace/orchestration-plans/my-feature/stage-01.plan.md" ]
 }

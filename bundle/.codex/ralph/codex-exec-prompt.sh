@@ -8,7 +8,7 @@
 ##   CODEX_PLAN_SANDBOX (default: workspace-write)
 ##   CODEX_PLAN_MODEL, CURSOR_PLAN_MODEL
 ##   CODEX_PLAN_EXEC_EXTRA (space-separated extra args before prompt)
-##   CODEX_PLAN_NO_ADD_AGENTS_DIR (default unset): set to 1 to skip --add-dir for .agents/ (plan human files use .ralph-workspace/, not .agents)
+##   CODEX_PLAN_NO_ADD_AGENTS_DIR (default unset): set to 1 to skip --add-dir for .ralph-workspace/ (plan human files use .ralph-workspace/, not .ralph-workspace)
 ##   RALPH_PLAN_CLI_RESUME=1: pass --json so session id can be captured (python in invoke)
 ##   RALPH_RUN_PLAN_RESUME_SESSION_ID: when set, use `codex exec resume <id> ...` instead of one-shot exec
 ##   RALPH_RUN_PLAN_RESUME_BARE=1 with RALPH_PLAN_ALLOW_UNSAFE_RESUME=1: `codex exec resume --last ...` when no id (unsafe locally)
@@ -54,8 +54,8 @@ fi
 if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
   if [[ "${CODEX_PLAN_NO_ADD_AGENTS_DIR:-0}" != "1" ]]; then
     _ws_abs="$(cd "$workspace" && pwd)"
-    mkdir -p "$_ws_abs/.agents"
-    args+=(--add-dir "$_ws_abs/.agents")
+    mkdir -p "$_ws_abs/.ralph-workspace"
+    args+=(--add-dir "$_ws_abs/.ralph-workspace")
   fi
 fi
 

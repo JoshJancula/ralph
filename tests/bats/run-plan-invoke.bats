@@ -282,7 +282,7 @@ EOF
   [[ "$output" == *"--sandbox"* ]]
   [[ "$output" == *"workspace-write"* ]]
   [[ "$output" == *"--add-dir"* ]]
-  [[ "$output" == *"$WORKSPACE/.agents"* ]]
+  [[ "$output" == *"$WORKSPACE/.ralph-workspace"* ]]
   [[ "$output" == *"--model"* ]]
   [[ "$output" == *"codex-model"* ]]
   [[ "$output" == *"--timeout"* ]]

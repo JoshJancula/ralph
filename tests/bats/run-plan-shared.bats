@@ -798,8 +798,8 @@ EOF
   [[ "$output" == *"**Declared output artifacts:**"* ]]
   [[ "$output" == *"**Rules (read and follow; full text inlined below):**"* ]]
   [[ "$output" == *"(none configured)"* ]]
-  [[ "$output" == *".agents/artifacts/PLAN/architecture.md"* ]]
-  [[ "$output" == *".agents/artifacts/PLAN/research.md"* ]]
+  [[ "$output" == *".ralph-workspace/artifacts/PLAN/architecture.md"* ]]
+  [[ "$output" == *".ralph-workspace/artifacts/PLAN/research.md"* ]]
   [[ "$output" == *"**Agent config:**"* ]]
 }
 
@@ -837,7 +837,7 @@ EOF
   python3 - <<'PY' > "$prompt_funcs"
 with open("bundle/.ralph/run-plan.sh") as f:
     for idx, line in enumerate(f, 1):
-        if 472 <= idx <= 608:
+        if 602 <= idx <= 643:
             print(line, end="")
 PY
 

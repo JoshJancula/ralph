@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
-source "$BATS_TEST_DIRNAME/../../.cursor/ralph/bash-lib/human-interaction.sh"
+source "$BATS_TEST_DIRNAME/../../.ralph/bash-lib/human-interaction.sh"
 
 setup() {
   TTY_HUMAN_HISTORY=""
@@ -17,26 +17,24 @@ setup() {
   [[ "$output" == *"Answer in-line."* ]]
 }
 
-@test "human ack helper falls back to orchestrator script" {
-  local tmpdir orchestrator
+@test "human ack helper uses the configured tool" {
+  local tmpdir tool
   tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/.ralph"
-  orchestrator="$tmpdir/.ralph/orchestrator.sh"
-  cat <<'EOF' >"$orchestrator"
+  tool="$tmpdir/ack-tool.sh"
+  cat <<'EOF' >"$tool"
 #!/usr/bin/env bash
-printf 'ok'
+printf 'ready'
 EOF
-  chmod +x "$orchestrator"
+  chmod +x "$tool"
 
-  WORKSPACE="$tmpdir"
-  RALPH_ORCH_FILE="dummy"
+  unset RALPH_HUMAN_ACK_TOOL
+  export RALPH_HUMAN_ACK_TOOL="$tool"
 
   run ralph_human_ack_tool_path
   [ "$status" -eq 0 ]
-  [ "$output" = "$orchestrator" ]
+  [ "$output" = "$tool" ]
 
-  unset WORKSPACE
-  unset RALPH_ORCH_FILE
+  unset RALPH_HUMAN_ACK_TOOL
   rm -rf "$tmpdir"
 }
 

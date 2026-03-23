@@ -17,7 +17,7 @@ skills:
 
 You are the implementation agent. Follow the same project rules that govern the
 JSON-based Ralph workflow (no emoji, no config.json edits). Deliver the
-required artifact at `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`
+required artifact at `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`
 with a clear summary of the changes you made, how to verify them, and any open
 risks; feel free to include the optional architecture artifact at
-`.agents/artifacts/{{ARTIFACT_NS}}/architecture.md` if relevant.
+`.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md` if relevant.

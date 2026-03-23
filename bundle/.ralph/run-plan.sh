@@ -38,18 +38,41 @@
 #
 # Usage:
 #   .ralph/run-plan.sh --runtime cursor --plan PLAN.md
-#   .ralph/run-plan.sh --runtime claude --plan PLAN.md /path/repo
+#   .ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace /path/repo
 #   .ralph/run-plan.sh --runtime codex --plan OTHER.md
-#   .ralph/run-plan.sh --runtime cursor --plan docs/plan.md /path/repo
+#   .ralph/run-plan.sh --runtime cursor --plan docs/plan.md --workspace /path/repo
 #   .ralph/run-plan.sh --runtime cursor --plan PLAN.md --agent research
 #   .ralph/run-plan.sh --runtime cursor --select-agent --plan PLAN.md
 #   .ralph/run-plan.sh --runtime claude --non-interactive --agent research --plan PLAN.md
 #   .ralph/run-plan.sh --runtime cursor --model gpt-5 --plan PLAN.md
 #   .ralph/run-plan.sh --runtime cursor --plan PLAN.md --agent research --model other-id
 #   (--no-interactive is an alias for --non-interactive; no model menu when agent/config/--model supplies model)
+#   Use --workspace <path> instead of a positional workspace argument.
 # Non-interactive mode:
 
 set -euo pipefail
+
+# Print usage/help text summarizing the required flags.
+print_usage() {
+  cat <<'EOF'
+Usage: .ralph/run-plan.sh --runtime <cursor|claude|codex> --plan <path> --workspace <path> [OPTIONS]
+
+Required:
+  --runtime <cursor|claude|codex>      CLI runtime to invoke.
+  --plan <path>                        Path to the plan file relative to the workspace.
+  --workspace <path>                   Absolute or relative path to the repo workspace.
+
+Common options:
+  --agent <name>                       Prebuilt agent directory under .<runtime>/agents/.
+  --select-agent                       Pick a prebuilt agent interactively.
+  --non-interactive / --no-interactive  Skip interactive prompts.
+  --model <id>                         CLI model id (overrides agent default).
+  --cli-resume / --no-cli-resume       Enable/disable CLI resume prompts.
+  --allow-unsafe-resume                Allow bare CLI resume without session id.
+  --resume <id>                        Force a CLI session id for this run.
+  --help                               Show this message.
+EOF
+}
 
 # On macOS, re-exec under caffeinate so the system does not sleep during the plan run.
 # Guard variables are normalized so we only re-exec once per invocation.
@@ -167,9 +190,13 @@ CLAUDE_TOOLS_FROM_AGENT=""
 _RALPH_CLI_RESUME_ENV_WAS_SET=0
 [[ "${RALPH_PLAN_CLI_RESUME+x}" == x ]] && _RALPH_CLI_RESUME_ENV_WAS_SET=1
 
-# Parse arguments: --plan, --model, --agent, --select-agent, --non-interactive, optional workspace positional
+# Parse arguments: --plan, --model, --agent, --select-agent, --non-interactive, explicit --workspace
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --help)
+      print_usage
+      exit 0
+      ;;
     --runtime)
       if [[ -z "${2:-}" ]]; then
         echo "Error: --runtime requires an argument (cursor, claude, or codex)." >&2
@@ -238,9 +265,17 @@ while [[ $# -gt 0 ]]; do
       RESUME_SESSION_ID_OVERRIDE="$2"
       shift 2
       ;;
+    --workspace)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --workspace requires a workspace path." >&2
+        exit 1
+      fi
+      WORKSPACE="$2"
+      shift 2
+      ;;
     *)
-      WORKSPACE="$1"
-      shift
+      echo "Error: unknown argument $1" >&2
+      exit 1
       ;;
   esac
 done
@@ -610,7 +645,7 @@ prompt_agent_source_mode() {
 PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
 
 # Per-plan logs and session files under .ralph-workspace/ (override with RALPH_PLAN_WORKSPACE_ROOT).
-# Keeps agent-writable paths (pending-human.txt, etc.) out of .agents, which some CLIs sandbox or restrict.
+# Keeps agent-writable paths (pending-human.txt, etc.) out of .ralph-workspace, which some CLIs sandbox or restrict.
 PLAN_LOG_NAME="$(plan_log_basename "$PLAN_PATH")"
 export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-$PLAN_LOG_NAME}"
 export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-$RALPH_PLAN_KEY}"
@@ -691,7 +726,7 @@ OPERATOR_RESPONSE_FILE="$RALPH_SESSION_DIR/operator-response.txt"
 HUMAN_INPUT_MD="$RALPH_SESSION_DIR/HUMAN-INPUT-REQUIRED.md"
 PENDING_ABS="$PENDING_HUMAN"
 
-_legacy_plan_sess="$WORKSPACE/.agents/sessions/${RALPH_PLAN_KEY}"
+_legacy_plan_sess="$WORKSPACE/.ralph-workspace/sessions/${RALPH_PLAN_KEY}"
 if [[ -d "$_legacy_plan_sess" ]]; then
   if [[ ! -s "$SESSION_ID_FILE" && -s "$_legacy_plan_sess/session-id.txt" ]]; then
     cp "$_legacy_plan_sess/session-id.txt" "$SESSION_ID_FILE"
@@ -701,7 +736,7 @@ if [[ -d "$_legacy_plan_sess" ]]; then
   for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md; do
     if [[ ! -e "$RALPH_SESSION_DIR/$_mig_f" && -e "$_legacy_plan_sess/$_mig_f" ]]; then
       cp -a "$_legacy_plan_sess/$_mig_f" "$RALPH_SESSION_DIR/$_mig_f"
-      log "Migrated $_mig_f from legacy .agents session dir"
+      log "Migrated $_mig_f from legacy .ralph-workspace session dir"
     fi
   done
 fi

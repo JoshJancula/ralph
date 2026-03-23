@@ -6,7 +6,7 @@
   "skills": [".codex/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
       "required": true
     }
   ]

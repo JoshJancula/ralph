@@ -6,7 +6,7 @@
   "skills": [".cursor/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/code-review.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
       "required": true
     }
   ]

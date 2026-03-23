@@ -12,11 +12,11 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   [ -f dashboard.orch.json ]
   [[ "$(cat dashboard.orch.json)" == *"\"name\": \"dashboard-three-runtime\""* ]]
 
-  [ -d .agents/artifacts/dashboard ]
-  [ -f .agents/artifacts/dashboard/research.md ]
-  [[ "$(cat .agents/artifacts/dashboard/research.md)" == *"Research Output"* ]]
-  [[ "$(cat .agents/artifacts/dashboard/implementation-handoff.md)" == *"Implementation Handoff"* ]]
-  [[ "$(cat .agents/artifacts/dashboard/code-review.md)" == *"Code Review Output"* ]]
+  [ -d .ralph-workspace/artifacts/dashboard ]
+  [ -f .ralph-workspace/artifacts/dashboard/research.md ]
+  [[ "$(cat .ralph-workspace/artifacts/dashboard/research.md)" == *"Research Output"* ]]
+  [[ "$(cat .ralph-workspace/artifacts/dashboard/implementation-handoff.md)" == *"Implementation Handoff"* ]]
+  [[ "$(cat .ralph-workspace/artifacts/dashboard/code-review.md)" == *"Code Review Output"* ]]
 
   popd >/dev/null
   rm -rf "$workspace"

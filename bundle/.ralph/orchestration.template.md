@@ -12,9 +12,9 @@ adjust the stage plan paths to point to your docs (e.g., `docs/orchestration-pla
 .ralph/orchestrator.sh my-feature.orch.json
 ```
 
-See `.agents/artifacts/README.md` for the required sections inside each handoff
+See `.ralph-workspace/artifacts/README.md` for the required sections inside each handoff
 file. Stage plans should be kept in version control (e.g., under `docs/orchestration-plans/`)
-since `.agents/` is git-ignored and only contains generated outputs.
+since `.ralph-workspace/` is git-ignored and only contains generated outputs.
 
 ---
 
@@ -26,9 +26,9 @@ continue without guessing.
 
 | Order | Agent ID (`config.json` folder) | After this step, expect |
 |-------|----------------------------------|-------------------------|
-| 1 | `research` | `.agents/artifacts/{{ARTIFACT_NS}}/research.md` |
-| 2 | `architect` | `.agents/artifacts/{{ARTIFACT_NS}}/architecture.md` |
-| 3 | `implementation` | `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md` |
+| 1 | `research` | `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md` |
+| 2 | `architect` | `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md` |
+| 3 | `implementation` | `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md` |
 
 Deliverables are enforced when you list them on the orchestration line or when
 the agent `config.json` declares `output_artifacts`. Paths are repo-relative
@@ -54,12 +54,12 @@ small plan per stage, for example under `docs/orchestration-plans/` so plans sta
 Each stage plan should tell the agent exactly one slice of work and mention the
 handoff file to write:
 
-1. **Research stage** – deliver `.agents/artifacts/{{ARTIFACT_NS}}/research.md`
+1. **Research stage** – deliver `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md`
    with summary, findings, decisions, and next steps.
 2. **Architect stage** – read the research artifact; deliver
-   `.agents/artifacts/{{ARTIFACT_NS}}/architecture.md`.
+   `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md`.
 3. **Implementation stage** – read the architecture artifact; deliver code plus
-   `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
+   `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
 
 ---
 
@@ -79,7 +79,7 @@ JSON example (see `dashboard.orch.json` at the repository root as a complete exa
       "plan": "docs/orchestration-plans/my-feature-01-research.plan.md",
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true
         }
       ]
@@ -94,5 +94,5 @@ JSON example (see `dashboard.orch.json` at the repository root as a complete exa
 
 - [ ] Each stage plan exists and contains checkable TODOs (`- [ ]`).
 - [ ] Agent IDs match directories under `.cursor/agents/`, `.claude/agents/`, or `.codex/agents/`.
-- [ ] Deliverables line up with `.agents/artifacts/README.md`.
+- [ ] Deliverables line up with `.ralph-workspace/artifacts/README.md`.
 - [ ] Run from the repository root so repo-relative paths resolve.

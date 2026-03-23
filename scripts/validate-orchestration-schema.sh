@@ -32,13 +32,19 @@ schema_filter='
       )
     );
 
+  def session_resume_ok:
+    ((.sessionResume? // null) as $sr |
+      ($sr == null) or ($sr | type == "boolean")
+    );
+
   def stage_ok:
     has("id") and has("runtime") and has("agent") and has("plan") and
     (.artifacts | artifacts_ok) and
     ((.inputArtifacts? // []) | artifacts_ok) and
     ((.outputArtifacts? // []) | artifacts_ok) and
     (has("inputFromStages") | not) and
-    loop_control_ok;
+    loop_control_ok and
+    session_resume_ok;
 
   type == "object" and
   has("name") and has("namespace") and

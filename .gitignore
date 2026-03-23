@@ -1,6 +1,6 @@
 .DS_Store
 *.log
-.agents
+.ralph-workspace
 .ralph-workspace
 /.cursor
 /.claude
@@ -9,3 +9,4 @@
 /PLAN.md
 /HUMAN_ACTION_REQUIRED.md
 ralph-dashboard/__pycache__/
+/dashboard.orch.json

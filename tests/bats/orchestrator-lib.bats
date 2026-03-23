@@ -49,8 +49,8 @@ setup() {
 
 @test "expand_artifact_tokens honors namespace" {
   export RALPH_ARTIFACT_NS="custom-ns"
-  result="$(expand_artifact_tokens ".agents/{{ARTIFACT_NS}}/out.md")"
-  [ "$result" = ".agents/custom-ns/out.md" ]
+  result="$(expand_artifact_tokens ".ralph-workspace/{{ARTIFACT_NS}}/out.md")"
+  [ "$result" = ".ralph-workspace/custom-ns/out.md" ]
 }
 
 @test "parse_artifact_csv trims entries and resets state" {

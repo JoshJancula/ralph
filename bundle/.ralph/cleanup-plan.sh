@@ -4,8 +4,8 @@
 # Usage:
 #   .ralph/cleanup-plan.sh <artifact-namespace> [workspace]
 #     Removes `.ralph-workspace/logs/<namespace>/plan-runner-*` files, `.ralph-workspace/sessions/<namespace>/`,
-#     legacy `.agents/logs/<namespace>/` plan-runner files if present, legacy `.agents/sessions/<namespace>/` if present,
-#     and `.agents/artifacts/<namespace>/`.
+#     legacy `.ralph-workspace/logs/<namespace>/` plan-runner files if present, legacy `.ralph-workspace/sessions/<namespace>/` if present,
+#     and `.ralph-workspace/artifacts/<namespace>/`.
 #     Defaults to `$RALPH_ARTIFACT_NS` if the namespace argument is empty.
 set -euo pipefail
 

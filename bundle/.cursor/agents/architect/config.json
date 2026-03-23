@@ -6,11 +6,11 @@
   "skills": [".cursor/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
       "required": true
     },
     {
-      "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
       "required": false
     }
   ]

@@ -58,7 +58,7 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
 @test "artifact path builder composes namespace directory" {
   run cleanup_plan_artifact_dir "/tmp/ws" "alpha"
   [ "$status" -eq 0 ]
-  [ "$output" = "/tmp/ws/.agents/artifacts/alpha" ]
+  [ "$output" = "/tmp/ws/.ralph-workspace/artifacts/alpha" ]
 }
 
 @test "log cleanup removes matching files and reports" {
@@ -104,10 +104,10 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
   namespace="wrapper"
 
   log_dir="$workspace/.ralph-workspace/logs/$namespace"
-  legacy_log_dir="$workspace/.agents/logs/$namespace"
+  legacy_log_dir="$workspace/.ralph-workspace/logs/$namespace"
   session_dir="$workspace/.ralph-workspace/sessions/$namespace"
-  legacy_session_dir="$workspace/.agents/sessions/$namespace"
-  artifact_dir="$workspace/.agents/artifacts/$namespace"
+  legacy_session_dir="$workspace/.ralph-workspace/sessions/$namespace"
+  artifact_dir="$workspace/.ralph-workspace/artifacts/$namespace"
 
   mkdir -p "$log_dir" "$legacy_log_dir" "$session_dir" "$legacy_session_dir" "$artifact_dir"
   touch "$log_dir/plan-runner-1" "$legacy_log_dir/plan-runner-old" "$artifact_dir/file"

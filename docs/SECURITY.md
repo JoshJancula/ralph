@@ -4,7 +4,7 @@ Ralph drives **Cursor**, **Claude Code**, or **Codex** against a workspace you c
 
 ## Workspace sandboxing (what Ralph does)
 
-**Codex:** Ralph always invokes the Codex CLI through **`.codex/ralph/codex-exec-prompt.sh`**, which runs `codex exec` with **`--sandbox`** (default mode **`workspace-write`**). Override the mode with **`CODEX_PLAN_SANDBOX`** if your CLI supports other values. By default the script also passes **`--add-dir`** for **`.agents/`** so logs, sessions, and human-prompt files stay reachable inside the sandbox. Details: **`.codex/ralph/README.md`** and **`.codex/ralph/codex-exec-prompt.sh`** under your workspace after install.
+**Codex:** Ralph always invokes the Codex CLI through **`.codex/ralph/codex-exec-prompt.sh`**, which runs `codex exec` with **`--sandbox`** (default mode **`workspace-write`**). Override the mode with **`CODEX_PLAN_SANDBOX`** if your CLI supports other values. By default the script also passes **`--add-dir`** for **`.ralph-workspace/`** so logs, sessions, and human-prompt files stay reachable inside the sandbox. Details: **`.codex/ralph/README.md`** and **`.codex/ralph/codex-exec-prompt.sh`** under your workspace after install.
 
 That is **Codex-specific**. It does not stop every way secrets could leave the machine; it is the one path where Ralph wires in the vendor’s sandbox flag for you.
 

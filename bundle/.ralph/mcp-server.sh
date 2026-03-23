@@ -9,6 +9,41 @@ IFS=$'\n'
 
 readonly SCRIPT_NAME="$(basename "$0")"
 
+setup_colors() {
+  if [[ -t 1 ]]; then
+    C_G=$'\033[32m'
+    C_B=$'\033[34m'
+    C_Y=$'\033[33m'
+    C_BOLD=$'\033[1m'
+    C_RST=$'\033[0m'
+  else
+    C_G="" C_B="" C_Y="" C_BOLD="" C_RST=""
+  fi
+}
+
+setup_colors
+
+print_usage() {
+  cat <<EOF
+${C_BOLD}${C_G}Usage:${C_RST} RALPH_MCP_WORKSPACE=<workspace-root> $SCRIPT_NAME
+
+${C_BOLD}Environment variables:${C_RST}
+  ${C_G}RALPH_MCP_WORKSPACE${C_RST}   Required path to the repo workspace the MCP server exposes.
+  ${C_G}RALPH_MCP_ALLOWLIST${C_RST}   Optional comma-separated dirs (relative to workspace) to allow in requests.
+
+${C_BOLD}Options:${C_RST}
+  ${C_G}--help${C_RST}                Show this help message and exit.
+
+${C_BOLD}Dependencies:${C_RST}
+  ${C_Y}jq${C_RST}                     Required for parsing MCP JSON-RPC payloads.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  print_usage
+  exit 0
+fi
+
 log() {
   printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SCRIPT_NAME" "$*" >&2
 }

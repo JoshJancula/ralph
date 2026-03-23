@@ -35,12 +35,12 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 @test "--help and unknown flag exit quickly" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   run /usr/bin/env bash "$RUN_PLAN_SH" --help
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"invalid option"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage:"* ]]
 
   run /usr/bin/env bash "$RUN_PLAN_SH" --invalid-flag
   [ "$status" -ne 0 ]
-  [[ "$output" == *"invalid option"* ]]
+  [[ "$output" == *"unknown argument"* ]]
 }
 
 @test "non-interactive gate includes --model (PLAN_MODEL_CLI)" {

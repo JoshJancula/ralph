@@ -8,17 +8,17 @@ This guide demonstrates building a multi-stage pipeline using `.ralph/orchestrat
 1. Copy `.ralph/plan.template` into stage files:
 
    ```bash
-   mkdir -p .agents/orchestration-plans/feature
-   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-01-research.plan.md
-   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-02-architecture.plan.md
-   cp .ralph/plan.template .agents/orchestration-plans/feature/feature-03-implementation.plan.md
+   mkdir -p .ralph-workspace/orchestration-plans/feature
+   cp .ralph/plan.template .ralph-workspace/orchestration-plans/feature/feature-01-research.plan.md
+   cp .ralph/plan.template .ralph-workspace/orchestration-plans/feature/feature-02-architecture.plan.md
+   cp .ralph/plan.template .ralph-workspace/orchestration-plans/feature/feature-03-implementation.plan.md
    ```
 
 2. Populate each plan:
 
-   - **Research plan** should explore modules, list questions, and point to `.agents/artifacts/{{ARTIFACT_NS}}/research.md`.
-   - **Architecture plan** should describe design decisions, diagrams, and artifact expectations for `.agents/artifacts/{{ARTIFACT_NS}}/architecture.md`.
-   - **Implementation plan** should enumerate files, commands (`npm run lint`, `npm run test`, etc.), and QA verification for `.agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
+   - **Research plan** should explore modules, list questions, and point to `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md`.
+   - **Architecture plan** should describe design decisions, diagrams, and artifact expectations for `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md`.
+   - **Implementation plan** should enumerate files, commands (`npm run lint`, `npm run test`, etc.), and QA verification for `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md`.
 
 3. Every TODO entry needs explicit verification steps and artifact outputs so the orchestrator can validate them per stage.
 
@@ -36,10 +36,10 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "research",
       "runtime": "cursor",
       "agent": "research",
-      "plan": ".agents/orchestration-plans/feature/feature-01-research.plan.md",
+      "plan": ".ralph-workspace/orchestration-plans/feature/feature-01-research.plan.md",
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true
         }
       ]
@@ -48,15 +48,15 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "architecture",
       "runtime": "claude",
       "agent": "architect",
-      "plan": ".agents/orchestration-plans/feature/feature-02-architecture.plan.md",
+      "plan": ".ralph-workspace/orchestration-plans/feature/feature-02-architecture.plan.md",
       "inputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/research.md"
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md"
         }
       ],
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
           "required": true
         }
       ]
@@ -65,15 +65,15 @@ Use `.ralph/orchestration.template.json` as the starting point, then edit:
       "id": "implementation",
       "runtime": "codex",
       "agent": "implementation",
-      "plan": ".agents/orchestration-plans/feature/feature-03-implementation.plan.md",
+      "plan": ".ralph-workspace/orchestration-plans/feature/feature-03-implementation.plan.md",
       "inputArtifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/architecture.md"
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md"
         }
       ],
       "artifacts": [
         {
-          "path": ".agents/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
           "required": true
         }
       ],
@@ -93,20 +93,20 @@ Use these prompts after the wizard scaffolds the files to ask an agent to fill t
 **Stage plan prompt**
 
 ```
-I need a stage plan for [STAGE-TYPE] that lives in `.agents/orchestration-plans/<namespace>/<namespace>-<NN>-<stage>.plan.md`. Base it on `.ralph/plan.template`, break the work into discrete `- [ ]` TODOs, mention the files or modules touched, include validation commands (lint/test/build), and surface the artifact file under `.agents/artifacts/<namespace>/` that you will deliver. The plan should be detailed enough that the orchestrator can run the stage and verify the artifacts automatically.
+I need a stage plan for [STAGE-TYPE] that lives in `.ralph-workspace/orchestration-plans/<namespace>/<namespace>-<NN>-<stage>.plan.md`. Base it on `.ralph/plan.template`, break the work into discrete `- [ ]` TODOs, mention the files or modules touched, include validation commands (lint/test/build), and surface the artifact file under `.ralph-workspace/artifacts/<namespace>/` that you will deliver. The plan should be detailed enough that the orchestrator can run the stage and verify the artifacts automatically.
 ```
 
 **Orchestration spec prompt**
 
 ```
-I am coordinating [FEATURE] across multiple runtimes. Each stage plan already exists under `.agents/orchestration-plans/<namespace>/`. Produce a `.agents/orchestration-plans/<namespace>/<namespace>.orch.json` that wires those plans together in order, sets a runtime (Cursor/Claude/Codex) and agent for each, points to the correct plan paths, lists the required artifact files (research.md, architecture.md, implementation-handoff.md, etc.), and includes `loopControl` when a reviewer should send work back to an earlier stage.
+I am coordinating [FEATURE] across multiple runtimes. Each stage plan already exists under `.ralph-workspace/orchestration-plans/<namespace>/`. Produce a `.ralph-workspace/orchestration-plans/<namespace>/<namespace>.orch.json` that wires those plans together in order, sets a runtime (Cursor/Claude/Codex) and agent for each, points to the correct plan paths, lists the required artifact files (research.md, architecture.md, implementation-handoff.md, etc.), and includes `loopControl` when a reviewer should send work back to an earlier stage.
 ```
 
 Set `runtime` per stage to decide if Cursor/Claude/Codex runs that piece. Use `loopControl` to rerun implementation if the review stage signals `status: changes-required`.
 
 ## 3. Scaffold the pipeline
 
-Before you run the orchestrator, let `.ralph/orchestration-wizard.sh` walk you through the tedious parts. The wizard asks for a pipeline name, namespace, stage runtimes, and agent IDs, then copies `.ralph/plan.template` into `.agents/orchestration-plans/<namespace>/<namespace>-NN-<stage>.plan.md`, creates the artifact directory under `.agents/artifacts/<namespace>/`, and writes a starter orchestration spec that matches your selections. Answer the prompts, replace the placeholder TODOs with the tasks you need, and verify each plan mentions the files to touch, validation commands, and artifact handoffs so the orchestrator can validate output.
+Before you run the orchestrator, let `.ralph/orchestration-wizard.sh` walk you through the tedious parts. The wizard asks for a pipeline name, namespace, stage runtimes, and agent IDs, then copies `.ralph/plan.template` into `.ralph-workspace/orchestration-plans/<namespace>/<namespace>-NN-<stage>.plan.md`, creates the artifact directory under `.ralph-workspace/artifacts/<namespace>/`, and writes a starter orchestration spec that matches your selections. Answer the prompts, replace the placeholder TODOs with the tasks you need, and verify each plan mentions the files to touch, validation commands, and artifact handoffs so the orchestrator can validate output.
 
 ```bash
 .ralph/orchestration-wizard.sh
@@ -121,18 +121,18 @@ Typical wizard flow:
    ```
 
 2. Enter a pipeline name and namespace (for example `notifications`), then pick runtimes and agents for each stage. The wizard writes:
-   - `.agents/orchestration-plans/<namespace>/<namespace>-01-*.plan.md`
-   - `.agents/orchestration-plans/<namespace>/<namespace>.orch.json`
-   - `.agents/artifacts/<namespace>/` with starter artifact docs
+   - `.ralph-workspace/orchestration-plans/<namespace>/<namespace>-01-*.plan.md`
+   - `.ralph-workspace/orchestration-plans/<namespace>/<namespace>.orch.json`
+   - `.ralph-workspace/artifacts/<namespace>/` with starter artifact docs
 3. Open each generated stage plan and replace placeholder TODOs with concrete tasks, expected artifact outputs, and verification commands (`npm run lint`, `npm run test`, etc.).
 4. If needed, edit the generated `.orch.json` to add extra stages, enforce required artifacts, or configure `loopControl` for review/rework cycles.
-5. Run the orchestrator using that generated spec and inspect `.agents/logs/` plus `.agents/artifacts/<namespace>/` after each stage.
+5. Run the orchestrator using that generated spec and inspect `.ralph-workspace/logs/` plus `.ralph-workspace/artifacts/<namespace>/` after each stage.
 
 After the wizard finishes, edit each stage plan and follow the prompts in `docs/AGENT-WORKFLOW.md` when you ask an agent to complete the TODOs.
 
 ## 4. Running the orchestrator
 ```bash
-.ralph/orchestrator.sh --orchestration .agents/orchestration-plans/feature/notifications-pipeline.orch.json
+.ralph/orchestrator.sh --orchestration .ralph-workspace/orchestration-plans/feature/notifications-pipeline.orch.json
 ```
 
 Each stage executes the referenced plan with its runtime CLI. The orchestrator checks that required artifacts exist and are non-empty before moving to the next stage, so ensure plans write the expected artifact files.
@@ -141,8 +141,8 @@ Each stage executes the referenced plan with its runtime CLI. The orchestrator c
 
 After every stage:
 
-- Check `.agents/logs/orchestrator-<namespace>.log` for per-stage stdout/stderr.
-- Confirm artifacts under `.agents/artifacts/{{ARTIFACT_NS}}/` are created and contain the sections described in `.agents/artifacts/README.md`.
+- Check `.ralph-workspace/logs/orchestrator-<namespace>.log` for per-stage stdout/stderr.
+- Confirm artifacts under `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/` are created and contain the sections described in `.ralph-workspace/artifacts/README.md`.
 - Use `.ralph/cleanup-plan.sh <namespace>` before rerunning the orchestrator if you need to reset logs/artifacts.
 
 ## 6. Orchestration lifecycle (sequence)
