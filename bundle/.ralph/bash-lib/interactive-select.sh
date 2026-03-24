@@ -5,6 +5,10 @@ if [[ -n "${RALPH_INTERACTIVE_SELECT_LIB_LOADED:-}" ]]; then
 fi
 RALPH_INTERACTIVE_SELECT_LIB_LOADED=1
 
+# Public interface:
+#   ralph_menu_select -- numbered menu with optional fzf; prints chosen item (see --help in implementation).
+# Internal: _ralph_menu_read_tty, _ralph_menu_numeric_prompt, _ralph_menu_run_fzf.
+
 _ralph_menu_read_tty() {
   local var_name="$1"
   local prompt="$2"

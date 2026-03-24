@@ -1,4 +1,9 @@
-# Runtime detection and CLI validation helpers for run-plan.sh.
+# Runtime detection and CLI validation helpers for run-plan.sh (sourced early in run-plan).
+#
+# Public interface:
+#   ralph_shared_ralph_dir_complete, ralph_resolve_shared_ralph_dir -- locate installed .ralph tree.
+#   prompt_select_runtime -- interactive runtime picker.
+#   ralph_ensure_cursor_cli, ralph_ensure_claude_cli, ralph_ensure_codex_cli -- verify CLIs (exit on failure).
 
 # Determine whether the provided directory contains the shared .ralph tree.
 # Args: $1 - path to inspect for the shared directory layout.

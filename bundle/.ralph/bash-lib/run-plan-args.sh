@@ -1,3 +1,11 @@
+# run-plan-args.sh -- argument parsing for .ralph/run-plan.sh (sourced only; not standalone).
+#
+# Public interface:
+#   print_usage -- writes run-plan --help text to stdout.
+#   ralph_run_plan_parse_args -- consumes "$@"; sets WORKSPACE, RUNTIME, PLAN_OVERRIDE, agent/model
+#     flags, and resume-related globals. Exports RALPH_PLAN_ALLOW_UNSAFE_RESUME for child processes
+#     when bare resume is allowed.
+
 # Print the run-plan CLI usage summary.
 # Args: none
 # Returns: 0 on success, non-zero on error
@@ -147,5 +155,6 @@ ralph_run_plan_parse_args() {
     1|true|yes|on) RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 ;;
     *) RALPH_PLAN_ALLOW_UNSAFE_RESUME=0 ;;
   esac
+  # When 1, allows CLI resume without a stored session id (unsafe on shared hosts); visible to subprocesses.
   export RALPH_PLAN_ALLOW_UNSAFE_RESUME
 }

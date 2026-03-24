@@ -1,4 +1,12 @@
-# Resource-resolution helpers for the MCP server.
+# Path resolution and allowlisting for MCP resources (sourced by mcp-server.sh).
+#
+# Public interface:
+#   canonicalize_path, is_subpath -- filesystem path normalization and prefix checks.
+#   add_allowlist_root, build_allowlist -- RALPH_MCP_ALLOWLIST parsing.
+#   workspace_allowed -- true when a path stays under allowed roots.
+#   resolve_workspace -- workspace root for a request.
+#   generate_agent_catalog_markdown -- markdown listing of agents for a resource.
+#   resolve_plan_path, resolve_orchestration_path -- validate and absolutize plan/orch paths.
 
 # Normalize a candidate path into a canonical absolute path.
 # Args: $1 - raw path to canonicalize (may contain ~ or relative segments).

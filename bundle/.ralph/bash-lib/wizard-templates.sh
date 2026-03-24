@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Template and artifact generation helpers for the orchestration wizard.
+#
+# Public interface:
+#   wizard_render_plan_template -- materialize a stage plan from the shared template + metadata.
+#   wizard_build_stage_entry -- emit one orchestration JSON stage object (shell string).
+#   wizard_write_orchestration_file -- write the full .orch.json from pipeline metadata and stages.
 
 # Ensures a stage plan file exists by rendering the shared plan template and appending metadata.
 # Args: 1 plan_template, 2 plan_abs_path, 3 plan_rel_path, 4 namespace, 5 stage_label, 6 pipeline_name,

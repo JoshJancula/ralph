@@ -5,6 +5,9 @@ if [[ -n "${RALPH_RUN_PLAN_CLI_HELPERS_LOADED:-}" ]]; then
 fi
 RALPH_RUN_PLAN_CLI_HELPERS_LOADED=1
 
+# Public interface:
+#   ralph_resolve_cursor_cli -- prints cursor-agent or agent on PATH, else returns 1.
+
 ralph_resolve_cursor_cli() {
   if command -v cursor-agent &>/dev/null; then
     printf '%s' "cursor-agent"

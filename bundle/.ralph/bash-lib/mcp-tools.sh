@@ -1,4 +1,9 @@
-# Tool execution and parameter-validation helpers for the MCP server.
+# MCP tool execution helpers (sourced by mcp-server.sh).
+#
+# Public interface:
+#   contains_shell_metacharacters, ensure_safe_argument -- guardrails for shelling out.
+#   tail_text -- bounded read of file tails for resources.
+#   execute_tool_command -- run allowlisted shell snippets with logging.
 
 readonly MAX_TOOL_TAIL_BYTES=32768
 

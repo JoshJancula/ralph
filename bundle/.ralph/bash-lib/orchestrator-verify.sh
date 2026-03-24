@@ -5,6 +5,10 @@ if [[ -n "${RALPH_ORCHESTRATOR_VERIFY_LOADED:-}" ]]; then
 fi
 RALPH_ORCHESTRATOR_VERIFY_LOADED=1
 
+# Public interface:
+#   artifact_remediation_text -- prints remediation steps for missing artifacts.
+#   verify_step_artifacts -- asserts EXPECTED_ARTIFACT_PATHS exist and are non-empty after a stage.
+
 artifact_remediation_text() {
   echo "  Remediation:"
   echo "    1. Open the step plan and ensure the agent finished every TODO (agent should write declared outputs)."

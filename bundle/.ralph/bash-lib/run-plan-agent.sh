@@ -1,5 +1,11 @@
-# Agent selection helpers for run-plan.sh.
+# Agent selection helpers for run-plan.sh (sourced from run-plan-core).
 # These functions are factored out to keep the main runner smaller.
+#
+# Public interface:
+#   prompt_for_agent -- prints model id for the current RUNTIME (uses select_model_*).
+#   prebuilt_agents_root, list_prebuilt_agent_ids, validate_prebuilt_agent_config -- agent dir discovery/validation.
+#   read_prebuilt_agent_model, format_prebuilt_agent_context_block -- model and context from config.json.
+#   prompt_select_prebuilt_agent, prompt_agent_source_mode -- interactive agent picking and mode selection.
 
 # Prompt for a runtime-specific model id and print it to stdout.
 # Args: none

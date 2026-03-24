@@ -1,4 +1,11 @@
-# Minimal JSON-RPC protocol helpers for the MCP server.
+# JSON-RPC helpers for bash .ralph/mcp-server.sh (sourced only).
+#
+# Public interface:
+#   ralph_mcp_log -- stderr trace when RALPH_MCP_DEBUG=1.
+#   fail -- stderr + exit 1.
+#   ensure_jq -- require jq on PATH.
+#   send_result, send_error -- JSON-RPC 2.0 responses on stdout.
+#   auth_token_guard_enabled, enforce_auth_token -- optional RALPH_MCP_AUTH_TOKEN gate.
 
 ralph_mcp_log() {
   printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SCRIPT_NAME" "$*" >&2

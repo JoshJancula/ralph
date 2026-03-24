@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# Orchestration graph helper for agent-config-tool.sh downstream-stages command.
+#
+# Public interface:
+#   downstream_stages <orch_file> <current_stage_id> [artifact_ns] -- prints later stage ids (jq).
 
 downstream_stages() {
   local orch_file="$1"

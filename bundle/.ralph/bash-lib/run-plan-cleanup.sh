@@ -1,3 +1,8 @@
+# Exit trap: optional interactive cleanup after run-plan (sourced from run-plan-core).
+#
+# Public interface:
+#   prompt_cleanup_on_exit -- registered on EXIT; may run cleanup-plan.sh or print the command.
+
 # Prompt the user for optional cleanup output when the runner exits.
 # Args: none
 # Returns: 0 after handling cleanup prompt, non-zero on error

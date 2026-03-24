@@ -5,6 +5,13 @@ if [[ -n "${RALPH_ORCHESTRATOR_LIB_LOADED:-}" ]]; then
 fi
 RALPH_ORCHESTRATOR_LIB_LOADED=1
 
+# Public interface:
+#   trim, parse_artifact_csv -- string and CSV parsing for artifact lists.
+#   expand_artifact_tokens -- substitute {{ARTIFACT_NS}}, {{PLAN_KEY}}, {{STAGE_ID}} in paths.
+#   artifact_paths_append_unique, merge_required_artifacts_from_agent -- build EXPECTED_ARTIFACT_PATHS.
+#   orchestrator_normalize_runtime, orchestrator_validate_runtime -- runtime id validation.
+#   orchestrator_validate_stage_agent_plan, orchestrator_stage_plan_abs -- stage field checks and paths.
+
 trim() {
   local s="$1"
   s="${s#"${s%%[![:space:]]*}"}"

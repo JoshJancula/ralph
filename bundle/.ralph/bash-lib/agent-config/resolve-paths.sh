@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# Token expansion for artifact paths (sourced by agent-config-tool.sh).
+#
+# Public interface:
+#   resolve_artifact_path_template -- substitute {{ARTIFACT_NS}}, {{PLAN_KEY}}, {{STAGE_ID}} from env.
 
 resolve_artifact_path_template() {
   local path="$1"

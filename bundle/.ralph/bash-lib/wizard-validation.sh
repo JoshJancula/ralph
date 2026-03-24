@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-
+#
 # Validation helpers used by the orchestration wizard.
+#
+# Public interface:
+#   configure_stage_input_dependencies -- interactive inputArtifacts wiring between stages.
+#   configure_loop_rules -- loopControl defaults for review stages.
 
 configure_stage_input_dependencies() {
   stage_input_sources=()

@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # Wizard prompt helpers shared by orchestration-wizard.sh.
+#
+# Public interface (selection and I/O helpers):
+#   runtime_default, agent_default, artifact_file_for_stage, agent_dir_for_runtime -- defaults per stage/runtime.
+#   ralph_internal_wizard_sanitize, list_agents, escape_sed, escape_json -- string and agent listing utilities.
+#   read_pipeline_info, read_stages, choose_stage_id_from_list -- wizard flow state.
+#   select_runtime, pick_model_for_runtime, select_model_override, select_agent, agent_model_default -- picks.
+#   print_info, print_hint, print_step, offer_prompt_execution -- TTY messaging and optional run hint.
 
 default_stages=("research" "architecture" "implementation" "code-review" "qa")
 pipeline_resume_all_stages="false"

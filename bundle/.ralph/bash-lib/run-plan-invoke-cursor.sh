@@ -12,6 +12,11 @@ source "$_run_plan_invoke_cursor_dir/run-plan-cli-helpers.sh"
 source "$_run_plan_invoke_cursor_dir/run-plan-invoke-common.sh"
 unset _run_plan_invoke_cursor_dir
 
+# Public interface:
+#   run_plan_invoke_cursor_session_resume_args / run_plan_invoke_cursor_bare_resume_args -- argv helpers for resume.
+#   run_plan_invoke_cursor_bare_resume_warn -- stderr when bare resume is disallowed.
+#   ralph_run_plan_invoke_cursor -- invoke Cursor CLI; exports OUTPUT_LOG, EXIT_CODE_FILE, SESSION_ID_FILE for demux.
+
 run_plan_invoke_cursor_session_resume_args() {
   local args_name="$1"
   eval "$args_name+=(--resume \"\${RALPH_RUN_PLAN_RESUME_SESSION_ID}\")"
@@ -27,6 +32,7 @@ run_plan_invoke_cursor_bare_resume_warn() {
 }
 
 ralph_run_plan_invoke_cursor() {
+  # Log path, exit-code sidecar, and session-id file for JSON demux and resume capture.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
   local cli=""

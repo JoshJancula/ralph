@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# Small helpers for .ralph/new-agent.sh (sourced by the entry script).
+#
+# Public interface:
+#   new_agent_is_valid_id -- true when the agent id matches allowed hyphenated pattern.
+#   new_agent_workspace_path -- resolve a path under workspace via Python (rejects escapes).
 
 new_agent_is_valid_id() {
   local candidate="${1:-}"

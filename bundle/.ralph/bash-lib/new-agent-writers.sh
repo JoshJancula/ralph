@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# File generation for .ralph/new-agent.sh.
+#
+# Public interface:
+#   write_agent_scaffold -- create config.json, agent markdown, rule/skill stubs for a runtime.
 
 write_agent_scaffold() {
   local runtime="$1"

@@ -1,4 +1,8 @@
-# Prompt helpers for the MCP server.
+# MCP tool payload builders for next-TODO prompts (sourced by mcp-server.sh).
+#
+# Public interface:
+#   generate_next_todo_prompt_definition -- emits JSON schema fragment for the next_todo_prompt tool.
+#   ralph_mcp_build_next_todo_prompt_message -- builds user message string for a plan path + workspace.
 
 generate_next_todo_prompt_definition() {
   jq -n '{

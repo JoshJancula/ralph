@@ -52,6 +52,12 @@
 
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Pipeline (this file): bootstrap, optional caffeinate re-exec, then source
+# bash-lib/run-plan-core.sh for the full plan loop (pick next TODO, build prompt,
+# invoke Cursor/Claude/Codex, update plan, human gates, session resume).
+# ---------------------------------------------------------------------------
+
 # On macOS, re-exec under caffeinate so the system does not sleep during the plan run.
 # Guard variables are normalized so we only re-exec once per invocation.
 #
@@ -61,6 +67,7 @@ set -euo pipefail
 # what dirname resolves to), use the workspace .ralph copy that contains bash-lib.
 _THIS_RUN_PLAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _THIS_RUN_PLAN_FILE="$_THIS_RUN_PLAN_DIR/$(basename "${BASH_SOURCE[0]}")"
+# Resolve the copy of .ralph that contains bash-lib (invocation may be from .cursor/ralph etc.).
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-runtime.sh
 source "$_THIS_RUN_PLAN_DIR/bash-lib/run-plan-runtime.sh"
 SCRIPT_DIR="$(ralph_resolve_shared_ralph_dir "$_THIS_RUN_PLAN_DIR")"
@@ -72,6 +79,7 @@ else
 fi
 RALPH_DIR="$SCRIPT_DIR"
 
+# Shared libraries: env merge per runtime, menus, errors, CLI parse, session paths.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-env.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-env.sh"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/menu-select.sh
@@ -83,6 +91,7 @@ source "$SCRIPT_DIR/bash-lib/run-plan-args.sh"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-session.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-session.sh"
 
+# Infer runtime from argv early so caffeinate re-exec picks up the right *_PLAN_* env chain.
 CAFFEINATE_RUNTIME="${RALPH_PLAN_RUNTIME:-}"
 if [[ -z "$CAFFEINATE_RUNTIME" ]]; then
   cmdline_args=("$@")
@@ -123,10 +132,13 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
   export CODEX_PLAN_CAFFEINATED=1
   exec caffeinate -s -i -- /usr/bin/env bash "$SCRIPT_PATH" "$@"
 fi
+# Block dangerous paths (e.g. .env) from plan/log targets.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/ralph-env-safety.sh
 source "$RALPH_DIR/ralph-env-safety.sh"
+# Markdown checklist helpers used by run-plan-core.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/plan-todo.sh
 source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
 
+# Main runner: parse_args already ran inside run-plan-core; executes until all TODOs done or failure.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-core.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-core.sh"

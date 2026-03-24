@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# Installer flag parsing and copy-plan execution for install.sh.
+#
+# Public interface:
+#   install_ops_reset_state -- clear globals before a parse pass.
+#   install_ops_parse_flags -- consume argv into install mode flags.
+#   install_ops_default_selection, install_ops_resolve_target, install_ops_verify_bundle -- target resolution.
+#   install_ops_has_any_stack, install_ops_should_install_dashboard -- derived install choices.
+#   install_ops_emit_copy, install_ops_add_optional_copy, install_ops_build_copy_plan -- plan assembly.
+#   install_ops_execute_plan, install_ops_copy_tree -- run the file copy plan.
 
 install_ops_reset_state() {
   DRY_RUN=0

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# Markdown context for run-plan when using a prebuilt agent (sourced by agent-config-tool.sh).
+#
+# Public interface:
+#   context_block -- emits agent summary, rules list, inlined rules, skills, output artifacts.
 
 context_block() {
   local agents_root="$1" agent_id="$2" workspace="$3"

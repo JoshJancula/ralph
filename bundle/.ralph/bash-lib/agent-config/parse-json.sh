@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#
+# Low-level JSON field extraction for agent config.json (sourced by agent-config-tool.sh modules).
+#
+# Public interface:
+#   load_cfg_path -- path to an agent's config.json.
+#   json_string_value -- crude quoted-string reader for a top-level key.
+#   array_block -- raw lines for a top-level JSON array by key.
+#   list_agent_ids -- sorted agent directory names under agents_root.
 
 load_cfg_path() {
   local agents_root="$1" agent_id="$2"

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+#
+# Agent config validation (sourced by agent-config-tool.sh).
+#
+# Public interface:
+#   is_env_secret_basename, rel_path_targets_env_secret -- block .env* rule/artifact targets.
+#   valid_agent_name -- agent id naming rules.
+#   validate_config -- full config.json checks; exits non-zero via composite ok flag.
 
 MAX_DESCRIPTION_WARN=2000
 

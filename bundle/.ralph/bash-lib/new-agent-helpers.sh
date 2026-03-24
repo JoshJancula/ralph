@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # Helpers extracted from new-agent.sh to keep the main script short.
+#
+# Public interface:
+#   agent_dir_nonempty -- true if an agent directory already has files.
+#   resolve_runtimes -- which stacks to install into from CLI flags.
+#   confirm_overwrite_all -- batch confirm when replacing existing agent dirs.
+#   require_model -- prompt until a non-empty model string.
+#   select_models -- per-runtime model prompts (or shared default).
 
 agent_dir_nonempty() {
   [[ -d "$1" ]] && [[ -n "$(ls -A "$1" 2>/dev/null || true)" ]]

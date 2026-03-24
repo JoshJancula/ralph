@@ -5,6 +5,10 @@ if [[ -n "${RALPH_JSON_CACHE_LOADED:-}" ]]; then
 fi
 RALPH_JSON_CACHE_LOADED=1
 
+# Public interface:
+#   ralph_json_cache_ensure_dir -- sets and exports RALPH_JSON_CACHE_DIR (temp dir for cache files).
+#   ralph_json_cache_file_mtime, ralph_json_cache_hash, ralph_json_cache_query -- file mtime, sha256 key, jq-backed read.
+
 # Ensure there is a directory for memoized JSON lookups.
 ralph_json_cache_ensure_dir() {
   if [[ -n "${RALPH_JSON_CACHE_DIR:-}" ]]; then
@@ -21,6 +25,7 @@ ralph_json_cache_ensure_dir() {
   fi
 
   RALPH_JSON_CACHE_DIR="$tmpdir"
+  # Temp directory path for JSON parse cache files; subprocesses may reuse the same dir.
   export RALPH_JSON_CACHE_DIR
 }
 

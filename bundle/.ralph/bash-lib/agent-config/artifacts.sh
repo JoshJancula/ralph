@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# Declared output_artifacts from agent config (sourced by agent-config-tool.sh).
+#
+# Public interface:
+#   required_artifacts -- prints required artifact path templates, one per line.
 
 required_artifacts() {
   local agents_root="$1" agent_id="$2"

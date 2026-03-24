@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# Safe inlining of rule file contents into agent context (sourced by agent-config-tool.sh).
+#
+# Public interface:
+#   inline_rule_file -- print file body or placeholder; blocks .env* and caps size.
 
 MAX_RULE_INLINE_BYTES=65536
 

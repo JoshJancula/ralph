@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+#
+# CLI-facing read helpers for agent-config-tool.sh (sourced by the tool entrypoint).
+#
+# Public interface:
+#   read_allowed_tools -- prints Claude allowed_tools as a comma list (python3) or empty.
+#   read_model -- prints model after validate_config.
+#   usage -- stderr usage and exit 2.
 
 read_allowed_tools() {
   local agents_root="$1" agent_id="$2"

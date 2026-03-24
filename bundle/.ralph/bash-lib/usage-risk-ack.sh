@@ -10,6 +10,12 @@ RALPH_USAGE_RISK_ACK_LIB_LOADED=1
 
 RALPH_USAGE_RISK_ACK_VERSION=1
 
+# Public interface:
+#   ralph_usage_risk_ack_init_colors -- sets UR_C_* variables for stderr prompts.
+#   ralph_usage_risk_ack_config_dir, ralph_usage_risk_ack_marker_path -- XDG config paths for the marker file.
+#   ralph_usage_risk_ack_marker_valid, ralph_usage_risk_ack_write_marker -- read/write consent marker.
+#   ralph_require_usage_risk_acknowledgment -- gate entry: env skip, marker, or interactive accept.
+
 ralph_usage_risk_ack_init_colors() {
   UR_C_R="" UR_C_Y="" UR_C_G="" UR_C_C="" UR_C_B="" UR_C_DIM="" UR_C_BOLD="" UR_C_RST=""
   if [[ -t 2 ]] && [[ -z "${NO_COLOR:-}" ]] && [[ "${RALPH_PLAN_NO_COLOR:-${CURSOR_PLAN_NO_COLOR:-0}}" != "1" ]]; then

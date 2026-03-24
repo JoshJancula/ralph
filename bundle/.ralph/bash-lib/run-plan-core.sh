@@ -1,5 +1,14 @@
 ## Core run-plan logic moved here; source from run-plan.sh.
 ## Do not execute directly.
+##
+## Environment exported for child CLIs and helpers:
+##   RALPH_PLAN_KEY -- stable id for this plan (logs, sessions, defaults).
+##   RALPH_ARTIFACT_NS -- artifact namespace (defaults to plan key).
+##   OUTPUT_LOG -- file path for tee'd assistant CLI output.
+##   RALPH_PLAN_CLI_RESUME -- 1 after optional prompt when one session is reused across TODOs.
+##
+## Public interface (functions): ralph_run_plan_log, ralph_ensure_*_cli, ralph_path_to_file_uri,
+## ralph_human_* / ralph_operator_* for human-in-the-loop flows, and related helpers below.
 WORKSPACE="$(pwd)"
 PLAN_OVERRIDE=""
 PREBUILT_AGENT=""
@@ -158,7 +167,9 @@ PLAN_PATH="$(plan_normalize_path "$PLAN_OVERRIDE" "$WORKSPACE")"
 # Per-plan logs and session files under .ralph-workspace/ (override with RALPH_PLAN_WORKSPACE_ROOT).
 # Keeps agent-writable paths (pending-human.txt, etc.) out of .ralph-workspace, which some CLIs sandbox or restrict.
 PLAN_LOG_NAME="$(plan_log_basename "$PLAN_PATH")"
+# Plan namespace for logs, sessions, and templated paths; inherited by subprocesses.
 export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-$PLAN_LOG_NAME}"
+# Artifact namespace (often equals plan key); used for {{ARTIFACT_NS}} style paths.
 export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-$RALPH_PLAN_KEY}"
 RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
@@ -175,6 +186,7 @@ if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
 else
   OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
 fi
+# Destination for captured CLI stdout/stderr (tee); subprocesses may append via invoke helpers.
 export OUTPUT_LOG
 
 ralph_assert_path_not_env_secret "Plan file" "$PLAN_PATH"
@@ -476,6 +488,7 @@ fi
 ralph_run_plan_log "session dir=$RALPH_SESSION_DIR"
 
 ralph_session_prompt_cli_resume
+# Whether to reuse one assistant session across TODOs (0/1); read by invoke and demux scripts.
 export RALPH_PLAN_CLI_RESUME
 
 # After this point, offer optional cleanup on exit (logs and Ralph artifacts).
@@ -552,6 +565,8 @@ fi
 
 total_invocations=0
 
+# Outer loop: one iteration per "next open TODO" in the plan file.
+# Inner loop (below): retry the same TODO until it is marked [x], human input is satisfied, or limits hit.
 while true; do
   if ! next=$(get_next_todo "$PLAN_PATH"); then
     read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
@@ -575,6 +590,7 @@ while true; do
 
   attempts_on_line=0
   human_gate_satisfied_for_line=0
+  # Same checklist line: re-invoke assistant if the box stayed [ ], pending-human was cleared, or gutter retry.
   while true; do
     total_invocations=$((total_invocations + 1))
     if [[ $total_invocations -gt $MAX_ITERATIONS ]]; then
@@ -608,6 +624,7 @@ while true; do
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
     echo ""
 
+    # Refresh resume env from session-id.txt / flags before building PROMPT (compact vs full context).
     ralph_session_apply_resume_strategy
 
     if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
@@ -738,6 +755,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
 
     cd "$WORKSPACE"
 
+    # Sidecar files for this invocation: CLI exit code; AGENT_PID watches the background shell.
     EXIT_CODE_FILE="$RALPH_LOG_DIR/.plan-runner-exit.$$"
     PROGRESS_INTERVAL="${CURSOR_PLAN_PROGRESS_INTERVAL:-30}"
     START_TIME="$(date +%s)"

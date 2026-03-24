@@ -5,6 +5,11 @@ if [[ -n "${RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED:-}" ]]; then
 fi
 RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 
+# Public interface:
+#   run_plan_invoke_claude_session_resume_args / run_plan_invoke_claude_bare_resume_args -- build argv fragments.
+#   run_plan_invoke_claude_bare_resume_warn -- stderr warning when bare resume is not allowed.
+#   ralph_run_plan_invoke_claude -- run Claude headless with model, tools, resume; exports log/session paths for demux.
+
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
 
 run_plan_invoke_claude_session_resume_args() {
@@ -22,6 +27,7 @@ run_plan_invoke_claude_bare_resume_warn() {
 }
 
 ralph_run_plan_invoke_claude() {
+  # Paths and flags the Python demux / tee pipeline expects in the environment.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
   local cli="${CLAUDE_PLAN_CLI:-}"

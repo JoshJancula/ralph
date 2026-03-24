@@ -5,6 +5,9 @@ if [[ -n "${RALPH_MENU_SELECT_LOADED:-}" ]]; then
 fi
 RALPH_MENU_SELECT_LOADED=1
 
+# Public interface:
+#   ralph_menu_select -- lightweight numbered picker (no fzf); see inline Args/Returns below.
+
 # Interactive numbered pick from argv (after --). Prints the chosen word on stdout.
 # Options: --prompt TEXT, --default N (1-based). Reads from /dev/tty.
 # Returns 0 on success; 1 on empty/invalid input (no stdout).

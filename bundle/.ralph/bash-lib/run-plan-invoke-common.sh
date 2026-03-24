@@ -5,6 +5,12 @@ if [[ -n "${RALPH_RUN_PLAN_INVOKE_COMMON_LOADED:-}" ]]; then
 fi
 RALPH_RUN_PLAN_INVOKE_COMMON_LOADED=1
 
+# Public interface:
+#   run_plan_invoke_common_add_model_flag -- append --model (or custom flag) from SELECTED_MODEL.
+#   run_plan_invoke_common_add_resume_args -- dispatch session vs bare resume argv builders.
+#   run_plan_invoke_common_add_cli_resume_flags -- append runtime-specific JSON/resume flags when python3 exists.
+#   run_plan_invoke_common_execute -- pipe CLI through demux+tee or plain tee; writes EXIT_CODE_FILE.
+
 run_plan_invoke_common_add_model_flag() {
   local args_name="$1"
   local flag="${2:---model}"

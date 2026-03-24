@@ -5,6 +5,15 @@ if [[ -n "${RALPH_PLAN_TODO_LIB_LOADED:-}" ]]; then
 fi
 RALPH_PLAN_TODO_LIB_LOADED=1
 
+# Public interface:
+#   plan_normalize_path, plan_log_basename -- path and safe log-stem helpers.
+#   plan_open_todo_body -- strip markdown checkbox prefix from an open task line.
+#   get_next_todo -- first open "- [ ]" line as "line|full line".
+#   count_todos -- prints "done total" counts.
+#   plan_todo_ordinal_at_line -- 1-based checklist index at a given file line.
+#   plan_todo_implies_operator_dialog -- true when wording should block on operator (pending-human).
+#   plan_reopen_todo_at_line -- flip [x] back to [ ] at a line.
+
 plan_normalize_path() {
   local path="$1"
   local workspace="$2"

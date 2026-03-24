@@ -10,6 +10,12 @@ ORCH_STAGE_INDEX_VALS=()
 ORCH_STAGE_ITER_KEYS=()
 ORCH_STAGE_ITER_VALS=()
 
+# Public interface:
+#   extract_review_status -- parse review markdown for status marker.
+#   check_loop_condition -- emit proceed vs loop:<stage>:<iter> from stage JSON and review file.
+#   orch_stage_index_map_*, orch_stage_iteration_map_* -- parallel key/value arrays for stage index and iteration.
+# Module state: ORCH_STAGE_INDEX_KEYS/VALS, ORCH_STAGE_ITER_KEYS/VALS (mutated by map_set).
+
 extract_review_status() {
   local review_file="$1"
   [[ ! -f "$review_file" ]] && return 1

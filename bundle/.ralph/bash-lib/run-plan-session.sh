@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 #
 # Shared helpers for managing CLI session state.
+#
+# Public interface:
+#   ralph_session_init -- creates session dir, sets RALPH_PLAN_SESSION_HOME and SESSION_ID_FILE.
+#   ralph_session_migrate_legacy -- copies old .ralph-workspace session files into the new home.
+#   ralph_session_write_manual_resume -- writes --resume session id to session-id.txt.
+#   ralph_session_prompt_cli_resume -- interactive y/n for RALPH_PLAN_CLI_RESUME.
+#   ralph_session_apply_resume_strategy -- sets RALPH_RUN_PLAN_RESUME_SESSION_ID or RALPH_RUN_PLAN_RESUME_BARE.
+#
+# Exported environment (where noted below): visible to CLI wrapper scripts and demux.
 
 # Initialize CLI session directories and helpers for this plan.
 # Args: $1 - workspace path; $2 - plan log name (reserved for callers; not read here)
@@ -17,6 +26,7 @@ ralph_session_init() {
     _plan_session_home="${_workspace_sessions_root}/sessions"
   fi
   RALPH_PLAN_SESSION_HOME="$_plan_session_home"
+  # Root directory containing per-plan session folders (session-id.txt, human files, etc.).
   export RALPH_PLAN_SESSION_HOME
 
   AGENTS_SESSION_ROOT="$RALPH_PLAN_SESSION_HOME"
@@ -25,6 +35,7 @@ ralph_session_init() {
   chmod 700 "$RALPH_SESSION_DIR"
 
   SESSION_ID_FILE="$RALPH_SESSION_DIR/session-id.txt"
+  # Path to the persisted assistant session id for CLI resume; read by invoke helpers and Python demux.
   export SESSION_ID_FILE
   PENDING_HUMAN="$RALPH_SESSION_DIR/pending-human.txt"
   HUMAN_CONTEXT="$RALPH_SESSION_DIR/human-replies.md"
@@ -125,6 +136,7 @@ ralph_session_apply_resume_strategy() {
   unset RALPH_RUN_PLAN_RESUME_BARE
 
   if [[ -n "$RESUME_SESSION_ID_OVERRIDE" ]]; then
+    # Explicit --resume id: pass through to the runtime wrapper unchanged.
     export RALPH_RUN_PLAN_RESUME_SESSION_ID="$RESUME_SESSION_ID_OVERRIDE"
     return 0
   fi
@@ -138,12 +150,14 @@ ralph_session_apply_resume_strategy() {
       _resume_sid="${_resume_sid%"${_resume_sid##*[![:space:]]}"}"
     fi
     if [[ -n "$_resume_sid" ]]; then
+      # Session id from session-id.txt for targeted CLI --resume.
       export RALPH_RUN_PLAN_RESUME_SESSION_ID="$_resume_sid"
       ralph_run_plan_log "RALPH_PLAN_CLI_RESUME: using stored session id and compact prompt (--resume on the CLI)"
     fi
   fi
 
   if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
+    # Flag for runtimes that support resume-without-id (e.g. Codex --last); only when unsafe resume is allowed.
     export RALPH_RUN_PLAN_RESUME_BARE=1
     ralph_run_plan_log "RALPH_PLAN_ALLOW_UNSAFE_RESUME: no stored session id; using bare resume (wrong session possible on a busy host)"
     echo "Warning: bare CLI resume without a stored session id can attach to the wrong session when several projects use the same CLI on one machine. Prefer isolated CI or fix session capture." >&2
