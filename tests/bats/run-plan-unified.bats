@@ -188,7 +188,7 @@ EOF
 
   run bash "$bad_layout/run-plan.sh" --runtime cursor --plan "$REPO_ROOT/PLAN.md"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"bash-lib/run-plan-env.sh: No such file or directory"* ]]
+  [[ "$output" == *"bash-lib/run-plan-runtime.sh: No such file or directory"* ]]
 
   rm -rf "$bad_layout"
 }

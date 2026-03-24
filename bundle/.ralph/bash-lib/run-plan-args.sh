@@ -119,7 +119,7 @@ ralph_run_plan_parse_args() {
 
   WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 
-  if [[ -z "$PLAN_OVERRIDE" ]]; then
+  if [[ -z "${PLAN_OVERRIDE:-}" ]]; then
     ralph_die "Error: --plan <path> is required."
   fi
 

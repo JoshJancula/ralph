@@ -134,6 +134,7 @@ EOF
     source "$2"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     CURSOR_PLAN_VERBOSE=0
+    ralph_run_plan_log() { :; }
     PATH=""
     ralph_ensure_cursor_cli
   ' _ "$log_file" "$RUN_PLAN_EXTRA_FUNCS_FILE"
