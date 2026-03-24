@@ -131,6 +131,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.cursor/rules" "$TARGET/.cursor/rules" "cursor-rules"
     install_ops_add_optional_copy "$BUNDLE/.cursor/skills" "$TARGET/.cursor/skills" "cursor-skills"
     install_ops_add_optional_copy "$BUNDLE/.cursor/agents" "$TARGET/.cursor/agents" "cursor-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.cursor/ralph/templates" "cursor-templates"
   fi
 
   if [[ "$INSTALL_CODEX" -eq 1 ]]; then
@@ -138,6 +139,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.codex/rules" "$TARGET/.codex/rules" "codex-rules"
     install_ops_add_optional_copy "$BUNDLE/.codex/skills" "$TARGET/.codex/skills" "codex-skills"
     install_ops_add_optional_copy "$BUNDLE/.codex/agents" "$TARGET/.codex/agents" "codex-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.codex/ralph/templates" "codex-templates"
   fi
 
   if [[ "$INSTALL_CLAUDE" -eq 1 ]]; then
@@ -145,6 +147,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.claude/rules" "$TARGET/.claude/rules" "claude-rules"
     install_ops_add_optional_copy "$BUNDLE/.claude/skills" "$TARGET/.claude/skills" "claude-skills"
     install_ops_add_optional_copy "$BUNDLE/.claude/agents" "$TARGET/.claude/agents" "claude-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.claude/ralph/templates" "claude-templates"
   fi
 
 }

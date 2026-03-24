@@ -124,7 +124,7 @@ LOG_FILE="$RALPH_LOG_DIR/orchestrator-${ORCH_BASENAME}.log"
 RALPH_RUN_PLAN="$WORKSPACE/.ralph/run-plan.sh"
 EXPECTED_ARTIFACT_PATHS=()
 
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
+ralph_orchestrator_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 
 # Agent config tool (shared under .ralph).
 if [[ -f "$WORKSPACE/.ralph/agent-config-tool.sh" ]]; then
@@ -157,7 +157,7 @@ verify_step_artifacts() {
       abs="$WORKSPACE/$ap"
     fi
     if [[ ! -f "$abs" ]]; then
-      log "FAIL step $step_n artifact check: missing file: $ap (resolved: $abs)"
+      ralph_orchestrator_log "FAIL step $step_n artifact check: missing file: $ap (resolved: $abs)"
       {
         echo ""
         echo "======== artifact verification failure ========"
@@ -176,7 +176,7 @@ verify_step_artifacts() {
       return 1
     fi
     if [[ ! -s "$abs" ]]; then
-      log "FAIL step $step_n artifact check: empty file: $ap (resolved: $abs)"
+      ralph_orchestrator_log "FAIL step $step_n artifact check: empty file: $ap (resolved: $abs)"
       {
         echo ""
         echo "======== artifact verification failure ========"
@@ -289,14 +289,14 @@ orch_stage_iteration_map_get() {
   printf '%s\n' "1"
 }
 
-log() {
-  echo "[$(ts)] $*" >> "$LOG_FILE"
+ralph_orchestrator_log() {
+  echo "[$(ralph_orchestrator_timestamp)] $*" >> "$LOG_FILE"
   if [[ "${ORCHESTRATOR_VERBOSE:-0}" == "1" ]]; then
-    echo "[$(ts)] $*" >&2
+    echo "[$(ralph_orchestrator_timestamp)] $*" >&2
   fi
 }
 
-log "orchestrator started workspace=$WORKSPACE orchestration=$ORCH_FILE"
+ralph_orchestrator_log "orchestrator started workspace=$WORKSPACE orchestration=$ORCH_FILE"
 
 if [[ -t 1 && "${ORCHESTRATOR_NO_COLOR:-0}" != "1" ]]; then
   C_R=$'\033[31m'
@@ -316,7 +316,7 @@ step_index=0
 if [[ "$ORCH_FILE" == *.json ]]; then
   # Parse JSON orchestration file with jq
   if ! command -v jq >/dev/null 2>&1; then
-    log "FAIL: jq not found. Install jq to parse JSON orchestration files."
+    ralph_orchestrator_log "FAIL: jq not found. Install jq to parse JSON orchestration files."
     echo -e "${C_R}${C_BOLD}Orchestrator aborted: jq is required for JSON orchestration${C_RST}" >&2
     echo "  Install: brew install jq (macOS) or apt install jq (Linux)" >&2
     echo "  Log: $LOG_FILE" >&2
@@ -325,7 +325,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   # Validate JSON
   if ! jq empty "$ORCH_FILE" 2>/dev/null; then
-    log "FAIL parse: invalid JSON in $ORCH_FILE"
+    ralph_orchestrator_log "FAIL parse: invalid JSON in $ORCH_FILE"
     echo -e "${C_R}${C_BOLD}Orchestrator parse error: invalid JSON${C_RST}" >&2
     jq empty "$ORCH_FILE" 2>&1 | sed 's/^/  /' >&2
     echo "  Log: $LOG_FILE" >&2
@@ -366,7 +366,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
     runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
     if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
-      log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, or codex)"
+      ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, or codex)"
       echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, or codex.${C_RST}" >&2
       echo "  Log: $LOG_FILE" >&2
       exit 1
@@ -378,7 +378,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     case "$agent_source" in
       ""|prebuilt|custom) ;;
       *)
-        log "FAIL parse: invalid agentSource '$agent_source_raw' (use prebuilt or custom)"
+        ralph_orchestrator_log "FAIL parse: invalid agentSource '$agent_source_raw' (use prebuilt or custom)"
         echo -e "${C_R}Invalid agentSource '${agent_source_raw}'. Use prebuilt or custom.${C_RST}" >&2
         echo "  Log: $LOG_FILE" >&2
         exit 1
@@ -392,7 +392,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     if echo "$stage" | jq -e 'has("sessionResume")' >/dev/null 2>&1; then
       _sr_type="$(echo "$stage" | jq -r '.sessionResume | type' 2>/dev/null || echo "")"
       if [[ "$_sr_type" != "boolean" ]]; then
-        log "FAIL parse: sessionResume must be a JSON boolean (got type ${_sr_type})"
+        ralph_orchestrator_log "FAIL parse: sessionResume must be a JSON boolean (got type ${_sr_type})"
         echo -e "${C_R}Invalid sessionResume: must be a JSON boolean (true or false), not ${_sr_type}.${C_RST}" >&2
         echo "  Log: $LOG_FILE" >&2
         exit 1
@@ -430,7 +430,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     fi
 
     if ! orchestrator_validate_stage_agent_plan "$agent" "$plan_rel"; then
-      log "FAIL parse: empty agent or plan for stage JSON: $stage"
+      ralph_orchestrator_log "FAIL parse: empty agent or plan for stage JSON: $stage"
       echo -e "${C_R}Empty agent or plan path.${C_RST} Log: $LOG_FILE" >&2
       exit 1
     fi
@@ -442,7 +442,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   runner_label=".ralph/run-plan.sh (runtime=$runtime)"
 
   if [[ ! -f "$runner" ]]; then
-    log "FAIL step $step_index: runner missing: $runner"
+    ralph_orchestrator_log "FAIL step $step_index: runner missing: $runner"
     echo -e "${C_R}${C_BOLD}Orchestrator aborted before step $step_index${C_RST}" >&2
     echo "  Runner not found: $runner" >&2
     echo "  Install Ralph shared bundle (.ralph/) so run-plan.sh exists, then retry." >&2
@@ -494,7 +494,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     # Create plan file from template
     if [[ -f "$template_to_use" ]]; then
       cp "$template_to_use" "$plan_abs"
-      log "auto-created plan file from template: $plan_abs"
+      ralph_orchestrator_log "auto-created plan file from template: $plan_abs"
       echo -e "${C_Y}Step $step_index: auto-created plan file${C_RST}" >&2
       echo "  Source template: $(basename "$template_to_use")" >&2
       echo "  Created: $plan_abs" >&2
@@ -503,7 +503,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       exit 0
     else
       # No template available - error out
-      log "FAIL step $step_index: plan file not found and no template available: $plan_abs"
+      ralph_orchestrator_log "FAIL step $step_index: plan file not found and no template available: $plan_abs"
       echo -e "${C_R}${C_BOLD}Step $step_index failed (plan missing)${C_RST}" >&2
       echo "  Agent: $agent  Runtime: $runtime" >&2
       echo "  Plan path: $plan_abs" >&2
@@ -522,7 +522,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     art_log="${EXPECTED_ARTIFACT_PATHS[*]}"
   fi
-  log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
+  ralph_orchestrator_log "step $step_index: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs expected_artifacts=$art_log"
 
   if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
     _dry_sr=""
@@ -584,7 +584,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
   if [[ "$agent_source" == "prebuilt" ]]; then
     _runner_args+=(--agent "$agent")
   elif [[ -z "$stage_model" ]]; then
-    log "FAIL step $step_index: custom agent '$agent' requires stage model"
+    ralph_orchestrator_log "FAIL step $step_index: custom agent '$agent' requires stage model"
     echo -e "${C_R}${C_BOLD}Step $step_index failed (missing model for custom agent)${C_RST}" >&2
     echo "  Add \"model\" to this stage in $ORCH_FILE or choose a prebuilt agent." >&2
     echo "  Log: $LOG_FILE" >&2
@@ -608,7 +608,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     hint_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}.log"
     hint_out="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log"
 
-    log "FAIL step $step_index exit=$rc agent=$agent plan=$plan_abs"
+    ralph_orchestrator_log "FAIL step $step_index exit=$rc agent=$agent plan=$plan_abs"
     {
       echo ""
       echo "======== orchestrator failure ========"
@@ -640,10 +640,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
 
   if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     if ! verify_step_artifacts "$step_index"; then
-      log "FAIL step $step_index: artifact verification failed (see log for remediation)"
+      ralph_orchestrator_log "FAIL step $step_index: artifact verification failed (see log for remediation)"
       exit 1
     fi
-    log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]} file(s))"
+    ralph_orchestrator_log "step $step_index artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]} file(s))"
   fi
 
   human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""
@@ -657,7 +657,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     ralph_assert_path_not_env_secret "Human ack file" "$human_ack_abs"
     if [[ ! -f "$human_ack_abs" ]]; then
       human_ack_msg="$(echo "$stage" | jq -r '.humanAck.message // empty' 2>/dev/null)" || human_ack_msg=""
-      log "HUMAN_ACK step $step_index: paused until ack file exists: $human_ack_abs"
+      ralph_orchestrator_log "HUMAN_ACK step $step_index: paused until ack file exists: $human_ack_abs"
       echo "" >&2
       echo -e "${C_Y}${C_BOLD}Human acknowledgment required before the next stage${C_RST}" >&2
       echo "  Stage: $step_index ($agent)" >&2
@@ -676,7 +676,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       echo "  Log: $LOG_FILE" >&2
       exit 3
     fi
-    log "humanAck OK: $human_ack_abs"
+    ralph_orchestrator_log "humanAck OK: $human_ack_abs"
   fi
 
   # Check for loop control (feedback loops for review stages).
@@ -695,24 +695,24 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       if [[ -n "$stage_id" ]]; then
         orch_stage_iteration_map_set "$stage_id" "$loop_iter"
       fi
-      log "step $step_index triggers loop back to $loop_back_stage (iteration $loop_iter)"
+      ralph_orchestrator_log "step $step_index triggers loop back to $loop_back_stage (iteration $loop_iter)"
       echo -e "${C_Y}Step $step_index completed with feedback loop.${C_RST}"
       echo -e "${C_Y}Looping back to: $loop_back_stage (iteration $loop_iter)${C_RST}"
       if back_idx="$(orch_stage_index_map_get "$loop_back_stage")"; then
         idx="$back_idx"
         continue
       fi
-      log "loop target '$loop_back_stage' not found in stages; continuing forward"
+      ralph_orchestrator_log "loop target '$loop_back_stage' not found in stages; continuing forward"
       echo -e "${C_Y}Loop target '$loop_back_stage' not found; continuing forward.${C_RST}"
     fi
   fi
 
-  log "step $step_index OK"
+  ralph_orchestrator_log "step $step_index OK"
   echo -e "${C_G}Step $step_index completed.${C_RST}"
   idx=$((idx + 1))
   done
 else
-  log "FAIL: orchestration file must be JSON (.orch.json)"
+  ralph_orchestrator_log "FAIL: orchestration file must be JSON (.orch.json)"
   echo -e "${C_R}${C_BOLD}Error: orchestration file must be JSON${C_RST}" >&2
   echo "  Expected: .orch.json (JSON format)" >&2
   echo "  Got: $(basename "$ORCH_FILE")" >&2
@@ -722,7 +722,7 @@ else
 fi
 
 if [[ $step_index -eq 0 ]]; then
-  log "FAIL: no stages found in $ORCH_FILE"
+  ralph_orchestrator_log "FAIL: no stages found in $ORCH_FILE"
   echo -e "${C_R}No valid stages in orchestration file.${C_RST}" >&2
   echo "  Check the 'stages' array in your JSON file." >&2
   echo "  Template: .ralph/orchestration.template.json" >&2
@@ -731,10 +731,10 @@ if [[ $step_index -eq 0 ]]; then
 fi
 
 if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
-  log "dry-run complete ($step_index steps)"
+  ralph_orchestrator_log "dry-run complete ($step_index steps)"
   exit 0
 fi
 
-log "orchestrator complete ($step_index steps)"
+ralph_orchestrator_log "orchestrator complete ($step_index steps)"
 echo -e "${C_G}${C_BOLD}Orchestration complete${C_RST} ($step_index steps). Log: $LOG_FILE"
 exit 0

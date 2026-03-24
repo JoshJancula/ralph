@@ -1,66 +1,7 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
-
-RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
-RUN_PLAN_FUNCS_FILE=""
-RUN_PLAN_EXTRA_FUNCS_FILE=""
-RUN_PLAN_PREBUILT_FUNCS_FILE=""
-RUN_PLAN_HUMAN_ACTION_FUNCS_FILE=""
-RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE=""
-
-setup() {
-  if [[ ! -f "$RUN_PLAN_SH" ]]; then
-    RUN_PLAN_FUNCS_FILE=""
-    RUN_PLAN_EXTRA_FUNCS_FILE=""
-    RUN_PLAN_HUMAN_FUNCS_FILE=""
-    RUN_PLAN_HUMAN_ACTION_FUNCS_FILE=""
-    RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE=""
-    return 0
-  fi
-  RUN_PLAN_FUNCS_FILE="$(mktemp)"
-  awk '/^_THIS_RUN_PLAN_DIR=/{exit} {print}' "$RUN_PLAN_SH" > "$RUN_PLAN_FUNCS_FILE"
-  RUN_PLAN_EXTRA_FUNCS_FILE="$(mktemp)"
-  awk '/^log\(\)/,/^prompt_for_agent\(/ { if ($0 ~ /^prompt_for_agent\(/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_EXTRA_FUNCS_FILE"
-  RUN_PLAN_PROMPT_FUNCS_FILE="$(mktemp)"
-  awk '/^prompt_for_agent\(\)/,/^prebuilt_agents_root\(\)/ { if ($0 ~ /^prebuilt_agents_root\(\)/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_PROMPT_FUNCS_FILE"
-  RUN_PLAN_PREBUILT_FUNCS_FILE="$(mktemp)"
-  awk '/^prebuilt_agents_root\(\)/,/^prompt_select_prebuilt_agent\(\)/ { if ($0 ~ /^prompt_select_prebuilt_agent\(\)/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_PREBUILT_FUNCS_FILE"
-  RUN_PLAN_HUMAN_FUNCS_FILE="$(mktemp)"
-  awk '/^ralph_operator_has_real_answer\(\)/,/^ralph_remove_human_action_file\(\)/ { if ($0 ~ /^ralph_remove_human_action_file\(\)/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_HUMAN_FUNCS_FILE"
-  RUN_PLAN_HUMAN_ACTION_FUNCS_FILE="$(mktemp)"
-  awk '/^ralph_remove_human_action_file\(\)/,/^ralph_human_input_write_offline_instructions\(\)/ { if ($0 ~ /^ralph_human_input_write_offline_instructions\(\)/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
-  RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE="$(mktemp)"
-  awk '/^ralph_operator_has_real_answer\(\)/,/^ralph_human_input_write_offline_instructions\(\)/ { if ($0 ~ /^ralph_human_input_write_offline_instructions\(\)/) exit; print }' "$RUN_PLAN_SH" > "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
-}
-
-teardown() {
-  rm -f "$RUN_PLAN_FUNCS_FILE" "$RUN_PLAN_EXTRA_FUNCS_FILE" "$RUN_PLAN_PROMPT_FUNCS_FILE" "$RUN_PLAN_PREBUILT_FUNCS_FILE"
-  rm -f "$RUN_PLAN_HUMAN_FUNCS_FILE" "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
-  rm -f "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
-}
-
-run_operator_has_real_answer_from_file() {
-  local response_file="$1"
-  run bash -c '
-    set -euo pipefail
-    printf() { builtin printf -- "$@"; }
-    source "$1"
-    OPERATOR_RESPONSE_FILE="$2"
-    ralph_operator_has_real_answer
-  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$response_file"
-}
-
-create_shared_layout() {
-  local shared_root
-  shared_root="$(mktemp -d)"
-  mkdir -p "$shared_root/bash-lib"
-  touch "$shared_root/ralph-env-safety.sh"
-  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh; do
-    touch "$shared_root/bash-lib/$helper"
-  done
-  printf '%s' "$shared_root"
-}
+source "$BATS_TEST_DIRNAME/test_helper/run-plan-helpers.bash"
 
 @test "ralph shared helper functions succeed when the shared tree is complete" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
@@ -179,6 +120,7 @@ EOF
     PATH="$1"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     CURSOR_PLAN_VERBOSE=0
+    ralph_run_plan_log() { :; }
     ralph_ensure_cursor_cli
     printf "%s" "$CURSOR_CLI"
   ' _ "$stub_dir:$PATH" "$log_file" "$RUN_PLAN_EXTRA_FUNCS_FILE"
@@ -192,12 +134,7 @@ EOF
     source "$2"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     CURSOR_PLAN_VERBOSE=0
-    command() {
-      if [[ "$1" == "-v" && ( "$2" == "cursor-agent" || "$2" == "agent" ) ]]; then
-        return 1
-      fi
-      builtin command "$@"
-    }
+    PATH=""
     ralph_ensure_cursor_cli
   ' _ "$log_file" "$RUN_PLAN_EXTRA_FUNCS_FILE"
 
@@ -250,6 +187,7 @@ EOF
       builtin command "$@"
     }
     CLAUDE_PLAN_CLI=""
+    ralph_run_plan_log() { :; }
     ralph_ensure_claude_cli
   ' _ "$log_file" "$RUN_PLAN_EXTRA_FUNCS_FILE"
 
@@ -300,6 +238,7 @@ EOF
       fi
       builtin command "$@"
     }
+    ralph_run_plan_log() { :; }
     ralph_ensure_codex_cli
   ' _ "$log_file" "$RUN_PLAN_EXTRA_FUNCS_FILE"
 
@@ -364,7 +303,7 @@ EOF
     printf() { builtin printf -- "$@"; }
     source "$1"
     HUMAN_ACTION_FILE="$2"
-    log(){ :; }
+    ralph_run_plan_log() { :; }
     touch "$HUMAN_ACTION_FILE"
     if [[ ! -f "$HUMAN_ACTION_FILE" ]]; then
       exit 1
@@ -378,298 +317,6 @@ EOF
 
   [ "$status" -eq 0 ]
   rm -f "$action_file"
-}
-
-@test "ralph_write_human_action_file renders the template with pending question and history" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" ] || skip "human action helper unavailable"
-
-  local tmp_dir human_action pending human_context plan_file operator_response log_file output_log
-  tmp_dir="$(mktemp -d)"
-  plan_file="$tmp_dir/PLAN.md"
-  printf 'plan instructions\n' >"$plan_file"
-  pending="$tmp_dir/pending-human.txt"
-  printf 'operator question\n' >"$pending"
-  human_context="$tmp_dir/HUMAN-CONTEXT.md"
-  printf '### history entry\n' >"$human_context"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  operator_response="$tmp_dir/operator-response.txt"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-
-  run bash -c '
-    set -euo pipefail
-    printf() { builtin printf -- "$@"; }
-    source "$1"
-    source "$2"
-    HUMAN_ACTION_FILE="$3"
-    PENDING_HUMAN="$4"
-    HUMAN_CONTEXT="$5"
-    PLAN_PATH="$6"
-    OPERATOR_RESPONSE_FILE="$7"
-    RALPH_SESSION_DIR="$8"
-    LOG_FILE="$9"
-    OUTPUT_LOG="${10}"
-    PREBUILT_AGENT="agent"
-    WORKSPACE="${11}"
-    RALPH_RUN_PLAN_REL="run-plan.sh"
-    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
-    ralph_restart_command_hint(){ printf "restart %s" "$PLAN_PATH"; }
-    ralph_write_human_action_file ""
-  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" "$human_action" "$pending" "$human_context" "$plan_file" "$operator_response" "$tmp_dir" "$log_file" "$output_log" "$tmp_dir"
-
-  [ "$status" -eq 0 ]
-  [ -f "$human_action" ]
-  output="$(<"$human_action")"
-  [[ "$output" == *"operator question"* ]]
-  [[ "$output" == *"## Plan file"* ]]
-  [[ "$output" == *"$plan_file"* ]]
-  [[ "$output" == *"### history entry"* ]]
-
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph_sync_human_action_file_state writes then clears the human action file" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" ] || skip "human action helper unavailable"
-
-  local tmp_dir human_action pending human_context plan_file operator_response log_file output_log session_dir
-  tmp_dir="$(mktemp -d)"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  pending="$tmp_dir/pending-human.txt"
-  human_context="$tmp_dir/HUMAN-CONTEXT.md"
-  plan_file="$tmp_dir/PLAN.md"
-  operator_response="$tmp_dir/operator-response.txt"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-  session_dir="$tmp_dir/session"
-  mkdir -p "$session_dir"
-
-  printf 'plan instructions\n' >"$plan_file"
-  printf 'operator question\n' >"$pending"
-  printf '### history entry\n' >"$human_context"
-  printf '%s\n' '(Replace this line with your answer to the question above, then save.)' >"$operator_response"
-
-  run bash -c '
-    set -euo pipefail
-    printf() { builtin printf -- "$@"; }
-    source "$1"
-    source "$2"
-    HUMAN_ACTION_FILE="$3"
-    PENDING_HUMAN="$4"
-    HUMAN_CONTEXT="$5"
-    PLAN_PATH="$6"
-    OPERATOR_RESPONSE_FILE="$7"
-    RALPH_SESSION_DIR="$8"
-    LOG_FILE="$9"
-    OUTPUT_LOG="${10}"
-    PREBUILT_AGENT="agent"
-    WORKSPACE="${11}"
-    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
-    ralph_restart_command_hint(){ printf "restart %s" "$PLAN_PATH"; }
-    ralph_should_persist_human_files(){ return 0; }
-
-    ralph_sync_human_action_file_state
-    if [[ ! -f "$HUMAN_ACTION_FILE" ]]; then
-      echo "expected human action file" >&2
-      exit 1
-    fi
-
-    if ! grep -q "operator question" "$HUMAN_ACTION_FILE"; then
-      echo "human action file missing pending question" >&2
-      exit 1
-    fi
-
-    printf '%s\n' "Operator answer available." >"$OPERATOR_RESPONSE_FILE"
-    ralph_sync_human_action_file_state
-
-    if [[ -f "$HUMAN_ACTION_FILE" ]]; then
-      echo "human action file should have been removed" >&2
-      exit 1
-    fi
-  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" "$human_action" "$pending" "$human_context" "$plan_file" "$operator_response" "$session_dir" "$log_file" "$output_log" "$tmp_dir"
-
-  [ "$status" -eq 0 ]
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph_try_consume_human_response applies answers and clears pending files" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
-
-  local tmp_dir pending human_context operator_response log_file
-  tmp_dir="$(mktemp -d)"
-  pending="$tmp_dir/pending-human.txt"
-  printf 'how should we proceed?\n' >"$pending"
-  human_context="$tmp_dir/HUMAN-CONTEXT.md"
-  printf '### history entry\n' >"$human_context"
-  operator_response="$tmp_dir/operator-response.txt"
-  printf 'yes, please continue\n' >"$operator_response"
-  log_file="$tmp_dir/log.txt"
-
-  run bash -c '
-    set -euo pipefail
-    printf() { builtin printf -- "$@"; }
-    source "$1"
-    HUMAN_CONTEXT="$2"
-    PENDING_HUMAN="$3"
-    OPERATOR_RESPONSE_FILE="$4"
-    LOG_FILE="$5"
-    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
-    ralph_try_consume_human_response
-  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$operator_response" "$log_file"
-
-  [ "$status" -eq 0 ]
-  [ ! -f "$pending" ]
-  [ ! -f "$operator_response" ]
-  output="$(<"$human_context")"
-  [[ "$output" == *"how should we proceed?"* ]]
-  [[ "$output" == *"yes, please continue"* ]]
-  grep -q "Applied answer from operator-response.txt; continuing plan run" "$log_file"
-
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph_human_input_write_offline_instructions writes expected content" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper tmp_dir human_input pending operator_response human_action
-  local plan_file log_file output_log session_dir
-
-  helper="$(mktemp)"
-  cat <<'EOF' > "$helper"
-C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_RST="" C_DIM=""
-log(){ :; }
-ralph_restart_command_hint(){ printf "%s" "restart hint"; }
-ralph_write_human_action_file(){ :; }
-EOF
-  sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$RUN_PLAN_SH" >> "$helper"
-  cat <<'STUBEOF' >>"$helper"
-ralph_path_to_file_uri() {
-  printf 'file://%s' "$1"
-}
-STUBEOF
-
-  tmp_dir="$(mktemp -d)"
-  human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
-  pending="$tmp_dir/pending-human.txt"
-  operator_response="$tmp_dir/operator-response.txt"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  plan_file="$tmp_dir/PLAN.md"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-  session_dir="$tmp_dir/session"
-  mkdir -p "$session_dir"
-  printf 'plan instructions\n' >"$plan_file"
-  printf 'agent question\n' >"$pending"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    HUMAN_INPUT_MD="$2"
-    PENDING_HUMAN="$3"
-    OPERATOR_RESPONSE_FILE="$4"
-    HUMAN_ACTION_FILE="$5"
-    RALPH_SESSION_DIR="$6"
-    PLAN_PATH="$7"
-    LOG_FILE="$8"
-    OUTPUT_LOG="$9"
-    HUMAN_PROMPT_NO_OPEN_FLAG=1
-    ralph_human_input_write_offline_instructions
-  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$session_dir" "$plan_file" "$log_file" "$output_log"
-
-  [ "$status" -eq 0 ]
-  [ -f "$human_input" ]
-  content="$(<"$human_input")"
-  [[ "$content" == *"# Paused for human input"* ]]
-  [[ "$content" == *"## Question from the agent"* ]]
-  [[ "$content" == *"agent question"* ]]
-  [[ "$content" == *"## What to do"* ]]
-  [[ "$content" == *"This instruction page:"* ]]
-  [[ "$content" == *"file://"*"HUMAN-INPUT-REQUIRED.md"* ]]
-  [[ "$content" == *"- Plan file:"*"$plan_file"* ]]
-  [ -f "$operator_response" ]
-  [[ "$( <"$operator_response")" == *"Replace this line"* ]]
-
-  rm -f "$helper"
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph_human_pause_for_operator_offline polls for answers with stubbed sleep" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper tmp_dir human_input pending operator_response human_action plan_file
-  local log_file output_log session_dir sleep_log workspace
-  helper="$(mktemp)"
-  cat <<'EOF' > "$helper"
-C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-ralph_path_to_file_uri(){ printf "%s" "$1"; }
-ralph_restart_command_hint(){ printf "%s" "restart hint"; }
-EOF
-  sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$RUN_PLAN_SH" >> "$helper"
-  sed -n '/^ralph_human_pause_for_operator_offline()/,/^}/p' "$RUN_PLAN_SH" >> "$helper"
-
-  tmp_dir="$(mktemp -d)"
-  human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
-  pending="$tmp_dir/pending-human.txt"
-  operator_response="$tmp_dir/operator-response.txt"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  plan_file="$tmp_dir/PLAN.md"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-  session_dir="$tmp_dir/session"
-  sleep_log="$tmp_dir/sleep.log"
-  workspace="$tmp_dir/workspace"
-  mkdir -p "$session_dir" "$workspace"
-  printf 'plan instructions\n' >"$plan_file"
-  printf 'operator question\n' >"$pending"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    HUMAN_INPUT_MD="$2"
-    PENDING_HUMAN="$3"
-    OPERATOR_RESPONSE_FILE="$4"
-    HUMAN_ACTION_FILE="$5"
-    RALPH_SESSION_DIR="$6"
-    PLAN_PATH="$7"
-    LOG_FILE="$8"
-    OUTPUT_LOG="$9"
-    SLEEP_LOG="${10}"
-    WORKSPACE="${11}"
-    HUMAN_PROMPT_NO_OPEN_FLAG=1
-    RALPH_HUMAN_POLL_INTERVAL=0
-    PREBUILT_AGENT="agent"
-    RALPH_RUN_PLAN_REL="run-plan.sh"
-    _call_count=0
-    log(){ printf "%s\n" "$*" >> "$LOG_FILE"; }
-    sleep(){ printf "%s\n" "$1" >> "$SLEEP_LOG"; }
-    ralph_operator_has_real_answer(){
-      _call_count=$((_call_count + 1))
-      if (( _call_count >= 2 )); then
-        return 0
-      fi
-      return 1
-    }
-    ralph_try_consume_human_response(){
-      printf "%s\n" "consuming answer" >> "$LOG_FILE"
-      return 0
-    }
-    ralph_sync_human_action_file_state(){ :; }
-    ralph_write_human_action_file(){ :; }
-    ralph_human_pause_for_operator_offline
-    printf "%s" "done"
-  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$session_dir" "$plan_file" "$log_file" "$output_log" "$sleep_log" "$workspace"
-
-  [ "$status" -eq 0 ]
-  [ -f "$sleep_log" ]
-  grep -q "consuming answer" "$log_file"
-  [[ "$output" == *"Waiting for a saved answer"* ]]
-  [[ "$output" == *"Answer received. Continuing."* ]]
-  grep -q "0" "$sleep_log"
-  [ -f "$human_input" ]
-  rm -f "$helper"
-  rm -rf "$tmp_dir"
 }
 
 @test "prompt_for_agent trims carriage returns from interactive selection" {
@@ -813,10 +460,8 @@ EOF
 @test "prompt_select_prebuilt_agent accepts scripted TTY selection" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
-  local prompt_funcs runner
-  prompt_funcs="$(mktemp)"
+  local runner
   runner="$(mktemp)"
-  awk 'BEGIN{flag=0} /^prebuilt_agents_root\(\)/ { flag=1 } flag { if (/^# If prebuilt agents exist/) exit; print }' "$RUN_PLAN_SH" > "$prompt_funcs"
 
   cat <<'EOS' > "$runner"
 #!/usr/bin/env bash
@@ -831,23 +476,21 @@ printf "%s\n" "$selected"
 EOS
   chmod +x "$runner"
 
-  run env PREBUILT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
+  run env PREBUILT_FUNCS_FILE="$RUN_PLAN_PROMPT_FUNCS_FILE" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
 2
 EOF
 
   [ "$status" -eq 0 ]
   final_line="$(printf '%s\n' "$output" | awk 'NF { last=$0 } END { printf "%s\n", last }' | tr -d '\r')"
-  rm -f "$prompt_funcs" "$runner"
+  rm -f "$runner"
   [ "$final_line" = "code-review" ]
 }
 
 @test "prompt_agent_source_mode accepts scripted selection" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
-  local prompt_funcs runner
-  prompt_funcs="$(mktemp)"
+  local runner
   runner="$(mktemp)"
-  awk '/^prompt_agent_source_mode\(\)/,/^PLAN_PATH=/ { if (/^PLAN_PATH=/) exit; print }' "$RUN_PLAN_SH" > "$prompt_funcs"
 
   cat <<'EOS' > "$runner"
 #!/usr/bin/env bash
@@ -867,22 +510,20 @@ printf "\nflag=%s\n" "$INTERACTIVE_SELECT_AGENT_FLAG"
 EOS
   chmod +x "$runner"
 
-  run env PROMPT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
+  run env PROMPT_FUNCS_FILE="$RUN_PLAN_PROMPT_FUNCS_FILE" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
 2
 EOF
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"flag=0"* ]]
-  rm -f "$prompt_funcs" "$runner"
+  rm -f "$runner"
 }
 
 @test "prompt_cleanup_on_exit prompts for yes and no answers via scripted TTY input" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_CLEANUP_FUNCS_FILE" ] || skip "prompt_cleanup_on_exit helper unavailable"
 
-  local helper cleanup_marker cleanup_script workspace log_dir output_log log_file
-  helper="$(mktemp)"
-  sed -n '/^prompt_cleanup_on_exit()/,/^}/p' "$RUN_PLAN_SH" > "$helper"
-
+  local cleanup_marker cleanup_script workspace log_dir output_log log_file
   cleanup_marker="$(mktemp)"
   cleanup_script="$(mktemp)"
   cat <<'EOF' > "$cleanup_script"
@@ -903,14 +544,13 @@ EOF
     printf '#!/usr/bin/env bash\n'
     printf 'set -euo pipefail\n'
     printf 'C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""\n'
-    printf 'source %q\n' "$helper"
+    printf 'source %q\n' "$RUN_PLAN_CLEANUP_FUNCS_FILE"
     printf 'prompt_cleanup_on_exit\n'
     printf 'prompt_cleanup_on_exit\n'
   } >"$cleanup_runner"
   chmod +x "$cleanup_runner"
 
   run env \
-    HELPER="$helper" \
     CLEANUP_SCRIPT="$cleanup_script" \
     CLEANUP_MARKER="$cleanup_marker" \
     RALPH_LOG_DIR="$log_dir" \
@@ -931,15 +571,12 @@ EOF
   [[ "$output" == *"Cleanup command:"* ]]
 
   rm -rf "$workspace"
-  rm -f "$helper" "$cleanup_script" "$cleanup_marker" "$cleanup_runner"
+  rm -f "$cleanup_script" "$cleanup_marker" "$cleanup_runner"
 }
 
 @test "ralph path to file uri uses sample paths" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper
-  helper="$(mktemp)"
-  sed -n '/^ralph_path_to_file_uri()/,/^}/p' "$RUN_PLAN_SH" > "$helper"
+  [ -n "$RUN_PLAN_HUMAN_FUNCS_FILE" ] || skip "human helper section unavailable"
 
   local path_space_dir path_space path_simple_dir path_simple encoded
   path_space_dir="$(mktemp -d)"
@@ -957,7 +594,7 @@ EOF
     PATH=""
     source "$1"
     printf "%s" "$(ralph_path_to_file_uri "$2")"
-  ' _ "$helper" "$path_space"
+  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$path_space"
 
   [ "$status" -eq 0 ]
   [ "$output" = "file://$encoded" ]
@@ -968,7 +605,7 @@ EOF
       set -euo pipefail
       source "$1"
       printf "%s" "$(ralph_path_to_file_uri "$2")"
-    ' _ "$helper" "$path_simple"
+    ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$path_simple"
 
     [ "$status" -eq 0 ]
     [ "$output" = "$expected" ]
@@ -976,41 +613,37 @@ EOF
     echo "python3 missing; skipping absolute URI check"
   fi
 
-  rm -f "$helper"
   rm -rf "$path_space_dir" "$path_simple_dir"
 }
 
 @test "ralph restart command hint exposes restart instructions" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper
-  helper="$(mktemp)"
-  sed -n '/^ralph_restart_command_hint()/,/^}/p' "$RUN_PLAN_SH" > "$helper"
+  [ -n "$RUN_PLAN_HUMAN_FUNCS_FILE" ] || skip "human helper section unavailable"
 
   run bash -c '
     set -euo pipefail
+    unset RALPH_ORCH_FILE
     RALPH_RUN_PLAN_RELATIVE=".ralph/run-plan.sh --runtime cursor"
     PLAN_PATH="plan path.md"
     WORKSPACE="/tmp/workspace dir"
     PREBUILT_AGENT=""
     source "$1"
     printf "%s" "$(ralph_restart_command_hint)"
-  ' _ "$helper"
+  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE"
 
   [ "$status" -eq 0 ]
-  [ "$output" = ".ralph/run-plan.sh --runtime cursor --non-interactive --plan plan\\ path.md --agent agent /tmp/workspace\\ dir" ]
+  [ "$output" = ".ralph/run-plan.sh --runtime cursor --non-interactive --plan plan\\ path.md --agent agent --workspace /tmp/workspace\\ dir" ]
 
   run bash -c '
     set -euo pipefail
     RALPH_ORCH_FILE="/tmp/restart plan/orch.json"
     source "$1"
     printf "%s" "$(ralph_restart_command_hint)"
-  ' _ "$helper"
+  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE"
 
   [ "$status" -eq 0 ]
   [ "$output" = ".ralph/orchestrator.sh --orchestration /tmp/restart\\ plan/orch.json" ]
 
-  rm -f "$helper"
 }
 
 @test "prebuilt agent CURSOR_PLAN_MODEL env var overrides agent config model" {
@@ -1203,101 +836,4 @@ CFG
   [ "$status" -eq 0 ]
   [ "$output" = "claude-sonnet-4-5" ]
   rm -rf "$tmp_dir"
-}
-
-@test "ralph_write_human_action_file succeeds without printf wrapper on format strings with leading dash" {
-  # Regression: printf '- text' crashed on macOS bash 3.2 with "invalid option" because
-  # the leading '-' was misinterpreted as a flag. Fixed by adding '--' to those calls.
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" ] || skip "human action helper unavailable"
-
-  local tmp_dir human_action pending human_context plan_file operator_response log_file output_log
-  tmp_dir="$(mktemp -d)"
-  plan_file="$tmp_dir/PLAN.md"
-  printf 'plan instructions\n' >"$plan_file"
-  pending="$tmp_dir/pending-human.txt"
-  printf 'operator question\n' >"$pending"
-  human_context="$tmp_dir/HUMAN-CONTEXT.md"
-  printf '### history entry\n' >"$human_context"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  operator_response="$tmp_dir/operator-response.txt"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-
-  # Deliberately do NOT override printf — this tests the actual fixed code path
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    source "$2"
-    HUMAN_ACTION_FILE="$3"
-    PENDING_HUMAN="$4"
-    HUMAN_CONTEXT="$5"
-    PLAN_PATH="$6"
-    OPERATOR_RESPONSE_FILE="$7"
-    RALPH_SESSION_DIR="$8"
-    LOG_FILE="$9"
-    OUTPUT_LOG="${10}"
-    PREBUILT_AGENT="agent"
-    WORKSPACE="${11}"
-    RALPH_RUN_PLAN_REL="run-plan.sh"
-    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
-    ralph_restart_command_hint(){ printf "restart %s" "$PLAN_PATH"; }
-    ralph_write_human_action_file ""
-  ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE" "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE" \
-    "$human_action" "$pending" "$human_context" "$plan_file" "$operator_response" \
-    "$tmp_dir" "$log_file" "$output_log" "$tmp_dir"
-
-  [ "$status" -eq 0 ]
-  [ -f "$human_action" ]
-  local content
-  content="$(<"$human_action")"
-  [[ "$content" == *"- Pending question:"* ]]
-  [[ "$content" == *"- Session directory:"* ]]
-  [[ "$content" == *"- Plan log:"* ]]
-  [[ "$content" == *"- Output log:"* ]]
-
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph should persist human files only when tty attached" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper out_file
-  helper="$(mktemp)"
-  sed -n '/^ralph_should_persist_human_files()/,/^}/p' "$RUN_PLAN_SH" > "$helper"
-  out_file="$(mktemp)"
-
-  local persist_runner
-  persist_runner="$(mktemp)"
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf 'set -euo pipefail\n'
-    printf 'source %q\n' "$helper"
-    printf 'ralph_should_persist_human_files\n'
-  } >"$persist_runner"
-  chmod +x "$persist_runner"
-
-  run ralph-pty-exec "$persist_runner"
-
-  [ "$status" -eq 1 ]
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    exec 0</dev/null
-    ralph_should_persist_human_files
-  ' _ "$helper"
-
-  [ "$status" -eq 0 ]
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    exec 1>"$2"
-    ralph_should_persist_human_files
-  ' _ "$helper" "$out_file"
-
-  [ "$status" -eq 0 ]
-
-  rm -f "$helper" "$out_file" "$persist_runner"
 }

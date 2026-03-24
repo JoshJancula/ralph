@@ -7,6 +7,7 @@ setup() {
   WORKSPACE="/tmp/ralph-ws"
   export ORCH_BASENAME="orch-base"
   export RALPH_ARTIFACT_NS=""
+  unset RALPH_PLAN_KEY
   EXPECTED_ARTIFACT_PATHS=()
 }
 
@@ -75,6 +76,22 @@ setup() {
   result="$(expand_artifact_tokens "{{ARTIFACT_NS}}/{{PLAN_KEY}}/{{STAGE_ID}}.md")"
   [ "$result" = "pipeline/pipeline/sr2.md" ]
   unset RALPH_STAGE_ID
+}
+
+@test "expand_artifact_tokens prefers PLAN_KEY over ARTIFACT_NS" {
+  export RALPH_ARTIFACT_NS="my-ns"
+  export RALPH_PLAN_KEY="my-plan-key"
+  result="$(expand_artifact_tokens ".ralph-workspace/{{PLAN_KEY}}/artifact.md")"
+  [ "$result" = ".ralph-workspace/my-plan-key/artifact.md" ]
+  unset RALPH_PLAN_KEY
+}
+
+@test "expand_artifact_tokens falls back to ARTIFACT_NS when PLAN_KEY empty" {
+  export RALPH_ARTIFACT_NS="fallback-ns"
+  export RALPH_PLAN_KEY=""
+  result="$(expand_artifact_tokens ".ralph-workspace/{{PLAN_KEY}}/artifact.md")"
+  [ "$result" = ".ralph-workspace/fallback-ns/artifact.md" ]
+  unset RALPH_PLAN_KEY
 }
 
 @test "artifact_paths_append_unique deduplicates after token expansion" {

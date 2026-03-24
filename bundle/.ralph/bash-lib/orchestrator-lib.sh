@@ -24,12 +24,22 @@ parse_artifact_csv() {
   done
 }
 
+# expand_artifact_tokens() replaces the templated tokens in artifact paths.
+#  * {{ARTIFACT_NS}} always resolves from RALPH_ARTIFACT_NS (no fallback).
+#  * {{PLAN_KEY}} resolves from RALPH_PLAN_KEY when set, otherwise falls back to the artifact namespace.
+#  * {{STAGE_ID}} resolves from RALPH_STAGE_ID, which is expected to be sanitized before export.
 expand_artifact_tokens() {
   local p="$1"
   local ns="${RALPH_ARTIFACT_NS:-$ORCH_BASENAME}"
   local stage_id="${RALPH_STAGE_ID:-}"
+  local plan_key
+  if [[ -n "${RALPH_PLAN_KEY:-}" ]]; then
+    plan_key="${RALPH_PLAN_KEY}"
+  else
+    plan_key="$ns"
+  fi
   p="${p//\{\{ARTIFACT_NS\}\}/$ns}"
-  p="${p//\{\{PLAN_KEY\}\}/$ns}"
+  p="${p//\{\{PLAN_KEY\}\}/$plan_key}"
   p="${p//\{\{STAGE_ID\}\}/$stage_id}"
   printf '%s' "$p"
 }

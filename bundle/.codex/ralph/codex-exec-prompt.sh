@@ -8,7 +8,7 @@
 ##   CODEX_PLAN_SANDBOX (default: workspace-write)
 ##   CODEX_PLAN_MODEL, CURSOR_PLAN_MODEL
 ##   CODEX_PLAN_EXEC_EXTRA (space-separated extra args before prompt)
-##   CODEX_PLAN_NO_ADD_AGENTS_DIR (default unset): set to 1 to skip --add-dir for .ralph-workspace/ (plan human files use .ralph-workspace/, not .ralph-workspace)
+##   CODEX_PLAN_NO_ADD_AGENTS_DIR (default unset): set to 1 to omit --add-dir <workspace>/.ralph-workspace on non-resume runs (default adds it so session and orchestration files under .ralph-workspace/ are visible to Codex; name is historical)
 ##   RALPH_PLAN_CLI_RESUME=1: pass --json so session id can be captured (python in invoke)
 ##   RALPH_RUN_PLAN_RESUME_SESSION_ID: when set, use `codex exec resume <id> ...` instead of one-shot exec
 ##   RALPH_RUN_PLAN_RESUME_BARE=1 with RALPH_PLAN_ALLOW_UNSAFE_RESUME=1: `codex exec resume --last ...` when no id (unsafe locally)

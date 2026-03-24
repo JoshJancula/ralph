@@ -5,6 +5,22 @@ if [[ -n "${RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED:-}" ]]; then
 fi
 RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
+
+run_plan_invoke_claude_session_resume_args() {
+  local args_name="$1"
+  eval "$args_name+=(--resume \"\${RALPH_RUN_PLAN_RESUME_SESSION_ID}\")"
+}
+
+run_plan_invoke_claude_bare_resume_args() {
+  local args_name="$1"
+  eval "$args_name+=(--resume)"
+}
+
+run_plan_invoke_claude_bare_resume_warn() {
+  echo "Warning: resume without a session id requires RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 or --allow-unsafe-resume; omitting bare --resume." >&2
+}
+
 ralph_run_plan_invoke_claude() {
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
@@ -20,9 +36,7 @@ ralph_run_plan_invoke_claude() {
   fi
 
   local -a args=(-p)
-  if [[ -n "${SELECTED_MODEL:-}" ]]; then
-    args+=(--model "$SELECTED_MODEL")
-  fi
+  run_plan_invoke_common_add_model_flag args --model
 
   local tools_use
   if [[ "${CLAUDE_PLAN_NO_ALLOWED_TOOLS:-0}" == "1" ]]; then
@@ -39,28 +53,19 @@ ralph_run_plan_invoke_claude() {
     args+=(--allowedTools "$tools_use")
   fi
 
-  if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
-    args+=(--resume "$RALPH_RUN_PLAN_RESUME_SESSION_ID")
-  elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
-    args+=(--resume)
-  elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
-    echo "Warning: resume without a session id requires RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 or --allow-unsafe-resume; omitting bare --resume." >&2
-  fi
+  run_plan_invoke_common_add_resume_args \
+    args \
+    run_plan_invoke_claude_session_resume_args \
+    run_plan_invoke_claude_bare_resume_args \
+    run_plan_invoke_claude_bare_resume_warn
+  run_plan_invoke_common_add_cli_resume_flags args --verbose --output-format stream-json
 
-  # Claude --print requires the prompt on stdin or as argv; stdin is reliable across
-  # versions (some builds reject trailing prompt after flags).
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && command -v python3 &>/dev/null; then
-    local _demux_py
-    _demux_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-cli-json-demux.py"
-    args+=(--verbose)
-    args+=(--output-format stream-json)
-    printf '%s' "$PROMPT" | "$cli" "${args[@]}" 2>&1 | python3 "$_demux_py" claude "$SESSION_ID_FILE" | tee -a "$OUTPUT_LOG"
-    echo "${PIPESTATUS[1]}" >"$EXIT_CODE_FILE"
-  else
-    if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]]; then
-      echo "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse stream-json and update session-id.txt; running without it." >&2
-    fi
-    printf '%s' "$PROMPT" | "$cli" "${args[@]}" 2>&1 | tee -a "$OUTPUT_LOG"
-    echo "${PIPESTATUS[1]}" >"$EXIT_CODE_FILE"
-  fi
+  run_plan_invoke_claude_cli() {
+    printf '%s' "$PROMPT" | "$cli" "${args[@]}"
+  }
+
+  run_plan_invoke_common_execute \
+    run_plan_invoke_claude_cli \
+    claude \
+    "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse stream-json and update session-id.txt; running without it."
 }

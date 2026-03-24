@@ -7,7 +7,11 @@ setup_orchestrator_workspace() {
   workspace="$(mktemp -d)"
   mkdir -p "$workspace/.ralph/bash-lib"
   cp "$REPO_ROOT/.ralph/ralph-env-safety.sh" "$workspace/.ralph/"
+  cp "$REPO_ROOT/.ralph/bash-lib/error-handling.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-logging.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-lib.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-verify.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/"
   cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -217,6 +221,73 @@ RESUME
     && [[ "$output" != *"--no-cli-resume"* ]] \
     || return 1
   rm -rf "$workspace"
+}
+
+@test "orchestrator sanitizes stage id before RALPH_STAGE_ID export" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file="$workspace/stage-id-sanitization.orch.json"
+  cat <<'SANITIZE_ORCH' > "$orch_file"
+{
+  "name": "bats stage id sanitization",
+  "namespace": "bats-sanitization",
+  "stages": [
+    {
+      "id": "My Stage/1",
+      "agent": "sanitize-agent",
+      "runtime": "cursor",
+      "plan": "stages/sanitize.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{STAGE_ID}}.md",
+          "required": true
+        }
+      ],
+      "humanAck": {
+        "path": ".ralph-workspace/human/{{STAGE_ID}}.ack",
+        "message": "Confirm sanitized artifact"
+      }
+    }
+  ]
+}
+SANITIZE_ORCH
+  write_plan_file "$workspace" "stages/sanitize.plan.md"
+  run env ORCHESTRATOR_DRY_RUN=1 ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *".ralph-workspace/artifacts/bats-sanitization/my-stage-1.md"* ]]
+  [[ "$output" == *"humanAck (only if ORCHESTRATOR_HUMAN_ACK=1): .ralph-workspace/human/my-stage-1.ack"* ]]
+  rm -rf "$workspace"
+}
+
+@test "validate-orchestration-schema rejects unsafe stage id" {
+  local orch_file
+  orch_file="$(mktemp)"
+  cat <<'BAD_ORCH' > "$orch_file"
+{
+  "name": "bats invalid stage id",
+  "namespace": "unsafe-stage",
+  "stages": [
+    {
+      "id": "unsafe stage/1",
+      "agent": "unsafe-agent",
+      "runtime": "cursor",
+      "plan": "stages/unsafe.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/unsafe-stage/output.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+BAD_ORCH
+
+  run bash "$REPO_ROOT/scripts/validate-orchestration-schema.sh" "$orch_file" 2>&1
+  [ "$status" -ne 0 ] \
+    && [[ "$output" == *"Orchestration schema validation failed"* ]] \
+    || return 1
+  rm -f "$orch_file"
 }
 
 @test "orchestrator rejects invalid sessionResume values" {
@@ -609,7 +680,8 @@ ORCH
   [ "$status" -eq 3 ] \
     && [[ "$output" == *"Human acknowledgment required"* ]] \
     || return 1
-  local ack_file="$workspace/.ralph-workspace/artifacts/bats-human-ack/human-ack.txt"
+  local artifact_ns="${RALPH_ARTIFACT_NS:-bats-human-ack}"
+  local ack_file="$workspace/.ralph-workspace/artifacts/$artifact_ns/human-ack.txt"
   mkdir -p "$(dirname "$ack_file")"
   : >"$ack_file"
   run env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
