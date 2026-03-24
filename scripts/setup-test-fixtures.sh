@@ -2,10 +2,14 @@
 
 set -euo pipefail
 
-mkdir -p .ralph-workspace/artifacts/dashboard
-mkdir -p .ralph-workspace/logs
+workspace=".ralph-workspace"
+checksum_file="$workspace/.fixture-checksums"
 
-cat > dashboard.orch.json << 'EOF'
+mkdir -p "$workspace/artifacts/dashboard"
+mkdir -p "$workspace/logs"
+
+dashboard_orch_json_generator() {
+  cat <<'INNER'
 {
   "name": "dashboard-three-runtime",
   "namespace": "dashboard",
@@ -87,20 +91,84 @@ cat > dashboard.orch.json << 'EOF'
     }
   ]
 }
-EOF
+INNER
+}
 
-
-cat > .ralph-workspace/artifacts/dashboard/research.md << 'EOF'
+dashboard_research_md_generator() {
+  cat <<'INNER'
 # Research Output
 Placeholder research artifact.
-EOF
+INNER
+}
 
-cat > .ralph-workspace/artifacts/dashboard/implementation-handoff.md << 'EOF'
+dashboard_implementation_md_generator() {
+  cat <<'INNER'
 # Implementation Handoff
 Placeholder implementation artifact.
-EOF
+INNER
+}
 
-cat > .ralph-workspace/artifacts/dashboard/code-review.md << 'EOF'
+dashboard_code_review_md_generator() {
+  cat <<'INNER'
 # Code Review Output
 Placeholder code review artifact.
-EOF
+INNER
+}
+
+fixtures_paths=(
+  "dashboard.orch.json"
+  "$workspace/artifacts/dashboard/research.md"
+  "$workspace/artifacts/dashboard/implementation-handoff.md"
+  "$workspace/artifacts/dashboard/code-review.md"
+)
+
+fixtures_generators=(
+  "dashboard_orch_json_generator"
+  "dashboard_research_md_generator"
+  "dashboard_implementation_md_generator"
+  "dashboard_code_review_md_generator"
+)
+
+if [[ -f "$checksum_file" ]]; then
+  while IFS=$'\t' read -r checksum path; do
+    if [[ -n "$checksum" && -n "$path" ]]; then
+      :
+    fi
+  done < "$checksum_file"
+fi
+
+lookup_previous_checksum() {
+  local path="$1"
+  [[ -f "$checksum_file" ]] || return 1
+  awk -F $'\t' -v target="$path" '$2 == target { print $1; found = 1; exit } END { exit(found ? 0 : 1) }' "$checksum_file"
+}
+
+generate_fixture() {
+  local path="$1"
+  local generator="$2"
+  local tmpfile
+  local previous_checksum
+  local checksum
+  tmpfile=$(mktemp "$workspace/.fixture-temp.XXXXXX")
+  "$generator" > "$tmpfile"
+  checksum=$(shasum -a 256 "$tmpfile" | cut -d ' ' -f 1)
+
+  previous_checksum=$(lookup_previous_checksum "$path" || true)
+
+  if [[ "$checksum" == "$previous_checksum" && -f "$path" ]]; then
+    rm -f "$tmpfile"
+  else
+    mkdir -p "$(dirname "$path")"
+    mv "$tmpfile" "$path"
+  fi
+
+  printf '%s\t%s\n' "$checksum" "$path" >> "$checksum_tmp"
+}
+
+checksum_tmp=$(mktemp "$workspace/.fixture-checksums.XXXXXX")
+
+for i in "${!fixtures_paths[@]}"; do
+  generate_fixture "${fixtures_paths[$i]}" "${fixtures_generators[$i]}"
+done
+
+mv "$checksum_tmp" "$checksum_file"

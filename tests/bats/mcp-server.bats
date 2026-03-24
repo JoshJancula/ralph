@@ -44,13 +44,32 @@ json_response_line() {
   printf '%s\n' "$first_line" | jq -e '.result.tools | length > 0'
 }
 
+@test "MCP tool-call rejects missing auth token when guard enabled" {
+  local payload=$'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload" "RALPH_MCP_AUTH_TOKEN=secret"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e '.error.code == -32001'
+  printf '%s\n' "$first_line" | jq -e '.error.message == "unauthorized"'
+}
+
+@test "MCP tool-call succeeds when correct auth token provided" {
+  local payload=$'{"jsonrpc":"2.0","id":1,"authToken":"secret","method":"tools/list"}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload" "RALPH_MCP_AUTH_TOKEN=secret"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e '.result.tools | length > 0'
+}
+
 @test "plan status rejects plan paths outside the workspace" {
   local payload=$'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ralph_plan_status","arguments":{"workspace":".","plan_path":"../PLAN.md"}}}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
   run_mcp_server_with_payload "$payload"
   [ "$status" -eq 0 ]
   local first_line
   first_line="$(json_response_line 0)"
-  printf '%s\n' "$first_line" | jq -e '.error.message | test("plan path invalid or outside workspace")'
+  printf '%s\n' "$first_line" | jq -e '.error.message | test("plan path invalid")'
 }
 
 @test "plan status tool reports checkbox counts" {
@@ -85,6 +104,65 @@ EOF
   local first_line
   first_line="$(json_response_line 0)"
   printf '%s\n' "$first_line" | jq -e '.result.capabilities.tools.listChanged == false'
+  printf '%s\n' "$first_line" | jq -e '.result.capabilities.resources.listChanged == false'
+  printf '%s\n' "$first_line" | jq -e '.result.capabilities.prompts.listChanged == false'
+}
+
+@test "resources/list exposes the agent catalog" {
+  local payload=$'{"jsonrpc":"2.0","id":1,"method":"resources/list"}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e '.result.resources[0].uri == "resource://ralph/agents"'
+  printf '%s\n' "$first_line" | jq -e '.result.resources[0].mimeType == "text/markdown"'
+}
+
+@test "resources/read returns the agent catalog markdown" {
+  local payload=$'{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"resource://ralph/agents"}}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e '.result.contents[0].mimeType == "text/markdown"'
+  printf '%s\n' "$first_line" | jq -e '.result.contents[0].text | test("# Ralph agent catalog")'
+  printf '%s\n' "$first_line" | jq -e '.result.contents[0].text | test("Cursor agents")'
+}
+
+@test "prompts/list advertises the next TODO prompt" {
+  local payload=$'{"jsonrpc":"2.0","id":1,"method":"prompts/list"}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e '.result.prompts[0].name == "ralph_run_next_todo_prompt"'
+  printf '%s\n' "$first_line" | jq -e '.result.prompts[0].arguments | map(select(.name == "plan_path")) | length == 1'
+}
+
+@test "prompts/get delivers guidance for the next unchecked TODO" {
+  local prompt_dir
+  prompt_dir="$(mktemp -d "$REPO_ROOT/tests/bats/next-todo.XXXX")"
+  local plan_path="$prompt_dir/PLAN.md"
+  cat <<'EOF' > "$plan_path"
+- [ ] pick runtime
+- [x] done
+EOF
+  local plan_rel="${plan_path#$REPO_ROOT/}"
+  local payload
+  payload=$(cat <<EOF
+{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"ralph_run_next_todo_prompt","arguments":{"plan_path":"$plan_rel"}}}
+{"jsonrpc":"2.0","id":2,"method":"exit"}
+EOF
+)
+  run_mcp_server_with_payload "$payload"
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+  printf '%s\n' "$first_line" | jq -e --arg term "ralph_plan_status" '.result.messages[0].content.text | contains($term)'
+  printf '%s\n' "$first_line" | jq -e --arg term "resource://ralph/agents" '.result.messages[0].content.text | contains($term)'
+  printf '%s\n' "$first_line" | jq -e --arg term "ralph_run_plan" '.result.messages[0].content.text | contains($term)'
+  printf '%s\n' "$first_line" | jq -e --arg plan "$plan_rel" '.result.messages[0].content.text | contains($plan)'
+  rm -rf "$prompt_dir"
 }
 
 @test "initialized notification does not produce a response" {

@@ -5,6 +5,13 @@ if [[ -n "${RALPH_HUMAN_INTERACTION_HELPERS_LOADED:-}" ]]; then
 fi
 RALPH_HUMAN_INTERACTION_HELPERS_LOADED=1
 
+# Public interface:
+#   ralph_optional_log -- forwards to orchestrator `log` when defined.
+#   ralph_human_ack_tool_path -- resolves .ralph/orchestrator.sh for --human-ack.
+#   ralph_forward_human_question_to_orchestrator -- invokes orchestrator with a question file.
+#   ralph_record_interactive_reply, ralph_interactive_history_block -- TTY Q&A capture for prompts.
+#   ralph_persist_human_exchange -- append exchange to human-replies.md when configured.
+
 # Holds the human exchanges captured during interactive runs.
 TTY_HUMAN_HISTORY=""
 

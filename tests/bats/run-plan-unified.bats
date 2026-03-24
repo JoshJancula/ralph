@@ -3,6 +3,8 @@
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 
 RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
+RUN_PLAN_ARGS_FILE="$REPO_ROOT/.ralph/bash-lib/run-plan-args.sh"
+RUN_PLAN_CORE_FILE="$REPO_ROOT/.ralph/bash-lib/run-plan-core.sh"
 
 @test "unified runner entrypoint exists (bundle)" {
   [ -f "$RUN_PLAN_SH" ]
@@ -45,8 +47,8 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 
 @test "non-interactive gate includes --model (PLAN_MODEL_CLI)" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  grep -Fq 'PLAN_MODEL_CLI' "$RUN_PLAN_SH"
-  run grep -F 'Non-interactive mode requires a prebuilt agent' "$RUN_PLAN_SH"
+  grep -Fq 'PLAN_MODEL_CLI' "$RUN_PLAN_ARGS_FILE"
+  run grep -F 'Non-interactive mode requires a prebuilt agent' "$RUN_PLAN_CORE_FILE"
   [[ "$output" == *"--model <id>"* ]]
 }
 
@@ -71,7 +73,7 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 - [ ] stub non-interactive invocation
 EOF
 
-  local select_model_dir
+  local select_model_dir session_home
   select_model_dir="$workspace/.cursor/ralph"
   mkdir -p "$select_model_dir"
   cat <<'EOF' > "$select_model_dir/select-model.sh"
@@ -137,14 +139,18 @@ EOF
 
   chmod +x "$bin_dir/cursor-agent" "$bin_dir/claude" "$bin_dir/codex"
 
+  session_home="$workspace/.sessions"
+  mkdir -p "$session_home"
+
   run bash -c '
     set -euo pipefail
     cd "$1"
     export PATH="$2:$PATH"
     export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$5"
     export STUB_PLAN_PATH="$4"
     "$3" --runtime cursor --plan PLAN.md --non-interactive --model stub-model
-  ' _ "$workspace" "$bin_dir" "$RUN_PLAN_SH" "$plan_file"
+  ' _ "$workspace" "$bin_dir" "$RUN_PLAN_SH" "$plan_file" "$session_home"
 
   [ "$status" -eq 0 ]
   grep -Fq -- "--model" "$cursor_record"
@@ -182,7 +188,7 @@ EOF
 
   run bash "$bad_layout/run-plan.sh" --runtime cursor --plan "$REPO_ROOT/PLAN.md"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"bash-lib/run-plan-env.sh: No such file or directory"* ]]
+  [[ "$output" == *"bash-lib/run-plan-runtime.sh: No such file or directory"* ]]
 
   rm -rf "$bad_layout"
 }

@@ -27,3 +27,19 @@ Use **hooks** (e.g. pre-tool-use) to block reads or edits you care about. Ralph 
 ### Codex: ignore lists vs sandbox
 
 `--sandbox` limits how Codex can touch the workspace **per Codex’s rules**; it is not the same as “never read `.env`.” There is still no great repo-local “never send this path to the model” story; see discussion in **[openai/codex#2847](https://github.com/openai/codex/issues/2847#issuecomment-4095749783)**. Combine **`CODEX_PLAN_SANDBOX`**, a clean tree, and minimal secrets on disk.
+
+## Session and human-interaction controls
+
+Files under `.ralph-workspace/sessions/{{PLAN_KEY}}/` are now created with owner-only permissions: the directory itself is `700`, both `pending-human.txt` and `session-id.txt` are `600`, and response processing double-checks that the current user owns `operator-response.txt` before honoring it. These permissions prevent other tenants from reading pending interactions or session tokens while the plan is running.
+
+Because these files can contain prompts, responses, and session identifiers, do not commit `.ralph-workspace/` into multi-tenant or shared repositories. Keep the directory outside the tracked tree and treat it like other sensitive runtime state.
+
+If you override session handling with `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1`, be aware that it forces the runner to reuse existing session files even when they live inside a workspace shared with other users. Only set this in isolated environments you control; in shared hosts keep it unset so each invocation creates fresh, owner-restricted session data.
+
+## MCP server access controls
+
+Ralph exposes an MCP JSON-RPC server for tool execution. Treat it as you would any RPC surface: set `RALPH_MCP_AUTH_TOKEN` to a shared secret so every request must include the matching `authToken` field before the server will run tools. When the token is unset, the server logs a startup warning and continues without authentication, so make sure to only run unauthenticated servers in isolated environments you control.
+
+Always run the MCP server behind authenticated transport in shared environments (e.g., expose it only through an SSH tunnel or bind to a loopback-only socket). That keeps a compromised coworker or tenant from reaching the server even if they have network access to the host.
+
+When your workspace root spans multiple projects or a directory tree with mixed owners, supply `RALPH_MCP_ALLOWLIST` to explicitly limit the directories the server will accept for `workspace`, `plan_path`, or `orchestration_path` parameters. The allowlist is a comma-separated list of absolute prefixes; any request that resolves outside the allowlisted roots is rejected before invoking a tool.

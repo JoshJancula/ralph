@@ -14,11 +14,36 @@ A normal install drops **`.ralph/`** into your workspace, which includes **`mcp-
 
 ---
 
+## Supported MCP surface today
+
+The canonical MCP server implementation described in this doc is the Bash script at `bundle/.ralph/mcp-server.sh`. The server implements **only** the JSON-RPC methods listed below; any other method currently returns `method not found` (`-32601`). Keep this doc aligned with the script so the surface you depend on matches the actual behavior that Cursor, Claude, or Codex sees.
+
+### lifecycle & capability methods
+
+- `initialize` / `initialized` – announces `{ "tools": { "listChanged": false }, "resources": { "listChanged": false }, "prompts": { "listChanged": false } }` so hosts know the available capabilities.
+- `shutdown` – responds with `{ "status": "shutting_down" }`.
+- `exit` – replies `{ "status": "exiting" }` and terminates the server process.
+
+### resource discovery
+
+- `resources/list` – advertises `resource://ralph/agents` as the only catalog entry.
+- `resources/read` – accepts `resource://ralph/agents` and returns the Markdown catalog content.
+
+### prompt discovery
+
+- `prompts/list` – lists the single `ralph_run_next_todo_prompt` definition.
+- `prompts/get` – requires `plan_path`, validates the optional `workspace`, and returns the templated guidance for scheduling the next unchecked TODO.
+
+### tools
+
+- `tools/list` – advertises `ralph_run_plan`, `ralph_plan_status`, and `ralph_orchestrator_run`.
+- `tools/call` – accepts exactly those three tool names and enforces workspace/plan/orchestration validation, runtime whitelisting, and argument safety before executing the helper scripts. Any other tool name yields `tool not found` (`-32601`).
+
 ## Agent catalog resource
 
 - **URI:** `resource://ralph/agents`
-- **Description:** Aggregates every agent configuration that lives under `.cursor/agents/`, `.claude/agents/`, and `.codex/agents/`. The resource returns a Markdown catalog listing each agent ID, the path to its `config.json`, its `model` declaration, and the published description.
-- **Consumption:** Use any MCP-capable client to call `resources/read` with the URI. The returned Markdown is safe to render in dashboards or include as context for downstream agents.
+- **Description:** Aggregates every agent configuration that lives under `.cursor/agents/`, `.claude/agents/`, and `.codex/agents/`. `resources/list` advertises the catalog; `resources/read` returns a Markdown document that lists each agent ID, the relative path to its `config.json`, the declared `model`, and the published description.
+- **Consumption:** Call `resources/read` with the URI and render the `text` of the first entry in `contents`. The response follows the MCP resources schema: `contents` is an array of `{ "uri", "mimeType", "text" }` blocks, so clients can display the Markdown or include it in plan context.
 
 Example outline:
 
@@ -39,9 +64,9 @@ Workspace root: `/path/to/workspace`
 - **Name:** `ralph_run_next_todo_prompt`
 - **Purpose:** Guides the orchestrator to inspect the next unchecked TODO in a plan and determine which runtime/agent should execute it.
 - **Arguments:**
-  - `workspace` (required) – absolute path to the workspace (defaults to the MCP server's configured root).
+  - `workspace` (optional) – absolute path to the workspace (defaults to the MCP server's configured root).
   - `plan_path` (required) – the plan file path relative to the workspace root (e.g., `PLAN.md`).
-- **Behavior:** The prompt reminds the orchestrator to consult `resource://ralph/agents`, call `ralph_plan_status` (or the future `ralph_list_next_todo` tool), and articulate the `ralph_run_plan` invocation that should follow.
+- **Behavior:** `prompts/list` advertises the prompt and its arguments. `prompts/get` returns a user-message template that reminds the orchestrator to consult `resource://ralph/agents`, call `ralph_plan_status`, and articulate the following `ralph_run_plan` invocation.
 
 Use `prompts/get` with the prompt name and arguments to pull the textual template before composing the next tool call.
 
@@ -78,6 +103,10 @@ For Codex, MCP servers are configured in `config.toml` (`~/.codex/config.toml` o
 - `RALPH_MCP_ALLOWLIST` lets you whitelist additional directories. Supply colon/comma/semicolon-separated entries (relative entries are resolved under `RALPH_MCP_WORKSPACE`, and `~` expands to the user home). The server canonicalizes each path, ensures it exists, logs the configured roots, and rejects tool calls that try to operate outside this set with a JSON-RPC error.
 - The server spawns `cursor`, `claude`, and `codex` runners, so the `PATH` that Cursor inherits must include their installers (`/opt/homebrew/bin`, `~/.local/bin`, etc.). Explicitly set `PATH` inside your MCP server `env` block (see the example below) so it can launch all runtimes regardless of how you installed them.
 - If your workspace uses multiple artifact namespaces (per plan, per feature), set `RALPH_ARTIFACT_NS` before starting the server so log and artifact paths stay predictable for downstream tools.
+
+### Tool stream limits
+
+The MCP server currently truncates any single tool response (stdout or stderr) to 32 KiB before it writes the JSON-RPC response back to the host. Long-running commands that emit more than 32 KiB will still finish, but the host will only see the trailing chunk. If you need the full raw streams for auditing or debugging, capture them yourself (for example, redirect `run-plan.sh` output to a workspace file or artifact path) and keep only the truncated tail for the MCP response so the client still receives the summary it expects.
 
 ## Cursor host configuration example
 

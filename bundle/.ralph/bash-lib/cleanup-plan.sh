@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# Shared implementation for .ralph/cleanup-plan.sh (sourced by the entry script).
+#
+# Public interface:
+#   cleanup_plan_namespace_from_arg_or_env, cleanup_plan_validate_namespace -- resolve RALPH_ARTIFACT_NS / argv.
+#   cleanup_plan_workspace_root -- resolve workspace and RALPH_PLAN_WORKSPACE_ROOT.
+#   cleanup_plan_log_dir, cleanup_plan_legacy_plan_log_dir -- log directory paths.
+#   cleanup_plan_session_dir, cleanup_plan_legacy_plan_session_dir -- session directory paths.
+#   cleanup_plan_artifact_dir -- artifact tree for the namespace.
+#   cleanup_plan_delete_log_files, cleanup_plan_delete_artifact_dir -- destructive deletes.
+#   cleanup_plan_remove_human_action_file -- remove workspace HUMAN_ACTION_REQUIRED.md when safe.
 
 cleanup_plan_namespace_from_arg_or_env() {
   local arg="${1:-}"

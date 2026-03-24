@@ -37,8 +37,15 @@ schema_filter='
       ($sr == null) or ($sr | type == "boolean")
     );
 
+  def stage_id_ok:
+    ((.id? // null) as $id |
+      ($id | type == "string") and
+      ($id | test("^[a-z0-9_]+(-[a-z0-9_]+)*$"))
+    );
+
   def stage_ok:
     has("id") and has("runtime") and has("agent") and has("plan") and
+    stage_id_ok and
     (.artifacts | artifacts_ok) and
     ((.inputArtifacts? // []) | artifacts_ok) and
     ((.outputArtifacts? // []) | artifacts_ok) and

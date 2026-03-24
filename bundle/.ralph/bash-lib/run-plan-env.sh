@@ -9,6 +9,10 @@
 #
 # The helper below sets verbose, color, log, gutter/iteration, progress, and caffeinate
 # flags according to the documented chains above.
+#
+# Public interface:
+#   ralph_run_plan_load_env_for_runtime <runtime> -- normalizes env into shared CURSOR_PLAN_*-style variables
+#     used by run-plan-core (verbose, colors, logs, iterations, human prompt toggles).
 
 ralph_run_plan_load_env_for_runtime() {
   local runtime="${1:-${RUNTIME:-}}"

@@ -54,6 +54,10 @@ The test suite uses Bats (Bash Automated Testing System). Tests live in `tests/b
 ./install.sh -n
 ```
 
+### Run a plan (`run-plan.sh`)
+
+Invoke **`.ralph/run-plan.sh`** with **`--plan`** (required). Pass **`--runtime`** unless **`RALPH_PLAN_RUNTIME`** is set or you rely on the interactive runtime prompt (TTY). Pass **`--workspace <path>`** for an explicit repo root; if omitted, the workspace defaults to the current working directory. The parser in `bundle/.ralph/bash-lib/run-plan-args.sh` rejects unknown arguments and does not accept positional workspace or plan paths. See [README.md](README.md) for typical commands and canonical examples.
+
 ### Ralph Dashboard (Python)
 
 ```bash
@@ -139,7 +143,7 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
 
    The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
 
-3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` and reuses the same CLI session on future runs (skips context setup, continues where assistant left off).
+3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
 
 ### Key environment variables
 
@@ -148,17 +152,27 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
 - `RALPH_PLAN_CLI_RESUME=1` -- Enable CLI session resume
 - `RALPH_ARTIFACT_NS` -- Override artifact namespace (defaults to plan file basename)
 - `RALPH_PLAN_KEY` -- Explicit plan namespace (defaults to plan file basename)
+- `RALPH_PLAN_SESSION_HOME` -- Directory that holds `session-id.txt`, `pending-human.txt`, and the rest of the session artifacts. When unset, defaults to `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (workspace-local). Set explicitly to override (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions` if you prefer the user config area).
 - `RALPH_HUMAN_POLL_INTERVAL=2` -- Poll interval (seconds) when waiting for offline human input
 - `ORCHESTRATOR_VERBOSE=1` -- Log each orchestrator step to stderr
 - `ORCHESTRATOR_DRY_RUN=1` -- Print orchestration steps without running
+- `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` -- Allow CLI resume without an existing session-id.txt; use only in isolated environments to avoid session mix-ups.
+- `RALPH_MCP_AUTH_TOKEN` -- When set, the MCP server rejects JSON-RPC tool calls missing the matching `authToken` field (code `-32001`).
+- `RALPH_MCP_ALLOWLIST` -- Comma-separated workspace/orchestration path prefixes that the MCP server will accept; requests referencing other locations are rejected.
 
 ### Human interaction flow
 
 When the runner needs human input:
 - **TTY attached:** Prompt interactively on `/dev/tty` and continue
-- **Non-TTY (orchestrator, CI):** Write `pending-human.txt` under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`, poll until the operator edits `operator-response.txt`, then continue
+- **Non-TTY (orchestrator, CI):** Write `pending-human.txt` under `${RALPH_PLAN_SESSION_HOME}/${RALPH_PLAN_KEY}/` (when `RALPH_PLAN_SESSION_HOME` is unset, this is under `<workspace>/.ralph-workspace/sessions/<RALPH_PLAN_KEY>` by default), poll until the operator edits `operator-response.txt`, then continue
 
 All Q&A is logged to `human-replies.md` in the session directory for auditing.
+
+### Session storage choices
+- **Default location:** When `RALPH_PLAN_SESSION_HOME` is unset, Ralph stores `session-id.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
+- **Python 3 dependency:** CLI resume relies on the JSON demux helper which is written in Python; if Python 3 is missing the runtime logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (see `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and continues without resuming the previous session.
+- **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files outside the workspace tree. If you use Codex with a custom session home, ensure the sandbox can read that path.
+- **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/`) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
 
 ## Important patterns
 
@@ -178,7 +192,7 @@ Use these tokens in `artifacts`, `outputArtifacts`, and agent `output_artifacts`
 | Token | Env var | Example value | Typical use |
 |-------|---------|---------------|-------------|
 | `{{ARTIFACT_NS}}` | `RALPH_ARTIFACT_NS` | `code-review` | Namespace from the orchestration JSON or plan basename |
-| `{{PLAN_KEY}}` | `RALPH_PLAN_KEY` | `code-review-01-cr1` | Plan file basename (same as `ARTIFACT_NS` when not overridden) |
+| `{{PLAN_KEY}}` | `RALPH_PLAN_KEY` | `code-review-01-cr1` | Plan namespace from `RALPH_PLAN_KEY` (falls back to `{{ARTIFACT_NS}}` when unset) |
 | `{{STAGE_ID}}` | `RALPH_STAGE_ID` | `cr1` | Sanitized stage `id` from the orchestration JSON |
 
 Examples:

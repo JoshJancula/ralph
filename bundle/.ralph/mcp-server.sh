@@ -8,6 +8,17 @@ set -uo pipefail
 IFS=$'\n'
 
 readonly SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/error-handling.sh
+source "$SCRIPT_DIR/bash-lib/error-handling.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/mcp-protocol.sh
+source "$SCRIPT_DIR/bash-lib/mcp-protocol.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/mcp-resources.sh
+source "$SCRIPT_DIR/bash-lib/mcp-resources.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/mcp-tools.sh
+source "$SCRIPT_DIR/bash-lib/mcp-tools.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/mcp-prompts.sh
+source "$SCRIPT_DIR/bash-lib/mcp-prompts.sh"
 
 setup_colors() {
   if [[ -t 1 ]]; then
@@ -29,7 +40,7 @@ ${C_BOLD}${C_G}Usage:${C_RST} RALPH_MCP_WORKSPACE=<workspace-root> $SCRIPT_NAME
 
 ${C_BOLD}Environment variables:${C_RST}
   ${C_G}RALPH_MCP_WORKSPACE${C_RST}   Required path to the repo workspace the MCP server exposes.
-  ${C_G}RALPH_MCP_ALLOWLIST${C_RST}   Optional comma-separated dirs (relative to workspace) to allow in requests.
+  ${C_G}RALPH_MCP_ALLOWLIST${C_RST}   Optional colon/comma/semicolon-separated dirs (relative to workspace) to allow in requests.
 
 ${C_BOLD}Options:${C_RST}
   ${C_G}--help${C_RST}                Show this help message and exit.
@@ -44,269 +55,12 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-log() {
-  printf '[%s] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SCRIPT_NAME" "$*" >&2
-}
-
-fail() {
-  log "$*"
-  exit 1
-}
-
-ensure_jq() {
-  if ! command -v jq >/dev/null 2>&1; then
-    fail "jq is required to parse MCP JSON-RPC messages; please install it before running the server."
-  fi
-}
-
-readonly MAX_TOOL_TAIL_BYTES=32768
 readonly ORCHESTRATOR_SCRIPT=".ralph/orchestrator.sh"
+MCP_AUTH_TOKEN="${RALPH_MCP_AUTH_TOKEN:-}"
 
 WORKSPACE_ROOT=""
 WORKSPACE_ROOT_PREFIX=""
 ALLOWLIST_ROOTS=()
-
-send_result() {
-  local id_present="$1"
-  local id_raw="$2"
-  local result_json="$3"
-
-  if [[ "$id_present" != "true" ]]; then
-    log "notification received; skipping response"
-    return
-  fi
-
-  local response
-  response="$(
-    jq -n \
-      --argjson id "$id_raw" \
-      --argjson result "$result_json" \
-      '{"jsonrpc":"2.0","id":$id,"result":$result}'
-  )"
-
-  printf '%s\n' "$response"
-}
-
-send_error() {
-  local id_present="$1"
-  local id_raw="$2"
-  local code="$3"
-  local message="$4"
-  local data_json="${5:-}"
-
-  if [[ "$id_present" != "true" ]]; then
-    log "cannot send error (missing id): $message"
-    return
-  fi
-
-  local error_payload
-  if [[ -n "$data_json" ]]; then
-    error_payload="$(
-      jq -n \
-        --argjson data "$data_json" \
-        --arg code "$code" \
-        --arg message "$message" \
-        '{code: ($code | tonumber), message: $message, data: $data}'
-    )"
-  else
-    error_payload="$(
-      jq -n \
-        --arg code "$code" \
-        --arg message "$message" \
-        '{code: ($code | tonumber), message: $message}'
-    )"
-  fi
-
-  local response
-  response="$(
-    jq -n \
-      --argjson id "$id_raw" \
-      --argjson error "$error_payload" \
-      '{"jsonrpc":"2.0","id":$id,"error":$error}'
-  )"
-
-  printf '%s\n' "$response"
-}
-
-tail_text() {
-  local file="$1"
-  local limit="$2"
-  local out_var="$3"
-  local truncated_var="$4"
-  local size
-  size="$(wc -c < "$file" 2>/dev/null || echo 0)"
-  local truncated="false"
-  if [[ "$size" -gt "$limit" ]]; then
-    truncated="true"
-  fi
-  local content=""
-  if [[ "$size" -gt 0 ]]; then
-    content="$(tail -c "$limit" "$file" 2>/dev/null || cat "$file")"
-  fi
-  printf -v "$out_var" "%s" "$content"
-  printf -v "$truncated_var" "%s" "$truncated"
-}
-
-execute_tool_command() {
-  local command=("$@")
-  local stdout_file stderr_file
-  stdout_file="$(mktemp)"
-  stderr_file="$(mktemp)"
-  local start_time end_time
-  start_time="$(date +%s.%N)"
-  set +e
-  "${command[@]}" >"$stdout_file" 2>"$stderr_file"
-  local exit_code=$?
-  set -e
-  end_time="$(date +%s.%N)"
-  local duration_value
-  duration_value="$(awk "BEGIN {printf \"%.3f\", $end_time - $start_time}")"
-  local stdout_value stderr_value
-  local stdout_trunc_value stderr_trunc_value
-  tail_text "$stdout_file" "$MAX_TOOL_TAIL_BYTES" stdout_value stdout_trunc_value
-  tail_text "$stderr_file" "$MAX_TOOL_TAIL_BYTES" stderr_value stderr_trunc_value
-  rm -f "$stdout_file" "$stderr_file"
-  EXECUTE_TOOL_COMMAND_EXIT_CODE="$exit_code"
-  EXECUTE_TOOL_COMMAND_DURATION_SECONDS="$duration_value"
-  EXECUTE_TOOL_COMMAND_STDOUT_TAIL="$stdout_value"
-  EXECUTE_TOOL_COMMAND_STDERR_TAIL="$stderr_value"
-  EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED="$stdout_trunc_value"
-  EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED="$stderr_trunc_value"
-}
-
-canonicalize_path() {
-  local raw="$1"
-  local expanded="$raw"
-  if [[ "$expanded" == "~" ]]; then
-    expanded="$HOME"
-  elif [[ "$expanded" == ~/* ]]; then
-    expanded="$HOME/${expanded#~/}"
-  fi
-  local dir
-  dir="$(cd "$(dirname "$expanded")" 2>/dev/null && pwd)" || return 1
-  printf '%s/%s\n' "$dir" "$(basename "$expanded")"
-}
-
-add_allowlist_root() {
-  local root="$1"
-  for existing in "${ALLOWLIST_ROOTS[@]-}"; do
-    [[ "$existing" == "$root" ]] && return
-  done
-  ALLOWLIST_ROOTS+=("$root")
-}
-
-build_allowlist() {
-  local raw="${RALPH_MCP_ALLOWLIST:-}"
-  if [[ -n "$raw" ]]; then
-    local normalized
-    normalized="$(printf '%s\n' "$raw" | tr ',;:' '\n')"
-    local entry
-    while IFS= read -r entry; do
-      entry="${entry#"${entry%%[![:space:]]*}"}"
-      entry="${entry%"${entry##*[![:space:]]}"}"
-      if [[ -z "${entry//[[:space:]]/}" ]]; then
-        continue
-      fi
-      local candidate="$entry"
-      if [[ "$candidate" == ~* ]]; then
-        :
-      elif [[ "$candidate" != /* ]]; then
-        candidate="$WORKSPACE_ROOT/$candidate"
-      fi
-      candidate="$(canonicalize_path "$candidate")" || fail "allowlist entry invalid: $entry"
-      if [[ ! -d "$candidate" ]]; then
-        fail "allowlist entry is not a directory: $candidate"
-      fi
-      add_allowlist_root "$candidate"
-    done <<< "$normalized"
-  fi
-  add_allowlist_root "$WORKSPACE_ROOT"
-}
-
-workspace_allowed() {
-  local candidate="$1"
-  for root in "${ALLOWLIST_ROOTS[@]-}"; do
-    if [[ "$root" == "/" ]]; then
-      [[ "$candidate" == /* ]] && return 0
-      continue
-    fi
-    if [[ "$candidate" == "$root" || "$candidate" == "$root/"* ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-is_subpath() {
-  local candidate="$1"
-  if [[ -z "$WORKSPACE_ROOT" ]]; then
-    return 1
-  fi
-  if [[ "$WORKSPACE_ROOT" == "/" ]]; then
-    [[ "$candidate" == /* ]]
-    return
-  fi
-  [[ "$candidate" == "$WORKSPACE_ROOT" || "$candidate" == "$WORKSPACE_ROOT_PREFIX"* ]]
-}
-
-resolve_workspace() {
-  local value="$1"
-  if [[ -z "$value" ]]; then
-    return 1
-  fi
-  local candidate
-  if [[ "$value" == /* ]]; then
-    candidate="$value"
-  else
-    candidate="$WORKSPACE_ROOT/$value"
-  fi
-  local canonical
-  canonical="$(canonicalize_path "$candidate")" || return 2
-  if [[ ! -d "$canonical" ]]; then
-    return 3
-  fi
-  if ! workspace_allowed "$canonical"; then
-    return 4
-  fi
-  printf '%s\n' "$canonical"
-}
-
-resolve_plan_path() {
-  local workspace="$1"
-  local plan_value="$2"
-  local candidate
-  if [[ "$plan_value" == /* ]]; then
-    candidate="$plan_value"
-  else
-    candidate="$workspace/$plan_value"
-  fi
-  local canonical
-  canonical="$(canonicalize_path "$candidate")" || return 1
-  if ! is_subpath "$canonical"; then
-    return 2
-  fi
-  printf '%s\n' "$canonical"
-}
-
-resolve_orchestration_path() {
-  local workspace="$1"
-  local path_value="$2"
-  local candidate
-  if [[ "$path_value" == /* ]]; then
-    candidate="$path_value"
-  else
-    candidate="$workspace/$path_value"
-  fi
-  local canonical
-  canonical="$(canonicalize_path "$candidate")" || return 1
-  if ! is_subpath "$canonical"; then
-    return 2
-  fi
-  if [[ ! -f "$canonical" ]]; then
-    return 3
-  fi
-  printf '%s\n' "$canonical"
-}
 
 TOOL_LIST_RESULT=$(
   cat <<'EOF'
@@ -471,7 +225,7 @@ handle_plan_status() {
   fi
   local plan_path
   if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
-    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid, outside workspace, or not allowlisted: $plan_arg"
     return
   fi
   if [[ ! -f "$plan_path" ]]; then
@@ -544,6 +298,21 @@ handle_run_plan() {
     send_error "$id_present" "$id_raw" "-32602" "workspace, plan_path, runtime, and agent are required"
     return
   fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$plan_arg" "plan_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$runtime_arg" "runtime" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$agent_arg" "agent" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$non_interactive_arg" "non_interactive" "$id_present" "$id_raw"; then
+    return
+  fi
   local workspace_path
   if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
     send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
@@ -551,7 +320,11 @@ handle_run_plan() {
   fi
   local plan_path
   if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
-    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid, outside workspace, or not allowlisted: $plan_arg"
+    return
+  fi
+  if [[ ! -f "$plan_path" ]]; then
+    send_error "$id_present" "$id_raw" "-32000" "Plan file not found: $plan_path"
     return
   fi
   local runtime_lower
@@ -643,6 +416,15 @@ handle_orchestrator_run() {
     send_error "$id_present" "$id_raw" "-32602" "workspace and orchestration_path are required"
     return
   fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$orchestration_arg" "orchestration_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$dry_run_arg" "dry_run" "$id_present" "$id_raw"; then
+    return
+  fi
   local workspace_path
   if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
     send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
@@ -650,7 +432,11 @@ handle_orchestrator_run() {
   fi
   local orchestration_path
   if ! orchestration_path="$(resolve_orchestration_path "$workspace_path" "$orchestration_arg")"; then
-    send_error "$id_present" "$id_raw" "-32602" "orchestration path invalid or outside workspace: $orchestration_arg"
+    send_error "$id_present" "$id_raw" "-32602" "orchestration path invalid, outside workspace, or not allowlisted: $orchestration_arg"
+    return
+  fi
+  if [[ ! -f "$orchestration_path" ]]; then
+    send_error "$id_present" "$id_raw" "-32000" "Orchestration file not found: $orchestration_path"
     return
   fi
   local stage_count
@@ -723,6 +509,131 @@ handle_list_tools() {
   send_result "$id_present" "$id_raw" "$TOOL_LIST_RESULT"
 }
 
+handle_resources_list() {
+  local id_present="$1"
+  local id_raw="$2"
+  local description="Aggregates every configured Cursor, Claude, and Codex agent into a shared catalog."
+  local result
+  result="$(
+    jq -n \
+      --arg uri "$RALPH_MCP_AGENT_CATALOG_RESOURCE_URI" \
+      --arg desc "$description" \
+      '{
+        resources:[{
+          uri:$uri,
+          name:"ralph/agents",
+          title:"Ralph agent catalog",
+          description:$desc,
+          mimeType:"text/markdown"
+        }],
+        nextCursor:null
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result"
+}
+
+handle_resources_read() {
+  local params_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local uri
+  uri="$(echo "$params_json" | jq -r '.uri // empty')"
+  if [[ -z "$uri" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "uri is required"
+    return
+  fi
+  if [[ "$uri" != "$RALPH_MCP_AGENT_CATALOG_RESOURCE_URI" ]]; then
+    send_error "$id_present" "$id_raw" "-32002" "resource not found: $uri" "{\"uri\": \"$uri\"}"
+    return
+  fi
+  local catalog
+  catalog="$(generate_agent_catalog_markdown)"
+  local result
+  result="$(
+    jq -n \
+      --arg uri "$uri" \
+      --arg text "$catalog" \
+      '{
+        contents:[{
+          uri:$uri,
+          mimeType:"text/markdown",
+          text:$text
+        }]
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result"
+}
+
+handle_prompts_list() {
+  local id_present="$1"
+  local id_raw="$2"
+  local prompt_def
+  prompt_def="$(generate_next_todo_prompt_definition)"
+  local result
+  result="$(
+    jq -n \
+      --argjson prompt "$prompt_def" \
+      '{prompts: [$prompt], nextCursor: null}'
+  )"
+  send_result "$id_present" "$id_raw" "$result"
+}
+
+handle_prompts_get() {
+  local params_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local name
+  name="$(echo "$params_json" | jq -r '.name // empty')"
+  if [[ "$name" != "ralph_run_next_todo_prompt" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "unknown prompt: $name"
+    return
+  fi
+  local args_json
+  args_json="$(echo "$params_json" | jq -c '.arguments // {}')"
+  local workspace_arg plan_arg
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  if [[ -z "$plan_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "plan_path is required"
+    return
+  fi
+  local workspace_path
+  if [[ -z "$workspace_arg" ]]; then
+    workspace_path="$WORKSPACE_ROOT"
+  else
+    if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+      send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+      return
+    fi
+  fi
+  local prompt_plan_path
+  if ! prompt_plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid, outside workspace, or not allowlisted: $plan_arg"
+    return
+  fi
+  local prompt_text
+  prompt_text="$(ralph_mcp_build_next_todo_prompt_message "$workspace_path" "$prompt_plan_path")"
+  local result
+  result="$(
+    jq -n \
+      --arg description "Guidance for scheduling the next unchecked TODO" \
+      --arg text "$prompt_text" \
+      '{
+        description: $description,
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: $text
+            }
+          }
+        ]
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result"
+}
+
 handle_call_tool() {
   local tool_name="$1"
   local args_json="$2"
@@ -747,10 +658,10 @@ handle_call_tool() {
 handle_initialize() {
   local id_present="$1"
   local id_raw="$2"
-  log "handling initialize request from orchestrator"
+  ralph_mcp_log "handling initialize request from orchestrator"
   local capabilities
   capabilities="$(
-    jq -n '{tools: {listChanged: false}, resources: null, prompts: null}'
+    jq -n '{tools: {listChanged: false}, resources: {listChanged: false}, prompts: {listChanged: false}}'
   )"
   local result
   result="$(
@@ -760,13 +671,13 @@ handle_initialize() {
 }
 
 handle_initialized() {
-  log "received initialized notification"
+  ralph_mcp_log "received initialized notification"
 }
 
 handle_shutdown() {
   local id_present="$1"
   local id_raw="$2"
-  log "shutdown requested"
+  ralph_mcp_log "shutdown requested"
   local result
   result="$(jq -n '{status: "shutting_down"}')"
   send_result "$id_present" "$id_raw" "$result"
@@ -775,7 +686,7 @@ handle_shutdown() {
 handle_exit() {
   local id_present="$1"
   local id_raw="$2"
-  log "exit requested; terminating MCP server"
+  ralph_mcp_log "exit requested; terminating MCP server"
   local result
   result="$(jq -n '{status: "exiting"}')"
   send_result "$id_present" "$id_raw" "$result"
@@ -801,6 +712,22 @@ dispatch_request() {
     exit)
       handle_exit "$id_present" "$id_raw"
       ;;
+    resources/list)
+      handle_resources_list "$id_present" "$id_raw"
+      ;;
+    resources/read)
+      local params_json
+      params_json="$(echo "$payload" | jq -c '.params // {}')"
+      handle_resources_read "$params_json" "$id_present" "$id_raw"
+      ;;
+    prompts/list)
+      handle_prompts_list "$id_present" "$id_raw"
+      ;;
+    prompts/get)
+      local params_json
+      params_json="$(echo "$payload" | jq -c '.params // {}')"
+      handle_prompts_get "$params_json" "$id_present" "$id_raw"
+      ;;
     tools/list)
       handle_list_tools "$id_present" "$id_raw"
       ;;
@@ -813,7 +740,7 @@ dispatch_request() {
       ;;
     *)
       local message="method not found: $method"
-      log "$message"
+      ralph_mcp_log "$message"
       send_error "$id_present" "$id_raw" "-32601" "$message"
       ;;
   esac
@@ -838,15 +765,20 @@ main() {
     WORKSPACE_ROOT_PREFIX="$WORKSPACE_ROOT/"
   fi
   build_allowlist
-  log "configured workspace allowlist: ${ALLOWLIST_ROOTS[*]-}"
+  ralph_mcp_log "configured workspace allowlist: ${ALLOWLIST_ROOTS[*]-}"
 
-  log "starting MCP server for workspace $workspace"
-  log "waiting for JSON-RPC requests on stdin"
+  ralph_mcp_log "starting MCP server for workspace $workspace"
+  ralph_mcp_log "waiting for JSON-RPC requests on stdin"
+  if auth_token_guard_enabled; then
+    ralph_mcp_log "RALPH_MCP_AUTH_TOKEN set; enforcing bearer-token guard."
+  else
+    ralph_mcp_log "RALPH_MCP_AUTH_TOKEN not set; MCP server accepting requests without auth tokens."
+  fi
 
   while true; do
     local raw
     if ! IFS= read -r raw; then
-      log "stdin closed; exiting"
+      ralph_mcp_log "stdin closed; exiting"
       break
     fi
 
@@ -855,14 +787,14 @@ main() {
     fi
 
     if ! echo "$raw" | jq -e . >/dev/null 2>&1; then
-      log "invalid JSON received; ignoring line"
+      ralph_mcp_log "invalid JSON received; ignoring line"
       continue
     fi
 
     local jsonrpc
     jsonrpc="$(echo "$raw" | jq -r '.jsonrpc // empty')"
     if [[ -z "$jsonrpc" || "$jsonrpc" != "2.0" ]]; then
-      log "invalid or missing jsonrpc version; rejecting request"
+      ralph_mcp_log "invalid or missing jsonrpc version; rejecting request"
       local id_present
       id_present="$(echo "$raw" | jq -r 'has("id")')"
       local id_raw
@@ -871,17 +803,20 @@ main() {
       continue
     fi
 
-    local method
-    method="$(echo "$raw" | jq -r '.method // empty')"
-    if [[ -z "$method" ]]; then
-      log "missing method in request; ignoring"
-      continue
-    fi
-
     local id_present
     id_present="$(echo "$raw" | jq -r 'has("id")')"
     local id_raw
     id_raw="$(echo "$raw" | jq -c '.id // null')"
+    if ! enforce_auth_token "$raw" "$id_present" "$id_raw"; then
+      continue
+    fi
+
+    local method
+    method="$(echo "$raw" | jq -r '.method // empty')"
+    if [[ -z "$method" ]]; then
+      ralph_mcp_log "missing method in request; ignoring"
+      continue
+    fi
 
     dispatch_request "$method" "$id_present" "$id_raw" "$raw"
   done

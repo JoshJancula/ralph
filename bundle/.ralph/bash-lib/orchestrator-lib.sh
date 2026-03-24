@@ -5,6 +5,13 @@ if [[ -n "${RALPH_ORCHESTRATOR_LIB_LOADED:-}" ]]; then
 fi
 RALPH_ORCHESTRATOR_LIB_LOADED=1
 
+# Public interface:
+#   trim, parse_artifact_csv -- string and CSV parsing for artifact lists.
+#   expand_artifact_tokens -- substitute {{ARTIFACT_NS}}, {{PLAN_KEY}}, {{STAGE_ID}} in paths.
+#   artifact_paths_append_unique, merge_required_artifacts_from_agent -- build EXPECTED_ARTIFACT_PATHS.
+#   orchestrator_normalize_runtime, orchestrator_validate_runtime -- runtime id validation.
+#   orchestrator_validate_stage_agent_plan, orchestrator_stage_plan_abs -- stage field checks and paths.
+
 trim() {
   local s="$1"
   s="${s#"${s%%[![:space:]]*}"}"
@@ -24,12 +31,22 @@ parse_artifact_csv() {
   done
 }
 
+# expand_artifact_tokens() replaces the templated tokens in artifact paths.
+#  * {{ARTIFACT_NS}} always resolves from RALPH_ARTIFACT_NS (no fallback).
+#  * {{PLAN_KEY}} resolves from RALPH_PLAN_KEY when set, otherwise falls back to the artifact namespace.
+#  * {{STAGE_ID}} resolves from RALPH_STAGE_ID, which is expected to be sanitized before export.
 expand_artifact_tokens() {
   local p="$1"
   local ns="${RALPH_ARTIFACT_NS:-$ORCH_BASENAME}"
   local stage_id="${RALPH_STAGE_ID:-}"
+  local plan_key
+  if [[ -n "${RALPH_PLAN_KEY:-}" ]]; then
+    plan_key="${RALPH_PLAN_KEY}"
+  else
+    plan_key="$ns"
+  fi
   p="${p//\{\{ARTIFACT_NS\}\}/$ns}"
-  p="${p//\{\{PLAN_KEY\}\}/$ns}"
+  p="${p//\{\{PLAN_KEY\}\}/$plan_key}"
   p="${p//\{\{STAGE_ID\}\}/$stage_id}"
   printf '%s' "$p"
 }

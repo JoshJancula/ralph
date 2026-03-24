@@ -96,9 +96,43 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/
 
 ## Run a plan (typical commands)
 
-- **Cursor:** `.ralph/run-plan.sh --runtime cursor --plan PLAN.md`
-- **Claude:** `.ralph/run-plan.sh --runtime claude --plan PLAN.md --model claude-haiku-4-5`
-- **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --agent architect`
+- **Cursor:** `.ralph/run-plan.sh --runtime cursor --plan PLAN.md --workspace .`
+- **Claude:** `.ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --model claude-haiku-4-5`
+- **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --workspace . --agent architect`
+
+**CLI contracting:** `run-plan.sh` uses the strict parser in `bundle/.ralph/bash-lib/run-plan-args.sh`: only documented flags are accepted (unknown flags are an error), and plan and workspace paths are not positional. You must pass `--plan <path>`. Pass `--workspace <path>` for an explicit repo root; if you omit it, the workspace defaults to the current working directory. Orchestration and docs usually show all three flags for clarity.
+
+### Canonical run-plan invocation
+
+Invoke the runner by explicitly passing the workspace root, plan file, and runtime. A canonical command looks like:
+
+```bash
+cd /path/to/project
+./.ralph/run-plan.sh --workspace /path/to/project --plan plans/feature.md --runtime cursor
+```
+
+Each invocation must supply the same flags because the parser in `bundle/.ralph/bash-lib/run-plan-args.sh` refuses positional workspace arguments.
+
+### How orchestration invokes the runner
+
+`.ralph/orchestrator.sh` executes `.ralph/run-plan.sh` once per stage, reusing the stage’s `plan`, `runtime`, and the workspace path. For example, a stage definition such as:
+
+```json
+{
+  "id": "design",
+  "runtime": "cursor",
+  "plan": ".ralph-workspace/orchestration-plans/feature/design.md"
+}
+```
+
+results in an orchestrator command similar to:
+
+```bash
+RALPH_ARTIFACT_NS=feature \
+./.ralph/run-plan.sh --workspace /path/to/project --plan .ralph-workspace/orchestration-plans/feature/design.md --runtime cursor
+```
+
+Stage overrides like `--agent`, `--model`, or `--cli-resume` are layered on top of this base invocation before the orchestrator starts each stage.
 
 **Checklist syntax:** Open tasks must look like **`- [ ]`** (space before **`]`**). The form **`- []`** is ignored, so the runner may stop while lines still look unfinished.
 
@@ -119,7 +153,7 @@ Out-of-process restarts and operator-driven re-invocations can pick up the most 
 **Storage and prerequisites:**
 
 - `session-id.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`, and each invocation rewrites or updates the file so future restarts always read the newest ID for that namespace.
-- Python 3 is required for `.ralph/bash-lib/run-plan-cli-json-demux.py`, the helper that pulls the session ID from the CLI’s JSON demux stream. If Python 3 is unavailable, CLI resume is skipped and the plan starts from a fresh session.
+- Python 3 is required for `.ralph/bash-lib/run-plan-cli-json-demux.py`, the helper that pulls the session ID from the CLI’s JSON demux stream. If Python 3 is unavailable, the runner logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (per `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and skips resume, starting a fresh session.
 
 **Manual resume from a known session id:**
 

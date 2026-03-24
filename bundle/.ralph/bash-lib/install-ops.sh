@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# Installer flag parsing and copy-plan execution for install.sh.
+#
+# Public interface:
+#   install_ops_reset_state -- clear globals before a parse pass.
+#   install_ops_parse_flags -- consume argv into install mode flags.
+#   install_ops_default_selection, install_ops_resolve_target, install_ops_verify_bundle -- target resolution.
+#   install_ops_has_any_stack, install_ops_should_install_dashboard -- derived install choices.
+#   install_ops_emit_copy, install_ops_add_optional_copy, install_ops_build_copy_plan -- plan assembly.
+#   install_ops_execute_plan, install_ops_copy_tree -- run the file copy plan.
 
 install_ops_reset_state() {
   DRY_RUN=0
@@ -131,6 +141,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.cursor/rules" "$TARGET/.cursor/rules" "cursor-rules"
     install_ops_add_optional_copy "$BUNDLE/.cursor/skills" "$TARGET/.cursor/skills" "cursor-skills"
     install_ops_add_optional_copy "$BUNDLE/.cursor/agents" "$TARGET/.cursor/agents" "cursor-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.cursor/ralph/templates" "cursor-templates"
   fi
 
   if [[ "$INSTALL_CODEX" -eq 1 ]]; then
@@ -138,6 +149,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.codex/rules" "$TARGET/.codex/rules" "codex-rules"
     install_ops_add_optional_copy "$BUNDLE/.codex/skills" "$TARGET/.codex/skills" "codex-skills"
     install_ops_add_optional_copy "$BUNDLE/.codex/agents" "$TARGET/.codex/agents" "codex-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.codex/ralph/templates" "codex-templates"
   fi
 
   if [[ "$INSTALL_CLAUDE" -eq 1 ]]; then
@@ -145,6 +157,7 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.claude/rules" "$TARGET/.claude/rules" "claude-rules"
     install_ops_add_optional_copy "$BUNDLE/.claude/skills" "$TARGET/.claude/skills" "claude-skills"
     install_ops_add_optional_copy "$BUNDLE/.claude/agents" "$TARGET/.claude/agents" "claude-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.claude/ralph/templates" "claude-templates"
   fi
 
 }
