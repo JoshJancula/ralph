@@ -192,3 +192,210 @@ EOF
 
   rm -rf "$bad_layout"
 }
+
+@test "timeout defaults to 30m when not specified via --timeout" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  mkdir -p "$bin_dir"
+  session_home="$workspace/.sessions"
+  mkdir -p "$session_home"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Timeout default test
+- [x] verify timeout defaulting
+EOF
+
+  local select_model_dir
+  select_model_dir="$workspace/.cursor/ralph"
+  mkdir -p "$select_model_dir"
+  cat <<'EOF' > "$select_model_dir/select-model.sh"
+#!/usr/bin/env bash
+select_model_cursor() {
+  if [[ "$1" == "--batch" ]]; then
+    shift
+  fi
+  printf '%s\n' "stub-model"
+}
+export -f select_model_cursor >/dev/null 2>&1 || true
+EOF
+  chmod +x "$select_model_dir/select-model.sh"
+
+  local agent_tool_dir
+  agent_tool_dir="$workspace/.ralph"
+  mkdir -p "$agent_tool_dir"
+  cat <<'EOF' > "$agent_tool_dir/agent-config-tool.sh"
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$agent_tool_dir/agent-config-tool.sh"
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    "$4" --runtime cursor --plan PLAN.md --non-interactive --model stub-model
+    exit_code=$?
+
+    # Check the log files for default timeout (1800s = 30m)
+    found=0
+    for log_file in "$1"/.ralph-workspace/logs/*/plan-runner-PLAN.log; do
+      if [ -f "$log_file" ] && grep -q "1800s.*30m" "$log_file"; then
+        found=1
+        break
+      fi
+    done
+    exit "$((1 - found))"
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH"
+
+  [ "$status" -eq 0 ]
+  rm -rf "$workspace"
+}
+
+@test "timeout enforcement exits with code 4 when invocation exceeds limit" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  mkdir -p "$bin_dir"
+  session_home="$workspace/.sessions"
+  mkdir -p "$session_home"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Timeout test
+- [ ] stub invocation that sleeps
+EOF
+
+  local select_model_dir
+  select_model_dir="$workspace/.cursor/ralph"
+  mkdir -p "$select_model_dir"
+  cat <<'EOF' > "$select_model_dir/select-model.sh"
+#!/usr/bin/env bash
+select_model_cursor() {
+  if [[ "$1" == "--batch" ]]; then
+    shift
+  fi
+  printf '%s\n' "stub-model"
+}
+export -f select_model_cursor >/dev/null 2>&1 || true
+EOF
+  chmod +x "$select_model_dir/select-model.sh"
+
+  local agent_tool_dir
+  agent_tool_dir="$workspace/.ralph"
+  mkdir -p "$agent_tool_dir"
+  cat <<'EOF' > "$agent_tool_dir/agent-config-tool.sh"
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$agent_tool_dir/agent-config-tool.sh"
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+# Simulate a long-running invocation that sleeps longer than timeout
+sleep 10
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    "$4" --runtime cursor --plan PLAN.md --non-interactive --model stub-model --timeout 3s
+    exit_code=$?
+    exit "$exit_code"
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH"
+
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"stuck"* ]] || [[ "$output" == *"timeout"* ]]
+
+  rm -rf "$workspace"
+}
+
+@test "timeout log includes stuck context when invocation is terminated" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  mkdir -p "$bin_dir"
+  session_home="$workspace/.sessions"
+  mkdir -p "$session_home"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Timeout log test
+- [ ] stub invocation that sleeps longer than timeout
+EOF
+
+  local select_model_dir
+  select_model_dir="$workspace/.cursor/ralph"
+  mkdir -p "$select_model_dir"
+  cat <<'EOF' > "$select_model_dir/select-model.sh"
+#!/usr/bin/env bash
+select_model_cursor() {
+  if [[ "$1" == "--batch" ]]; then
+    shift
+  fi
+  printf '%s\n' "stub-model"
+}
+export -f select_model_cursor >/dev/null 2>&1 || true
+EOF
+  chmod +x "$select_model_dir/select-model.sh"
+
+  local agent_tool_dir
+  agent_tool_dir="$workspace/.ralph"
+  mkdir -p "$agent_tool_dir"
+  cat <<'EOF' > "$agent_tool_dir/agent-config-tool.sh"
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$agent_tool_dir/agent-config-tool.sh"
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+# Simulate a long-running invocation
+sleep 15
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run bash -c '
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    "$4" --runtime cursor --plan PLAN.md --non-interactive --model stub-model --timeout 2s 2>/dev/null || true
+    exit_code=$?
+
+    # Check the log files for timeout context
+    found=0
+    for log_file in "$1"/.ralph-workspace/logs/*/plan-runner-PLAN.*; do
+      if [ -f "$log_file" ] && grep -q "timeout" "$log_file"; then
+        found=1
+        break
+      fi
+    done
+    exit "$((1 - found))"
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH"
+
+  [ "$status" -eq 0 ]
+
+  rm -rf "$workspace"
+}

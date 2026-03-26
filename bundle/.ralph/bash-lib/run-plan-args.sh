@@ -28,6 +28,9 @@ Common options:
   --cli-resume / --no-cli-resume       Enable/disable CLI resume prompts.
   --allow-unsafe-resume                Allow bare CLI resume without session id.
   --resume <id>                        Force a CLI session id for this run.
+  --max-iterations <n>                 Per-TODO gutter: exit after n attempts on the same open item (positive integer).
+                                       Overrides CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER.
+  --timeout <duration>                 Invocation timeout (default: 30m). Format: e.g. 30m, 1800s, 2h.
   --help                               Show this message.
 EOU
 }
@@ -109,6 +112,29 @@ ralph_run_plan_parse_args() {
           ralph_die "Error: --workspace requires a workspace path."
         fi
         WORKSPACE="$2"
+        shift 2
+        ;;
+      --max-iterations)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --max-iterations requires a positive integer."
+        fi
+        if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+          ralph_die "Error: --max-iterations must be a positive integer."
+        fi
+        RALPH_PLAN_TODO_MAX_ITERATIONS="$2"
+        shift 2
+        ;;
+      --timeout)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --timeout requires a duration string (e.g. 30m, 1800s, 2h)."
+        fi
+        if ! [[ "$2" =~ ^[0-9]+(s|m|h)$ ]]; then
+          ralph_die "Error: --timeout must be a positive integer with a unit (s, m, or h). Got '$2'."
+        fi
+        if [[ "${2%[smh]}" -le 0 ]]; then
+          ralph_die "Error: --timeout duration must be positive. Got '$2'."
+        fi
+        RALPH_PLAN_INVOCATION_TIMEOUT_RAW="$2"
         shift 2
         ;;
       *)

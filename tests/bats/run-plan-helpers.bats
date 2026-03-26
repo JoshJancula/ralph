@@ -25,6 +25,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
     NO_CLI_RESUME_FLAG=0
     ALLOW_UNSAFE_RESUME_FLAG=0
     RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
     _RALPH_CLI_RESUME_ENV_WAS_SET=0
     source "$1"
     source "$2"
@@ -53,6 +54,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
     NO_CLI_RESUME_FLAG=0
     ALLOW_UNSAFE_RESUME_FLAG=0
     RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
     _RALPH_CLI_RESUME_ENV_WAS_SET=0
     source "$1"
     source "$2"
@@ -62,6 +64,65 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--plan <path> is required."* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --max-iterations" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --max-iterations 7
+    printf "%s" "$RALPH_PLAN_TODO_MAX_ITERATIONS"
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "7" ]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects invalid --max-iterations" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --max-iterations 0
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--max-iterations must be a positive integer."* ]]
   rm -rf "$workspace"
 }
 
@@ -275,4 +336,180 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "ralph_run_plan_parse_args accepts --timeout with valid duration 30m" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout 30m
+    printf "%s" "$RALPH_PLAN_INVOCATION_TIMEOUT_RAW"
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "30m" ]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --timeout with valid duration 1800s" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout 1800s
+    printf "%s" "$RALPH_PLAN_INVOCATION_TIMEOUT_RAW"
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "1800s" ]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects --timeout with missing value" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--timeout requires a duration string"* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects --timeout with invalid format (non-numeric)" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout abc
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--timeout must be a positive integer with a unit"* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects --timeout with invalid format (zero duration)" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout 0m
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--timeout duration must be positive"* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects --timeout with unsupported unit" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime cursor --plan "$4" --workspace "$WORKSPACE" --timeout 30x
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--timeout must be a positive integer with a unit"* ]]
+  rm -rf "$workspace"
 }
