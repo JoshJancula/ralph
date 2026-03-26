@@ -52,6 +52,11 @@ git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git m
 
 # Copy Ralph into .ralph/, .cursor/, .claude/, .codex/ at your repo root.
 ./vendor/ralph/install.sh
+
+# The installer removes vendor/ralph from disk when it is not a Git checkout (typical subtree).
+# Commit the new project-root files and the vendor/ removal.
+git add -A
+git commit -m "Add Ralph at repo root"
 ```
 
 ## Vendored package layout
@@ -59,6 +64,12 @@ git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git m
 The committed Ralph tree uses **`vendor/ralph/bundle/`** (for example **`bundle/.ralph`**). There is no **`vendor/ralph/.ralph`** inside the Ralph package until you run **`install.sh`**, which copies the shared scripts into **your** project root as **`.ralph/`**.
 
 Always run **`vendor/ralph/install.sh`** (the script at the root of the vendored tree), not a path under **`bundle/.ralph/`**.
+
+### After install: vendor directory
+
+When **`install.sh`** lives under your project (for example **`./vendor/ralph/install.sh`**) and that folder is **not** its own Git checkout (no **`vendor/ralph/.git`**), the installer **removes the vendored tree after a successful install** so you commit only **`.ralph/`** and the runtime dirs at the repo root. That matches a typical **git subtree** copy.
+
+If **`vendor/ralph/.git`** exists (Git submodule gitlink or a full clone), the vendor tree is **kept** so you can update with **`git submodule`** or **`git pull`** inside **`vendor/ralph`**. To remove it anyway, set **`RALPH_INSTALL_REMOVE_VENDOR=1`**. To always keep vendor even without **`.git`**, set **`RALPH_INSTALL_KEEP_VENDOR=1`**.
 
 ## Installer options
 
@@ -82,18 +93,20 @@ You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`*
 
 The Claude and Codex runners expect **`.ralph/agent-config-tool.sh`** when you use **`--agent`**; use **`./install.sh --claude --shared`**, **`./install.sh --codex --shared`**, or a full install.
 
-## Uninstall / cleanup
+## Uninstall and manual vendor removal
 
-From your project root, when Ralph is vendored as **`vendor/ralph`** (or another path under the repo):
+**`--uninstall`** (alias **`--remove-installed`**) removes only **files that ship in this Ralph package** (same manifest as install, including **`ralph-dashboard/`** when that applies), then prunes empty directories. Your own files next to Ralph rules, skills, or agents stay. Stack flags work like install (for example **`--uninstall --shared`** only touches **`.ralph/`**).
+
+**`--cleanup`** is the same as **`--remove-vendor`**: delete the vendored Ralph directory under the project when it still exists (for example you used **`RALPH_INSTALL_KEEP_VENDOR=1`** or a submodule). Normal installs already drop subtree-style **`vendor/ralph`** when safe; you usually do not need **`--cleanup`**.
+
+**`--purge`** runs a full **`--uninstall`** for all stacks plus **`--remove-vendor`**.
 
 ```bash
-./vendor/ralph/install.sh --cleanup -n              # dry-run: list paths only
-./vendor/ralph/install.sh --cleanup --silent        # no prompts (scripts / CI)
+./vendor/ralph/install.sh --uninstall -n              # dry-run: sample file list
+./vendor/ralph/install.sh --uninstall --silent      # no prompts (CI)
+./vendor/ralph/install.sh --cleanup -n               # dry-run: rm vendored tree
+./vendor/ralph/install.sh --purge --silent         # full strip + vendor
 ```
-
-**`--cleanup`** removes the same trees a full install would add (including the dashboard under **`.ralph/ralph-dashboard/`**, or all of **`.ralph/`** when shared tooling is removed) and then deletes the vendored Ralph directory (the folder that contains **`install.sh`**, only if it lies under the target directory). Use **`--remove-installed`** or **`--remove-vendor`** alone for a single step. For **`--remove-installed`**, stack flags apply the same way as install (for example **`--remove-installed --shared`** drops only **`.ralph/`**).
-
-**Warning:** **`--remove-installed`** deletes whole directories such as **`.cursor/rules`** and **`.cursor/skills`** when that stack is selected. If you added non-Ralph files there, move them before cleanup.
 
 You still need normal Git steps for submodules (**`git submodule deinit`**, **`git rm`**) or subtree history; the installer only removes files on disk.
 

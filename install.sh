@@ -16,16 +16,21 @@
 #   -s, --silent   Run without interactive prompts (skip conflicts, configure MCP, skip removal prompts)
 #   -n, --dry-run   Print what would be copied or removed, do not write
 #   -h, --help
-#   --remove-installed   Remove Ralph-installed trees under TARGET (honors --shared/--cursor/--codex/--claude/--no-dashboard; default stacks match a full install)
-#   --remove-vendor      Remove the vendored Ralph package directory when it sits under TARGET (e.g. vendor/ralph after subtree/submodule)
-#   --cleanup            --remove-installed for all stacks and the dashboard, then --remove-vendor
+#   --remove-installed, --uninstall   Remove Ralph-installed files under TARGET (bundle manifest only; honors stack flags)
+#   --remove-vendor      Remove the vendored Ralph package directory when it sits under TARGET (e.g. vendor/ralph)
+#   --cleanup            Same as --remove-vendor (manual removal; normal install already drops vendor when safe)
+#   --purge              Full removal: --uninstall for all stacks and the dashboard, then --remove-vendor
+#
+#   When install.sh lives under TARGET and that folder is not its own Git checkout (typical git subtree
+#   copy), the vendored directory is removed after install. Submodule or clone checkouts keep vendor/
+#   unless you set RALPH_INSTALL_REMOVE_VENDOR=1. Set RALPH_INSTALL_KEEP_VENDOR=1 to always keep vendor/.
 #
 # Examples:
 #   git submodule add https://github.com/you/ralph.git vendor/ralph
 #   ./vendor/ralph/install.sh
 #   ./vendor/ralph/install.sh --cursor /path/to/other-repo
 #   ./vendor/ralph/install.sh --cleanup -n
-#   ./vendor/ralph/install.sh --cleanup --silent
+#   ./vendor/ralph/install.sh --purge --silent
 
 set -euo pipefail
 
@@ -36,7 +41,7 @@ BUNDLE="$SCRIPT_DIR/bundle"
 RALPH_BASH_LIB="$BUNDLE/.ralph/bash-lib"
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -54,9 +59,21 @@ TARGET="$(install_ops_resolve_target "${INSTALL_TARGET_ARG:-}")"
 install_ops_verify_bundle "$BUNDLE"
 
 if [[ "$REMOVE_INSTALLED" -eq 1 || "$REMOVE_VENDOR" -eq 1 ]]; then
-  echo "Ralph cleanup -> $TARGET"
+  if [[ "$REMOVE_INSTALLED" -eq 1 && "$REMOVE_VENDOR" -eq 1 ]]; then
+    install_log_banner "Ralph" "purge (uninstall + remove vendor)"
+    install_log_ok_detail "target" "$TARGET"
+  elif [[ "$REMOVE_INSTALLED" -eq 1 ]]; then
+    install_log_banner "Ralph" "uninstall"
+    install_log_ok_detail "target" "$TARGET"
+  else
+    install_log_banner "Ralph" "vendor cleanup (remove vendored package only)"
+    install_log_ok_detail "target" "$TARGET"
+  fi
   if [[ "$REMOVE_INSTALLED" -eq 1 ]]; then
     install_ops_default_selection
+    # Same roots install uses for docs and the dashboard manifest (cleanup may run without a prior export).
+    export RALPH_INSTALL_SCRIPT_DIR="$SCRIPT_DIR"
+    export RALPH_INSTALL_SOURCE_ROOT="${RALPH_INSTALL_SOURCE_ROOT:-$SCRIPT_DIR}"
     install_ops_execute_remove
   fi
   if [[ "$REMOVE_VENDOR" -eq 1 ]]; then
@@ -71,19 +88,22 @@ install_dashboard() {
   local src="$SCRIPT_DIR/ralph-dashboard"
   local dest="$TARGET/.ralph/ralph-dashboard"
   if [[ ! -d "$src" ]]; then
-    echo "Skip ralph-dashboard (missing): $src" >&2
+    install_log_skip "Skip ralph-dashboard (missing):" "$src"
     return 0
   fi
   mkdir -p "$dest"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run] rsync -a --exclude __pycache__ --exclude '*.pyc' $src/ $dest/"
+    install_log_dry "[dry-run]" "rsync -a --exclude __pycache__ --exclude '*.pyc' $src/ $dest/"
     return 0
   fi
   rsync -a --exclude '__pycache__' --exclude '*.pyc' "$src/" "$dest/"
-  echo "Installed: $dest"
+  install_log_ok "Dashboard" "$dest"
 }
 
-echo "Ralph install -> $TARGET"
+install_log_divider "----------------------------------------------------------------------"
+install_log_banner "Ralph" "install"
+install_log_ok_detail "target" "$TARGET"
+install_log_divider "----------------------------------------------------------------------"
 export RALPH_INSTALL_SOURCE_ROOT="$SCRIPT_DIR"
 install_ops_execute_plan
 install_configure_mcp
@@ -92,15 +112,23 @@ if install_ops_should_install_dashboard; then
   install_dashboard
 fi
 
+install_ops_auto_remove_vendor_after_install "$TARGET" "$SCRIPT_DIR"
+
 if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
-  echo ""
+  printf '\n'
+  install_log_divider "----------------------------------------------------------------------"
+  install_log_next_header "You are set. Here is what to do next."
+  install_log_divider "----------------------------------------------------------------------"
   if [[ -d "$TARGET/.ralph/ralph-dashboard" ]]; then
-    echo "Next: python3 -m pip install -e .ralph/ralph-dashboard && python3 -m ralph_dashboard for the local dashboard; add PLAN.md from .ralph/plan.template as needed."
+    install_log_next_line "Dashboard: python3 -m pip install -e .ralph/ralph-dashboard && python3 -m ralph_dashboard"
+    install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"
   else
-    echo "Next: add PLAN.md from .ralph/plan.template as needed."
+    install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"
   fi
-  echo "The canonical bash MCP server is bundled in .ralph/mcp-server.sh; run it with RALPH_MCP_WORKSPACE=\$PWD bash .ralph/mcp-server.sh once jq is installed."
+  install_log_next_line "MCP (optional): RALPH_MCP_WORKSPACE=\$PWD bash .ralph/mcp-server.sh (needs jq)"
   if [[ -d "$TARGET/.ralph/docs" ]]; then
-    echo "Docs and guides: $TARGET/.ralph/docs/"
+    install_log_next_line "Docs: $TARGET/.ralph/docs/"
   fi
+  install_log_divider "----------------------------------------------------------------------"
+  printf '\n'
 fi

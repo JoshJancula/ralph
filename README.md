@@ -32,15 +32,25 @@ After you run the installer, these pieces appear at **your project root** (the a
 
 ## Install
 
-Run **`install.sh`** from a checkout of this repository. Pass your project directory as the argument, or run it from inside that directory so the target defaults to **`.`**.
-
+Quick install
 ```bash
-git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash && ./vendor/ralph/install.sh --cleanup
+git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash && ./vendor/ralph/install.sh
 ```
 
-That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.claude/`**, and **`.codex/`**, and (by default) the dashboard under **`.ralph/ralph-dashboard/`**.
+Alternatively run **`install.sh`** from a checkout of this repository. Pass your project directory as the argument, or run it from inside that directory so the target defaults to **`.`**.
 
-**Submodule, subtree, installer flags, partial installs, and cleanup:** [docs/INSTALL.md](docs/INSTALL.md) (also **`.ralph/docs/INSTALL.md`** in your project after install).
+```bash
+# Clone Ralph to a throwaway directory (not inside your project).
+git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
+
+# Install from that clone into your project root; adjust the path as needed.
+/tmp/ralph/install.sh /path/to/your-repo
+
+# Remove the temporary clone when finished.
+rm -rf /tmp/ralph
+```
+
+That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.claude/`**, and **`.codex/`**, and (by default) the dashboard under **`.ralph/ralph-dashboard/`**. A **subtree-style** **`vendor/ralph`** tree (no **`.git`** inside it) is removed automatically after install. Uninstall and **`--purge`** are documented in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## After install
 
