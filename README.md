@@ -2,7 +2,9 @@
 
 Ralph helps you work with AI coding assistants in an organized way. You keep a markdown to-do list; a small shell loop calls **Cursor**, **Claude Code**, or **OpenAI Codex** for each open task until every box is checked. When a job is too big for one pass, an optional **orchestrator** runs stages in sequence (research, design, implementation, review) and hands artifacts from one step to the next.
 
-For detailed breakdowns (human-in-the-loop behavior, MCP, security, worked examples), use the **[documentation index](docs/README.md)**. If you installed Ralph into your own repo, those guides are also copied to **`.ralph/docs/`** so they live next to `run-plan.sh` and the rest of the tooling.
+Ralph is meant to become **part of your codebase**, not a separate app you drive from the side. You install it into the repository you are building; it adds **`.ralph/`** and layers onto **`.cursor/`**, **`.claude/`**, and **`.codex/`** with runners, rules, skills, and prebuilt **agents** so those tools share the same plans, handoffs, and guard rails.
+
+For installation options beyond the quick start, see **[docs/INSTALL.md](docs/INSTALL.md)**. For human-in-the-loop behavior, MCP, security, worked examples, and the rest, use the **[documentation index](docs/README.md)**. Installed copies mirror these guides under **`.ralph/docs/`** next to **`run-plan.sh`**.
 
 ## In short
 
@@ -12,7 +14,7 @@ For detailed breakdowns (human-in-the-loop behavior, MCP, security, worked examp
 | **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. |
 | **Orchestrator** | Optional multi-stage pipelines with checks between steps. |
 
-While plans run, logs and generated files usually land under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional **ralph-dashboard** app (Python 3) gives you a simple local UI over plans and logs.
+While plans run, logs and generated files will appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional dashboard (Python 3) installs under **`.ralph/ralph-dashboard/`** and gives you a simple local UI over plans and logs.
 
 ## What gets installed
 
@@ -20,65 +22,25 @@ After you run the installer, these pieces appear at **your project root** (the a
 
 | Folder | Role |
 |--------|------|
-| [.ralph](bundle/.ralph) | Shared scripts: unified `run-plan.sh`, orchestrator, cleanup, plan templates, MCP server, and **`.ralph/docs/`** (the same guides as `docs/` in this package) |
+| [.ralph](bundle/.ralph) | Shared scripts: unified `run-plan.sh`, orchestrator, cleanup, plan templates, MCP server, **`.ralph/docs/`** (same guides as `docs/` in this package), and optional **`.ralph/ralph-dashboard/`** |
 | [.cursor/ralph](bundle/.cursor/ralph/) | Cursor-specific runner and config |
 | [.claude/ralph](bundle/.claude/ralph) | Claude Code runner and config |
 | [.codex/ralph](bundle/.codex/ralph) | Codex runner and config |
-| [ralph-dashboard](ralph-dashboard) | Optional local dashboard |
 | [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex) | Rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) for each stack you install |
 
 **repo-context:** Each runtime includes a template skill so assistants know how your repo is laid out and how you build it. After install, edit **`skills/repo-context/SKILL.md`** under `.cursor`, `.claude`, or `.codex` to match your project.
 
-## Install (pick one)
+## Install
 
-**Submodule (easy updates):**
-
-```bash
-cd /path/to/your-repo
-git submodule add <YOUR_RALPH_REPO_URL> vendor/ralph
-git submodule update --init
-./vendor/ralph/install.sh
-git add .ralph ralph-dashboard \
-  .cursor/ralph .cursor/rules .cursor/skills .cursor/agents \
-  .claude/ralph .claude/rules .claude/skills .claude/agents \
-  .codex/ralph .codex/rules .codex/skills .codex/agents
-git commit -m "Add Ralph agent workflows"
-```
-
-Teammates: after `git clone`, run `git submodule update --init` and, if the Ralph bundle changed, `./vendor/ralph/install.sh` again.
-
-**One-time copy:**
+Run **`install.sh`** from a checkout of this repository. Pass your project directory as the argument, or run it from inside that directory so the target defaults to **`.`**.
 
 ```bash
-git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
-/tmp/ralph/install.sh /path/to/your-repo
-rm -rf /tmp/ralph
+git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash && ./vendor/ralph/install.sh --cleanup
 ```
 
-**Subtree:**
+That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.claude/`**, and **`.codex/`**, and (by default) the dashboard under **`.ralph/ralph-dashboard/`**.
 
-```bash
-git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash
-./vendor/ralph/install.sh
-```
-
-### Installer options
-
-With **no flags**, you get the full stack (same as **`--all`**): shared **`.ralph`**, Cursor, Claude, and Codex pieces, plus the dashboard.
-
-```text
-./install.sh                      # full install (default)
-./install.sh --all                # same as default
-./install.sh --cursor             # Cursor runner + rules/skills/agents (combine with --shared if you need .ralph)
-./install.sh --codex --claude     # Codex and Claude only
-./install.sh --shared             # only .ralph/ (orchestrator, templates, runners, docs)
-./install.sh --no-dashboard       # skip ralph-dashboard/
-./install.sh -n /path/to/repo     # dry-run: print actions only
-```
-
-You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`** to trim what is copied.
-
-**Partial installs:** **`--cursor`** alone does **not** install **`.ralph/`**, so you will not get the unified runner, orchestrator, plan template, or in-tree docs. Add **`--shared`** (or do a full install) when you need those. The Claude and Codex runners expect **`.ralph/agent-config-tool.sh`** when you use **`--agent`**; use **`./install.sh --claude --shared`**, **`./install.sh --codex --shared`**, or a full install.
+**Submodule, subtree, installer flags, partial installs, and cleanup:** [docs/INSTALL.md](docs/INSTALL.md) (also **`.ralph/docs/INSTALL.md`** in your project after install).
 
 ## After install
 
@@ -89,7 +51,8 @@ You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`*
 ### Dashboard
 
 ```bash
-python3 ralph-dashboard/server.py
+python3 -m pip install -e .ralph/ralph-dashboard
+python3 -m ralph_dashboard
 ```
 
 By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
@@ -166,6 +129,7 @@ In CI or isolated environments where you trust there will not be session mix-ups
 - Set `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` or pass `--allow-unsafe-resume` to `.ralph/run-plan.sh`.
 - The runner will attempt to resume directly (e.g., Codex `--last` semantics) even if `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` is absent.
 - **Warning:** Bare resume without a stored session ID may attach to the wrong session on a shared workstation; prefer isolated CI or the session files above for safety.
+
 ### Orchestration (multi-stage)
 
 ```bash
@@ -181,6 +145,7 @@ You can pass the **`.orch.json`** path as the first argument with no flag; detai
 | Guide | What you get |
 |-------|----------------|
 | [Index](docs/README.md) | Map of all topics and quick reference |
+| [Installation](docs/INSTALL.md) | Submodule, subtree, flags, partial installs, cleanup |
 | [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup, sample prompts |
 | [MCP](docs/MCP.md) | Bash MCP server, host config, guard rails |
 | [Claude agent teams](docs/CLAUDE-AGENT-TEAMS.md) | Using Claude Code teams alongside Ralph |

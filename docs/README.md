@@ -1,6 +1,6 @@
 # Ralph documentation
 
-These pages assume you have **installed Ralph into a project** using the installer in the Ralph repository (see the main **README** there for submodule, subtree, or one-shot copy). Unless we say otherwise, paths are from **your project root**: the directory that contains **`.ralph/`**, **`.cursor/`**, and the rest.
+These pages assume you have **installed Ralph into a project** using **`install.sh`** (see **[INSTALL.md](INSTALL.md)** for submodule, subtree, flags, and removal, or the quick start in the main **README**). Unless we say otherwise, paths are from **your project root**: the directory that contains **`.ralph/`**, **`.cursor/`**, and the rest.
 
 The installer copies this documentation into **`.ralph/docs/`** in that project. Read it from either place; the content is the same.
 
@@ -10,6 +10,7 @@ Pick what matches what you are doing. You can read them in any order.
 
 | Guide | What it is for |
 |-------|----------------|
+| [INSTALL.md](INSTALL.md) | Submodule, subtree, one-time copy, **`install.sh`** flags, partial installs, uninstall |
 | [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | How the plan loop works, how human input behaves (terminal vs offline files), orchestration stages, `loopControl`, cleanup, and copy-paste prompts |
 | [worker-ralph-example.md](worker-ralph-example.md) | One plan, one runtime, end to end: where logs and artifacts go |
 | [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipelines: stage plans, `.orch.json`, running the orchestrator, checking artifacts |

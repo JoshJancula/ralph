@@ -1,5 +1,7 @@
 # Ralph dashboard
 
+When Ralph is installed into another repository, this package is copied to **`.ralph/ralph-dashboard/`** next to the rest of the shared scripts. Use **`python3 -m pip install -e .ralph/ralph-dashboard`** from that project root, then **`python3 -m ralph_dashboard`**.
+
 ## Testing
 
 Install the local dashboard package from the `ralph-dashboard/` directory before running tests:

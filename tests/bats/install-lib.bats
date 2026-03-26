@@ -22,6 +22,56 @@ setup() {
   set -e
 }
 
+@test "cleanup flags set remove and stack options" {
+  install_ops_parse_flags --cleanup
+  [ "$?" -eq 0 ]
+  [ "$REMOVE_INSTALLED" -eq 1 ]
+  [ "$REMOVE_VENDOR" -eq 1 ]
+  [ "$INSTALL_SHARED" -eq 1 ]
+  [ "$INSTALL_CURSOR" -eq 1 ]
+  [ "$INSTALL_DASHBOARD" -eq 1 ]
+}
+
+@test "remove-installed and remove-vendor flags" {
+  install_ops_parse_flags --remove-installed --remove-vendor --shared
+  [ "$?" -eq 0 ]
+  [ "$REMOVE_INSTALLED" -eq 1 ]
+  [ "$REMOVE_VENDOR" -eq 1 ]
+  [ "$INSTALL_SHARED" -eq 1 ]
+  [ "$INSTALL_CURSOR" -eq 0 ]
+}
+
+@test "remove dests list matches selected stacks" {
+  target_dir="$(mktemp -d)"
+  TARGET="$target_dir"
+  INSTALL_SHARED=1
+  INSTALL_CURSOR=1
+  INSTALL_CODEX=0
+  INSTALL_CLAUDE=0
+  INSTALL_DASHBOARD=1
+  dests="$(install_ops_build_remove_dests | sort -u)"
+  [[ "$dests" == *"$target_dir/.ralph"* ]]
+  [[ "$dests" == *"$target_dir/.cursor/ralph"* ]]
+  [[ "$dests" != *"$target_dir/ralph-dashboard"* ]]
+  [[ "$dests" != *"$target_dir/.codex"* ]]
+  rm -rf "$target_dir"
+  TARGET=""
+}
+
+@test "remove dests includes dashboard under .ralph when shared is off" {
+  target_dir="$(mktemp -d)"
+  TARGET="$target_dir"
+  INSTALL_SHARED=0
+  INSTALL_CURSOR=1
+  INSTALL_CODEX=0
+  INSTALL_CLAUDE=0
+  INSTALL_DASHBOARD=1
+  dests="$(install_ops_build_remove_dests | sort -u)"
+  [[ "$dests" == *"$target_dir/.ralph/ralph-dashboard"* ]]
+  rm -rf "$target_dir"
+  TARGET=""
+}
+
 @test "resolving target returns absolute path" {
   workspace="$(mktemp -d)"
   output="$(install_ops_resolve_target "$workspace")"

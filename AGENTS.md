@@ -54,11 +54,15 @@ The test suite uses Bats (Bash Automated Testing System). Tests live in `tests/b
 ./install.sh -n
 ```
 
+Submodule, subtree, partial installs, and cleanup: [docs/INSTALL.md](docs/INSTALL.md).
+
 ### Run a plan (`run-plan.sh`)
 
 Invoke **`.ralph/run-plan.sh`** with **`--plan`** (required). Pass **`--runtime`** unless **`RALPH_PLAN_RUNTIME`** is set or you rely on the interactive runtime prompt (TTY). Pass **`--workspace <path>`** for an explicit repo root; if omitted, the workspace defaults to the current working directory. The parser in `bundle/.ralph/bash-lib/run-plan-args.sh` rejects unknown arguments and does not accept positional workspace or plan paths. See [README.md](README.md) for typical commands and canonical examples.
 
 ### Ralph Dashboard (Python)
+
+In this repository, develop and test from **`ralph-dashboard/`** at the repo root:
 
 ```bash
 cd ralph-dashboard
@@ -66,6 +70,8 @@ python3 -m pip install -e ".[dev]"
 python3 -m pytest tests/ -v --cov=ralph_dashboard --cov-fail-under=80
 python3 server.py  # runs on http://127.0.0.1:8123
 ```
+
+After **`install.sh`** copies Ralph into another project, the dashboard lives at **`.ralph/ralph-dashboard/`**; install it with **`python3 -m pip install -e .ralph/ralph-dashboard`** from that project root, then run **`python3 -m ralph_dashboard`**.
 
 The dashboard reads plan state, logs, and artifacts from `.ralph-workspace/` and provides a UI for monitoring orchestration runs.
 
@@ -246,7 +252,7 @@ bats tests/bats/orchestration-integration.bats --filter "integration test for mu
 | `.ralph/orchestration.template.json` | Starter orchestration plan template |
 | `.ralph/plan.template` | Starter plan template |
 | `.claude/agents/README.md` | Agent configuration schema documentation |
-| `ralph-dashboard/server.py` | Dashboard entry point |
+| `.ralph/ralph-dashboard/` (installed) or `ralph-dashboard/` (this repo) | Dashboard package; run `python3 -m ralph_dashboard` after `pip install -e` |
 | `scripts/setup-test-fixtures.sh` | Test fixture generator (creates `.ralph-workspace/`) |
 | `tests/bats/*.bats` | Bats test files |
 
