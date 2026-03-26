@@ -20,6 +20,7 @@ NO_CLI_RESUME_FLAG=0
 ALLOW_UNSAFE_RESUME_FLAG=0
 RESUME_SESSION_ID_OVERRIDE=""
 RUNTIME=""
+RALPH_PLAN_TODO_MAX_ITERATIONS=""
 CLAUDE_TOOLS_FROM_AGENT=""
 _RALPH_CLI_RESUME_ENV_WAS_SET=0
 [[ "${RALPH_PLAN_CLI_RESUME+x}" == x ]] && _RALPH_CLI_RESUME_ENV_WAS_SET=1
@@ -46,6 +47,54 @@ source "$SCRIPT_DIR/bash-lib/usage-risk-ack.sh"
 ralph_require_usage_risk_acknowledgment
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/run-plan-cli-helpers.sh"
+
+ralph_parse_duration() {
+  local duration_str="${1:-}"
+  if [[ -z "$duration_str" ]]; then
+    echo "Error: duration string is empty" >&2
+    return 1
+  fi
+
+  local num unit seconds
+
+  if [[ "$duration_str" =~ ^([0-9]+)(s|m|h)$ ]]; then
+    num="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+  else
+    echo "Error: invalid duration format '$duration_str' (expected e.g. 30s, 5m, 2h)" >&2
+    return 1
+  fi
+
+  if [[ "$num" -le 0 ]]; then
+    echo "Error: duration must be positive (got '$duration_str')" >&2
+    return 1
+  fi
+
+  case "$unit" in
+    s) seconds="$num" ;;
+    m) seconds=$((num * 60)) ;;
+    h) seconds=$((num * 3600)) ;;
+  esac
+
+  echo "$seconds"
+}
+
+ralph_resolve_timeout() {
+  local raw_timeout="${RALPH_PLAN_INVOCATION_TIMEOUT_RAW:-}"
+  local timeout_seconds
+
+  if [[ -n "$raw_timeout" ]]; then
+    if ! timeout_seconds="$(ralph_parse_duration "$raw_timeout")"; then
+      return 1
+    fi
+  else
+    if ! timeout_seconds="$(ralph_parse_duration "30m")"; then
+      return 1
+    fi
+  fi
+
+  echo "$timeout_seconds"
+}
 
 AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
 
@@ -76,9 +125,6 @@ if [[ -f "$SELECT_MODEL_SCRIPT" ]]; then
 else
   ralph_die "Error: select-model script not found for runtime $RUNTIME ($SELECT_MODEL_SCRIPT)."
 fi
-
-MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
-GUTTER_ITERATIONS="${CURSOR_PLAN_GUTTER_ITER:-10}"
 
 # Log to file and optionally stdout (if CURSOR_PLAN_VERBOSE=1)
 ralph_run_plan_log() {
@@ -212,9 +258,33 @@ case "$RUNTIME" in
   codex) RALPH_INVOKED_CLI="$CODEX_CLI" ;;
 esac
 
+MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
+case "$RUNTIME" in
+  cursor)
+    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-10}"
+    ;;
+  claude)
+    _ralph_gutter_default="${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}"
+    ;;
+  codex)
+    _ralph_gutter_default="${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}"
+    ;;
+  *)
+    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-10}"
+    ;;
+esac
+GUTTER_ITERATIONS="${RALPH_PLAN_TODO_MAX_ITERATIONS:-$_ralph_gutter_default}"
+unset _ralph_gutter_default
+
+RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS=""
+if ! RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS="$(ralph_resolve_timeout)"; then
+  ralph_die "Error: failed to resolve invocation timeout"
+fi
+
 ralph_run_plan_log "run-plan.sh started (workspace=$WORKSPACE plan=$PLAN_PATH)"
 ralph_run_plan_log "plan_path=$PLAN_PATH output_log=$OUTPUT_LOG log_file=$LOG_FILE"
 ralph_run_plan_log "artifact namespace: RALPH_ARTIFACT_NS=$RALPH_ARTIFACT_NS RALPH_PLAN_KEY=$RALPH_PLAN_KEY"
+ralph_run_plan_log "invocation timeout: ${RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS}s (${RALPH_PLAN_INVOCATION_TIMEOUT_RAW:-default 30m})"
 
 # Startup banner in output log (per-plan)
 mkdir -p "$(dirname "$OUTPUT_LOG")"
@@ -594,7 +664,7 @@ while true; do
   while true; do
     total_invocations=$((total_invocations + 1))
     if [[ $total_invocations -gt $MAX_ITERATIONS ]]; then
-      ralph_run_plan_log "exceeded CURSOR_PLAN_MAX_ITER=$MAX_ITERATIONS"
+      ralph_run_plan_log "exceeded plan max invocations (CURSOR_PLAN_MAX_ITER etc.) limit=$MAX_ITERATIONS"
       echo -e "${C_R}Too many agent invocations ($MAX_ITERATIONS).${C_RST} Raise CURSOR_PLAN_MAX_ITER or fix the plan." >&2
       exit 1
     fi
@@ -818,6 +888,22 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
           echo -e "${C_DIM}[$(date '+%H:%M:%S')] Agent still working (elapsed ${secs}s).${C_RST}" >&2
         fi
       fi
+
+      if [[ $elapsed -gt "$RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS" ]]; then
+        echo "" >&2
+        echo -e "${C_R}${C_BOLD}Invocation stuck: timeout exceeded (${elapsed}s > ${RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS}s).${C_RST}" >&2
+        echo -e "${C_R}Terminating agent process (PID $AGENT_PID).${C_RST}" >&2
+        ralph_run_plan_log "Invocation timeout exceeded: elapsed=${elapsed}s limit=${RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS}s; killing agent (PID $AGENT_PID)"
+        kill -TERM "$AGENT_PID" 2>/dev/null || true
+        sleep 2
+        if kill -0 "$AGENT_PID" 2>/dev/null; then
+          kill -KILL "$AGENT_PID" 2>/dev/null || true
+        fi
+        echo "" >> "$OUTPUT_LOG"
+        echo "--- Invocation terminated due to timeout (elapsed ${elapsed}s > ${RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS}s) ---" >> "$OUTPUT_LOG"
+        EXIT_STATUS="stuck"
+        exit 4
+      fi
     done
 
     wait "$AGENT_PID" 2>/dev/null || true
@@ -920,10 +1006,15 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
 
     attempts_on_line=$((attempts_on_line + 1))
     if [[ $attempts_on_line -gt $GUTTER_ITERATIONS ]]; then
-      ralph_run_plan_log "GUTTER: line $line_num unchanged after $attempts_on_line attempts"
+      ralph_run_plan_log "GUTTER: line $line_num unchanged after $attempts_on_line attempts (per-TODO limit=$GUTTER_ITERATIONS)"
+      _gutter_help_msg="Plan runner stopped (gutter): this TODO stayed open after $attempts_on_line attempts (per-TODO limit is $GUTTER_ITERATIONS). Unblock by fixing the task, editing the plan line, or raising the limit (CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER or --max-iterations). To ask you a question, the agent should write to: $PENDING_ABS"
+      if ralph_should_persist_human_files; then
+        ralph_write_human_action_file "$_gutter_help_msg"
+      fi
       echo "" >&2
-      echo -e "${C_R}${C_BOLD}Agent did not complete this TODO after $attempts_on_line tries.${C_RST}" >&2
+      echo -e "${C_R}${C_BOLD}Agent did not complete this TODO after $attempts_on_line tries (gutter limit $GUTTER_ITERATIONS).${C_RST}" >&2
       echo -e "  Plan: $PLAN_PATH  Line $line_num: $todo_text" >&2
+      echo -e "${C_DIM}Human help needed: adjust the plan or complete the work, then re-run.${C_RST}" >&2
       echo -e "${C_DIM}To ask you a question instead of retrying blindly, the agent should write to:${C_RST}" >&2
       echo "  $PENDING_ABS" >&2
       exit 1

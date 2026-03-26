@@ -19,8 +19,9 @@
 #                 CLAUDE_PLAN_LOG / CLAUDE_PLAN_OUTPUT_LOG +
 #                 CODEX_PLAN_LOG / CODEX_PLAN_OUTPUT_LOG
 #   Plan state dir: RALPH_PLAN_WORKSPACE_ROOT (default: <workspace>/.ralph-workspace) holds plan logs + sessions
-#   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER
-#   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER
+#   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER (total agent invocations cap)
+#   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER, or --max-iterations <n>
+#                 (per-TODO retries before gutter exit; human help / plan edit expected)
 #   Progress:     CURSOR_PLAN_PROGRESS_INTERVAL / CLAUDE_PLAN_PROGRESS_INTERVAL / CODEX_PLAN_PROGRESS_INTERVAL
 #   Caffeinate:   CURSOR_PLAN_NO_CAFFEINATE / CLAUDE_PLAN_NO_CAFFEINATE / CODEX_PLAN_NO_CAFFEINATE
 #   Human prompts: CURSOR_PLAN_DISABLE_HUMAN_PROMPT / CLAUDE_PLAN_DISABLE_HUMAN_PROMPT / CODEX_PLAN_DISABLE_HUMAN_PROMPT
@@ -34,6 +35,9 @@
 #   Unsafe bare resume: RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 or --allow-unsafe-resume is required before the runner
 #     passes resume without a stored session id (e.g. Codex resume --last). Invoke helpers ignore bare resume without
 #     this flag so ad-hoc RALPH_RUN_PLAN_RESUME_BARE cannot resume the wrong session during interactive use.
+#   Timeout:      --timeout <duration> (per-agent-invocation timeout, default 30m).
+#                 Duration format: compact units such as `30m`, `1800s`, `2h`.
+#                 On timeout, exits as `stuck` with exit code `4`.
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
