@@ -26,14 +26,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$SCRIPT_DIR/bundle"
+# Canonical copy lives under bundle/; root .ralph is a local symlink and is gitignored, so
+# submodule/subtree/checkouts never have SCRIPT_DIR/.ralph -- only bundle/.ralph is published.
+RALPH_BASH_LIB="$BUNDLE/.ralph/bash-lib"
 
 usage() {
   sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
-source "$SCRIPT_DIR/.ralph/bash-lib/install-ops.sh"
-source "$SCRIPT_DIR/.ralph/bash-lib/install-mcp.sh"
+source "$RALPH_BASH_LIB/install-ops.sh"
+source "$RALPH_BASH_LIB/install-mcp.sh"
 
 install_ops_reset_state
 
