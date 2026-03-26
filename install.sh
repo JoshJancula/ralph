@@ -13,6 +13,7 @@
 #   --codex     .codex/ralph + rules/skills/agents (same)
 #   --claude    .claude/ralph + rules/skills/agents (same)
 #   --no-dashboard   Skip copying ralph-dashboard/ into TARGET
+#   -s, --silent   Run without interactive prompts (skip conflicts, configure MCP)
 #   -n, --dry-run   Print what would be copied, do not write
 #   -h, --help
 #
@@ -32,6 +33,7 @@ usage() {
 }
 
 source "$SCRIPT_DIR/.ralph/bash-lib/install-ops.sh"
+source "$SCRIPT_DIR/.ralph/bash-lib/install-mcp.sh"
 
 install_ops_reset_state
 
@@ -64,6 +66,7 @@ install_dashboard() {
 echo "Ralph install -> $TARGET"
 export RALPH_INSTALL_SOURCE_ROOT="$SCRIPT_DIR"
 install_ops_execute_plan
+install_configure_mcp
 
 if install_ops_should_install_dashboard; then
   install_dashboard

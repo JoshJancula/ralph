@@ -13,6 +13,7 @@ set -euo pipefail
 
 install_ops_reset_state() {
   DRY_RUN=0
+  SILENT=0
   INSTALL_SHARED=0
   INSTALL_CURSOR=0
   INSTALL_CODEX=0
@@ -59,6 +60,10 @@ install_ops_parse_flags() {
         ;;
       -n|--dry-run)
         DRY_RUN=1
+        shift
+        ;;
+      -s|--silent)
+        SILENT=1
         shift
         ;;
       -h|--help)
@@ -186,6 +191,107 @@ install_ops_copy_tree() {
     return 0
   fi
 
-  rsync -a "$src/" "$dest/"
-  echo "Installed: $dest"
+  local -a conflicts=()
+  local file relpath
+
+  while IFS= read -r file; do
+    relpath="${file#"$src/"}"
+    if [[ -e "$dest/$relpath" ]]; then
+      conflicts+=("$relpath")
+    fi
+  done < <(find "$src" -type f)
+
+  if [[ "${#conflicts[@]}" -eq 0 ]]; then
+    rsync -a "$src/" "$dest/"
+    echo "Installed: $dest"
+    return 0
+  fi
+
+  if [[ "$SILENT" -eq 1 ]]; then
+    rsync -a --ignore-existing "$src/" "$dest/"
+    printf 'Conflicts detected in %s (skipped - manual review required):\n' "$dest"
+    printf '  %s\n' "${conflicts[@]}"
+    printf 'Run without --silent to resolve interactively.\n'
+    return 0
+  fi
+
+  # Interactive path: check if we have a TTY
+  if [[ ! -t 0 ]]; then
+    printf 'WARNING: stdin is not a TTY. Cannot prompt interactively. Falling back to silent mode.\n' >&2
+    rsync -a --ignore-existing "$src/" "$dest/"
+    printf 'Conflicts detected in %s (skipped - manual review required):\n' "$dest"
+    printf '  %s\n' "${conflicts[@]}"
+    printf 'Run with an interactive terminal to resolve interactively.\n'
+    return 0
+  fi
+
+  printf 'Conflicts found in %s:\n' "$dest"
+  printf '  %s\n' "${conflicts[@]}"
+  printf '\n'
+
+  local choice
+  while true; do
+    printf 'Conflicts found. [o]verwrite all / [s]kip all / [r]eview each: '
+    if ! read -r -t 0 choice < /dev/tty; then
+      printf '\n'
+      read -r choice < /dev/tty
+    else
+      read -r choice < /dev/tty
+    fi
+
+    case "$choice" in
+      o|O)
+        rsync -a "$src/" "$dest/"
+        echo "Installed (overwrote conflicts): $dest"
+        return 0
+        ;;
+      s|S)
+        rsync -a --ignore-existing "$src/" "$dest/"
+        echo "Installed (skipped conflicts): $dest"
+        return 0
+        ;;
+      r|R)
+        # Review mode: show each conflict and ask per-file
+        local -a skipped=()
+        local conflict
+        for conflict in "${conflicts[@]}"; do
+          printf '\n--- Conflict: %s ---\n' "$conflict"
+          if command -v diff &> /dev/null; then
+            diff --color=auto "$dest/$conflict" "$src/$conflict" 2>/dev/null || true
+          fi
+          printf 'Overwrite %s? [o]verwrite / [s]kip: ' "$conflict"
+          local file_choice
+          read -r file_choice < /dev/tty
+          case "$file_choice" in
+            o|O)
+              # Will be included in the final rsync
+              ;;
+            *)
+              skipped+=("$conflict")
+              ;;
+          esac
+        done
+
+        # Build and run rsync with exclusions
+        if [[ "${#skipped[@]}" -eq 0 ]]; then
+          rsync -a "$src/" "$dest/"
+        else
+          # Use rsync with --exclude for each skipped file
+          local -a rsync_args=("-a" "$src/" "$dest/")
+          for conflict in "${skipped[@]}"; do
+            rsync_args+=("--exclude" "$conflict")
+          done
+          rsync "${rsync_args[@]}"
+          # Copy non-excluded conflicts, ignoring those we're skipping
+          rsync -a --ignore-existing "$src/" "$dest/"
+        fi
+        echo "Installed (reviewed conflicts): $dest"
+        return 0
+        ;;
+      *)
+        printf 'Invalid choice. Please enter o, s, or r.\n'
+        ;;
+    esac
+  done
+
 }
