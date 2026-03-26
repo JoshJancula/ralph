@@ -4,8 +4,6 @@ Ralph helps you work with AI coding assistants in an organized way. You keep a m
 
 Ralph is meant to become **part of your codebase**, not a separate app you drive from the side. You install it into the repository you are building; it adds **`.ralph/`** and layers onto **`.cursor/`**, **`.claude/`**, and **`.codex/`** with runners, rules, skills, and prebuilt **agents** so those tools share the same plans, handoffs, and guard rails.
 
-For installation options beyond the quick start, see **[docs/INSTALL.md](docs/INSTALL.md)**. For human-in-the-loop behavior, MCP, security, worked examples, and the rest, use the **[documentation index](docs/README.md)**. Installed copies mirror these guides under **`.ralph/docs/`** next to **`run-plan.sh`**.
-
 ## In short
 
 | Idea | What it means |
@@ -160,6 +158,12 @@ You can pass the **`.orch.json`** path as the first argument with no flag; detai
 | [MCP](docs/MCP.md) | Bash MCP server, host config, guard rails |
 | [Claude agent teams](docs/CLAUDE-AGENT-TEAMS.md) | Using Claude Code teams alongside Ralph |
 | [Security](docs/SECURITY.md) | Sandboxing reality, `.cursorignore`, hooks, practical caution |
+
+**Further reading (Ralph technique):** 
+
+- [Ralph Cursor Guide](https://forum.cursor.com/t/ralph-cursor-guide/149998) -- Cursor Community Forum
+- [Ralph Wiggum as a "software engineer"](https://ghuntley.com/ralph/) -- Geoffrey Huntley
+- [Ralph Wiggum: AI loop technique](https://awesomeclaude.ai/ralph-wiggum) -- Awesome Claude
 
 Runtime-specific READMEs: [.cursor/ralph](bundle/.cursor/ralph/README.md), [.codex/ralph](bundle/.codex/ralph/README.md). Orchestration JSON shape: comments in **`.ralph/orchestrator.sh`** and **`.ralph/orchestration.template.json`**.
 

@@ -309,11 +309,11 @@ install_ops_copy_tree() {
         local -a skipped=()
         local conflict
         for conflict in "${conflicts[@]}"; do
-          printf '\n%b\n' "${C_C}--- Conflict: ${C_BOLD}%s${C_RST}${C_C} ---${C_RST}" "$conflict"
+          printf '\n%b%s%b%s%b%s%b\n' "${C_C}" "--- Conflict: " "${C_BOLD}" "$conflict" "${C_RST}${C_C}" " ---" "${C_RST}"
           if command -v diff &> /dev/null; then
             diff --color=auto "$dest/$conflict" "$src/$conflict" 2>/dev/null || true
           fi
-          printf '%b' "${C_Y}Overwrite ${C_B}%s${C_Y}? [o]verwrite / [s]kip:${C_RST} " "$conflict"
+          printf '%b%s%b%s%b%s%b' "${C_Y}" "Overwrite " "${C_B}" "$conflict" "${C_Y}" "? [o]verwrite / [s]kip:" "${C_RST}"
           local file_choice
           read -r file_choice < /dev/tty
           case "$file_choice" in
@@ -412,7 +412,7 @@ install_ops_removal_needs_tty_or_silent() {
   if [[ -t 0 ]]; then
     return 0
   fi
-  install_log_err "Removal requires an interactive terminal or --silent for non-interactive runs." ""
+  install_log_err "Removal requires an interactive terminal or --silent for non-interactive runs."
   return 1
 }
 
@@ -457,8 +457,12 @@ install_ops_execute_remove() {
 
   if [[ "$SILENT" -eq 0 ]]; then
     install_log_phase "Confirm uninstall"
-    printf '%b\n' "${C_Y}Will remove ${C_BOLD}%d${C_Y} Ralph-installed file(s) only; your other files stay.${C_RST}" "${#files[@]}"
-    install_log_ok_detail "prune empty dirs under" "$(printf '%s\n' "${prune_roots[@]}" | tr '\n' ' ')"
+    printf '%b%d%b\n' "${C_Y}Will remove ${C_BOLD}" "${#files[@]}" "${C_Y} Ralph-installed file(s) only; your other files stay.${C_RST}"
+    printf '%b\n' "${C_DIM}Then prune empty directories under:${C_RST}"
+    local _p
+    for _p in "${prune_roots[@]}"; do
+      printf '%b\n' "  ${C_DIM}${_p}${C_RST}"
+    done
     printf '%b' "${C_Y}${C_BOLD}Proceed? [y/N]${C_RST} "
     local answer
     if ! read -r -t 0 answer < /dev/tty 2>/dev/null; then
@@ -496,7 +500,7 @@ install_ops_resolve_vendor_rel() {
   sn="$(cd "$script_dir" && pwd -P)" || return 1
 
   if [[ "$sn" == "$tn" ]]; then
-    install_log_err "Refusing vendor removal: install script directory equals target (unsafe)." ""
+    install_log_err "Refusing vendor removal: install script directory equals target (unsafe)."
     return 2
   fi
 
@@ -517,6 +521,19 @@ install_ops_resolve_vendor_rel() {
 
   printf '%s\n' "$rel"
   return 0
+}
+
+# After rm -rf of rel (e.g. vendor/ralph), remove empty parent segments under tn (e.g. empty vendor/).
+install_ops_prune_empty_vendor_ancestors() {
+  local tn="$1"
+  local rel="$2"
+  local _p
+  _p="$(dirname "$rel")"
+  while [[ "$_p" != "." && "$_p" != "/" ]]; do
+    [[ -d "$tn/$_p" ]] || break
+    rmdir "$tn/$_p" 2>/dev/null || break
+    _p="$(dirname "$_p")"
+  done
 }
 
 # After a normal install from vendor/ralph, remove that vendored copy so only project-root files remain.
@@ -545,6 +562,7 @@ install_ops_auto_remove_vendor_after_install() {
   fi
 
   ( cd "$tn" && rm -rf "$rel" )
+  install_ops_prune_empty_vendor_ancestors "$tn" "$rel"
   install_log_ok "Removed vendored copy (Ralph lives at project root)" "$vendor_path"
 }
 
@@ -571,12 +589,12 @@ install_ops_remove_vendor() {
   vendor_path="$tn/$rel"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    printf '[dry-run] rm -rf %s\n' "$vendor_path"
+    install_log_dry "[dry-run]" "rm -rf $vendor_path"
     return 0
   fi
 
   if [[ "$SILENT" -eq 0 ]]; then
-    printf 'Remove entire vendored Ralph tree %s ? [y/N] ' "$vendor_path"
+    printf '%b' "${C_Y}${C_BOLD}Remove entire vendored Ralph tree?${C_RST} ${C_DIM}${vendor_path}${C_RST} ${C_Y}[y/N]${C_RST} "
     local answer
     if ! read -r -t 0 answer < /dev/tty 2>/dev/null; then
       read -r answer < /dev/tty
@@ -586,12 +604,13 @@ install_ops_remove_vendor() {
     case "$answer" in
       y|Y) ;;
       *)
-        printf 'Cancelled.\n'
+        install_log_warn "Cancelled."
         return 1
         ;;
     esac
   fi
 
   ( cd "$tn" && rm -rf "$rel" )
-  printf 'Removed vendored package: %s\n' "$vendor_path"
+  install_ops_prune_empty_vendor_ancestors "$tn" "$rel"
+  install_log_ok "Removed vendored package" "$vendor_path"
 }

@@ -48,6 +48,28 @@ setup() {
   [ "$REMOVE_VENDOR" -eq 0 ]
 }
 
+@test "prune_empty_vendor_ancestors removes empty parent directories" {
+  t="$(mktemp -d)"
+  mkdir -p "$t/vendor/ralph"
+  printf 'x\n' > "$t/vendor/ralph/keep.txt"
+  rm -f "$t/vendor/ralph/keep.txt"
+  ( cd "$t" && rm -rf vendor/ralph )
+  install_ops_prune_empty_vendor_ancestors "$t" "vendor/ralph"
+  [[ ! -d "$t/vendor" ]]
+  rm -rf "$t"
+}
+
+@test "prune_empty_vendor_ancestors keeps parent when non-empty" {
+  t="$(mktemp -d)"
+  mkdir -p "$t/vendor/ralph"
+  printf 'other\n' > "$t/vendor/other.txt"
+  ( cd "$t" && rm -rf vendor/ralph )
+  install_ops_prune_empty_vendor_ancestors "$t" "vendor/ralph"
+  [[ -d "$t/vendor" ]]
+  [[ -f "$t/vendor/other.txt" ]]
+  rm -rf "$t"
+}
+
 @test "resolve_vendor_rel prints path when script dir is under target" {
   t="$(mktemp -d)"
   mkdir -p "$t/vendor/ralph"

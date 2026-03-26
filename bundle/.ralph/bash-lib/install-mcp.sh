@@ -12,7 +12,8 @@ install_configure_mcp() {
   fi
 
   local answer
-  printf 'Configure Ralph MCP server for installed runtimes? [y/N] '
+  printf '%b\n' "${C_C}${C_BOLD}MCP${C_RST} ${C_DIM}Optional: wire the Ralph MCP server into your editor configs.${C_RST}"
+  printf '%b' "${C_Y}${C_BOLD}Configure MCP now?${C_RST} ${C_DIM}[y/N]${C_RST} "
   if ! read -r -t 0 answer < /dev/tty; then
     printf '\n'
     read -r answer < /dev/tty
@@ -37,7 +38,7 @@ _mcp_configure_cursor() {
   local target_file="$TARGET/.cursor/mcp.json"
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    printf '[dry-run] would write/merge %s\n' "$target_file"
+    install_log_dry "[dry-run]" "would write/merge $target_file"
     return 0
   fi
 
@@ -49,12 +50,13 @@ _mcp_configure_cursor() {
   if [[ ! -f "$target_file" ]]; then
     mkdir -p "$(dirname "$target_file")"
     printf '%s\n' "$content" > "$target_file"
+    install_log_ok "Wrote Cursor MCP example" "$target_file"
     return 0
   fi
 
   # Target exists - check if jq is available
   if ! command -v jq &> /dev/null; then
-    printf 'Warning: %s exists and jq is not available. Skipping merge.\n' "$target_file" >&2
+    install_log_warn "Warning: $target_file exists and jq is not installed; skipping MCP merge."
     return 0
   fi
 
@@ -68,6 +70,7 @@ _mcp_configure_cursor() {
     .mcpServers += $new_servers |
     .mcpServers |= unique_by(.name)
   ' "$target_file" > "$target_file.tmp" && mv "$target_file.tmp" "$target_file"
+  install_log_ok "Merged Cursor MCP config" "$target_file"
 }
 
 _mcp_configure_claude() {
@@ -75,7 +78,7 @@ _mcp_configure_claude() {
   local target_file="$TARGET/.claude/mcp.json"
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    printf '[dry-run] would write/merge %s\n' "$target_file"
+    install_log_dry "[dry-run]" "would write/merge $target_file"
     return 0
   fi
 
@@ -87,12 +90,13 @@ _mcp_configure_claude() {
   if [[ ! -f "$target_file" ]]; then
     mkdir -p "$(dirname "$target_file")"
     printf '%s\n' "$content" > "$target_file"
+    install_log_ok "Wrote Claude MCP example" "$target_file"
     return 0
   fi
 
   # Target exists - check if jq is available
   if ! command -v jq &> /dev/null; then
-    printf 'Warning: %s exists and jq is not available. Skipping merge.\n' "$target_file" >&2
+    install_log_warn "Warning: $target_file exists and jq is not installed; skipping MCP merge."
     return 0
   fi
 
@@ -103,6 +107,7 @@ _mcp_configure_claude() {
 
   # Merge: preserve existing keys and add the ralph entry
   jq --argjson new_config "$new_config" '. * $new_config' "$target_file" > "$target_file.tmp" && mv "$target_file.tmp" "$target_file"
+  install_log_ok "Merged Claude MCP config" "$target_file"
 }
 
 _mcp_configure_codex() {
@@ -110,7 +115,7 @@ _mcp_configure_codex() {
   local target_file="$TARGET/.codex/config.toml"
 
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-    printf '[dry-run] would write/append %s\n' "$target_file"
+    install_log_dry "[dry-run]" "would write/append $target_file"
     return 0
   fi
 
@@ -121,15 +126,17 @@ _mcp_configure_codex() {
   # If target exists, check if ralph is already configured
   if [[ -f "$target_file" ]]; then
     if grep -q '\[mcp_servers\.ralph\]' "$target_file"; then
-      printf 'Skipping %s: [mcp_servers.ralph] already configured.\n' "$target_file"
+      install_log_skip "Skip Codex MCP (already configured):" "$target_file"
       return 0
     fi
     # Append to existing file
     printf '\n%s\n' "$content" >> "$target_file"
+    install_log_ok "Appended Codex MCP block" "$target_file"
     return 0
   fi
 
   # Target does not exist, create it
   mkdir -p "$(dirname "$target_file")"
   printf '%s\n' "$content" > "$target_file"
+  install_log_ok "Wrote Codex MCP example" "$target_file"
 }

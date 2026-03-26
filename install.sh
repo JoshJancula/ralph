@@ -25,6 +25,8 @@
 #   copy), the vendored directory is removed after install. Submodule or clone checkouts keep vendor/
 #   unless you set RALPH_INSTALL_REMOVE_VENDOR=1. Set RALPH_INSTALL_KEEP_VENDOR=1 to always keep vendor/.
 #
+#   NO_COLOR (https://no-color.org, any value) or RALPH_INSTALL_NO_COLOR=1 disables colored installer output.
+#
 # Examples:
 #   git submodule add https://github.com/you/ralph.git vendor/ralph
 #   ./vendor/ralph/install.sh
@@ -41,7 +43,7 @@ BUNDLE="$SCRIPT_DIR/bundle"
 RALPH_BASH_LIB="$BUNDLE/.ralph/bash-lib"
 
 usage() {
-  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -105,10 +107,12 @@ install_log_banner "Ralph" "install"
 install_log_ok_detail "target" "$TARGET"
 install_log_divider "----------------------------------------------------------------------"
 export RALPH_INSTALL_SOURCE_ROOT="$SCRIPT_DIR"
+install_log_phase "Copying components"
 install_ops_execute_plan
 install_configure_mcp
 
 if install_ops_should_install_dashboard; then
+  install_log_phase "Dashboard (optional Python UI)"
   install_dashboard
 fi
 
