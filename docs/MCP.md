@@ -138,6 +138,63 @@ The `stdio` flag tells Cursor to speak the MCP protocol over the server's standa
 
 ---
 
+## Third-party MCP servers (browser and tools for plan agents)
+
+Ralph's bash MCP server (`mcp-server.sh`) exposes **plan and orchestration** tools to an external MCP client. It does **not** provide a browser, Playwright, or other product-specific integrations. When `.ralph/run-plan.sh` runs the **qa** agent (or any agent) via Cursor, Claude Code, or Codex, only the **tools that runtime has configured** are available. To let QA open a browser, call external APIs through MCP, or use other skills, add those MCP servers to **that** runtime's configuration and approve tool use according to your policy.
+
+Official references:
+
+- Codex: [Model Context Protocol (Codex)](https://developers.openai.com/codex/mcp)
+- Cursor: [Model Context Protocol (MCP)](https://cursor.com/docs/mcp) and [MCP in the Cursor CLI](https://cursor.com/docs/cli/mcp)
+- Claude Code: [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)
+
+### Example: Playwright MCP
+
+[Playwright's MCP server](https://www.npmjs.com/package/@playwright/mcp) is a common choice for browser automation and visual checks during QA work.
+
+**Codex**
+
+Add the stdio server (requires Node/`npx` on `PATH`):
+
+```bash
+codex mcp add playwright -- npx -y @playwright/mcp@latest
+```
+
+Some servers ask the user for input through MCP **elicitation**. To allow that when Codex applies granular approval policy, set in `~/.codex/config.toml` or project-scoped `.codex/config.toml` (see [Codex MCP](https://developers.openai.com/codex/mcp)):
+
+```toml
+[approval_policy.granular]
+mcp_elicitations = true
+```
+
+Use `/mcp` in the Codex TUI or `codex mcp --help` to inspect servers, OAuth login, and timeouts.
+
+**Cursor**
+
+MCP is shared between the editor and the Cursor CLI `agent`. Configure servers in `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) as described in the [Cursor MCP guide](https://cursor.com/docs/mcp). Then use the [CLI MCP commands](https://cursor.com/docs/cli/mcp) to list, enable, or authenticate:
+
+```bash
+agent mcp enable playwright
+```
+
+Use `agent mcp list` first if you need to confirm the server name or connection status; add or fix the Playwright entry in `mcp.json` if it does not appear.
+
+**Claude Code**
+
+Options such as `--transport` and `--env` must come **before** the server name; the stdio command and its arguments follow `--` (see [Claude Code MCP](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add --transport stdio playwright -- npx -y @playwright/mcp@latest
+```
+
+Use `claude mcp list`, `claude mcp get playwright`, and `/mcp` inside Claude Code for OAuth and status. For team-shared entries, consider `--scope project` so the repo carries a `.mcp.json` (with secrets supplied via environment expansion, not committed values).
+
+### Other MCP servers and safety
+
+The same pattern applies to documentation indexes, issue trackers, observability, and other MCP packages: register them on the **runtime that executes the plan**, not inside `mcp-server.sh`. Review each server's tools and data access, use restricted credentials where possible, and align auto-approval settings with your threat model (see [SECURITY.md](SECURITY.md)).
+
+---
+
 ## Connecting from OpenClaw
 
 [OpenClaw](https://openclaw.ai/) is a personal AI assistant that runs on your machine and can use MCP servers as skills. With the Ralph MCP server configured, OpenClaw can run Ralph plans, check plan status, and use the agent catalog from chat (e.g. WhatsApp, Telegram, Discord).

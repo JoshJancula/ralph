@@ -15,7 +15,7 @@ Pick what matches what you are doing. You can read them in any order.
 | [worker-ralph-example.md](worker-ralph-example.md) | One plan, one runtime, end to end: where logs and artifacts go |
 | [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipelines: stage plans, `.orch.json`, running the orchestrator, checking artifacts |
 | [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
-| [MCP.md](MCP.md) | The bash MCP server (`jq`), resources and prompts, wiring Cursor / Claude / Codex, path rules |
+| [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
 | [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, `.cursorignore`, hooks, Codex caveats |
 
 ## Quick reference

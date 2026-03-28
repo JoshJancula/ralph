@@ -155,7 +155,7 @@ You can pass the **`.orch.json`** path as the first argument with no flag; detai
 | [Index](docs/README.md) | Map of all topics and quick reference |
 | [Installation](docs/INSTALL.md) | Submodule, subtree, flags, partial installs, cleanup |
 | [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup, sample prompts |
-| [MCP](docs/MCP.md) | Bash MCP server, host config, guard rails |
+| [MCP](docs/MCP.md) | Bash MCP server, host config, guard rails, third-party MCP for plan agents (e.g. browser) |
 | [Claude agent teams](docs/CLAUDE-AGENT-TEAMS.md) | Using Claude Code teams alongside Ralph |
 | [Security](docs/SECURITY.md) | Sandboxing reality, `.cursorignore`, hooks, practical caution |
 
