@@ -71,7 +71,7 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/
 - **Cursor:** `.ralph/run-plan.sh --runtime cursor --plan PLAN.md --workspace .`
 - **Claude:** `.ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --model claude-haiku-4-5`
 - **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --workspace . --agent architect`
-- **OpenCode:** `.ralph/run-plan.sh --runtime opencode --plan PLAN.md --workspace . --model anthropic/claude-sonnet-4-5`
+- **OpenCode:** `.ralph/run-plan.sh --runtime opencode --plan PLAN.md --workspace . --model opencode/nemotron-3-super-free`
 
 **CLI contracting:** `run-plan.sh` uses the strict parser in `bundle/.ralph/bash-lib/run-plan-args.sh`: only documented flags are accepted (unknown flags are an error), and plan and workspace paths are not positional. You must pass `--plan <path>`. Pass `--workspace <path>` for an explicit repo root; if you omit it, the workspace defaults to the current working directory. Orchestration and docs usually show all three flags for clarity.
 
