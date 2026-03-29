@@ -24,6 +24,10 @@ if [[ -f "$bundle_root/.codex/ralph/select-model.sh" ]]; then
   # shellcheck source=/dev/null
   source "$bundle_root/.codex/ralph/select-model.sh"
 fi
+if [[ -f "$bundle_root/.opencode/ralph/select-model.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$bundle_root/.opencode/ralph/select-model.sh"
+fi
 
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/wizard-prompts.sh
 source "$bundle_root/.ralph/bash-lib/wizard-prompts.sh"

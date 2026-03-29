@@ -2,7 +2,7 @@
 """Read newline-delimited JSON from stdin; print human-readable text lines; write first session id to file.
 
 Argv: <mode> <session_id_file>
-mode: claude | cursor | codex
+mode: claude | cursor | codex | opencode
 """
 import json
 import os
@@ -27,6 +27,20 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                 n = session_id_from(v, mode)
                 if n:
                     return n
+        elif mode == "opencode":
+            for k in ("session_id", "sessionId", "chat_id", "id"):
+                v = obj.get(k)
+                if isinstance(v, (str, int)) and str(v).strip():
+                    return str(v).strip()
+            for k in ("thread_id", "threadId"):
+                v = obj.get(k)
+                if isinstance(v, (str, int)) and str(v).strip():
+                    return str(v).strip()
+            for k in ("payload", "result", "data"):
+                if k in obj:
+                    n = session_id_from(obj.get(k), mode)
+                    if n:
+                        return n
         else:
             for k in ("session_id", "sessionId", "chat_id", "id"):
                 v = obj.get(k)

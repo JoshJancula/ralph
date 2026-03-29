@@ -1,8 +1,8 @@
 # Ralph
 
-Ralph helps you work with AI coding assistants in an organized way. You keep a markdown to-do list; a small shell loop calls **Cursor**, **Claude Code**, or **OpenAI Codex** for each open task until every box is checked. When a job is too big for one pass, an optional **orchestrator** runs stages in sequence (research, design, implementation, review) and hands artifacts from one step to the next.
+Ralph helps you work with AI coding assistants in an organized way. You keep a markdown to-do list; a small shell loop calls **Cursor**, **Claude Code**, **OpenAI Codex**, or **OpenCode** for each open task until every box is checked. When a job is too big for one pass, an optional **orchestrator** runs stages in sequence (research, design, implementation, review) and hands artifacts from one step to the next.
 
-Ralph is meant to become **part of your codebase**, not a separate app you drive from the side. You install it into the repository you are building; it adds **`.ralph/`** and layers onto **`.cursor/`**, **`.claude/`**, and **`.codex/`** with runners, rules, skills, and prebuilt **agents** so those tools share the same plans, handoffs, and guard rails.
+Ralph is meant to become **part of your codebase**, not a separate app you drive from the side. You install it into the repository you are building; it adds **`.ralph/`** and layers onto **`.cursor/`**, **`.claude/`**, **`.opencode/`** and **`.codex/`** with runners, rules, skills, and prebuilt **agents** so those tools share the same plans, handoffs, and guard rails.
 
 ## In short
 
@@ -21,10 +21,11 @@ After you run the installer, these pieces appear at **your project root** (the a
 | Folder | Role |
 |--------|------|
 | [.ralph](bundle/.ralph) | Shared scripts: unified `run-plan.sh`, orchestrator, cleanup, plan templates, MCP server, **`.ralph/docs/`** (same guides as `docs/` in this package), and optional **`.ralph/ralph-dashboard/`** |
-| [.cursor/ralph](bundle/.cursor/ralph/) | Cursor-specific runner and config |
-| [.claude/ralph](bundle/.claude/ralph) | Claude Code runner and config |
-| [.codex/ralph](bundle/.codex/ralph) | Codex runner and config |
-| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex) | Rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) for each stack you install |
+| [.cursor/ralph](bundle/.cursor/ralph/) | Cursor config |
+| [.claude/ralph](bundle/.claude/ralph) | Claude Code config |
+| [.codex/ralph](bundle/.codex/ralph) | Codex config |
+| [.opencode/ralph](bundle/.opencode/ralph) | OpenCode config |
+| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex), [.opencode](bundle/.opencode) | Rules, skills, and **agents** (research, architect, implementation, code-review, qa, security) for each stack you install |
 
 **repo-context:** Each runtime includes a template skill so assistants know how your repo is laid out and how you build it. After install, edit **`skills/repo-context/SKILL.md`** under `.cursor`, `.claude`, or `.codex` to match your project.
 
@@ -70,6 +71,7 @@ By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/
 - **Cursor:** `.ralph/run-plan.sh --runtime cursor --plan PLAN.md --workspace .`
 - **Claude:** `.ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --model claude-haiku-4-5`
 - **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --workspace . --agent architect`
+- **OpenCode:** `.ralph/run-plan.sh --runtime opencode --plan PLAN.md --workspace . --model anthropic/claude-sonnet-4-5`
 
 **CLI contracting:** `run-plan.sh` uses the strict parser in `bundle/.ralph/bash-lib/run-plan-args.sh`: only documented flags are accepted (unknown flags are an error), and plan and workspace paths are not positional. You must pass `--plan <path>`. Pass `--workspace <path>` for an explicit repo root; if you omit it, the workspace defaults to the current working directory. Orchestration and docs usually show all three flags for clarity.
 
@@ -165,7 +167,7 @@ You can pass the **`.orch.json`** path as the first argument with no flag; detai
 - [Ralph Wiggum as a "software engineer"](https://ghuntley.com/ralph/) -- Geoffrey Huntley
 - [Ralph Wiggum: AI loop technique](https://awesomeclaude.ai/ralph-wiggum) -- Awesome Claude
 
-Runtime-specific READMEs: [.cursor/ralph](bundle/.cursor/ralph/README.md), [.codex/ralph](bundle/.codex/ralph/README.md). Orchestration JSON shape: comments in **`.ralph/orchestrator.sh`** and **`.ralph/orchestration.template.json`**.
+Runtime-specific READMEs: [.cursor/ralph](bundle/.cursor/ralph/README.md), [.codex/ralph](bundle/.codex/ralph/README.md), [.opencode/ralph](bundle/.opencode/ralph/README.md). Orchestration JSON shape: comments in **`.ralph/orchestrator.sh`** and **`.ralph/orchestration.template.json`**.
 
 **MCP server (needs `jq`):**
 
@@ -186,5 +188,8 @@ Cost depends on the **model** you choose (or that a prebuilt agent pins) and on 
 ## License
 
 MIT -- see [LICENSE](LICENSE).
+
+## Support Ralph
+Please take a moment to [leave a star](https://github.com/JoshJancula/ralph/stargazers) if you found this repository useful.
 
 <img src="./public/ralph-coding.jpeg" alt="" />

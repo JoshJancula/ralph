@@ -101,11 +101,11 @@ AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
 if [[ -z "$RUNTIME" ]]; then
   if [[ -n "${RALPH_PLAN_RUNTIME:-}" ]]; then
     case "${RALPH_PLAN_RUNTIME}" in
-      cursor|claude|codex)
+      cursor|claude|codex|opencode)
         RUNTIME="${RALPH_PLAN_RUNTIME}"
         ;;
       *)
-        ralph_die "Error: RALPH_PLAN_RUNTIME must be one of cursor, claude, or codex."
+        ralph_die "Error: RALPH_PLAN_RUNTIME must be one of cursor, claude, codex, or opencode."
         ;;
     esac
   else
@@ -249,6 +249,9 @@ case "$RUNTIME" in
   codex)
     ralph_ensure_codex_cli
     ;;
+  opencode)
+    ralph_ensure_opencode_cli
+    ;;
 esac
 
 RALPH_INVOKED_CLI=""
@@ -256,6 +259,7 @@ case "$RUNTIME" in
   cursor) RALPH_INVOKED_CLI="$CURSOR_CLI" ;;
   claude) RALPH_INVOKED_CLI="$CLAUDE_CLI" ;;
   codex) RALPH_INVOKED_CLI="$CODEX_CLI" ;;
+  opencode) RALPH_INVOKED_CLI="$OPENCODE_CLI" ;;
 esac
 
 MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
@@ -268,6 +272,9 @@ case "$RUNTIME" in
     ;;
   codex)
     _ralph_gutter_default="${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}"
+    ;;
+  opencode)
+    _ralph_gutter_default="${OPENCODE_PLAN_GUTTER_ITER:-${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}}"
     ;;
   *)
     _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-10}"
@@ -849,6 +856,11 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
         # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-invoke-codex.sh
         source "$SCRIPT_DIR/bash-lib/run-plan-invoke-codex.sh"
         ralph_run_plan_invoke_codex &
+        ;;
+      opencode)
+        # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-opencode.sh
+        source "$SCRIPT_DIR/bash-lib/run-plan-invoke-opencode.sh"
+        ralph_run_plan_invoke_opencode &
         ;;
       *)
         ralph_die "Error: unsupported runtime for invocation: $RUNTIME"

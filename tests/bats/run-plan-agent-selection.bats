@@ -88,6 +88,25 @@ EOF
   [ "$output" = "scripted-model" ]
 }
 
+@test "prompt_for_agent uses select_model_opencode when RUNTIME is opencode" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PROMPT_FUNCS_FILE" ] || skip "prompt_for_agent helper unavailable"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    RUNTIME=opencode
+    NON_INTERACTIVE_FLAG=0
+    select_model_opencode() {
+      printf "%s" "opencode/test-model"
+    }
+    prompt_for_agent
+  ' _ "$RUN_PLAN_PROMPT_FUNCS_FILE"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "opencode/test-model" ]
+}
+
 @test "prebuilt_agents_root constructs the runtime agents path" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"

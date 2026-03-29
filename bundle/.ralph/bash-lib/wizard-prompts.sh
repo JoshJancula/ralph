@@ -234,6 +234,11 @@ pick_model_for_runtime() {
         select_model_codex --interactive
       fi
       ;;
+    opencode)
+      if declare -F select_model_opencode >/dev/null 2>&1; then
+        select_model_opencode --interactive
+      fi
+      ;;
   esac
 }
 

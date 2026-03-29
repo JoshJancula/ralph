@@ -24,14 +24,14 @@ RUN_PLAN_CORE_FILE="$REPO_ROOT/.ralph/bash-lib/run-plan-core.sh"
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   run "$RUN_PLAN_SH" --non-interactive --plan "$REPO_ROOT/PLAN.md"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME (cursor, claude, or codex)."* ]]
+  [[ "$output" == *"Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME (cursor, claude, codex, or opencode)."* ]]
 }
 
 @test "invalid runtime value fails fast with guidance" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   run "$RUN_PLAN_SH" --runtime invalid --plan "$REPO_ROOT/PLAN.md"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Error: --runtime must be one of cursor, claude, or codex."* ]]
+  [[ "$output" == *"Error: --runtime must be one of cursor, claude, codex, or opencode."* ]]
 }
 
 @test "--help and unknown flag exit quickly" {

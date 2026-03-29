@@ -6,6 +6,7 @@
 # - cursor: `CURSOR_PLAN_*` values win for every option.
 # - claude: `CLAUDE_PLAN_*` takes precedence, falling back to `CURSOR_PLAN_*`.
 # - codex: `CODEX_PLAN_*` beats `CLAUDE_PLAN_*`, which in turn beats `CURSOR_PLAN_*`.
+# - opencode: `OPENCODE_PLAN_*` beats `CODEX_PLAN_*`, `CLAUDE_PLAN_*`, and `CURSOR_PLAN_*`.
 #
 # The helper below sets verbose, color, log, gutter/iteration, progress, and caffeinate
 # flags according to the documented chains above.
@@ -64,6 +65,19 @@ ralph_run_plan_load_env_for_runtime() {
       caffeinated="${CODEX_PLAN_CAFFEINATED:-${CLAUDE_PLAN_CAFFEINATED:-${CURSOR_PLAN_CAFFEINATED:-0}}}"
       disable_prompt="${CODEX_PLAN_DISABLE_HUMAN_PROMPT:-${CLAUDE_PLAN_DISABLE_HUMAN_PROMPT:-${CURSOR_PLAN_DISABLE_HUMAN_PROMPT:-0}}}"
       no_open="${CODEX_PLAN_NO_OPEN:-${CLAUDE_PLAN_NO_OPEN:-${CURSOR_PLAN_NO_OPEN:-0}}}"
+      ;;
+    opencode)
+      verbose="${OPENCODE_PLAN_VERBOSE:-${CODEX_PLAN_VERBOSE:-${CLAUDE_PLAN_VERBOSE:-${CURSOR_PLAN_VERBOSE:-0}}}}"
+      no_color="${OPENCODE_PLAN_NO_COLOR:-${CODEX_PLAN_NO_COLOR:-${CLAUDE_PLAN_NO_COLOR:-${CURSOR_PLAN_NO_COLOR:-0}}}}"
+      max_iter="${OPENCODE_PLAN_MAX_ITER:-${CODEX_PLAN_MAX_ITER:-${CLAUDE_PLAN_MAX_ITER:-${CURSOR_PLAN_MAX_ITER:-9999}}}}"
+      gutter="${OPENCODE_PLAN_GUTTER_ITER:-${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}}"
+      interval="${OPENCODE_PLAN_PROGRESS_INTERVAL:-${CODEX_PLAN_PROGRESS_INTERVAL:-${CLAUDE_PLAN_PROGRESS_INTERVAL:-${CURSOR_PLAN_PROGRESS_INTERVAL:-30}}}}"
+      plan_log="${OPENCODE_PLAN_LOG:-${CODEX_PLAN_LOG:-${CLAUDE_PLAN_LOG:-${CURSOR_PLAN_LOG:-}}}}"
+      plan_output_log="${OPENCODE_PLAN_OUTPUT_LOG:-${CODEX_PLAN_OUTPUT_LOG:-${CLAUDE_PLAN_OUTPUT_LOG:-${CURSOR_PLAN_OUTPUT_LOG:-}}}}"
+      no_caffeinate="${OPENCODE_PLAN_NO_CAFFEINATE:-${CODEX_PLAN_NO_CAFFEINATE:-${CLAUDE_PLAN_NO_CAFFEINATE:-${CURSOR_PLAN_NO_CAFFEINATE:-0}}}}"
+      caffeinated="${OPENCODE_PLAN_CAFFEINATED:-${CODEX_PLAN_CAFFEINATED:-${CLAUDE_PLAN_CAFFEINATED:-${CURSOR_PLAN_CAFFEINATED:-0}}}}"
+      disable_prompt="${OPENCODE_PLAN_DISABLE_HUMAN_PROMPT:-${CODEX_PLAN_DISABLE_HUMAN_PROMPT:-${CLAUDE_PLAN_DISABLE_HUMAN_PROMPT:-${CURSOR_PLAN_DISABLE_HUMAN_PROMPT:-0}}}}"
+      no_open="${OPENCODE_PLAN_NO_OPEN:-${CODEX_PLAN_NO_OPEN:-${CLAUDE_PLAN_NO_OPEN:-${CURSOR_PLAN_NO_OPEN:-0}}}}"
       ;;
     *)
       echo "Unsupported runtime: $runtime" >&2

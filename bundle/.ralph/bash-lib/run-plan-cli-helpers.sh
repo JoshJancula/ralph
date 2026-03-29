@@ -7,6 +7,7 @@ RALPH_RUN_PLAN_CLI_HELPERS_LOADED=1
 
 # Public interface:
 #   ralph_resolve_cursor_cli -- prints cursor-agent or agent on PATH, else returns 1.
+#   ralph_resolve_opencode_cli -- prints opencode on PATH, else returns 1.
 
 ralph_resolve_cursor_cli() {
   if command -v cursor-agent &>/dev/null; then
@@ -15,6 +16,14 @@ ralph_resolve_cursor_cli() {
   fi
   if command -v agent &>/dev/null; then
     printf '%s' "agent"
+    return 0
+  fi
+  return 1
+}
+
+ralph_resolve_opencode_cli() {
+  if command -v opencode &>/dev/null; then
+    printf '%s' "opencode"
     return 0
   fi
   return 1

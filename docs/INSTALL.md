@@ -23,7 +23,8 @@ git submodule update --init
 git add .ralph \
   .cursor/ralph .cursor/rules .cursor/skills .cursor/agents \
   .claude/ralph .claude/rules .claude/skills .claude/agents \
-  .codex/ralph .codex/rules .codex/skills .codex/agents
+  .codex/ralph .codex/rules .codex/skills .codex/agents \
+  .opencode/ralph .opencode/rules .opencode/skills .opencode/agents
 git commit -m "Add Ralph agent workflows"
 ```
 
@@ -73,19 +74,20 @@ If **`vendor/ralph/.git`** exists (Git submodule gitlink or a full clone), the v
 
 ## Installer options
 
-With **no flags**, **`install.sh`** installs the full stack (same as **`--all`**): shared **`.ralph/`**, Cursor, Claude, and Codex pieces, plus the dashboard under **`.ralph/ralph-dashboard/`**.
+With **no flags**, **`install.sh`** installs the full stack (same as **`--all`**): shared **`.ralph/`**, Cursor, Claude, Codex, and Opencode pieces, plus the dashboard under **`.ralph/ralph-dashboard/`**.
 
 ```text
 ./install.sh                      # full install (default)
 ./install.sh --all                # same as default
 ./install.sh --cursor             # Cursor runner + rules/skills/agents (combine with --shared if you need .ralph)
 ./install.sh --codex --claude     # Codex and Claude only
+./install.sh --opencode           # Opencode only
 ./install.sh --shared             # only .ralph/ (orchestrator, templates, runners, docs)
 ./install.sh --no-dashboard       # skip .ralph/ralph-dashboard/
 ./install.sh -n /path/to/repo     # dry-run: print actions only
 ```
 
-You can combine **`--cursor`**, **`--claude`**, **`--codex`**, and **`--shared`** to trim what is copied.
+You can combine **`--cursor`**, **`--claude`**, **`--codex`**, **`--opencode`**, and **`--shared`** to trim what is copied.
 
 ### Partial installs
 
@@ -115,7 +117,7 @@ You still need normal Git steps for submodules (**`git submodule deinit`**, **`g
 After **`install.sh`** runs, typical paths at your project root include:
 
 - **`.ralph/`** -- **`run-plan.sh`**, orchestrator, templates, MCP server, **`.ralph/docs/`**, optional **`.ralph/ralph-dashboard/`**
-- **`.cursor/`**, **`.claude/`**, **`.codex/`** -- per-runtime **`ralph/`** runners plus rules, skills, and agents (depending on flags)
+- **`.cursor/`**, **`.claude/`**, **`.codex/`**, **`.opencode/`** -- per-runtime **`ralph/`** runners plus rules, skills, and agents (depending on flags)
 
 See the main repository **README** for a compact table and **repo-context** notes.
 

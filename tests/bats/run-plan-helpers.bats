@@ -133,7 +133,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   shared="$(mktemp -d)"
   mkdir -p "$shared/bash-lib"
   touch "$shared/ralph-env-safety.sh"
-  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh; do
+  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh run-plan-invoke-opencode.sh; do
     touch "$shared/bash-lib/$helper"
   done
 

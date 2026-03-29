@@ -1,0 +1,17 @@
+{
+  "name": "qa",
+  "model": "anthropic/claude-sonnet-4-5",
+  "description": "Tests code changes and summarizes whether they meet the accepted criteria.",
+  "rules": [".opencode/rules/no-emoji.md"],
+  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md",
+      "required": true
+    },
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": false
+    }
+  ]
+}

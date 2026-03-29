@@ -17,7 +17,7 @@ Required:
   --plan <path>                        Path to the plan file relative to the workspace.
 
 Options:
-  --runtime <cursor|claude|codex>      CLI runtime (omit if RALPH_PLAN_RUNTIME is set or you use the interactive prompt).
+  --runtime <cursor|claude|codex|opencode>  CLI runtime (omit if RALPH_PLAN_RUNTIME is set or you use the interactive prompt).
   --workspace <path>                   Repo workspace root (default: current directory).
 
 Common options:
@@ -47,14 +47,14 @@ ralph_run_plan_parse_args() {
         ;;
       --runtime)
         if [[ -z "${2:-}" ]]; then
-          ralph_die "Error: --runtime requires an argument (cursor, claude, or codex)."
+          ralph_die "Error: --runtime requires an argument (cursor, claude, codex, or opencode)."
         fi
         case "$2" in
-          cursor|claude|codex)
+          cursor|claude|codex|opencode)
             RUNTIME="$2"
             ;;
           *)
-            ralph_die "Error: --runtime must be one of cursor, claude, or codex."
+            ralph_die "Error: --runtime must be one of cursor, claude, codex, or opencode."
             ;;
         esac
         shift 2
