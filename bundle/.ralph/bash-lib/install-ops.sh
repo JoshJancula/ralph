@@ -29,6 +29,7 @@ install_ops_reset_state() {
   INSTALL_CURSOR=0
   INSTALL_CODEX=0
   INSTALL_CLAUDE=0
+  INSTALL_OPENCODE=0
   INSTALL_DASHBOARD=1
   SELECTION_SPECIFIED=0
   INSTALL_TARGET_ARG=""
@@ -44,6 +45,7 @@ install_ops_parse_flags() {
         INSTALL_CURSOR=1
         INSTALL_CODEX=1
         INSTALL_CLAUDE=1
+        INSTALL_OPENCODE=1
         SELECTION_SPECIFIED=1
         shift
         ;;
@@ -64,6 +66,11 @@ install_ops_parse_flags() {
         ;;
       --claude)
         INSTALL_CLAUDE=1
+        SELECTION_SPECIFIED=1
+        shift
+        ;;
+      --opencode)
+        INSTALL_OPENCODE=1
         SELECTION_SPECIFIED=1
         shift
         ;;
@@ -101,6 +108,7 @@ install_ops_parse_flags() {
         INSTALL_CURSOR=1
         INSTALL_CODEX=1
         INSTALL_CLAUDE=1
+        INSTALL_OPENCODE=1
         INSTALL_DASHBOARD=1
         SELECTION_SPECIFIED=1
         shift
@@ -124,6 +132,7 @@ install_ops_default_selection() {
     INSTALL_CURSOR=1
     INSTALL_CODEX=1
     INSTALL_CLAUDE=1
+    INSTALL_OPENCODE=1
   fi
 }
 
@@ -146,7 +155,7 @@ install_ops_verify_bundle() {
 }
 
 install_ops_has_any_stack() {
-  [[ "$INSTALL_SHARED$INSTALL_CURSOR$INSTALL_CODEX$INSTALL_CLAUDE" != "0000" ]]
+  [[ "$INSTALL_SHARED$INSTALL_CURSOR$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE" != "00000" ]]
 }
 
 install_ops_should_install_dashboard() {
@@ -199,6 +208,14 @@ install_ops_build_copy_plan() {
     install_ops_add_optional_copy "$BUNDLE/.claude/skills" "$TARGET/.claude/skills" "claude-skills"
     install_ops_add_optional_copy "$BUNDLE/.claude/agents" "$TARGET/.claude/agents" "claude-agents"
     install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.claude/ralph/templates" "claude-templates"
+  fi
+
+  if [[ "$INSTALL_OPENCODE" -eq 1 ]]; then
+    install_ops_emit_copy "$BUNDLE/.opencode/ralph" "$TARGET/.opencode/ralph" "opencode-ralph"
+    install_ops_add_optional_copy "$BUNDLE/.opencode/rules" "$TARGET/.opencode/rules" "opencode-rules"
+    install_ops_add_optional_copy "$BUNDLE/.opencode/skills" "$TARGET/.opencode/skills" "opencode-skills"
+    install_ops_add_optional_copy "$BUNDLE/.opencode/agents" "$TARGET/.opencode/agents" "opencode-agents"
+    install_ops_add_optional_copy "$BUNDLE/.ralph/plan-templates" "$TARGET/.opencode/ralph/templates" "opencode-templates"
   fi
 
 }

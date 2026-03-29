@@ -13,7 +13,8 @@ ralph_shared_ralph_dir_complete() {
   if [[ -f "$d/bash-lib/run-plan-env.sh" && -f "$d/ralph-env-safety.sh" \
     && -f "$d/bash-lib/run-plan-invoke-cursor.sh" \
     && -f "$d/bash-lib/run-plan-invoke-claude.sh" \
-    && -f "$d/bash-lib/run-plan-invoke-codex.sh" ]]; then
+    && -f "$d/bash-lib/run-plan-invoke-codex.sh" \
+    && -f "$d/bash-lib/run-plan-invoke-opencode.sh" ]]; then
     return 0
   fi
   return 1
@@ -46,7 +47,7 @@ ralph_resolve_shared_ralph_dir() {
 # Returns: prints the selected runtime (cursor, claude, or codex) and 0 on success, 1 on failure.
 prompt_select_runtime() {
   if [[ "$NON_INTERACTIVE_FLAG" == "1" ]]; then
-    echo "Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME (cursor, claude, or codex)." >&2
+    echo "Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME (cursor, claude, codex, or opencode)." >&2
     return 1
   fi
   if [[ ! -t 0 ]]; then
@@ -59,6 +60,7 @@ prompt_select_runtime() {
   echo -e "  ${C_G}1)${C_RST} Cursor" >&2
   echo -e "  ${C_G}2)${C_RST} Claude Code" >&2
   echo -e "  ${C_G}3)${C_RST} Codex" >&2
+  echo -e "  ${C_G}4)${C_RST} Opencode" >&2
   echo "" >&2
   local runtime_choice
   printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
@@ -68,9 +70,10 @@ prompt_select_runtime() {
     1) printf '%s' "cursor" ;;
     2) printf '%s' "claude" ;;
     3) printf '%s' "codex" ;;
-    cursor|claude|codex) printf '%s' "$runtime_choice" ;;
+    4) printf '%s' "opencode" ;;
+    cursor|claude|codex|opencode) printf '%s' "$runtime_choice" ;;
     *)
-      echo "Error: invalid runtime selection (use 1-3 or cursor, claude, or codex)." >&2
+      echo "Error: invalid runtime selection (use 1-4 or cursor, claude, codex, or opencode)." >&2
       return 1
       ;;
   esac
@@ -143,4 +146,25 @@ ralph_ensure_codex_cli() {
   fi
   CODEX_CLI="$cli"
   : "$CODEX_CLI"
+}
+
+# Ensure the Opencode CLI is installed and available, exiting when it is missing.
+# Args: none.
+# Returns: sets OPENCODE_CLI and exits the script when the CLI cannot be found.
+ralph_ensure_opencode_cli() {
+  local cli="${OPENCODE_PLAN_CLI:-}"
+  if [[ -z "$cli" && -n "$(command -v opencode 2>/dev/null)" ]]; then
+    cli="opencode"
+  fi
+  if [[ -z "$cli" ]] || ! command -v "$cli" &>/dev/null; then
+    ralph_run_plan_log "ERROR: Opencode CLI not found (set OPENCODE_PLAN_CLI or install opencode)"
+    echo -e "${C_R}${C_BOLD}Opencode CLI is not installed or not on PATH.${C_RST}"
+    echo ""
+    echo "Install the Opencode CLI and authenticate:"
+    echo -e "  ${C_C}https://opencode.ai${C_RST}"
+    echo ""
+    exit 1
+  fi
+  OPENCODE_CLI="$cli"
+  : "$OPENCODE_CLI"
 }

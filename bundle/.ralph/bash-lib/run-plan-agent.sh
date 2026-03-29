@@ -24,6 +24,10 @@ prompt_for_agent() {
       em="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}"
       tr -d '\r' <<<"$(select_model_codex --batch "$NON_INTERACTIVE_FLAG" "$em" "$cfg")"
       ;;
+    opencode)
+      em="${OPENCODE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}"
+      tr -d '\r' <<<"$(select_model_opencode --batch "$NON_INTERACTIVE_FLAG" "$em" "$cfg")"
+      ;;
     *)
       echo "Error: unsupported runtime for model selection: $RUNTIME" >&2
       return 1

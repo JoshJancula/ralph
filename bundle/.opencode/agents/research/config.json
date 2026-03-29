@@ -1,0 +1,13 @@
+{
+  "name": "research",
+  "model": "anthropic/claude-sonnet-4-5",
+  "description": "Explores the codebase and docs, summarizes findings, and produces research.md for downstream agents. Read-heavy; avoids large refactors or implementation.",
+  "rules": [".opencode/rules/no-emoji.md"],
+  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+      "required": true
+    }
+  ]
+}

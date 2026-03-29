@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Ralph agent workflows into a project (Cursor, Claude Code, Codex + shared .ralph).
+# Install Ralph agent workflows into a project (Cursor, Claude Code, Codex, OpenCode + shared .ralph).
 #
 # Usage:
 #   ./install.sh [OPTIONS] [TARGET_DIR]
@@ -12,6 +12,7 @@
 #   --cursor    .cursor/ralph + rules/skills/agents (no-emoji, repo-context)
 #   --codex     .codex/ralph + rules/skills/agents (same)
 #   --claude    .claude/ralph + rules/skills/agents (same)
+#   --opencode  .opencode/ralph + rules/skills/agents (same)
 #   --no-dashboard   Skip copying the dashboard into TARGET/.ralph/ralph-dashboard/
 #   -s, --silent   Run without interactive prompts (skip conflicts, configure MCP, skip removal prompts)
 #   -n, --dry-run   Print what would be copied or removed, do not write

@@ -111,7 +111,7 @@ create_shared_layout() {
   shared_root="$(mktemp -d)"
   mkdir -p "$shared_root/bash-lib"
   touch "$shared_root/ralph-env-safety.sh"
-  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh; do
+  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh run-plan-invoke-opencode.sh; do
     touch "$shared_root/bash-lib/$helper"
   done
   printf '%s' "$shared_root"

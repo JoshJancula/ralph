@@ -11,3 +11,4 @@
 ralph-dashboard/__pycache__/
 /dashboard.orch.json
 .agents
+/.opencode

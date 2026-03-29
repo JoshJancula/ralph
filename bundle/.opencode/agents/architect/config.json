@@ -1,0 +1,17 @@
+{
+  "name": "architect",
+  "model": "anthropic/claude-sonnet-4-5",
+  "description": "Turns research into system and module design, outlines boundaries, flows, and risks, and aligns other agents on execution plans.",
+  "rules": [".opencode/rules/no-emoji.md"],
+  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": true
+    },
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+      "required": false
+    }
+  ]
+}

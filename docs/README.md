@@ -22,7 +22,7 @@ Pick what matches what you are doing. You can read them in any order.
 
 - **Open tasks:** `- [ ]` (space inside the brackets). **Done:** `- [x]`. **Not a task:** `- []`.
 - **Plan file:** Usually **`PLAN.md`** from **`.ralph/plan.template`**. Pass it with **`--plan <path>`** to **`.ralph/run-plan.sh`**. Relative paths resolve against the workspace directory you pass last, or the current directory.
-- **Runner:** `.ralph/run-plan.sh --runtime cursor|claude|codex --plan <path>` (**`--plan` is required**).
+- **Runner:** `.ralph/run-plan.sh --runtime cursor|claude|codex|opencode --plan <path>` (**`--plan` is required**).
 - **Orchestrator:** `.ralph/orchestrator.sh --orchestration path/to/file.orch.json` or the same path as the first argument only.
 - **Wizard:** `.ralph/orchestration-wizard.sh` scaffolds a namespace, stage plans, and a starter **`.orch.json`**.
 

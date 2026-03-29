@@ -1,0 +1,13 @@
+{
+  "name": "security",
+  "model": "anthropic/claude-sonnet-4-5",
+  "description": "Audits code for security vulnerabilities. Writes security.md summarizing findings and blocking issues.",
+  "rules": [".opencode/rules/no-emoji.md"],
+  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "output_artifacts": [
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md",
+      "required": true
+    }
+  ]
+}

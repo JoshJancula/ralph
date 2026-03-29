@@ -1,31 +1,34 @@
 #!/usr/bin/env bash
 #
-# Unified multi-runtime runner for Cursor, Claude, and Codex.
+# Unified multi-runtime runner for Cursor, Claude, Codex, and OpenCode.
 # Usage examples (all flags; no positional plan or workspace paths):
 #   .ralph/run-plan.sh --runtime cursor --plan PLAN.md --workspace .
 #   .ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --agent research --non-interactive
 #   .ralph/run-plan.sh --runtime cursor --model <id> --plan PLAN.md --workspace .
 #   RALPH_PLAN_RUNTIME=codex .ralph/run-plan.sh --plan PLAN.md --workspace /path/to/workspace
+#   RALPH_PLAN_RUNTIME=opencode .ralph/run-plan.sh --plan PLAN.md --workspace /path/to/workspace
 # Omit `--workspace` only when the current working directory is the workspace (it defaults to pwd).
 # Omit `--runtime` when RALPH_PLAN_RUNTIME is set or when the interactive runtime prompt runs (TTY).
 # CLIs required by runtime:
-#   Cursor: https://cursor.com/docs/cli/installation
-#   Claude:  https://code.claude.com/docs/en/overview
-#   Codex:   https://developers.openai.com/codex/cli/reference
-# Aggregated env vars (runtime-specific pipeline merges Cursor → Claude → Codex):
-#   Verbose:      CURSOR_PLAN_VERBOSE / CLAUDE_PLAN_VERBOSE / CODEX_PLAN_VERBOSE
-#   Color:        CURSOR_PLAN_NO_COLOR / CLAUDE_PLAN_NO_COLOR / CODEX_PLAN_NO_COLOR
+#   Cursor:   https://cursor.com/docs/cli/installation
+#   Claude:   https://code.claude.com/docs/en/overview
+#   Codex:    https://developers.openai.com/codex/cli/reference
+#   OpenCode: https://opencode.ai
+# Aggregated env vars (runtime-specific pipeline merges Cursor → Claude → Codex → OpenCode):
+#   Verbose:      CURSOR_PLAN_VERBOSE / CLAUDE_PLAN_VERBOSE / CODEX_PLAN_VERBOSE / OPENCODE_PLAN_VERBOSE
+#   Color:        CURSOR_PLAN_NO_COLOR / CLAUDE_PLAN_NO_COLOR / CODEX_PLAN_NO_COLOR / OPENCODE_PLAN_NO_COLOR
 #   Logs:         CURSOR_PLAN_LOG / CURSOR_PLAN_OUTPUT_LOG +
 #                 CLAUDE_PLAN_LOG / CLAUDE_PLAN_OUTPUT_LOG +
-#                 CODEX_PLAN_LOG / CODEX_PLAN_OUTPUT_LOG
+#                 CODEX_PLAN_LOG / CODEX_PLAN_OUTPUT_LOG +
+#                 OPENCODE_PLAN_LOG / OPENCODE_PLAN_OUTPUT_LOG
 #   Plan state dir: RALPH_PLAN_WORKSPACE_ROOT (default: <workspace>/.ralph-workspace) holds plan logs + sessions
-#   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER (total agent invocations cap)
-#   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER, or --max-iterations <n>
+#   Iterations:   CURSOR_PLAN_MAX_ITER / CLAUDE_PLAN_MAX_ITER / CODEX_PLAN_MAX_ITER / OPENCODE_PLAN_MAX_ITER (total agent invocations cap)
+#   Gutter:       CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER / OPENCODE_PLAN_GUTTER_ITER, or --max-iterations <n>
 #                 (per-TODO retries before gutter exit; human help / plan edit expected)
-#   Progress:     CURSOR_PLAN_PROGRESS_INTERVAL / CLAUDE_PLAN_PROGRESS_INTERVAL / CODEX_PLAN_PROGRESS_INTERVAL
-#   Caffeinate:   CURSOR_PLAN_NO_CAFFEINATE / CLAUDE_PLAN_NO_CAFFEINATE / CODEX_PLAN_NO_CAFFEINATE
-#   Human prompts: CURSOR_PLAN_DISABLE_HUMAN_PROMPT / CLAUDE_PLAN_DISABLE_HUMAN_PROMPT / CODEX_PLAN_DISABLE_HUMAN_PROMPT
-#                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN
+#   Progress:     CURSOR_PLAN_PROGRESS_INTERVAL / CLAUDE_PLAN_PROGRESS_INTERVAL / CODEX_PLAN_PROGRESS_INTERVAL / OPENCODE_PLAN_PROGRESS_INTERVAL
+#   Caffeinate:   CURSOR_PLAN_NO_CAFFEINATE / CLAUDE_PLAN_NO_CAFFEINATE / CODEX_PLAN_NO_CAFFEINATE / OPENCODE_PLAN_NO_CAFFEINATE
+#   Human prompts: CURSOR_PLAN_DISABLE_HUMAN_PROMPT / CLAUDE_PLAN_DISABLE_HUMAN_PROMPT / CODEX_PLAN_DISABLE_HUMAN_PROMPT / OPENCODE_PLAN_DISABLE_HUMAN_PROMPT
+#                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN / OPENCODE_PLAN_NO_OPEN
 #   Human offline (no TTY): RALPH_HUMAN_POLL_INTERVAL (default 2), RALPH_HUMAN_OFFLINE_EXIT=1 to exit 4 instead of waiting
 #   Usage risk (first run): interactive YES prompt once; marker under ${XDG_CONFIG_HOME:-~/.config}/ralph/usage-risk-acknowledgment; RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skips (CI/automation)
 #   CLI session resume (optional): RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
@@ -111,7 +114,7 @@ if [[ -z "$CAFFEINATE_RUNTIME" ]]; then
 fi
 
 case "$CAFFEINATE_RUNTIME" in
-  cursor|claude|codex)
+  cursor|claude|codex|opencode)
     ralph_run_plan_load_env_for_runtime "$CAFFEINATE_RUNTIME"
     ;;
 esac
@@ -134,6 +137,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && \
   export CURSOR_PLAN_CAFFEINATED=1
   export CLAUDE_PLAN_CAFFEINATED=1
   export CODEX_PLAN_CAFFEINATED=1
+  export OPENCODE_PLAN_CAFFEINATED=1
   exec caffeinate -s -i -- /usr/bin/env bash "$SCRIPT_PATH" "$@"
 fi
 # Block dangerous paths (e.g. .env) from plan/log targets.

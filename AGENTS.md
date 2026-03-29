@@ -10,9 +10,9 @@ Ralph is a framework for organizing AI coding assistant workflows. It provides:
 - **Agents:** Prebuilt agent profiles for specialized work (research, architect, implementation, code-review, qa, security)
 - **Dashboard:** Optional Python UI for monitoring plan execution and artifact generation
 
-Ralph is installed into projects via `./install.sh`. The installer copies shared scripts to `.ralph/`, runtime-specific runners to `.cursor/ralph`, `.claude/ralph`, `.codex/ralph`, and agents/rules/skills to `.cursor/agents`, `.claude/agents`, etc.
+Ralph is installed into projects via `./install.sh`. The installer copies shared scripts to `.ralph/`, runtime-specific runners to `.cursor/ralph`, `.claude/ralph`, `.codex/ralph`, `.opencode/ralph`, and agents/rules/skills to `.cursor/agents`, `.claude/agents`, `.opencode/agents`, etc.
 
-> **Symlink note (this repo only):** `.cursor`, `.claude`, and `.codex` at the repo root are symlinks to `bundle/.cursor`, `bundle/.claude`, and `bundle/.codex`. Editing files under `bundle/.cursor/` (or `bundle/.claude/`, `bundle/.codex/`) automatically updates the symlinked paths — no manual copy or sync is needed. Similarly, `.ralph/` files are hardlinked to `bundle/.ralph/`, so edits there are also immediately reflected.
+> **Symlink note (this repo only):** `.cursor`, `.claude`, `.codex`, and `.opencode` at the repo root are symlinks to `bundle/.cursor`, `bundle/.claude`, `bundle/.codex`, and `bundle/.opencode`. Editing files under `bundle/.cursor/` (or `bundle/.claude/`, `bundle/.codex/`, `bundle/.opencode/`) automatically updates the symlinked paths — no manual copy or sync is needed. Similarly, `.ralph/` files are hardlinked to `bundle/.ralph/`, so edits there are also immediately reflected.
 
 ## Key Commands
 
@@ -115,6 +115,13 @@ bundle/
   .codex/
     ralph/            # Codex-specific runner thin wrapper
     agents/           # Codex agent profiles (same 6 agents)
+  .opencode/
+    ralph/            # Opencode-specific runner thin wrapper
+    agents/           # Opencode agent profiles (same 6 agents)
+    rules/
+      no-emoji.md
+    skills/
+      repo-context/SKILL.md
 ```
 
 ### Agent configuration
@@ -138,7 +145,7 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
 
 2. **Orchestration:** A `.orch.json` file defines stages (research → architect → implementation → code-review → qa → security or custom). Each stage has:
    - `id`: stage identifier
-   - `runtime`: "cursor" | "claude" | "codex"
+   - `runtime`: "cursor" | "claude" | "codex" | "opencode"
    - `agent`: agent name to load
    - `plan`: path to that stage's plan file
    - `artifacts`: required outputs for this stage (array of `{ "path": "...", "required": true }`). This is the primary artifact declaration and overrides the agent config's `output_artifacts` entirely. Paths support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` tokens.
@@ -247,7 +254,7 @@ bats tests/bats/orchestration-integration.bats --filter "integration test for mu
 |------|---------|
 | `.ralph/run-plan.sh` | Main plan executor (unified across Cursor/Claude/Codex) |
 | `.ralph/orchestrator.sh` | Multi-stage orchestration runner |
-| `.ralph/bash-lib/run-plan-invoke-*.sh` | Runtime-specific invoke logic (cursor, claude, codex) |
+| `.ralph/bash-lib/run-plan-invoke-*.sh` | Runtime-specific invoke logic (cursor, claude, codex, opencode) |
 | `.ralph/agent-config-tool.sh` | Agent config validation and context building |
 | `.ralph/orchestration.template.json` | Starter orchestration plan template |
 | `.ralph/plan.template` | Starter plan template |
@@ -259,6 +266,6 @@ bats tests/bats/orchestration-integration.bats --filter "integration test for mu
 ## Rules and conventions
 
 - **Agent naming:** Lowercase with hyphens (e.g., `code-review`), no underscores or spaces
-- **No emojis:** The `.claude/rules/no-emoji.md` rule (and equivalents in `.cursor`, `.codex`) forbids emoji in code, comments, and logs
+- **No emojis:** The `.claude/rules/no-emoji.md` rule (and equivalents in `.cursor`, `.codex`, `.opencode`) forbids emoji in code, comments, and logs
 - **Output artifacts:** Every agent should declare at least one output artifact so orchestration can verify completion
 - **Session resumption:** Safe only in isolated environments; bare resume (without stored session ID) requires `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` to prevent session mix-up on shared machines
