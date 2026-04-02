@@ -1,0 +1,20 @@
+<div class="workspace-sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-title">Ralph workspace</div>
+    <div class="sidebar-subtitle">Browse workspace files and folders.</div>
+  </div>
+  <div class="root-node" *ngFor="let root of allRoots()">
+    <div
+      class="root-row"
+      [class.active]="isActive(root)"
+      [class.disabled]="!root.exists"
+      (click)="toggleRoot(root)"
+    >
+      <span class="expander">{{ isExpanded(root) ? '-' : '+' }}</span>
+      <span class="root-name">{{ root.label | lowercase }}</span>
+    </div>
+    <div class="root-tree" *ngIf="isExpanded(root) && root.exists">
+      <app-sidebar-tree [root]="root.key" [path]="''" [autoOpen]="isActive(root)" />
+    </div>
+  </div>
+</div>

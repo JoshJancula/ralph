@@ -1,0 +1,40 @@
+<div class="view-logs-toolbar" *ngIf="showViewLogs">
+  <button class="toolbar-btn" (click)="viewLogs()">View Logs</button>
+</div>
+
+<div class="run-snippet" *ngIf="runSnippet">
+  <span class="snippet-label">To execute this plan run:</span>
+  <code class="snippet-code">{{ runSnippet }}</code>
+</div>
+
+<div class="file-viewer" *ngIf="loading(); else loadedBody">
+  <span class="loading-indicator">Loading...</span>
+</div>
+
+<ng-template #loadedBody>
+  <div class="file-viewer" *ngIf="error() as err; else viewer">
+    <span class="error-message">{{ err }}</span>
+  </div>
+
+  <ng-template #viewer>
+    <div class="file-content">
+      <div class="file-toolbar" *ngIf="isMarkdown()">
+        <button (click)="toggleView()">
+          {{ isRendered() ? 'View source' : 'View rendered' }}
+        </button>
+      </div>
+
+      <div *ngIf="isMarkdown() && isRendered()">
+        <div [innerHTML]="formatHtml()" class="markdown-content"></div>
+      </div>
+
+      <div *ngIf="isJson()">
+        <pre class="json-content">{{ formatJson() }}</pre>
+      </div>
+
+      <div *ngIf="isPlainText()">
+        <pre class="text-content">{{ content() }}</pre>
+      </div>
+    </div>
+  </ng-template>
+</ng-template>

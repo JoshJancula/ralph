@@ -9,6 +9,8 @@ setup() {
   source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-invoke-claude.sh"
   # shellcheck disable=SC1090
   source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-invoke-codex.sh"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-invoke-opencode.sh"
 
   TEST_TMPDIR="$(mktemp -d)"
   BIN_DIR="$TEST_TMPDIR/bin"
@@ -30,10 +32,14 @@ setup() {
   unset CODEX_CLI
   unset CODEX_PLAN_CLI
   unset CODEX_PLAN_MODEL
+  unset OPENCODE_CLI
+  unset OPENCODE_PLAN_CLI
+  unset OPENCODE_PLAN_MODEL
   unset RALPH_PLAN_ALLOW_UNSAFE_RESUME
   unset RALPH_RUN_PLAN_RESUME_BARE
   unset RALPH_PLAN_CLI_RESUME
   unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  unset PREBUILT_AGENT
 }
 
 teardown() {
@@ -214,6 +220,27 @@ EOF
   run ralph_run_plan_invoke_claude
   [ "$status" -eq 0 ]
   ! grep -Fxq -- "--resume" "$record"
+}
+
+@test "opencode invoke helper pins build agent by default" {
+  local record="$TEST_TMPDIR/opencode.args"
+  write_stub_script "opencode" "$record"
+
+  PROMPT="opencode-prompt"
+  export PROMPT
+  SELECTED_MODEL="anthropic/claude-sonnet-4-5"
+  export SELECTED_MODEL
+
+  run ralph_run_plan_invoke_opencode
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  grep -Fxq -- "run" "$record"
+  grep -Fxq -- "--agent" "$record"
+  grep -Fxq -- "build" "$record"
+  grep -Fxq -- "--model" "$record"
+  grep -Fxq -- "anthropic/claude-sonnet-4-5" "$record"
+  grep -Fxq -- "opencode-prompt" "$record"
 }
 
 @test "cursor bare resume passes --resume and --continue when unsafe allowed" {

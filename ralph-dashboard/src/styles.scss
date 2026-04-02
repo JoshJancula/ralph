@@ -1,0 +1,136 @@
+:root {
+  --background: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #238636;
+  --accent-hover: #2ea043;
+  --danger: #da3633;
+  --monospace-font: 'SFMono-Regular', Menlo, Consolas, monospace;
+  --ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body.theme-light {
+  --background: #ffffff;
+  --surface: #f6f8fa;
+  --border: #d0d7de;
+  --text-primary: #24292f;
+  --text-muted: #6e7781;
+  --accent: #0969da;
+  --accent-hover: #0a68db;
+  --danger: #cf222e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--background);
+  color: var(--text-primary);
+  font-family: var(--ui-font);
+  height: 100vh;
+  overflow: hidden;
+}
+
+.topbar {
+  width: 100%;
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: row;
+  padding: 1rem;
+}
+
+.sidebar {
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  height: 100%;
+}
+
+.sidebar-root-button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.sidebar-root-button.active {
+  background-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.sidebar-root-button:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.sidebar-tree-row {
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.sidebar-tree-row:hover {
+  background-color: var(--surface);
+}
+
+.sidebar-tree-row.selected {
+  background-color: var(--accent);
+}
+
+.sidebar-tree-row.loading {
+  color: var(--text-muted);
+}
+
+.sidebar-tree-row.error {
+  color: var(--danger);
+}
+
+.sidebar-tree-indent {
+  display: inline-block;
+  min-width: 1rem;
+}
+
+.file-viewer,
+.log-viewer {
+  overflow: auto;
+  font-family: var(--monospace-font);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  padding: 1rem;
+  background-color: var(--surface);
+}
+
+.log-viewer-search-bar {
+  position: sticky;
+  top: 0;
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.log-viewer-search-bar input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  background-color: var(--background);
+  color: var(--text-primary);
+  font-family: var(--monospace-font);
+}
+
+.log-viewer-search-bar button {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+}

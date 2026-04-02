@@ -607,7 +607,8 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
   case "$RUNTIME" in
     cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
     claude) _runtime_env_model="${CLAUDE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
-    codex)  _runtime_env_model="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
+    codex)     _runtime_env_model="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
+    opencode)  _runtime_env_model="${OPENCODE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
   esac
   if [[ -n "$_runtime_env_model" ]]; then
     SELECTED_MODEL="$_runtime_env_model"

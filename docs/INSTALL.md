@@ -121,6 +121,14 @@ After **`install.sh`** runs, typical paths at your project root include:
 
 See the main repository **README** for a compact table and **repo-context** notes.
 
+## Dashboard (optional UI)
+
+From your project root (after **`install.sh`** has copied **`.ralph/ralph-dashboard/`**):
+
+```bash
+cd .ralph/ralph-dashboard && npm install && npm run build && PORT=8124 npm start
+```
+
 ## See also
 
 - [Documentation index](README.md)

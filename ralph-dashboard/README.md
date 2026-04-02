@@ -1,24 +1,86 @@
-# Ralph dashboard
+# Ralph Dashboard
 
-When Ralph is installed into another repository, this package is copied to **`.ralph/ralph-dashboard/`** next to the rest of the shared scripts. Use **`python3 -m pip install -e .ralph/ralph-dashboard`** from that project root, then **`python3 -m ralph_dashboard`**.
+Angular SSR app for browsing Ralph plan logs, artifacts, sessions, docs, and plan files in a workspace. Run it from the repository where Ralph is installed (the project root that contains `.ralph-workspace/`).
 
-## Testing
+## Prerequisites
 
-Install the local dashboard package from the `ralph-dashboard/` directory before running tests:
+- **Node.js 22** (use [nvm](https://github.com/nvm-sh/nvm), for example `nvm install 22` and `nvm use v22`)
+- **npm** (bundled with Node)
 
-```bash
-cd ralph-dashboard
-python3 -m pip install -e ".[dev]"
-python3 -m pytest --collect-only
-```
+## Install
 
-These commands use Python 3.10+ per the repository guidance and verify that the tooling is wired up even when no tests exist yet.
-
-To keep the dashboard gate honest, enforce line coverage on the `ralph_dashboard` package every time tests run:
+From this directory:
 
 ```bash
-cd ralph-dashboard
-python3 -m pytest tests/ -v --cov=ralph_dashboard --cov-report=term-missing --cov-report=html --cov-fail-under=80
+npm install
 ```
 
-This fails if line coverage drops below 80% and produces `ralph-dashboard/htmlcov/index.html` for reviewers.
+## Development
+
+Use two terminals from `ralph-dashboard/`:
+
+1. **Rebuild the app on change** (Angular client + server bundle):
+
+   ```bash
+   npm run watch
+   ```
+
+2. **Run the Node server with reload** (serves the last successful `dist/` build):
+
+   ```bash
+   npm run dev
+   ```
+
+Open the URL printed by the server (default port **8123**). Edit client or server code; `watch` rebuilds `dist/` and `dev` picks up changes to the server entry.
+
+## Production
+
+Build once, then start the server:
+
+```bash
+npm run build
+npm start
+```
+
+The production server runs `dist/ralph-dashboard/server/server.mjs`.
+
+### Port
+
+Default port is **8123**. Override with the `PORT` environment variable:
+
+```bash
+PORT=8124 npm start
+```
+
+## Tests
+
+- **All tests** (Jest API/server unit tests, then Vitest Angular tests):
+
+  ```bash
+  npm test
+  ```
+
+- **With coverage** (both Jest and Vitest coverage; project thresholds apply):
+
+  ```bash
+  npm run test:cov
+  ```
+
+## UI overview
+
+The layout has a **workspace sidebar** and a **file tree** beside it:
+
+- **Workspace roots:** Pick one of **Logs**, **Artifacts**, **Sessions**, **Docs**, or **Plans**. Each root maps to a directory under the workspace (see below).
+- **File tree:** After a root is selected, the tree lists files and folders for that root. Expand directories to drill down; select a file to open it in the main area (markdown and other text in the file viewer; `.log` files in the log viewer with optional tailing).
+
+**Directories the dashboard reads** (relative to the workspace project root, i.e. the repo where Ralph runs):
+
+| Root        | Path on disk                          |
+|------------|----------------------------------------|
+| Logs       | `.ralph-workspace/logs`                |
+| Artifacts  | `.ralph-workspace/artifacts`           |
+| Sessions   | `.ralph-workspace/sessions`            |
+| Docs       | `docs`                                 |
+| Plans      | Workspace root (repository root)     |
+
+If a path does not exist yet, it may not appear in listings until it is created by Ralph or the project.

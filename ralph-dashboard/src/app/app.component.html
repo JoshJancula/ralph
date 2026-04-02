@@ -1,0 +1,40 @@
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow">Workspace</div>
+      <div class="title-group">
+        <div class="title">Ralph Dashboard</div>
+        <div class="subtitle">Workspace explorer</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="refresh-btn" (click)="refresh()">Refresh</button>
+      <button type="button" class="theme-toggle" (click)="toggleTheme()">
+        {{ isLightTheme() ? 'Dark' : 'Light' }} theme
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <app-workspace-sidebar class="sidebar"></app-workspace-sidebar>
+
+    <main class="content">
+      @if (nav.activeRoot(); as root) {
+        @if (nav.activeFile(); as file) {
+          @if (file.endsWith('.log')) {
+            <ralph-log-viewer [root]="root" [filePath]="file"></ralph-log-viewer>
+          } @else {
+            <app-file-viewer [root]="root" [filePath]="file"></app-file-viewer>
+          }
+        } @else if (root === 'plans') {
+          <ralph-plan-hub></ralph-plan-hub>
+        } @else {
+          <div class="empty-state">Select a file to inspect its contents.</div>
+        }
+      } @else {
+        <div class="empty-state">Select a section from the sidebar to get started.</div>
+      }
+    </main>
+  </div>
+</div>

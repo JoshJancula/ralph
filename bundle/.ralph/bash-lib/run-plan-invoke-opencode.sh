@@ -35,6 +35,14 @@ ralph_run_plan_invoke_opencode() {
   # Paths and flags the Python demux / tee pipeline expects in the environment.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
+  # Ensure node v22 is active so the correct opencode binary is found and used.
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$NVM_DIR/nvm.sh" --no-use 2>/dev/null
+    nvm use 22 --silent 2>/dev/null || true
+  fi
+
   local cli="${OPENCODE_PLAN_CLI:-}"
 
   if [[ -z "$cli" ]]; then

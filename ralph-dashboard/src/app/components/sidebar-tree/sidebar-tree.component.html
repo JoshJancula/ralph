@@ -1,0 +1,24 @@
+<div class="sidebar-tree">
+  <div *ngIf="loading()" class="loading-indicator">Loading...</div>
+  <div *ngIf="error()" class="error-message">{{ error() }}</div>
+  <ng-container *ngIf="!loading() && !error()">
+    <div
+      *ngFor="let node of flatNodes()"
+      class="tree-row"
+      [class.selected]="isSelected(node)"
+      [class.is-dir]="node.type === 'dir'"
+      [style.paddingLeft.px]="indentPx(node)"
+      (click)="selectEntry(node)"
+    >
+      <span class="tree-expander" *ngIf="node.type === 'dir'">
+        <span *ngIf="node.loading">...</span>
+        <span *ngIf="!node.loading">{{ node.expanded ? '-' : '+' }}</span>
+      </span>
+      <span class="tree-expander-placeholder" *ngIf="node.type !== 'dir'"></span>
+      <span class="node-name">{{ node.name }}</span>
+      <span class="node-size" *ngIf="node.type === 'file' && formatSize(node)">
+        {{ formatSize(node) }}
+      </span>
+    </div>
+  </ng-container>
+</div>

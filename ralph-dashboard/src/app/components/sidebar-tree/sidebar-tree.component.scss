@@ -1,0 +1,73 @@
+.sidebar-tree {
+  width: 100%;
+}
+
+.tree-loading,
+.tree-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.tree-error {
+  color: var(--danger);
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+  padding-right: 0.5rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  user-select: none;
+  transition: background 0.1s ease;
+  min-height: 24px;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+
+  &.selected {
+    background: var(--accent-active);
+    color: #fff;
+
+    .node-size {
+      color: rgba(255,255,255,0.7);
+    }
+  }
+
+  &.is-dir {
+    font-weight: 500;
+  }
+}
+
+.expander {
+  font-size: 0.75rem;
+  width: 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.expander-placeholder {
+  width: 1rem;
+  flex-shrink: 0;
+}
+
+.node-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-size {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
