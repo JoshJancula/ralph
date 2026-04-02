@@ -32,6 +32,11 @@ app.use(
   }),
 );
 
+// Serve index.csr.html for root path
+app.get('/', (req, res) => {
+  res.sendFile(join(browserDistFolder, 'index.csr.html'));
+});
+
 app.use((req, res, next) => {
   try {
     const engine = initializeAngularApp();
@@ -41,7 +46,6 @@ app.use((req, res, next) => {
         if (response) {
           writeResponseToNodeResponse(response, res);
         } else {
-          console.log(`No response from Angular engine for ${req.method} ${req.path}`);
           next();
         }
       })
@@ -53,6 +57,16 @@ app.use((req, res, next) => {
     console.error('Error initializing Angular app:', error);
     next(error);
   }
+});
+
+// Fallback: serve index.html for all unhandled requests (SPA routing)
+app.use((req, res) => {
+  const indexPath = join(browserDistFolder, 'index.html');
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      res.status(404).send('Not found');
+    }
+  });
 });
 
 const port = Number(process.env['PORT'] ?? 8123);
