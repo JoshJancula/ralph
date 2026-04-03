@@ -69,11 +69,14 @@ interface PlanItem {
       color: var(--text-muted);
       padding: 1rem;
     }
-    .empty-state {
-      color: var(--text-muted);
-      padding: 2rem;
-      text-align: center;
-    }
+      .empty-state {
+        color: var(--text-muted);
+        padding: 3rem 2rem;
+        text-align: center;
+        background: var(--surface);
+        border-radius: 8px;
+        border: 1px solid var(--border);
+      }
     .plan-list {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -146,8 +149,8 @@ export class PlanHubComponent implements OnInit {
     this.loading = true;
     this.error = '';
     
-    // Fetch plans from the logs directory
-    this.apiService.fetchListing('plans', '').subscribe({
+    // Fetch plan log directories
+    this.apiService.fetchListing('logs', '').subscribe({
       next: (response) => {
         // Filter for directories (these are the plan folders)
         this.items = response.entries
@@ -169,8 +172,9 @@ export class PlanHubComponent implements OnInit {
   }
 
   openPlan(item: PlanItem): void {
-    // Navigate to the plan in the plans tree
-    this.navService.navigate('plans', item.path, '');
+    const directory = item.path.replace(/\/$/, '');
+    const planFile = `${directory}.md`;
+    this.navService.navigate('plans', '', planFile);
   }
 
   viewLogs(item: PlanItem): void {

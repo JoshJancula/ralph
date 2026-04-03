@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "node dist/ralph-dashboard/server/server.mjs",
+    "start": "node scripts/start-server.cjs",
     "build": "NODE_OPTIONS=--require=./scripts/angular-launch-server-stub.cjs ng build",
-    "dev": "node --watch dist/ralph-dashboard/server/server.mjs",
+    "dev": "node --watch scripts/start-server.cjs",
     "watch": "ng build --watch --configuration development",
     "test": "npm run test:server && npm run test:angular",
     "test:server": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.ts --passWithNoTests",
@@ -13,7 +13,7 @@
     "test:cov": "npm run test:cov:server && npm run test:cov:angular",
     "test:cov:server": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.ts --coverage",
     "test:cov:angular": "vitest run --coverage",
-    "serve:ssr:ralph-dashboard": "node dist/ralph-dashboard/server/server.mjs"
+    "serve:ssr:ralph-dashboard": "node scripts/start-server.cjs"
   },
   "private": true,
   "dependencies": {

@@ -177,6 +177,6 @@ export class SidebarTreeComponent implements OnInit {
   }
 
   indentPx(node: TreeNode): number {
-    return node.depth * 16 + 12;
+    return node.depth * 12 + 6;
   }
 }

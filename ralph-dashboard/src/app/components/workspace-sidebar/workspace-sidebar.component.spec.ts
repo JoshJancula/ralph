@@ -1,9 +1,15 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { RouterTestingModule } from '@angular/router/testing';
 import { WorkspaceSidebarComponent } from './workspace-sidebar.component';
 import { NavService } from '../../services/nav.service';
 import type { Root } from '../../services/api.service';
+
+const testRoutes = [
+  { path: '', redirectTo: 'plans', pathMatch: 'full' },
+  { path: '**', redirectTo: 'plans' },
+];
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -14,17 +20,15 @@ describe('WorkspaceSidebarComponent', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
-    window.location.hash = '';
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
-      imports: [WorkspaceSidebarComponent, HttpClientTestingModule],
+      imports: [WorkspaceSidebarComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
     httpMock.verify();
-    window.location.hash = '';
   });
 
   it('ngOnInit loads roots and isActive reflects NavService', () => {

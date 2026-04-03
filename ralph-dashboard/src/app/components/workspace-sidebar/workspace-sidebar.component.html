@@ -1,20 +1,45 @@
 <div class="workspace-sidebar">
-  <div class="sidebar-header">
-    <div class="sidebar-title">Ralph workspace</div>
-    <div class="sidebar-subtitle">Browse workspace files and folders.</div>
-  </div>
-  <div class="root-node" *ngFor="let root of allRoots()">
-    <div
-      class="root-row"
-      [class.active]="isActive(root)"
-      [class.disabled]="!root.exists"
-      (click)="toggleRoot(root)"
+  <ul class="root-list" role="list">
+    <li
+      class="root-item"
+      #rootHost
+      *ngFor="let root of allRoots()"
+      [attr.data-root-key]="root.key"
     >
-      <span class="expander">{{ isExpanded(root) ? '-' : '+' }}</span>
-      <span class="root-name">{{ root.label | lowercase }}</span>
-    </div>
-    <div class="root-tree" *ngIf="isExpanded(root) && root.exists">
-      <app-sidebar-tree [root]="root.key" [path]="''" [autoOpen]="isActive(root)" />
-    </div>
-  </div>
+      <div class="root-summary" [class.disabled]="!root.exists">
+        <button
+          type="button"
+          class="expander-toggle"
+          [class.expanded]="isExpanded(root)"
+          [attr.aria-expanded]="isExpanded(root)"
+          [attr.aria-controls]="'tree-' + root.key"
+          [attr.aria-label]="isExpanded(root) ? 'Collapse ' + root.label : 'Expand ' + root.label"
+          (click)="toggleExpansion(root)"
+          [disabled]="!root.exists"
+        >
+          <span class="expander-icon">{{ isExpanded(root) ? '▾' : '▸' }}</span>
+        </button>
+        <button
+          type="button"
+          class="root-button"
+          [class.active]="isActive(root)"
+          (click)="selectRoot(root)"
+          [disabled]="!root.exists"
+        >
+          <span class="root-label">{{ root.label }}</span>
+          <span class="root-meta">
+            {{ root.exists ? 'Browse entries' : 'Section unavailable' }}
+          </span>
+        </button>
+        <span *ngIf="isActive(root)" class="active-pill">Active</span>
+      </div>
+      <div
+        class="root-tree"
+        *ngIf="isExpanded(root) && root.exists"
+        [attr.id]="'tree-' + root.key"
+      >
+        <app-sidebar-tree [root]="root.key" [path]="''" [autoOpen]="isActive(root)"></app-sidebar-tree>
+      </div>
+    </li>
+  </ul>
 </div>

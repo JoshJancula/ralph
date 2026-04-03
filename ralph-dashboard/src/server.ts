@@ -19,10 +19,18 @@ let angularApp: AngularNodeAppEngine | null = null;
 
 const initializeAngularApp = () => {
   if (!angularApp) {
-    angularApp = new AngularNodeAppEngine();
+    try {
+      angularApp = new AngularNodeAppEngine();
+    } catch (error) {
+      // Silently fall back to client rendering if manifest is not set
+      return {
+        handle: async () => null,
+      } as any;
+    }
   }
   return angularApp;
 };
+
 
 app.use(
   express.static(browserDistFolder, {
@@ -42,14 +50,14 @@ app.use((req, res, next) => {
     const engine = initializeAngularApp();
     engine
       .handle(req)
-      .then((response) => {
-        if (response) {
+      .then((response: any) => {
+        if (response && res && typeof res.setHeader === 'function') {
           writeResponseToNodeResponse(response, res);
         } else {
           next();
         }
       })
-      .catch((error) => {
+      .catch((error: any) => {
         console.error('Error handling request:', error);
         next(error);
       });

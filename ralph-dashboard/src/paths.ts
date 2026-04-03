@@ -73,7 +73,7 @@ export function getAllowedRoots(workspaceRoot: string): Record<string, RootConfi
     },
     plans: {
       label: 'Plans',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'logs'),
+      basePath: resolve(workspaceRoot),
       writable: false,
     },
   };

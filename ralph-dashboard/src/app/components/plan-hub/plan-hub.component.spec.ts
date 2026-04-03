@@ -1,8 +1,14 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { RouterTestingModule } from '@angular/router/testing';
 import { PlanHubComponent } from './plan-hub.component';
 import { NavService } from '../../services/nav.service';
+
+const testRoutes = [
+  { path: '', redirectTo: 'plans', pathMatch: 'full' },
+  { path: '**', redirectTo: 'plans' },
+];
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -13,24 +19,22 @@ describe('PlanHubComponent', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
-    window.location.hash = '';
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
-      imports: [PlanHubComponent, HttpClientTestingModule],
+      imports: [PlanHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
     httpMock.verify();
-    window.location.hash = '';
   });
 
   it('fetchPlans sorts directories by mtime', () => {
     const fixture = TestBed.createComponent(PlanHubComponent);
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'plans');
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
     req.flush({
       root: 'plans',
       path: '',
@@ -51,7 +55,7 @@ describe('PlanHubComponent', () => {
     const fixture = TestBed.createComponent(PlanHubComponent);
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list');
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
     req.flush({
       root: 'plans',
       path: '',
@@ -67,7 +71,7 @@ describe('PlanHubComponent', () => {
     const fixture = TestBed.createComponent(PlanHubComponent);
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list');
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
     req.flush({ error: 'server' }, { status: 500, statusText: 'Error' });
 
     expect(fixture.componentInstance.error.length).toBeGreaterThan(0);
@@ -81,7 +85,7 @@ describe('PlanHubComponent', () => {
 
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list');
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
     req.flush({
       root: 'plans',
       path: '',
@@ -91,7 +95,7 @@ describe('PlanHubComponent', () => {
 
     const item = fixture.componentInstance.items[0];
     fixture.componentInstance.openPlan(item);
-    expect(spy).toHaveBeenCalledWith('plans', 'PLAN2/', '');
+    expect(spy).toHaveBeenCalledWith('plans', '', 'PLAN2.md');
   });
 
   it('viewLogs delegates to NavService.navigate with logs root', () => {
@@ -101,7 +105,7 @@ describe('PlanHubComponent', () => {
 
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list');
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
     req.flush({
       root: 'plans',
       path: '',

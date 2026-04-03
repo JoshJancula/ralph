@@ -38,8 +38,9 @@ More text
 
     expect(result).toContain('<div class="mermaid">');
     expect(result).toContain('graph TD');
-    expect(result).toContain('A --&gt; B');
-    expect(result).toContain('B --&gt; C');
+    // Mermaid content is NOT escaped (no HTML escaping within mermaid blocks)
+    expect(result).toContain('A --> B');
+    expect(result).toContain('B --> C');
   });
 
   it('does not produce mermaid wrapper for ` ```js ` fenced block', () => {
@@ -57,7 +58,7 @@ More text
     const result = markdownToHtml(source);
 
     expect(result).not.toContain('<div class="mermaid">');
-    expect(result).toContain('<code class="language-js">');
+    expect(result).toContain('class="hljs language-js"');
   });
 });
 

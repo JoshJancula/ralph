@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { Subscription } from 'rxjs';
+import { markdownToHtml } from '../../utils/markdown-to-html';
 
 interface LogEntry {
   content: string;
@@ -23,8 +24,10 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   @Input() filePath: string = '';
 
   @ViewChild('logContent', { static: false }) logContentElement?: ElementRef<HTMLPreElement>;
+  @ViewChild('prettyContent', { static: false }) prettyContentElement?: ElementRef<HTMLDivElement>;
 
   content: string = '';
+  prettyMode = false;
   searchQuery: string = '';
   filteredLines: string[] = [];
   matchLineIndices: number[] = [];
@@ -107,18 +110,24 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
     this.isTailing = false;
   }
 
-  fetchNewContent(): void {
+  fetchNewContent(forceScroll = false): void {
     if (!this.root || !this.filePath) return;
     this.subscription.add(
       this.apiService.fetchFile(this.root, this.filePath, this.nextOffset).subscribe({
         next: (response) => {
-          if (response.content) {
+          const hasContent = Boolean(response.content);
+          if (hasContent) {
             this.content += response.content;
-            this.nextOffset = response.nextOffset;
             this.applySearch();
-            this.autoScroll();
-            this.cdr.markForCheck();
           }
+          this.nextOffset = response.nextOffset;
+          if (forceScroll) {
+            this.cdr.detectChanges();
+            setTimeout(() => this.scrollToBottom(), 0);
+          } else {
+            this.autoScroll();
+          }
+          this.cdr.markForCheck();
         },
         error: () => {
           this.error = 'Failed to fetch new log content';
@@ -131,6 +140,11 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   handleSearchInput(query: string): void {
     this.searchQuery = query;
     this.applySearch();
+    this.cdr.markForCheck();
+  }
+
+  togglePrettyMode(): void {
+    this.prettyMode = !this.prettyMode;
     this.cdr.markForCheck();
   }
 
@@ -162,9 +176,42 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
     this.cdr.markForCheck();
   }
 
+  get filteredPrettyHtml(): string {
+    if (!this.searchQuery.trim()) {
+      return this.prettyHtml;
+    }
+    // In pretty mode, we highlight matches in the HTML content
+    const searchTerm = this.searchQuery;
+    const lowerSearch = searchTerm.toLowerCase();
+    let html = this.prettyHtml;
+    
+    // Find all text nodes in the HTML and wrap matches in mark tags
+    // We use a regex to match the search term case-insensitively
+    const regex = new RegExp(`(${this.escapeRegex(searchTerm)})`, 'gi');
+    
+    // Only highlight in text content, not in HTML tags
+    // Split by HTML tags and only apply highlighting to text parts
+    const parts = html.split(/(<[^>]+>)/g);
+    return parts.map((part, index) => {
+      // Even indices are text, odd indices are HTML tags
+      if (index % 2 === 0) {
+        return part.replace(regex, '<mark>$1</mark>');
+      }
+      return part;
+    }).join('');
+  }
+
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   get matchCount(): string {
     if (!this.searchQuery.trim() || this.matchLineIndices.length === 0) return '';
     return `${this.currentMatchIndex + 1} of ${this.matchLineIndices.length}`;
+  }
+
+  get prettyHtml(): string {
+    return markdownToHtml(this.content);
   }
 
   nextMatch(): void {
@@ -199,11 +246,23 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  goToLatest(): void {
-    this.stopTailing();
-    if (this.logContentElement?.nativeElement) {
-      this.logContentElement.nativeElement.scrollTop = this.logContentElement.nativeElement.scrollHeight;
+  private scrollToBottom(): void {
+    if (this.prettyMode) {
+      if (!this.prettyContentElement?.nativeElement) return;
+      const element = this.prettyContentElement.nativeElement;
+      element.scrollTop = element.scrollHeight;
+    } else {
+      if (!this.logContentElement?.nativeElement) return;
+      const element = this.logContentElement.nativeElement;
+      element.scrollTop = element.scrollHeight;
     }
+  }
+
+  goToLatest(): void {
+    if (!this.root || !this.filePath) return;
+    this.stopTailing();
+    this.scrollToBottom();
+    this.fetchNewContent(true);
   }
 
   onScroll(): void {
@@ -227,6 +286,6 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   viewPlanFile(): void {
     const dir = this.planDirectory;
     if (!dir) return;
-    this.nav.navigate('plans', dir + '/', null as any);
+    this.nav.navigate('plans', dir, `${dir}.md`);
   }
 }

@@ -21,6 +21,6 @@ describe('AppComponent (root)', () => {
     const fixture = TestBed.createComponent(AppComponent);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.title')?.textContent).toContain('Ralph Dashboard');
+    expect(compiled.querySelector('.title')?.textContent).toContain('Workspace Explorer');
   });
 });

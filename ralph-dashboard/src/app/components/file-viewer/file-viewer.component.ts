@@ -95,7 +95,7 @@ export class FileViewerComponent {
   viewLogs(): void {
     const dir = this.planDirectory;
     if (!dir) return;
-    this.nav.navigate('logs', dir + '/', null as any);
+    this.nav.navigate('logs', dir, null);
   }
 
   get runSnippet(): string | null {

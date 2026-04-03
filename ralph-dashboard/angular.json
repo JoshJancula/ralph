@@ -37,7 +37,18 @@
             "ssr": {
               "entry": "src/server.ts"
             },
-            "outputMode": "server"
+            "allowedCommonJsDependencies": [
+              "cytoscape",
+              "cytoscape-cose-bilkent",
+              "cytoscape-fcose",
+              "@braintree/sanitize-url",
+              "dompurify",
+              "roughjs",
+              "d3-sankey",
+              "dayjs",
+              "katex",
+              "ts-dedent"
+            ]
           },
           "configurations": {
             "production": {

@@ -60,6 +60,25 @@ function seedAngularManifests(exportsObj) {
   manifestState.patched = true;
 }
 
+// Pre-register manifests globally before any Angular code runs
+// This ensures the manifests are available even when loading ESM modules
+globalThis.ɵsetAngularAppEngineManifest = function(manifest) {
+  globalThis.__ANGULAR_APP_ENGINE_MANIFEST__ = manifest;
+};
+globalThis.ɵsetAngularAppManifest = function(manifest) {
+  globalThis.__ANGULAR_APP_MANIFEST__ = manifest;
+};
+globalThis.ɵgetAngularAppEngineManifest = function() {
+  return globalThis.__ANGULAR_APP_ENGINE_MANIFEST__;
+};
+globalThis.ɵgetAngularAppManifest = function() {
+  return globalThis.__ANGULAR_APP_MANIFEST__;
+};
+
+// Set the manifests immediately
+globalThis.ɵsetAngularAppEngineManifest(createEngineManifest());
+globalThis.ɵsetAngularAppManifest(createAppManifest());
+
 Module._load = function patchedLoad(request, parent, isMain) {
   try {
     const resolved = Module._resolveFilename(request, parent, isMain);
@@ -75,7 +94,10 @@ Module._load = function patchedLoad(request, parent, isMain) {
       path.normalize(resolved).endsWith(`${path.sep}@angular${path.sep}ssr${path.sep}fesm2022${path.sep}ssr.mjs`)
     ) {
       const exportsObj = originalLoad.apply(this, arguments);
+      // Always seed manifests, both at build time and runtime
       seedAngularManifests(exportsObj);
+      // Also try to trigger seeding again for runtime
+      setTimeout(() => seedAngularManifests(exportsObj), 0);
       return exportsObj;
     }
   } catch {

@@ -1,29 +1,79 @@
 :root {
+  color-scheme: dark;
   --background: #0d1117;
+  --background-elevated: #0b1017;
   --surface: #161b22;
+  --surface-muted: #101620;
+  --surface-hover: rgba(255, 255, 255, 0.04);
+  --surface-active: rgba(255, 255, 255, 0.08);
   --border: #30363d;
+  --divider: rgba(255, 255, 255, 0.12);
   --text-primary: #e6edf3;
   --text-muted: #8b949e;
-  --accent: #238636;
-  --accent-hover: #2ea043;
-  --danger: #da3633;
+  --text-link: #58a6ff;
+  --accent: #5ea7ff;
+  --accent-hover: #79b8ff;
+  --accent-active: #4198ff;
+  --danger: #f85149;
   --monospace-font: 'SFMono-Regular', Menlo, Consolas, monospace;
   --ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --button-bg: var(--accent);
+  --button-text: #0a1120;
+  --button-border: transparent;
+  --button-hover: var(--accent-hover);
+  --button-active: var(--accent-active);
+  --text-on-accent: #ffffff;
+  --text-on-accent-muted: rgba(255, 255, 255, 0.75);
+  --text-on-danger: #ffffff;
+  --surface-highlight: rgba(255, 255, 255, 0.12);
+  --topbar-bg: rgba(9, 14, 26, 0.7);
+  --code-bg: #0c1421;
+  --table-header-bg: rgba(255, 255, 255, 0.04);
+  --table-row-hover: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.18);
+  --dashboard-header-height: 96px;
 }
 
 body.theme-light {
-  --background: #ffffff;
-  --surface: #f6f8fa;
+  color-scheme: light;
+  --background: #f4f6fb;
+  --background-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface-muted: #f6f8fa;
+  --surface-hover: rgba(0, 0, 0, 0.04);
+  --surface-active: rgba(0, 0, 0, 0.06);
   --border: #d0d7de;
-  --text-primary: #24292f;
-  --text-muted: #6e7781;
+  --divider: #e2e8f0;
+  --text-primary: #1f2937;
+  --text-muted: #4b5563;
+  --text-link: #0969da;
   --accent: #0969da;
-  --accent-hover: #0a68db;
+  --accent-hover: #0f6ad5;
+  --accent-active: #0847a8;
   --danger: #cf222e;
+  --button-text: #ffffff;
+  --button-border: transparent;
+  --button-hover: var(--accent-hover);
+  --button-active: var(--accent-active);
+  --text-on-accent: #ffffff;
+  --text-on-accent-muted: rgba(255, 255, 255, 0.9);
+  --text-on-danger: #ffffff;
+  --surface-highlight: rgba(255, 255, 255, 0.35);
+  --topbar-bg: rgba(255, 255, 255, 0.9);
+  --code-bg: #f3f4f6;
+  --table-header-bg: #e1e4e8;
+  --table-row-hover: rgba(0, 0, 0, 0.04);
+  --scrollbar-thumb: rgba(15, 23, 42, 0.2);
+  --scrollbar-thumb-hover: rgba(15, 23, 42, 0.35);
 }
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
 }
 
 body {
@@ -32,24 +82,147 @@ body {
   background-color: var(--background);
   color: var(--text-primary);
   font-family: var(--ui-font);
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
+  overflow-y: auto;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(7, 12, 22, 0.7), var(--surface));
+  color: var(--text-primary);
+  transition: background 0.3s ease;
 }
 
 .topbar {
-  width: 100%;
-  background-color: var(--surface);
-  border-bottom: 1px solid var(--border);
   display: flex;
-  flex-direction: row;
-  padding: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--topbar-bg);
+  backdrop-filter: blur(14px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  width: 100%;
+}
+
+.brand {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.title-group {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.title {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.actions button {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+button {
+  border: 1px solid var(--button-border);
+  border-radius: 999px;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  cursor: pointer;
+  background-color: var(--button-bg);
+  color: var(--button-text);
+  text-transform: none;
+  min-width: 120px;
+}
+
+button:hover {
+  background-color: var(--button-hover);
+}
+
+button:active {
+  background-color: var(--button-active);
+}
+
+.refresh-btn {
+  background-color: var(--accent);
+  color: var(--button-text);
+}
+
+.theme-toggle {
+  background-color: var(--surface);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.theme-toggle:hover {
+  background-color: var(--surface-hover);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  min-height: 0;
+  width: 100%;
+  align-items: stretch;
+  gap: 0;
+  grid-auto-rows: minmax(min-content, auto);
+  flex: 1 1 auto;
 }
 
 .sidebar {
-  background-color: var(--surface);
+  width: 280px;
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  min-height: 0;
+  height: auto;
+  align-self: stretch;
+  background-color: var(--surface);
+}
+
+.content {
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  padding: 1rem;
+  gap: 1rem;
+  overflow: visible;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--surface) 90%, var(--background)));
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 100%;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 .sidebar-root-button {
@@ -64,7 +237,7 @@ body {
 
 .sidebar-root-button.active {
   background-color: var(--accent);
-  color: var(--text-primary);
+  color: var(--button-text);
 }
 
 .sidebar-root-button:disabled {
@@ -78,11 +251,12 @@ body {
 }
 
 .sidebar-tree-row:hover {
-  background-color: var(--surface);
+  background-color: var(--surface-hover);
 }
 
 .sidebar-tree-row.selected {
   background-color: var(--accent);
+  color: var(--button-text);
 }
 
 .sidebar-tree-row.loading {
@@ -106,6 +280,8 @@ body {
   white-space: pre-wrap;
   padding: 1rem;
   background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
 }
 
 .log-viewer-search-bar {
@@ -122,7 +298,7 @@ body {
   flex: 1;
   padding: 0.5rem;
   border: 1px solid var(--border);
-  background-color: var(--background);
+  background-color: var(--background-elevated);
   color: var(--text-primary);
   font-family: var(--monospace-font);
 }
@@ -133,4 +309,91 @@ body {
   background-color: var(--surface);
   color: var(--text-primary);
   cursor: pointer;
+}
+
+.markdown-content {
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 1rem;
+}
+
+.markdown-content table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--border);
+  padding: 0.65rem 0.9rem;
+  text-align: left;
+}
+
+.markdown-content thead th {
+  background-color: var(--table-header-bg);
+  color: var(--text-primary);
+}
+
+.markdown-content tbody tr:hover {
+  background-color: var(--table-row-hover);
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  margin: 0 0 1rem;
+  line-height: 1.6;
+}
+
+.markdown-content pre {
+  background-color: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: var(--monospace-font);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  white-space: pre;
+  overflow: auto;
+}
+
+.markdown-content code {
+  font-family: var(--monospace-font);
+  background-color: color-mix(in srgb, var(--text-primary) 12%, var(--code-bg));
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+}
+
+.hljs {
+  background: var(--code-bg);
+  color: var(--text-primary);
+}
+
+/* Token styles using underscore class names (CSS-friendly and safe) */
+.hljs .token_keyword {
+  color: #c792ea;
+}
+
+.hljs .token_string {
+  color: #a3e635;
+}
+
+.hljs .token_number {
+  color: #f8c555;
+}
+
+.hljs .token_comment {
+  color: #94a3b8;
+  font-style: italic;
 }

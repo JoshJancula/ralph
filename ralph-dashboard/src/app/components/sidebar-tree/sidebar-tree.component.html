@@ -11,8 +11,8 @@
       (click)="selectEntry(node)"
     >
       <span class="tree-expander" *ngIf="node.type === 'dir'">
-        <span *ngIf="node.loading">...</span>
-        <span *ngIf="!node.loading">{{ node.expanded ? '-' : '+' }}</span>
+        <span *ngIf="node.loading" class="expander-loading">• • •</span>
+        <span *ngIf="!node.loading" class="expander-icon">{{ node.expanded ? '-' : '+' }}</span>
       </span>
       <span class="tree-expander-placeholder" *ngIf="node.type !== 'dir'"></span>
       <span class="node-name">{{ node.name }}</span>

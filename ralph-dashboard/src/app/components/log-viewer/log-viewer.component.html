@@ -42,6 +42,13 @@
         View Plan
       </button>
       <button
+        (click)="togglePrettyMode()"
+        type="button"
+        class="action-btn"
+      >
+        {{ prettyMode ? 'Raw' : 'Pretty' }}
+      </button>
+      <button
         (click)="startTailing()"
         [disabled]="isTailing"
         class="action-btn"
@@ -75,15 +82,23 @@
     {{ error }}
   </div>
 
-  <pre
-    *ngIf="!isLoading && !error"
-    (scroll)="onScroll()"
-    #logContent
-    class="log-content"
-  >
-    <ng-container *ngFor="let line of filteredLines; trackBy: trackByLine; let i = index">
-      <span [id]="'log-line-' + i" [innerHTML]="line"></span>
-      <br />
-    </ng-container>
-  </pre>
+  <div *ngIf="!isLoading && !error" class="log-body">
+    <div
+      *ngIf="prettyMode"
+      class="log-pretty markdown-content"
+      [innerHTML]="filteredPrettyHtml"
+      #prettyContent
+    ></div>
+    <pre
+      *ngIf="!prettyMode"
+      (scroll)="onScroll()"
+      #logContent
+      class="log-content"
+    >
+      <ng-container *ngFor="let line of filteredLines; trackBy: trackByLine; let i = index">
+        <span [id]="'log-line-' + i" [innerHTML]="line"></span>
+        <br />
+      </ng-container>
+    </pre>
+  </div>
 </div>

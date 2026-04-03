@@ -1,10 +1,23 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject, signal, computed, OnInit } from '@angular/core';
+import {
+  AfterViewInit,
+  Component,
+  ElementRef,
+  OnDestroy,
+  OnInit,
+  QueryList,
+  ViewChildren,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
+
 import { ApiService, Root } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { SidebarTreeComponent } from '../sidebar-tree/sidebar-tree.component';
 
-const ROOT_ORDER = ['artifacts', 'logs', 'orchestration-plans', 'plans', 'sessions', 'docs'];
+const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'plans', 'artifacts', 'sessions'];
 
 @Component({
   selector: 'app-workspace-sidebar',
@@ -13,12 +26,15 @@ const ROOT_ORDER = ['artifacts', 'logs', 'orchestration-plans', 'plans', 'sessio
   templateUrl: './workspace-sidebar.component.html',
   styleUrls: ['./workspace-sidebar.component.scss'],
 })
-export class WorkspaceSidebarComponent implements OnInit {
+export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
 
   roots = signal<Root[]>([]);
   expandedRoots = signal<Set<string>>(new Set());
+
+  @ViewChildren('rootHost', { read: ElementRef })
+  rootHosts!: QueryList<ElementRef<HTMLElement>>;
 
   allRoots = computed(() => {
     const available = this.roots();
@@ -27,15 +43,41 @@ export class WorkspaceSidebarComponent implements OnInit {
       .filter((r): r is Root => r !== undefined);
   });
 
+  constructor() {
+    effect(() => {
+      const activeRoot = this.nav.activeRoot();
+      if (activeRoot) {
+        this.ensureActiveRootVisible();
+      }
+    });
+  }
+
   ngOnInit(): void {
     this.api.fetchRoots().subscribe((roots) => {
       this.roots.set(roots);
-      // Auto-expand the active root if one is set
       const active = this.nav.activeRoot();
       if (active) {
-        this.expandedRoots.update(s => { const n = new Set(s); n.add(active); return n; });
+        this.expandedRoots.update((s) => {
+          const next = new Set(s);
+          next.add(active);
+          return next;
+        });
+      } else {
+        // Auto-select the first available root on initial load
+        const firstAvailable = this.allRoots().find(r => r.exists);
+        if (firstAvailable) {
+          this.selectRoot(firstAvailable);
+        }
       }
     });
+  }
+
+  ngAfterViewInit(): void {
+    this.rootHosts.changes.subscribe(() => this.ensureActiveRootVisible());
+    this.ensureActiveRootVisible();
+  }
+
+  ngOnDestroy(): void {
   }
 
   isExpanded(root: Root): boolean {
@@ -46,21 +88,40 @@ export class WorkspaceSidebarComponent implements OnInit {
     return this.nav.activeRoot() === root.key;
   }
 
-  toggleRoot(root: Root): void {
+  toggleExpansion(root: Root): void {
     if (!root.exists) return;
-    this.nav.navigate(root.key);
-    this.expandedRoots.update(s => {
-      const n = new Set(s);
-      if (n.has(root.key)) {
-        n.delete(root.key);
+    this.expandedRoots.update((current) => {
+      const next = new Set(current);
+      if (next.has(root.key)) {
+        next.delete(root.key);
       } else {
-        n.add(root.key);
+        next.add(root.key);
       }
-      return n;
+      return next;
     });
   }
 
   selectRoot(root: Root): void {
-    this.toggleRoot(root);
+    if (!root.exists) return;
+    this.nav.navigate(root.key);
+    this.expandedRoots.update((current) => {
+      const next = new Set(current);
+      next.add(root.key);
+      return next;
+    });
+    this.ensureActiveRootVisible();
+  }
+
+  private ensureActiveRootVisible(): void {
+    const activeRootKey = this.nav.activeRoot();
+    if (!activeRootKey || !this.rootHosts) {
+      return;
+    }
+    Promise.resolve().then(() => {
+      const el = this.rootHosts.find(
+        (ref) => ref.nativeElement.dataset['rootKey'] === activeRootKey,
+      );
+      el?.nativeElement.scrollIntoView({ block: 'nearest' });
+    });
   }
 }

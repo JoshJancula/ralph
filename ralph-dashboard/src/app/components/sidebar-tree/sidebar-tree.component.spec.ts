@@ -1,8 +1,14 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed, fakeAsync, tick, flushMicrotasks } from '@angular/core/testing';
+import { RouterTestingModule } from '@angular/router/testing';
 import { SidebarTreeComponent } from './sidebar-tree.component';
 import { NavService } from '../../services/nav.service';
+
+const testRoutes = [
+  { path: '', redirectTo: 'plans', pathMatch: 'full' },
+  { path: '**', redirectTo: 'plans' },
+];
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -13,17 +19,15 @@ describe('SidebarTreeComponent', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
-    window.location.hash = '';
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
-      imports: [SidebarTreeComponent, HttpClientTestingModule],
+      imports: [SidebarTreeComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
   });
 
   afterEach(() => {
     httpMock.verify();
-    window.location.hash = '';
   });
 
   function flushMicrotaskQueue() {

@@ -103,11 +103,41 @@ export function registerDashboardApi(app: Express): void {
       });
     }
 
+    // Filter plan files to only show files with corresponding logs directories
+    let filteredEntries = entries;
+    if (rootKey === 'plans' && !pathParam) {
+      const logsConfig = getRootsMap()['logs'];
+      if (logsConfig && existsSync(logsConfig.basePath)) {
+        filteredEntries = [];
+        for (const entry of entries) {
+          // Skip directories - only show files
+          if (entry.type === 'dir') {
+            continue;
+          }
+          // For files, check if there's a corresponding directory in logs with matching name
+          const fileName = entry.name;
+          // Try with the full filename (without extension) as directory name
+          const fileNameWithoutExt = fileName.includes('.')
+            ? fileName.substring(0, fileName.lastIndexOf('.'))
+            : fileName;
+          const logsPlanDir = join(logsConfig.basePath, fileNameWithoutExt);
+          try {
+            const logsStat = await fs.stat(logsPlanDir);
+            if (logsStat.isDirectory()) {
+              filteredEntries.push(entry);
+            }
+          } catch {
+            // Corresponding logs directory doesn't exist, skip this file
+          }
+        }
+      }
+    }
+
     res.json({
       root: rootKey,
       path: pathParam,
       parent: parentListingPath(pathParam),
-      entries,
+      entries: filteredEntries,
     });
   });
 

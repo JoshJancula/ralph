@@ -2,10 +2,15 @@ import '../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { RouterTestingModule } from '@angular/router/testing';
 import { AppComponent } from './app.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 import { NavService } from './services/nav.service';
+
+const testRoutes = [
+  { path: '', redirectTo: 'plans', pathMatch: 'full' },
+  { path: '**', redirectTo: 'plans' },
+];
 
 @Component({
   selector: 'ralph-plan-hub',
@@ -56,11 +61,9 @@ describe('AppComponent', () => {
   let httpMock: HttpTestingController;
 
   beforeEach(async () => {
-    window.location.hash = '';
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
-      imports: [AppComponent, HttpClientTestingModule],
-      providers: [provideRouter([])],
+      imports: [AppComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
     })
       .overrideComponent(AppComponent, {
         remove: { imports: [PlanHubComponent] },
@@ -72,10 +75,9 @@ describe('AppComponent', () => {
 
   afterEach(() => {
     httpMock.verify();
-    window.location.hash = '';
   });
 
-  it('shell renders topbar with title Ralph Dashboard', async () => {
+  it('shell renders topbar with title Workspace Explorer', async () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     flushOutstandingHttp(httpMock);
@@ -83,7 +85,7 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.topbar .title')?.textContent?.trim()).toBe('Ralph Dashboard');
+    expect(compiled.querySelector('.topbar .title')?.textContent?.trim()).toBe('Workspace Explorer');
   });
 
   it('refresh button calls NavService.refresh()', async () => {
@@ -178,5 +180,16 @@ describe('AppComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-file-viewer')).toBeTruthy();
+  });
+
+  it('marks the layout with the page scroll model attribute', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
+    flushOutstandingHttp(httpMock);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.layout')?.getAttribute('data-scroll-model')).toBe('page');
   });
 });

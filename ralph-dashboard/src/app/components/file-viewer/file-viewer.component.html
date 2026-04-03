@@ -17,23 +17,32 @@
   </div>
 
   <ng-template #viewer>
-    <div class="file-content">
-      <div class="file-toolbar" *ngIf="isMarkdown()">
-        <button (click)="toggleView()">
-          {{ isRendered() ? 'View source' : 'View rendered' }}
-        </button>
-      </div>
+    <div class="file-viewer">
+      <div class="file-content">
+        <div class="file-toolbar" *ngIf="isMarkdown()">
+          <button (click)="toggleView()">
+            {{ isRendered() ? 'View source' : 'View rendered' }}
+          </button>
+        </div>
 
-      <div *ngIf="isMarkdown() && isRendered()">
-        <div [innerHTML]="formatHtml()" class="markdown-content"></div>
-      </div>
+        <div class="file-inner">
+          <ng-container *ngIf="isMarkdown(); else notMarkdown">
+            <div *ngIf="isRendered(); else markdownSource" class="markdown-content" [innerHTML]="formatHtml()"></div>
+            <ng-template #markdownSource>
+              <pre class="text-content">{{ content() }}</pre>
+            </ng-template>
+          </ng-container>
 
-      <div *ngIf="isJson()">
-        <pre class="json-content">{{ formatJson() }}</pre>
-      </div>
+          <ng-template #notMarkdown>
+            <div *ngIf="isJson()">
+              <pre class="json-content">{{ formatJson() }}</pre>
+            </div>
 
-      <div *ngIf="isPlainText()">
-        <pre class="text-content">{{ content() }}</pre>
+            <div *ngIf="isPlainText()">
+              <pre class="text-content">{{ content() }}</pre>
+            </div>
+          </ng-template>
+        </div>
       </div>
     </div>
   </ng-template>

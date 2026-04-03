@@ -1,3 +1,8 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
 .log-viewer-container {
   display: flex;
   flex-direction: column;
@@ -72,7 +77,7 @@
   &:hover:not(:disabled) {
     border-color: var(--accent);
     background: var(--accent);
-    color: #fff;
+    color: var(--text-on-accent);
   }
 
   &:disabled {
@@ -112,9 +117,32 @@
 
   mark {
     background: var(--danger);
-    color: #fff;
+    color: var(--text-on-danger);
     padding: 0 2px;
     border-radius: 2px;
+  }
+}
+
+.log-pretty {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem 1.5rem;
+  background: var(--background);
+  max-height: 100%;
+
+  pre {
+    background: var(--code-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    overflow: auto;
+  }
+
+  code {
+    background: color-mix(in srgb, var(--code-bg) 70%, var(--background));
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
   }
 }
 
@@ -138,3 +166,12 @@
     background: var(--border);
   }
 }
+
+.log-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+ 
