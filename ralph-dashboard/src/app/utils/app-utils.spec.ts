@@ -7,13 +7,13 @@ describe('markdownToHtml (Vitest)', () => {
   it('wraps mermaid code blocks produced by marked', () => {
     const source = '```mermaid\ngraph TD\n  A --> B\n```';
     const result = markdownToHtml(source);
-    expect(result).toContain('<div class="mermaid">');
+    expect(result).toContain('<pre><code class="language-mermaid">');
   });
 
   it('leaves non-mermaid fenced code as pre/code', () => {
     const source = '```txt\nhello\n```';
     const result = markdownToHtml(source);
-    expect(result).not.toContain('<div class="mermaid">');
+    expect(result).not.toContain('language-mermaid');
   });
 });
 

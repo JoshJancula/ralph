@@ -51,7 +51,7 @@ export function markdownToHtml(source: string): string {
     const language = (lang || '').trim();
 
     if (language === 'mermaid') {
-      return `<div class="mermaid">${code.trim()}</div>`;
+      return `<pre><code class="language-mermaid">${escapeHtml(code.trim())}</code></pre>`;
     }
 
     const highlighted = basicHighlight(code);

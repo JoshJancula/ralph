@@ -22,7 +22,7 @@ Some text with **bold** and *italic*.
     expect(result).not.toContain('<div class="mermaid">');
   });
 
-  it('converts a ` ```mermaid ` fenced block to <div class="mermaid">', () => {
+  it('converts a ` ```mermaid ` fenced block to <pre><code class="language-mermaid">', () => {
     const source = `Some text
 
 \`\`\`mermaid
@@ -36,11 +36,10 @@ More text
 
     const result = markdownToHtml(source);
 
-    expect(result).toContain('<div class="mermaid">');
+    expect(result).toContain('<pre><code class="language-mermaid">');
     expect(result).toContain('graph TD');
-    // Mermaid content is NOT escaped (no HTML escaping within mermaid blocks)
-    expect(result).toContain('A --> B');
-    expect(result).toContain('B --> C');
+    expect(result).toContain('A --&gt; B');
+    expect(result).toContain('B --&gt; C');
   });
 
   it('does not produce mermaid wrapper for ` ```js ` fenced block', () => {

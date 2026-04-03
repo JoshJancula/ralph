@@ -53,6 +53,31 @@ describe('FileViewerComponent', () => {
     expect(markdownEl?.innerHTML).toBe(markdownToHtml(raw));
   });
 
+  it('mermaid markdown is rendered into SVG markup', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = '```mermaid\ngraph TD\n  A --> B\n```';
+    const renderSpy = vi.spyOn(fixture.componentInstance as any, 'loadMermaidClient').mockResolvedValue({
+      initialize: vi.fn(),
+      render: vi.fn(async () => ({ svg: '<svg id="diagram"></svg>' })),
+    });
+    fixture.componentInstance.filePath = 'PLAN2/diagram.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/diagram.md');
+    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const markdownEl = (fixture.nativeElement as HTMLElement).querySelector(
+      '.markdown-content',
+    ) as HTMLElement | null;
+    expect(markdownEl).toBeTruthy();
+    expect(markdownEl?.innerHTML).toContain('<svg');
+    expect(markdownEl?.innerHTML).not.toContain('language-mermaid');
+    expect(renderSpy).toHaveBeenCalled();
+  });
+
   it('.json file: content is displayed in a <pre> as pretty-printed JSON', async () => {
     const fixture = TestBed.createComponent(FileViewerComponent);
     const raw = '{"z":1,"a":2}';

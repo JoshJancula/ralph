@@ -27,7 +27,7 @@
 
         <div class="file-inner">
           <ng-container *ngIf="isMarkdown(); else notMarkdown">
-            <div *ngIf="isRendered(); else markdownSource" class="markdown-content" [innerHTML]="formatHtml()"></div>
+            <div *ngIf="isRendered(); else markdownSource" class="markdown-content" [innerHTML]="safeHtml()"></div>
             <ng-template #markdownSource>
               <pre class="text-content">{{ content() }}</pre>
             </ng-template>

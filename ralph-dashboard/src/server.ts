@@ -67,9 +67,9 @@ app.use((req, res, next) => {
   }
 });
 
-// Fallback: serve index.html for all unhandled requests (SPA routing)
+// Fallback: serve the CSR entrypoint for all unhandled requests (SPA routing)
 app.use((req, res) => {
-  const indexPath = join(browserDistFolder, 'index.html');
+  const indexPath = join(browserDistFolder, 'index.csr.html');
   res.sendFile(indexPath, (err) => {
     if (err) {
       res.status(404).send('Not found');

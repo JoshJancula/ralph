@@ -72,6 +72,8 @@ describe('NavService - Route-Driven Navigation', () => {
       expect(service.activeRoot()).toBe('plans');
       expect(service.activePath()).toBe('PLAN2');
       expect(service.mode()).toBe('hub');
+      expect(router.url).toContain('/plans');
+      expect(router.parseUrl(router.url).queryParams['path']).toBe('PLAN2');
     });
 
     it('navigate to root with path and file updates all signals', async () => {
@@ -86,6 +88,8 @@ describe('NavService - Route-Driven Navigation', () => {
       expect(service.activePath()).toBe('PLAN2');
       expect(service.activeFile()).toBe('runner.log');
       expect(service.mode()).toBe('file');
+      expect(router.parseUrl(router.url).queryParams['path']).toBe('PLAN2');
+      expect(router.parseUrl(router.url).queryParams['file']).toBe('runner.log');
     });
   });
 
@@ -101,6 +105,7 @@ describe('NavService - Route-Driven Navigation', () => {
       expect(service.activeRoot()).toBe('logs');
       expect(service.activeFile()).toBe('notes.md');
       expect(service.mode()).toBe('file');
+      expect(router.parseUrl(router.url).queryParams['file']).toBe('notes.md');
     });
 
     it('handles direct URL to nested file', async () => {
@@ -115,6 +120,7 @@ describe('NavService - Route-Driven Navigation', () => {
       expect(service.activePath()).toBe('PLAN2');
       expect(service.activeFile()).toBe('docs/notes.md');
       expect(service.mode()).toBe('file');
+      expect(router.parseUrl(router.url).queryParams['file']).toBe('docs/notes.md');
     });
 
     it('handles URL with encoded special characters', async () => {

@@ -1,5 +1,5 @@
-import { Injectable, inject, signal } from '@angular/core';
-import { NavigationEnd, Router, UrlSegment } from '@angular/router';
+import { Injectable, inject, signal, effect } from '@angular/core';
+import { NavigationEnd, Router } from '@angular/router';
 import { filter } from 'rxjs';
 
 @Injectable({
@@ -11,11 +11,29 @@ export class NavService {
   private readonly activePathSignal = signal<string | null>(null);
   private readonly activeFileSignal = signal<string | null>(null);
   private readonly modeSignal = signal<'hub' | 'file'>('hub');
+  private initialized = false;
 
   readonly activeRoot = this.activeRootSignal.asReadonly();
   readonly activePath = this.activePathSignal.asReadonly();
   readonly activeFile = this.activeFileSignal.asReadonly();
   readonly mode = this.modeSignal.asReadonly();
+
+  constructor() {
+    // Listen to route changes and update state
+    this.router.events
+      .pipe(filter((event) => event instanceof NavigationEnd))
+      .subscribe(() => {
+        this.updateStateFromRoute();
+      });
+
+    // Initialize from current route
+    effect(() => {
+      if (!this.initialized) {
+        this.updateStateFromRoute();
+        this.initialized = true;
+      }
+    });
+  }
 
   navigate(root: string, dirPath?: string | null, file?: string | null): void {
     const normalizedRoot = root?.trim();
@@ -23,55 +41,41 @@ export class NavService {
       return;
     }
 
-    const targetUrl = this.buildUrl(normalizedRoot, dirPath, file);
     this.setState(normalizedRoot, this.normalizePath(dirPath), this.normalizePath(file));
+
+    const targetUrl = this.buildUrl(normalizedRoot, dirPath, file);
     void this.router.navigateByUrl(targetUrl).catch(() => {});
   }
 
   refresh(): void {
-    this.updateStateFromUrl(this.router.url);
+    this.updateStateFromRoute();
   }
 
-  private buildUrl(root: string, dirPath?: string | null, file?: string | null): string {
-    const segments = [encodeURIComponent(root)];
-    const normalizedPath = this.normalizePath(dirPath);
-    if (normalizedPath) {
-      segments.push('path', encodeURIComponent(normalizedPath));
-    }
-    const normalizedFile = this.normalizePath(file);
-    if (normalizedFile) {
-      segments.push('file', encodeURIComponent(normalizedFile));
-    }
+  private updateStateFromRoute(): void {
+    const urlTree = this.router.parseUrl(this.router.url);
+    const rootSegments = urlTree.root.children['primary']?.segments ?? [];
+    const root = rootSegments.length > 0 ? this.decodeSegment(rootSegments[0].path) : '';
 
-    return `/${segments.join('/')}`;
-  }
-
-  private updateStateFromUrl(url: string): void {
-    if (!url || url === '/') {
-      this.resetState();
+    const queryPath = this.normalizePath(urlTree.queryParams['path']);
+    const queryFile = this.normalizePath(urlTree.queryParams['file']);
+    if (queryPath !== null || queryFile !== null) {
+      this.setState(root || 'plans', queryPath, queryFile);
       return;
     }
 
-    const tree = this.router.parseUrl(url);
-    const segments = tree.root.children['primary']?.segments ?? [];
-    if (segments.length === 0) {
-      this.resetState();
-      return;
-    }
-
-    const rootSegment = segments[0];
-    const root = rootSegment?.path ?? null;
     if (!root) {
-      this.resetState();
+      this.setState('plans', null, null);
       return;
     }
+
+    const segments = rootSegments.map((segment) => this.decodeSegment(segment.path));
 
     let dirPath: string | null = null;
     let file: string | null = null;
     let index = 1;
 
     while (index < segments.length) {
-      const marker = segments[index].path;
+      const marker = segments[index];
       if (marker === 'path' && index + 1 < segments.length) {
         dirPath = this.decodeSegment(segments[index + 1]);
         index += 2;
@@ -88,11 +92,19 @@ export class NavService {
     this.setState(root, dirPath, file);
   }
 
-  private resetState(): void {
-    this.activeRootSignal.set(null);
-    this.activePathSignal.set(null);
-    this.activeFileSignal.set(null);
-    this.modeSignal.set('hub');
+  private buildUrl(root: string, dirPath?: string | null, file?: string | null): string {
+    const queryParams: Record<string, string> = {};
+    const normalizedPath = this.normalizePath(dirPath);
+    if (normalizedPath) {
+      queryParams['path'] = normalizedPath;
+    }
+    const normalizedFile = this.normalizePath(file);
+    if (normalizedFile) {
+      queryParams['file'] = normalizedFile;
+    }
+
+    const tree = this.router.createUrlTree([`/${root}`], { queryParams });
+    return this.router.serializeUrl(tree);
   }
 
   private setState(root: string | null, dirPath: string | null, file: string | null): void {
@@ -109,11 +121,11 @@ export class NavService {
     return value.length === 0 ? null : value;
   }
 
-  private decodeSegment(segment: UrlSegment): string {
+  private decodeSegment(segment: string): string {
     try {
-      return decodeURIComponent(segment.path);
+      return decodeURIComponent(segment);
     } catch {
-      return segment.path;
+      return segment;
     }
   }
 }

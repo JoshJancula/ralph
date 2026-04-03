@@ -1,5 +1,6 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute, Router } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 
@@ -136,13 +137,18 @@ export class PlanHubComponent implements OnInit {
   loading = false;
   error = '';
 
-  constructor(
-    private apiService: ApiService,
-    private navService: NavService
-  ) {}
+  private apiService = inject(ApiService);
+  private navService = inject(NavService);
+  private route = inject(ActivatedRoute);
+  private router = inject(Router);
 
   ngOnInit(): void {
     this.fetchPlans();
+    
+    // Subscribe to route params to handle direct navigation
+    this.route.params.subscribe(() => {
+      this.navService.refresh();
+    });
   }
 
   fetchPlans(): void {

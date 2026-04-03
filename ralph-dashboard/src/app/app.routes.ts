@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 
 export const routes: Routes = [
   {
@@ -6,8 +7,29 @@ export const routes: Routes = [
     pathMatch: 'full',
     redirectTo: 'plans',
   },
-  // Wildcard route matches any path. NavService parses the URL client-side to extract state.
-  // The redirectTo ensures the router accepts the navigation, but actual content is driven by NavService signals.
+  {
+    path: 'plans',
+    component: PlanHubComponent,
+  },
+  // Dynamic routes with optional path and file segments
+  // Order matters: most specific routes first
+  {
+    path: ':root/path/:path/file/:file',
+    component: PlanHubComponent,
+  },
+  {
+    path: ':root/file/:file',
+    component: PlanHubComponent,
+  },
+  {
+    path: ':root/path/:path',
+    component: PlanHubComponent,
+  },
+  {
+    path: ':root',
+    component: PlanHubComponent,
+  },
+  // Wildcard route - redirect to plans
   {
     path: '**',
     redirectTo: 'plans',

@@ -63,15 +63,13 @@ describe('NavService', () => {
     expect(service.activePath()).toBe('PLAN2');
     expect(service.activeFile()).toBe('plan-runner.log');
     expect(router.url).toContain('/logs');
-    expect(router.url).toContain('file');
+    expect(router.url).toContain('path=PLAN2');
+    expect(router.url).toContain('file=plan-runner.log');
   });
 
-  it.skip('direct navigation updates state from URL', async () => {
-    // Skipped: NavService doesn't subscribe to router events, so direct router.navigateByUrl() calls
-    // bypass the service. This test documents expected behavior - proper back/forward support
-    // would require NavService to listen to router events (NavigationEnd).
+  it('direct navigation updates state from URL', async () => {
     const service = TestBed.inject(NavService);
-    await router.navigateByUrl('/alpha/path/beta/file/gamma.txt');
+    await router.navigateByUrl('/alpha?path=beta&file=gamma.txt');
 
     expect(service.activeRoot()).toBe('alpha');
     expect(service.activePath()).toBe('beta');
@@ -102,8 +100,8 @@ describe('NavService', () => {
 
   it('refresh re-parses the current URL', () => {
     const service = TestBed.inject(NavService);
-    const spy = vi.spyOn(service as any, 'updateStateFromUrl' as any);
+    const spy = vi.spyOn(service as any, 'updateStateFromRoute' as any);
     service.refresh();
-    expect(spy).toHaveBeenCalledWith(router.url);
+    expect(spy).toHaveBeenCalled();
   });
 });

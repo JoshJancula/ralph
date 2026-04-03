@@ -7,17 +7,19 @@ import { AppComponent } from './app.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 import { NavService } from './services/nav.service';
 
-const testRoutes = [
-  { path: '', redirectTo: 'plans', pathMatch: 'full' },
-  { path: '**', redirectTo: 'plans' },
-];
-
 @Component({
   selector: 'ralph-plan-hub',
   standalone: true,
   template: '',
 })
 class PlanHubStubComponent {}
+
+const testRoutes = [
+  { path: '', redirectTo: 'plans', pathMatch: 'full' },
+  { path: 'plans', component: PlanHubStubComponent },
+  { path: ':root', component: PlanHubStubComponent },
+  { path: '**', component: PlanHubStubComponent },
+];
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -102,7 +104,7 @@ describe('AppComponent', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it('with activeFile null: placeholder shown; log-viewer and file-viewer not rendered', async () => {
+  it('with no active file: plan hub is shown and file viewers are not rendered', async () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     flushOutstandingHttp(httpMock);
@@ -110,7 +112,7 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.content .empty-state')).toBeTruthy();
+    expect(el.querySelector('ralph-plan-hub')).toBeTruthy();
     expect(el.querySelector('ralph-log-viewer')).toBeNull();
     expect(el.querySelector('app-file-viewer')).toBeNull();
   });

@@ -1,11 +1,10 @@
 import { CommonModule } from '@angular/common';
-import { AfterViewChecked, Component, inject, signal } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 import { WorkspaceSidebarComponent } from './components/workspace-sidebar/workspace-sidebar.component';
 import { NavService } from './services/nav.service';
-import mermaid from 'mermaid';
 
 @Component({
   selector: 'app-root',
@@ -20,11 +19,9 @@ import mermaid from 'mermaid';
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.scss'],
 })
-export class AppComponent implements AfterViewChecked {
+export class AppComponent {
   readonly nav = inject(NavService);
   readonly isLightTheme = signal(false);
-  private mermaidInitialized = false;
-  private mermaidTheme: 'base' | 'dark' | null = null;
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
@@ -50,39 +47,6 @@ export class AppComponent implements AfterViewChecked {
       this.applyThemeClass(next);
     }
     this.storeThemePreference(next);
-    this.resetMermaidRendering();
-  }
-
-  ngAfterViewChecked(): void {
-    this.renderMermaidDiagramsIfNeeded();
-  }
-
-  private renderMermaidDiagramsIfNeeded(): void {
-    if (typeof document === 'undefined') {
-      return;
-    }
-
-    if (!document.querySelector('.mermaid')) {
-      return;
-    }
-
-    const nextTheme = this.isLightTheme() ? 'base' : 'dark';
-    if (!this.mermaidInitialized || this.mermaidTheme !== nextTheme) {
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: 'loose',
-        theme: nextTheme,
-      });
-      this.mermaidInitialized = true;
-      this.mermaidTheme = nextTheme;
-    }
-
-    mermaid.contentLoaded();
-  }
-
-  private resetMermaidRendering(): void {
-    this.mermaidInitialized = false;
-    this.mermaidTheme = null;
   }
 
   private readStoredThemePreference(): boolean | undefined {
