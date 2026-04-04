@@ -28,6 +28,10 @@
   --surface-highlight: rgba(255, 255, 255, 0.12);
   --topbar-bg: rgba(9, 14, 26, 0.7);
   --code-bg: #0c1421;
+  --syntax-comment: #8b949e;
+  --syntax-keyword: #79c0ff;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #f2cc60;
   --table-header-bg: rgba(255, 255, 255, 0.04);
   --table-row-hover: rgba(255, 255, 255, 0.08);
   --scrollbar-thumb: rgba(255, 255, 255, 0.08);
@@ -62,6 +66,10 @@ body.theme-light {
   --surface-highlight: rgba(255, 255, 255, 0.35);
   --topbar-bg: rgba(255, 255, 255, 0.9);
   --code-bg: #f3f4f6;
+  --syntax-comment: #6b7280;
+  --syntax-keyword: #0969da;
+  --syntax-string: #0f766e;
+  --syntax-number: #b45309;
   --table-header-bg: #e1e4e8;
   --table-row-hover: rgba(0, 0, 0, 0.04);
   --scrollbar-thumb: rgba(15, 23, 42, 0.2);

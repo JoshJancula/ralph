@@ -5,40 +5,46 @@ function escapeHtml(input: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/"/g, '&quot;');
+}
+
+function replaceOutsideTags(
+  html: string,
+  pattern: RegExp,
+  replacement: (match: string, ...groups: string[]) => string,
+): string {
+  return html
+    .split(/(<[^>]+>)/g)
+    .map((part) => (part.startsWith('<') ? part : part.replace(pattern, replacement)))
+    .join('');
 }
 
 function basicHighlight(code: string): string {
   // First, escape HTML entities in the code
   let result = escapeHtml(code);
 
-  // Apply syntax highlighting - order matters to avoid conflicts
-  // Use single quotes for class attributes to avoid matching the quotes we add
-
-  // Comments first (before strings, since comments can contain quotes)
-  result = result.replace(
+  // Apply syntax highlighting while leaving previously inserted span tags alone.
+  result = replaceOutsideTags(
+    result,
     /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g,
-    '<span class=\'token_comment\'>$1</span>',
+    (match) => `<span class='token_comment'>${match}</span>`,
   );
 
-  // Strings (single, double, and template literals)
-  result = result.replace(
+  result = replaceOutsideTags(
+    result,
     /("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|`[^`\\]*(?:\\.[^`\\]*)*`)/g,
-    '<span class=\'token_string\'>$1</span>',
+    (match) => `<span class='token_string'>${match}</span>`,
   );
 
-  // Keywords
-  result = result.replace(
+  result = replaceOutsideTags(
+    result,
     /\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|class|extends|new|this|super|import|export|from|as|interface|type|implements|public|private|protected|readonly|async|await)\b/g,
-    '<span class=\'token_keyword\'>$1</span>',
+    (match) => `<span class='token_keyword'>${match}</span>`,
   );
 
-  // Numbers
-  result = result.replace(
-    /(\b\d+(?:\.\d+)?\b)/g,
-    '<span class=\'token_number\'>$1</span>',
-  );
+  result = replaceOutsideTags(result, /(\b\d+(?:\.\d+)?\b)/g, (match) => {
+    return `<span class='token_number'>${match}</span>`;
+  });
 
   return result;
 }

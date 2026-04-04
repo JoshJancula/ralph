@@ -59,6 +59,18 @@ More text
     expect(result).not.toContain('<div class="mermaid">');
     expect(result).toContain('class="hljs language-js"');
   });
+
+  it('preserves apostrophes in highlighted code instead of escaping them as entities', () => {
+    const source = `\`\`\`ts
+const label = 'app-sidebar-tree';
+\`\`\``;
+
+    const result = markdownToHtml(source);
+
+    expect(result).toContain("'app-sidebar-tree'");
+    expect(result).not.toContain('&#39;');
+    expect(result).not.toContain('&amp;#39;');
+  });
 });
 
 describe('isMermaidBlock', () => {
