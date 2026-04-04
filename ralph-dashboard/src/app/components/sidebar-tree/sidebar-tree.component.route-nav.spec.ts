@@ -152,10 +152,8 @@ describe('SidebarTreeComponent - Route-Driven Navigation', () => {
       const el = fixture.nativeElement as HTMLElement;
       const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
 
-      // Click on the expander (+/-) specifically
-      const toggle = dirRow.querySelector('.tree-expander') as HTMLElement;
-      expect(toggle).toBeTruthy();
-      toggle.click();
+      // Click on the directory row to expand
+      dirRow.click();
       tick(0);
 
       const childReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('path') === 'PLAN2/docs/');
@@ -212,8 +210,9 @@ describe('SidebarTreeComponent - Route-Driven Navigation', () => {
 
       const el = fixture.nativeElement as HTMLElement;
       const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
-      const toggle = dirRow.querySelector('.tree-expander') as HTMLElement;
-      toggle.click();
+
+      // Click on the directory row to expand
+      dirRow.click();
       tick(0);
 
       const childReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('path') === 'PLAN2/docs/');

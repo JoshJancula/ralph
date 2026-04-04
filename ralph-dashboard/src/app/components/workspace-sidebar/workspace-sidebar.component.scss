@@ -43,8 +43,8 @@
 
 .root-summary {
   display: grid;
-  grid-template-columns: 20px 1fr auto;
-  align-items: flex-start;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
   gap: 0.4rem;
 }
 
@@ -124,17 +124,6 @@
   line-height: 1.2;
   color: var(--text-muted);
   font-weight: 500;
-}
-
-.active-pill {
-  font-size: 0.65rem;
-  letter-spacing: 0.04em;
-  color: var(--accent-active);
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.2rem 0.5rem;
-  text-transform: uppercase;
 }
 
 .root-tree {

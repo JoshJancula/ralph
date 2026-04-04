@@ -2,6 +2,7 @@ import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { LogViewerComponent } from './log-viewer.component';
+import { NavService } from '../../services/nav.service';
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -10,8 +11,13 @@ function requestPath(url: string): string {
 
 describe('LogViewerComponent', () => {
   let httpMock: HttpTestingController;
+  let originalScrollIntoView: typeof Element.prototype.scrollIntoView;
 
   beforeEach(async () => {
+    // Mock scrollIntoView since it's not available in jsdom
+    originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
+
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [LogViewerComponent, HttpClientTestingModule],
@@ -21,6 +27,8 @@ describe('LogViewerComponent', () => {
 
   afterEach(() => {
     httpMock.verify();
+    // Restore original scrollIntoView
+    Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
   function expectFileRequest(root: string, path: string, offset: string): TestRequest {
@@ -305,5 +313,197 @@ describe('LogViewerComponent', () => {
     fixture.destroy();
 
     tick(2000);
+  }));
+
+  it('viewPlanFile navigates to plan file', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'PLAN2/run-001/output.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'PLAN2/run-001/output.log', '0');
+    req.flush({ content: 'log content', size: 11, offset: 0, nextOffset: 11 });
+    tick();
+    fixture.detectChanges();
+
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.componentInstance.viewPlanFile();
+
+    expect(spy).toHaveBeenCalledWith('plans', 'PLAN2', 'PLAN2.md');
+  }));
+
+  it('togglePrettyMode switches between raw and pretty view', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: '# Header\nText', size: 13, offset: 0, nextOffset: 13 });
+    tick();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.prettyMode).toBe(false);
+    fixture.componentInstance.togglePrettyMode();
+    expect(fixture.componentInstance.prettyMode).toBe(true);
+  }));
+
+  it('nextMatch navigates to next search match', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: 'foo line\nbar line\nfoo again', size: 25, offset: 0, nextOffset: 25 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.handleSearchInput('foo');
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.matchLineIndices).toEqual([0, 2]);
+    expect(fixture.componentInstance.currentMatchIndex).toBe(0);
+
+    fixture.componentInstance.nextMatch();
+    expect(fixture.componentInstance.currentMatchIndex).toBe(1);
+
+    fixture.componentInstance.nextMatch();
+    expect(fixture.componentInstance.currentMatchIndex).toBe(0); // wraps around
+  });
+
+  it('prevMatch navigates to previous search match', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: 'foo line\nbar line\nfoo again', size: 25, offset: 0, nextOffset: 25 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.handleSearchInput('foo');
+    fixture.detectChanges();
+
+    fixture.componentInstance.nextMatch();
+    fixture.componentInstance.nextMatch();
+    expect(fixture.componentInstance.currentMatchIndex).toBe(0);
+
+    fixture.componentInstance.prevMatch();
+    expect(fixture.componentInstance.currentMatchIndex).toBe(1); // wraps around
+  });
+
+  it('filteredPrettyHtml highlights matches in pretty mode', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: 'hello world', size: 11, offset: 0, nextOffset: 11 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.handleSearchInput('world');
+    fixture.componentInstance.togglePrettyMode();
+    fixture.detectChanges();
+
+    const html = fixture.componentInstance.filteredPrettyHtml;
+    expect(html).toContain('<mark>world</mark>');
+  });
+
+  it('matchCount returns empty string when no search', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: 'content', size: 7, offset: 0, nextOffset: 7 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.matchCount).toBe('');
+  });
+
+  it('matchCount returns match indicator when searching', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: 'foo bar foo baz foo', size: 17, offset: 0, nextOffset: 17 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.handleSearchInput('foo');
+    fixture.detectChanges();
+
+    // matchCount shows "currentIndex of totalMatches" for lines with matches
+    // Our search finds 'foo' which appears in line 0 (foo bar foo baz foo)
+    // and it appears multiple times in that line
+    expect(fixture.componentInstance.matchCount).toMatch(/^\d+ of \d+$/);
+  });
+
+  it('planDirectory extracts directory from file path', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'PLAN2/run-001/output.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'PLAN2/run-001/output.log', '0');
+    req.flush({ content: 'log', size: 3, offset: 0, nextOffset: 3 });
+    tick();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.planDirectory).toBe('PLAN2');
+  }));
+
+  it('planDirectory returns null for empty path', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = '';
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.planDirectory).toBeNull();
+  }));
+
+  it('escapeRegex escapes special regex characters', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    // Access the private method through component instance
+    const escaped = (fixture.componentInstance as any).escapeRegex('[.*+?^${}()|[\\]');
+    expect(escaped).toBe('\\[\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\\\\\]');
+  });
+
+  it('ngOnChanges reloads file when root or filePath changes', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req1 = expectFileRequest('logs', 'app.log', '0');
+    req1.flush({ content: 'first', size: 5, offset: 0, nextOffset: 5 });
+    tick();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.content).toBe('first');
+
+    // Change file path
+    fixture.componentInstance.filePath = 'other.log';
+    fixture.componentInstance.ngOnChanges({
+      filePath: { currentValue: 'other.log', previousValue: 'app.log', firstChange: false, isFirstChange: () => false }
+    });
+    fixture.detectChanges();
+
+    const req2 = expectFileRequest('logs', 'other.log', '0');
+    req2.flush({ content: 'second', size: 6, offset: 0, nextOffset: 6 });
+    tick();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.content).toBe('second');
   }));
 });

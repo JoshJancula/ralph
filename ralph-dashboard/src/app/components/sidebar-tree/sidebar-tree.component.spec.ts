@@ -91,10 +91,8 @@ describe('SidebarTreeComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
     
-    // Click on the expander (+/-) specifically
-    const toggle = dirRow.querySelector('.tree-expander') as HTMLElement;
-    expect(toggle).toBeTruthy();
-    toggle.click();
+    // Click on the directory row to expand
+    dirRow.click();
     flushMicrotaskQueue();
 
     flushListing('logs', 'PLAN2/docs/', [
@@ -134,7 +132,6 @@ describe('SidebarTreeComponent', () => {
   it('highlights the active file', fakeAsync(async () => {
     const fixture = TestBed.createComponent(SidebarTreeComponent);
     const nav = TestBed.inject(NavService);
-    nav.navigate('logs', '', 'PLAN2/readme.md');
 
     fixture.componentInstance.root = 'logs';
     fixture.componentInstance.path = 'PLAN2';
@@ -144,6 +141,11 @@ describe('SidebarTreeComponent', () => {
     flushListing('logs', 'PLAN2', [
       { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 1, mtime: 0 },
     ]);
+    fixture.detectChanges();
+
+    // Navigate after the component is initialized and data is loaded
+    nav.navigate('logs', '', 'PLAN2/readme.md');
+    tick();
     fixture.detectChanges();
 
     const selected = (fixture.nativeElement as HTMLElement).querySelectorAll('.tree-row.selected');
@@ -186,10 +188,9 @@ describe('SidebarTreeComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
-    const toggle = dirRow.querySelector('.tree-expander') as HTMLElement;
-    
-    // Expand
-    toggle.click();
+
+    // Expand by clicking the directory row
+    dirRow.click();
     flushMicrotaskQueue();
     flushListing('logs', 'PLAN2/docs/', [
       { name: 'nested.md', path: 'PLAN2/docs/nested.md', type: 'file', size: 1, mtime: 0 },
@@ -199,11 +200,12 @@ describe('SidebarTreeComponent', () => {
     // Should have 2 rows now
     expect(el.querySelectorAll('.tree-row').length).toBe(2);
 
-    // Collapse
-    toggle.click();
+    // Collapse by clicking the directory row again
+    const dirRowAfterExpand = el.querySelectorAll('.tree-row')[0] as HTMLElement;
+    dirRowAfterExpand.click();
     tick();
     fixture.detectChanges();
-    
+
     // Should be back to 1 row
     expect(el.querySelectorAll('.tree-row').length).toBe(1);
   }));
@@ -220,8 +222,9 @@ describe('SidebarTreeComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
-    const toggle = dirRow.querySelector('.tree-expander') as HTMLElement;
-    toggle.click();
+
+    // Click on the directory row to expand
+    dirRow.click();
     flushMicrotaskQueue();
 
     const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('path') === 'PLAN2/docs/');
@@ -246,5 +249,120 @@ describe('SidebarTreeComponent', () => {
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.error-message')?.textContent?.trim()).toBe('Failed to load directory listing');
+  }));
+
+  it('autoOpen opens first file when no active file', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.path = 'PLAN2';
+    fixture.componentInstance.autoOpen = true;
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+    flushListing('logs', 'PLAN2', [
+      { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 1, mtime: 0 },
+    ]);
+    fixture.detectChanges();
+
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md');
+  }));
+
+  it('autoOpen expands first directory when no files exist', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.path = 'PLAN2';
+    fixture.componentInstance.autoOpen = true;
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+    flushListing('logs', 'PLAN2', [
+      { name: 'docs', path: 'PLAN2/docs/', type: 'dir', size: 0, mtime: 0 },
+    ]);
+    fixture.detectChanges();
+
+    // Should expand the directory and fetch its contents
+    const childReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2/docs/',
+    );
+    childReq.flush({
+      root: 'logs',
+      path: 'PLAN2/docs/',
+      parent: 'PLAN2',
+      entries: [
+        { name: 'nested.md', path: 'PLAN2/docs/nested.md', type: 'file', size: 1, mtime: 0 },
+      ],
+    });
+    fixture.detectChanges();
+
+    // Should navigate to the first file found in subdirectory
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/docs/nested.md');
+  }));
+
+  it('autoOpen does nothing when active file already exists', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    
+    // Set up the component first
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.path = 'PLAN2';
+    fixture.componentInstance.autoOpen = true;
+    fixture.detectChanges();
+
+    // Navigate AFTER component is set up but BEFORE data loads
+    nav.navigate('logs', '', 'PLAN2/readme.md');
+    const spy = vi.spyOn(nav, 'navigate');
+
+    flushMicrotaskQueue();
+    flushListing('logs', 'PLAN2', [
+      { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 1, mtime: 0 },
+    ]);
+    fixture.detectChanges();
+
+    // Should not navigate again since active file already exists
+    expect(spy).not.toHaveBeenCalled();
+  }));
+
+  it('autoOpen does nothing when autoOpen is false', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.path = 'PLAN2';
+    fixture.componentInstance.autoOpen = false;
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+    flushListing('logs', 'PLAN2', [
+      { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 1, mtime: 0 },
+    ]);
+    fixture.detectChanges();
+
+    expect(spy).not.toHaveBeenCalled();
+  }));
+
+  it('ngOnInit does nothing when root is empty', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.componentInstance.root = '';
+    fixture.componentInstance.path = '';
+    fixture.componentInstance.autoOpen = true;
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+
+    // No API call should be made when root is empty
+    expect(spy).not.toHaveBeenCalled();
   }));
 });

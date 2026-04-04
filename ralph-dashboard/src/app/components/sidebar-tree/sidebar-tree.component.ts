@@ -177,6 +177,8 @@ export class SidebarTreeComponent implements OnInit {
   }
 
   indentPx(node: TreeNode): number {
-    return node.depth * 12 + 6;
+    const baseIndent = node.depth * 12 + 6;
+    const marginOffset = 4; // account for the left margin so nodes stay aligned
+    return Math.max(0, baseIndent - marginOffset);
   }
 }

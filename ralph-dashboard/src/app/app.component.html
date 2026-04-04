@@ -1,5 +1,15 @@
 <div class="app-shell">
   <header class="topbar">
+    <button
+      type="button"
+      class="hamburger-btn"
+      aria-label="Toggle navigation"
+      (click)="toggleSidebar()"
+    >
+      <span class="bar"></span>
+      <span class="bar"></span>
+      <span class="bar"></span>
+    </button>
     <div class="brand">
       <div class="title">Workspace Explorer</div>
     </div>
@@ -12,8 +22,13 @@
     </div>
   </header>
 
-  <div class="layout" data-scroll-model="page">
+  <div class="layout" data-scroll-model="page" [class.sidebar-open]="sidebarOpen()">
     <app-workspace-sidebar class="sidebar"></app-workspace-sidebar>
+    <div
+      class="sidebar-backdrop"
+      *ngIf="sidebarOpen()"
+      (click)="closeSidebar()"
+    ></div>
 
     <main class="content">
       @if (nav.activeRoot(); as root) {

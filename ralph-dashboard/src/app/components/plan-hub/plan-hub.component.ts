@@ -1,7 +1,7 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
-import { ApiService } from '../../services/api.service';
+import { ApiService, ListingEntry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 
 interface PlanItem {
@@ -184,7 +184,42 @@ export class PlanHubComponent implements OnInit {
   }
 
   viewLogs(item: PlanItem): void {
-    // Navigate to the logs for this plan
-    this.navService.navigate('logs', item.path, '');
+    const dir = item.path.replace(/\/$/, '');
+
+    this.apiService.fetchListing('logs', dir).subscribe({
+      next: (listing) => {
+        const logFile = this.findMostRecentLog(listing.entries, dir);
+        if (logFile) {
+          this.navService.navigate('logs', null, logFile);
+          return;
+        }
+
+        const subdirs = listing.entries
+          .filter((e) => e.type === 'dir')
+          .sort((a, b) => b.mtime - a.mtime);
+
+        if (subdirs.length === 0) {
+          this.navService.navigate('logs', dir, null);
+          return;
+        }
+
+        const subdirPath = `${dir}/${subdirs[0].name}`;
+        this.apiService.fetchListing('logs', subdirPath).subscribe({
+          next: (sub) => {
+            const found = this.findMostRecentLog(sub.entries, subdirPath);
+            this.navService.navigate('logs', null, found ?? null);
+          },
+          error: () => this.navService.navigate('logs', dir, null),
+        });
+      },
+      error: () => this.navService.navigate('logs', dir, null),
+    });
+  }
+
+  private findMostRecentLog(entries: ListingEntry[], prefix: string): string | null {
+    const logs = entries
+      .filter((e) => e.type === 'file' && e.name.endsWith('.log'))
+      .sort((a, b) => b.mtime - a.mtime);
+    return logs.length > 0 ? `${prefix}/${logs[0].name}` : null;
   }
 }

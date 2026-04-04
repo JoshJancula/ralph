@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject, signal } from '@angular/core';
+import { Component, effect, inject, signal } from '@angular/core';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
@@ -22,6 +22,7 @@ import { NavService } from './services/nav.service';
 export class AppComponent {
   readonly nav = inject(NavService);
   readonly isLightTheme = signal(false);
+  readonly sidebarOpen = signal(false);
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
@@ -33,6 +34,13 @@ export class AppComponent {
     if (typeof document !== 'undefined') {
       this.applyThemeClass(initialTheme);
     }
+
+    effect(() => {
+      const activeFile = this.nav.activeFile();
+      if (activeFile) {
+        this.sidebarOpen.set(false);
+      }
+    });
   }
 
   refresh(): void {
@@ -90,5 +98,13 @@ export class AppComponent {
     }
 
     return window.matchMedia('(prefers-color-scheme: light)').matches;
+  }
+
+  toggleSidebar(): void {
+    this.sidebarOpen.update((open) => !open);
+  }
+
+  closeSidebar(): void {
+    this.sidebarOpen.set(false);
   }
 }

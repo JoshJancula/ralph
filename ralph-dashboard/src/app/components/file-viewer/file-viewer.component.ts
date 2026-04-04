@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { ApiService, FileChunk } from '../../services/api.service';
+import { ApiService, FileChunk, ListingEntry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 
@@ -107,7 +107,88 @@ export class FileViewerComponent {
   viewLogs(): void {
     const dir = this.planDirectory;
     if (!dir) return;
-    this.nav.navigate('logs', dir, null);
+
+    this.api.fetchListing('logs', dir).subscribe({
+      next: (listing) => {
+        const logFile = this.findMostRecentLog(listing.entries, dir);
+        if (logFile) {
+          this.nav.navigate('logs', null, logFile);
+          return;
+        }
+
+        // Look one level deeper in subdirectories (e.g. run-xxx/output.log)
+        const subdirs = listing.entries
+          .filter((e) => e.type === 'dir')
+          .sort((a, b) => b.mtime - a.mtime);
+
+        if (subdirs.length === 0) {
+          this.nav.navigate('logs', dir, null);
+          return;
+        }
+
+        const subdirPath = `${dir}/${subdirs[0].name}`;
+        this.api.fetchListing('logs', subdirPath).subscribe({
+          next: (sub) => {
+            const found = this.findMostRecentLog(sub.entries, subdirPath);
+            this.nav.navigate('logs', null, found ?? null);
+          },
+          error: () => this.nav.navigate('logs', dir, null),
+        });
+      },
+      error: () => this.nav.navigate('logs', dir, null),
+    });
+  }
+
+  private findMostRecentLog(entries: ListingEntry[], prefix: string): string | null {
+    const logs = entries
+      .filter((e) => e.type === 'file' && e.name.endsWith('.log'))
+      .sort((a, b) => b.mtime - a.mtime);
+    return logs.length > 0 ? `${prefix}/${logs[0].name}` : null;
+  }
+
+  handleContentClick(event: MouseEvent): void {
+    const anchor = (event.target as HTMLElement).closest('a');
+    if (!anchor) return;
+
+    const href = anchor.getAttribute('href');
+    if (
+      !href ||
+      href.startsWith('http://') ||
+      href.startsWith('https://') ||
+      href.startsWith('//') ||
+      href.startsWith('mailto:')
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+
+    // Strip fragment
+    const [filePart] = href.split('#');
+    if (!filePart) return;
+
+    const currentFile = this.filePathSignal();
+    const currentRoot = this.rootSignal();
+
+    // Resolve the relative path against the current file's directory
+    const currentDir = currentFile.split('/').filter(Boolean).slice(0, -1);
+    const targetParts = filePart.startsWith('/')
+      ? filePart.slice(1).split('/')
+      : [...currentDir, ...filePart.split('/')];
+
+    const resolved: string[] = [];
+    for (const part of targetParts) {
+      if (part === '..') {
+        resolved.pop();
+      } else if (part !== '.' && part !== '') {
+        resolved.push(part);
+      }
+    }
+
+    const targetPath = resolved.join('/');
+    if (!targetPath) return;
+
+    this.nav.navigate(currentRoot, null, targetPath);
   }
 
   get runSnippet(): string | null {

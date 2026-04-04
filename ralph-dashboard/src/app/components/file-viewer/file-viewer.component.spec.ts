@@ -3,6 +3,8 @@ import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@an
 import { TestBed } from '@angular/core/testing';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
+import { NavService } from '../../services/nav.service';
+import { RouterTestingModule } from '@angular/router/testing';
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -15,7 +17,7 @@ describe('FileViewerComponent', () => {
   beforeEach(async () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
-      imports: [FileViewerComponent, HttpClientTestingModule],
+      imports: [FileViewerComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
     }).compileComponents();
     httpMock = TestBed.inject(HttpTestingController);
   });
@@ -172,5 +174,302 @@ describe('FileViewerComponent', () => {
     expect(fixture.componentInstance.isRendered()).toBe(true);
     expect(btn.textContent?.trim()).toBe('View source');
     expect(el.querySelector('.markdown-content')).toBeTruthy();
+  });
+
+  it('viewLogs navigates to the most recent log file', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.viewLogs();
+
+    const listReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2',
+    );
+    listReq.flush({
+      root: 'logs',
+      path: 'PLAN2',
+      parent: null,
+      entries: [
+        { name: 'output.log', path: 'PLAN2/output.log', type: 'file', size: 100, mtime: 1000 },
+      ],
+    });
+    await fixture.whenStable();
+  });
+
+  it('viewLogs looks in subdirectories when no logs at root', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.viewLogs();
+
+    const listReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2',
+    );
+    listReq.flush({
+      root: 'logs',
+      path: 'PLAN2',
+      parent: null,
+      entries: [
+        { name: 'run-001', path: 'PLAN2/run-001/', type: 'dir', size: 0, mtime: 2000 },
+      ],
+    });
+    await fixture.whenStable();
+
+    // Should fetch subdirectory listing
+    const subListReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2/run-001',
+    );
+    subListReq.flush({
+      root: 'logs',
+      path: 'PLAN2/run-001',
+      parent: 'PLAN2',
+      entries: [
+        { name: 'output.log', path: 'PLAN2/run-001/output.log', type: 'file', size: 100, mtime: 1000 },
+      ],
+    });
+    await fixture.whenStable();
+  });
+
+  it('viewLogs navigates to directory when no log file found', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.viewLogs();
+
+    const listReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2',
+    );
+    listReq.flush({
+      root: 'logs',
+      path: 'PLAN2',
+      parent: null,
+      entries: [],
+    });
+    await fixture.whenStable();
+  });
+
+  it('viewLogs handles error when listing fails', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.viewLogs();
+
+    const listReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2',
+    );
+    listReq.flush('error', { status: 500, statusText: 'Internal Server Error' });
+    await fixture.whenStable();
+  });
+
+  it('handleContentClick navigates for internal relative links', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = '[Link](./other.md)';
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    const anchor = (fixture.nativeElement as HTMLElement).querySelector('a');
+    const clickEvent = new MouseEvent('click', { bubbles: true });
+    Object.defineProperty(clickEvent, 'target', { value: anchor });
+
+    fixture.componentInstance.handleContentClick(clickEvent);
+
+    expect(spy).toHaveBeenCalledWith('plans', null, 'PLAN2/other.md');
+  });
+
+  it('handleContentClick ignores external links', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = '<a href="https://example.com">External</a>';
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    const anchor = (fixture.nativeElement as HTMLElement).querySelector('a');
+    const clickEvent = new MouseEvent('click', { bubbles: true });
+    Object.defineProperty(clickEvent, 'target', { value: anchor });
+
+    fixture.componentInstance.handleContentClick(clickEvent);
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('runSnippet returns command for plan files', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/plan.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'PLAN2/plan.md');
+    req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.runSnippet).toBe('bash $PWD/.ralph/run-plan.sh --plan plan.md');
+  });
+
+  it('runSnippet returns command for orchestration files', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'my-plan.orch.json';
+    fixture.componentInstance.root = 'orchestration-plans';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('orchestration-plans', 'my-plan.orch.json');
+    req.flush({ content: '{}', size: 2, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.runSnippet).toBe('bash $PWD/.ralph/run-orchestration.sh --plan my-plan.orch.json');
+  });
+
+  it('runSnippet returns null for unsupported file types', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'readme.txt';
+    fixture.componentInstance.root = 'docs';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('docs', 'readme.txt');
+    req.flush({ content: 'Hello', size: 5, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.runSnippet).toBeNull();
+  });
+
+  it('formatJson returns pretty-printed JSON', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.content.set('{"z":1,"a":2}');
+    const result = fixture.componentInstance.formatJson();
+    // JSON.stringify sorts keys, so we just check it's valid JSON
+    expect(JSON.parse(result)).toEqual({ a: 2, z: 1 });
+  });
+
+  it('formatJson returns original content on parse error', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.content.set('invalid json');
+    expect(fixture.componentInstance.formatJson()).toBe('invalid json');
+  });
+
+  it('isPlainText returns true for non-markdown non-JSON files', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'readme.txt';
+    expect(fixture.componentInstance.isPlainText()).toBe(true);
+  });
+
+  it('isPlainText returns false for markdown files', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'readme.md';
+    expect(fixture.componentInstance.isPlainText()).toBe(false);
+  });
+
+  it('planDirectory extracts directory from file path', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/docs/readme.md';
+    expect(fixture.componentInstance.planDirectory).toBe('PLAN2');
+  });
+
+  it('planDirectory returns null for empty path', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = '';
+    expect(fixture.componentInstance.planDirectory).toBeNull();
+  });
+
+  it('showViewLogs returns true for plans and logs root with markdown', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.root = 'plans';
+    fixture.componentInstance.filePath = 'readme.md';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('plans', 'readme.md');
+    req.flush({ content: '# Doc', size: 5, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.showViewLogs).toBe(true);
+  });
+
+  it('showViewLogs returns false for other roots', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.root = 'docs';
+    fixture.componentInstance.filePath = 'readme.md';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('docs', 'readme.md');
+    req.flush({ content: '# Doc', size: 5, offset: 0, nextOffset: 0 });
+    await fixture.whenStable();
+
+    expect(fixture.componentInstance.showViewLogs).toBe(false);
+  });
+
+  it('isJson returns true for .json files', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'config.json';
+    expect(fixture.componentInstance.isJson()).toBe(true);
+  });
+
+  it('isJson returns true for .orch.json files', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'plan.orch.json';
+    expect(fixture.componentInstance.isJson()).toBe(true);
+  });
+
+  it('isJson returns false for other files', () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'readme.txt';
+    expect(fixture.componentInstance.isJson()).toBe(false);
   });
 });
