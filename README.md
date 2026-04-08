@@ -12,7 +12,7 @@ Ralph is meant to become **part of your codebase**, not a separate app you drive
 | **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. |
 | **Orchestrator** | Optional multi-stage pipelines with checks between steps. |
 
-While plans run, logs and generated files will appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional dashboard (Python 3) installs under **`.ralph/ralph-dashboard/`** and gives you a simple local UI over plans and logs.
+While plans run, logs and generated files will appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional dashboard (Node.js/Angular) installs under **`.ralph/ralph-dashboard/`** and gives you a simple local UI over plans and logs.
 
 ## What gets installed
 
@@ -59,12 +59,25 @@ That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.
 
 ### Dashboard
 
+From the repository where Ralph is installed (the project root that contains `.ralph-workspace/`):
+
+**In this repository:**
 ```bash
-python3 -m pip install -e .ralph/ralph-dashboard
-python3 -m ralph_dashboard
+cd ralph-dashboard
+npm ci
+npm run build
+npm start
 ```
 
-By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
+**After install into another project (from the target project root):**
+```bash
+cd .ralph/ralph-dashboard
+npm install
+npm run build
+npm start
+```
+
+Use `PORT=8124 npm start` to run on a different port. By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
 
 ## Run a plan (typical commands)
 
