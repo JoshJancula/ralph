@@ -59,25 +59,15 @@ That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.
 
 ### Dashboard
 
-From the repository where Ralph is installed (the project root that contains `.ralph-workspace/`):
-
-**In this repository:**
-```bash
-cd ralph-dashboard
-npm ci
-npm run build
-npm start
-```
-
 **After install into another project (from the target project root):**
 ```bash
 cd .ralph/ralph-dashboard
-npm install
+npm ci
 npm run build
-npm start
+npm run start
 ```
 
-Use `PORT=8124 npm start` to run on a different port. By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
+Use `PORT=8124 npm run start` to run on a different port. By default the UI is at **http://127.0.0.1:8123**. It reads **`.ralph-workspace/orchestration-plans`**, **`.ralph-workspace/artifacts`**, and **`.ralph-workspace/logs`** next to your repo root.
 
 ## Run a plan (typical commands)
 
