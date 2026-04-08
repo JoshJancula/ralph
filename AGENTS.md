@@ -8,7 +8,7 @@ Ralph is a framework for organizing AI coding assistant workflows. It provides:
 - **Plan-first loop:** Markdown todo lists executed by AI assistants (Cursor, Claude Code, or Codex)
 - **Orchestration:** Multi-stage pipelines (research → design → implementation → review) with artifact handoffs
 - **Agents:** Prebuilt agent profiles for specialized work (research, architect, implementation, code-review, qa, security)
-- **Dashboard:** Optional Python UI for monitoring plan execution and artifact generation
+- **Dashboard:** Optional Node UI for monitoring plan execution and artifact generation
 
 Ralph is installed into projects via `./install.sh`. The installer copies shared scripts to `.ralph/`, runtime-specific runners to `.cursor/ralph`, `.claude/ralph`, `.codex/ralph`, `.opencode/ralph`, and agents/rules/skills to `.cursor/agents`, `.claude/agents`, `.opencode/agents`, etc.
 
@@ -60,18 +60,20 @@ Submodule, subtree, partial installs, and cleanup: [docs/INSTALL.md](docs/INSTAL
 
 Invoke **`.ralph/run-plan.sh`** with **`--plan`** (required). Pass **`--runtime`** unless **`RALPH_PLAN_RUNTIME`** is set or you rely on the interactive runtime prompt (TTY). Pass **`--workspace <path>`** for an explicit repo root; if omitted, the workspace defaults to the current working directory. The parser in `bundle/.ralph/bash-lib/run-plan-args.sh` rejects unknown arguments and does not accept positional workspace or plan paths. See [README.md](README.md) for typical commands and canonical examples.
 
-### Ralph Dashboard (Python)
+### Ralph Dashboard (Node UI)
 
 In this repository, develop and test from **`ralph-dashboard/`** at the repo root:
 
 ```bash
 cd ralph-dashboard
-python3 -m pip install -e ".[dev]"
-python3 -m pytest tests/ -v --cov=ralph_dashboard --cov-fail-under=80
-python3 server.py  # runs on http://127.0.0.1:8123
+npm install
+npm run build
+npm start
 ```
 
-After **`install.sh`** copies Ralph into another project, the dashboard lives at **`.ralph/ralph-dashboard/`**; install it with **`python3 -m pip install -e .ralph/ralph-dashboard`** from that project root, then run **`python3 -m ralph_dashboard`**.
+Use **`PORT=8124 npm start`** instead of **`npm start`** when you need a different port.
+
+After **`install.sh`** copies Ralph into another project, the dashboard lives at **`.ralph/ralph-dashboard/`**. From that project root run **`cd .ralph/ralph-dashboard && npm install`**, then **`npm run build`** and **`npm start`** (use **`PORT=8124 npm start`** to override the port).
 
 The dashboard reads plan state, logs, and artifacts from `.ralph-workspace/` and provides a UI for monitoring orchestration runs.
 
@@ -259,7 +261,7 @@ bats tests/bats/orchestration-integration.bats --filter "integration test for mu
 | `.ralph/orchestration.template.json` | Starter orchestration plan template |
 | `.ralph/plan.template` | Starter plan template |
 | `.claude/agents/README.md` | Agent configuration schema documentation |
-| `.ralph/ralph-dashboard/` (installed) or `ralph-dashboard/` (this repo) | Dashboard package; run `python3 -m ralph_dashboard` after `pip install -e` |
+| `.ralph/ralph-dashboard/` (installed) or `ralph-dashboard/` (this repo) | Dashboard package; `cd` there, then `npm install`, `npm run build`, and `npm start` |
 | `scripts/setup-test-fixtures.sh` | Test fixture generator (creates `.ralph-workspace/`) |
 | `tests/bats/*.bats` | Bats test files |
 

@@ -96,10 +96,10 @@ install_dashboard() {
   fi
   mkdir -p "$dest"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    install_log_dry "[dry-run]" "rsync -a --exclude __pycache__ --exclude '*.pyc' $src/ $dest/"
+    install_log_dry "[dry-run]" "rsync -a --exclude __pycache__ --exclude '*.pyc' --exclude='node_modules/' --exclude='dist/' --exclude='.angular/' $src/ $dest/"
     return 0
   fi
-  rsync -a --exclude '__pycache__' --exclude '*.pyc' "$src/" "$dest/"
+  rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude='node_modules/' --exclude='dist/' --exclude='.angular/' "$src/" "$dest/"
   install_log_ok "Dashboard" "$dest"
 }
 
@@ -113,7 +113,7 @@ install_ops_execute_plan
 install_configure_mcp
 
 if install_ops_should_install_dashboard; then
-  install_log_phase "Dashboard (optional Python UI)"
+  install_log_phase "Dashboard (optional Node UI)"
   install_dashboard
 fi
 
@@ -125,7 +125,7 @@ if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
   install_log_next_header "You are set. Here is what to do next."
   install_log_divider "----------------------------------------------------------------------"
   if [[ -d "$TARGET/.ralph/ralph-dashboard" ]]; then
-    install_log_next_line "Dashboard: python3 -m pip install -e .ralph/ralph-dashboard && python3 -m ralph_dashboard"
+    install_log_next_line "Dashboard: cd .ralph/ralph-dashboard && npm install && npm run build && npm start"
     install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"
   else
     install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"

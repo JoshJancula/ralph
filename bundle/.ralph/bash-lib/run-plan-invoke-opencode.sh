@@ -35,6 +35,7 @@ ralph_run_plan_invoke_opencode() {
   # Paths and flags the Python demux / tee pipeline expects in the environment.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
+  # Resolve CLI before nvm use because nvm may change PATH and break the resolved path.
   local cli="${OPENCODE_PLAN_CLI:-}"
 
   if [[ -z "$cli" ]]; then
@@ -51,8 +52,24 @@ ralph_run_plan_invoke_opencode() {
     return 1
   fi
 
+  # Store absolute path before nvm use potentially changes PATH.
+  cli="$(command -v "$cli")"
+
+  # Ensure node v22 is active so the correct opencode binary is found and used.
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$NVM_DIR/nvm.sh" --no-use 2>/dev/null
+    nvm use 22 --silent 2>/dev/null || true
+  fi
+
+  if ! command -v "$cli" &>/dev/null; then
+    echo "Error: OpenCode CLI not found at '$cli'." >&2
+    return 1
+  fi
+
   # `opencode` with no subcommand starts the TUI; headless automation uses `opencode run` (see https://opencode.ai/docs/cli).
-  local -a args=(run)
+  local -a args=(run --agent build)
   run_plan_invoke_common_add_model_flag args --model
 
   run_plan_invoke_common_add_resume_args \

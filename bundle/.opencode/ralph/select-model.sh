@@ -21,6 +21,12 @@ _opencode_list_models_from_cli() {
   (
     set +e
     set +o pipefail
+    # Load nvm and switch to node v22 if available so opencode models works
+    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh" --no-use 2>/dev/null
+    if command -v nvm >/dev/null 2>&1; then
+      nvm use 22 --silent 2>/dev/null || true
+    fi
     command -v opencode >/dev/null 2>&1 || exit 0
     opencode models 2>/dev/null | grep -E '^[a-zA-Z0-9/._:-]+$' | sort -u
   ) 2>/dev/null || true
@@ -38,7 +44,16 @@ _opencode_select_model_interactive() {
   done < <(_opencode_list_models_from_cli)
 
   if [[ ${#models[@]} -le 1 ]]; then
-    models=("auto" "anthropic/claude-sonnet-4-5" "anthropic/claude-haiku-4-5" "openai/gpt-4o" "google/gemini-2.0-flash")
+    models=(
+      "auto"
+      "opencode/big-pickle"
+      "opencode/gpt-5-nano"
+      "opencode/mimo-v2-omni-free"
+      "opencode/mimo-v2-pro-free"
+      "opencode/minimax-m2.5-free"
+      "opencode/nemotron-3-super-free"
+      "opencode/qwen3.6-plus-free"
+    )
   fi
 
   local default_index=1 i

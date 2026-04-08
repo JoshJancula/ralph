@@ -1,0 +1,44 @@
+<div class="workspace-sidebar">
+  <ul class="root-list" role="list">
+    <li
+      class="root-item"
+      #rootHost
+      *ngFor="let root of allRoots()"
+      [attr.data-root-key]="root.key"
+    >
+      <div class="root-summary" [class.disabled]="!root.exists">
+        <button
+          type="button"
+          class="expander-toggle"
+          [class.expanded]="isExpanded(root)"
+          [attr.aria-expanded]="isExpanded(root)"
+          [attr.aria-controls]="'tree-' + root.key"
+          [attr.aria-label]="isExpanded(root) ? 'Collapse ' + root.label : 'Expand ' + root.label"
+          (click)="toggleExpansion(root)"
+          [disabled]="!root.exists"
+        >
+          <span class="expander-icon">{{ isExpanded(root) ? '▾' : '▸' }}</span>
+        </button>
+        <button
+          type="button"
+          class="root-button"
+          [class.active]="isActive(root)"
+          (click)="selectRoot(root)"
+          [disabled]="!root.exists"
+        >
+          <span class="root-label">{{ root.label }}</span>
+          <span class="root-meta">
+            {{ root.exists ? 'Browse entries' : 'Section unavailable' }}
+          </span>
+        </button>
+      </div>
+      <div
+        class="root-tree"
+        *ngIf="isExpanded(root) && root.exists"
+        [attr.id]="'tree-' + root.key"
+      >
+        <app-sidebar-tree [root]="root.key" [path]="''" [autoOpen]="isActive(root)"></app-sidebar-tree>
+      </div>
+    </li>
+  </ul>
+</div>

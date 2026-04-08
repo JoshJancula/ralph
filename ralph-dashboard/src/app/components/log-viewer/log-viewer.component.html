@@ -1,0 +1,101 @@
+<div class="log-viewer-container">
+  <div class="toolbar">
+    <div class="search-bar">
+      <ion-searchbar
+        [value]="searchQuery"
+        (ionInput)="handleSearchInput($event.detail.value ?? '')"
+        (ionClear)="handleSearchInput('')"
+        placeholder="Search logs..."
+        [debounce]="0"
+      ></ion-searchbar>
+      <span class="match-count" *ngIf="searchQuery && matchLineIndices.length > 0">
+        {{ matchCount }}
+      </span>
+      <button
+        *ngIf="searchQuery && matchLineIndices.length > 0"
+        (click)="prevMatch()"
+        class="nav-btn"
+        type="button"
+        title="Previous match"
+      >&#8593;</button>
+      <button
+        *ngIf="searchQuery && matchLineIndices.length > 0"
+        (click)="nextMatch()"
+        class="nav-btn"
+        type="button"
+        title="Next match"
+      >&#8595;</button>
+    </div>
+    <div class="actions">
+      <button
+        *ngIf="root === 'logs' && planDirectory"
+        (click)="viewPlanFile()"
+        class="action-btn"
+      >
+        View Plan
+      </button>
+      <button
+        (click)="togglePrettyMode()"
+        type="button"
+        class="action-btn"
+      >
+        {{ prettyMode ? 'Raw' : 'Pretty' }}
+      </button>
+      <button
+        (click)="startTailing()"
+        [disabled]="isTailing"
+        class="action-btn"
+      >
+        Start tailing
+      </button>
+      <button
+        (click)="stopTailing()"
+        [disabled]="!isTailing"
+        class="action-btn"
+      >
+        Stop tailing
+      </button>
+      <button
+        (click)="goToLatest()"
+        class="action-btn"
+      >
+        Go to latest
+      </button>
+      <ion-badge *ngIf="isTailing">Tailing active</ion-badge>
+    </div>
+  </div>
+
+  <div *ngIf="isLoading" class="loading-state">
+    <ion-spinner name="crescent"></ion-spinner>
+  </div>
+
+  <div *ngIf="error" class="error-message">
+    {{ error }}
+  </div>
+
+  <div *ngIf="!isLoading && !error" class="log-body">
+    <div
+      *ngIf="prettyMode"
+      class="log-pretty markdown-content"
+      [innerHTML]="filteredPrettyHtml"
+      #prettyContent
+      (scroll)="onScroll()"
+    ></div>
+    <pre
+      *ngIf="!prettyMode"
+      (scroll)="onScroll()"
+      #logContent
+      class="log-content"
+    >
+      <ng-container *ngFor="let line of filteredLines; trackBy: trackByLine; let i = index">
+        <span [id]="'log-line-' + i" [innerHTML]="line"></span>
+        <br />
+      </ng-container>
+    </pre>
+
+    <div *ngIf="isTailing && waitingForOutput" class="waiting-indicator">
+      <ion-spinner name="dots"></ion-spinner>
+      <span class="waiting-text">Waiting for output...</span>
+    </div>
+  </div>
+</div>

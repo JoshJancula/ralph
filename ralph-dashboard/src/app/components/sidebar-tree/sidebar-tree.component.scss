@@ -1,0 +1,125 @@
+.sidebar-tree {
+  width: 100%;
+}
+
+.loading-indicator,
+.error-message {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.loading-indicator {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.error-message {
+  color: var(--danger);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.35rem 0.18rem 0.1rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  user-select: none;
+  transition: background 0.1s ease;
+  min-height: 28px;
+  border-radius: 4px;
+  margin: 0 4px;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+
+  &.selected {
+    background: var(--accent-active);
+    color: var(--text-on-accent);
+
+    .node-size {
+      color: var(--text-on-accent-muted);
+    }
+  }
+
+  &.is-dir {
+    font-weight: 500;
+  }
+}
+
+.tree-expander-placeholder {
+  width: 1rem;
+  flex-shrink: 0;
+}
+
+.tree-chevron {
+  width: 12px;
+  height: 12px;
+  display: block;
+  transition: transform 0.18s ease;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-row.expanded .tree-chevron {
+  transform: rotate(90deg);
+}
+
+.expander-loading {
+  display: inline-flex;
+  gap: 2px;
+  justify-content: center;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.expander-loading .dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dot-bounce 1s infinite ease-in-out;
+}
+
+.expander-loading .dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.expander-loading .dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes dot-bounce {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+.node-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-size {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}

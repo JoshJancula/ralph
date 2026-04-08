@@ -1,0 +1,108 @@
+:host {
+  display: block;
+  height: 100vh;
+  --app-header-height: calc(56px + env(safe-area-inset-top, 0px));
+}
+
+ion-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+ion-split-pane {
+  margin-top: var(--app-header-height);
+  flex: 1;
+  min-height: 0;
+  height: calc(100% - var(--app-header-height));
+  --side-width: 280px;
+  --side-max-width: 320px;
+  --side-min-width: 280px;
+  --border: 1px solid var(--border);
+}
+
+.app-header {
+  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+.app-title {
+  text-align: left;
+}
+
+ion-menu {
+  --background: var(--surface);
+  --ion-background-color: var(--surface);
+}
+
+ion-menu::part(container) {
+  border-right: 1px solid var(--border);
+}
+
+.main-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.menu-header {
+  display: none;
+}
+
+ion-content {
+  --background: var(--surface);
+}
+
+.main-content {
+  --background: transparent;
+  --overflow: hidden;
+  --padding-start: 0;
+  --padding-end: 0;
+  --padding-top: 0;
+  --padding-bottom: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.content-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0.75rem 1rem 1.25rem;
+}
+
+.content-wrapper > app-file-viewer,
+.content-wrapper > ralph-log-viewer,
+.content-wrapper > ralph-plan-hub {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.empty-state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 2rem;
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+// Hide the menu header on desktop when split pane is showing
+@media (min-width: 992px) {
+  .menu-header {
+    display: flex;
+  }
+}

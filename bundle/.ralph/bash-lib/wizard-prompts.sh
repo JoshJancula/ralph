@@ -55,6 +55,7 @@ agent_dir_for_runtime() {
     cursor) printf '.cursor/agents' ;;
     claude) printf '.claude/agents' ;;
     codex) printf '.codex/agents' ;;
+    opencode) printf '.opencode/agents' ;;
     *)
       printf '.cursor/agents'
       ;;
@@ -195,7 +196,7 @@ select_runtime() {
   local default
   default="$(runtime_default "$stage")"
   local runtime options idx=1 default_index=1 choice
-  options=("cursor" "claude" "codex")
+  options=("cursor" "claude" "codex" "opencode")
   printf 'Available runtimes:\n' >&2
   for opt in "${options[@]}"; do
     if [[ "$opt" == "$default" ]]; then
