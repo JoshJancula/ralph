@@ -288,4 +288,38 @@ describe('PlanHubComponent', () => {
 
     expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null);
   }));
+
+  it('viewLogs navigates to directory when listing has no log files or subdirs', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.detectChanges();
+
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
+    req.flush({
+      root: 'plans',
+      path: '',
+      parent: null,
+      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
+    });
+
+    const item = fixture.componentInstance.items[0];
+    fixture.componentInstance.viewLogs(item);
+
+    tick();
+    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
+    viewLogsReq.flush({
+      root: 'logs',
+      path: 'PLAN2',
+      parent: null,
+      entries: [
+        { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 100, mtime: 1000 },
+      ],
+    });
+    tick();
+
+    // No log files and no subdirectories, so should navigate to dir
+    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null);
+  }));
 });

@@ -53,6 +53,10 @@ function flushOutstandingHttp(httpMock: HttpTestingController): void {
       });
       flushed = true;
     }
+    for (const req of httpMock.match((r) => requestPath(r.url) === '/api/workspace')) {
+      req.flush({ root: '/test' });
+      flushed = true;
+    }
     if (!flushed) {
       break;
     }
@@ -79,7 +83,7 @@ describe('AppComponent', () => {
     httpMock.verify();
   });
 
-  it('shell renders topbar with title Workspace Explorer', async () => {
+  it('renders ion-split-pane for responsive layout', async () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     flushOutstandingHttp(httpMock);
@@ -87,7 +91,42 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.topbar .title')?.textContent?.trim()).toBe('Workspace Explorer');
+    const splitPane = compiled.querySelector('ion-split-pane');
+    const menu = compiled.querySelector('ion-menu');
+    const contentTarget = compiled.querySelector('#main-content');
+    expect(splitPane).toBeTruthy();
+    expect(menu).toBeTruthy();
+    expect(contentTarget).toBeTruthy();
+    expect(menu?.getAttribute('contentid')).toBe('main-content');
+    expect(menu?.getAttribute('menuid')).toBe('workspace-menu');
+  });
+
+  it('theme preference loads from localStorage light', async () => {
+    localStorage.setItem('ralph-dashboard-theme', 'light');
+
+    const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
+    flushOutstandingHttp(httpMock);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.isLightTheme()).toBe(true);
+
+    localStorage.removeItem('ralph-dashboard-theme');
+  });
+
+  it('theme preference loads from localStorage dark', async () => {
+    localStorage.setItem('ralph-dashboard-theme', 'dark');
+
+    const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
+    flushOutstandingHttp(httpMock);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.isLightTheme()).toBe(false);
+
+    localStorage.removeItem('ralph-dashboard-theme');
   });
 
   it('refresh button calls NavService.refresh()', async () => {
@@ -99,8 +138,12 @@ describe('AppComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const btn = fixture.nativeElement.querySelector('.refresh-btn') as HTMLButtonElement;
-    btn.click();
+    const btns = fixture.nativeElement.querySelectorAll('ion-button');
+    // Find the refresh button by its icon
+    const refreshBtn = Array.from(btns).find((btn: any) => 
+      btn.querySelector('ion-icon[name="refresh-outline"]'));
+    expect(refreshBtn).toBeTruthy();
+    (refreshBtn as HTMLElement).click();
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -149,23 +192,61 @@ describe('AppComponent', () => {
     expect(el.querySelector('ralph-log-viewer')).toBeTruthy();
   });
 
-  it('theme toggle switches body class and button label', async () => {
+   it('theme toggle switches body class and icon', async () => {
+     localStorage.setItem('ralph-dashboard-theme', 'dark');
+
+     const fixture = TestBed.createComponent(AppComponent);
+     fixture.detectChanges();
+     flushOutstandingHttp(httpMock);
+     await fixture.whenStable();
+     fixture.detectChanges();
+
+     expect(fixture.componentInstance.isLightTheme()).toBe(false);
+
+     const btns = fixture.nativeElement.querySelectorAll('ion-button');
+     // Find the theme button by its icon
+     const themeBtn = Array.from(btns).find((btn: any) =>
+       btn.querySelector('ion-icon[name="sunny-outline"], ion-icon[name="moon-outline"]'));
+     expect(themeBtn).toBeTruthy();
+     (themeBtn as HTMLElement).click();
+     fixture.detectChanges();
+     expect(document.body.classList.contains('theme-light')).toBe(true);
+     expect(fixture.componentInstance.isLightTheme()).toBe(true);
+
+     (themeBtn as HTMLElement).click();
+     fixture.detectChanges();
+     expect(document.body.classList.contains('theme-light')).toBe(false);
+     expect(fixture.componentInstance.isLightTheme()).toBe(false);
+
+     localStorage.removeItem('ralph-dashboard-theme');
+   });
+
+  it('theme toggle reflects localStorage value', async () => {
+    localStorage.setItem('ralph-dashboard-theme', 'light');
+
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     flushOutstandingHttp(httpMock);
     await fixture.whenStable();
     fixture.detectChanges();
 
-    document.body.classList.remove('theme-light');
-    const btn = fixture.nativeElement.querySelector('.theme-toggle') as HTMLButtonElement;
-    expect(btn.textContent?.trim()).toContain('Light');
-    btn.click();
+    expect(fixture.componentInstance.isLightTheme()).toBe(true);
+
+    localStorage.removeItem('ralph-dashboard-theme');
+  });
+
+  it('theme toggle reflects dark localStorage value', async () => {
+    localStorage.setItem('ralph-dashboard-theme', 'dark');
+
+    const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
-    expect(document.body.classList.contains('theme-light')).toBe(true);
-    expect(btn.textContent?.trim()).toContain('Dark');
-    btn.click();
+    flushOutstandingHttp(httpMock);
+    await fixture.whenStable();
     fixture.detectChanges();
-    expect(document.body.classList.contains('theme-light')).toBe(false);
+
+    expect(fixture.componentInstance.isLightTheme()).toBe(false);
+
+    localStorage.removeItem('ralph-dashboard-theme');
   });
 
   it('with activeFile .md filename: file-viewer is shown', async () => {
@@ -184,7 +265,7 @@ describe('AppComponent', () => {
     expect(el.querySelector('app-file-viewer')).toBeTruthy();
   });
 
-  it('marks the layout with the page scroll model attribute', async () => {
+  it('renders ion-menu-button for mobile navigation', async () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     flushOutstandingHttp(httpMock);
@@ -192,6 +273,6 @@ describe('AppComponent', () => {
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.layout')?.getAttribute('data-scroll-model')).toBe('page');
+    expect(compiled.querySelector('ion-menu-button')).toBeTruthy();
   });
 });

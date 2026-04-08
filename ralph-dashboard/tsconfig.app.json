@@ -11,6 +11,7 @@
     "src/**/*.spec.ts",
     "src/setup.ts",
     "src/setup.angular.ts",
-    "src/angular-test-env.ts"
+    "src/angular-test-env.ts",
+    "src/vitest-test-env.ts"
   ]
 }

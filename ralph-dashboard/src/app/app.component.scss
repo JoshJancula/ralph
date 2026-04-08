@@ -1,125 +1,96 @@
-.app-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background:
-    radial-gradient(circle at top left, var(--surface-highlight), transparent 45%),
-    linear-gradient(180deg, var(--surface) 0%, var(--background) 100%);
-  color: var(--text-primary);
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--topbar-bg);
-  backdrop-filter: blur(14px);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  width: 100%;
-}
-
-.brand {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.eyebrow,
-.subtitle {
-  color: var(--text-muted);
-}
-
-.title-group {
-  display: grid;
-  gap: 0.1rem;
-}
-
-.title {
-  font-size: 1.15rem;
-  font-weight: 700;
-}
-
-.actions {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-button {
-  border: 0;
-  border-radius: 999px;
-  padding: 0.65rem 1rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.refresh-btn,
-.theme-toggle {
-  background: var(--accent);
-  color: var(--text-on-accent);
-}
-
-.hamburger-btn {
-  display: none;
-  flex-direction: column;
-  gap: 5px;
-  background: transparent;
-  border: none;
-  padding: 4px;
-  cursor: pointer;
-  min-width: unset;
-  appearance: none;
-}
-
-.hamburger-btn .bar {
+:host {
   display: block;
-  width: 20px;
-  height: 2px;
-  background: var(--text-primary);
-  border-radius: 1px;
+  height: 100vh;
+  --app-header-height: calc(56px + env(safe-area-inset-top, 0px));
 }
 
-.layout {
-  height: calc(100vh - var(--dashboard-header-height));
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
-  min-height: 0;
-  width: 100%;
-  align-items: stretch;
-  gap: 0;
-  flex: 1 1 auto;
-}
-
-.sidebar {
-  border-right: 1px solid var(--border);
-  min-height: 0;
-  height: 100%;
-  align-self: stretch;
-  overflow-y: auto;
-}
-
-.content {
-  min-width: 0;
-  min-height: 0;
+ion-app {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  height: 100vh;
+}
+
+ion-split-pane {
+  margin-top: var(--app-header-height);
+  flex: 1;
+  min-height: 0;
+  height: calc(100% - var(--app-header-height));
+  --side-width: 280px;
+  --side-max-width: 320px;
+  --side-min-width: 280px;
+  --border: 1px solid var(--border);
+}
+
+.app-header {
+  flex-shrink: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+.app-title {
+  text-align: left;
+}
+
+ion-menu {
+  --background: var(--surface);
+  --ion-background-color: var(--surface);
+}
+
+ion-menu::part(container) {
+  border-right: 1px solid var(--border);
+}
+
+.main-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.menu-header {
+  display: none;
+}
+
+ion-content {
+  --background: var(--surface);
+}
+
+.main-content {
+  --background: transparent;
+  --overflow: hidden;
+  --padding-start: 0;
+  --padding-end: 0;
+  --padding-top: 0;
+  --padding-bottom: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.content-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   padding: 0.75rem 1rem 1.25rem;
-  gap: 1rem;
-  overflow-x: hidden;
-  overflow-y: auto;
+}
+
+.content-wrapper > app-file-viewer,
+.content-wrapper > ralph-log-viewer,
+.content-wrapper > ralph-plan-hub {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .empty-state {
   display: flex;
+  flex: 1;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  min-height: 0;
   color: var(--text-muted);
   font-size: 0.9rem;
   text-align: center;
@@ -129,41 +100,9 @@ button {
   border: 1px solid var(--border);
 }
 
-.sidebar-backdrop {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 99;
-  background: rgba(0, 0, 0, 0.35);
-}
-@media (max-width: 768px) {
-  .hamburger-btn {
+// Hide the menu header on desktop when split pane is showing
+@media (min-width: 992px) {
+  .menu-header {
     display: flex;
-  }
-
-  .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    position: fixed;
-    top: var(--dashboard-header-height);
-    left: 0;
-    height: calc(100vh - var(--dashboard-header-height));
-    width: 280px;
-    z-index: 100;
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    overflow-y: auto;
-    border-right: 1px solid var(--border);
-  }
-
-  .layout.sidebar-open .sidebar {
-    transform: translateX(0);
-  }
-
-  .layout.sidebar-open .sidebar-backdrop {
-    display: block;
-    pointer-events: auto;
   }
 }

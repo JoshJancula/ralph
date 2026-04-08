@@ -1,13 +1,13 @@
 <div class="log-viewer-container">
   <div class="toolbar">
     <div class="search-bar">
-      <input
-        type="text"
-        [placeholder]="'Search logs...'"
-        [(ngModel)]="searchQuery"
-        (input)="handleSearchInput(searchQuery)"
-        class="search-input"
-      />
+      <ion-searchbar
+        [value]="searchQuery"
+        (ionInput)="handleSearchInput($event.detail.value ?? '')"
+        (ionClear)="handleSearchInput('')"
+        placeholder="Search logs..."
+        [debounce]="0"
+      ></ion-searchbar>
       <span class="match-count" *ngIf="searchQuery && matchLineIndices.length > 0">
         {{ matchCount }}
       </span>
@@ -25,13 +25,6 @@
         type="button"
         title="Next match"
       >&#8595;</button>
-      <button
-        *ngIf="searchQuery"
-        (click)="handleSearchInput('')"
-        class="clear-btn"
-        type="button"
-        aria-label="Clear search"
-      >x</button>
     </div>
     <div class="actions">
       <button
@@ -68,14 +61,12 @@
       >
         Go to latest
       </button>
-      <span *ngIf="isTailing" class="tailing-indicator">
-        Tailing active
-      </span>
+      <ion-badge *ngIf="isTailing">Tailing active</ion-badge>
     </div>
   </div>
 
-  <div *ngIf="isLoading" class="loading-indicator">
-    Loading...
+  <div *ngIf="isLoading" class="loading-state">
+    <ion-spinner name="crescent"></ion-spinner>
   </div>
 
   <div *ngIf="error" class="error-message">
@@ -88,6 +79,7 @@
       class="log-pretty markdown-content"
       [innerHTML]="filteredPrettyHtml"
       #prettyContent
+      (scroll)="onScroll()"
     ></div>
     <pre
       *ngIf="!prettyMode"
@@ -100,5 +92,10 @@
         <br />
       </ng-container>
     </pre>
+
+    <div *ngIf="isTailing && waitingForOutput" class="waiting-indicator">
+      <ion-spinner name="dots"></ion-spinner>
+      <span class="waiting-text">Waiting for output...</span>
+    </div>
   </div>
 </div>

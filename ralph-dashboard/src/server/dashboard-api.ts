@@ -21,6 +21,11 @@ function getRootsMap(): Record<string, RootConfig> {
 }
 
 export function registerDashboardApi(app: Express): void {
+  app.get('/api/workspace', (_req: Request, res: Response) => {
+    const root = findWorkspaceProjectRoot();
+    res.json({ root });
+  });
+
   app.get('/api/roots', (_req: Request, res: Response) => {
     const roots = getRootsMap();
     const body = Object.entries(roots).map(([key, config]) => ({

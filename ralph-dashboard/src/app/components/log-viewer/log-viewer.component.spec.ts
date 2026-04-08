@@ -127,9 +127,11 @@ describe('LogViewerComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const input = (fixture.nativeElement as HTMLElement).querySelector('.search-input') as HTMLInputElement;
-    input.value = 'foo';
-    input.dispatchEvent(new Event('input'));
+    const searchbar = (fixture.nativeElement as HTMLElement).querySelector('ion-searchbar') as HTMLElement;
+    searchbar.dispatchEvent(new CustomEvent('ionInput', {
+      detail: { value: 'foo' },
+      bubbles: true,
+    }));
     fixture.detectChanges();
 
     const pre = (fixture.nativeElement as HTMLElement).querySelector('.log-content');
@@ -294,6 +296,40 @@ describe('LogViewerComponent', () => {
     fixture.componentInstance.stopTailing();
   }));
 
+  it('onScroll in pretty mode keeps view at bottom when tailing and near bottom', fakeAsync(() => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req0 = expectFileRequest('logs', 'app.log', '0');
+    req0.flush({ content: '# Header\nText', size: 13, offset: 0, nextOffset: 13 });
+    tick();
+    fixture.detectChanges();
+
+    // Switch to pretty mode
+    fixture.componentInstance.togglePrettyMode();
+    fixture.detectChanges();
+
+    const startBtn = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Start tailing',
+    );
+    startBtn?.click();
+    fixture.detectChanges();
+
+    const prettyDiv = (fixture.nativeElement as HTMLElement).querySelector('.log-pretty') as HTMLDivElement;
+    Object.defineProperty(prettyDiv, 'scrollHeight', { configurable: true, value: 600 });
+    Object.defineProperty(prettyDiv, 'clientHeight', { configurable: true, value: 150 });
+    prettyDiv.scrollTop = 450;
+
+    prettyDiv.dispatchEvent(new Event('scroll'));
+    fixture.detectChanges();
+
+    expect(prettyDiv.scrollTop).toBe(600);
+
+    fixture.componentInstance.stopTailing();
+  }));
+
   it('clears the tail interval on destroy', fakeAsync(() => {
     const fixture = TestBed.createComponent(LogViewerComponent);
     fixture.componentInstance.root = 'logs';
@@ -415,6 +451,36 @@ describe('LogViewerComponent', () => {
     expect(html).toContain('<mark>world</mark>');
   });
 
+  it('scrollToBottom handles logContentElement being null', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = false;
+    
+    // Mock the elements - logContentElement is null, so scrollToBottom should return early
+    component.logContentElement = undefined;
+    component.prettyContentElement = { nativeElement: { scrollTop: 0, scrollHeight: 200 } };
+    
+    fixture.detectChanges();
+    
+    const scrollToBottom = component.scrollToBottom.bind(component);
+    expect(() => scrollToBottom()).not.toThrow();
+  });
+
+  it('scrollToBottom handles prettyContentElement being null', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = true;
+    
+    // Mock the elements - prettyContentElement is null, so scrollToBottom should return early
+    component.logContentElement = { nativeElement: { scrollTop: 0, scrollHeight: 300 } };
+    component.prettyContentElement = undefined;
+    
+    fixture.detectChanges();
+    
+    const scrollToBottom = component.scrollToBottom.bind(component);
+    expect(() => scrollToBottom()).not.toThrow();
+  });
+
   it('matchCount returns empty string when no search', async () => {
     const fixture = TestBed.createComponent(LogViewerComponent);
     fixture.componentInstance.root = 'logs';
@@ -506,4 +572,126 @@ describe('LogViewerComponent', () => {
 
     expect(fixture.componentInstance.content).toBe('second');
   }));
+
+  it('scrollToBottom sets scrollTop when logContentElement exists', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = false;
+    
+    const mockLogContent = { 
+      scrollTop: 0, 
+      scrollHeight: 200,
+      set scrollTop(v: number) { this._scrollTop = v; },
+      get scrollTop() { return this._scrollTop || 0; }
+    };
+    component.logContentElement = { nativeElement: mockLogContent };
+    component.prettyContentElement = undefined;
+    
+    const scrollToBottom = component.scrollToBottom.bind(component);
+    scrollToBottom();
+    
+    expect(mockLogContent.scrollTop).toBe(200);
+  });
+
+  it('scrollToBottom sets scrollTop when prettyContentElement exists', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = true;
+    
+    const mockPrettyContent = { 
+      scrollTop: 0, 
+      scrollHeight: 300,
+      set scrollTop(v: number) { this._scrollTop = v; },
+      get scrollTop() { return this._scrollTop || 0; }
+    };
+    component.logContentElement = undefined;
+    component.prettyContentElement = { nativeElement: mockPrettyContent };
+    
+    const scrollToBottom = component.scrollToBottom.bind(component);
+    scrollToBottom();
+    
+    expect(mockPrettyContent.scrollTop).toBe(300);
+  });
+
+  it('autoScroll scrolls when near bottom in raw mode', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = false;
+    
+    let storedScrollTop = 350;
+    const mockLogContent = { 
+      scrollHeight: 500,
+      clientHeight: 100,
+      get scrollTop() { return storedScrollTop; },
+      set scrollTop(v: number) { storedScrollTop = v; }
+    };
+    component.logContentElement = { nativeElement: mockLogContent };
+    component.prettyContentElement = undefined;
+    
+    const autoScroll = component.autoScroll.bind(component);
+    autoScroll();
+    
+    // Should scroll to bottom (50px from bottom = 500 - 350 - 100 = 50)
+    expect(storedScrollTop).toBe(500);
+  });
+
+  it('autoScroll does not scroll when far from bottom in raw mode', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = false;
+    
+    let storedScrollTop = 0;
+    const mockLogContent = { 
+      scrollHeight: 500,
+      clientHeight: 100,
+      get scrollTop() { return storedScrollTop; },
+      set scrollTop(v: number) { storedScrollTop = v; }
+    };
+    component.logContentElement = { nativeElement: mockLogContent };
+    component.prettyContentElement = undefined;
+    
+    const autoScroll = component.autoScroll.bind(component);
+    autoScroll();
+    
+    // Should not scroll (400px from bottom = 500 - 0 - 100 = 400 > threshold 100)
+    expect(storedScrollTop).toBe(0);
+  });
+
+  it('autoScroll scrolls when near bottom in pretty mode', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = true;
+    
+    let storedScrollTop = 450;
+    const mockPrettyContent = { 
+      scrollHeight: 600,
+      clientHeight: 150,
+      get scrollTop() { return storedScrollTop; },
+      set scrollTop(v: number) { storedScrollTop = v; }
+    };
+    component.logContentElement = undefined;
+    component.prettyContentElement = { nativeElement: mockPrettyContent };
+    
+    const autoScroll = component.autoScroll.bind(component);
+    autoScroll();
+    
+    // Should scroll to bottom (0px from bottom = 600 - 450 - 150 = 0)
+    expect(storedScrollTop).toBe(600);
+  });
+
+  it('autoScroll does not scroll when element is null', () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    const component = fixture.componentInstance as any;
+    component.prettyMode = false;
+    component.isTailing = true;
+    
+    component.logContentElement = undefined;
+    component.prettyContentElement = undefined;
+    
+    const autoScroll = component.autoScroll.bind(component);
+    autoScroll();
+    
+    // Should not throw and not scroll
+    expect(() => autoScroll()).not.toThrow();
+  });
 });

@@ -1,49 +1,45 @@
-<div class="view-logs-toolbar" *ngIf="showViewLogs">
-  <button class="toolbar-btn" (click)="viewLogs()">View Logs</button>
-</div>
-
-<div class="run-snippet" *ngIf="runSnippet">
-  <span class="snippet-label">To execute this plan run:</span>
-  <code class="snippet-code">{{ runSnippet }}</code>
-</div>
-
-<div class="file-viewer" *ngIf="loading(); else loadedBody">
-  <span class="loading-indicator">Loading...</span>
-</div>
-
-<ng-template #loadedBody>
-  <div class="file-viewer" *ngIf="error() as err; else viewer">
-    <span class="error-message">{{ err }}</span>
+<div class="file-viewer">
+  <div class="file-toolbar" *ngIf="showViewLogs || runSnippet || isMarkdown()">
+    <div class="toolbar-left">
+      <ion-button *ngIf="showViewLogs" fill="clear" size="small" (click)="viewLogs()">
+        View Logs
+      </ion-button>
+      <ion-button *ngIf="isMarkdown()" fill="clear" size="small" (click)="toggleView()">
+        {{ isRendered() ? 'View Raw' : 'View Pretty' }}
+      </ion-button>
+    </div>
+    <div class="toolbar-right" *ngIf="runSnippet">
+      <span class="snippet-label">Run: </span>
+      <code class="snippet-code">{{ runSnippet }}</code>
+    </div>
   </div>
 
-  <ng-template #viewer>
-    <div class="file-viewer">
-      <div class="file-content">
-        <div class="file-toolbar" *ngIf="isMarkdown()">
-          <button (click)="toggleView()">
-            {{ isRendered() ? 'View source' : 'View rendered' }}
-          </button>
+  <div class="loading-indicator" *ngIf="loading()">
+    <ion-spinner name="crescent"></ion-spinner>
+  </div>
+
+  <div class="error-message" *ngIf="!loading() && error() as err">
+    <span>{{ err }}</span>
+  </div>
+
+  <div class="file-content" *ngIf="!loading() && !error()">
+    <div class="file-inner">
+      <ng-container *ngIf="isMarkdown(); else notMarkdown">
+        <div *ngIf="isRendered(); else markdownSource" class="markdown-content" [innerHTML]="safeHtml()" (click)="handleContentClick($event)"></div>
+        <ng-template #markdownSource>
+          <pre class="text-content">{{ content() }}</pre>
+        </ng-template>
+      </ng-container>
+
+      <ng-template #notMarkdown>
+        <div *ngIf="isJson()">
+          <pre class="json-content">{{ formatJson() }}</pre>
         </div>
 
-        <div class="file-inner">
-          <ng-container *ngIf="isMarkdown(); else notMarkdown">
-            <div *ngIf="isRendered(); else markdownSource" class="markdown-content" [innerHTML]="safeHtml()" (click)="handleContentClick($event)"></div>
-            <ng-template #markdownSource>
-              <pre class="text-content">{{ content() }}</pre>
-            </ng-template>
-          </ng-container>
-
-          <ng-template #notMarkdown>
-            <div *ngIf="isJson()">
-              <pre class="json-content">{{ formatJson() }}</pre>
-            </div>
-
-            <div *ngIf="isPlainText()">
-              <pre class="text-content">{{ content() }}</pre>
-            </div>
-          </ng-template>
+        <div *ngIf="isPlainText()">
+          <pre class="text-content">{{ content() }}</pre>
         </div>
-      </div>
+      </ng-template>
     </div>
-  </ng-template>
-</ng-template>
+  </div>
+</div>

@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input, inject, signal } from '@angular/core';
+import { Component, Input, OnInit, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { IonSpinner, IonButton } from '@ionic/angular/standalone';
 import { ApiService, FileChunk, ListingEntry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
@@ -8,11 +9,11 @@ import { markdownToHtml } from '../../utils/markdown-to-html';
 @Component({
   selector: 'app-file-viewer',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, IonSpinner, IonButton],
   templateUrl: './file-viewer.component.html',
   styleUrls: ['./file-viewer.component.scss'],
 })
-export class FileViewerComponent {
+export class FileViewerComponent implements OnInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
   private readonly sanitizer = inject(DomSanitizer);
@@ -25,6 +26,19 @@ export class FileViewerComponent {
   error = signal<string | null>(null);
   isRendered = signal<boolean>(true);
   safeHtml = signal<SafeHtml | null>(null);
+  workspaceRoot = signal<string>('');
+
+  ngOnInit(): void {
+    this.api.fetchWorkspace().subscribe({
+      next: (workspace) => {
+        this.workspaceRoot.set(workspace.root);
+      },
+      error: () => {
+        // Fallback to empty string, component will still work
+        this.workspaceRoot.set('');
+      },
+    });
+  }
 
   @Input() set root(value: string) {
     this.rootSignal.set(value);
@@ -96,7 +110,13 @@ export class FileViewerComponent {
     const path = this.filePathSignal();
     if (!path) return null;
     const parts = path.split('/').filter(Boolean);
-    return parts.length > 0 ? parts[0] : null;
+    if (parts.length === 0) return null;
+    const name = parts[0];
+    if (parts.length === 1) {
+      const dotIdx = name.lastIndexOf('.');
+      return dotIdx > 0 ? name.substring(0, dotIdx) : name;
+    }
+    return name;
   }
 
   get showViewLogs(): boolean {
@@ -195,12 +215,15 @@ export class FileViewerComponent {
     const root = this.rootSignal();
     const path = this.filePathSignal();
     const fileName = path.split('/').filter(Boolean).pop() ?? '';
+    const workspaceRoot = this.workspaceRoot();
     if (!fileName) return null;
     if ((root === 'plans' || root === 'logs') && path.endsWith('.md')) {
-      return `bash $PWD/.ralph/run-plan.sh --plan ${fileName}`;
+      const wsPath = workspaceRoot || '$PWD';
+      return `bash ${wsPath}/.ralph/run-plan.sh --plan ${fileName}`;
     }
     if (root === 'orchestration-plans' && path.endsWith('.orch.json')) {
-      return `bash $PWD/.ralph/run-orchestration.sh --plan ${fileName}`;
+      const wsPath = workspaceRoot || '$PWD';
+      return `bash ${wsPath}/.ralph/run-orchestration.sh --plan ${fileName}`;
     }
     return null;
   }

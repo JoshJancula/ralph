@@ -1,6 +1,7 @@
 import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChanges, ElementRef, ViewChild, ChangeDetectorRef, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { IonSpinner, IonBadge, IonSearchbar } from '@ionic/angular/standalone';
 import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { Subscription } from 'rxjs';
@@ -15,7 +16,7 @@ interface LogEntry {
 @Component({
   selector: 'ralph-log-viewer',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IonSpinner, IonBadge, IonSearchbar],
   templateUrl: './log-viewer.component.html',
   styleUrls: ['./log-viewer.component.scss']
 })
@@ -39,6 +40,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   private tailInterval: number | null = null;
   private subscription: Subscription = new Subscription();
   private readonly nav = inject(NavService);
+  waitingForOutput: boolean = false;
 
   constructor(private apiService: ApiService, private cdr: ChangeDetectorRef) {}
 
@@ -93,6 +95,10 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
       this.tailInterval = null;
     }
     this.isTailing = true;
+    this.waitingForOutput = true;
+    // Scroll to bottom immediately when starting tail
+    this.cdr.detectChanges();
+    setTimeout(() => this.scrollToBottom(), 0);
     this.tailInterval = window.setInterval(() => {
       this.fetchNewContent();
     }, 2000);
@@ -119,6 +125,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
           if (hasContent) {
             this.content += response.content;
             this.applySearch();
+            this.waitingForOutput = false;
           }
           this.nextOffset = response.nextOffset;
           if (forceScroll) {
@@ -237,12 +244,22 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   autoScroll(): void {
-    if (!this.logContentElement?.nativeElement) return;
-    const element = this.logContentElement.nativeElement;
-    const threshold = 100;
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceFromBottom <= threshold) {
-      element.scrollTop = element.scrollHeight;
+    if (this.prettyMode) {
+      if (!this.prettyContentElement?.nativeElement) return;
+      const element = this.prettyContentElement.nativeElement;
+      const threshold = 100;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distanceFromBottom <= threshold) {
+        element.scrollTop = element.scrollHeight;
+      }
+    } else {
+      if (!this.logContentElement?.nativeElement) return;
+      const element = this.logContentElement.nativeElement;
+      const threshold = 100;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distanceFromBottom <= threshold) {
+        element.scrollTop = element.scrollHeight;
+      }
     }
   }
 
@@ -266,12 +283,21 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   onScroll(): void {
-    if (!this.logContentElement?.nativeElement) return;
-    const element = this.logContentElement.nativeElement;
     const threshold = 100;
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (this.isTailing && distanceFromBottom <= threshold) {
-      element.scrollTop = element.scrollHeight;
+    if (this.prettyMode) {
+      if (!this.prettyContentElement?.nativeElement) return;
+      const element = this.prettyContentElement.nativeElement;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (this.isTailing && distanceFromBottom <= threshold) {
+        element.scrollTop = element.scrollHeight;
+      }
+    } else {
+      if (!this.logContentElement?.nativeElement) return;
+      const element = this.logContentElement.nativeElement;
+      const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (this.isTailing && distanceFromBottom <= threshold) {
+        element.scrollTop = element.scrollHeight;
+      }
     }
   }
 

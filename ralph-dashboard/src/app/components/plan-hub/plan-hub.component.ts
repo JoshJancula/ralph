@@ -1,6 +1,6 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router } from '@angular/router';
+import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
 import { ApiService, ListingEntry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 
@@ -14,7 +14,7 @@ interface PlanItem {
 @Component({
   selector: 'ralph-plan-hub',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent],
   template: `
     <div class="plan-hub">
       <div class="header">
@@ -23,33 +23,44 @@ interface PlanItem {
       @if (error) {
         <div class="error">{{ error }}</div>
       } @else if (loading) {
-        <div class="loading">Loading plans...</div>
+        <div class="loading">
+          <ion-spinner name="crescent"></ion-spinner>
+          <span>Loading plans...</span>
+        </div>
       } @else if (items.length === 0) {
         <div class="empty-state">No plan directories found</div>
       } @else {
         <div class="plan-list">
           @for (item of items; track item.name) {
-            <div class="plan-card">
-              <div class="plan-header">
-                <span class="plan-name">{{ item.name }}</span>
-                <span class="plan-date">{{ item.mtime | date: 'yyyy-MM-dd HH:mm' }}</span>
-              </div>
-              <div class="plan-actions">
-                <button class="btn-primary" (click)="openPlan(item)">Open Plan</button>
-                @if (item.hasLogs) {
-                  <button class="btn-secondary" (click)="viewLogs(item)">View Logs</button>
-                }
-              </div>
-            </div>
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>{{ item.name }}</ion-card-title>
+                <ion-card-subtitle>{{ item.mtime | date: 'yyyy-MM-dd HH:mm' }}</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="plan-actions">
+                  <button class="btn-primary" (click)="openPlan(item)">Open Plan</button>
+                  @if (item.hasLogs) {
+                    <button class="btn-secondary" (click)="viewLogs(item)">View Logs</button>
+                  }
+                </div>
+              </ion-card-content>
+            </ion-card>
           }
         </div>
       }
     </div>
   `,
   styles: `
+    :host {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
     .plan-hub {
+      flex: 1;
+      min-height: 0;
       padding: 2rem;
-      height: 100%;
       overflow-y: auto;
     }
     .header {
@@ -67,41 +78,48 @@ interface PlanItem {
       border-radius: 4px;
     }
     .loading {
+      min-height: 220px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      padding: 3rem 2rem;
       color: var(--text-muted);
-      padding: 1rem;
     }
-      .empty-state {
-        color: var(--text-muted);
-        padding: 3rem 2rem;
-        text-align: center;
-        background: var(--surface);
-        border-radius: 8px;
-        border: 1px solid var(--border);
-      }
+    .empty-state {
+      min-height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      padding: 3rem 2rem;
+      text-align: center;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
     .plan-list {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
       gap: 1rem;
     }
-    .plan-card {
-      background: var(--surface);
+    ion-card {
+      --background: var(--surface);
+      --color: var(--text-primary);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 1rem;
+      box-shadow: none;
+      margin: 0;
     }
-    .plan-header {
-      margin-bottom: 1rem;
-    }
-    .plan-name {
-      font-size: 1.1rem;
+    ion-card-title {
+      font-size: 1rem;
       font-weight: 500;
       font-family: var(--monospace-font);
-      display: block;
-      margin-bottom: 0.25rem;
     }
-    .plan-date {
-      color: var(--text-muted);
+    ion-card-subtitle {
       font-size: 0.8rem;
+      color: var(--text-muted);
     }
     .plan-actions {
       display: flex;
@@ -139,16 +157,9 @@ export class PlanHubComponent implements OnInit {
 
   private apiService = inject(ApiService);
   private navService = inject(NavService);
-  private route = inject(ActivatedRoute);
-  private router = inject(Router);
 
   ngOnInit(): void {
     this.fetchPlans();
-    
-    // Subscribe to route params to handle direct navigation
-    this.route.params.subscribe(() => {
-      this.navService.refresh();
-    });
   }
 
   fetchPlans(): void {

@@ -1,17 +1,27 @@
 .sidebar-tree {
   width: 100%;
-  overflow-y: auto;
 }
 
-.tree-loading,
-.tree-error {
+.loading-indicator,
+.error-message {
   padding: 0.5rem 0.75rem;
   font-size: 0.78rem;
   color: var(--text-muted);
 }
 
-.tree-error {
+.loading-indicator {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.error-message {
   color: var(--danger);
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tree-row {

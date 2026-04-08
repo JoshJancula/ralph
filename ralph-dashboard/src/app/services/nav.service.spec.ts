@@ -92,16 +92,44 @@ describe('NavService', () => {
       router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
     );
 
-    service.navigate('logs', '', 'runner.log');
-    await fileNav;
-    expect(service.mode()).toBe('file');
-    expect(service.activeFile()).toBe('runner.log');
+     service.navigate('logs', '', 'runner.log');
+     await fileNav;
+     expect(service.mode()).toBe('file');
+     expect(service.activeFile()).toBe('runner.log');
+   });
+
+   it('refresh re-parses the current URL', () => {
+     const service = TestBed.inject(NavService);
+     const spy = vi.spyOn(service as any, 'updateStateFromRoute' as any);
+     service.refresh();
+     expect(spy).toHaveBeenCalled();
+   });
+
+  it('navigate ignores empty root string', () => {
+    const service = TestBed.inject(NavService);
+    const originalNav = service['router'].navigate;
+    const spy = vi.spyOn(service['router'], 'navigate');
+
+    service.navigate('');
+    service.navigate('   ');
+
+    expect(spy).not.toHaveBeenCalled();
   });
 
-  it('refresh re-parses the current URL', () => {
+  it('decodeSegment returns original segment when decodeURIComponent fails', () => {
     const service = TestBed.inject(NavService);
-    const spy = vi.spyOn(service as any, 'updateStateFromRoute' as any);
-    service.refresh();
-    expect(spy).toHaveBeenCalled();
+    const decodeSegment = (service as any).decodeSegment;
+    
+    // Mock decodeURIComponent to throw
+    const originalDecode = globalThis.decodeURIComponent;
+    (globalThis as any).decodeURIComponent = () => {
+      throw new Error('Decode failed');
+    };
+
+    const result = decodeSegment('%20test%20');
+    expect(result).toBe('%20test%20');
+
+    // Restore
+    (globalThis as any).decodeURIComponent = originalDecode;
   });
 });

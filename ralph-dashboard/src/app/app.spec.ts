@@ -40,7 +40,7 @@ describe('AppComponent (root)', () => {
     const fixture = TestBed.createComponent(AppComponent);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.title')?.textContent).toContain('Workspace Explorer');
+    expect(compiled.querySelector('ion-title')?.textContent).toContain('Workspace Explorer');
   });
 
   it('should read theme preference from localStorage on init', () => {
@@ -51,6 +51,7 @@ describe('AppComponent (root)', () => {
 
   it('should store theme preference to localStorage when toggling', () => {
     const fixture = TestBed.createComponent(AppComponent);
+    fixture.componentInstance.isLightTheme.set(false);
     fixture.componentInstance.toggleTheme();
     expect(localStorageMock.setItem).toHaveBeenCalledWith('ralph-dashboard-theme', 'light');
   });
@@ -62,46 +63,11 @@ describe('AppComponent (root)', () => {
     expect(document.body.classList.contains('theme-light')).toBe(!initialClass);
   });
 
-  it('should toggle sidebar open state', () => {
-    const fixture = TestBed.createComponent(AppComponent);
-    const initialState = fixture.componentInstance.sidebarOpen();
-    fixture.componentInstance.toggleSidebar();
-    expect(fixture.componentInstance.sidebarOpen()).toBe(!initialState);
-  });
-
-  it('should close sidebar when closeSidebar is called', () => {
-    const fixture = TestBed.createComponent(AppComponent);
-    fixture.componentInstance.sidebarOpen.set(true);
-    fixture.componentInstance.closeSidebar();
-    expect(fixture.componentInstance.sidebarOpen()).toBe(false);
-  });
-
-  it('should refresh nav when refresh is called', () => {
+  it('should call nav.refresh when refresh is called', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     const spy = vi.spyOn(nav, 'refresh');
     fixture.componentInstance.refresh();
     expect(spy).toHaveBeenCalled();
   });
-
-  it.skip('should close sidebar when active file changes', fakeAsync(() => {
-    const fixture = TestBed.createComponent(AppComponent);
-    fixture.componentInstance.sidebarOpen.set(true);
-    
-    // Force a re-run of the effect by triggering change detection
-    fixture.detectChanges();
-    tick();
-    
-    // Now simulate navigation to a file - this should trigger the effect
-    const nav = TestBed.inject(NavService);
-    nav.navigate('logs', '', 'some-file.md');
-    tick();
-    
-    // Force change detection to run the effect
-    fixture.detectChanges();
-    tick();
-    
-    // The sidebar should be closed after navigating to a file
-    expect(fixture.componentInstance.sidebarOpen()).toBe(false);
-  }));
 });

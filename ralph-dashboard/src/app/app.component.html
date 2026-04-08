@@ -1,51 +1,48 @@
-<div class="app-shell">
-  <header class="topbar">
-    <button
-      type="button"
-      class="hamburger-btn"
-      aria-label="Toggle navigation"
-      (click)="toggleSidebar()"
-    >
-      <span class="bar"></span>
-      <span class="bar"></span>
-      <span class="bar"></span>
-    </button>
-    <div class="brand">
-      <div class="title">Workspace Explorer</div>
-    </div>
+<ion-app>
+  <ion-header [translucent]="false" class="app-header">
+    <ion-toolbar>
+      <ion-buttons slot="start">
+        <ion-menu-button menu="workspace-menu"></ion-menu-button>
+      </ion-buttons>
+      <ion-title class="app-title">Workspace Explorer</ion-title>
+      <ion-buttons slot="end">
+        <ion-button (click)="refresh()" fill="clear" aria-label="Refresh">
+          <ion-icon slot="icon-only" name="refresh-outline"></ion-icon>
+        </ion-button>
+        <ion-button (click)="toggleTheme()" fill="clear" aria-label="Toggle theme">
+          <ion-icon slot="icon-only" [name]="isLightTheme() ? 'moon-outline' : 'sunny-outline'"></ion-icon>
+        </ion-button>
+      </ion-buttons>
+    </ion-toolbar>
+  </ion-header>
 
-    <div class="actions">
-      <button type="button" class="refresh-btn" (click)="refresh()">Refresh</button>
-      <button type="button" class="theme-toggle" (click)="toggleTheme()">
-        {{ isLightTheme() ? 'Dark' : 'Light' }} theme
-      </button>
-    </div>
-  </header>
+  <ion-split-pane contentId="main-content">
+    <ion-menu menuId="workspace-menu" contentId="main-content" side="start" class="app-menu">
+      <ion-content [forceOverscroll]="false">
+        <app-workspace-sidebar></app-workspace-sidebar>
+      </ion-content>
+    </ion-menu>
 
-  <div class="layout" data-scroll-model="page" [class.sidebar-open]="sidebarOpen()">
-    <app-workspace-sidebar class="sidebar"></app-workspace-sidebar>
-    <div
-      class="sidebar-backdrop"
-      *ngIf="sidebarOpen()"
-      (click)="closeSidebar()"
-    ></div>
-
-    <main class="content">
-      @if (nav.activeRoot(); as root) {
-        @if (nav.activeFile(); as file) {
-          @if (file.endsWith('.log')) {
-            <ralph-log-viewer [root]="root" [filePath]="file"></ralph-log-viewer>
+    <div class="ion-page main-shell" id="main-content">
+      <ion-content class="main-content" [forceOverscroll]="false" [scrollY]="false">
+        <div class="content-wrapper">
+          @if (nav.activeRoot(); as root) {
+            @if (nav.activeFile(); as file) {
+              @if (file.endsWith('.log')) {
+                <ralph-log-viewer [root]="root" [filePath]="file"></ralph-log-viewer>
+              } @else {
+                <app-file-viewer [root]="root" [filePath]="file"></app-file-viewer>
+              }
+            } @else if (root === 'plans') {
+              <ralph-plan-hub></ralph-plan-hub>
+            } @else {
+              <div class="empty-state">Select a file to inspect its contents.</div>
+            }
           } @else {
-            <app-file-viewer [root]="root" [filePath]="file"></app-file-viewer>
+            <div class="empty-state">Select a section from the sidebar to get started.</div>
           }
-        } @else if (root === 'plans') {
-          <ralph-plan-hub></ralph-plan-hub>
-        } @else {
-          <div class="empty-state">Select a file to inspect its contents.</div>
-        }
-      } @else {
-        <div class="empty-state">Select a section from the sidebar to get started.</div>
-      }
-    </main>
-  </div>
-</div>
+        </div>
+      </ion-content>
+    </div>
+  </ion-split-pane>
+</ion-app>

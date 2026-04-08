@@ -13,6 +13,7 @@ import {
   signal,
 } from '@angular/core';
 
+
 import { ApiService, Root } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { SidebarTreeComponent } from '../sidebar-tree/sidebar-tree.component';
@@ -32,6 +33,7 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
 
   roots = signal<Root[]>([]);
   expandedRoots = signal<Set<string>>(new Set());
+  collapsedByUser = signal<Set<string>>(new Set());
 
   @ViewChildren('rootHost', { read: ElementRef })
   rootHosts!: QueryList<ElementRef<HTMLElement>>;
@@ -58,6 +60,7 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
       const active = this.nav.activeRoot();
       if (active) {
         this.expandedRoots.update((s) => {
+          if (this.collapsedByUser().has(active)) return s;
           const next = new Set(s);
           next.add(active);
           return next;
@@ -90,12 +93,22 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
 
   toggleExpansion(root: Root): void {
     if (!root.exists) return;
+    const isCurrentlyExpanded = this.expandedRoots().has(root.key);
     this.expandedRoots.update((current) => {
       const next = new Set(current);
-      if (next.has(root.key)) {
+      if (isCurrentlyExpanded) {
         next.delete(root.key);
       } else {
         next.add(root.key);
+      }
+      return next;
+    });
+    this.collapsedByUser.update((current) => {
+      const next = new Set(current);
+      if (isCurrentlyExpanded) {
+        next.add(root.key);
+      } else {
+        next.delete(root.key);
       }
       return next;
     });
@@ -104,11 +117,13 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
   selectRoot(root: Root): void {
     if (!root.exists) return;
     this.nav.navigate(root.key);
-    this.expandedRoots.update((current) => {
-      const next = new Set(current);
-      next.add(root.key);
-      return next;
-    });
+    if (!this.collapsedByUser().has(root.key)) {
+      this.expandedRoots.update((current) => {
+        const next = new Set(current);
+        next.add(root.key);
+        return next;
+      });
+    }
     this.ensureActiveRootVisible();
   }
 

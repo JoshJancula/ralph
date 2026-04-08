@@ -35,11 +35,19 @@ export interface Template {
   content: string;
 }
 
+export interface WorkspaceInfo {
+  root: string;
+}
+
 @Injectable({
   providedIn: 'root',
 })
 export class ApiService {
   private readonly http = inject(HttpClient);
+
+  fetchWorkspace(): Observable<WorkspaceInfo> {
+    return this.http.get<WorkspaceInfo>('/api/workspace');
+  }
 
   fetchRoots(): Observable<Root[]> {
     return this.http.get<Root[]>('/api/roots');

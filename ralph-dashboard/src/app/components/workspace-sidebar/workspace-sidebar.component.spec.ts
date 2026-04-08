@@ -192,4 +192,51 @@ describe('WorkspaceSidebarComponent', () => {
     expect(spy).not.toHaveBeenCalled();
   }));
 
+  it('selectRoot adds to expanded set when not in collapsedByUser', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+
+    fixture.detectChanges();
+    tick();
+
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
+    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    tick();
+    flush();
+    httpMock.match(() => true).forEach((req) => {
+      req.flush({ root: 'logs', path: '', parent: null, entries: [] });
+    });
+
+    const logs: Root = { key: 'logs', label: 'Logs', exists: true };
+    fixture.componentInstance.selectRoot(logs);
+    expect(fixture.componentInstance.isExpanded(logs)).toBe(true);
+  }));
+
+  it('isActive returns true only for active root', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    const nav = TestBed.inject(NavService);
+
+    fixture.detectChanges();
+    tick();
+
+    const navService = fixture.componentInstance['nav'] as any;
+    navService.activeRootSignal.set('logs');
+
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
+    req.flush([
+      { key: 'logs', label: 'Logs', exists: true },
+      { key: 'plans', label: 'Plans', exists: true },
+    ]);
+    tick();
+    flush();
+    httpMock.match(() => true).forEach((req) => {
+      req.flush({ root: 'logs', path: '', parent: null, entries: [] });
+    });
+
+    const logs: Root = { key: 'logs', label: 'Logs', exists: true };
+    const plans: Root = { key: 'plans', label: 'Plans', exists: true };
+
+    expect(fixture.componentInstance.isActive(logs)).toBe(true);
+    expect(fixture.componentInstance.isActive(plans)).toBe(false);
+  }));
+
 });

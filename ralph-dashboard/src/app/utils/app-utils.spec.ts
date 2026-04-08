@@ -40,4 +40,34 @@ describe('dashboard file hash (Vitest)', () => {
     const h = buildDashboardFileHash('logs', 'p', 'f.log');
     expect(parseDashboardFileHash(h)).toEqual({ root: 'logs', path: 'p', file: 'f.log' });
   });
+
+  it('escapes HTML entities in code blocks', () => {
+    const source = '```typescript\nconst x = 1 < 2 && 3 > 4\n```';
+    const result = markdownToHtml(source);
+    expect(result).toContain('&lt;');
+    expect(result).toContain('&gt;');
+  });
+
+  it('handles empty string input', () => {
+    const result = markdownToHtml('');
+    expect(result).toBe('');
+  });
+
+  it('highlights comments in code blocks', () => {
+    const source = '```typescript\n// This is a comment\nconst x = 1;\n```';
+    const result = markdownToHtml(source);
+    expect(result).toContain('token_comment');
+  });
+
+  it('highlights keywords in code blocks', () => {
+    const source = '```typescript\nconst x = 1;\n```';
+    const result = markdownToHtml(source);
+    expect(result).toContain('token_keyword');
+  });
+
+  it('highlights numbers in code blocks', () => {
+    const source = '```typescript\nconst x = 42;\n```';
+    const result = markdownToHtml(source);
+    expect(result).toContain('token_number');
+  });
 });

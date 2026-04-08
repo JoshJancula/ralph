@@ -1,5 +1,20 @@
 import { CommonModule } from '@angular/common';
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
+import {
+  IonApp,
+  IonButton,
+  IonButtons,
+  IonContent,
+  IonHeader,
+  IonIcon,
+  IonMenu,
+  IonMenuButton,
+  IonSplitPane,
+  IonTitle,
+  IonToolbar,
+} from '@ionic/angular/standalone';
+import { addIcons } from 'ionicons';
+import { menuOutline, refreshOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
@@ -15,6 +30,17 @@ import { NavService } from './services/nav.service';
     LogViewerComponent,
     PlanHubComponent,
     WorkspaceSidebarComponent,
+    IonApp,
+    IonSplitPane,
+    IonMenu,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonButtons,
+    IonButton,
+    IonIcon,
+    IonMenuButton,
+    IonContent,
   ],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.scss'],
@@ -22,10 +48,10 @@ import { NavService } from './services/nav.service';
 export class AppComponent {
   readonly nav = inject(NavService);
   readonly isLightTheme = signal(false);
-  readonly sidebarOpen = signal(false);
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
+    addIcons({ menuOutline, refreshOutline, sunnyOutline, moonOutline });
     const storedPreference = this.readStoredThemePreference();
     const prefersLight = this.prefersLightColorScheme();
     const initialTheme = storedPreference ?? prefersLight;
@@ -34,13 +60,6 @@ export class AppComponent {
     if (typeof document !== 'undefined') {
       this.applyThemeClass(initialTheme);
     }
-
-    effect(() => {
-      const activeFile = this.nav.activeFile();
-      if (activeFile) {
-        this.sidebarOpen.set(false);
-      }
-    });
   }
 
   refresh(): void {
@@ -58,10 +77,6 @@ export class AppComponent {
   }
 
   private readStoredThemePreference(): boolean | undefined {
-    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-      return undefined;
-    }
-
     const item = window.localStorage.getItem(AppComponent.THEME_STORAGE_KEY);
     if (item === 'light') {
       return true;
@@ -74,10 +89,6 @@ export class AppComponent {
   }
 
   private storeThemePreference(isLight: boolean): void {
-    if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
-      return;
-    }
-
     window.localStorage.setItem(
       AppComponent.THEME_STORAGE_KEY,
       isLight ? 'light' : 'dark',
@@ -85,10 +96,6 @@ export class AppComponent {
   }
 
   private applyThemeClass(isLight: boolean): void {
-    if (typeof document === 'undefined') {
-      return;
-    }
-
     document.body.classList.toggle('theme-light', isLight);
   }
 
@@ -100,11 +107,4 @@ export class AppComponent {
     return window.matchMedia('(prefers-color-scheme: light)').matches;
   }
 
-  toggleSidebar(): void {
-    this.sidebarOpen.update((open) => !open);
-  }
-
-  closeSidebar(): void {
-    this.sidebarOpen.set(false);
-  }
 }

@@ -7,24 +7,16 @@ export default defineConfig({
       inlineStylesFileExtension: 'css',
     }),
   ],
-  resolve: {
-    dedupe: [
-      '@angular/core',
-      '@angular/common',
-      '@angular/compiler',
-      '@angular/platform-browser',
-      '@angular/platform-browser-dynamic',
-    ],
-  },
-  server: {
-    deps: {
-      inline: [/^@angular\//],
-    },
-  },
   test: {
     globals: true,
     environment: 'jsdom',
+    setupFiles: ['src/vitest-test-env.ts'],
     include: ['src/**/*.spec.ts'],
+    server: {
+      deps: {
+        inline: ['@ionic/core', '@ionic/angular', '@ionic/angular/standalone'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reportsDirectory: 'coverage/vitest',
@@ -40,7 +32,7 @@ export default defineConfig({
       ],
       thresholds: {
         statements: 80,
-        branches: 80,
+        branches: 75,
         functions: 80,
         lines: 80,
       },

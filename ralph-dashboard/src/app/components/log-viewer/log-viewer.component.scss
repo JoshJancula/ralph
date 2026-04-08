@@ -1,23 +1,26 @@
 :host {
-  display: block;
-  height: 100%;
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .log-viewer-container {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
   overflow: hidden;
 }
 
-.toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
+  .toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
 
 .search-bar {
   display: flex;
@@ -25,36 +28,15 @@
   width: 100%;
 }
 
-.search-input {
+ion-searchbar {
+  --background: var(--background);
+  --color: var(--text-primary);
+  --placeholder-color: var(--text-muted);
+  --border-radius: 4px;
+  --box-shadow: none;
   flex: 1;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--background);
-  color: var(--text-primary);
-  font-family: var(--monospace-font);
-  font-size: 0.85rem;
-  outline: none;
-
-  &:focus {
-    border-color: var(--accent);
-  }
-}
-
-.clear-btn {
-  padding: 0.25rem 0.5rem;
-  margin-left: 0.5rem;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-
-  &:hover {
-    color: var(--text-primary);
-  }
+  padding-inline-start: 0;
+  padding-inline-end: 0;
 }
 
 .actions {
@@ -86,22 +68,35 @@
   }
 }
 
-.tailing-indicator {
-  font-size: 0.75rem;
-  color: var(--accent);
-  font-weight: 500;
-  margin-left: 0.5rem;
+ion-badge {
+  --background: var(--accent);
+  --color: var(--text-on-accent);
+  font-size: 0.72rem;
+  align-self: center;
 }
 
 .loading-indicator,
 .error-message {
+  flex: 1;
+  min-height: 220px;
   padding: 1rem;
   text-align: center;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .error-message {
   color: var(--danger);
+}
+
+.loading-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
 }
 
 .log-content {
@@ -320,6 +315,25 @@
 
   &:hover {
     background: var(--border);
+  }
+}
+
+.waiting-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+
+  .waiting-text {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+  }
+
+  ion-spinner {
+    color: var(--accent);
   }
 }
 

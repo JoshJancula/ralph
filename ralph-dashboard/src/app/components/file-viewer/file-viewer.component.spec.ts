@@ -36,6 +36,19 @@ describe('FileViewerComponent', () => {
     );
   }
 
+  function expectWorkspaceRequest(): TestRequest {
+    return httpMock.expectOne(
+      (r) => requestPath(r.url) === '/api/workspace',
+    );
+  }
+
+  function flushWorkspaceAndFile(root: string, path: string, content: string): void {
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    const fileReq = expectFileRequest(root, path);
+    fileReq.flush({ content, size: content.length, offset: 0, nextOffset: 0 });
+  }
+
   it('.md file: content is rendered via markdownToHtml into [innerHTML]', async () => {
     const fixture = TestBed.createComponent(FileViewerComponent);
     const raw = '# Hello from md';
@@ -43,8 +56,7 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
-    const req = expectFileRequest('plans', 'PLAN2/notes.md');
-    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    flushWorkspaceAndFile('plans', 'PLAN2/notes.md', raw);
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -66,8 +78,7 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
-    const req = expectFileRequest('plans', 'PLAN2/diagram.md');
-    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    flushWorkspaceAndFile('plans', 'PLAN2/diagram.md', raw);
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -87,8 +98,7 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
-    const req = expectFileRequest('plans', 'PLAN2/config.json');
-    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    flushWorkspaceAndFile('plans', 'PLAN2/config.json', raw);
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -103,8 +113,7 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'logs';
     fixture.detectChanges();
 
-    const req = expectFileRequest('logs', 'PLAN2/readme.txt');
-    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    flushWorkspaceAndFile('logs', 'PLAN2/readme.txt', raw);
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -119,14 +128,16 @@ describe('FileViewerComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.loading-indicator')?.textContent?.trim()).toBe('Loading...');
+    expect(el.querySelector('ion-spinner')).toBeTruthy();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/x.md');
     req.flush({ content: 'ok', size: 2, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(el.querySelector('.loading-indicator')).toBeNull();
+    expect(el.querySelector('ion-spinner')).toBeNull();
   });
 
   it('error state shown when fetch fails', async () => {
@@ -135,6 +146,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/missing.md');
     req.flush('fail', { status: 500, statusText: 'Internal Server Error' });
     await fixture.whenStable();
@@ -151,28 +164,30 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
-    const req = expectFileRequest('plans', 'PLAN2/page.md');
-    req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
+    flushWorkspaceAndFile('plans', 'PLAN2/page.md', raw);
     await fixture.whenStable();
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    const btn = el.querySelector('.file-toolbar button') as HTMLButtonElement;
-    expect(btn?.textContent?.trim()).toBe('View source');
+    // Get all buttons and find the one with "View Raw" / "View Pretty" text
+    const buttons = el.querySelectorAll('.file-toolbar ion-button');
+    const btn = Array.from(buttons).find(b => b.textContent?.includes('View Raw') || b.textContent?.includes('View Pretty')) as HTMLElement;
+    expect(btn).toBeTruthy();
+    expect(btn?.textContent?.trim()).toBe('View Raw');
     expect(el.querySelector('.markdown-content')).toBeTruthy();
 
     btn.click();
     fixture.detectChanges();
 
     expect(fixture.componentInstance.isRendered()).toBe(false);
-    expect(btn.textContent?.trim()).toBe('View rendered');
+    expect(btn.textContent?.trim()).toBe('View Pretty');
     expect(el.querySelector('.markdown-content')).toBeNull();
 
     btn.click();
     fixture.detectChanges();
 
     expect(fixture.componentInstance.isRendered()).toBe(true);
-    expect(btn.textContent?.trim()).toBe('View source');
+    expect(btn.textContent?.trim()).toBe('View Raw');
     expect(el.querySelector('.markdown-content')).toBeTruthy();
   });
 
@@ -182,6 +197,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -212,6 +229,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -259,6 +278,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -287,6 +308,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -311,6 +334,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -335,6 +360,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: raw, size: raw.length, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -358,11 +385,13 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/plan.md');
     req.flush({ content: '# Plan', size: 10, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
 
-    expect(fixture.componentInstance.runSnippet).toBe('bash $PWD/.ralph/run-plan.sh --plan plan.md');
+    expect(fixture.componentInstance.runSnippet).toBe('bash /test/.ralph/run-plan.sh --plan plan.md');
   });
 
   it('runSnippet returns command for orchestration files', async () => {
@@ -371,11 +400,13 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'orchestration-plans';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('orchestration-plans', 'my-plan.orch.json');
     req.flush({ content: '{}', size: 2, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
 
-    expect(fixture.componentInstance.runSnippet).toBe('bash $PWD/.ralph/run-orchestration.sh --plan my-plan.orch.json');
+    expect(fixture.componentInstance.runSnippet).toBe('bash /test/.ralph/run-orchestration.sh --plan my-plan.orch.json');
   });
 
   it('runSnippet returns null for unsupported file types', async () => {
@@ -384,6 +415,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.root = 'docs';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('docs', 'readme.txt');
     req.flush({ content: 'Hello', size: 5, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -435,6 +468,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.filePath = 'readme.md';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'readme.md');
     req.flush({ content: '# Doc', size: 5, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
@@ -448,6 +483,8 @@ describe('FileViewerComponent', () => {
     fixture.componentInstance.filePath = 'readme.md';
     fixture.detectChanges();
 
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
     const req = expectFileRequest('docs', 'readme.md');
     req.flush({ content: '# Doc', size: 5, offset: 0, nextOffset: 0 });
     await fixture.whenStable();
