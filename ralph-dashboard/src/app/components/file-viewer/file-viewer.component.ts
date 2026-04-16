@@ -3,7 +3,7 @@ import { Component, Input, OnInit, effect, inject, signal } from '@angular/core'
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { IonSpinner, IonButton } from '@ionic/angular/standalone';
 import { Subscription } from 'rxjs';
-import { ApiService, FileChunk, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
@@ -63,6 +63,24 @@ export class FileViewerComponent implements OnInit {
 
     effect(() => {
       this.syncPlanMetrics();
+    });
+  }
+
+  constructor() {
+    // Coalesce root/filePath changes into one load and cancel any in-flight request.
+    effect((onCleanup) => {
+      const root = this.rootSignal();
+      const filePath = this.filePathSignal();
+
+      if (!root || !filePath) {
+        this.loadSequence += 1;
+        this.loading.set(false);
+        this.error.set(null);
+        return;
+      }
+
+      const subscription = this.loadFile(root, filePath);
+      onCleanup(() => subscription.unsubscribe());
     });
   }
 
@@ -275,51 +293,6 @@ export class FileViewerComponent implements OnInit {
     return path.endsWith('.md') || path.endsWith('.mdc');
   }
 
-  private syncPlanMetrics(): void {
-    const summary = this.metricsSummary();
-    const fileName = this.filePathSignal().split('/').filter(Boolean).pop() ?? '';
-    const planKey = this.stripPlanSuffix(fileName);
-
-    if (!summary || !planKey) {
-      this.planMetrics.set(null);
-      return;
-    }
-
-    this.planMetrics.set(this.findLatestPlanMetrics(summary, planKey));
-  }
-
-  private findLatestPlanMetrics(summary: MetricsSummary, planKey: string): MetricsSummaryItem | null {
-    const matches = summary.plans.filter((item) => item.plan_key === planKey);
-    if (matches.length === 0) {
-      return null;
-    }
-    return matches.reduce((latest, candidate) =>
-      this.metricTimestamp(candidate) > this.metricTimestamp(latest) ? candidate : latest,
-    );
-  }
-
-  private metricTimestamp(item: MetricsSummaryItem): number {
-    return this.parseTimestamp(item.ended_at) || this.parseTimestamp(item.started_at);
-  }
-
-  private parseTimestamp(value?: string): number {
-    if (!value) {
-      return 0;
-    }
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  private stripPlanSuffix(fileName: string): string {
-    if (fileName.endsWith('.mdc')) {
-      return fileName.slice(0, -4);
-    }
-    if (fileName.endsWith('.md')) {
-      return fileName.slice(0, -3);
-    }
-    return fileName;
-  }
-
   private async renderMarkdown(source: string, requestToken: number, finalizeLoad = false): Promise<void> {
     if (typeof document === 'undefined') {
       if (finalizeLoad && requestToken === this.loadSequence) {
@@ -330,7 +303,7 @@ export class FileViewerComponent implements OnInit {
 
     const html = this.formatHtmlFromSource(source);
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    sanitizeHtmlDocument(doc.body);
+    this.sanitizeHtmlDocument(doc.body);
     if (requestToken !== this.loadSequence) {
       return;
     }
@@ -340,7 +313,7 @@ export class FileViewerComponent implements OnInit {
     if (requestToken !== this.loadSequence) {
       return;
     }
-    sanitizeHtmlDocument(doc.body);
+    this.sanitizeHtmlDocument(doc.body);
     // Angular's HTML sanitizer strips Mermaid SVG entirely, so we clean the DOM
     // ourselves and then trust the result to preserve the rendered diagram.
     this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
@@ -444,7 +417,46 @@ export class FileViewerComponent implements OnInit {
     }
   }
 
-  // sanitizer helper replaced with shared implementation
+  private sanitizeHtmlDocument(root: ParentNode): void {
+    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'template', 'link', 'meta']);
+    const elements = Array.from(root.querySelectorAll('*'));
+
+    for (const element of elements) {
+      const tagName = element.tagName.toLowerCase();
+      if (blockedTags.has(tagName)) {
+        element.remove();
+        continue;
+      }
+
+      for (const attr of Array.from(element.attributes)) {
+        const attrName = attr.name.toLowerCase();
+        if (attrName.startsWith('on') || attrName === 'srcdoc') {
+          element.removeAttribute(attr.name);
+          continue;
+        }
+
+        if (this.isUrlAttribute(attrName) && this.isUnsafeUrl(attr.value)) {
+          element.removeAttribute(attr.name);
+        }
+      }
+    }
+  }
+
+  private isUrlAttribute(name: string): boolean {
+    return ['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'data'].includes(name);
+  }
+
+  private isUnsafeUrl(value: string): boolean {
+    const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
+    return (
+      normalized.startsWith('javascript:') ||
+      normalized.startsWith('vbscript:') ||
+      normalized.startsWith('data:text/html') ||
+      normalized.startsWith('data:application/javascript') ||
+      normalized.startsWith('data:application/ecmascript') ||
+      normalized.startsWith('data:application/x-javascript')
+    );
+  }
 }
 
 interface MermaidClient {

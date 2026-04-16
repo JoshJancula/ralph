@@ -1,16 +1,11 @@
-import { basename, dirname, join, relative, resolve } from 'node:path';
-import { Dirent, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export interface RootConfig {
   label: string;
   basePath: string;
   writable: boolean;
-}
-
-export interface DashboardRoots {
-  projectRoot: string;
-  workspaceRoot: string;
 }
 
 export function isHiddenEntryName(name: string): boolean {
@@ -21,34 +16,51 @@ export function filterVisibleEntryNames(names: readonly string[]): string[] {
   return names.filter((name) => !isHiddenEntryName(name));
 }
 
-function hasEntry(dir: string, entry: string): boolean {
-  const candidate = join(dir, entry);
-  if (!existsSync(candidate)) {
+export function findWorkspaceProjectRoot(): string {
+  const fromEnvRoots = [
+    process.env['RALPH_PLAN_WORKSPACE_ROOT'],
+    process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'],
+  ];
+
+  for (const fromEnv of fromEnvRoots) {
+    if (!fromEnv) {
+      continue;
+    }
+
+    const resolvedEnvRoot = resolve(fromEnv);
+    if (hasDotRalphWorkspace(resolvedEnvRoot)) {
+      return resolvedEnvRoot;
+    }
+  }
+
+  const fromCwd = walkUpForDotRalphWorkspace(process.cwd());
+  if (fromCwd) {
+    return fromCwd;
+  }
+
+  const here = dirname(fileURLToPath(import.meta.url));
+  const fromModule = walkUpForDotRalphWorkspace(here);
+  if (fromModule) {
+    return fromModule;
+  }
+
+  return process.cwd();
+}
+
+function hasDotRalphWorkspace(dir: string): boolean {
+  const workspaceDir = join(dir, '.ralph-workspace');
+  if (!existsSync(workspaceDir)) {
     return false;
   }
 
   try {
-    return statSync(candidate).isDirectory();
+    return statSync(workspaceDir).isDirectory();
   } catch {
     return false;
   }
 }
 
-function hasDotRalphWorkspace(dir: string): boolean {
-  return hasEntry(dir, '.ralph-workspace');
-}
-
-function hasDotRalphDir(dir: string): boolean {
-  return hasEntry(dir, '.ralph');
-}
-
-const WORKSPACE_CONTENT_ENTRIES = ['logs', 'artifacts', 'sessions', 'orchestration-plans', 'handoffs'] as const;
-
-function isPopulatedWorkspace(workspaceDir: string): boolean {
-  return WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry));
-}
-
-function walkUpForEntry(startDir: string, entry: string): string | null {
+function walkUpForDotRalphWorkspace(startDir: string): string | null {
   let dir = startDir;
   for (let i = 0; i < 64; i++) {
     if (hasEntry(dir, entry)) {
@@ -179,7 +191,7 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
     },
     plans: {
       label: 'Plans',
-      basePath: roots.projectRoot,
+      basePath: join(workspaceRoot, '.ralph-workspace', 'orchestration-plans'),
       writable: false,
     },
   };

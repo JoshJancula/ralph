@@ -1,61 +1,57 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { findWorkspaceProjectRoot } from '../src/paths';
 
-function withProjectRootEnv(
-  envKey: 'RALPH_DASHBOARD_PROJECT_ROOT' | 'RALPH_PROJECT_ROOT',
+function withWorkspaceRootEnv(
+  envKey: 'RALPH_PLAN_WORKSPACE_ROOT' | 'RALPH_DASHBOARD_WORKSPACE_ROOT',
   envValue: string,
   callback: () => void,
 ): void {
-  const originalDashboardRoot = process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
-  const originalProjectRoot = process.env['RALPH_PROJECT_ROOT'];
+  const originalPlanRoot = process.env['RALPH_PLAN_WORKSPACE_ROOT'];
+  const originalDashboardRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
 
   try {
-    if (envKey === 'RALPH_DASHBOARD_PROJECT_ROOT') {
-      process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = envValue;
-      delete process.env['RALPH_PROJECT_ROOT'];
+    if (envKey === 'RALPH_PLAN_WORKSPACE_ROOT') {
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = envValue;
+      delete process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
     } else {
-      process.env['RALPH_PROJECT_ROOT'] = envValue;
-      delete process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
+      process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] = envValue;
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     }
 
     callback();
   } finally {
-    if (originalDashboardRoot === undefined) {
-      delete process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
+    if (originalPlanRoot === undefined) {
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     } else {
-      process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = originalDashboardRoot;
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = originalPlanRoot;
     }
 
-    if (originalProjectRoot === undefined) {
-      delete process.env['RALPH_PROJECT_ROOT'];
+    if (originalDashboardRoot === undefined) {
+      delete process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
     } else {
-      process.env['RALPH_PROJECT_ROOT'] = originalProjectRoot;
+      process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] = originalDashboardRoot;
     }
   }
 }
 
 describe('findWorkspaceProjectRoot', () => {
-  for (const envKey of ['RALPH_DASHBOARD_PROJECT_ROOT', 'RALPH_PROJECT_ROOT'] as const) {
-    it(`falls back to walk-up discovery when ${envKey} has no .ralph directory`, () => {
-      const originalCwd = process.cwd();
-      const tempRoot = realpathSync(mkdtempSync(join(tmpdir(), 'ralph-dashboard-root-')));
-      const expectedProjectRoot = join(tempRoot, 'project');
-      mkdirSync(join(expectedProjectRoot, '.ralph'), { recursive: true });
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+  for (const envKey of ['RALPH_PLAN_WORKSPACE_ROOT', 'RALPH_DASHBOARD_WORKSPACE_ROOT'] as const) {
+    it(`falls back to walk-up discovery when ${envKey} has no .ralph-workspace directory`, () => {
+      const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-root-'));
       const invalidRoot = join(tempRoot, 'workspace');
       mkdirSync(invalidRoot, { recursive: true });
-      const nestedDir = join(expectedProjectRoot, 'nested');
-      mkdirSync(nestedDir, { recursive: true });
 
       try {
-        process.chdir(nestedDir);
-        withProjectRootEnv(envKey, invalidRoot, () => {
-          expect(findWorkspaceProjectRoot()).toBe(expectedProjectRoot);
+        withWorkspaceRootEnv(envKey, invalidRoot, () => {
+          expect(findWorkspaceProjectRoot()).toBe(repoRoot);
         });
       } finally {
-        process.chdir(originalCwd);
         rmSync(tempRoot, { recursive: true, force: true });
       }
     });

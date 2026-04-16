@@ -1,12 +1,12 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ApiService, FileChunk, MetricsSummary } from '../../services/api.service';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { NavService } from '../../services/nav.service';
 import { RouterTestingModule } from '@angular/router/testing';
-import { Observable, Subject, of } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');

@@ -1,10 +1,9 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
-import { ApiService, MetricsSummary, MetricsSummaryItem, MetricsSummaryOverall } from '../../services/api.service';
+import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
-import { formatElapsedSeconds } from '../../utils/format-elapsed';
 
 interface PlanItem {
   name: string;
@@ -295,7 +294,6 @@ export class PlanHubComponent implements OnInit {
   private apiService = inject(ApiService);
   private navService = inject(NavService);
   private planLogResolution = inject(PlanLogResolutionService);
-  private cdr = inject(ChangeDetectorRef);
 
   ngOnInit(): void {
     this.fetchPlans();
@@ -383,106 +381,5 @@ export class PlanHubComponent implements OnInit {
         this.navService.navigate('logs', target.directory, target.file);
       },
     });
-  }
-
-  formatNumber(value: number): string {
-    return new Intl.NumberFormat().format(value);
-  }
-
-  formatSeconds(value: number): string {
-    return formatElapsedSeconds(value);
-  }
-
-  formatTokens(item: MetricsSummaryItem): string {
-    const total =
-      item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens;
-    if (total <= 0) {
-      return '--';
-    }
-    return this.formatNumber(total);
-  }
-
-  formatOverallTokens(overall: MetricsSummaryOverall): string {
-    const total =
-      overall.input_tokens + overall.output_tokens + overall.cache_creation_input_tokens + overall.cache_read_input_tokens;
-    if (total <= 0) {
-      return '--';
-    }
-    return this.formatNumber(total);
-  }
-
-  formatPercent(ratio: number): string {
-    if (!Number.isFinite(ratio) || ratio <= 0) {
-      return '--';
-    }
-    return `${(ratio * 100).toFixed(1)}%`;
-  }
-
-  formatPeakTurn(tokens: number): string {
-    if (!Number.isFinite(tokens) || tokens <= 0) {
-      return '--';
-    }
-    return this.formatNumber(tokens);
-  }
-
-  private rebuildPlanFolderMetrics(): void {
-    const summary = this.metricsSummary;
-    this.planCards = this.items.map((item) => ({
-      ...item,
-      folderMetrics: summary ? this.aggregateForFolder(summary, item.name) : null,
-      mtimeLabel: this.formatMtimeLabel(item.mtime),
-    }));
-  }
-
-  private formatMtimeLabel(mtimeMs: number): string {
-    const d = new Date(mtimeMs);
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  private aggregateForFolder(summary: MetricsSummary, folderName: string): MetricsSummaryItem | null {
-    const seenPaths = new Set<string>();
-    const matches: MetricsSummaryItem[] = [];
-
-    const consider = (row: MetricsSummaryItem): void => {
-      if (seenPaths.has(row.path)) {
-        return;
-      }
-      if (row.plan_key === folderName || row.artifact_ns === folderName) {
-        seenPaths.add(row.path);
-        matches.push(row);
-      }
-    };
-
-    for (const row of summary.plans) {
-      consider(row);
-    }
-    for (const row of summary.orchestrations) {
-      consider(row);
-    }
-
-    if (matches.length === 0) {
-      return null;
-    }
-
-    const aggInput = matches.reduce((acc, m) => acc + m.input_tokens, 0);
-    const aggCacheRead = matches.reduce((acc, m) => acc + m.cache_read_input_tokens, 0);
-    const aggCacheCreate = matches.reduce((acc, m) => acc + m.cache_creation_input_tokens, 0);
-    const aggTotal = aggInput + aggCacheRead + aggCacheCreate;
-    const aggCacheHitRatio = aggTotal > 0 ? Math.round((aggCacheRead / aggTotal) * 10000) / 10000 : 0;
-    const aggMaxTurn = matches.reduce((max, m) => Math.max(max, m.max_turn_total_tokens), 0);
-
-    return {
-      path: matches.map((m) => m.path).join('|'),
-      plan_key: folderName,
-      artifact_ns: folderName,
-      elapsed_seconds: matches.reduce((acc, m) => acc + m.elapsed_seconds, 0),
-      input_tokens: aggInput,
-      output_tokens: matches.reduce((acc, m) => acc + m.output_tokens, 0),
-      cache_creation_input_tokens: aggCacheCreate,
-      cache_read_input_tokens: aggCacheRead,
-      max_turn_total_tokens: aggMaxTurn,
-      cache_hit_ratio: aggCacheHitRatio,
-    };
   }
 }
