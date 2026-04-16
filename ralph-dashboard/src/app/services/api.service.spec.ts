@@ -119,22 +119,30 @@ describe('ApiService', () => {
   });
 
   describe('fetchTemplate()', () => {
-    it('should make GET to /api/template?name=', async () => {
-      const name = 'my-template';
-      const mockTemplate = {
-        name,
-        content: 'template content here',
-      };
+    it.each(['plan', 'orchestration'] as const)(
+      'should make GET to /api/template?name=%s',
+      async (name) => {
+        const mockTemplate = {
+          name,
+          content: 'template content here',
+        };
 
-      const responsePromise = firstValueFrom(service.fetchTemplate(name));
-      const req = httpMock.expectOne(
-        (r) => r.urlWithParams.startsWith('/api/template') && r.params.get('name') === name,
-      );
-      expect(req.request.method).toBe('GET');
-      req.flush(mockTemplate);
+        const responsePromise = firstValueFrom(service.fetchTemplate(name));
+        const req = httpMock.expectOne(
+          (r) => r.urlWithParams.startsWith('/api/template') && r.params.get('name') === name,
+        );
+        expect(req.request.method).toBe('GET');
+        req.flush(mockTemplate);
 
-      const template = await responsePromise;
-      expect(template).toEqual(mockTemplate);
+        const template = await responsePromise;
+        expect(template).toEqual(mockTemplate);
+      },
+    );
+
+    it('should reject invalid template names at compile time', () => {
+      const invalidName = 'my-template' as const;
+      // @ts-expect-error - only plan and orchestration are valid template names
+      service.fetchTemplate(invalidName);
     });
   });
 

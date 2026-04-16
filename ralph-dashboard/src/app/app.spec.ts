@@ -28,6 +28,7 @@ describe('AppComponent (root)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    document.body.classList.remove('theme-light');
   });
 
   it('should create the app', () => {
@@ -46,6 +47,7 @@ describe('AppComponent (root)', () => {
   it('should read theme preference from localStorage on init', () => {
     localStorageMock.getItem.mockReturnValue('light');
     const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
     expect(fixture.componentInstance.isLightTheme()).toBe(true);
   });
 

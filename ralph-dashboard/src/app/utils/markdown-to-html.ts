@@ -49,6 +49,10 @@ function basicHighlight(code: string): string {
   return result;
 }
 
+/**
+ * Converts markdown into HTML for the file viewer's sanitization pipeline.
+ * The caller is responsible for cleaning the parsed DOM before trusting it.
+ */
 export function markdownToHtml(source: string): string {
   const renderer = new Renderer();
 

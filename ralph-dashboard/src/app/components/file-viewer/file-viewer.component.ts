@@ -1,9 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input, OnInit, inject, signal } from '@angular/core';
+import { Component, Input, OnInit, effect, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { IonSpinner, IonButton } from '@ionic/angular/standalone';
-import { ApiService, FileChunk, ListingEntry } from '../../services/api.service';
+import { Subscription } from 'rxjs';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 
 @Component({
@@ -17,7 +19,9 @@ export class FileViewerComponent implements OnInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
   private readonly sanitizer = inject(DomSanitizer);
+  private readonly planLogResolution = inject(PlanLogResolutionService);
   private mermaidImportPromise: Promise<MermaidClient | null> | null = null;
+  private loadSequence = 0;
 
   rootSignal = signal<string>('');
   filePathSignal = signal<string>('');
@@ -27,6 +31,24 @@ export class FileViewerComponent implements OnInit {
   isRendered = signal<boolean>(true);
   safeHtml = signal<SafeHtml | null>(null);
   workspaceRoot = signal<string>('');
+
+  constructor() {
+    // Coalesce root/filePath changes into one load and cancel any in-flight request.
+    effect((onCleanup) => {
+      const root = this.rootSignal();
+      const filePath = this.filePathSignal();
+
+      if (!root || !filePath) {
+        this.loadSequence += 1;
+        this.loading.set(false);
+        this.error.set(null);
+        return;
+      }
+
+      const subscription = this.loadFile(root, filePath);
+      onCleanup(() => subscription.unsubscribe());
+    });
+  }
 
   ngOnInit(): void {
     this.api.fetchWorkspace().subscribe({
@@ -42,31 +64,38 @@ export class FileViewerComponent implements OnInit {
 
   @Input() set root(value: string) {
     this.rootSignal.set(value);
-    this.loadFile(value, this.filePathSignal());
   }
 
   @Input() set filePath(value: string) {
     this.filePathSignal.set(value);
-    this.loadFile(this.rootSignal(), value);
   }
 
-  loadFile(root: string, filePath: string): void {
-    if (!root || !filePath) return;
+  private loadFile(root: string, filePath: string): Subscription {
+    const requestToken = ++this.loadSequence;
+    const markdownFile = this.isMarkdownPath(filePath);
 
     this.loading.set(true);
     this.error.set(null);
 
-    this.api.fetchFile(root, filePath).subscribe({
+    return this.api.fetchFile(root, filePath).subscribe({
       next: (chunk) => {
+        if (requestToken !== this.loadSequence) {
+          return;
+        }
+
         this.content.set(chunk.content);
-        this.loading.set(false);
-        if (this.isMarkdown()) {
-          void this.renderMarkdown(chunk.content);
+        if (markdownFile) {
+          void this.renderMarkdown(chunk.content, requestToken, true);
         } else {
           this.safeHtml.set(null);
+          this.loading.set(false);
         }
       },
       error: () => {
+        if (requestToken !== this.loadSequence) {
+          return;
+        }
+
         this.error.set('Failed to load file');
         this.loading.set(false);
       },
@@ -76,13 +105,12 @@ export class FileViewerComponent implements OnInit {
   toggleView(): void {
     this.isRendered.update((val) => !val);
     if (this.isRendered() && this.isMarkdown()) {
-      void this.renderMarkdown(this.content());
+      void this.renderMarkdown(this.content(), this.loadSequence);
     }
   }
 
   isMarkdown(): boolean {
-    const path = this.filePathSignal();
-    return path.endsWith('.md') || path.endsWith('.mdc');
+    return this.isMarkdownPath(this.filePathSignal());
   }
 
   isJson(): boolean {
@@ -107,16 +135,7 @@ export class FileViewerComponent implements OnInit {
   }
 
   get planDirectory(): string | null {
-    const path = this.filePathSignal();
-    if (!path) return null;
-    const parts = path.split('/').filter(Boolean);
-    if (parts.length === 0) return null;
-    const name = parts[0];
-    if (parts.length === 1) {
-      const dotIdx = name.lastIndexOf('.');
-      return dotIdx > 0 ? name.substring(0, dotIdx) : name;
-    }
-    return name;
+    return this.planLogResolution.resolvePlanDirectory(this.filePathSignal());
   }
 
   get showViewLogs(): boolean {
@@ -128,42 +147,11 @@ export class FileViewerComponent implements OnInit {
     const dir = this.planDirectory;
     if (!dir) return;
 
-    this.api.fetchListing('logs', dir).subscribe({
-      next: (listing) => {
-        const logFile = this.findMostRecentLog(listing.entries, dir);
-        if (logFile) {
-          this.nav.navigate('logs', null, logFile);
-          return;
-        }
-
-        // Look one level deeper in subdirectories (e.g. run-xxx/output.log)
-        const subdirs = listing.entries
-          .filter((e) => e.type === 'dir')
-          .sort((a, b) => b.mtime - a.mtime);
-
-        if (subdirs.length === 0) {
-          this.nav.navigate('logs', dir, null);
-          return;
-        }
-
-        const subdirPath = `${dir}/${subdirs[0].name}`;
-        this.api.fetchListing('logs', subdirPath).subscribe({
-          next: (sub) => {
-            const found = this.findMostRecentLog(sub.entries, subdirPath);
-            this.nav.navigate('logs', null, found ?? null);
-          },
-          error: () => this.nav.navigate('logs', dir, null),
-        });
+    this.planLogResolution.resolveLatestLogTarget(dir).subscribe({
+      next: (target) => {
+        this.nav.navigate('logs', target.directory, target.file);
       },
-      error: () => this.nav.navigate('logs', dir, null),
     });
-  }
-
-  private findMostRecentLog(entries: ListingEntry[], prefix: string): string | null {
-    const logs = entries
-      .filter((e) => e.type === 'file' && e.name.endsWith('.log'))
-      .sort((a, b) => b.mtime - a.mtime);
-    return logs.length > 0 ? `${prefix}/${logs[0].name}` : null;
   }
 
   handleContentClick(event: MouseEvent): void {
@@ -228,17 +216,37 @@ export class FileViewerComponent implements OnInit {
     return null;
   }
 
-  private async renderMarkdown(source: string): Promise<void> {
+  private isMarkdownPath(path: string): boolean {
+    return path.endsWith('.md') || path.endsWith('.mdc');
+  }
+
+  private async renderMarkdown(source: string, requestToken: number, finalizeLoad = false): Promise<void> {
     if (typeof document === 'undefined') {
+      if (finalizeLoad && requestToken === this.loadSequence) {
+        this.loading.set(false);
+      }
       return;
     }
 
     const html = this.formatHtmlFromSource(source);
-    this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(html));
-
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    await this.renderMermaidDiagrams(doc);
+    this.sanitizeHtmlDocument(doc.body);
+    if (requestToken !== this.loadSequence) {
+      return;
+    }
     this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
+
+    await this.renderMermaidDiagrams(doc);
+    if (requestToken !== this.loadSequence) {
+      return;
+    }
+    this.sanitizeHtmlDocument(doc.body);
+    // Angular's HTML sanitizer strips Mermaid SVG entirely, so we clean the DOM
+    // ourselves and then trust the result to preserve the rendered diagram.
+    this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
+    if (finalizeLoad && requestToken === this.loadSequence) {
+      this.loading.set(false);
+    }
   }
 
   private formatHtmlFromSource(source: string): string {
@@ -265,7 +273,7 @@ export class FileViewerComponent implements OnInit {
     mermaidClient.initialize({
       startOnLoad: false,
       theme: isLightTheme ? 'default' : 'dark',
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: 'inherit',
     });
 
@@ -334,6 +342,47 @@ export class FileViewerComponent implements OnInit {
     if (typeof proto.getComputedTextLength !== 'function') {
       proto.getComputedTextLength = () => 0;
     }
+  }
+
+  private sanitizeHtmlDocument(root: ParentNode): void {
+    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'template', 'link', 'meta']);
+    const elements = Array.from(root.querySelectorAll('*'));
+
+    for (const element of elements) {
+      const tagName = element.tagName.toLowerCase();
+      if (blockedTags.has(tagName)) {
+        element.remove();
+        continue;
+      }
+
+      for (const attr of Array.from(element.attributes)) {
+        const attrName = attr.name.toLowerCase();
+        if (attrName.startsWith('on') || attrName === 'srcdoc') {
+          element.removeAttribute(attr.name);
+          continue;
+        }
+
+        if (this.isUrlAttribute(attrName) && this.isUnsafeUrl(attr.value)) {
+          element.removeAttribute(attr.name);
+        }
+      }
+    }
+  }
+
+  private isUrlAttribute(name: string): boolean {
+    return ['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'data'].includes(name);
+  }
+
+  private isUnsafeUrl(value: string): boolean {
+    const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
+    return (
+      normalized.startsWith('javascript:') ||
+      normalized.startsWith('vbscript:') ||
+      normalized.startsWith('data:text/html') ||
+      normalized.startsWith('data:application/javascript') ||
+      normalized.startsWith('data:application/ecmascript') ||
+      normalized.startsWith('data:application/x-javascript')
+    );
   }
 }
 

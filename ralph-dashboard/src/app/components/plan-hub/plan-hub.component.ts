@@ -1,8 +1,9 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
-import { ApiService, ListingEntry } from '../../services/api.service';
+import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 
 interface PlanItem {
   name: string;
@@ -157,6 +158,7 @@ export class PlanHubComponent implements OnInit {
 
   private apiService = inject(ApiService);
   private navService = inject(NavService);
+  private planLogResolution = inject(PlanLogResolutionService);
 
   ngOnInit(): void {
     this.fetchPlans();
@@ -189,48 +191,25 @@ export class PlanHubComponent implements OnInit {
   }
 
   openPlan(item: PlanItem): void {
-    const directory = item.path.replace(/\/$/, '');
+    const directory = this.planLogResolution.resolvePlanDirectory(item.path);
+    if (!directory) {
+      return;
+    }
+
     const planFile = `${directory}.md`;
     this.navService.navigate('plans', '', planFile);
   }
 
   viewLogs(item: PlanItem): void {
-    const dir = item.path.replace(/\/$/, '');
+    const dir = this.planLogResolution.resolvePlanDirectory(item.path);
+    if (!dir) {
+      return;
+    }
 
-    this.apiService.fetchListing('logs', dir).subscribe({
-      next: (listing) => {
-        const logFile = this.findMostRecentLog(listing.entries, dir);
-        if (logFile) {
-          this.navService.navigate('logs', null, logFile);
-          return;
-        }
-
-        const subdirs = listing.entries
-          .filter((e) => e.type === 'dir')
-          .sort((a, b) => b.mtime - a.mtime);
-
-        if (subdirs.length === 0) {
-          this.navService.navigate('logs', dir, null);
-          return;
-        }
-
-        const subdirPath = `${dir}/${subdirs[0].name}`;
-        this.apiService.fetchListing('logs', subdirPath).subscribe({
-          next: (sub) => {
-            const found = this.findMostRecentLog(sub.entries, subdirPath);
-            this.navService.navigate('logs', null, found ?? null);
-          },
-          error: () => this.navService.navigate('logs', dir, null),
-        });
+    this.planLogResolution.resolveLatestLogTarget(dir).subscribe({
+      next: (target) => {
+        this.navService.navigate('logs', target.directory, target.file);
       },
-      error: () => this.navService.navigate('logs', dir, null),
     });
-  }
-
-  private findMostRecentLog(entries: ListingEntry[], prefix: string): string | null {
-    const logs = entries
-      .filter((e) => e.type === 'file' && e.name.endsWith('.log'))
-      .sort((a, b) => b.mtime - a.mtime);
-    return logs.length > 0 ? `${prefix}/${logs[0].name}` : null;
   }
 }

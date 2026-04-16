@@ -1,5 +1,5 @@
 import { dirname, join, relative, resolve } from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export interface RootConfig {
@@ -8,10 +8,29 @@ export interface RootConfig {
   writable: boolean;
 }
 
+export function isHiddenEntryName(name: string): boolean {
+  return name.length > 1 && name.startsWith('.');
+}
+
+export function filterVisibleEntryNames(names: readonly string[]): string[] {
+  return names.filter((name) => !isHiddenEntryName(name));
+}
+
 export function findWorkspaceProjectRoot(): string {
-  const fromEnv = process.env['RALPH_PLAN_WORKSPACE_ROOT'] ?? process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
-  if (fromEnv) {
-    return resolve(fromEnv);
+  const fromEnvRoots = [
+    process.env['RALPH_PLAN_WORKSPACE_ROOT'],
+    process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'],
+  ];
+
+  for (const fromEnv of fromEnvRoots) {
+    if (!fromEnv) {
+      continue;
+    }
+
+    const resolvedEnvRoot = resolve(fromEnv);
+    if (hasDotRalphWorkspace(resolvedEnvRoot)) {
+      return resolvedEnvRoot;
+    }
   }
 
   const fromCwd = walkUpForDotRalphWorkspace(process.cwd());
@@ -26,6 +45,19 @@ export function findWorkspaceProjectRoot(): string {
   }
 
   return process.cwd();
+}
+
+function hasDotRalphWorkspace(dir: string): boolean {
+  const workspaceDir = join(dir, '.ralph-workspace');
+  if (!existsSync(workspaceDir)) {
+    return false;
+  }
+
+  try {
+    return statSync(workspaceDir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function walkUpForDotRalphWorkspace(startDir: string): string | null {
@@ -73,7 +105,7 @@ export function getAllowedRoots(workspaceRoot: string): Record<string, RootConfi
     },
     plans: {
       label: 'Plans',
-      basePath: resolve(workspaceRoot),
+      basePath: join(workspaceRoot, '.ralph-workspace', 'orchestration-plans'),
       writable: false,
     },
   };
@@ -89,6 +121,9 @@ function normalizeRelPath(relPath: string): string[] {
   }
   const segments = stripped.split('/').filter(Boolean);
   if (segments.some((seg) => seg === '..')) {
+    throw new Error('invalid path');
+  }
+  if (segments.some((seg) => isHiddenEntryName(seg))) {
     throw new Error('invalid path');
   }
   return segments;

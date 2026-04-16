@@ -3,15 +3,16 @@ import {
   AfterViewInit,
   Component,
   ElementRef,
-  OnDestroy,
   OnInit,
   QueryList,
   ViewChildren,
   computed,
   effect,
+  DestroyRef,
   inject,
   signal,
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 
 import { ApiService, Root } from '../../services/api.service';
@@ -27,9 +28,11 @@ const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'plans', 'artifacts',
   templateUrl: './workspace-sidebar.component.html',
   styleUrls: ['./workspace-sidebar.component.scss'],
 })
-export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestroy {
+export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly rootHostsVisibilityVersion = signal(0);
 
   roots = signal<Root[]>([]);
   expandedRoots = signal<Set<string>>(new Set());
@@ -47,10 +50,9 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
 
   constructor() {
     effect(() => {
-      const activeRoot = this.nav.activeRoot();
-      if (activeRoot) {
-        this.ensureActiveRootVisible();
-      }
+      this.nav.activeRoot();
+      this.rootHostsVisibilityVersion();
+      this.ensureActiveRootVisible();
     });
   }
 
@@ -76,11 +78,12 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   ngAfterViewInit(): void {
-    this.rootHosts.changes.subscribe(() => this.ensureActiveRootVisible());
-    this.ensureActiveRootVisible();
-  }
-
-  ngOnDestroy(): void {
+    this.rootHosts.changes
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => {
+        this.rootHostsVisibilityVersion.update((version) => version + 1);
+      });
+    this.rootHostsVisibilityVersion.update((version) => version + 1);
   }
 
   isExpanded(root: Root): boolean {
@@ -124,12 +127,11 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
         return next;
       });
     }
-    this.ensureActiveRootVisible();
   }
 
   private ensureActiveRootVisible(): void {
     const activeRootKey = this.nav.activeRoot();
-    if (!activeRootKey || !this.rootHosts) {
+    if (!activeRootKey || !this.rootHosts?.length) {
       return;
     }
     Promise.resolve().then(() => {

@@ -30,8 +30,10 @@ export interface FileChunk {
   nextOffset: number;
 }
 
+export type TemplateName = 'plan' | 'orchestration';
+
 export interface Template {
-  name: string;
+  name: TemplateName;
   content: string;
 }
 
@@ -63,7 +65,7 @@ export class ApiService {
     return this.http.get<FileChunk>('/api/file', { params });
   }
 
-  fetchTemplate(name: string): Observable<Template> {
+  fetchTemplate(name: TemplateName): Observable<Template> {
     const params = { name };
     return this.http.get<Template>('/api/template', { params });
   }

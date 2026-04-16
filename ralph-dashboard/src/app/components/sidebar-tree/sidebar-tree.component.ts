@@ -12,6 +12,7 @@ interface TreeNode {
   depth: number;
   expanded: boolean;
   loading: boolean;
+  requestToken: number;
   children: TreeNode[] | null; // null = not loaded, [] = loaded empty
 }
 
@@ -31,6 +32,7 @@ function formatSize(bytes: number): string {
 export class SidebarTreeComponent implements OnInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
+  private nextRequestToken = 0;
 
   @Input() set root(value: string) {
     this._root = value;
@@ -90,6 +92,7 @@ export class SidebarTreeComponent implements OnInit {
       depth,
       expanded: false,
       loading: false,
+      requestToken: 0,
       children: null,
     };
   }
@@ -112,6 +115,14 @@ export class SidebarTreeComponent implements OnInit {
   toggleDirectory(node: TreeNode): void {
     if (node.type !== 'dir') return;
 
+    if (node.loading) {
+      node.requestToken = ++this.nextRequestToken;
+      node.loading = false;
+      node.expanded = false;
+      this.rebuildFlat();
+      return;
+    }
+
     if (node.expanded) {
       node.expanded = false;
       this.rebuildFlat();
@@ -124,11 +135,14 @@ export class SidebarTreeComponent implements OnInit {
       return;
     }
 
+    const requestToken = ++this.nextRequestToken;
+    node.requestToken = requestToken;
     node.loading = true;
     this.rebuildFlat();
 
     this.api.fetchListing(this._root, node.path).subscribe({
       next: (listing) => {
+        if (node.requestToken !== requestToken) return;
         node.children = listing.entries.map(e => this.entryToNode(e, node.depth + 1));
         node.expanded = true;
         node.loading = false;
@@ -138,6 +152,7 @@ export class SidebarTreeComponent implements OnInit {
         }
       },
       error: () => {
+        if (node.requestToken !== requestToken) return;
         node.loading = false;
         node.expanded = false;
         this.rebuildFlat();

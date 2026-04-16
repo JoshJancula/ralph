@@ -1,10 +1,12 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { NavService } from '../../services/nav.service';
 import { RouterTestingModule } from '@angular/router/testing';
+import { Observable, Subject } from 'rxjs';
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -70,8 +72,9 @@ describe('FileViewerComponent', () => {
   it('mermaid markdown is rendered into SVG markup', async () => {
     const fixture = TestBed.createComponent(FileViewerComponent);
     const raw = '```mermaid\ngraph TD\n  A --> B\n```';
+    const initializeSpy = vi.fn();
     const renderSpy = vi.spyOn(fixture.componentInstance as any, 'loadMermaidClient').mockResolvedValue({
-      initialize: vi.fn(),
+      initialize: initializeSpy,
       render: vi.fn(async () => ({ svg: '<svg id="diagram"></svg>' })),
     });
     fixture.componentInstance.filePath = 'PLAN2/diagram.md';
@@ -88,7 +91,40 @@ describe('FileViewerComponent', () => {
     expect(markdownEl).toBeTruthy();
     expect(markdownEl?.innerHTML).toContain('<svg');
     expect(markdownEl?.innerHTML).not.toContain('language-mermaid');
+    expect(initializeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ securityLevel: 'strict' }),
+    );
     expect(renderSpy).toHaveBeenCalled();
+  });
+
+  it('sanitizes script tags, event handlers, and javascript: URLs from markdown HTML', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '# Security check',
+      '<script>globalThis.__xss = true</script>',
+      '<img src="x" onerror="alert(1)" />',
+      '<a href="javascript:alert(1)" onclick="alert(1)">bad link</a>',
+    ].join('\n\n');
+    fixture.componentInstance.filePath = 'PLAN2/security.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    flushWorkspaceAndFile('plans', 'PLAN2/security.md', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const markdownEl = (fixture.nativeElement as HTMLElement).querySelector(
+      '.markdown-content',
+    ) as HTMLElement | null;
+    expect(markdownEl).toBeTruthy();
+    expect(markdownEl?.querySelector('script')).toBeNull();
+    expect(markdownEl?.querySelector('[onerror]')).toBeNull();
+    expect(markdownEl?.querySelector('[onclick]')).toBeNull();
+
+    const anchor = markdownEl?.querySelector('a');
+    expect(anchor?.getAttribute('href')).not.toBe('javascript:alert(1)');
+    expect(markdownEl?.textContent).toContain('Security check');
+    expect(markdownEl?.textContent).toContain('bad link');
   });
 
   it('.json file: content is displayed in a <pre> as pretty-printed JSON', async () => {
@@ -138,6 +174,65 @@ describe('FileViewerComponent', () => {
     fixture.detectChanges();
 
     expect(el.querySelector('ion-spinner')).toBeNull();
+  });
+
+  it('rapid input changes keep only the latest file content', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const api = TestBed.inject(ApiService);
+    const firstSubject = new Subject<FileChunk>();
+    const secondSubject = new Subject<FileChunk>();
+    let firstCancelled = false;
+
+    vi.spyOn(api, 'fetchFile')
+      .mockImplementationOnce(
+        () =>
+          new Observable<FileChunk>((subscriber) => {
+            const inner = firstSubject.subscribe(subscriber);
+            return () => {
+              firstCancelled = true;
+              inner.unsubscribe();
+            };
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Observable<FileChunk>((subscriber) => {
+            const inner = secondSubject.subscribe(subscriber);
+            return () => inner.unsubscribe();
+          }),
+      );
+
+    fixture.componentInstance.filePath = 'PLAN2/old.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fixture.componentInstance.filePath = 'PLAN2/new.md';
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(firstCancelled).toBe(true);
+
+    secondSubject.next({ content: '# New content', size: 13, offset: 0, nextOffset: 0 });
+    secondSubject.complete();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    firstSubject.next({ content: '# Old content', size: 13, offset: 0, nextOffset: 0 });
+    firstSubject.complete();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const markdownEl = (fixture.nativeElement as HTMLElement).querySelector(
+      '.markdown-content',
+    ) as HTMLElement | null;
+    expect(markdownEl).toBeTruthy();
+    expect(markdownEl?.innerHTML).toBe(markdownToHtml('# New content'));
   });
 
   it('error state shown when fetch fails', async () => {

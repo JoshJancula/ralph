@@ -143,9 +143,8 @@ describe('SidebarTreeComponent', () => {
     ]);
     fixture.detectChanges();
 
-    // Navigate after the component is initialized and data is loaded
-    nav.navigate('logs', '', 'PLAN2/readme.md');
-    tick();
+    // Seed the active file directly so the selection logic can be asserted
+    nav['activeFileSignal'].set('PLAN2/readme.md');
     fixture.detectChanges();
 
     const selected = (fixture.nativeElement as HTMLElement).querySelectorAll('.tree-row.selected');
@@ -174,6 +173,53 @@ describe('SidebarTreeComponent', () => {
     fixture.detectChanges();
 
     expect(el.querySelector('.loading-indicator')).toBeNull();
+  }));
+
+  it('cancels a pending directory fetch when the row is collapsed', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.path = 'PLAN2';
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+    flushListing('logs', 'PLAN2', [{ name: 'docs', path: 'PLAN2/docs/', type: 'dir', size: 0, mtime: 0 }]);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const dirRow = el.querySelectorAll('.tree-row')[0] as HTMLElement;
+
+    dirRow.click();
+    flushMicrotaskQueue();
+    fixture.detectChanges();
+
+    const pendingRequests = httpMock.match(
+      (r) => requestPath(r.url) === '/api/list' && r.params.get('path') === 'PLAN2/docs/',
+    );
+    expect(pendingRequests.length).toBe(1);
+
+    dirRow.click();
+    flushMicrotaskQueue();
+    fixture.detectChanges();
+
+    const node = fixture.componentInstance.treeData()[0];
+    expect(node.expanded).toBe(false);
+    expect(node.loading).toBe(false);
+    expect(el.querySelectorAll('.tree-row').length).toBe(1);
+
+    pendingRequests[0].flush({
+      root: 'logs',
+      path: 'PLAN2/docs/',
+      parent: 'PLAN2',
+      entries: [
+        { name: 'nested.md', path: 'PLAN2/docs/nested.md', type: 'file', size: 1, mtime: 0 },
+      ],
+    });
+    fixture.detectChanges();
+
+    expect(node.expanded).toBe(false);
+    expect(node.loading).toBe(false);
+    expect(el.querySelectorAll('.tree-row').length).toBe(1);
+    expect(el.textContent).not.toContain('nested.md');
   }));
 
   it('clicking an expanded directory collapses children', fakeAsync(async () => {
@@ -317,8 +363,8 @@ describe('SidebarTreeComponent', () => {
     fixture.componentInstance.autoOpen = true;
     fixture.detectChanges();
 
-    // Navigate AFTER component is set up but BEFORE data loads
-    nav.navigate('logs', '', 'PLAN2/readme.md');
+    // Seed the active file before data loads so autoOpen stays quiet
+    nav['activeFileSignal'].set('PLAN2/readme.md');
     const spy = vi.spyOn(nav, 'navigate');
 
     flushMicrotaskQueue();

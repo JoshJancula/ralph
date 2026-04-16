@@ -1,4 +1,4 @@
-import { Injectable, inject, signal, effect } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter } from 'rxjs';
 
@@ -10,13 +10,11 @@ export class NavService {
   private readonly activeRootSignal = signal<string | null>(null);
   private readonly activePathSignal = signal<string | null>(null);
   private readonly activeFileSignal = signal<string | null>(null);
-  private readonly modeSignal = signal<'hub' | 'file'>('hub');
-  private initialized = false;
 
   readonly activeRoot = this.activeRootSignal.asReadonly();
   readonly activePath = this.activePathSignal.asReadonly();
   readonly activeFile = this.activeFileSignal.asReadonly();
-  readonly mode = this.modeSignal.asReadonly();
+  readonly mode = computed<'hub' | 'file'>(() => (this.activeFile() ? 'file' : 'hub'));
 
   constructor() {
     // Listen to route changes and update state
@@ -26,13 +24,8 @@ export class NavService {
         this.updateStateFromRoute();
       });
 
-    // Initialize from current route
-    effect(() => {
-      if (!this.initialized) {
-        this.updateStateFromRoute();
-        this.initialized = true;
-      }
-    });
+    // Initialize from the current route
+    this.updateStateFromRoute();
   }
 
   navigate(root: string, dirPath?: string | null, file?: string | null): void {
@@ -41,10 +34,24 @@ export class NavService {
       return;
     }
 
-    this.setState(normalizedRoot, this.normalizePath(dirPath), this.normalizePath(file));
-
     const targetUrl = this.buildUrl(normalizedRoot, dirPath, file);
-    void this.router.navigateByUrl(targetUrl).catch(() => {});
+    try {
+      void this.router
+        .navigateByUrl(targetUrl)
+        .then((success) => {
+          if (success) {
+            this.updateStateFromRoute();
+            return;
+          }
+
+          this.reportNavigationFailure(targetUrl, 'Navigation was canceled');
+        })
+        .catch((error: unknown) => {
+          this.reportNavigationFailure(targetUrl, error);
+        });
+    } catch (error) {
+      this.reportNavigationFailure(targetUrl, error);
+    }
   }
 
   refresh(): void {
@@ -111,7 +118,11 @@ export class NavService {
     this.activeRootSignal.set(root);
     this.activePathSignal.set(dirPath);
     this.activeFileSignal.set(file);
-    this.modeSignal.set(file ? 'file' : 'hub');
+  }
+
+  private reportNavigationFailure(targetUrl: string, reason: unknown): void {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    console.error(`Navigation to ${targetUrl} failed: ${message}`);
   }
 
   private normalizePath(value?: string | null): string | null {

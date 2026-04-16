@@ -3,6 +3,15 @@ import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@an
 import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { LogViewerComponent } from './log-viewer.component';
 import { NavService } from '../../services/nav.service';
+import * as markdownUtils from '../../utils/markdown-to-html';
+
+vi.mock('../../utils/markdown-to-html', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/markdown-to-html')>();
+  return {
+    ...actual,
+    markdownToHtml: vi.fn(actual.markdownToHtml),
+  };
+});
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -29,6 +38,7 @@ describe('LogViewerComponent', () => {
     httpMock.verify();
     // Restore original scrollIntoView
     Element.prototype.scrollIntoView = originalScrollIntoView;
+    vi.clearAllMocks();
   });
 
   function expectFileRequest(root: string, path: string, offset: string): TestRequest {
@@ -449,6 +459,35 @@ describe('LogViewerComponent', () => {
 
     const html = fixture.componentInstance.filteredPrettyHtml;
     expect(html).toContain('<mark>world</mark>');
+  });
+
+  it('caches rendered markdown until content changes', async () => {
+    const markdownToHtmlMock = vi.mocked(markdownUtils.markdownToHtml);
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.log';
+    fixture.detectChanges();
+
+    const req = expectFileRequest('logs', 'app.log', '0');
+    req.flush({ content: '# Header\nText', size: 13, offset: 0, nextOffset: 13 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(markdownToHtmlMock).not.toHaveBeenCalled();
+
+    fixture.componentInstance.togglePrettyMode();
+    fixture.detectChanges();
+
+    expect(markdownToHtmlMock).toHaveBeenCalledTimes(1);
+
+    fixture.detectChanges();
+    fixture.detectChanges();
+    expect(markdownToHtmlMock).toHaveBeenCalledTimes(1);
+
+    fixture.componentInstance.content = '# Updated\nBody';
+    fixture.detectChanges();
+
+    expect(markdownToHtmlMock).toHaveBeenCalledTimes(2);
   });
 
   it('scrollToBottom handles logContentElement being null', () => {

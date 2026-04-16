@@ -42,9 +42,13 @@ describe('NavService', () => {
     await router.initialNavigation();
   });
 
-  it('initial state: signals are empty when no route', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('initial state reflects the current route after initial navigation', () => {
     const service = TestBed.inject(NavService);
-    expect(service.activeRoot()).toBeNull();
+    expect(service.activeRoot()).toBe('plans');
     expect(service.activePath()).toBeNull();
     expect(service.activeFile()).toBeNull();
     expect(service.mode()).toBe('hub');
@@ -65,6 +69,34 @@ describe('NavService', () => {
     expect(router.url).toContain('/logs');
     expect(router.url).toContain('path=PLAN2');
     expect(router.url).toContain('file=plan-runner.log');
+  });
+
+  it('navigate rejection does not update signals', async () => {
+    const service = TestBed.inject(NavService);
+    await router.navigateByUrl('/logs?path=PLAN2&file=plan-runner.log');
+
+    expect(service.activeRoot()).toBe('logs');
+    expect(service.activePath()).toBe('PLAN2');
+    expect(service.activeFile()).toBe('plan-runner.log');
+    expect(service.mode()).toBe('file');
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const navigateSpy = vi.spyOn(router, 'navigateByUrl').mockRejectedValueOnce(new Error('Navigation blocked'));
+
+    service.navigate('plans', 'PLAN3', 'notes.md');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(navigateSpy).toHaveBeenCalledWith(expect.stringContaining('/plans'));
+    expect(service.activeRoot()).toBe('logs');
+    expect(service.activePath()).toBe('PLAN2');
+    expect(service.activeFile()).toBe('plan-runner.log');
+    expect(service.mode()).toBe('file');
+
+    expect(consoleSpy).toHaveBeenCalled();
+    const loggedMessage = consoleSpy.mock.calls[0]?.[0] ?? '';
+    expect(loggedMessage).toContain('Navigation to /plans');
+    expect(loggedMessage).toContain('Navigation blocked');
   });
 
   it('direct navigation updates state from URL', async () => {

@@ -3,12 +3,13 @@ import { existsSync, promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
 import {
+  filterVisibleEntryNames,
   findWorkspaceProjectRoot,
   getAllowedRoots,
   parentListingPath,
   resolveUnderRoot,
   type RootConfig,
-} from '../paths.js';
+} from '../paths';
 
 const FILE_CHUNK_BYTES = 256 * 1024;
 
@@ -20,23 +21,7 @@ function getRootsMap(): Record<string, RootConfig> {
   return getAllowedRoots(findWorkspaceProjectRoot());
 }
 
-export function registerDashboardApi(app: Express): void {
-  app.get('/api/workspace', (_req: Request, res: Response) => {
-    const root = findWorkspaceProjectRoot();
-    res.json({ root });
-  });
-
-  app.get('/api/roots', (_req: Request, res: Response) => {
-    const roots = getRootsMap();
-    const body = Object.entries(roots).map(([key, config]) => ({
-      key,
-      label: config.label,
-      exists: existsSync(config.basePath),
-    }));
-    res.json(body);
-  });
-
-  app.get('/api/list', async (req: Request, res: Response) => {
+export async function handleListRequest(req: Request, res: Response): Promise<void> {
     const rootKey = req.query['root'] as string | undefined;
     const pathParam = (req.query['path'] as string | undefined) ?? '';
     if (!rootKey) {
@@ -74,7 +59,8 @@ export function registerDashboardApi(app: Express): void {
       return jsonError(res, 500, 'read failed');
     }
 
-    names.sort((a, b) => a.localeCompare(b));
+    const visibleNames = filterVisibleEntryNames(names);
+    visibleNames.sort((a, b) => a.localeCompare(b));
 
     const entries: Array<{
       name: string;
@@ -86,10 +72,7 @@ export function registerDashboardApi(app: Express): void {
 
     const relPrefix = pathParam ? (pathParam.endsWith('/') ? pathParam : `${pathParam}/`) : '';
 
-    for (const name of names) {
-      if (name.startsWith('.')) {
-        continue;
-      }
+    for (const name of visibleNames) {
       const absChild = join(absDir, name);
       let st: Awaited<ReturnType<typeof fs.stat>>;
       try {
@@ -144,9 +127,9 @@ export function registerDashboardApi(app: Express): void {
       parent: parentListingPath(pathParam),
       entries: filteredEntries,
     });
-  });
+}
 
-  app.get('/api/file', async (req: Request, res: Response) => {
+export async function handleFileRequest(req: Request, res: Response): Promise<void> {
     const rootKey = req.query['root'] as string | undefined;
     const filePath = (req.query['path'] as string | undefined) ?? '';
     const offsetRaw = (req.query['offset'] as string | undefined) ?? '0';
@@ -181,12 +164,13 @@ export function registerDashboardApi(app: Express): void {
 
     const size = stat.size;
     if (offset > size) {
-      return res.json({
+      res.json({
         content: '',
         size,
         offset,
         nextOffset: size,
       });
+      return;
     }
 
     const length = Math.min(FILE_CHUNK_BYTES, size - offset);
@@ -205,9 +189,9 @@ export function registerDashboardApi(app: Express): void {
     } finally {
       await handle.close();
     }
-  });
+}
 
-  app.get('/api/template', async (req: Request, res: Response) => {
+export async function handleTemplateRequest(req: Request, res: Response): Promise<void> {
     const name = req.query['name'] as string | undefined;
     if (!name || (name !== 'plan' && name !== 'orchestration')) {
       return jsonError(res, 400, 'invalid template name');
@@ -234,5 +218,25 @@ export function registerDashboardApi(app: Express): void {
     } catch {
       return jsonError(res, 404, 'template not found');
     }
+}
+
+export function registerDashboardApi(app: Express): void {
+  app.get('/api/workspace', (_req: Request, res: Response) => {
+    const root = findWorkspaceProjectRoot();
+    res.json({ root });
   });
+
+  app.get('/api/roots', (_req: Request, res: Response) => {
+    const roots = getRootsMap();
+    const body = Object.entries(roots).map(([key, config]) => ({
+      key,
+      label: config.label,
+      exists: existsSync(config.basePath),
+    }));
+    res.json(body);
+  });
+
+  app.get('/api/list', handleListRequest);
+  app.get('/api/file', handleFileRequest);
+  app.get('/api/template', handleTemplateRequest);
 }
