@@ -72,6 +72,7 @@ The layout has a **workspace sidebar** and a **file tree** beside it:
 
 - **Workspace roots:** Pick one of **Logs**, **Artifacts**, **Sessions**, **Docs**, or **Plans**. Each root maps to a directory under the workspace (see below).
 - **File tree:** After a root is selected, the tree lists files and folders for that root. Expand directories to drill down; select a file to open it in the main area (markdown and other text in the file viewer; `.log` files in the log viewer with optional tailing).
+- **Usage view:** Click the header Usage button or open `/usage` for a dedicated runtime/model token breakdown page with drill-down filters.
 
 **Directories the dashboard reads** (relative to the workspace project root, i.e. the repo where Ralph runs):
 

@@ -53,6 +53,34 @@
     gap: 0.5rem;
   }
 
+  .toolbar-metrics {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .metric-elapsed {
+    color: var(--text-muted);
+    font-family: var(--monospace-font);
+  }
+
+  .metric-model-chip {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-hover);
+    color: var(--text-primary);
+    font-family: var(--monospace-font);
+  }
+
+  .metric-separator {
+    color: var(--text-muted);
+  }
+
   .snippet-label {
     color: var(--text-muted);
     font-size: 0.8rem;
@@ -87,14 +115,14 @@
 
     p {
       margin: 0 0 1rem;
-      color: var(--text-secondary);
+      color: var(--text-primary);
     }
 
     ul,
     ol {
       margin: 0 0 1rem;
       padding-left: 1.5rem;
-      color: var(--text-secondary);
+      color: var(--text-primary);
     }
 
     li {

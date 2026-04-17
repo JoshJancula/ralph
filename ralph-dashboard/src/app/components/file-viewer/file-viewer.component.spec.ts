@@ -1,12 +1,12 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ApiService, FileChunk } from '../../services/api.service';
+import { ApiService, FileChunk, MetricsSummary } from '../../services/api.service';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { NavService } from '../../services/nav.service';
 import { RouterTestingModule } from '@angular/router/testing';
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, of } from 'rxjs';
 
 function requestPath(url: string): string {
   const q = url.indexOf('?');
@@ -21,6 +21,22 @@ describe('FileViewerComponent', () => {
     await TestBed.configureTestingModule({
       imports: [FileViewerComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
     }).compileComponents();
+    const api = TestBed.inject(ApiService);
+    const emptySummary: MetricsSummary = {
+      overall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 0,
+        count: 0,
+      },
+      plans: [],
+      orchestrations: [],
+    };
+    vi.spyOn(api, 'fetchMetricsSummary').mockReturnValue(of(emptySummary));
     httpMock = TestBed.inject(HttpTestingController);
   });
 

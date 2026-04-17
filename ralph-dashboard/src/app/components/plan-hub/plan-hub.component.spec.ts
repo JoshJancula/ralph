@@ -177,6 +177,20 @@ describe('PlanHubComponent', () => {
     expect(spy).toHaveBeenCalledWith('plans', '', 'PLAN2.md');
   });
 
+  it('openUsage delegates to NavService.navigate', () => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.detectChanges();
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
+    req.flush({ root: 'plans', path: '', parent: null, entries: [] });
+    flushMetricsSummary(httpMock);
+
+    fixture.componentInstance.openUsage();
+    expect(spy).toHaveBeenCalledWith('usage');
+  });
+
   it('viewLogs delegates to NavService.navigate with logs root', fakeAsync(() => {
     const fixture = TestBed.createComponent(PlanHubComponent);
     const nav = TestBed.inject(NavService);
@@ -442,9 +456,10 @@ describe('PlanHubComponent', () => {
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('5.0s');
+    const comp = fixture.componentInstance;
+    expect(comp.formatSeconds(5)).toBe('5s');
+    expect(comp.formatSeconds(8.5)).toBe('8.5s');
     expect(text).toContain('31');
-    expect(text).toContain('8.5s');
     expect(text).toContain('75');
   });
 

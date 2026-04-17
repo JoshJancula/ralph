@@ -4,6 +4,7 @@ import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonC
 import { ApiService, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
+import { formatElapsedSeconds } from '../../utils/format-elapsed';
 
 interface PlanItem {
   name: string;
@@ -14,11 +15,6 @@ interface PlanItem {
 
 type PlanCardRow = PlanItem & { folderMetrics: MetricsSummaryItem | null; mtimeLabel: string };
 
-interface StatItem {
-  label: string;
-  value: string;
-}
-
 @Component({
   selector: 'ralph-plan-hub',
   standalone: true,
@@ -28,89 +24,10 @@ interface StatItem {
     <div class="plan-hub">
       <div class="header">
         <h2>Plans</h2>
+        <div class="header-actions">
+          <button class="btn-secondary" (click)="openUsage()">Usage Details</button>
+        </div>
       </div>
-      @if (metricsLoading) {
-        <div class="metrics-loading">Loading metrics...</div>
-      } @else if (metricsError) {
-        <div class="metrics-error">{{ metricsError }}</div>
-      } @else if (metricsSummary) {
-        <section class="metrics-section">
-          <div class="metrics-overall">
-            @for (stat of overallStatRows; track stat.label) {
-              <ion-card>
-                <ion-card-content>
-                  <div class="metric-label">{{ stat.label }}</div>
-                  <div class="metric-value">{{ stat.value }}</div>
-                </ion-card-content>
-              </ion-card>
-            }
-          </div>
-
-          <div class="metrics-grid">
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Plan Metrics</ion-card-title>
-                <ion-card-subtitle>{{ metricsSummary.plans.length }} plan runs</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                @if (metricsSummary.plans.length === 0) {
-                  <div class="metrics-empty">No plan metrics found</div>
-                } @else {
-                  <div class="metrics-table">
-                    <div class="metrics-table-row metrics-table-header">
-                      <span>Plan</span>
-                      <span>Elapsed</span>
-                      <span>Tokens</span>
-                      <span>Cache hit</span>
-                      <span>Peak turn</span>
-                    </div>
-                    @for (item of metricsSummary.plans; track item.path) {
-                      <div class="metrics-table-row">
-                        <span>{{ item.plan_key }}</span>
-                        <span>{{ formatSeconds(item.elapsed_seconds) }}</span>
-                        <span>{{ formatTokens(item) }}</span>
-                        <span>{{ formatPercent(item.cache_hit_ratio) }}</span>
-                        <span>{{ formatPeakTurn(item.max_turn_total_tokens) }}</span>
-                      </div>
-                    }
-                  </div>
-                }
-              </ion-card-content>
-            </ion-card>
-
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Orchestration Metrics</ion-card-title>
-                <ion-card-subtitle>{{ metricsSummary.orchestrations.length }} orchestration runs</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                @if (metricsSummary.orchestrations.length === 0) {
-                  <div class="metrics-empty">No orchestration metrics found</div>
-                } @else {
-                  <div class="metrics-table">
-                    <div class="metrics-table-row metrics-table-header">
-                      <span>Orchestration</span>
-                      <span>Elapsed</span>
-                      <span>Tokens</span>
-                      <span>Cache hit</span>
-                      <span>Peak turn</span>
-                    </div>
-                    @for (item of metricsSummary.orchestrations; track item.path) {
-                      <div class="metrics-table-row">
-                        <span>{{ item.artifact_ns }}</span>
-                        <span>{{ formatSeconds(item.elapsed_seconds) }}</span>
-                        <span>{{ formatTokens(item) }}</span>
-                        <span>{{ formatPercent(item.cache_hit_ratio) }}</span>
-                        <span>{{ formatPeakTurn(item.max_turn_total_tokens) }}</span>
-                      </div>
-                    }
-                  </div>
-                }
-              </ion-card-content>
-            </ion-card>
-          </div>
-        </section>
-      }
       @if (error) {
         <div class="error">{{ error }}</div>
       } @else if (loading) {
@@ -186,73 +103,20 @@ interface StatItem {
     }
     .header {
       margin-bottom: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
     }
     .header h2 {
       margin: 0;
       font-size: 1.75rem;
       font-weight: 600;
     }
-    .metrics-section {
-      display: grid;
-      gap: 1rem;
-      margin-bottom: 2rem;
-    }
-    .metrics-overall {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 1rem;
-    }
-    .metrics-overall ion-card {
-      margin: 0;
-    }
-    .metric-label {
-      color: var(--text-muted);
-      font-size: 0.85rem;
-      margin-bottom: 0.35rem;
-    }
-    .metric-value {
-      font-size: 1.4rem;
-      font-weight: 600;
-      font-family: var(--monospace-font);
-    }
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 1rem;
-    }
-    .metrics-table {
-      display: grid;
+    .header-actions {
+      display: flex;
       gap: 0.5rem;
-    }
-    .metrics-table-row {
-      display: grid;
-      grid-template-columns: 1.4fr 0.8fr 0.9fr 0.7fr 0.7fr;
-      gap: 0.75rem;
-      align-items: center;
-      font-size: 0.9rem;
-    }
-    .metrics-table-header {
-      color: var(--text-muted);
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .metrics-empty,
-    .metrics-loading,
-    .metrics-error {
-      padding: 1rem;
-      border-radius: 4px;
-      margin-bottom: 1rem;
-    }
-    .metrics-loading,
-    .metrics-empty {
-      color: var(--text-muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-    }
-    .metrics-error {
-      color: var(--danger);
-      background: rgba(255, 0, 0, 0.1);
     }
     .error {
       color: var(--danger);
@@ -323,6 +187,7 @@ interface StatItem {
       letter-spacing: 0.04em;
     }
     .plan-folder-metric-value {
+      color: var(--text-primary);
       font-family: var(--monospace-font);
       font-weight: 600;
     }
@@ -345,7 +210,7 @@ interface StatItem {
     }
     .btn-primary {
       background: var(--accent);
-      color: #fff;
+      color: var(--button-text);
     }
     .btn-primary:hover {
       background: var(--accent-hover);
@@ -364,7 +229,6 @@ export class PlanHubComponent implements OnInit {
   items: PlanItem[] = [];
   planCards: PlanCardRow[] = [];
   metricsSummary: MetricsSummary | null = null;
-  overallStatRows: StatItem[] = [];
   loading = false;
   metricsLoading = false;
   error = '';
@@ -403,7 +267,10 @@ export class PlanHubComponent implements OnInit {
         this.cdr.markForCheck();
       },
       error: (err) => {
-        this.error = err.error?.error || 'Failed to load plans';
+        const missingLogsMessage =
+          'Logs directory not found (.ralph-workspace/logs). Run a plan or set RALPH_DASHBOARD_WORKSPACE_ROOT to the workspace before loading plans.';
+        this.error =
+          err.status === 404 ? missingLogsMessage : err.error?.error || 'Failed to load plans';
         this.loading = false;
         this.rebuildPlanFolderMetrics();
         this.cdr.markForCheck();
@@ -420,7 +287,6 @@ export class PlanHubComponent implements OnInit {
       next: (summary) => {
         this.metricsSummary = summary;
         this.metricsLoading = false;
-        this.overallStatRows = this.buildOverallStatRows(summary);
         this.rebuildPlanFolderMetrics();
         this.cdr.markForCheck();
       },
@@ -428,11 +294,14 @@ export class PlanHubComponent implements OnInit {
         this.metricsError = err.error?.error || 'Failed to load metrics';
         this.metricsLoading = false;
         this.metricsSummary = null;
-        this.overallStatRows = [];
         this.rebuildPlanFolderMetrics();
         this.cdr.markForCheck();
       },
     });
+  }
+
+  openUsage(): void {
+    this.navService.navigate('usage');
   }
 
   openPlan(item: PlanItem): void {
@@ -463,17 +332,16 @@ export class PlanHubComponent implements OnInit {
   }
 
   formatSeconds(value: number): string {
-    if (!Number.isFinite(value)) {
-      return '0s';
-    }
-
-    return `${value.toFixed(1)}s`;
+    return formatElapsedSeconds(value);
   }
 
   formatTokens(item: MetricsSummaryItem): string {
-    return this.formatNumber(
-      item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens,
-    );
+    const total =
+      item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens;
+    if (total <= 0) {
+      return '--';
+    }
+    return this.formatNumber(total);
   }
 
   formatPercent(ratio: number): string {
@@ -503,18 +371,6 @@ export class PlanHubComponent implements OnInit {
     const d = new Date(mtimeMs);
     const pad = (n: number) => n.toString().padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  private buildOverallStatRows(summary: MetricsSummary): StatItem[] {
-    return [
-      { label: 'Input Tokens', value: this.formatNumber(summary.overall.input_tokens) },
-      { label: 'Output Tokens', value: this.formatNumber(summary.overall.output_tokens) },
-      { label: 'Cache Created', value: this.formatNumber(summary.overall.cache_creation_input_tokens) },
-      { label: 'Cache Read', value: this.formatNumber(summary.overall.cache_read_input_tokens) },
-      { label: 'Cache Hit Rate', value: this.formatPercent(summary.overall.cache_hit_ratio) },
-      { label: 'Peak Turn', value: this.formatPeakTurn(summary.overall.max_turn_total_tokens) },
-      { label: 'Elapsed Time', value: this.formatSeconds(summary.overall.elapsed_seconds) },
-    ];
   }
 
   private aggregateForFolder(summary: MetricsSummary, folderName: string): MetricsSummaryItem | null {

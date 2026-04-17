@@ -15,7 +15,7 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { menuOutline, refreshOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
+import { menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
 import { WorkspaceSidebarComponent } from './components/workspace-sidebar/workspace-sidebar.component';
 import { NavService } from './services/nav.service';
 
@@ -47,7 +47,7 @@ export class AppComponent implements OnInit {
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
-    addIcons({ menuOutline, refreshOutline, sunnyOutline, moonOutline });
+    addIcons({ menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline });
   }
 
   ngOnInit(): void {
@@ -60,6 +60,10 @@ export class AppComponent implements OnInit {
 
   refresh(): void {
     this.nav.refresh();
+  }
+
+  openUsage(): void {
+    this.nav.navigate('usage');
   }
 
   toggleTheme(): void {

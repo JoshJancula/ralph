@@ -99,6 +99,20 @@ describe('NavService', () => {
     expect(loggedMessage).toContain('Navigation blocked');
   });
 
+  it('navigate logs when router resolves false (navigation canceled)', async () => {
+    const service = TestBed.inject(NavService);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(router, 'navigateByUrl').mockResolvedValueOnce(false);
+
+    service.navigate('plans');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleSpy).toHaveBeenCalled();
+    const loggedMessage = consoleSpy.mock.calls[0]?.[0] ?? '';
+    expect(loggedMessage).toContain('Navigation was canceled');
+  });
+
   it('direct navigation updates state from URL', async () => {
     const service = TestBed.inject(NavService);
     await router.navigateByUrl('/alpha?path=beta&file=gamma.txt');

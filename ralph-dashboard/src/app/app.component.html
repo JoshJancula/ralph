@@ -6,6 +6,9 @@
       </ion-buttons>
       <ion-title class="app-title">Workspace Explorer</ion-title>
       <ion-buttons slot="end">
+        <ion-button (click)="openUsage()" fill="clear" aria-label="Usage">
+          <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
+        </ion-button>
         <ion-button (click)="refresh()" fill="clear" aria-label="Refresh">
           <ion-icon slot="icon-only" name="refresh-outline"></ion-icon>
         </ion-button>

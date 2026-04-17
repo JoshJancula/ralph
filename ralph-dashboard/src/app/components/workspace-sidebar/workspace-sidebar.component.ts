@@ -41,12 +41,11 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
   @ViewChildren('rootHost', { read: ElementRef })
   rootHosts!: QueryList<ElementRef<HTMLElement>>;
 
-  allRoots = computed(() => {
-    const available = this.roots();
-    return ROOT_ORDER
-      .map(key => available.find(r => r.key === key))
-      .filter((r): r is Root => r !== undefined);
-  });
+  allRoots = computed(() =>
+    ROOT_ORDER
+      .map(key => this.roots().find(r => r.key === key))
+      .filter((r): r is Root => r !== undefined)
+  );
 
   constructor() {
     effect(() => {
@@ -92,6 +91,13 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
 
   isActive(root: Root): boolean {
     return this.nav.activeRoot() === root.key;
+  }
+
+  rootMeta(root: Root): string {
+    if (!root.exists) {
+      return 'Section unavailable';
+    }
+    return 'Browse entries';
   }
 
   toggleExpansion(root: Root): void {

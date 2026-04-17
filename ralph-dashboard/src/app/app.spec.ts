@@ -72,4 +72,12 @@ describe('AppComponent (root)', () => {
     fixture.componentInstance.refresh();
     expect(spy).toHaveBeenCalled();
   });
+
+  it('should navigate to usage when openUsage is called', () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+    fixture.componentInstance.openUsage();
+    expect(spy).toHaveBeenCalledWith('usage');
+  });
 });
