@@ -234,7 +234,7 @@ describe('WorkspaceSidebarComponent', () => {
     expect(spy).not.toHaveBeenCalled();
   }));
 
-  it('selectRoot adds to expanded set when not in collapsedByUser', fakeAsync(() => {
+  it('selectRoot expands the root and clears user-collapsed state', fakeAsync(() => {
     const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
 
     fixture.detectChanges();
@@ -249,6 +249,10 @@ describe('WorkspaceSidebarComponent', () => {
     });
 
     const logs: Root = { key: 'logs', label: 'Logs', exists: true };
+    fixture.componentInstance.toggleExpansion(logs);
+    fixture.componentInstance.toggleExpansion(logs);
+    expect(fixture.componentInstance.isExpanded(logs)).toBe(false);
+
     fixture.componentInstance.selectRoot(logs);
     expect(fixture.componentInstance.isExpanded(logs)).toBe(true);
   }));

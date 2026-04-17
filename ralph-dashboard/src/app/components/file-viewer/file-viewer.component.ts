@@ -7,6 +7,7 @@ import { ApiService, FileChunk } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
+import { sanitizeHtmlDocument } from '../../utils/sanitize-html';
 
 @Component({
   selector: 'app-file-viewer',
@@ -230,7 +231,7 @@ export class FileViewerComponent implements OnInit {
 
     const html = this.formatHtmlFromSource(source);
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    this.sanitizeHtmlDocument(doc.body);
+    sanitizeHtmlDocument(doc.body);
     if (requestToken !== this.loadSequence) {
       return;
     }
@@ -240,7 +241,7 @@ export class FileViewerComponent implements OnInit {
     if (requestToken !== this.loadSequence) {
       return;
     }
-    this.sanitizeHtmlDocument(doc.body);
+    sanitizeHtmlDocument(doc.body);
     // Angular's HTML sanitizer strips Mermaid SVG entirely, so we clean the DOM
     // ourselves and then trust the result to preserve the rendered diagram.
     this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
@@ -344,46 +345,7 @@ export class FileViewerComponent implements OnInit {
     }
   }
 
-  private sanitizeHtmlDocument(root: ParentNode): void {
-    const blockedTags = new Set(['script', 'iframe', 'object', 'embed', 'template', 'link', 'meta']);
-    const elements = Array.from(root.querySelectorAll('*'));
-
-    for (const element of elements) {
-      const tagName = element.tagName.toLowerCase();
-      if (blockedTags.has(tagName)) {
-        element.remove();
-        continue;
-      }
-
-      for (const attr of Array.from(element.attributes)) {
-        const attrName = attr.name.toLowerCase();
-        if (attrName.startsWith('on') || attrName === 'srcdoc') {
-          element.removeAttribute(attr.name);
-          continue;
-        }
-
-        if (this.isUrlAttribute(attrName) && this.isUnsafeUrl(attr.value)) {
-          element.removeAttribute(attr.name);
-        }
-      }
-    }
-  }
-
-  private isUrlAttribute(name: string): boolean {
-    return ['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'data'].includes(name);
-  }
-
-  private isUnsafeUrl(value: string): boolean {
-    const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
-    return (
-      normalized.startsWith('javascript:') ||
-      normalized.startsWith('vbscript:') ||
-      normalized.startsWith('data:text/html') ||
-      normalized.startsWith('data:application/javascript') ||
-      normalized.startsWith('data:application/ecmascript') ||
-      normalized.startsWith('data:application/x-javascript')
-    );
-  }
+  // sanitizer helper replaced with shared implementation
 }
 
 interface MermaidClient {

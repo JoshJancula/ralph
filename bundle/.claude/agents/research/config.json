@@ -1,6 +1,7 @@
 {
   "name": "research",
   "model": "claude-haiku-4-5",
+  "max_budget_usd": "0.50",
   "description": "Explores the codebase and docs, summarizes findings, and produces research.md for downstream agents. Read-heavy; avoids large refactors or implementation.",
   "rules": [".claude/rules/no-emoji.md"],
   "skills": [".claude/skills/repo-context/SKILL.md"],

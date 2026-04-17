@@ -120,12 +120,14 @@ EOF
 cat <<'EOF' >"$RULES_DIR/README.md"
 # Rules
 
+This scaffold is inert until a rules file is referenced from `config.json`.
 Use this folder to document agent-specific rules, validation stages, or guardrails. Expand the README with policy references and examples relevant to this agent.
 EOF
 
 cat <<'EOF' >"$SKILLS_DIR/README.md"
 # Skills
 
+This scaffold is inert until a skill file is referenced from `config.json`.
 Use this folder to list agent skills, describe intent, and outline how each skill is expected to behave. Include usage guidance and any constraints that matter for this agent.
 EOF
 

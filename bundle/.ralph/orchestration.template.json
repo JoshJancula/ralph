@@ -15,6 +15,7 @@
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
           "required": true,
+          "kind": "research",
           "description": "Research summary, findings, open questions, and suggested next steps."
         }
       ],
@@ -41,13 +42,25 @@
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
           "required": true,
+          "kind": "design",
           "description": "Technical architecture and design decisions derived from research."
+        },
+        {
+          "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md",
+          "required": false,
+          "kind": "handoff",
+          "to": "implementation",
+          "description": "Handoff tasks for implementation stage with specific requirements from architecture."
         }
       ],
       "artifacts": [
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
           "required": true
+        },
+        {
+          "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md",
+          "required": false
         }
       ]
     },
@@ -67,13 +80,25 @@
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
           "required": true,
+          "kind": "notes",
           "description": "Implementation handoff: what changed, how to verify, and follow-ups."
+        },
+        {
+          "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
+          "required": false,
+          "kind": "handoff",
+          "to": "qa",
+          "description": "Handoff tasks for QA stage with testing instructions and expected behaviors."
         }
       ],
       "artifacts": [
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
           "required": true
+        },
+        {
+          "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
+          "required": false
         }
       ]
     },
@@ -93,6 +118,7 @@
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
           "required": true,
+          "kind": "review",
           "description": "Code review findings, risks, and required or suggested fixes."
         }
       ],
@@ -123,6 +149,7 @@
         {
           "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa.md",
           "required": true,
+          "kind": "review",
           "description": "QA verification notes, test coverage, and sign-off or blocking issues."
         }
       ],

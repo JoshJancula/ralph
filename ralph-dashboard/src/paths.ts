@@ -8,6 +8,11 @@ export interface RootConfig {
   writable: boolean;
 }
 
+export interface DashboardRoots {
+  projectRoot: string;
+  workspaceRoot: string;
+}
+
 export function isHiddenEntryName(name: string): boolean {
   return name.length > 1 && name.startsWith('.');
 }
@@ -16,56 +21,32 @@ export function filterVisibleEntryNames(names: readonly string[]): string[] {
   return names.filter((name) => !isHiddenEntryName(name));
 }
 
-export function findWorkspaceProjectRoot(): string {
-  const fromEnvRoots = [
-    process.env['RALPH_PLAN_WORKSPACE_ROOT'],
-    process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'],
-  ];
-
-  for (const fromEnv of fromEnvRoots) {
-    if (!fromEnv) {
-      continue;
-    }
-
-    const resolvedEnvRoot = resolve(fromEnv);
-    if (hasDotRalphWorkspace(resolvedEnvRoot)) {
-      return resolvedEnvRoot;
-    }
-  }
-
-  const fromCwd = walkUpForDotRalphWorkspace(process.cwd());
-  if (fromCwd) {
-    return fromCwd;
-  }
-
-  const here = dirname(fileURLToPath(import.meta.url));
-  const fromModule = walkUpForDotRalphWorkspace(here);
-  if (fromModule) {
-    return fromModule;
-  }
-
-  return process.cwd();
-}
-
-function hasDotRalphWorkspace(dir: string): boolean {
-  const workspaceDir = join(dir, '.ralph-workspace');
-  if (!existsSync(workspaceDir)) {
+function hasEntry(dir: string, entry: string): boolean {
+  const candidate = join(dir, entry);
+  if (!existsSync(candidate)) {
     return false;
   }
 
   try {
-    return statSync(workspaceDir).isDirectory();
+    return statSync(candidate).isDirectory();
   } catch {
     return false;
   }
 }
 
-function walkUpForDotRalphWorkspace(startDir: string): string | null {
+function hasDotRalphWorkspace(dir: string): boolean {
+  return hasEntry(dir, '.ralph-workspace');
+}
+
+function hasDotRalphDir(dir: string): boolean {
+  return hasEntry(dir, '.ralph');
+}
+
+function walkUpForEntry(startDir: string, entry: string): string | null {
   let dir = startDir;
-  let found: string | null = null;
   for (let i = 0; i < 64; i++) {
-    if (existsSync(join(dir, '.ralph-workspace'))) {
-      found = dir;
+    if (hasEntry(dir, entry)) {
+      return dir;
     }
     const parent = dirname(dir);
     if (parent === dir) {
@@ -73,39 +54,101 @@ function walkUpForDotRalphWorkspace(startDir: string): string | null {
     }
     dir = parent;
   }
-  return found;
+  return null;
 }
 
-export function getAllowedRoots(workspaceRoot: string): Record<string, RootConfig> {
+function determineProjectRoot(): string {
+  const envRootKeys = ['RALPH_DASHBOARD_PROJECT_ROOT', 'RALPH_PROJECT_ROOT'] as const;
+  for (const key of envRootKeys) {
+    const envRoot = process.env[key];
+    if (!envRoot) {
+      continue;
+    }
+    const resolved = resolve(envRoot);
+    if (hasDotRalphDir(resolved)) {
+      return resolved;
+    }
+  }
+
+  const fromCwd = walkUpForEntry(process.cwd(), '.ralph');
+  if (fromCwd) {
+    return fromCwd;
+  }
+
+  const fromModule = walkUpForEntry(dirname(fileURLToPath(import.meta.url)), '.ralph');
+  if (fromModule) {
+    return fromModule;
+  }
+
+  return process.cwd();
+}
+
+function determineWorkspaceRoot(projectRoot: string): string {
+  const envRootKeys = ['RALPH_DASHBOARD_WORKSPACE_ROOT', 'RALPH_PLAN_WORKSPACE_ROOT'] as const;
+  for (const key of envRootKeys) {
+    const envRoot = process.env[key];
+    if (!envRoot) {
+      continue;
+    }
+    const resolved = resolve(envRoot);
+    if (hasDotRalphWorkspace(resolved)) {
+      return resolved;
+    }
+  }
+
+  const fromCwd = walkUpForEntry(process.cwd(), '.ralph-workspace');
+  if (fromCwd) {
+    return fromCwd;
+  }
+
+  const fromModule = walkUpForEntry(dirname(fileURLToPath(import.meta.url)), '.ralph-workspace');
+  if (fromModule) {
+    return fromModule;
+  }
+
+  return join(projectRoot, '.ralph-workspace');
+}
+
+export function findDashboardRoots(): DashboardRoots {
+  const projectRoot = determineProjectRoot();
+  const workspaceRoot = determineWorkspaceRoot(projectRoot);
+  return { projectRoot, workspaceRoot };
+}
+
+export function findWorkspaceProjectRoot(): string {
+  return findDashboardRoots().projectRoot;
+}
+
+export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfig> {
   return {
     logs: {
       label: 'Logs',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'logs'),
+      basePath: join(roots.workspaceRoot, 'logs'),
       writable: false,
     },
     artifacts: {
       label: 'Artifacts',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'artifacts'),
+      basePath: join(roots.workspaceRoot, 'artifacts'),
       writable: false,
     },
     sessions: {
       label: 'Sessions',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'sessions'),
+      basePath: join(roots.workspaceRoot, 'sessions'),
       writable: false,
     },
     'orchestration-plans': {
       label: 'Orchestration Plans',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'orchestration-plans'),
+      basePath: join(roots.workspaceRoot, 'orchestration-plans'),
       writable: false,
     },
     docs: {
       label: 'Docs',
-      basePath: join(workspaceRoot, 'docs'),
+      basePath: join(roots.projectRoot, 'docs'),
       writable: false,
     },
     plans: {
       label: 'Plans',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'orchestration-plans'),
+      basePath: roots.projectRoot,
       writable: false,
     },
   };
@@ -143,7 +186,8 @@ export function resolveUnderRoot(rootConfig: RootConfig, relPath: string): strin
   const segments = normalizeRelPath(relPath);
   const base = resolve(rootConfig.basePath);
   const candidate = resolve(base, ...segments);
-  assertContainedInRoot(base, candidate);
+  const candidateToCheck = existsSync(candidate) ? realpathSync(candidate) : candidate;
+  assertContainedInRoot(base, candidateToCheck);
   return candidate;
 }
 

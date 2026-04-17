@@ -10,6 +10,7 @@
 ##   CODEX_PLAN_EXEC_EXTRA (space-separated extra args before prompt)
 ##   CODEX_PLAN_NO_ADD_AGENTS_DIR (default unset): set to 1 to omit --add-dir <workspace>/.ralph-workspace on non-resume runs (default adds it so session and orchestration files under .ralph-workspace/ are visible to Codex; name is historical)
 ##   RALPH_PLAN_CLI_RESUME=1: pass --json so session id can be captured (python in invoke)
+##   RALPH_PLAN_CAPTURE_USAGE=1 (default 1): also pass --json so the demux can collect token usage counters
 ##   RALPH_RUN_PLAN_RESUME_SESSION_ID: when set, use `codex exec resume <id> ...` instead of one-shot exec
 ##   RALPH_RUN_PLAN_RESUME_BARE=1 with RALPH_PLAN_ALLOW_UNSAFE_RESUME=1: `codex exec resume --last ...` when no id (unsafe locally)
 
@@ -59,7 +60,7 @@ if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
   fi
 fi
 
-if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]]; then
+if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ]]; then
   args+=(--json)
 fi
 

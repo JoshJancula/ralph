@@ -96,6 +96,9 @@ ralph_resolve_timeout() {
   echo "$timeout_seconds"
 }
 
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/ralph-format-elapsed.sh"
+
 AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
 
 if [[ -z "$RUNTIME" ]]; then
@@ -217,7 +220,12 @@ PLAN_LOG_NAME="$(plan_log_basename "$PLAN_PATH")"
 export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-$PLAN_LOG_NAME}"
 # Artifact namespace (often equals plan key); used for {{ARTIFACT_NS}} style paths.
 export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-$RALPH_PLAN_KEY}"
-RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$WORKSPACE/.ralph-workspace}"
+DEFAULT_RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
+if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
+  DEFAULT_RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE_ROOT_OVERRIDE"
+fi
+RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORKSPACE_ROOT}"
+export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
 
 ralph_session_init "$WORKSPACE" "$PLAN_LOG_NAME"
@@ -262,22 +270,22 @@ case "$RUNTIME" in
   opencode) RALPH_INVOKED_CLI="$OPENCODE_CLI" ;;
 esac
 
-MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-9999}"
+MAX_ITERATIONS="${CURSOR_PLAN_MAX_ITER:-50}"
 case "$RUNTIME" in
   cursor)
-    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-10}"
+    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-3}"
     ;;
   claude)
-    _ralph_gutter_default="${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}"
+    _ralph_gutter_default="${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-3}}"
     ;;
   codex)
-    _ralph_gutter_default="${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}"
+    _ralph_gutter_default="${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-3}}}"
     ;;
   opencode)
-    _ralph_gutter_default="${OPENCODE_PLAN_GUTTER_ITER:-${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-10}}}}"
+    _ralph_gutter_default="${OPENCODE_PLAN_GUTTER_ITER:-${CODEX_PLAN_GUTTER_ITER:-${CLAUDE_PLAN_GUTTER_ITER:-${CURSOR_PLAN_GUTTER_ITER:-3}}}}"
     ;;
   *)
-    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-10}"
+    _ralph_gutter_default="${CURSOR_PLAN_GUTTER_ITER:-3}"
     ;;
 esac
 GUTTER_ITERATIONS="${RALPH_PLAN_TODO_MAX_ITERATIONS:-$_ralph_gutter_default}"
@@ -618,16 +626,27 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
     SELECTED_MODEL="$PLAN_MODEL_CLI"
     ralph_run_plan_log "CLI --model overrides prebuilt agent default model (agent=$PREBUILT_AGENT)"
   fi
-  PREBUILT_AGENT_CONTEXT="$(format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
-    echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
-    ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
-    exit 1
-  }
+  if [[ "$RUNTIME" == "claude" ]]; then
+    PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=0 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
+      echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
+      ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
+      exit 1
+    }
+  else
+    PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=1 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
+      echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
+      ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
+      exit 1
+    }
+  fi
   ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
   if [[ "$RUNTIME" == "claude" ]]; then
     _agents_root_for_tools="$(prebuilt_agents_root "$WORKSPACE")"
     CLAUDE_TOOLS_FROM_AGENT="$(bash "$AGENT_CONFIG_TOOL" allowed-tools "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
     [[ -n "$CLAUDE_TOOLS_FROM_AGENT" ]] && ralph_run_plan_log "allowed_tools from agent config: $CLAUDE_TOOLS_FROM_AGENT"
+    RALPH_AGENT_MAX_BUDGET="$(bash "$AGENT_CONFIG_TOOL" max-budget "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
+    export RALPH_AGENT_MAX_BUDGET
+    [[ -n "$RALPH_AGENT_MAX_BUDGET" ]] && ralph_run_plan_log "max_budget_usd from agent config: $RALPH_AGENT_MAX_BUDGET"
   else
     CLAUDE_TOOLS_FROM_AGENT=""
   fi
@@ -642,6 +661,126 @@ else
 fi
 
 total_invocations=0
+# Running token usage totals (accumulated from per-invocation USAGE_FILE written by demux.py).
+_total_input_tokens=0
+_total_output_tokens=0
+_total_cache_creation_tokens=0
+_total_cache_read_tokens=0
+_total_max_turn_tokens=0
+_plan_start_ts="$(date +%s)"
+_plan_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+_ralph_write_plan_usage_summary() {
+  local _done="$1" _total="$2"
+  local _elapsed=$(( $(date +%s) - _plan_start_ts ))
+  local _ended_at
+  _ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local _summary_dir="$RALPH_LOG_DIR"
+  mkdir -p "$_summary_dir"
+  local _summary_cache_hit_ratio=0
+  local _summary_total_input=$(( _total_input_tokens + _total_cache_read_tokens + _total_cache_creation_tokens ))
+  local _summary_total_tokens=$(( _total_input_tokens + _total_output_tokens + _total_cache_creation_tokens + _total_cache_read_tokens ))
+  if [[ "$_summary_total_input" -gt 0 ]]; then
+    _summary_cache_hit_ratio="$(python3 -c "print(round(${_total_cache_read_tokens}/${_summary_total_input},4))" 2>/dev/null || echo 0)"
+  fi
+  #region agent log
+  if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
+    printf '%s\n' "{\"sessionId\":\"1c2b9f\",\"id\":\"log_$(date +%s%3N)_plan_usage_summary\",\"timestamp\":$(date +%s%3N),\"location\":\"bundle/.ralph/bash-lib/run-plan-core.sh:667\",\"message\":\"summary token breakdown\",\"data\":{\"input_tokens\":${_total_input_tokens},\"output_tokens\":${_total_output_tokens},\"cache_creation_input_tokens\":${_total_cache_creation_tokens},\"cache_read_input_tokens\":${_total_cache_read_tokens},\"total_tokens\":${_summary_total_tokens}},\"runId\":\"initial\",\"hypothesisId\":\"H1\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-1c2b9f.log" || true
+  fi
+  #endregion agent log
+  cat > "$_summary_dir/plan-usage-summary.json" << _SUMMARY_EOF
+{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","invocations":${total_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_total_input_tokens},"output_tokens":${_total_output_tokens},"cache_creation_input_tokens":${_total_cache_creation_tokens},"cache_read_input_tokens":${_total_cache_read_tokens},"max_turn_total_tokens":${_total_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio}}
+_SUMMARY_EOF
+  local _elapsed_fmt
+  _elapsed_fmt="$(ralph_format_elapsed_secs "$_elapsed")"
+  ralph_run_plan_log "plan usage summary: invocations=${total_invocations} input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} max_turn=${_total_max_turn_tokens} cache_hit_ratio=${_summary_cache_hit_ratio} elapsed=${_elapsed_fmt}"
+  echo -e "${C_DIM}Token usage: input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} total=${_summary_total_tokens} elapsed=${_elapsed_fmt}${C_RST}"
+  echo -e "${C_DIM}Total elapsed time: ${_elapsed_fmt}${C_RST}"
+}
+
+_ralph_append_invocation_usage_history() {
+  local _path="$1"
+  local _iteration="$2"
+  local _model="$3"
+  local _runtime="$4"
+  local _elapsed_seconds="$5"
+  local _input_tokens="$6"
+  local _output_tokens="$7"
+  local _cache_create="$8"
+  local _cache_read="$9"
+  local _max_turn="${10:-0}"
+  local _cache_hit_ratio="${11:-0}"
+
+  mkdir -p "$(dirname "$_path")"
+
+  if command -v python3 &>/dev/null; then
+    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path = sys.argv[1]
+iteration = int(sys.argv[2])
+model = sys.argv[3]
+runtime = sys.argv[4]
+elapsed_seconds = int(sys.argv[5])
+input_tokens = int(sys.argv[6])
+output_tokens = int(sys.argv[7])
+cache_creation_input_tokens = int(sys.argv[8])
+cache_read_input_tokens = int(sys.argv[9])
+max_turn_total_tokens = int(sys.argv[10])
+try:
+    cache_hit_ratio = float(sys.argv[11])
+except (ValueError, IndexError):
+    cache_hit_ratio = 0.0
+
+record = {
+    "iteration": iteration,
+    "model": model,
+    "runtime": runtime,
+    "elapsed_seconds": elapsed_seconds,
+    "input_tokens": input_tokens,
+    "output_tokens": output_tokens,
+    "cache_creation_input_tokens": cache_creation_input_tokens,
+    "cache_read_input_tokens": cache_read_input_tokens,
+    "max_turn_total_tokens": max_turn_total_tokens,
+    "cache_hit_ratio": round(cache_hit_ratio, 4),
+    }
+
+doc = {
+    "schema_version": 1,
+    "kind": "plan_invocation_usage_history",
+    "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "invocations": [],
+    }
+
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            existing = json.load(fh)
+        if isinstance(existing, dict) and isinstance(existing.get("invocations"), list):
+            doc = existing
+    except Exception:
+        pass
+
+doc["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+inv = doc.setdefault("invocations", [])
+inv.append(record)
+
+tmp = f"{path}.tmp.{os.getpid()}"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+    fh.write("\n")
+os.replace(tmp, path)
+PY
+    return 0
+  fi
+
+  cat >"$_path" <<USAGE_EOF
+{"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}}]}
+USAGE_EOF
+}
 
 # Outer loop: one iteration per "next open TODO" in the plan file.
 # Inner loop (below): retry the same TODO until it is marked [x], human input is satisfied, or limits hit.
@@ -657,6 +796,7 @@ while true; do
     } >> "$OUTPUT_LOG"
     echo ""
     echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done_count/$total_count)${C_RST}."
+    _ralph_write_plan_usage_summary "$done_count" "$total_count"
     echo -e "${C_DIM}Output log: $OUTPUT_LOG${C_RST}"
     EXIT_STATUS="complete"
     exit 0
@@ -692,12 +832,17 @@ while true; do
     ralph_run_plan_log "current task line=$line_num session=$_session_label"
 
     task_ordinal="$(plan_todo_ordinal_at_line "$PLAN_PATH" "$line_num")"
+    _banner_plan_secs=$(( $(date +%s) - _plan_start_ts ))
+    _banner_plan_str="$(ralph_format_elapsed_secs "$_banner_plan_secs")"
 
     echo ""
-    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════════════${C_RST}"
+    echo -e "${C_C}${C_BOLD}═══════════════════════════════════════════════════════════════════════════════════${C_RST}"
     echo -e "${C_C}Building plan:${C_RST} $PLAN_PATH"
+    echo -e "${C_DIM}-----------------------------------------------------------------------------------${C_RST}"
     echo -e "  ${C_DIM}${C_RST}  ${C_BOLD}TASK ${task_ordinal}${C_RST}  ${C_DIM}|${C_RST}  Complete ${C_G}$done_count/$total_count |${C_RST} Skipped: 0 ${C_DIM}|${C_RST}  ${C_Y}invoke $iteration${C_RST} (line $line_num)"
-    echo -e "${C_C}${C_BOLD}══════════════════════════════════════════════════════════════════════${C_RST}"
+    echo -e "${C_DIM}-----------------------------------------------------------------------------------${C_RST}"
+    echo -e "  ${C_C}model:${C_RST} ${C_BOLD}${SELECTED_MODEL:-default}${C_RST}  ${C_DIM}|${C_RST}  ${C_C}runtime:${C_RST} ${C_BOLD}${RUNTIME}${C_RST}  ${C_DIM}|${C_RST}  ${C_C}plan elapsed:${C_RST} ${C_BOLD}${_banner_plan_str}${C_RST}"
+    echo -e "${C_C}${C_BOLD}═══════════════════════════════════════════════════════════════════════════════════${C_RST}"
     echo -e "${C_BOLD}$todo_text${C_RST}"
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
     echo ""
@@ -705,104 +850,175 @@ while true; do
     # Refresh resume env from session-id.txt / flags before building PROMPT (compact vs full context).
     ralph_session_apply_resume_strategy
 
+    _hc_included_bytes=0
+    _ds_stage_count=0
+    _prompt_mode="fresh"
     if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
+      _prompt_mode="resume"
       if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
-        _resume_intro="You are continuing the same CLI session for this workspace (runner session id is on file; the CLI is invoked with --resume)."
+        _resume_intro="Continuing the same CLI session (--resume)."
       else
-        _resume_intro="You are continuing this workspace run using bare CLI resume (no session id on file; the CLI uses last-session semantics). This is unsafe on a shared workstation; typical in isolated CI."
+        _resume_intro="Continuing via bare CLI resume (last-session semantics; isolated CI only)."
       fi
+      PROMPT_STATIC=""
       PROMPT="$_resume_intro
 
-**Current TODO only (line $line_num):** $todo_text
+**TODO (line $line_num):** $todo_text
 
-**Plan file:** $PLAN_PATH
-Open it, finish this TODO, change only the matching \`- [ ]\` to \`- [x]\`, save, and stop. Do not start the next unchecked item. Use the repo toolchain as documented (README, AGENTS.md, etc.).
+Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, and stop. Do not start the next item.
 
-**Artifact namespace:** RALPH_ARTIFACT_NS=$RALPH_ARTIFACT_NS  RALPH_PLAN_KEY=$RALPH_PLAN_KEY
-
-**Human input (file only -- the runner does not read your assistant output):** If the operator must answer or choose before you can complete this TODO, do NOT mark [x]. Questions you ask only in your assistant message do not pause the run; the same TODO will be dispatched again. You MUST write your question as plain text to this path (create parent directories if needed):
-$PENDING_ABS
-Overwrite that file with your question, then stop this turn without checking the box. With a TTY the operator may answer inline; without a TTY the runner waits in-process for operator-response.txt. If you can finish without asking, mark [x] and do not create pending-human.txt.
-
-If this TODO tells you to ask or confirm something with the user, you still must use that file first; marking [x] without a recorded operator reply from the runner is incorrect."
+If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]."
 
       if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
-        PROMPT+=$'\n\n## Human operator answers (this plan run -- use them)\n'"$(<"$HUMAN_CONTEXT")"
+        _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
+        _hc_size="$(wc -c < "$HUMAN_CONTEXT" 2>/dev/null || echo 0)"
+        if [[ "$_hc_size" -gt "$_hc_max" ]]; then
+          _hc_content="$(tail -c "$_hc_max" "$HUMAN_CONTEXT")"
+          PROMPT+=$'\n\n## Human operator answers\n[Note: trimmed to last '"$_hc_max"' bytes]\n'"$_hc_content"
+          _hc_included_bytes="$_hc_max"
+        else
+          PROMPT+=$'\n\n## Human operator answers\n'"$(<"$HUMAN_CONTEXT")"
+          _hc_included_bytes="$_hc_size"
+        fi
       fi
     else
-      PROMPT="You are executing a single step of a plan. Do exactly this and nothing else:
+      # Per-TODO variable portion -- kept short so PROMPT_STATIC carries the bulk.
+      PROMPT="Complete exactly this TODO and nothing else:
 
-**TODO:** $todo_text
+**TODO (line $line_num):** $todo_text
 
-**Rules:**
-1. Implement only this one TODO.
-2. Before running build, test, lint, or dev commands, use the toolchain and environment this repository documents (README, CONTRIBUTING, AGENTS.md, version files, Docker/devcontainer, etc.). Do not assume a specific language, runtime, or package manager.
-3. Follow verification steps written in the plan file. If the plan says how to handle failing checks (revert, document in a named file, etc.), follow those instructions.
-4. Then open the plan file \`$PLAN_PATH\`, find the line with this TODO (the first unchecked \`- [ ]\`), change \`[ ]\` to \`[x]\`, save the file, and stop.
-5. Do not do the next TODO; only this one.
-6. Human input (file only -- the runner does not read your chat): If the operator must answer or choose before you can complete this TODO, do NOT mark [x]. Questions you ask only in your assistant message do not pause the run; the same TODO will be dispatched again. You MUST write your question as plain text to this path (create parent directories if needed):
-   $PENDING_ABS
-   Overwrite that file with your question, then stop this turn without checking the box. With a TTY the operator may answer inline; without a TTY the runner waits in-process for operator-response.txt. If you can finish without asking, mark [x] and do not create pending-human.txt.
+**Plan file:** \`$PLAN_PATH\`
 
-The plan file is at: $PLAN_PATH
-The TODO to complete and then mark [x] is on line $line_num.
-
-Artifact namespace for this run:
-- RALPH_ARTIFACT_NS=$RALPH_ARTIFACT_NS
-- RALPH_PLAN_KEY=$RALPH_PLAN_KEY
-
-When writing handoff artifacts, use the namespace-aware paths from the prebuilt agent context."
+Rules:
+- Use the repo toolchain documented in README/AGENTS.md. Follow verification steps in the plan.
+- Prefer targeted search and partial file/log reads first; avoid full log reads unless needed.
+- When done, mark \`- [ ]\` on line $line_num as \`- [x]\` and stop.
+- If operator input is needed first, write your question to \`$PENDING_ABS\` and stop without marking [x]."
 
       if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
-        PROMPT+=$'\n\n## Human operator answers (this plan run -- use them)\n'"$(<"$HUMAN_CONTEXT")"
+        _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
+        if [[ "${RALPH_PLAN_CONTEXT_BUDGET:-standard}" != "full" ]]; then
+          _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME:-2048}"
+        fi
+        _hc_size="$(wc -c < "$HUMAN_CONTEXT" 2>/dev/null || echo 0)"
+        if [[ "$_hc_size" -gt "$_hc_max" ]]; then
+          _hc_content="$(tail -c "$_hc_max" "$HUMAN_CONTEXT")"
+          PROMPT+=$'\n\n## Human operator answers\n[Note: trimmed to last '"$_hc_max"' bytes]\n'"$_hc_content"
+          _hc_included_bytes="$_hc_max"
+        else
+          PROMPT+=$'\n\n## Human operator answers\n'"$(<"$HUMAN_CONTEXT")"
+          _hc_included_bytes="$_hc_size"
+        fi
+      fi
+
+      # PROMPT_STATIC holds stable per-run context (artifact namespace, agent rules + skills) for
+      # --system-prompt caching on Claude. Non-Claude runtimes get it appended to PROMPT.
+      # Build the static prefix with namespace info so it is cached alongside agent context.
+      _ns_block=""
+      if [[ -n "${RALPH_ARTIFACT_NS:-}" || -n "${RALPH_PLAN_KEY:-}" ]]; then
+        _ns_block="Artifact namespace: RALPH_ARTIFACT_NS=${RALPH_ARTIFACT_NS:-}  RALPH_PLAN_KEY=${RALPH_PLAN_KEY:-}
+Use namespace-aware artifact paths when writing handoff files."
       fi
 
       if [[ -n "$PREBUILT_AGENT_CONTEXT" ]]; then
-        PROMPT+=$'\n'"$PREBUILT_AGENT_CONTEXT"
+        if [[ -n "$_ns_block" ]]; then
+          PROMPT_STATIC="${_ns_block}"$'\n\n'"${PREBUILT_AGENT_CONTEXT}"
+        else
+          PROMPT_STATIC="$PREBUILT_AGENT_CONTEXT"
+        fi
+        if [[ "$RUNTIME" != "claude" ]]; then
+          PROMPT+=$'\n'"$PROMPT_STATIC"
+        fi
+      elif [[ -n "$_ns_block" ]]; then
+        PROMPT_STATIC="$_ns_block"
+        if [[ "$RUNTIME" != "claude" ]]; then
+          PROMPT+=$'\n'"$_ns_block"
+        fi
+      else
+        PROMPT_STATIC=""
       fi
-      if [[ -n "${RALPH_ORCH_FILE:-}" && -f "${RALPH_ORCH_FILE}" && -n "$PREBUILT_AGENT" && -f "$AGENT_CONFIG_TOOL" ]]; then
-        _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
-        if [[ -n "$_downstream_raw" ]]; then
-          PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
-          PROMPT+=$'\n'"The downstream stages below rely on you to populate their templates before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
-          _ds_stage_entries=()
-          _ds_stage_id=""
-          _ds_plan_path=""
-          _ds_plan_template=""
-          while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
-            if [[ "$_ds_line" == "---" ]]; then
+      case "${PREBUILT_AGENT:-}" in
+        research|security|code-review)
+          ralph_run_plan_log "skipping downstream stage context for read-only agent: $PREBUILT_AGENT"
+          ;;
+        *)
+          if [[ -n "${RALPH_ORCH_FILE:-}" && -f "${RALPH_ORCH_FILE}" && -n "$PREBUILT_AGENT" && -f "$AGENT_CONFIG_TOOL" ]]; then
+            _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
+            if [[ -n "$_downstream_raw" ]]; then
+              PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
+              PROMPT+=$'\n'"The downstream stages below rely on you to populate their templates before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
+              _ds_stage_entries=()
+              _ds_stage_id=""
+              _ds_plan_path=""
+              _ds_plan_template=""
+              while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
+                if [[ "$_ds_line" == "---" ]]; then
+                  if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
+                    _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
+                    _ds_stage_id=""
+                    _ds_plan_path=""
+                    _ds_plan_template=""
+                  fi
+                  continue
+                fi
+                case "$_ds_line" in
+                  STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
+                  PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
+                  PLAN_TEMPLATE=*) _ds_plan_template="${_ds_line#PLAN_TEMPLATE=}";;
+                esac
+              done <<< "$_downstream_raw"
               if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
                 _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
-                _ds_stage_id=""
-                _ds_plan_path=""
-                _ds_plan_template=""
               fi
-              continue
+              if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
+                _ds_stage_list=""
+                _ds_stage_limit="${RALPH_DOWNSTREAM_STAGE_LIMIT:-1}"
+                if [[ "${RALPH_PLAN_CONTEXT_BUDGET:-standard}" == "lean" ]]; then
+                  _ds_stage_limit="${RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME:-0}"
+                fi
+                _ds_stage_count=0
+                for _ds_entry in "${_ds_stage_entries[@]}"; do
+                  if [[ "$_ds_stage_limit" -gt 0 && "$_ds_stage_count" -ge "$_ds_stage_limit" ]]; then
+                    break
+                  fi
+                  _ds_stage_id="${_ds_entry%%|*}"
+                  _ds_rest="${_ds_entry#*|}"
+                  _ds_plan_path="${_ds_rest%%|*}"
+                  _ds_plan_template="${_ds_rest#*|}"
+                  PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}, template path: ${_ds_plan_template:-none}"
+                  _ds_stage_list+="${_ds_stage_id:-unknown}, "
+                  _ds_stage_count=$(( _ds_stage_count + 1 ))
+                done
+                _ds_stage_list="${_ds_stage_list%, }"
+                ralph_run_plan_log "downstream stage plan context appended for: ${_ds_stage_list:-none} (limit=${_ds_stage_limit})"
+              fi
             fi
-            case "$_ds_line" in
-              STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
-              PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
-              PLAN_TEMPLATE=*) _ds_plan_template="${_ds_line#PLAN_TEMPLATE=}";;
-            esac
-          done <<< "$_downstream_raw"
-          if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
-            _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
           fi
-          if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
-            _ds_stage_list=""
-            for _ds_entry in "${_ds_stage_entries[@]}"; do
-              _ds_stage_id="${_ds_entry%%|*}"
-              _ds_rest="${_ds_entry#*|}"
-              _ds_plan_path="${_ds_rest%%|*}"
-              _ds_plan_template="${_ds_rest#*|}"
-              PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}, template path: ${_ds_plan_template:-none}"
-              _ds_stage_list+="${_ds_stage_id:-unknown}, "
-            done
-            _ds_stage_list="${_ds_stage_list%, }"
-            ralph_run_plan_log "downstream stage plan context appended for: ${_ds_stage_list:-none}"
-          fi
-        fi
-      fi
+          ;;
+      esac
+    fi
+
+    #region agent log
+    if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
+      _dbg_ts=$(( $(date +%s) * 1000 ))
+      _dbg_prompt_static_len=${#PROMPT_STATIC}
+      _dbg_prompt_len=${#PROMPT}
+      _dbg_has_resume_sid=0
+      [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && _dbg_has_resume_sid=1
+      printf '%s\n' "{\"sessionId\":\"91b133\",\"id\":\"log_${_dbg_ts}_prompt_shape_$$\",\"timestamp\":${_dbg_ts},\"location\":\"bundle/.ralph/bash-lib/run-plan-core.sh:while_loop_prompt_build\",\"message\":\"prompt branch built\",\"data\":{\"prompt_mode\":\"${_prompt_mode}\",\"line_num\":\"${line_num}\",\"has_resume_session_id\":${_dbg_has_resume_sid},\"resume_bare\":\"${RALPH_RUN_PLAN_RESUME_BARE:-0}\",\"prompt_len\":${_dbg_prompt_len},\"prompt_static_len\":${_dbg_prompt_static_len}},\"runId\":\"initial\",\"hypothesisId\":\"H2\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-91b133.log" || true
+    fi
+    #endregion agent log
+
+    # Export PROMPT_STATIC so invoke scripts can use it for --system-prompt caching.
+    export PROMPT_STATIC
+    # Prompt size measurement and warning.
+    _prompt_bytes="${#PROMPT}"
+    _prompt_est_tokens=$(( _prompt_bytes / 4 ))
+    ralph_run_plan_log "prompt size: bytes=${_prompt_bytes} est_tokens=${_prompt_est_tokens}"
+    ralph_run_plan_log "context footprint: mode=${_prompt_mode} context_budget=${RALPH_PLAN_CONTEXT_BUDGET:-standard} hc_bytes=${_hc_included_bytes:-0} ds_stages=${_ds_stage_count:-0}"
+    _prompt_warn_threshold="${RALPH_PROMPT_SIZE_WARN_BYTES:-40000}"
+    if [[ "$_prompt_bytes" -gt "$_prompt_warn_threshold" ]]; then
+      echo "Warning: prompt is large (${_prompt_bytes} bytes, ~${_prompt_est_tokens} tokens). Consider reducing rules, human context, or downstream stages." >&2
     fi
 
     _invoke_resume_note=""
@@ -835,6 +1051,10 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
 
     # Sidecar files for this invocation: CLI exit code; AGENT_PID watches the background shell.
     EXIT_CODE_FILE="$RALPH_LOG_DIR/.plan-runner-exit.$$"
+    # Per-invocation usage JSON written by demux.py when JSON streaming is enabled.
+    USAGE_FILE="$RALPH_LOG_DIR/.plan-runner-usage.$$.json"
+    export USAGE_FILE
+    rm -f "$USAGE_FILE"
     PROGRESS_INTERVAL="${CURSOR_PLAN_PROGRESS_INTERVAL:-30}"
     START_TIME="$(date +%s)"
     LOG_SIZE_AT_START="$(wc -c < "$OUTPUT_LOG" 2>/dev/null || echo 0)"
@@ -893,13 +1113,9 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
 
       if [[ $elapsed -ge $((LAST_PROGRESS_AT + PROGRESS_INTERVAL)) ]]; then
         LAST_PROGRESS_AT=$elapsed
-        mins=$((elapsed / 60))
-        secs=$((elapsed % 60))
-        if [[ $mins -gt 0 ]]; then
-          echo -e "${C_DIM}[$(date '+%H:%M:%S')] Agent still working (elapsed ${mins}m ${secs}s).${C_RST}" >&2
-        else
-          echo -e "${C_DIM}[$(date '+%H:%M:%S')] Agent still working (elapsed ${secs}s).${C_RST}" >&2
-        fi
+        _inv_elapsed_str="$(ralph_format_elapsed_secs "$elapsed")"
+        _run_elapsed_str="$(ralph_format_elapsed_secs "$((now - _plan_start_ts))")"
+        echo -e "${C_DIM}[$(date '+%H:%M:%S')] Agent still working (invocation ${_inv_elapsed_str}, run ${_run_elapsed_str}).${C_RST}" >&2
       fi
 
       if [[ $elapsed -gt "$RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS" ]]; then
@@ -926,7 +1142,51 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
       rm -f "$EXIT_CODE_FILE"
     fi
     set -e
-    ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code)"
+    _inv_elapsed=$(( $(date +%s) - START_TIME ))
+    ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code elapsed=${_inv_elapsed}s)"
+
+    # Read per-invocation token usage from demux.py output (only when JSON streaming was active).
+    _inv_input=0; _inv_output=0; _inv_cache_create=0; _inv_cache_read=0; _inv_max_turn=0
+    if [[ -f "$USAGE_FILE" ]]; then
+      if command -v python3 &>/dev/null; then
+        _inv_usage_json="$(<"$USAGE_FILE")"
+        _inv_input="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_output="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('output_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_cache_create="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_creation_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_cache_read="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_read_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_max_turn="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('max_turn_total_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+      fi
+      rm -f "$USAGE_FILE"
+    fi
+    # Compute per-invocation cache_hit_ratio = cache_read / (input + cache_read + cache_create).
+    _inv_cache_hit_ratio=0
+    _inv_total_input=$(( _inv_input + _inv_cache_read + _inv_cache_create ))
+    if [[ "$_inv_total_input" -gt 0 ]] && command -v python3 &>/dev/null; then
+      _inv_cache_hit_ratio="$(python3 -c "print(round(${_inv_cache_read}/${_inv_total_input},4))" 2>/dev/null || echo 0)"
+    fi
+    _total_input_tokens=$(( _total_input_tokens + _inv_input ))
+    _total_output_tokens=$(( _total_output_tokens + _inv_output ))
+    _total_cache_creation_tokens=$(( _total_cache_creation_tokens + _inv_cache_create ))
+    _total_cache_read_tokens=$(( _total_cache_read_tokens + _inv_cache_read ))
+    if [[ "$_inv_max_turn" -gt "$_total_max_turn_tokens" ]]; then
+      _total_max_turn_tokens="$_inv_max_turn"
+    fi
+
+    # Write consolidated per-invocation usage history JSON.
+    _inv_usage_file="$RALPH_LOG_DIR/invocation-usage.json"
+    _ralph_append_invocation_usage_history \
+      "$_inv_usage_file" \
+      "$iteration" \
+      "${SELECTED_MODEL:-}" \
+      "$RUNTIME" \
+      "$_inv_elapsed" \
+      "$_inv_input" \
+      "$_inv_output" \
+      "$_inv_cache_create" \
+      "$_inv_cache_read" \
+      "$_inv_max_turn" \
+      "$_inv_cache_hit_ratio"
+    ralph_run_plan_log "invocation $iteration usage: input=${_inv_input} output=${_inv_output} cache_create=${_inv_cache_create} cache_read=${_inv_cache_read} max_turn=${_inv_max_turn} cache_hit_ratio=${_inv_cache_hit_ratio} elapsed=${_inv_elapsed}s"
 
     echo "" >>"$OUTPUT_LOG"
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
@@ -942,6 +1202,7 @@ When writing handoff artifacts, use the namespace-aware paths from the prebuilt 
       } >>"$OUTPUT_LOG"
       echo ""
       echo -e "${C_G}${C_BOLD}All TODOs complete${C_RST} ${C_G}($done_count/$total_count)${C_RST}."
+      _ralph_write_plan_usage_summary "$done_count" "$total_count"
       echo -e "${C_DIM}Output log: $OUTPUT_LOG${C_RST}"
       EXIT_STATUS="complete"
       exit 0

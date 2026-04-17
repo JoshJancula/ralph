@@ -8,7 +8,7 @@
 
 configure_stage_input_dependencies() {
   stage_input_sources=()
-  print_step "4/6" "Stage input dependencies"
+  print_step "5/7" "Stage input dependencies"
   print_info "Choose stage inputs (writes to: inputArtifacts in the JSON)"
   print_hint "- Use this so a stage knows which earlier artifacts to read."
   print_hint "- This is how one agent uses output from a previous agent."
@@ -93,11 +93,129 @@ configure_stage_input_dependencies() {
   fi
 }
 
+configure_parallel_stages() {
+  parallel_stage_waves=()
+  parallel_stages_enabled="false"
+
+  print_step "4/7" "Parallel stages (optional)"
+  print_hint "- Use this to run independent stages in parallel waves."
+  print_hint "- Each wave runs all listed stages concurrently; waves run in order."
+  print_hint "- Parallelism cannot be combined with loopControl."
+  print_hint "- Enter one wave per line as comma-separated stage ids (example: research,implementation)."
+  print_hint "- Press Enter on an empty line to finish, or type 'none' to disable."
+
+  read -rp "Enable parallel stage waves? (parallelStages) [y/N]: " parallel_choice
+  if [[ ! "$parallel_choice" =~ ^[Yy] ]]; then
+    return 0
+  fi
+
+  parallel_stages_enabled="true"
+  print_info "Available stages for parallel waves:"
+  for idx in "${!stage_ids[@]}"; do
+    printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}" >&2
+  done
+
+  while true; do
+    read -rp "Wave stages (comma-separated ids or numbers; empty to finish): " wave_line
+    wave_line="${wave_line:-}"
+    if [[ -z "$wave_line" ]]; then
+      break
+    fi
+    if [[ "$wave_line" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
+      parallel_stage_waves=()
+      parallel_stages_enabled="false"
+      break
+    fi
+
+    local normalized candidate is_valid already_added
+    local parsed_wave=()
+    normalized="$(printf '%s' "$wave_line" | tr ',' ' ')"
+    local tokens=()
+    IFS=' ' read -r -a tokens <<< "$normalized"
+    for token in "${tokens[@]-}"; do
+      token="$(printf '%s' "$token" | tr -d '[:space:]')"
+      [[ -n "$token" ]] || continue
+      if [[ "$token" =~ ^[0-9]+$ ]] && (( token >= 1 && token <= ${#stage_ids[@]} )); then
+        candidate="${stage_ids[$((token - 1))]}"
+      else
+        candidate="$(ralph_internal_wizard_sanitize "$token")"
+      fi
+      [[ -n "$candidate" ]] || continue
+      is_valid=0
+      for stage_opt in "${stage_ids[@]}"; do
+        if [[ "$candidate" == "$stage_opt" ]]; then
+          is_valid=1
+          break
+        fi
+      done
+      if (( is_valid == 0 )); then
+        echo "Ignoring unknown stage id \"$candidate\" in wave." >&2
+        continue
+      fi
+      already_added=0
+      for existing in "${parsed_wave[@]-}"; do
+        if [[ "$existing" == "$candidate" ]]; then
+          already_added=1
+          break
+        fi
+      done
+      (( already_added == 0 )) && parsed_wave+=("$candidate")
+    done
+
+    if (( ${#parsed_wave[@]} == 0 )); then
+      echo "Wave is empty after parsing; try again." >&2
+      continue
+    fi
+
+    parallel_stage_waves+=("$(IFS=,; printf '%s' "${parsed_wave[*]}")")
+  done
+
+  if [[ "$parallel_stages_enabled" != "true" ]]; then
+    return 0
+  fi
+
+  if (( ${#parallel_stage_waves[@]} == 0 )); then
+    echo "Parallel waves enabled but none were provided; disabling." >&2
+    parallel_stages_enabled="false"
+    return 0
+  fi
+
+  local seen_ids=()
+  local wave ids id already_seen
+  for wave in "${parallel_stage_waves[@]}"; do
+    IFS=',' read -r -a ids <<< "$wave"
+    for id in "${ids[@]-}"; do
+      already_seen=0
+      for existing_id in "${seen_ids[@]-}"; do
+        if [[ "$existing_id" == "$id" ]]; then
+          already_seen=1
+          break
+        fi
+      done
+      if (( already_seen == 1 )); then
+        ralph_die "Stage \"$id\" appears in parallel waves more than once."
+      fi
+      seen_ids+=("$id")
+    done
+  done
+
+  for id in "${stage_ids[@]}"; do
+    already_seen=0
+    for existing_id in "${seen_ids[@]-}"; do
+      if [[ "$existing_id" == "$id" ]]; then
+        already_seen=1
+        break
+      fi
+    done
+    (( already_seen == 1 )) || ralph_die "Parallel waves must include every stage exactly once; missing \"$id\"."
+  done
+}
+
 configure_loop_rules() {
   loop_sources=()
   loop_targets=()
   loop_max_iterations=()
-  print_step "5/6" "Optional loop rules"
+  print_step "6/7" "Optional loop rules"
   print_hint "- Use loop rules for review/testing stages that may find issues."
   print_hint "- If a review/test stage finds a problem, it can send work back."
   print_hint "- If review/test says everything is good, pipeline moves forward."

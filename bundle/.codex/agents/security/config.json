@@ -7,7 +7,14 @@
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md",
-      "required": true
+      "required": true,
+      "kind": "review"
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "implementation"
     }
   ]
 }

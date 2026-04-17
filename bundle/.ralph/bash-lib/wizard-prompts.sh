@@ -478,3 +478,59 @@ EOF
     echo ".ralph/orchestrator.sh --orchestration $orch_file"
   fi
 }
+
+# Prompts the user to configure handoff declarations between stages.
+
+# Prompts the user to configure handoff declarations between stages.
+# Populates: stage_handoff_targets, stage_handoff_kinds
+configure_handoff_declarations() {
+  local stage_count=${#stages[@]}
+  
+  read -rp "Configure handoffs between stages? (y/N) " handoff_prompt_response
+  handoff_prompt_response="${handoff_prompt_response:-N}"
+  
+  if [[ ! "$handoff_prompt_response" =~ ^[Yy] ]]; then
+    print_info "Skipping handoff configuration."
+    return 0
+  fi
+  
+  print_info "Configuring handoffs..."
+  
+  for idx in "${!stages[@]}"; do
+    local current_stage="${stages[$idx]}"
+    local current_stage_id="$(ralph_internal_wizard_sanitize "$current_stage")"
+    
+    # Show available target stages (stages after current)
+    local target_options=()
+    for (( target_idx = idx + 1; target_idx < stage_count; target_idx++ )); do
+      target_options+=("$(ralph_internal_wizard_sanitize "${stages[$target_idx]}")")
+    done
+    
+    if (( ${#target_options[@]} == 0 )); then
+      print_info "  $current_stage_id: no downstream stages for handoff"
+      stage_handoff_targets+=("")
+      stage_handoff_kinds+=("")
+      continue
+    fi
+    
+    read -rp "  Enable handoff from \"$current_stage_id\"? (y/N) " enable_handoff
+    enable_handoff="${enable_handoff:-N}"
+    
+    if [[ "$enable_handoff" =~ ^[Yy] ]]; then
+      local target_stage
+      if (( ${#target_options[@]} == 1 )); then
+        target_stage="${target_options[0]}"
+        print_info "    Using default target: $target_stage"
+      else
+        read -rp "    Select target stage [${target_options[0]}]: " target_input
+        target_stage="${target_input:-${target_options[0]}}"
+      fi
+      
+      stage_handoff_targets+=("$target_stage")
+      stage_handoff_kinds+=("handoff")
+    else
+      stage_handoff_targets+=("")
+      stage_handoff_kinds+=("")
+    fi
+  done
+}

@@ -98,10 +98,18 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 - **Rules:**
   - Each entry must be either:
     - a non-empty string (file path or glob relative to repo root), or
-    - an object with at least `path` (string) and optionally `required` (boolean, default true).
+    - an object with at least `path` (string) and optionally `required` (boolean, default true), `kind` (string), `to` (string), and `description` (string).
   - Path templates may include `{{ARTIFACT_NS}}` and `{{PLAN_KEY}}`.
     - `{{ARTIFACT_NS}}` resolves from `RALPH_ARTIFACT_NS` (or plan key fallback).
     - `{{PLAN_KEY}}` resolves from `RALPH_PLAN_KEY`.
+  - **`kind`** (optional): Classifies artifact type for orchestration and handoff routing. Allowed values:
+    - `handoff`: Indicates artifact contains tasks/instructions to hand off to another stage (requires `to` field).
+    - `design`: Design or architecture artifact.
+    - `review`: Review findings or analysis.
+    - `research`: Research or exploration output.
+    - `notes`: General notes or summary.
+    - If omitted, artifact is treated as a standard deliverable without handoff semantics.
+  - **`to`** (conditionally required): When `kind` is `handoff`, specifies the target stage ID that receives this handoff. Must match a declared stage id in the orchestration config. Orchestration will inject identified unchecked tasks from the handoff file into the target stage's plan.
   - At least one artifact should be listed for agents that produce handoff files; orchestrators may require `required: true` entries to exist and be non-empty after a run.
 
 ## Example (minimal valid config)
@@ -124,7 +132,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 ```json
 {
   "name": "architect",
-  "model": "claude-sonnet-4",
+  "model": "claude-sonnet-4-6",
   "description": "Design and handoff only.",
   "rules": [".claude/rules/no-emoji.md"],
   "skills": [".claude/skills/repo-context/SKILL.md"],

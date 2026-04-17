@@ -53,6 +53,15 @@ CAFFEINATE
   rm -f "$plan_file"
 }
 
+@test "run-plan help documents project/workspace root overrides" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash "$RUN_PLAN_SH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--project-root"* ]]
+  [[ "$output" == *"--workspace-root"* ]]
+}
+
 @test "ralph restart command hint exposes restart instructions" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

@@ -6,6 +6,9 @@
 #     flags, and resume-related globals. Exports RALPH_PLAN_ALLOW_UNSAFE_RESUME for child processes
 #     when bare resume is allowed.
 
+PROJECT_ROOT_OVERRIDE=""
+WORKSPACE_ROOT_OVERRIDE=""
+
 # Print the run-plan CLI usage summary.
 # Args: none
 # Returns: 0 on success, non-zero on error
@@ -19,6 +22,8 @@ Required:
 Options:
   --runtime <cursor|claude|codex|opencode>  CLI runtime (omit if RALPH_PLAN_RUNTIME is set or you use the interactive prompt).
   --workspace <path>                   Repo workspace root (default: current directory).
+  --project-root <path>                Alias for --workspace; where the project (and .ralph/) lives.
+  --workspace-root <path>              Directory that contains .ralph-workspace (defaults to <project>/.ralph-workspace).
 
 Common options:
   --agent <name>                       Prebuilt agent directory under .<runtime>/agents/.
@@ -114,6 +119,20 @@ ralph_run_plan_parse_args() {
         WORKSPACE="$2"
         shift 2
         ;;
+      --project-root)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --project-root requires a project path."
+        fi
+        PROJECT_ROOT_OVERRIDE="$2"
+        shift 2
+        ;;
+      --workspace-root)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --workspace-root requires a directory path."
+        fi
+        WORKSPACE_ROOT_OVERRIDE="$2"
+        shift 2
+        ;;
       --max-iterations)
         if [[ -z "${2:-}" ]]; then
           ralph_die "Error: --max-iterations requires a positive integer."
@@ -151,7 +170,15 @@ ralph_run_plan_parse_args() {
     ralph_die "Error: --non-interactive cannot be combined with --select-agent."
   fi
 
+  if [[ -n "$PROJECT_ROOT_OVERRIDE" ]]; then
+    WORKSPACE="$PROJECT_ROOT_OVERRIDE"
+  fi
+
   WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+
+  if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
+    WORKSPACE_ROOT_OVERRIDE="$(cd "$WORKSPACE_ROOT_OVERRIDE" && pwd)"
+  fi
 
   if [[ -z "${PLAN_OVERRIDE:-}" ]]; then
     ralph_die "Error: --plan <path> is required."
@@ -184,3 +211,15 @@ ralph_run_plan_parse_args() {
   # When 1, allows CLI resume without a stored session id (unsafe on shared hosts); visible to subprocesses.
   export RALPH_PLAN_ALLOW_UNSAFE_RESUME
 }
+
+# Normalize RALPH_PLAN_CONTEXT_BUDGET (full / standard / lean; default standard).
+case "${RALPH_PLAN_CONTEXT_BUDGET:-standard}" in
+  full|standard|lean) ;;
+  *) RALPH_PLAN_CONTEXT_BUDGET="standard" ;;
+esac
+RALPH_PLAN_CONTEXT_BUDGET="${RALPH_PLAN_CONTEXT_BUDGET:-standard}"
+export RALPH_PLAN_CONTEXT_BUDGET
+
+# Human-context byte cap for non-resume (fresh) invocations when standard/lean budget is active.
+: "${RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME:=2048}"
+export RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME

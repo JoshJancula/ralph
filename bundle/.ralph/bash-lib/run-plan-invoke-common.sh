@@ -42,7 +42,7 @@ run_plan_invoke_common_add_cli_resume_flags() {
   shift
   local flags=("$@")
 
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && command -v python3 &>/dev/null; then
+  if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
     local flag
     for flag in "${flags[@]}"; do
       eval "$args_name+=(\"$flag\")"
@@ -58,9 +58,17 @@ run_plan_invoke_common_execute() {
   local demux_py
   demux_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-cli-json-demux.py"
 
+  # USAGE_FILE receives token usage JSON from demux when JSON streaming is active.
+  export USAGE_FILE="${USAGE_FILE:-}"
+  if [[ -z "$USAGE_FILE" && -n "${EXIT_CODE_FILE:-}" ]]; then
+    # Match run-plan-core naming: .plan-runner-usage.<pid>.json (not .plan-runner-exit.<pid>.usage...)
+    _exit_base="${EXIT_CODE_FILE%.$$}"
+    USAGE_FILE="${_exit_base/.plan-runner-exit/.plan-runner-usage}.$$.json"
+  fi
+
   local exit_code
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && command -v python3 &>/dev/null; then
-    "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "$SESSION_ID_FILE" | tee -a "$OUTPUT_LOG"
+  if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
+    "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
     exit_code="${PIPESTATUS[0]}"
   else
     if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -n "$python_warning" ]]; then

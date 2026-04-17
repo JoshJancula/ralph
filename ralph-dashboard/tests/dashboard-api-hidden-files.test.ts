@@ -10,21 +10,10 @@ describe('dashboard API hidden file handling', () => {
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-hidden-files-'));
     mkdirSync(join(tempRoot, '.ralph-workspace', 'orchestration-plans'), { recursive: true });
-    writeFileSync(
-      join(tempRoot, '.ralph-workspace', 'orchestration-plans', 'visible.md'),
-      'visible plan',
-    );
-    writeFileSync(
-      join(tempRoot, '.ralph-workspace', 'orchestration-plans', '.secret.md'),
-      'hidden plan',
-    );
-    mkdirSync(join(tempRoot, '.ralph-workspace', 'orchestration-plans', '.hidden-dir'), {
-      recursive: true,
-    });
-    writeFileSync(
-      join(tempRoot, '.ralph-workspace', 'orchestration-plans', '.hidden-dir', 'nested.md'),
-      'nested hidden plan',
-    );
+    writeFileSync(join(tempRoot, 'visible.md'), 'visible plan');
+    writeFileSync(join(tempRoot, '.secret.md'), 'hidden plan');
+    mkdirSync(join(tempRoot, '.hidden-dir'), { recursive: true });
+    writeFileSync(join(tempRoot, '.hidden-dir', 'nested.md'), 'nested hidden plan');
   });
 
   afterEach(() => {
@@ -34,7 +23,11 @@ describe('dashboard API hidden file handling', () => {
   });
 
   it('omits hidden entries from listings', () => {
-    const plans = getAllowedRoots(tempRoot).plans;
+    const roots = getAllowedRoots({
+      projectRoot: tempRoot,
+      workspaceRoot: join(tempRoot, '.ralph-workspace'),
+    });
+    const plans = roots.plans;
     const names = readdirSync(plans.basePath);
 
     expect(filterVisibleEntryNames(names)).toEqual(['visible.md']);
@@ -43,7 +36,11 @@ describe('dashboard API hidden file handling', () => {
   });
 
   it('blocks direct access to hidden paths', () => {
-    const plans = getAllowedRoots(tempRoot).plans;
+    const roots = getAllowedRoots({
+      projectRoot: tempRoot,
+      workspaceRoot: join(tempRoot, '.ralph-workspace'),
+    });
+    const plans = roots.plans;
 
     expect(() => resolveUnderRoot(plans, '.secret.md')).toThrow('invalid path');
     expect(() => resolveUnderRoot(plans, '.hidden-dir')).toThrow('invalid path');

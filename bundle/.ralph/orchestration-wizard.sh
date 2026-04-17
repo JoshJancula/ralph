@@ -40,11 +40,11 @@ source "$bundle_root/.ralph/bash-lib/wizard-validation.sh"
 
 echo "Note: this wizard copies .ralph/plan.template and scaffolds .ralph-workspace/orchestration-plans/<namespace> plus artifacts."
 
-print_step "1/6" "Pipeline metadata"
+print_step "1/7" "Pipeline metadata"
 print_hint "- Pick a short name we can use in file paths."
 read_pipeline_info
 
-print_step "2/6" "Stage list"
+print_step "2/7" "Stage list"
 print_hint "- Type stage names with commas, like: plan,test,qa"
 print_hint "- Press Enter if you want the default stage list."
 read_stages
@@ -63,9 +63,12 @@ stage_agent_sources=()
 stage_descriptions=()
 stage_models=()
 stage_session_resume=()
+stage_context_budgets=()
 stage_input_sources=()
+stage_handoff_targets=()
+stage_handoff_kinds=()
 
-print_step "3/6" "Configure each stage"
+print_step "3/7" "Configure each stage"
 print_hint "- For each stage, pick where it runs and which helper agent to use."
 print_hint "- Pick 'custom' if you want to choose a model yourself."
 for stage in "${stages[@]}"; do
@@ -100,6 +103,12 @@ for stage in "${stages[@]}"; do
       stage_session_resume+=("false")
     fi
   fi
+  read -rp "Context budget for \"$stage_id\" (full/standard/lean, enter for default): " cb_input
+  cb_input="${cb_input:-}"
+  case "$cb_input" in
+    full|standard|lean) stage_context_budgets+=("$cb_input") ;;
+    *) stage_context_budgets+=("") ;;
+  esac
 done
 
 orch_session_resume_enabled="true"
@@ -120,11 +129,22 @@ for stage in "${stages[@]}"; do
   stage_ids+=("$(ralph_internal_wizard_sanitize "$stage")")
 done
 
+configure_parallel_stages
+
 configure_stage_input_dependencies
 
-configure_loop_rules
+if [[ "${parallel_stages_enabled:-false}" == "true" ]]; then
+  print_hint "Skipping loop rules because parallelStages is enabled."
+  loop_sources=()
+  loop_targets=()
+  loop_max_iterations=()
+else
+  configure_loop_rules
+fi
 
-print_step "6/6" "Generate orchestration files"
+configure_handoff_declarations
+
+print_step "7/7" "Generate orchestration files"
 plan_dir="$workspace/.ralph-workspace/orchestration-plans/$namespace"
 artifact_dir="$workspace/.ralph-workspace/artifacts/$namespace"
 orch_file="$plan_dir/$namespace.orch.json"
@@ -160,7 +180,8 @@ mkdir -p "$plan_dir" "$artifact_dir"
     stage_entries+=("$(
       wizard_build_stage_entry \
         "$namespace" "$stage_label" "$runtime" "$agent" "$agent_source" "$plan_rel_path" "$artifact_path" \
-        "$stage_desc" "$stage_model" "$stage_resume_json" "$stage_input_list"
+        "$stage_desc" "$stage_model" "$stage_resume_json" "$stage_input_list" \
+        "${stage_context_budgets[$idx]:-}"
     )")
   done
 

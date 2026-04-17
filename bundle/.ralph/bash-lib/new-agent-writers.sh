@@ -40,13 +40,15 @@ EOF
     cat <<'EOF' >"$base_dir/rules/README.md"
 # Rules
 
-Add agent-specific rules here. Global Codex policy stays under `.codex/rules/`.
+This scaffold is inert until a rules file is referenced from `config.json`.
+Custom agents can add rules here and point `config.json` at them; global Codex policy stays under `.codex/rules/`.
 EOF
   else
     cat <<'EOF' >"$base_dir/rules/README.md"
 # Rules
 
-Use this folder to document agent-specific rules, validation stages, or guardrails. Expand the README with policy references and examples relevant to this agent.
+This scaffold is inert until a rules file is referenced from `config.json`.
+Custom agents can add rules here and point `config.json` at them. Use this folder to document agent-specific rules, validation stages, or guardrails, with policy references and examples relevant to this agent.
 EOF
   fi
 
@@ -54,13 +56,15 @@ EOF
     cat <<'EOF' >"$base_dir/skills/README.md"
 # Skills
 
-List Codex-relevant skills and workflows for this agent.
+This scaffold is inert until a skill file is referenced from `config.json`.
+Custom agents can add skills here and point `config.json` at them; list Codex-relevant skills and workflows for this agent.
 EOF
   else
     cat <<'EOF' >"$base_dir/skills/README.md"
 # Skills
 
-Use this folder to list agent skills, describe intent, and outline how each skill is expected to behave. Include usage guidance and any constraints that matter for this agent.
+This scaffold is inert until a skill file is referenced from `config.json`.
+Custom agents can add skills here and point `config.json` at them. Use this folder to list agent skills, describe intent, and outline how each skill is expected to behave, including usage guidance and any constraints that matter for this agent.
 EOF
   fi
 }

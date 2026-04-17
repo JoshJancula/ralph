@@ -179,6 +179,35 @@ EOF
   [ "$(cat "$SESSION_ID_FILE" | tr -d '\n')" = "cursor-sid-9" ]
 }
 
+@test "cursor usage capture writes USAGE_FILE even without CLI resume" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON demux"
+  cat <<'EOF' >"$BIN_DIR/cursor-agent"
+#!/usr/bin/env bash
+echo '{"session_id":"cursor-sid-usage","content":"ok","usage":{"promptTokens":5,"completionTokens":7,"cacheReadInputTokens":2}}'
+exit 0
+EOF
+  chmod +x "$BIN_DIR/cursor-agent"
+
+  export SESSION_ID_FILE="$TEST_TMPDIR/cursor-sid-usage.txt"
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=1
+  export USAGE_FILE="$TEST_TMPDIR/cursor.usage.json"
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  [ -s "$USAGE_FILE" ]
+  python3 - <<'PY' "$USAGE_FILE"
+import json,sys
+with open(sys.argv[1]) as f:
+  d=json.load(f)
+assert d.get("input_tokens") == 5
+assert d.get("output_tokens") == 7
+assert d.get("cache_read_input_tokens") == 2
+PY
+}
+
 @test "claude bare resume passes --resume without session id argument when unsafe allowed" {
   local record="$TEST_TMPDIR/claude-bare.args"
   cat <<EOF >"$BIN_DIR/claude"
@@ -228,7 +257,7 @@ EOF
 
   PROMPT="opencode-prompt"
   export PROMPT
-  SELECTED_MODEL="anthropic/claude-sonnet-4-5"
+  SELECTED_MODEL="anthropic/claude-sonnet-4-6"
   export SELECTED_MODEL
 
   run ralph_run_plan_invoke_opencode
@@ -239,7 +268,7 @@ EOF
   grep -Fxq -- "--agent" "$record"
   grep -Fxq -- "build" "$record"
   grep -Fxq -- "--model" "$record"
-  grep -Fxq -- "anthropic/claude-sonnet-4-5" "$record"
+  grep -Fxq -- "anthropic/claude-sonnet-4-6" "$record"
   grep -Fxq -- "opencode-prompt" "$record"
 }
 
@@ -315,6 +344,44 @@ EOF
   [[ "$output" == *"--timeout"* ]]
   [[ "$output" == *"--voice"* ]]
   [[ "$output" == *"prompt-body"* ]]
+}
+
+@test "codex-exec-prompt passes --json when RALPH_PLAN_CAPTURE_USAGE=1" {
+  cat <<'EOF' >"$BIN_DIR/codex"
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local prompt_file="$TEST_TMPDIR/codex-capture-prompt.txt"
+  echo "capture-prompt" >"$prompt_file"
+
+  export CODEX_PLAN_CLI=codex
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=1
+
+  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--json"* ]]
+}
+
+@test "codex-exec-prompt omits --json when both CAPTURE_USAGE and CLI_RESUME are off" {
+  cat <<'EOF' >"$BIN_DIR/codex"
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local prompt_file="$TEST_TMPDIR/codex-no-json-prompt.txt"
+  echo "no-json-prompt" >"$prompt_file"
+
+  export CODEX_PLAN_CLI=codex
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=0
+
+  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"--json"* ]]
 }
 
 @test "codex invoke helper warns when unsafe bare resume is blocked" {

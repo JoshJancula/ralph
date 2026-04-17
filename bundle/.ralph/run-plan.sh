@@ -41,6 +41,17 @@
 #   Timeout:      --timeout <duration> (per-agent-invocation timeout, default 30m).
 #                 Duration format: compact units such as `30m`, `1800s`, `2h`.
 #                 On timeout, exits as `stuck` with exit code `4`.
+#   Context budget: RALPH_PLAN_CONTEXT_BUDGET (full / standard / lean; default standard)
+#     Controls how much prompt context is included on fresh (non-resume) invocations to reduce cold-start cost.
+#     standard: lowers human context byte cap (RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME, default 2048).
+#     lean: standard + skips downstream stage context (RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME, default 0).
+#     full: no trimming applied. Set per-stage via contextBudget in .orch.json (orchestrator injects automatically).
+# Model tier configuration (for cost control):
+#   Agent config `model` field (.claude/agents/<id>/config.json etc.) sets the default model for that agent type.
+#   Orchestration stage `model` field in .orch.json overrides the agent config default for that stage.
+#   --model <id> CLI flag overrides everything for a single run.
+#   Recommended tiers: research/qa on claude-haiku-4-5, architect/code-review on claude-sonnet-4-6,
+#                      implementation on claude-sonnet-4-6 or claude-opus-4-6.
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:

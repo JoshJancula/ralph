@@ -2,6 +2,8 @@
 
 These pages assume you have **installed Ralph into a project** using **`install.sh`** (see **[INSTALL.md](INSTALL.md)** for submodule, subtree, flags, and removal, or the quick start in the main **README**). Unless we say otherwise, paths are from **your project root**: the directory that contains **`.ralph/`**, **`.cursor/`**, and the rest.
 
+Ralph keeps runtime state (logs, artifacts, sessions) under a workspace root that contains **`.ralph-workspace/`** (it defaults to the project root but can live elsewhere via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`), so references to `.ralph-workspace` point at that workspace root rather than the project root itself.
+
 The installer copies this documentation into **`.ralph/docs/`** in that project. Read it from either place; the content is the same.
 
 ## Guides
@@ -28,7 +30,7 @@ Pick what matches what you are doing. You can read them in any order.
 
 ## CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and replays a compact prompt (TODO + plan path + human replies only) the next time the same runtime runs under that namespace.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude prebuilt agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
 
 **Enable CLI session resume (pick one):**
 

@@ -9,6 +9,8 @@
    - Claude: `.ralph/run-plan.sh --runtime claude --plan ...`
    - Codex: `.ralph/run-plan.sh --runtime codex --non-interactive --plan ...`
 
+**Project vs workspace root:** The folder that contains `.ralph/` is the project root, while `.ralph-workspace/` lives under the workspace root (defaulting to the project root but movable via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`). Most plan and doc paths are resolved against the project root unless they explicitly mention `.ralph-workspace`, in which case they refer to the workspace root.
+
 3. With **`--agent <id>`**, the runner loads that id under `.cursor/agents/`, `.claude/agents/`, or `.codex/agents/`. Try **`architect`** or **`research`** after install. The **agent-config-tool** under `.ralph/` validates and builds context for all runtimes.
 
 ## Multi-stage orchestration
@@ -17,6 +19,10 @@
    Alternatively, run `.ralph/orchestration-wizard.sh` to choose a pipeline name/namespace, pick runtimes and agents for each stage, and let the wizard scaffold the plan files plus `.orch.json` under `.ralph-workspace/orchestration-plans/<namespace>/`.
 2. Each stage has `"runtime": "cursor" | "claude" | "codex"`, `"agent"`, and `"plan"`.
 3. Run: `.ralph/orchestrator.sh --orchestration path/to/pipeline.orch.json` or `.ralph/orchestrator.sh path/to/pipeline.orch.json` (both forms are supported; see the usage block in `.ralph/orchestrator.sh`).
+
+### Handoffs
+
+Orchestration stages can publish handoff artifacts by adding output entries with `kind: "handoff"` and `to: "<target-stage-id>"`. Ralph scans incoming handoffs before the target stage runs and injects any unchecked `- [ ]` tasks into that stage's plan. Start from [bundle/.ralph/handoff.template.md](../bundle/.ralph/handoff.template.md) for the canonical `Handoff`, `HANDOFF_META`, `## Tasks`, `## Context`, and `## Acceptance` structure.
 
 ## Visual flow
 

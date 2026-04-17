@@ -456,6 +456,21 @@ EOF
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/architecture.md"* ]]
   [[ "$output" == *".ralph-workspace/artifacts/PLAN/research.md"* ]]
   [[ "$output" == *"**Agent config:**"* ]]
+
+  run env RALPH_ARTIFACT_NS=PLAN RALPH_COMPACT_CONTEXT=1 bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".cursor/agents"
+    AGENT_CONFIG_TOOL="$3"
+    ws="$2"
+    format_prebuilt_agent_context_block "$ws" "architect"
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"**Rules (read and follow; paths only):**"* ]]
+  [[ "$output" == *"  - \`.cursor/rules/no-emoji.mdc\`"* ]]
+  [[ "$output" == *"**Skill paths (read these files in the repo as needed):**"* ]]
+  [[ "$output" == *"**Declared output artifacts:**"* ]]
+  [[ "$output" != *"--- Rule file:"* ]]
 }
 
 @test "prompt_select_prebuilt_agent accepts scripted TTY selection" {
@@ -819,7 +834,7 @@ CFG
     AGENTS_ROOT_REL=".claude/agents"
     AGENT_CONFIG_TOOL="$3"
     RUNTIME=claude
-    export CLAUDE_PLAN_MODEL="claude-sonnet-4-5"
+    export CLAUDE_PLAN_MODEL="claude-sonnet-4-6"
     unset CURSOR_PLAN_MODEL
     unset PLAN_MODEL_CLI
     ws="$2"
@@ -835,6 +850,6 @@ CFG
   ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
 
   [ "$status" -eq 0 ]
-  [ "$output" = "claude-sonnet-4-5" ]
+  [ "$output" = "claude-sonnet-4-6" ]
   rm -rf "$tmp_dir"
 }

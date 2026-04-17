@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Wrapper for sha256sum using shasum
+shasum -a 256 "$@"

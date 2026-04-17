@@ -158,6 +158,22 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
 
    The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
 
+   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs. When present, each wave is an array of stage IDs that must all exist in `stages[].id`, every stage ID must appear exactly once across all waves, and every stage in the orchestration must be covered. Do not combine `parallelStages` with any stage that declares `loopControl`; that combination is rejected.
+
+#### Handoffs
+
+Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer; with `parallelStages`, the target must be in a later wave.
+
+Non-handoff artifact entries may still set `kind` to `design`, `review`, `research`, or `notes`. Leave `kind` and `to` off ordinary artifact declarations.
+
+Handoff markdown files should follow `bundle/.ralph/handoff.template.md`:
+- `# Handoff: <FROM_STAGE> -> <TO_STAGE>`
+- `<!-- HANDOFF_META: START -->` / `<!-- HANDOFF_META: END -->` with `from`, `to`, and `iteration`
+- `## Tasks` containing unchecked `- [ ]` items for work that should be injected into the next stage plan
+- `## Context` and `## Acceptance` for background and success criteria
+
+Before each stage runs, the orchestrator scans incoming handoffs for that stage, resolves template tokens in the artifact path, extracts unchecked tasks from `## Tasks`, and injects them into the stage plan inside guarded `RALPH_HANDOFF` blocks. Identical blocks are skipped, same-iteration content changes replace the stale block, and missing or malformed handoff files are logged as warnings instead of failing the run. Injection is enabled by default with `RALPH_HANDOFFS_ENABLED=1`; set it to `0` to disable the behavior.
+
 3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
 
 ### Key environment variables
@@ -188,6 +204,41 @@ All Q&A is logged to `human-replies.md` in the session directory for auditing.
 - **Python 3 dependency:** CLI resume relies on the JSON demux helper which is written in Python; if Python 3 is missing the runtime logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (see `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and continues without resuming the previous session.
 - **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files outside the workspace tree. If you use Codex with a custom session home, ensure the sandbox can read that path.
 - **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/`) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
+
+### Runtime outputs
+
+Generated plan and orchestration outputs live under `.ralph-workspace/` so runners, dashboards, and automated checks can find them consistently.
+
+- Plan runs write logs under `.ralph-workspace/logs/` and generated artifacts under `.ralph-workspace/artifacts/`.
+- Orchestration runs may also write stage-specific files beneath `.ralph-workspace/orchestration-plans/` and read summary data from `.ralph-workspace/logs/`.
+- Agent configs that declare `output_artifacts` should treat those paths as fallback deliverables only; orchestration-stage `artifacts` and `outputArtifacts` take precedence when present.
+
+### Interpreting invocation-usage.json
+
+Every plan run appends a record to `.ralph-workspace/logs/<PLAN_KEY>/invocation-usage.json` and writes a final rollup to `plan-usage-summary.json`. The same files are served by the Ralph dashboard under Metrics.
+
+#### Per-runtime token field semantics
+
+| Runtime | `input_tokens` | `output_tokens` | `cache_creation_input_tokens` | `cache_read_input_tokens` |
+|---------|---------------|-----------------|-------------------------------|--------------------------|
+| claude  | uncached input tokens | output tokens | tokens written to the Anthropic prompt cache | tokens read from the cache |
+| cursor  | full input tokens (no cache) | output tokens | 0 | 0 |
+| codex   | `input_tokens - cached_input_tokens` from the final `token_count` event | `output_tokens + reasoning_output_tokens` | 0 (Codex does not distinguish creation) | `cached_input_tokens` |
+| opencode | sum of `tokens.input` across steps | sum of `tokens.output + tokens.reasoning` | sum of `tokens.cache.write` | sum of `tokens.cache.read` |
+
+#### Additional fields
+
+- `max_turn_total_tokens` -- peak single-turn total token count during the invocation (Codex only, derived from `last_token_usage.total_tokens`; 0 for all other runtimes). High values indicate a context-heavy turn and predict slow or failed runs.
+- `cache_hit_ratio` -- `cache_read_input_tokens / (input_tokens + cache_read_input_tokens + cache_creation_input_tokens)`. Values near 1 mean the prompt cache absorbed almost all input cost. Values near 0 on Claude indicate cold starts (no active session) or that session resume is not enabled.
+
+Both fields are shown in the Ralph dashboard as "Cache hit" and "Peak turn" columns in the Plan Metrics and Orchestration Metrics tables, and in the per-plan-folder metric strip on plan cards.
+
+#### Optimization rules of thumb
+
+- **Cursor: favor Claude or Codex for large plans.** Cursor's `composer-2` has no prompt cache; every invocation pays the full codebase-index cost (~77K input tokens in the PLAN2 run). A 10-TODO plan on Cursor costs roughly 770K input tokens versus ~142K cache-create + ~600K cheap cache-read on Claude. Reserve Cursor for short, one-shot plans.
+- **Claude: enable session resume (`--cli-resume`) within a plan.** The first invocation in a new session creates the prompt cache (~142K tokens in PLAN2); subsequent invocations read it cheaply. Session resume amortizes this cost and keeps `cache_hit_ratio` above 0.8. The runner prompt's stable portions are automatically placed in `PROMPT_STATIC` (fed to `--system-prompt` for caching) to further reduce per-call cache creation.
+- **Codex: watch `max_turn_total_tokens`.** Slow or retried invocations strongly correlate with single turns that approach the context window limit. If `max_turn_total_tokens` exceeds ~50K on a model with a 258K window, the agent is loading too much context. Review the TODO scope or reduce file reads in the agent prompt.
+- **OpenCode: mostly model-side.** The `glm-5.1` and similar throughput-limited models have high latency per token regardless of context size. No Ralph-side optimization closes that gap; choose a faster model when elapsed time matters.
 
 ## Important patterns
 

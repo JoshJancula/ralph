@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Read newline-delimited JSON from stdin; print human-readable text lines; write first session id to file.
 
-Argv: <mode> <session_id_file>
+Argv: <mode> <session_id_file> [<usage_file>]
 mode: claude | cursor | codex | opencode
+usage_file: optional path; written with JSON token usage summary at EOF
 """
 import json
 import os
 import sys
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def session_id_from(obj: Any, mode: str) -> Optional[str]:
@@ -63,6 +64,135 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
     return None
 
 
+def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
+    """Accumulate token usage fields from a JSON event into acc."""
+    if not isinstance(obj, dict):
+        return
+    if mode == "codex":
+        # Codex emits repeated token_count events. Each carries:
+        #   payload.info.total_token_usage  -- running cumulative (OVERWRITE, not sum)
+        #   payload.info.last_token_usage   -- this turn only (track max)
+        # We must NOT recurse generically here to avoid double-counting both sub-dicts.
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            return
+        if payload.get("type") != "token_count":
+            return
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            return
+        total = info.get("total_token_usage")
+        if isinstance(total, dict):
+            # input_tokens in Codex includes cached tokens; separate them out.
+            raw_input = int(total.get("input_tokens") or 0)
+            cached = int(total.get("cached_input_tokens") or 0)
+            acc["input_tokens"] = raw_input - cached
+            acc["cache_read_input_tokens"] = cached
+            acc["output_tokens"] = int(total.get("output_tokens") or 0) + int(total.get("reasoning_output_tokens") or 0)
+            # Codex does not distinguish cache creation; leave at 0.
+            acc["cache_creation_input_tokens"] = 0
+        last = info.get("last_token_usage")
+        if isinstance(last, dict):
+            last_total = int(last.get("total_tokens") or 0)
+            if last_total > acc.get("max_turn_total_tokens", 0):
+                acc["max_turn_total_tokens"] = last_total
+        return
+    if mode == "opencode":
+        # Implementation note -- OpenCode token event semantics (evidence from
+        # .ralph-workspace/logs/PLAN4/plan-runner-PLAN4-output.log):
+        #
+        # Event excerpt (step_finish, invocation 1, step 1):
+        #   {"type":"step_finish","timestamp":1776367151513,"part":{"tokens":{
+        #     "total":18765,"input":18644,"output":121,"reasoning":0,
+        #     "cache":{"read":0,"write":0}}}}
+        #
+        # Event excerpt (step_finish, invocation 1, step 2):
+        #   {"type":"step_finish","timestamp":1776367153750,"part":{"tokens":{
+        #     "total":20023,"input":19962,"output":61,"reasoning":0,
+        #     "cache":{"read":0,"write":0}}}}
+        #
+        # Interpretation: tokens.input/output/reasoning/cache are per-step DELTAS,
+        # not cumulative snapshots. Evidence:
+        #   (a) Step-2 input=19962 is NOT step-1 input + step-2 delta (would be
+        #       ~38606 if cumulative); it is ~18K because it is independent.
+        #   (b) A later invocation resets: its first step shows input=18609, far
+        #       below the ~30118 total of invocation 1's last step.
+        #   (c) total == input + output + reasoning always holds (18765 = 18644+121+0),
+        #       confirming each event reports only its own turn.
+        # Therefore the correct accumulation model is SUM across events (not
+        # overwrite or max), which matches the current implementation below.
+        #
+        # OpenCode emits step-level events. The token counts live in a top-level
+        # "tokens" dict (or nested inside "part") and use field names:
+        #   tokens.input, tokens.output, tokens.reasoning,
+        #   tokens.cache.read, tokens.cache.write
+        # These are per-step so we SUM across events.
+        tokens = obj.get("tokens")
+        if not isinstance(tokens, dict):
+            # Also check inside "part" for step_finish events.
+            part = obj.get("part")
+            if isinstance(part, dict):
+                tokens = part.get("tokens")
+        if isinstance(tokens, dict):
+            acc["input_tokens"] += int(tokens.get("input") or 0)
+            acc["output_tokens"] += int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
+            cache = tokens.get("cache")
+            if isinstance(cache, dict):
+                acc["cache_read_input_tokens"] += int(cache.get("read") or 0)
+                acc["cache_creation_input_tokens"] += int(cache.get("write") or 0)
+        return
+    if mode == "claude":
+        # Claude stream-json usage appears in usage blocks (top-level and/or under message).
+        usage = obj.get("usage")
+        if not usage and isinstance(obj.get("message"), dict):
+            usage = obj.get("message", {}).get("usage")
+        if isinstance(usage, dict):
+            acc["input_tokens"] += int(usage.get("input_tokens") or 0)
+            acc["output_tokens"] += int(usage.get("output_tokens") or 0)
+            acc["cache_creation_input_tokens"] += int(usage.get("cache_creation_input_tokens") or 0)
+            acc["cache_read_input_tokens"] += int(usage.get("cache_read_input_tokens") or 0)
+        # Also check top-level usage fields (some event types)
+        if "input_tokens" in obj or "output_tokens" in obj:
+            acc["input_tokens"] += int(obj.get("input_tokens") or 0)
+            acc["output_tokens"] += int(obj.get("output_tokens") or 0)
+            acc["cache_creation_input_tokens"] += int(obj.get("cache_creation_input_tokens") or 0)
+            acc["cache_read_input_tokens"] += int(obj.get("cache_read_input_tokens") or 0)
+        return
+    # Generic: look for common token field names across runtimes (cursor, etc.)
+    for in_key in ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"):
+        if in_key in obj:
+            acc["input_tokens"] += int(obj[in_key] or 0)
+            break
+    for out_key in ("output_tokens", "outputTokens", "completion_tokens", "completionTokens"):
+        if out_key in obj:
+            acc["output_tokens"] += int(obj[out_key] or 0)
+            break
+    # Some runtimes nest usage under "usage" or "tokenUsage" with different key casing.
+    usage = obj.get("usage") or obj.get("tokenUsage") or obj.get("token_usage")
+    if isinstance(usage, dict):
+        for in_key in ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"):
+            if in_key in usage:
+                acc["input_tokens"] += int(usage.get(in_key) or 0)
+                break
+        for out_key in ("output_tokens", "outputTokens", "completion_tokens", "completionTokens"):
+            if out_key in usage:
+                acc["output_tokens"] += int(usage.get(out_key) or 0)
+                break
+        for cc_key in ("cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWriteTokens"):
+            if cc_key in usage:
+                acc["cache_creation_input_tokens"] += int(usage.get(cc_key) or 0)
+                break
+        for cr_key in ("cache_read_input_tokens", "cacheReadInputTokens", "cacheReadTokens"):
+            if cr_key in usage:
+                acc["cache_read_input_tokens"] += int(usage.get(cr_key) or 0)
+                break
+    # Recurse into nested dicts for usage sub-objects, but avoid double-counting
+    # when we already processed a dedicated usage object above.
+    for v in obj.values():
+        if isinstance(v, dict) and v is not usage:
+            extract_usage(v, mode, acc)
+
+
 def extract_text(obj: Any, mode: str) -> List[str]:
     out: List[str] = []
     if isinstance(obj, dict):
@@ -82,7 +212,15 @@ def extract_text(obj: Any, mode: str) -> List[str]:
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "claude"
     path = sys.argv[2] if len(sys.argv) > 2 else ""
+    usage_path = sys.argv[3] if len(sys.argv) > 3 else ""
     sid: Optional[str] = None
+    usage_acc: Dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "max_turn_total_tokens": 0,
+    }
     for raw in sys.stdin:
         line = raw.rstrip("\n")
         if not line.strip():
@@ -92,8 +230,21 @@ def main() -> None:
         except json.JSONDecodeError:
             print(line)
             continue
+        if (
+            mode == "claude"
+            and isinstance(o, dict)
+            and o.get("type") == "system"
+            and o.get("subtype") == "init"
+        ):
+            # Claude emits a system/init envelope per print invocation.
+            # Suppress this metadata line so resumed plan logs are less noisy.
+            if sid is None and path:
+                sid = session_id_from(o, mode)
+            extract_usage(o, mode, usage_acc)
+            continue
         if sid is None and path:
             sid = session_id_from(o, mode)
+        extract_usage(o, mode, usage_acc)
         texts = extract_text(o, mode)
         if texts:
             for t in texts:
@@ -107,6 +258,14 @@ def main() -> None:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(sid + "\n")
+        except OSError:
+            pass
+    if usage_path:
+        try:
+            os.makedirs(os.path.dirname(usage_path) or ".", exist_ok=True)
+            with open(usage_path, "w", encoding="utf-8") as fh:
+                json.dump(usage_acc, fh)
+                fh.write("\n")
         except OSError:
             pass
 

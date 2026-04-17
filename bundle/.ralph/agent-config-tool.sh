@@ -85,6 +85,10 @@ case "$cmd" in
     validate_config "$2" "$3" || exit 1
     read_allowed_tools "$2" "$3"
     ;;
+  max-budget)
+    [[ $# -eq 3 ]] || usage
+    read_max_budget "$2" "$3"
+    ;;
   downstream-stages)
     [[ $# -ge 3 && $# -le 4 ]] || usage
     downstream_stages "$2" "$3" "${4:-}"

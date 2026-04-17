@@ -162,4 +162,17 @@ ralph_session_apply_resume_strategy() {
     ralph_run_plan_log "RALPH_PLAN_ALLOW_UNSAFE_RESUME: no stored session id; using bare resume (wrong session possible on a busy host)"
     echo "Warning: bare CLI resume without a stored session id can attach to the wrong session when several projects use the same CLI on one machine. Prefer isolated CI or fix session capture." >&2
   fi
+
+  #region agent log
+  if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
+    _dbg_ts=$(( $(date +%s) * 1000 ))
+    _dbg_sid_present=0
+    [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && _dbg_sid_present=1
+    _dbg_sid_len=0
+    if [[ "$_dbg_sid_present" == "1" ]]; then
+      _dbg_sid_len=${#RALPH_RUN_PLAN_RESUME_SESSION_ID}
+    fi
+    printf '%s\n' "{\"sessionId\":\"91b133\",\"id\":\"log_${_dbg_ts}_resume_strategy_$$\",\"timestamp\":${_dbg_ts},\"location\":\"bundle/.ralph/bash-lib/run-plan-session.sh:ralph_session_apply_resume_strategy\",\"message\":\"resume strategy applied\",\"data\":{\"cli_resume\":\"${RALPH_PLAN_CLI_RESUME:-0}\",\"session_id_file_exists\":$([[ -s \"$SESSION_ID_FILE\" ]] && echo true || echo false),\"resume_session_id_present\":${_dbg_sid_present},\"resume_session_id_length\":${_dbg_sid_len},\"resume_bare\":\"${RALPH_RUN_PLAN_RESUME_BARE:-0}\"},\"runId\":\"initial\",\"hypothesisId\":\"H1\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-91b133.log" || true
+  fi
+  #endregion agent log
 }

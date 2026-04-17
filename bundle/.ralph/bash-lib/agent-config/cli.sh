@@ -27,6 +27,16 @@ elif isinstance(v, list):
 " "$cfg" 2>/dev/null || true
 }
 
+read_max_budget() {
+  local agents_root="$1" agent_id="$2"
+  local cfg
+  cfg="$(load_cfg_path "$agents_root" "$agent_id")"
+  [[ -f "$cfg" ]] || return 1
+  local b
+  b="$(json_string_value "$cfg" "max_budget_usd")"
+  [[ -n "$b" ]] && echo "$b"
+}
+
 read_model() {
   local agents_root="$1" agent_id="$2"
   local cfg
@@ -43,6 +53,7 @@ usage() {
 Usage: agent-config-tool.sh list <agents_root>
        agent-config-tool.sh validate <agents_root> <agent_id> <workspace>
        agent-config-tool.sh model <agents_root> <agent_id>
+       agent-config-tool.sh max-budget <agents_root> <agent_id>
        agent-config-tool.sh context <agents_root> <agent_id> <workspace>
        agent-config-tool.sh required-artifacts <agents_root> <agent_id>
        agent-config-tool.sh allowed-tools <agents_root> <agent_id>   # Claude --allowedTools line or empty

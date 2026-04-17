@@ -7,11 +7,18 @@
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
-      "required": true
+      "required": true,
+      "kind": "design"
     },
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
       "required": false
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "implementation"
     }
   ]
 }

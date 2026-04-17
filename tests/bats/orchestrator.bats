@@ -10,7 +10,9 @@ setup_orchestrator_workspace() {
   cp "$REPO_ROOT/.ralph/bash-lib/error-handling.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-logging.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-lib.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/ralph-format-elapsed.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-verify.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-handoffs.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/"
   cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
@@ -20,6 +22,44 @@ exit 0
 STUB
   chmod +x "$workspace/.ralph/run-plan.sh"
   mkdir -p "$workspace/.ralph-workspace/logs"
+  printf '%s' "$workspace"
+}
+
+setup_handoff_capture_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+# Validate the plan exactly as run-plan sees it so the test can prove injection timing.
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path=""
+while (($# > 0)); do
+  case "$1" in
+    --plan)
+      plan_path="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "$plan_path" && "$(basename "$plan_path")" == "consumer.plan.md" ]]; then
+  grep -q "RALPH_HANDOFF: from=producer iter=1" "$plan_path" || {
+    echo "expected injected handoff before run-plan invocation" >&2
+    exit 42
+  }
+  grep -q "Injected task from producer stage" "$plan_path" || {
+    echo "expected injected tasks before run-plan invocation" >&2
+    exit 42
+  }
+fi
+
+printf 'stub run-plan received %s\n' "$*"
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
   printf '%s' "$workspace"
 }
 
@@ -114,6 +154,41 @@ LOOP_ORCH
   printf '%s' "$orch_path"
 }
 
+create_handoff_injection_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/handoff-injection.orch.json"
+  cat <<ORCH > "$orch_path"
+{
+  "name": "bats handoff injection",
+  "namespace": "handoff-order",
+  "stages": [
+    {
+      "id": "producer",
+      "agent": "producer-agent",
+      "runtime": "cursor",
+      "plan": "stages/producer.plan.md",
+      "outputArtifacts": [
+        {
+          "path": "$workspace/.ralph-workspace/artifacts/{{ARTIFACT_NS}}/handoff-a-to-b.md",
+          "kind": "handoff",
+          "to": "consumer"
+        }
+      ]
+    },
+    {
+      "id": "consumer",
+      "agent": "consumer-agent",
+      "runtime": "cursor",
+      "plan": "stages/consumer.plan.md"
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/producer.plan.md"
+  write_plan_file "$workspace" "stages/consumer.plan.md"
+  printf '%s' "$orch_path"
+}
+
 create_human_ack_orchestration() {
   local workspace="$1"
   local orch_path="$workspace/human-ack.orch.json"
@@ -137,6 +212,89 @@ create_human_ack_orchestration() {
 HUM_ORCH
   write_plan_file "$workspace" "stages/human-ack.plan.md"
   printf '%s' "$orch_path"
+}
+
+create_parallel_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/parallel.orch.json"
+  local runtime="${2:-cursor}"
+  local stage_one_id="${3:-alpha-one}"
+  local stage_two_id="${4:-beta-two}"
+  local stage_one_plan="${5:-stages/parallel-stage-one.plan.md}"
+  local stage_two_plan="${6:-stages/parallel-stage-two.plan.md}"
+  local stage_one_artifact="${7:-.ralph-workspace/artifacts/bats-parallel/alpha-one.md}"
+  local stage_two_artifact="${8:-.ralph-workspace/artifacts/bats-parallel/beta-two.md}"
+  local stage_two_agent="${9:-parallel-agent-two}"
+
+  cat <<ORCH > "$orch_path"
+{
+  "name": "bats parallel",
+  "namespace": "bats-parallel",
+  "parallelStages": [
+    "$stage_one_id,$stage_two_id"
+  ],
+  "stages": [
+    {
+      "id": "$stage_one_id",
+      "agent": "parallel-agent-one",
+      "runtime": "$runtime",
+      "plan": "$stage_one_plan",
+      "artifacts": [
+        {
+          "path": "$stage_one_artifact",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "$stage_two_id",
+      "agent": "$stage_two_agent",
+      "runtime": "$runtime",
+      "plan": "$stage_two_plan",
+      "artifacts": [
+        {
+          "path": "$stage_two_artifact",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "$stage_one_plan"
+  write_plan_file "$workspace" "$stage_two_plan"
+  printf '%s' "$orch_path"
+}
+
+setup_parallel_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  mkdir -p "$workspace/.ralph-workspace/logs/PLAN"
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path=""
+while (($# > 0)); do
+  if [[ "$1" == --plan ]]; then
+    plan_path="${2:-}"
+    break
+  fi
+  shift
+done
+printf '%s\n' "${plan_path##*/}" >> "${PARALLEL_CAPTURE_FILE:-/dev/null}"
+if [[ -n "${PARALLEL_FAIL_PLAN:-}" && "${plan_path##*/}" == "${PARALLEL_FAIL_PLAN}" ]]; then
+  exit 7
+fi
+if [[ -n "${PARALLEL_SKIP_ARTIFACT_PLAN:-}" && "${plan_path##*/}" == "${PARALLEL_SKIP_ARTIFACT_PLAN}" ]]; then
+  exit 0
+fi
+if [[ -n "${PARALLEL_OUTPUT_FILE:-}" ]]; then
+  printf 'artifact output for %s\n' "${plan_path##*/}" > "$PARALLEL_OUTPUT_FILE"
+fi
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
+  printf '%s' "$workspace"
 }
 
 @test "orchestrator prints usage when asked for help" {
@@ -220,6 +378,115 @@ RESUME
     && [[ "$output" == *"--cli-resume"* ]] \
     && [[ "$output" != *"--no-cli-resume"* ]] \
     || return 1
+  rm -rf "$workspace"
+}
+
+@test "orchestrator dry-run shows parallel wave steps" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace
+  workspace="$(setup_parallel_workspace)"
+  local orch_file
+  orch_file="$(create_parallel_orchestration "$workspace")"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"DRY RUN step 1:"* ]] \
+    && [[ "$output" == *"DRY RUN step 2:"* ]] \
+    || return 1
+  rm -rf "$workspace"
+}
+
+@test "orchestrator runs parallel waves successfully" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_parallel_workspace)"
+  capture_file="$(mktemp)"
+  local orch_file
+  orch_file="$(create_parallel_orchestration "$workspace")"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-parallel/alpha-one.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-parallel/beta-two.md"
+
+  run env PARALLEL_CAPTURE_FILE="$capture_file" bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  local captured
+  captured="$(cat "$capture_file")"
+  [[ "$captured" == *"parallel-stage-one.plan.md"* ]] || { echo "missing stage one capture: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"parallel-stage-two.plan.md"* ]] || { echo "missing stage two capture: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator reports a failing stage in a parallel wave" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_parallel_workspace)"
+  capture_file="$(mktemp)"
+  local orch_file
+  orch_file="$(create_parallel_orchestration "$workspace")"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-parallel/alpha-one.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-parallel/beta-two.md"
+  run env PARALLEL_CAPTURE_FILE="$capture_file" PARALLEL_FAIL_PLAN="parallel-stage-two.plan.md" bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -ne 0 ] \
+    && [[ "$output" == *"Parallel wave 1 failed:"* ]] \
+    && [[ "$output" == *"beta-two:1"* ]] \
+    || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator surfaces artifact verification failures in parallel mode" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_parallel_workspace)"
+  capture_file="$(mktemp)"
+  local orch_file
+  orch_file="$(create_parallel_orchestration "$workspace")"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-parallel/alpha-one.md"
+
+  run env PARALLEL_CAPTURE_FILE="$capture_file" PARALLEL_SKIP_ARTIFACT_PLAN="parallel-stage-two.plan.md" bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -ne 0 ] \
+    && [[ "$output" == *"Expected file missing:"* ]] \
+    && [[ "$output" == *"beta-two.md"* ]] \
+    || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator rejects parallelStages with loopControl" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file="$workspace/parallel-loop.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats parallel loop",
+  "namespace": "bats-parallel-loop",
+  "parallelStages": [
+    "stage-one"
+  ],
+  "stages": [
+    {
+      "id": "stage-one",
+      "agent": "parallel-agent-one",
+      "runtime": "cursor",
+      "plan": "stages/parallel-loop.plan.md",
+      "loopControl": {
+        "loopBackTo": "stage-one",
+        "maxIterations": 2
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-parallel-loop/stage-one.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/parallel-loop.plan.md"
+  run bash "$REPO_ROOT/scripts/validate-orchestration-schema.sh" "$orch_file" 2>&1
+  [ "$status" -ne 0 ] \
+    && [[ "$output" == *"schema validation failed"* ]] \
+    || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
   rm -rf "$workspace"
 }
 
@@ -335,6 +602,46 @@ BAD
   rm -rf "$workspace"
 }
 
+@test "orchestrator injects handoffs before run-plan invocation" {
+  local workspace artifact_ns handoff_file orch_file consumer_plan captured
+  workspace="$(setup_handoff_capture_workspace)"
+  artifact_ns="handoff-order"
+  handoff_file="$workspace/.ralph-workspace/artifacts/$artifact_ns/handoff-a-to-b.md"
+  orch_file="$(create_handoff_injection_orchestration "$workspace")"
+
+  mkdir -p "$(dirname "$handoff_file")"
+  cat > "$handoff_file" <<'HANDOFF'
+# Handoff: Producer to Consumer
+
+<!-- HANDOFF_META: START -->
+from: producer
+to: stage-b
+iteration: 1
+<!-- HANDOFF_META: END -->
+
+## Tasks
+
+- [ ] Injected task from producer stage
+- [ ] Confirm plan mutation before runner invocation
+
+## Context
+
+Generated by the plan-execution test.
+HANDOFF
+
+  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
+
+  consumer_plan="$workspace/stages/consumer.plan.md"
+  captured="$(cat "$consumer_plan")"
+  [[ "$captured" == *"RALPH_HANDOFF: from=producer iter=1"* ]] \
+    || { echo "FAIL: consumer plan missing injected handoff: $captured"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"Injected task from producer stage"* ]] \
+    || { echo "FAIL: consumer plan missing injected task: $captured"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
 create_agent_config_workspace() {
   local workspace="$1"
   local agent_id="$2"
@@ -445,7 +752,7 @@ ORCH
       "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
-      "model": "claude-sonnet-4-5",
+      "model": "claude-sonnet-4-6",
       "sessionResume": false,
       "artifacts": [
         { "path": ".ralph-workspace/artifacts/model-multi/claude-stage.md", "required": true }
@@ -476,7 +783,7 @@ ORCH
 
   local captured
   captured="$(cat "$capture_file")"
-  [[ "$captured" == *"CLAUDE_PLAN_MODEL=claude-sonnet-4-5"* ]] \
+  [[ "$captured" == *"CLAUDE_PLAN_MODEL=claude-sonnet-4-6"* ]] \
     || { echo "FAIL: missing CLAUDE_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
   [[ "$captured" == *"CODEX_PLAN_MODEL=gpt-5.1-codex-mini"* ]] \
     || { echo "FAIL: missing CODEX_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }

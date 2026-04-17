@@ -76,6 +76,8 @@ Use `PORT=8124 npm run start` to run on a different port. By default the UI is a
 - **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --workspace . --agent architect`
 - **OpenCode:** `.ralph/run-plan.sh --runtime opencode --plan PLAN.md --workspace . --model opencode/nemotron-3-super-free`
 
+Ralph now treats the project root (where your `.ralph/` copy and plans live) as separate from the workspace root (where `.ralph-workspace/` stores logs, artifacts, and session files). Use `--workspace` (or the alias `--project-root`) to point at the project directory and `--workspace-root` to place `.ralph-workspace` elsewhere (it defaults to `<project>/.ralph-workspace` when you omit it). You can also override the workspace root with `RALPH_PLAN_WORKSPACE_ROOT` when you prefer environment variables to flags.
+
 **CLI contracting:** `run-plan.sh` uses the strict parser in `bundle/.ralph/bash-lib/run-plan-args.sh`: only documented flags are accepted (unknown flags are an error), and plan and workspace paths are not positional. You must pass `--plan <path>`. Pass `--workspace <path>` for an explicit repo root; if you omit it, the workspace defaults to the current working directory. Orchestration and docs usually show all three flags for clarity.
 
 ### Canonical run-plan invocation
@@ -86,6 +88,8 @@ Invoke the runner by explicitly passing the workspace root, plan file, and runti
 cd /path/to/project
 ./.ralph/run-plan.sh --workspace /path/to/project --plan plans/feature.md --runtime cursor
 ```
+
+Add `--workspace-root /path/to/.ralph-workspace` to that command whenever you need to keep logs/artifacts/sessions outside the project folder.
 
 Each invocation must supply the same flags because the parser in `bundle/.ralph/bash-lib/run-plan-args.sh` refuses positional workspace arguments.
 
@@ -107,18 +111,21 @@ results in an orchestrator command similar to:
 RALPH_ARTIFACT_NS=feature \
 ./.ralph/run-plan.sh --workspace /path/to/project --plan .ralph-workspace/orchestration-plans/feature/design.md --runtime cursor
 ```
+Add `--workspace-root /path/to/.ralph-workspace` when the workspace state lives outside the project directory so the runner and dashboard stay in sync.
 
 Stage overrides like `--agent`, `--model`, or `--cli-resume` are layered on top of this base invocation before the orchestrator starts each stage.
+
+When you define `artifacts` or `outputArtifacts` in an orchestration file, those paths are the authoritative outputs for the run. The agent config `output_artifacts` field is only a fallback when a stage does not define its own artifact declarations. Keep generated logs and artifacts under the workspace root’s `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/` so the dashboard and orchestration checks can discover them consistently.
 
 **Checklist syntax:** Open tasks must look like **`- [ ]`** (space before **`]`**). The form **`- []`** is ignored, so the runner may stop while lines still look unfinished.
 
 ### When the runner needs you
 
-**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input through a helper script configured via **`RALPH_HUMAN_ACK_TOOL`** (the orchestrator script itself does not provide `--human-ack`). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
+**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`--workspace-root`** or **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input through a helper script configured via **`RALPH_HUMAN_ACK_TOOL`** (the orchestrator script itself does not provide `--human-ack`). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
 ### CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and supplies that ID plus a compact prompt (TODO, plan path, and human replies only) to the next runtime invocation so the session continues where it left off.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and supplies that ID plus a compact context block to the next runtime invocation so the session continues where it left off. For non-Claude prebuilt agents, that block is compact by default and can be forced with `RALPH_COMPACT_CONTEXT=1` or the equivalent `--compact` context mode.
 
 **Enable CLI session resume (pick one):**
 
@@ -186,7 +193,7 @@ Ralph can run **many** agent turns in a row, repeatedly without human interventi
 
 ## Monitor your token usage
 
-Cost depends on the **model** you choose (or that a prebuilt agent pins) and on **how big and vague each task is**. Prefer a model that fits the job, keep TODOs concrete, and watch Cursor, Anthropic, or OpenAI billing so you are not surprised.
+Cost comes from two places: the **prompt bytes** sent at the start of each turn, and the **runtime context/tool-output** that can accumulate as the session grows. Keep prompts short and targeted, prefer partial reads over full logs or huge files, and write TODOs that point at the smallest relevant path or line range so the next turn does not have to re-read unnecessary data. Also choose a model that fits the job, keep TODOs concrete, and watch Cursor, Anthropic, or OpenAI billing so you are not surprised.
 
 ## License
 

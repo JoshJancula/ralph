@@ -42,7 +42,8 @@ wizard_render_plan_template() {
 
 # Builds the JSON entry for a stage, including optional artifacts and control data.
 # Args: 1 namespace, 2 stage_label, 3 runtime, 4 agent, 5 agent_source, 6 plan_rel_path, 7 artifact_path,
-#       8 stage_desc, 9 stage_model, 10 session_resume, 11 stage_input_list
+#       8 stage_desc, 9 stage_model, 10 session_resume, 11 stage_input_list, 12 context_budget,
+#       13 handoff_target, 14 handoff_kind
 # Returns: prints the JSON entry to stdout.
 wizard_build_stage_entry() {
   local namespace="$1"
@@ -56,6 +57,9 @@ wizard_build_stage_entry() {
   local stage_model="$9"
   local session_resume="${10:-false}"
   local stage_input_list="${11:-}"
+  local context_budget="${12:-}"
+  local handoff_target="${13:-}"
+  local handoff_kind="${14:-}"
 
   local entry
   entry="    {\n      \"id\": \"$stage_label\",\n      \"runtime\": \"$runtime\",\n      \"agent\": \"$agent\",\n      \"agentSource\": \"$agent_source\",\n      \"plan\": \"$plan_rel_path\",\n      \"artifacts\": [\n        {\n          \"path\": \"$artifact_path\",\n          \"required\": true\n        }\n      ]"
@@ -70,6 +74,10 @@ wizard_build_stage_entry() {
     local model_json
     model_json="$(escape_json "$stage_model")"
     entry="$entry,\n      \"model\": $model_json"
+  fi
+
+  if [[ -n "$context_budget" ]]; then
+    entry="$entry,\n      \"contextBudget\": \"$context_budget\""
   fi
 
   entry="$entry,\n      \"sessionResume\": $session_resume"
@@ -107,6 +115,12 @@ wizard_build_stage_entry() {
     done
   fi
 
+  # Add outputArtifacts with handoff declaration if configured
+  if [[ -n "$handoff_target" && -n "$handoff_kind" ]]; then
+    local handoff_artifact_path=".ralph-workspace/handoffs/$namespace/${stage_label}-to-${handoff_target}.md"
+    entry="$entry,\n      \"outputArtifacts\": [\n        {\n          \"path\": \"$artifact_path\",\n          \"required\": true\n        },\n        {\n          \"path\": \"$handoff_artifact_path\",\n          \"required\": false,\n          \"kind\": \"$handoff_kind\",\n          \"to\": \"$handoff_target\"\n        }\n      ]"
+  fi
+
   entry="$entry\n    }"
   printf '%s' "$entry"
 }
@@ -125,12 +139,29 @@ wizard_write_orchestration_file() {
   local name_json
   local namespace_json
   local description_json
+  local wave_json
 
   name_json="$(escape_json "$pipeline_name")"
   namespace_json="$(escape_json "$namespace")"
   description_json="$(escape_json "$description")"
-  printf '{\n  "name": %s,\n  "namespace": %s,\n  "description": %s,\n  "sessionResumeEnabled": %s,\n  "stages": [\n' \
+  printf '{\n  "name": %s,\n  "namespace": %s,\n  "description": %s,\n  "sessionResumeEnabled": %s' \
     "$name_json" "$namespace_json" "$description_json" "$session_resume_enabled" > "$orch_file"
+
+  if [[ "${parallel_stages_enabled:-false}" == "true" ]] && (( ${#parallel_stage_waves[@]-0} > 0 )); then
+    printf ',\n  "parallelStages": [\n' >>"$orch_file"
+    for idx in "${!parallel_stage_waves[@]}"; do
+      wave_json="$(escape_json "${parallel_stage_waves[$idx]}")"
+      printf '    %s' "$wave_json" >>"$orch_file"
+      if (( idx < ${#parallel_stage_waves[@]} - 1 )); then
+        printf ',\n' >>"$orch_file"
+      else
+        printf '\n' >>"$orch_file"
+      fi
+    done
+    printf '  ]' >>"$orch_file"
+  fi
+
+  printf ',\n  "stages": [\n' >>"$orch_file"
 
   for idx in "${!stage_entries[@]}"; do
     printf '%b' "${stage_entries[$idx]}" >> "$orch_file"

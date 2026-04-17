@@ -288,6 +288,60 @@ EOF
   rm -f "$prompt_funcs" "$runner"
 }
 
+@test "runtime-specific context branching toggles compact mode outside claude" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
+
+  local tmp_dir workspace agent_tool
+  tmp_dir="$(mktemp -d)"
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+
+  agent_tool="$tmp_dir/agent-config-tool.sh"
+  cat <<'EOF' > "$agent_tool"
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  context)
+    printf 'compact=%s\n' "${RALPH_COMPACT_CONTEXT:-unset}"
+    ;;
+  *)
+    printf 'unexpected command: %s\n' "${1:-}" >&2
+    exit 1
+    ;;
+esac
+EOF
+  chmod +x "$agent_tool"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    AGENTS_ROOT_REL=".cursor/agents"
+    AGENT_CONFIG_TOOL="$2"
+    ws="$3"
+    build_context_for_runtime() {
+      local runtime="$1"
+      if [[ "$runtime" == "claude" ]]; then
+        RALPH_COMPACT_CONTEXT=0 format_prebuilt_agent_context_block "$ws" "architect"
+      else
+        RALPH_COMPACT_CONTEXT=1 format_prebuilt_agent_context_block "$ws" "architect"
+      fi
+    }
+    printf 'cursor\n'
+    build_context_for_runtime cursor
+    printf '\nclaude\n'
+    build_context_for_runtime claude
+  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$agent_tool" "$workspace"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cursor"* ]]
+  [[ "$output" == *"compact=1"* ]]
+  [[ "$output" == *"claude"* ]]
+  [[ "$output" == *"compact=0"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
 @test "prebuilt agent CURSOR_PLAN_MODEL env var overrides agent config model" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
@@ -460,7 +514,7 @@ CFG
     AGENTS_ROOT_REL=".claude/agents"
     AGENT_CONFIG_TOOL="$3"
     RUNTIME=claude
-    export CLAUDE_PLAN_MODEL="claude-sonnet-4-5"
+    export CLAUDE_PLAN_MODEL="claude-sonnet-4-6"
     unset CURSOR_PLAN_MODEL
     unset PLAN_MODEL_CLI
     ws="$2"
@@ -476,6 +530,6 @@ CFG
   ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
 
   [ "$status" -eq 0 ]
-  [ "$output" = "claude-sonnet-4-5" ]
+  [ "$output" = "claude-sonnet-4-6" ]
   rm -rf "$tmp_dir"
 }

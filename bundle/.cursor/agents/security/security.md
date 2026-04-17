@@ -12,5 +12,6 @@ When invoked:
 2. Check for common issues: injection, XSS, auth bypass, hardcoded secrets, weak validation.
 3. Verify input validation and sanitization; note missing or weak controls.
 4. Report findings by severity: Critical (must fix before deploy), High (fix soon), Medium (address when possible).
+5. Optionally produce security-to-implementation.md (kind: handoff, to: implementation) if security issues are discovered that require fixes.
 
 Produce a concise security report. When orchestrated by Ralph, write the deliverable to the path specified in the plan (e.g. security.md under the artifact namespace). Do not use emojis in any output.

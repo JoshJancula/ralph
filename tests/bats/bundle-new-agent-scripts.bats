@@ -17,6 +17,8 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   grep -q '"model": "auto"' "$config"
   [ -f "$bundle_root/.cursor/agents/cursor-test/rules/README.md" ]
   [ -f "$bundle_root/.cursor/agents/cursor-test/skills/README.md" ]
+  grep -q 'This scaffold is inert until a rules file is referenced from `config.json`.' "$bundle_root/.cursor/agents/cursor-test/rules/README.md"
+  grep -q 'This scaffold is inert until a skill file is referenced from `config.json`.' "$bundle_root/.cursor/agents/cursor-test/skills/README.md"
   [ ! -d "$bundle_root/.claude/agents" ]
   [ ! -d "$bundle_root/.codex/agents" ]
 
@@ -37,6 +39,8 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   grep -q '"model": "claude-custom-model"' "$config"
   [ -f "$bundle_root/.claude/agents/claude-test/rules/README.md" ]
   [ -f "$bundle_root/.claude/agents/claude-test/skills/README.md" ]
+  grep -q 'This scaffold is inert until a rules file is referenced from `config.json`.' "$bundle_root/.claude/agents/claude-test/rules/README.md"
+  grep -q 'This scaffold is inert until a skill file is referenced from `config.json`.' "$bundle_root/.claude/agents/claude-test/skills/README.md"
 
   rm -rf "$repo"
 }
@@ -55,6 +59,8 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   grep -q '"model": "codex-special-model"' "$config"
   [ -f "$bundle_root/.codex/agents/codex-test/rules/README.md" ]
   [ -f "$bundle_root/.codex/agents/codex-test/skills/README.md" ]
+  grep -q 'This scaffold is inert until a rules file is referenced from `config.json`.' "$bundle_root/.codex/agents/codex-test/rules/README.md"
+  grep -q 'This scaffold is inert until a skill file is referenced from `config.json`.' "$bundle_root/.codex/agents/codex-test/skills/README.md"
 
   rm -rf "$repo"
 }

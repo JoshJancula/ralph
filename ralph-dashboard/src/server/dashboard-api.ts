@@ -1,24 +1,274 @@
 import type { Express, Request, Response } from 'express';
-import { existsSync, promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { type Dirent, existsSync, promises as fs } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 import {
   filterVisibleEntryNames,
-  findWorkspaceProjectRoot,
+  findDashboardRoots,
   getAllowedRoots,
+  isHiddenEntryName,
   parentListingPath,
   resolveUnderRoot,
   type RootConfig,
 } from '../paths';
 
 const FILE_CHUNK_BYTES = 256 * 1024;
+const SUMMARY_FILE_NAMES = new Set(['plan-usage-summary.json', 'orchestration-usage-summary.json']);
+
+type MetricsSummaryKind = 'plan_usage_summary' | 'orchestration_usage_summary';
+
+interface UsageSummaryRecord {
+  schema_version?: number;
+  kind?: MetricsSummaryKind;
+  plan?: string;
+  orchestration?: string;
+  plan_key?: string;
+  artifact_ns?: string;
+  stage_id?: string;
+  model?: string;
+  runtime?: string;
+  started_at?: string;
+  ended_at?: string;
+  elapsed_seconds?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  max_turn_total_tokens?: number;
+  cache_hit_ratio?: number;
+  invocations?: number;
+  steps?: number;
+  todos_done?: number;
+  todos_total?: number;
+}
+
+interface MetricsSummaryItem {
+  path: string;
+  plan_key: string;
+  artifact_ns: string;
+  stage_id?: string;
+  model?: string;
+  runtime?: string;
+  started_at?: string;
+  ended_at?: string;
+  elapsed_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  max_turn_total_tokens: number;
+  cache_hit_ratio: number;
+}
 
 function jsonError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: message });
 }
 
 function getRootsMap(): Record<string, RootConfig> {
-  return getAllowedRoots(findWorkspaceProjectRoot());
+  return getAllowedRoots(findDashboardRoots());
+}
+
+async function findPlanByBasename(workspaceRoot: string, fileName: string): Promise<string | null> {
+  const maxDepth = 8;
+  const skipDirs = new Set(['node_modules', 'dist', 'build', 'out', 'coverage']);
+
+  async function walk(dir: string, depth: number): Promise<string | null> {
+    if (depth > maxDepth) {
+      return null;
+    }
+
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+
+    for (const entry of entries) {
+      if (isHiddenEntryName(entry.name)) {
+        continue;
+      }
+
+      const absPath = join(dir, entry.name);
+      if (entry.isFile()) {
+        if (entry.name === fileName) {
+          return absPath;
+        }
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) {
+          continue;
+        }
+
+        const found = await walk(absPath, depth + 1);
+        if (found) {
+          return found;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  return await walk(workspaceRoot, 0);
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function normalizeSummaryRecord(record: UsageSummaryRecord, summaryPath: string): MetricsSummaryItem | null {
+  const kind =
+    record.kind === 'plan_usage_summary' || record.kind === 'orchestration_usage_summary'
+      ? record.kind
+      : (() => {
+          const file = basename(summaryPath);
+          if (file === 'plan-usage-summary.json' && record.invocations !== undefined) {
+            return 'plan_usage_summary' as const;
+          }
+          if (file === 'orchestration-usage-summary.json' && record.steps !== undefined) {
+            return 'orchestration_usage_summary' as const;
+          }
+          return null;
+        })();
+
+  if (!kind) {
+    return null;
+  }
+
+  const inferredKey = basename(dirname(summaryPath));
+
+  return {
+    path: summaryPath,
+    plan_key: record.plan_key ?? inferredKey,
+    artifact_ns: record.artifact_ns ?? inferredKey,
+    stage_id: record.stage_id || undefined,
+    model: record.model || undefined,
+    runtime: record.runtime || undefined,
+    started_at: record.started_at || undefined,
+    ended_at: record.ended_at || undefined,
+    elapsed_seconds: toNumber(record.elapsed_seconds),
+    input_tokens: toNumber(record.input_tokens),
+    output_tokens: toNumber(record.output_tokens),
+    cache_creation_input_tokens: toNumber(record.cache_creation_input_tokens),
+    cache_read_input_tokens: toNumber(record.cache_read_input_tokens),
+    max_turn_total_tokens: toNumber(record.max_turn_total_tokens),
+    cache_hit_ratio: toNumber(record.cache_hit_ratio),
+  };
+}
+
+async function collectSummaryFiles(dir: string, output: string[] = []): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true, encoding: 'utf8' });
+  } catch {
+    return output;
+  }
+
+  for (const entry of entries) {
+    const absPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectSummaryFiles(absPath, output);
+      continue;
+    }
+
+    if (entry.isFile() && SUMMARY_FILE_NAMES.has(entry.name)) {
+      output.push(absPath);
+    }
+  }
+
+  return output;
+}
+
+export async function handleMetricsSummaryRequest(_req: Request, res: Response): Promise<void> {
+  const roots = getAllowedRoots(findDashboardRoots());
+  const logsRoot = roots['logs']?.basePath;
+  if (!logsRoot || !existsSync(logsRoot)) {
+    res.json({
+      overall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 0,
+        count: 0,
+      },
+      plans: [],
+      orchestrations: [],
+    });
+    return;
+  }
+
+  const summaryPaths = await collectSummaryFiles(logsRoot);
+  const plans: MetricsSummaryItem[] = [];
+  const orchestrations: MetricsSummaryItem[] = [];
+  const overall = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+    max_turn_total_tokens: 0,
+    cache_hit_ratio: 0,
+    elapsed_seconds: 0,
+    count: 0,
+  };
+
+  for (const summaryPath of summaryPaths) {
+    try {
+      const raw = await fs.readFile(summaryPath, 'utf8');
+      const parsed = JSON.parse(raw) as UsageSummaryRecord;
+      const normalized = normalizeSummaryRecord(parsed, summaryPath);
+      if (!normalized) {
+        continue;
+      }
+
+      overall.input_tokens += normalized.input_tokens;
+      overall.output_tokens += normalized.output_tokens;
+      overall.cache_creation_input_tokens += normalized.cache_creation_input_tokens;
+      overall.cache_read_input_tokens += normalized.cache_read_input_tokens;
+      overall.elapsed_seconds += normalized.elapsed_seconds;
+      if (normalized.max_turn_total_tokens > overall.max_turn_total_tokens) {
+        overall.max_turn_total_tokens = normalized.max_turn_total_tokens;
+      }
+      overall.count += 1;
+
+      if (parsed.kind === 'plan_usage_summary') {
+        plans.push(normalized);
+      } else {
+        orchestrations.push(normalized);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  plans.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
+  orchestrations.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
+
+  // Compute overall cache_hit_ratio from accumulated token totals.
+  const overallTotalInput =
+    overall.input_tokens + overall.cache_read_input_tokens + overall.cache_creation_input_tokens;
+  overall.cache_hit_ratio =
+    overallTotalInput > 0
+      ? Math.round((overall.cache_read_input_tokens / overallTotalInput) * 10000) / 10000
+      : 0;
+
+  res.json({
+    overall,
+    plans,
+    orchestrations,
+  });
 }
 
 export async function handleListRequest(req: Request, res: Response): Promise<void> {
@@ -155,14 +405,29 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
     try {
       stat = await fs.stat(absFile);
     } catch {
-      return jsonError(res, 404, 'file not found');
+      if (rootKey === 'plans' && !filePath.includes('/') && filePath.endsWith('.md')) {
+        const { projectRoot } = findDashboardRoots();
+        const found = await findPlanByBasename(projectRoot, filePath);
+        if (found) {
+          absFile = found;
+          try {
+            stat = await fs.stat(absFile);
+          } catch {
+            return jsonError(res, 404, 'file not found');
+          }
+        } else {
+          return jsonError(res, 404, 'file not found');
+        }
+      } else {
+        return jsonError(res, 404, 'file not found');
+      }
     }
 
     if (!stat.isFile()) {
       return jsonError(res, 400, 'not a file');
     }
 
-    const size = stat.size;
+    const size = Number(stat.size);
     if (offset > size) {
       res.json({
         content: '',
@@ -197,8 +462,8 @@ export async function handleTemplateRequest(req: Request, res: Response): Promis
       return jsonError(res, 400, 'invalid template name');
     }
 
-    const workspaceRoot = findWorkspaceProjectRoot();
-    const roots = getAllowedRoots(workspaceRoot);
+    const dashboardRoots = findDashboardRoots();
+    const roots = getAllowedRoots(dashboardRoots);
     const plans = roots['plans'];
     if (!plans) {
       return jsonError(res, 500, 'config');
@@ -239,4 +504,5 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/list', handleListRequest);
   app.get('/api/file', handleFileRequest);
   app.get('/api/template', handleTemplateRequest);
+  app.get('/api/metrics/summary', handleMetricsSummaryRequest);
 }
