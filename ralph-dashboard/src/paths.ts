@@ -1,5 +1,5 @@
-import { dirname, join, relative, resolve } from 'node:path';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { Dirent, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export interface RootConfig {
@@ -42,6 +42,12 @@ function hasDotRalphDir(dir: string): boolean {
   return hasEntry(dir, '.ralph');
 }
 
+const WORKSPACE_CONTENT_ENTRIES = ['logs', 'artifacts', 'sessions', 'orchestration-plans', 'handoffs'] as const;
+
+function isPopulatedWorkspace(workspaceDir: string): boolean {
+  return WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry));
+}
+
 function walkUpForEntry(startDir: string, entry: string): string | null {
   let dir = startDir;
   for (let i = 0; i < 64; i++) {
@@ -55,6 +61,28 @@ function walkUpForEntry(startDir: string, entry: string): string | null {
     dir = parent;
   }
   return null;
+}
+
+function walkUpForPopulatedWorkspace(startDir: string): string | null {
+  let dir = startDir;
+  let firstMatch: string | null = null;
+  for (let i = 0; i < 64; i++) {
+    if (hasDotRalphWorkspace(dir)) {
+      const workspace = join(dir, '.ralph-workspace');
+      if (isPopulatedWorkspace(workspace)) {
+        return workspace;
+      }
+      if (firstMatch === null) {
+        firstMatch = workspace;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return firstMatch;
 }
 
 function determineProjectRoot(): string {
@@ -91,17 +119,20 @@ function determineWorkspaceRoot(projectRoot: string): string {
       continue;
     }
     const resolved = resolve(envRoot);
-    if (hasDotRalphWorkspace(resolved)) {
+    if (basename(resolved) === '.ralph-workspace') {
       return resolved;
+    }
+    if (hasDotRalphWorkspace(resolved)) {
+      return join(resolved, '.ralph-workspace');
     }
   }
 
-  const fromCwd = walkUpForEntry(process.cwd(), '.ralph-workspace');
+  const fromCwd = walkUpForPopulatedWorkspace(process.cwd());
   if (fromCwd) {
     return fromCwd;
   }
 
-  const fromModule = walkUpForEntry(dirname(fileURLToPath(import.meta.url)), '.ralph-workspace');
+  const fromModule = walkUpForPopulatedWorkspace(dirname(fileURLToPath(import.meta.url)));
   if (fromModule) {
     return fromModule;
   }

@@ -3,11 +3,19 @@ import { Component, Input, OnInit, effect, inject, signal } from '@angular/core'
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { IonSpinner, IonButton } from '@ionic/angular/standalone';
 import { Subscription } from 'rxjs';
-import { ApiService, FileChunk } from '../../services/api.service';
+import { ApiService, FileChunk, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { sanitizeHtmlDocument } from '../../utils/sanitize-html';
+import { formatElapsedSeconds } from '../../utils/format-elapsed';
+
+interface TokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
 
 @Component({
   selector: 'app-file-viewer',
@@ -55,24 +63,6 @@ export class FileViewerComponent implements OnInit {
 
     effect(() => {
       this.syncPlanMetrics();
-    });
-  }
-
-  constructor() {
-    // Coalesce root/filePath changes into one load and cancel any in-flight request.
-    effect((onCleanup) => {
-      const root = this.rootSignal();
-      const filePath = this.filePathSignal();
-
-      if (!root || !filePath) {
-        this.loadSequence += 1;
-        this.loading.set(false);
-        this.error.set(null);
-        return;
-      }
-
-      const subscription = this.loadFile(root, filePath);
-      onCleanup(() => subscription.unsubscribe());
     });
   }
 
@@ -283,6 +273,51 @@ export class FileViewerComponent implements OnInit {
 
   private isMarkdownPath(path: string): boolean {
     return path.endsWith('.md') || path.endsWith('.mdc');
+  }
+
+  private syncPlanMetrics(): void {
+    const summary = this.metricsSummary();
+    const fileName = this.filePathSignal().split('/').filter(Boolean).pop() ?? '';
+    const planKey = this.stripPlanSuffix(fileName);
+
+    if (!summary || !planKey) {
+      this.planMetrics.set(null);
+      return;
+    }
+
+    this.planMetrics.set(this.findLatestPlanMetrics(summary, planKey));
+  }
+
+  private findLatestPlanMetrics(summary: MetricsSummary, planKey: string): MetricsSummaryItem | null {
+    const matches = summary.plans.filter((item) => item.plan_key === planKey);
+    if (matches.length === 0) {
+      return null;
+    }
+    return matches.reduce((latest, candidate) =>
+      this.metricTimestamp(candidate) > this.metricTimestamp(latest) ? candidate : latest,
+    );
+  }
+
+  private metricTimestamp(item: MetricsSummaryItem): number {
+    return this.parseTimestamp(item.ended_at) || this.parseTimestamp(item.started_at);
+  }
+
+  private parseTimestamp(value?: string): number {
+    if (!value) {
+      return 0;
+    }
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private stripPlanSuffix(fileName: string): string {
+    if (fileName.endsWith('.mdc')) {
+      return fileName.slice(0, -4);
+    }
+    if (fileName.endsWith('.md')) {
+      return fileName.slice(0, -3);
+    }
+    return fileName;
   }
 
   private async renderMarkdown(source: string, requestToken: number, finalizeLoad = false): Promise<void> {

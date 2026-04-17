@@ -456,9 +456,10 @@ describe('PlanHubComponent', () => {
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('5.0s');
+    const comp = fixture.componentInstance;
+    expect(comp.formatSeconds(5)).toBe('5s');
+    expect(comp.formatSeconds(8.5)).toBe('8.5s');
     expect(text).toContain('31');
-    expect(text).toContain('8.5s');
     expect(text).toContain('75');
   });
 

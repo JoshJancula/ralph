@@ -52,6 +52,19 @@ export interface MetricsSummaryOverall {
   count: number;
 }
 
+export interface ModelBreakdownItem {
+  runtime: string;
+  model: string;
+  invocations: number;
+  elapsed_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  max_turn_total_tokens: number;
+  cache_hit_ratio: number;
+}
+
 export interface MetricsSummaryItem {
   path: string;
   plan_key: string;
@@ -68,6 +81,7 @@ export interface MetricsSummaryItem {
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
   cache_hit_ratio: number;
+  model_breakdown?: ModelBreakdownItem[];
 }
 
 export interface MetricsSummary {

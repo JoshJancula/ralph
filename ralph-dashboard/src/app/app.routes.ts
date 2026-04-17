@@ -3,16 +3,20 @@ import { Routes } from '@angular/router';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
+import { UsageHubComponent } from './components/usage-hub/usage-hub.component';
 import { NavService } from './services/nav.service';
 
 @Component({
   selector: 'app-workspace-view',
   standalone: true,
-  imports: [FileViewerComponent, LogViewerComponent, PlanHubComponent],
+  imports: [FileViewerComponent, LogViewerComponent, PlanHubComponent, UsageHubComponent],
   template: `
     @switch (viewKind()) {
       @case ('plan') {
         <ralph-plan-hub></ralph-plan-hub>
+      }
+      @case ('usage') {
+        <ralph-usage-hub></ralph-usage-hub>
       }
       @case ('file') {
         @if (activeRoot(); as root) {
@@ -64,7 +68,7 @@ export class WorkspaceViewComponent {
   private readonly nav = inject(NavService);
   readonly activeRoot = this.nav.activeRoot;
   readonly activeFile = this.nav.activeFile;
-  readonly viewKind = computed<'plan' | 'file' | 'log' | 'empty'>(() => {
+  readonly viewKind = computed<'plan' | 'usage' | 'file' | 'log' | 'empty'>(() => {
     const root = this.activeRoot();
     const file = this.activeFile();
 
@@ -73,6 +77,9 @@ export class WorkspaceViewComponent {
     }
     if (file) {
       return file.endsWith('.log') ? 'log' : 'file';
+    }
+    if (root === 'usage') {
+      return 'usage';
     }
     return root === 'plans' ? 'plan' : 'empty';
   });
@@ -86,6 +93,10 @@ export const routes: Routes = [
   },
   {
     path: 'plans',
+    component: WorkspaceViewComponent,
+  },
+  {
+    path: 'usage',
     component: WorkspaceViewComponent,
   },
   {
