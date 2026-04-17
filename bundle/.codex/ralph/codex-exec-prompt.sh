@@ -99,11 +99,6 @@ if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
   fi
 fi
 
-# Append bypass flag after sandbox/model/add-dir logic, before --json or prompt.
-if [[ "${CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX:-0}" == "1" ]]; then
-  args+=(--dangerously-bypass-approvals-and-sandbox)
-fi
-
 if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ]]; then
   args+=(--json)
 fi

@@ -136,13 +136,6 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
       return next;
     });
     this.nav.navigate(root.key);
-    if (!this.collapsedByUser().has(root.key)) {
-      this.expandedRoots.update((current) => {
-        const next = new Set(current);
-        next.add(root.key);
-        return next;
-      });
-    }
   }
 
   private ensureActiveRootVisible(): void {

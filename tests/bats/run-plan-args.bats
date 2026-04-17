@@ -60,8 +60,6 @@ CAFFEINATE
   [ "$status" -eq 0 ]
   [[ "$output" == *"--project-root"* ]]
   [[ "$output" == *"--workspace-root"* ]]
-  [[ "$output" == *"--codex-sandbox"* ]]
-  [[ "$output" == *"danger-full-access"* ]]
 }
 
 @test "ralph restart command hint exposes restart instructions" {

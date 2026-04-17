@@ -169,17 +169,11 @@ Session rotation caps cache growth: `RALPH_PLAN_SESSION_MAX_TURNS` defaults to `
 
    The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
 
-   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs followed by an optional sequential tail. Assumptions:
-   - When `parallelStages` is absent, existing sequential orchestration behavior is preserved.
-   - When `parallelStages` is present, stages are grouped into waves (arrays of stage IDs). Each wave executes in parallel; waves run sequentially.
-   - Partial `parallelStages` coverage is supported: stages not listed in any wave run sequentially (in `stages[].id` declaration order) after all waves complete. This sequential tail preserves the declaration order from the orchestration JSON.
-   - Deterministic failure semantics: the orchestrator completes the active parallel wave (waits for all stages in the wave), then fails with per-stage status if any stage in that wave fails. Remaining waves and the sequential tail do not run.
-   
-   When `parallelStages` is present, each wave is a comma-separated string of stage IDs. All stage IDs in waves must exist in `stages[].id`, and no stage ID may appear more than once across all waves. Stages not listed in `parallelStages` run sequentially after all waves, in `stages[]` declaration order. A stage in a parallel wave may declare `loopControl` to loop back to any earlier stage; the loop cycles at the end of the wave.
+   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs. When present, each wave is an array of stage IDs that must all exist in `stages[].id`, every stage ID must appear exactly once across all waves, and every stage in the orchestration must be covered. Do not combine `parallelStages` with any stage that declares `loopControl`; that combination is rejected.
 
 #### Handoffs
 
-Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer in `stages[]` order. With `parallelStages` (including partial coverage with a sequential tail), the target stage must run after the producer in execution order: waves run in order, and stages within the same wave cannot have handoffs between them (same rank); stages in the sequential tail run after all waves, in `stages[]` declaration order.
+Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer; with `parallelStages`, the target must be in a later wave.
 
 Non-handoff artifact entries may still set `kind` to `design`, `review`, `research`, or `notes`. Leave `kind` and `to` off ordinary artifact declarations.
 
@@ -191,34 +185,7 @@ Handoff markdown files should follow `bundle/.ralph/handoff.template.md`:
 
 Before each stage runs, the orchestrator scans incoming handoffs for that stage, resolves template tokens in the artifact path, extracts unchecked tasks from `## Tasks`, and injects them into the stage plan inside guarded `RALPH_HANDOFF` blocks. Identical blocks are skipped, same-iteration content changes replace the stale block, and missing or malformed handoff files are logged as warnings instead of failing the run. Injection is enabled by default with `RALPH_HANDOFFS_ENABLED=1`; set it to `0` to disable the behavior.
 
-3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a runtime-specific `session-id.<runtime>.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
-
-### Plan format modes
-
-The runner supports two plan file formats:
-
-1. **Default (markdown checkbox):** Standard Ralph format with lines like `- [ ] Task` and `- [x] Done`. Detected when the file does not start with `---` or lacks a `todos:` array in frontmatter.
-
-2. **Cursor frontmatter:** YAML frontmatter format with a `todos` array:
-   ```yaml
-   ---
-   todos:
-     - id: "1"
-       content: "Task description"
-       status: pending
-     - id: "2"
-       content: "Another task"
-       status: completed
-   ---
-   # Plan content follows
-   ```
-   Valid status values: `pending`, `in_progress`, `completed`. The runner updates the frontmatter when completing tasks.
-
-**Format selection:**
-- **Auto-detect (default):** The runner examines the file for `---` frontmatter markers and a `todos:` array.
-- **Override:** Set `RALPH_PLAN_FORMAT=cursor` or `RALPH_PLAN_FORMAT=default` to force a specific format regardless of content.
-
-**Implementation:** Format detection and manipulation are handled in `bundle/.ralph/bash-lib/plan-todo.sh` using Python 3 with PyYAML when available.
+3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
 
 ### Key environment variables
 
@@ -278,30 +245,12 @@ Every plan run appends a record to `.ralph-workspace/logs/<PLAN_KEY>/invocation-
 
 Both fields are shown in the Ralph dashboard as "Cache hit" and "Peak turn" columns in the Plan Metrics and Orchestration Metrics tables, and in the per-plan-folder metric strip on plan cards.
 
-### Dashboard metrics
+#### Optimization rules of thumb
 
-The Ralph dashboard provides a web UI for monitoring plan execution and token usage:
-
-**Metrics sections:**
-
-1. **Overall metrics:** Aggregated statistics across all plans
-   - Total elapsed time, input/output tokens, cache hit ratio
-   - Per-runtime breakdowns
-
-2. **Per-plan metrics:** Individual plan statistics
-   - Each plan folder shows: elapsed time, tokens, cache hit ratio, peak turn
-   - Sortable and filterable by runtime, date, status
-
-3. **Per-orchestration metrics:** Stage-level breakdowns for multi-stage pipelines
-   - Shows each stage's contribution to total tokens/time
-   - Identifies which stages consumed the most resources
-
-**Access:** The dashboard runs at `http://127.0.0.1:8123` by default (use `PORT=8124 npm start` to override). It reads from `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/`.
-
-**API endpoints:**
-- `GET /api/metrics/summary` -- Overall aggregated metrics
-- `GET /api/metrics/plan/:planKey` -- Per-plan metrics
-- `GET /api/metrics/orchestration/:namespace` -- Per-orchestration stage metrics
+- **Cursor: favor Claude or Codex for large plans.** Cursor's `composer-2` has no prompt cache; every invocation pays the full codebase-index cost (~77K input tokens in the PLAN2 run). A 10-TODO plan on Cursor costs roughly 770K input tokens versus ~142K cache-create + ~600K cheap cache-read on Claude. Reserve Cursor for short, one-shot plans.
+- **Claude: enable session resume (`--cli-resume`) within a plan.** The first invocation in a new session creates the prompt cache (~142K tokens in PLAN2); subsequent invocations read it cheaply. Session resume amortizes this cost and keeps `cache_hit_ratio` above 0.8. The runner prompt's stable portions are automatically placed in `PROMPT_STATIC` (fed to `--system-prompt` for caching) to further reduce per-call cache creation.
+- **Codex: watch `max_turn_total_tokens`.** Slow or retried invocations strongly correlate with single turns that approach the context window limit. If `max_turn_total_tokens` exceeds ~50K on a model with a 258K window, the agent is loading too much context. Review the TODO scope or reduce file reads in the agent prompt.
+- **OpenCode: mostly model-side.** The `glm-5.1` and similar throughput-limited models have high latency per token regardless of context size. No Ralph-side optimization closes that gap; choose a faster model when elapsed time matters.
 
 ## Important patterns
 

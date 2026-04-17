@@ -146,6 +146,42 @@ describe('ApiService', () => {
     });
   });
 
+  describe('fetchMetricsSummary()', () => {
+    it('should make GET to /api/metrics/summary and return typed metrics payload', async () => {
+      const mockSummary = {
+        overall: {
+          input_tokens: 123,
+          output_tokens: 456,
+          cache_creation_input_tokens: 78,
+          cache_read_input_tokens: 90,
+          elapsed_seconds: 12.5,
+          count: 2,
+        },
+        plans: [
+          {
+            path: '/logs/plan-1/plan-usage-summary.json',
+            plan_key: 'plan-1',
+            artifact_ns: 'plan-1',
+            elapsed_seconds: 5,
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 1,
+          },
+        ],
+        orchestrations: [],
+      };
+
+      const responsePromise = firstValueFrom(service.fetchMetricsSummary());
+      const req = httpMock.expectOne('/api/metrics/summary');
+      expect(req.request.method).toBe('GET');
+      req.flush(mockSummary);
+
+      const summary = await responsePromise;
+      expect(summary).toEqual(mockSummary);
+    });
+  });
+
   describe('error handling', () => {
     it('should surface non-200 responses as observable errors', async () => {
       const responsePromise = firstValueFrom(service.fetchRoots());

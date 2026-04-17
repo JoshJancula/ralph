@@ -8,6 +8,11 @@ export interface RootConfig {
   writable: boolean;
 }
 
+export interface DashboardRoots {
+  projectRoot: string;
+  workspaceRoot: string;
+}
+
 export function isHiddenEntryName(name: string): boolean {
   return name.length > 1 && name.startsWith('.');
 }
@@ -16,51 +21,28 @@ export function filterVisibleEntryNames(names: readonly string[]): string[] {
   return names.filter((name) => !isHiddenEntryName(name));
 }
 
-export function findWorkspaceProjectRoot(): string {
-  const fromEnvRoots = [
-    process.env['RALPH_PLAN_WORKSPACE_ROOT'],
-    process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'],
-  ];
-
-  for (const fromEnv of fromEnvRoots) {
-    if (!fromEnv) {
-      continue;
-    }
-
-    const resolvedEnvRoot = resolve(fromEnv);
-    if (hasDotRalphWorkspace(resolvedEnvRoot)) {
-      return resolvedEnvRoot;
-    }
-  }
-
-  const fromCwd = walkUpForDotRalphWorkspace(process.cwd());
-  if (fromCwd) {
-    return fromCwd;
-  }
-
-  const here = dirname(fileURLToPath(import.meta.url));
-  const fromModule = walkUpForDotRalphWorkspace(here);
-  if (fromModule) {
-    return fromModule;
-  }
-
-  return process.cwd();
-}
-
-function hasDotRalphWorkspace(dir: string): boolean {
-  const workspaceDir = join(dir, '.ralph-workspace');
-  if (!existsSync(workspaceDir)) {
+function hasEntry(dir: string, entry: string): boolean {
+  const candidate = join(dir, entry);
+  if (!existsSync(candidate)) {
     return false;
   }
 
   try {
-    return statSync(workspaceDir).isDirectory();
+    return statSync(candidate).isDirectory();
   } catch {
     return false;
   }
 }
 
-function walkUpForDotRalphWorkspace(startDir: string): string | null {
+function hasDotRalphWorkspace(dir: string): boolean {
+  return hasEntry(dir, '.ralph-workspace');
+}
+
+function hasDotRalphDir(dir: string): boolean {
+  return hasEntry(dir, '.ralph');
+}
+
+function walkUpForEntry(startDir: string, entry: string): string | null {
   let dir = startDir;
   for (let i = 0; i < 64; i++) {
     if (hasEntry(dir, entry)) {
@@ -73,28 +55,6 @@ function walkUpForDotRalphWorkspace(startDir: string): string | null {
     dir = parent;
   }
   return null;
-}
-
-function walkUpForPopulatedWorkspace(startDir: string): string | null {
-  let dir = startDir;
-  let firstMatch: string | null = null;
-  for (let i = 0; i < 64; i++) {
-    if (hasDotRalphWorkspace(dir)) {
-      const workspace = join(dir, '.ralph-workspace');
-      if (isPopulatedWorkspace(workspace)) {
-        return workspace;
-      }
-      if (firstMatch === null) {
-        firstMatch = workspace;
-      }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-  return firstMatch;
 }
 
 function determineProjectRoot(): string {
@@ -131,20 +91,17 @@ function determineWorkspaceRoot(projectRoot: string): string {
       continue;
     }
     const resolved = resolve(envRoot);
-    if (basename(resolved) === '.ralph-workspace') {
-      return resolved;
-    }
     if (hasDotRalphWorkspace(resolved)) {
-      return join(resolved, '.ralph-workspace');
+      return resolved;
     }
   }
 
-  const fromCwd = walkUpForPopulatedWorkspace(process.cwd());
+  const fromCwd = walkUpForEntry(process.cwd(), '.ralph-workspace');
   if (fromCwd) {
     return fromCwd;
   }
 
-  const fromModule = walkUpForPopulatedWorkspace(dirname(fileURLToPath(import.meta.url)));
+  const fromModule = walkUpForEntry(dirname(fileURLToPath(import.meta.url)), '.ralph-workspace');
   if (fromModule) {
     return fromModule;
   }
@@ -191,7 +148,7 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
     },
     plans: {
       label: 'Plans',
-      basePath: join(workspaceRoot, '.ralph-workspace', 'orchestration-plans'),
+      basePath: roots.projectRoot,
       writable: false,
     },
   };

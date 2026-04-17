@@ -463,11 +463,14 @@ EOF
 }
 
 # Prompts the user to configure handoff declarations between stages.
+
+# Prompts the user to configure handoff declarations between stages.
 # Populates: stage_handoff_targets, stage_handoff_kinds
 configure_handoff_declarations() {
   local stage_count=${#stages[@]}
   
-  handoff_prompt_response="$(ralph_prompt_yesno "Configure handoffs between stages" "n")"
+  read -rp "Configure handoffs between stages? (y/N) " handoff_prompt_response
+  handoff_prompt_response="${handoff_prompt_response:-N}"
   
   if [[ ! "$handoff_prompt_response" =~ ^[Yy] ]]; then
     print_info "Skipping handoff configuration."
@@ -493,15 +496,17 @@ configure_handoff_declarations() {
       continue
     fi
     
-    enable_handoff="$(ralph_prompt_yesno "Enable handoff from \"$current_stage_id\"" "n")"
+    read -rp "  Enable handoff from \"$current_stage_id\"? (y/N) " enable_handoff
+    enable_handoff="${enable_handoff:-N}"
     
-    if [[ "$enable_handoff" == "y" ]]; then
+    if [[ "$enable_handoff" =~ ^[Yy] ]]; then
       local target_stage
       if (( ${#target_options[@]} == 1 )); then
         target_stage="${target_options[0]}"
         print_info "    Using default target: $target_stage"
       else
-        target_stage="$(ralph_menu_select --prompt "target for \"$current_stage_id\"" --default 1 -- "${target_options[@]}")"
+        read -rp "    Select target stage [${target_options[0]}]: " target_input
+        target_stage="${target_input:-${target_options[0]}}"
       fi
       
       stage_handoff_targets+=("$target_stage")

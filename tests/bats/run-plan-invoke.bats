@@ -784,27 +784,6 @@ EOF
   [[ "$output" == *"prompt-body"* ]]
 }
 
-@test "codex-exec-prompt honors CODEX_PLAN_SANDBOX overrides" {
-  cat <<'EOF' >"$BIN_DIR/codex"
-#!/usr/bin/env bash
-printf '%s\n' "$@"
-EOF
-  chmod +x "$BIN_DIR/codex"
-
-  local prompt_file="$TEST_TMPDIR/codex-sandbox-prompt.txt"
-  echo "sandbox-prompt" >"$prompt_file"
-
-  export CODEX_PLAN_CLI=codex
-  export CODEX_PLAN_SANDBOX="danger-full-access"
-  export RALPH_PLAN_CLI_RESUME=0
-
-  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"--sandbox"* ]]
-  [[ "$output" == *"danger-full-access"* ]]
-  [[ "$output" == *"sandbox-prompt"* ]]
-}
-
 @test "codex-exec-prompt passes --json when RALPH_PLAN_CAPTURE_USAGE=1" {
   cat <<'EOF' >"$BIN_DIR/codex"
 #!/usr/bin/env bash

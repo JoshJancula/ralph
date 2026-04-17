@@ -50,18 +50,6 @@
 #     standard: lowers human context byte cap (RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME, default 2048).
 #     lean: standard + skips downstream stage context (RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME, default 0).
 #     full: no trimming applied. Set per-stage via contextBudget in .orch.json (orchestrator injects automatically).
-# Optional tooling:
-#   fzf: Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf).
-#        Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
-# Cost defaults for Claude:
-#   CLAUDE_PLAN_BARE: Default 0; `CLAUDE_PLAN_MINIMAL=1` keeps subscription users on the auth-safe path.
-#     `CLAUDE_PLAN_BARE=1` is an opt-in API-key mode, while minimal mode composes `--disable-slash-commands`,
-#     optional MCP lockdown (`--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'` when `CLAUDE_PLAN_MINIMAL_DISABLE_MCP` is unset or `1`),
-#     `--setting-sources project,local`, and `--tools ...` so Claude starts with a narrower, safer surface without relying on keychain-backed auth.
-#     Set `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0` or pass `--claude-allow-mcp` to keep other minimal flags but load project MCP servers.
-#     During reset-command invocations, Ralph omits `--disable-slash-commands` so reset commands can execute.
-#   RALPH_PLAN_SESSION_MAX_TURNS: Default 8 for Claude. Rotates CLI session after this many invocations to cap cache
-#     growth. Set 0 to disable. Other runtimes unaffected.
 # Model tier configuration (for cost control):
 #   Agent config `model` field (.claude/agents/<id>/config.json etc.) sets the default model for that agent type.
 #   Orchestration stage `model` field in .orch.json overrides the agent config default for that stage.

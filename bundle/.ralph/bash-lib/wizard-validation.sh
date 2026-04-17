@@ -116,87 +116,74 @@ configure_parallel_stages() {
   print_step "4/7" "Parallel stages (optional)"
   print_hint "- Use this to run independent stages in parallel waves."
   print_hint "- Each wave runs all listed stages concurrently; waves run in order."
-  print_hint "- parallelStages in JSON is a string array: one JSON string per wave, comma-separated stage ids (same wave order as below)."
-  print_hint "- Commas or spaces in answers are accepted; ids are trimmed and stored as comma-separated strings."
+  print_hint "- Parallelism cannot be combined with loopControl."
   print_hint "- Enter one wave per line as comma-separated stage ids (example: research,implementation)."
-  print_hint "- Press Enter on an empty line to use all remaining stages for the current wave."
+  print_hint "- Press Enter on an empty line to finish, or type 'none' to disable."
 
-  parallel_choice="$(ralph_prompt_yesno "Enable parallel stage waves (parallelStages)" "n")"
-  if [[ "$parallel_choice" == "n" ]]; then
+  read -rp "Enable parallel stage waves? (parallelStages) [y/N]: " parallel_choice
+  if [[ ! "$parallel_choice" =~ ^[Yy] ]]; then
     return 0
   fi
 
   parallel_stages_enabled="true"
-
-  # Build the pool of stages available for waves (start with all stages)
-  local available_stages=()
-  for s in "${stage_ids[@]}"; do
-    available_stages+=("$s")
+  print_info "Available stages for parallel waves:"
+  for idx in "${!stage_ids[@]}"; do
+    printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}" >&2
   done
 
-  local wave_num=1
-  while (( ${#available_stages[@]} > 0 )); do
-    # Build comma-separated known list for this wave
-    local known_csv=""
-    local IFS=','
-    known_csv="${available_stages[*]}"
-    unset IFS
-
-    local wave_result
-    wave_result="$(ralph_prompt_list "Wave $wave_num stages" "$known_csv" "$known_csv")"
-
-    # Empty input should expand to the remaining stages for this wave.
-    if [[ -z "$wave_result" ]]; then
-      wave_result="$known_csv"
+  while true; do
+    read -rp "Wave stages (comma-separated ids or numbers; empty to finish): " wave_line
+    wave_line="${wave_line:-}"
+    if [[ -z "$wave_line" ]]; then
+      break
+    fi
+    if [[ "$wave_line" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
+      parallel_stage_waves=()
+      parallel_stages_enabled="false"
+      break
     fi
 
-    _wizard_parallel_wave_split "$wave_result"
-    if (( ${#_wizard_parallel_wave_toks[@]} == 0 )); then
-      ralph_die "Wave $wave_num: no stage ids in this wave (use ids from the remaining list: $known_csv)."
-    fi
-    if _wizard_parallel_wave_toks_have_duplicates; then
-      ralph_die "Wave $wave_num: duplicate stage id in the same wave; each stage id must appear once across all waves."
-    fi
-
-    local tok
-    for tok in "${_wizard_parallel_wave_toks[@]}"; do
-      local in_pool=0
-      for stage in "${available_stages[@]}"; do
-        if [[ "$stage" == "$tok" ]]; then
-          in_pool=1
+    local normalized candidate is_valid already_added
+    local parsed_wave=()
+    normalized="$(printf '%s' "$wave_line" | tr ',' ' ')"
+    local tokens=()
+    IFS=' ' read -r -a tokens <<< "$normalized"
+    for token in "${tokens[@]-}"; do
+      token="$(printf '%s' "$token" | tr -d '[:space:]')"
+      [[ -n "$token" ]] || continue
+      if [[ "$token" =~ ^[0-9]+$ ]] && (( token >= 1 && token <= ${#stage_ids[@]} )); then
+        candidate="${stage_ids[$((token - 1))]}"
+      else
+        candidate="$(ralph_internal_wizard_sanitize "$token")"
+      fi
+      [[ -n "$candidate" ]] || continue
+      is_valid=0
+      for stage_opt in "${stage_ids[@]}"; do
+        if [[ "$candidate" == "$stage_opt" ]]; then
+          is_valid=1
           break
         fi
       done
-      if (( in_pool == 0 )); then
-        ralph_die "Wave $wave_num: stage \"$tok\" is not in the remaining pool ($known_csv). Unknown ids and ids already placed in an earlier wave are rejected."
+      if (( is_valid == 0 )); then
+        echo "Ignoring unknown stage id \"$candidate\" in wave." >&2
+        continue
       fi
-    done
-
-    local joined_wave=""
-    joined_wave="$(IFS=','; printf '%s' "${_wizard_parallel_wave_toks[*]}")"
-    parallel_stage_waves+=("$joined_wave")
-
-    # Update available stages (remove assigned ones)
-    local new_available=()
-    for stage in "${available_stages[@]}"; do
-      local in_wave=0
-      for tok in "${_wizard_parallel_wave_toks[@]}"; do
-        if [[ "$stage" == "$tok" ]]; then
-          in_wave=1
+      already_added=0
+      for existing in "${parsed_wave[@]-}"; do
+        if [[ "$existing" == "$candidate" ]]; then
+          already_added=1
           break
         fi
       done
-      if (( in_wave == 0 )); then
-        new_available+=("$stage")
-      fi
+      (( already_added == 0 )) && parsed_wave+=("$candidate")
     done
-    if (( ${#new_available[@]} > 0 )); then
-      available_stages=("${new_available[@]}")
-    else
-      available_stages=()
+
+    if (( ${#parsed_wave[@]} == 0 )); then
+      echo "Wave is empty after parsing; try again." >&2
+      continue
     fi
 
-    wave_num=$((wave_num + 1))
+    parallel_stage_waves+=("$(IFS=,; printf '%s' "${parsed_wave[*]}")")
   done
 
   if [[ "$parallel_stages_enabled" != "true" ]]; then
@@ -209,20 +196,34 @@ configure_parallel_stages() {
     return 0
   fi
 
-  # Validate that all stages were assigned exactly once across waves
+  local seen_ids=()
+  local wave ids id already_seen
+  for wave in "${parallel_stage_waves[@]}"; do
+    IFS=',' read -r -a ids <<< "$wave"
+    for id in "${ids[@]-}"; do
+      already_seen=0
+      for existing_id in "${seen_ids[@]-}"; do
+        if [[ "$existing_id" == "$id" ]]; then
+          already_seen=1
+          break
+        fi
+      done
+      if (( already_seen == 1 )); then
+        ralph_die "Stage \"$id\" appears in parallel waves more than once."
+      fi
+      seen_ids+=("$id")
+    done
+  done
+
   for id in "${stage_ids[@]}"; do
-    local found=0
-    for wave in "${parallel_stage_waves[@]}"; do
-      if _wizard_parallel_wave_csv_contains_id "$id" "$wave"; then
-        found=$((found + 1))
+    already_seen=0
+    for existing_id in "${seen_ids[@]-}"; do
+      if [[ "$existing_id" == "$id" ]]; then
+        already_seen=1
+        break
       fi
     done
-    if (( found == 0 )); then
-      ralph_die "Parallel waves must include every stage; missing \"$id\"."
-    fi
-    if (( found > 1 )); then
-      ralph_die "Parallel waves: stage \"$id\" appears in more than one wave."
-    fi
+    (( already_seen == 1 )) || ralph_die "Parallel waves must include every stage exactly once; missing \"$id\"."
   done
 }
 

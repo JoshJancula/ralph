@@ -57,8 +57,8 @@ print_hint "- Pick a short name we can use in file paths."
 read_pipeline_info
 
 print_step "2/7" "Stage list"
-print_hint "- List stages with commas or spaces: preset names (research, architecture, ...), 1-based indexes (1,2,3), or custom ids (letters, digits, hyphens; example: r1,plan-a)."
-print_hint "- Press Enter for the default stage list."
+print_hint "- Type stage names with commas, like: plan,test,qa"
+print_hint "- Press Enter if you want the default stage list."
 read_stages
 stages=()
 if [[ ${#selected_stages[@]} -gt 0 ]]; then
@@ -74,7 +74,7 @@ stage_agents=()
 stage_agent_sources=()
 stage_descriptions=()
 stage_models=()
-stage_session_strategy=()
+stage_session_resume=()
 stage_context_budgets=()
 stage_input_sources=()
 stage_handoff_targets=()
@@ -118,8 +118,12 @@ for stage in "${stages[@]}"; do
     _stage_strategy="$(ralph_menu_select --prompt "Session strategy for \"$stage_id\"" --default "$_stage_strategy_default_index" -- "fresh" "resume" "reset")"
     stage_session_strategy+=("${_stage_strategy:-fresh}")
   fi
-  cb_input="$(ralph_menu_select --prompt "Context budget for \"$stage_id\"" --default 2 -- "full" "standard" "lean")"
-  stage_context_budgets+=("$cb_input")
+  read -rp "Context budget for \"$stage_id\" (full/standard/lean, enter for default): " cb_input
+  cb_input="${cb_input:-}"
+  case "$cb_input" in
+    full|standard|lean) stage_context_budgets+=("$cb_input") ;;
+    *) stage_context_budgets+=("") ;;
+  esac
 done
 
 orch_session_resume_enabled="true"
@@ -144,7 +148,14 @@ configure_parallel_stages
 
 configure_stage_input_dependencies
 
-configure_loop_rules
+if [[ "${parallel_stages_enabled:-false}" == "true" ]]; then
+  print_hint "Skipping loop rules because parallelStages is enabled."
+  loop_sources=()
+  loop_targets=()
+  loop_max_iterations=()
+else
+  configure_loop_rules
+fi
 
 configure_handoff_declarations
 
@@ -213,10 +224,28 @@ for idx in "${!stages[@]}"; do
   stage_model="${stage_models[$idx]}"
   stage_input_list="${stage_input_sources[$idx]}"
 
-  wizard_render_plan_template \
-    "$plan_template" "$plan_abs_path" "$plan_rel_path" "$namespace" "$stage_label" "$pipeline_name" "$runtime" "$agent" \
-    "$stage_desc" "$stage_input_list" "$stage_model"
-done
+    plan_rel_path=".ralph-workspace/orchestration-plans/$namespace/${namespace}-${step_number}-${stage_label}.plan.md"
+    plan_abs_path="$workspace/$plan_rel_path"
+    generated_plan_paths+=("$plan_rel_path")
+    artifact_base="$(artifact_file_for_stage "$stage_label")"
+    artifact_path=".ralph-workspace/artifacts/$namespace/$artifact_base"
+
+    stage_desc="${stage_descriptions[$idx]}"
+    stage_model="${stage_models[$idx]}"
+    stage_resume_json="${stage_session_resume[$idx]}"
+    stage_input_list="${stage_input_sources[$idx]}"
+
+    wizard_render_plan_template \
+      "$plan_template" "$plan_abs_path" "$plan_rel_path" "$namespace" "$stage_label" "$pipeline_name" "$runtime" "$agent" \
+      "$stage_desc" "$stage_input_list" "$stage_model"
+
+    stage_entries+=("$(
+      wizard_build_stage_entry \
+        "$namespace" "$stage_label" "$runtime" "$agent" "$agent_source" "$plan_rel_path" "$artifact_path" \
+        "$stage_desc" "$stage_model" "$stage_resume_json" "$stage_input_list" \
+        "${stage_context_budgets[$idx]:-}"
+    )")
+  done
 
 wizard_write_orchestration_file \
   "$orch_file" "$pipeline_name" "$namespace" "$description" "$orch_session_resume_enabled" \

@@ -304,7 +304,7 @@ EOF
   [[ "$output" == *"schema validation failed"* ]]
 }
 
-@test "validator accepts parallelStages when loopControl is present" {
+@test "validator rejects parallelStages when loopControl is present" {
   local orch
   orch="$(mktemp)"
   temp_files+=("$orch")
@@ -336,7 +336,8 @@ EOF
 }
 EOF
   run "$VALIDATOR" "$orch"
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
 }
 
 @test "validator accepts valid handoff artifact with kind and to" {

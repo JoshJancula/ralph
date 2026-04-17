@@ -139,7 +139,7 @@ DEFAULT_ORCH_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
 if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
   DEFAULT_ORCH_WORKSPACE_ROOT="$WORKSPACE_ROOT_OVERRIDE"
 fi
-export RALPH_PLAN_WORKSPACE_ROOT="$DEFAULT_ORCH_WORKSPACE_ROOT"
+export RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_ORCH_WORKSPACE_ROOT}"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
@@ -407,8 +407,7 @@ orch_stage_execute() {
   local runner_label=".ralph/run-plan.sh (runtime=$runtime)"
   local human_ack_rel human_ack_abs human_ack_msg
   local _dry_sr _dry_model_label _step_model_label _plan_tag_stream _runner_stream_log _runner_env _runner_args _art_check
-  local _session_strategy_cli=()
-  local _session_strategy_type _session_strategy_value
+  local _session_resume_cli=()
   local _session_resume_type _session_resume_value
   local _stage_usage_file=""
 
@@ -493,43 +492,18 @@ orch_stage_execute() {
   fi
   ralph_orchestrator_log "step $step_n: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs_file expected_artifacts=$art_log"
 
-  _session_strategy_type="$(echo "$stage" | jq -r 'if has("sessionStrategy") then (.sessionStrategy|type) else "absent" end' 2>/dev/null || echo "error")"
-  if [[ "$_session_strategy_type" == "string" ]]; then
-    _session_strategy_value="$(echo "$stage" | jq -r '.sessionStrategy' 2>/dev/null || echo "")"
-    case "$_session_strategy_value" in
-      fresh|resume|reset)
-        _session_strategy_cli+=(--session-strategy "$_session_strategy_value")
-        ;;
-      *)
-        ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be one of fresh|resume|reset (got $_session_strategy_value)"
-        echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionStrategy)${C_RST}" >&2
-        echo "  sessionStrategy must be one of fresh, resume, or reset in $ORCH_FILE." >&2
-        echo "  Log: $LOG_FILE" >&2
-        printf -v "$step_status_var" '%s' 1
-        return 1
-        ;;
-    esac
-  elif [[ "$_session_strategy_type" == "absent" ]]; then
-    _session_resume_type="$(echo "$stage" | jq -r 'if has("sessionResume") then (.sessionResume|type) else "absent" end' 2>/dev/null || echo "error")"
-    if [[ "$_session_resume_type" == "boolean" ]]; then
-      _session_resume_value="$(echo "$stage" | jq -r '.sessionResume' 2>/dev/null || echo "false")"
-      if [[ "$_session_resume_value" == "true" ]]; then
-        _session_strategy_cli+=(--session-strategy resume)
-      else
-        _session_strategy_cli+=(--session-strategy fresh)
-      fi
-    elif [[ "$_session_resume_type" != "absent" ]]; then
-      ralph_orchestrator_log "FAIL step $step_n: sessionResume must be a boolean (got $_session_resume_type)"
-      echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionResume)${C_RST}" >&2
-      echo "  sessionResume must be a boolean true/false in $ORCH_FILE." >&2
-      echo "  Log: $LOG_FILE" >&2
-      printf -v "$step_status_var" '%s' 1
-      return 1
+  _session_resume_type="$(echo "$stage" | jq -r 'if has("sessionResume") then (.sessionResume|type) else "absent" end' 2>/dev/null || echo "error")"
+  if [[ "$_session_resume_type" == "boolean" ]]; then
+    _session_resume_value="$(echo "$stage" | jq -r '.sessionResume' 2>/dev/null || echo "false")"
+    if [[ "$_session_resume_value" == "true" ]]; then
+      _session_resume_cli+=(--cli-resume)
+    else
+      _session_resume_cli+=(--no-cli-resume)
     fi
-  else
-    ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be a string (got $_session_strategy_type)"
-    echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionStrategy)${C_RST}" >&2
-    echo "  sessionStrategy must be a string in $ORCH_FILE." >&2
+  elif [[ "$_session_resume_type" != "absent" ]]; then
+    ralph_orchestrator_log "FAIL step $step_n: sessionResume must be a boolean (got $_session_resume_type)"
+    echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionResume)${C_RST}" >&2
+    echo "  sessionResume must be a boolean true/false in $ORCH_FILE." >&2
     echo "  Log: $LOG_FILE" >&2
     printf -v "$step_status_var" '%s' 1
     return 1
@@ -537,8 +511,8 @@ orch_stage_execute() {
 
   if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
     _dry_sr=""
-    if ((${#_session_strategy_cli[@]} > 0)); then
-      _dry_sr=" ${_session_strategy_cli[*]}"
+    if ((${#_session_resume_cli[@]} > 0)); then
+      _dry_sr=" ${_session_resume_cli[*]}"
     fi
     _dry_model_label="${stage_model:-agent-config default}"
     if [[ "$agent_source" == "prebuilt" ]]; then
@@ -549,14 +523,6 @@ orch_stage_execute() {
     echo "  model: ${_dry_model_label}"
     if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
       echo "  expected artifacts: ${EXPECTED_ARTIFACT_PATHS[*]}"
-    fi
-    if [[ "${ORCHESTRATOR_HUMAN_ACK:-0}" == "1" ]]; then
-      local _dry_human_ack_rel
-      _dry_human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || _dry_human_ack_rel=""
-      if [[ -n "$_dry_human_ack_rel" ]]; then
-        _dry_human_ack_rel="$(expand_artifact_tokens "$_dry_human_ack_rel")"
-        echo "  humanAck (only if ORCHESTRATOR_HUMAN_ACK=1): $_dry_human_ack_rel"
-      fi
     fi
     printf -v "$step_status_var" '%s' 0
     return 0
@@ -580,7 +546,7 @@ orch_stage_execute() {
 
   if [[ "${RALPH_HANDOFFS_ENABLED:-1}" == "1" ]]; then
     export ORCH_FILE="$RALPH_ORCH_FILE"
-    RALPH_ARTIFACT_NS="$ORCH_ARTIFACT_NS" inject_handoffs_into_plan "$plan_abs_file" "$stage_id" "$stage_iter" || {
+    inject_handoffs_into_plan "$plan_abs_file" "$stage_id" "$stage_iter" || {
       ralph_orchestrator_log "WARNING step $step_n: failed to inject handoffs into plan (continuing anyway)"
     }
   fi
@@ -591,30 +557,6 @@ orch_stage_execute() {
     RALPH_PLAN_KEY="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
     RALPH_ORCH_FILE="$RALPH_ORCH_FILE"
   )
-  if [[ -n "${CODEX_PLAN_SANDBOX:-}" ]]; then
-    _runner_env+=(CODEX_PLAN_SANDBOX="$CODEX_PLAN_SANDBOX")
-  fi
-  if [[ -n "${CODEX_PLAN_FULL_AUTO:-}" ]]; then
-    _runner_env+=(CODEX_PLAN_FULL_AUTO="$CODEX_PLAN_FULL_AUTO")
-  fi
-  if [[ -n "${CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX:-}" ]]; then
-    _runner_env+=(CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX="$CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX")
-  fi
-  if [[ -n "${CLAUDE_PLAN_BARE:-}" ]]; then
-    _runner_env+=(CLAUDE_PLAN_BARE="$CLAUDE_PLAN_BARE")
-  fi
-  if [[ -n "${CLAUDE_PLAN_MINIMAL:-}" ]]; then
-    _runner_env+=(CLAUDE_PLAN_MINIMAL="$CLAUDE_PLAN_MINIMAL")
-  fi
-  if [[ -n "${CLAUDE_PLAN_MINIMAL_TOOLS:-}" ]]; then
-    _runner_env+=(CLAUDE_PLAN_MINIMAL_TOOLS="$CLAUDE_PLAN_MINIMAL_TOOLS")
-  fi
-  if [[ -n "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-}" ]]; then
-    _runner_env+=(CLAUDE_PLAN_MINIMAL_DISABLE_MCP="$CLAUDE_PLAN_MINIMAL_DISABLE_MCP")
-  fi
-  if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
-    _runner_env+=(CLAUDE_PLAN_PERMISSION_MODE="$CLAUDE_PLAN_PERMISSION_MODE")
-  fi
   if [[ -n "$stage_model" ]]; then
     if [[ "$runtime" == "cursor" ]]; then
       _runner_env+=(CURSOR_PLAN_MODEL="$stage_model")
@@ -633,8 +575,8 @@ orch_stage_execute() {
   if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
     _runner_args+=(--workspace-root "$WORKSPACE_ROOT_OVERRIDE")
   fi
-  if ((${#_session_strategy_cli[@]} > 0)); then
-    _runner_args+=("${_session_strategy_cli[@]}")
+  if ((${#_session_resume_cli[@]} > 0)); then
+    _runner_args+=("${_session_resume_cli[@]}")
   fi
   if [[ "$agent_source" == "prebuilt" ]]; then
     _runner_args+=(--agent "$agent")
@@ -1013,28 +955,15 @@ ralph_orchestrator_log "orchestrator complete ($step_index steps)"
 # Write orchestration-level usage summary.
 _orch_elapsed=$(( $(date +%s) - _orch_start_ts ))
 _orch_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-_orch_summary_dir="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS"
-_orch_summary_file="$_orch_summary_dir/orchestration-usage-summary.json"
-mkdir -p "$_orch_summary_dir"
+_orch_summary_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/orchestration-usage-summary.json"
+mkdir -p "$(dirname "$_orch_summary_file")"
 cat > "$_orch_summary_file" << _ORCH_SUMMARY_EOF
 {"schema_version":1,"kind":"orchestration_usage_summary","orchestration":"$(basename "$ORCH_FILE")","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","started_at":"${_orch_started_at}","ended_at":"${_orch_ended_at}","steps":${step_index},"elapsed_seconds":${_orch_elapsed},"input_tokens":${_orch_input_tokens},"output_tokens":${_orch_output_tokens},"cache_creation_input_tokens":${_orch_cache_creation_tokens},"cache_read_input_tokens":${_orch_cache_read_tokens},"stages":[${_orch_stage_usages}]}
 _ORCH_SUMMARY_EOF
 _orch_elapsed_fmt="$(ralph_format_elapsed_secs "$_orch_elapsed")"
 ralph_orchestrator_log "orchestration usage: steps=${step_index} input=${_orch_input_tokens} output=${_orch_output_tokens} cache_create=${_orch_cache_creation_tokens} cache_read=${_orch_cache_read_tokens} elapsed=${_orch_elapsed_fmt}"
-_orch_summary_text=""
-if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
-  _orch_summary_text="$(
-    python3 "$WORKSPACE/.ralph/bash-lib/ralph-usage-summary-text.py" orch \
-      --summary "$_orch_summary_file" \
-      --invocations "$RALPH_LOG_DIR/invocation-usage.json" 2>/dev/null || true
-  )"
-fi
-echo -e "${C_DIM}Token usage: input=${_orch_input_tokens} output=${_orch_output_tokens} cache_create=${_orch_cache_creation_tokens} cache_read=${_orch_cache_read_tokens} elapsed=${_orch_elapsed_fmt}${C_RST}"
-if [[ -n "$_orch_summary_text" ]]; then
-  printf '%s\n' "${C_DIM}${_orch_summary_text}${C_RST}"
-else
-  echo -e "${C_DIM}Total elapsed time: ${_orch_elapsed_fmt}${C_RST}"
-fi
+echo -e "${C_DIM}Token usage: input=${_orch_input_tokens} output=${_orch_output_tokens} cache_read=${_orch_cache_read_tokens} elapsed=${_orch_elapsed_fmt}${C_RST}"
+echo -e "${C_DIM}Total elapsed time: ${_orch_elapsed_fmt}${C_RST}"
 
 echo -e "${C_G}${C_BOLD}Orchestration complete${C_RST} ($step_index steps). Log: $LOG_FILE"
 exit 0

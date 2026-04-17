@@ -125,7 +125,7 @@ When you define `artifacts` or `outputArtifacts` in an orchestration file, those
 
 ### CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and supplies that ID plus a compact context block to the next runtime invocation so the session continues where it left off. For non-Claude prebuilt agents, that block is compact by default and can be forced with `RALPH_COMPACT_CONTEXT=1` or the equivalent `--compact` context mode.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and supplies that ID plus a compact context block to the next runtime invocation so the session continues where it left off. For non-Claude prebuilt agents, that block is compact by default and can be forced with `RALPH_COMPACT_CONTEXT=1` or the equivalent `--compact` context mode.
 
 **Enable CLI session resume (pick one):**
 

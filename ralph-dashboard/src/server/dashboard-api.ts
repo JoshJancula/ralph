@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 
 import {
   filterVisibleEntryNames,
-  findWorkspaceProjectRoot,
+  findDashboardRoots,
   getAllowedRoots,
   isHiddenEntryName,
   parentListingPath,
@@ -36,24 +36,10 @@ interface UsageSummaryRecord {
   cache_read_input_tokens?: number;
   max_turn_total_tokens?: number;
   cache_hit_ratio?: number;
-  model_breakdown?: ModelBreakdownItem[];
   invocations?: number;
   steps?: number;
   todos_done?: number;
   todos_total?: number;
-}
-
-interface ModelBreakdownItem {
-  runtime: string;
-  model: string;
-  invocations: number;
-  elapsed_seconds: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  max_turn_total_tokens: number;
-  cache_hit_ratio: number;
 }
 
 interface MetricsSummaryItem {
@@ -72,150 +58,7 @@ interface MetricsSummaryItem {
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
   cache_hit_ratio: number;
-  model_breakdown?: ModelBreakdownItem[];
 }
-
-type AggregatedListingEntry = {
-  name: string;
-  path: string;
-  type: 'file' | 'dir';
-  size: number;
-  mtime: number;
-};
-
-async function collectSummaryPathsFromLogs(logRoots: string[]): Promise<string[]> {
-  const seen = new Set<string>();
-
-  for (const root of logRoots) {
-    const files = await collectSummaryFiles(root);
-    for (const file of files) {
-      seen.add(file);
-    }
-  }
-
-  return Array.from(seen).sort();
-}
-
-function normalizeAggregatePath(pathParam: string): string {
-  return pathParam.replace(/^\/+/, '').replace(/\/+$/, '');
-}
-
-async function collectAggregatedEntriesFromRoots(
-  roots: string[],
-  relPath: string,
-): Promise<AggregatedListingEntry[]> {
-  const entriesMap = new Map<string, AggregatedListingEntry>();
-  const normalized = normalizeAggregatePath(relPath);
-
-  for (const root of roots) {
-    const target = normalized ? join(root, normalized) : root;
-    let children: Dirent[];
-    try {
-      children = await fs.readdir(target, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const child of children) {
-      if (isHiddenEntryName(child.name)) {
-        continue;
-      }
-
-      const childPath = join(target, child.name);
-      let stat: Awaited<ReturnType<typeof fs.stat>>;
-      try {
-        stat = await fs.stat(childPath);
-      } catch {
-        continue;
-      }
-
-      const relativePath = normalized ? `${normalized}/${child.name}` : child.name;
-      const displayPath = child.isDirectory() ? `${relativePath}/` : relativePath;
-      const entry: AggregatedListingEntry = {
-        name: child.name,
-        path: displayPath,
-        type: child.isDirectory() ? 'dir' : 'file',
-        size: stat.size,
-        mtime: Math.floor(stat.mtimeMs),
-      };
-
-      const existing = entriesMap.get(displayPath);
-      if (!existing || entry.mtime > existing.mtime) {
-        entriesMap.set(displayPath, entry);
-      }
-    }
-  }
-
-  return Array.from(entriesMap.values()).sort((a, b) => a.path.localeCompare(b.path));
-}
-
-async function findFileInAggregatedRoots(
-  roots: string[],
-  relPath: string,
-): Promise<string | null> {
-  const normalized = normalizeAggregatePath(relPath);
-  if (!normalized) {
-    return null;
-  }
-
-  for (const root of roots) {
-    const candidate = join(root, normalized);
-    let stat: Awaited<ReturnType<typeof fs.stat>>;
-    try {
-      stat = await fs.stat(candidate);
-    } catch {
-      continue;
-    }
-    if (stat.isFile()) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-const PLAN_DIR_BLOCKLIST = new Set([
-  'bundle',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  'docs',
-  'node_modules',
-  '.cursor',
-  '.claude',
-  '.codex',
-  '.ralph',
-  '.ralph-workspace',
-  '.git',
-  'public',
-  'ralph-dashboard',
-  'scripts',
-  'tests',
-]);
-
-const PLAN_ROOT_FILE_DENYLIST = new Set(['agents.md', 'claude.md', 'readme.md']);
-
-function isPlanDirectoryAllowed(name: string): boolean {
-  return !PLAN_DIR_BLOCKLIST.has(name.toLowerCase());
-}
-
-function isPlanRootFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (PLAN_ROOT_FILE_DENYLIST.has(lower)) {
-    return false;
-  }
-  if (lower.endsWith('.md')) {
-    const base = lower.slice(0, -3);
-    return base.startsWith('plan');
-  }
-  if (lower.endsWith('.mdc')) {
-    const base = lower.slice(0, -4);
-    return base.startsWith('plan');
-  }
-  return false;
-}
-
 
 function jsonError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: message });
@@ -223,6 +66,209 @@ function jsonError(res: Response, status: number, message: string): void {
 
 function getRootsMap(): Record<string, RootConfig> {
   return getAllowedRoots(findDashboardRoots());
+}
+
+async function findPlanByBasename(workspaceRoot: string, fileName: string): Promise<string | null> {
+  const maxDepth = 8;
+  const skipDirs = new Set(['node_modules', 'dist', 'build', 'out', 'coverage']);
+
+  async function walk(dir: string, depth: number): Promise<string | null> {
+    if (depth > maxDepth) {
+      return null;
+    }
+
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+
+    for (const entry of entries) {
+      if (isHiddenEntryName(entry.name)) {
+        continue;
+      }
+
+      const absPath = join(dir, entry.name);
+      if (entry.isFile()) {
+        if (entry.name === fileName) {
+          return absPath;
+        }
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) {
+          continue;
+        }
+
+        const found = await walk(absPath, depth + 1);
+        if (found) {
+          return found;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  return await walk(workspaceRoot, 0);
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function normalizeSummaryRecord(record: UsageSummaryRecord, summaryPath: string): MetricsSummaryItem | null {
+  const kind =
+    record.kind === 'plan_usage_summary' || record.kind === 'orchestration_usage_summary'
+      ? record.kind
+      : (() => {
+          const file = basename(summaryPath);
+          if (file === 'plan-usage-summary.json' && record.invocations !== undefined) {
+            return 'plan_usage_summary' as const;
+          }
+          if (file === 'orchestration-usage-summary.json' && record.steps !== undefined) {
+            return 'orchestration_usage_summary' as const;
+          }
+          return null;
+        })();
+
+  if (!kind) {
+    return null;
+  }
+
+  const inferredKey = basename(dirname(summaryPath));
+
+  return {
+    path: summaryPath,
+    plan_key: record.plan_key ?? inferredKey,
+    artifact_ns: record.artifact_ns ?? inferredKey,
+    stage_id: record.stage_id || undefined,
+    model: record.model || undefined,
+    runtime: record.runtime || undefined,
+    started_at: record.started_at || undefined,
+    ended_at: record.ended_at || undefined,
+    elapsed_seconds: toNumber(record.elapsed_seconds),
+    input_tokens: toNumber(record.input_tokens),
+    output_tokens: toNumber(record.output_tokens),
+    cache_creation_input_tokens: toNumber(record.cache_creation_input_tokens),
+    cache_read_input_tokens: toNumber(record.cache_read_input_tokens),
+    max_turn_total_tokens: toNumber(record.max_turn_total_tokens),
+    cache_hit_ratio: toNumber(record.cache_hit_ratio),
+  };
+}
+
+async function collectSummaryFiles(dir: string, output: string[] = []): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true, encoding: 'utf8' });
+  } catch {
+    return output;
+  }
+
+  for (const entry of entries) {
+    const absPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectSummaryFiles(absPath, output);
+      continue;
+    }
+
+    if (entry.isFile() && SUMMARY_FILE_NAMES.has(entry.name)) {
+      output.push(absPath);
+    }
+  }
+
+  return output;
+}
+
+export async function handleMetricsSummaryRequest(_req: Request, res: Response): Promise<void> {
+  const roots = getAllowedRoots(findDashboardRoots());
+  const logsRoot = roots['logs']?.basePath;
+  if (!logsRoot || !existsSync(logsRoot)) {
+    res.json({
+      overall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 0,
+        count: 0,
+      },
+      plans: [],
+      orchestrations: [],
+    });
+    return;
+  }
+
+  const summaryPaths = await collectSummaryFiles(logsRoot);
+  const plans: MetricsSummaryItem[] = [];
+  const orchestrations: MetricsSummaryItem[] = [];
+  const overall = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+    max_turn_total_tokens: 0,
+    cache_hit_ratio: 0,
+    elapsed_seconds: 0,
+    count: 0,
+  };
+
+  for (const summaryPath of summaryPaths) {
+    try {
+      const raw = await fs.readFile(summaryPath, 'utf8');
+      const parsed = JSON.parse(raw) as UsageSummaryRecord;
+      const normalized = normalizeSummaryRecord(parsed, summaryPath);
+      if (!normalized) {
+        continue;
+      }
+
+      overall.input_tokens += normalized.input_tokens;
+      overall.output_tokens += normalized.output_tokens;
+      overall.cache_creation_input_tokens += normalized.cache_creation_input_tokens;
+      overall.cache_read_input_tokens += normalized.cache_read_input_tokens;
+      overall.elapsed_seconds += normalized.elapsed_seconds;
+      if (normalized.max_turn_total_tokens > overall.max_turn_total_tokens) {
+        overall.max_turn_total_tokens = normalized.max_turn_total_tokens;
+      }
+      overall.count += 1;
+
+      if (parsed.kind === 'plan_usage_summary') {
+        plans.push(normalized);
+      } else {
+        orchestrations.push(normalized);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  plans.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
+  orchestrations.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
+
+  // Compute overall cache_hit_ratio from accumulated token totals.
+  const overallTotalInput =
+    overall.input_tokens + overall.cache_read_input_tokens + overall.cache_creation_input_tokens;
+  overall.cache_hit_ratio =
+    overallTotalInput > 0
+      ? Math.round((overall.cache_read_input_tokens / overallTotalInput) * 10000) / 10000
+      : 0;
+
+  res.json({
+    overall,
+    plans,
+    orchestrations,
+  });
 }
 
 export async function handleListRequest(req: Request, res: Response): Promise<void> {
@@ -368,53 +414,25 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
     const artifactRoots = findWorkspaceArtifactsRoots();
     let absFile: string | null = null;
     let stat: Awaited<ReturnType<typeof fs.stat>>;
-
-    if (rootKey === 'logs' || rootKey === 'artifacts') {
-      const aggregatedRoots = rootKey === 'logs' ? logsRoots : artifactRoots;
-      if (aggregatedRoots.length === 0) {
-        return jsonError(res, 404, 'file not found');
-      }
-      const candidate = await findFileInAggregatedRoots(aggregatedRoots, filePath);
-      if (!candidate) {
-        return jsonError(res, 404, 'file not found');
-      }
-      absFile = candidate;
-      try {
-        stat = await fs.stat(absFile);
-      } catch {
-        return jsonError(res, 404, 'file not found');
-      }
-    } else {
-      const roots = getRootsMap();
-      const config = roots[rootKey];
-      if (!config) {
-        return jsonError(res, 400, 'unknown root');
-      }
-      try {
-        absFile = resolveUnderRoot(config, filePath);
-        stat = await fs.stat(absFile);
-      } catch {
-        if (rootKey === 'plans' && !filePath.includes('/') && filePath.endsWith('.md')) {
-          const { projectRoot } = findDashboardRoots();
-          const found = await findPlanByBasename(projectRoot, filePath);
-          if (found) {
-            absFile = found;
-            try {
-              stat = await fs.stat(absFile);
-            } catch {
-              return jsonError(res, 404, 'file not found');
-            }
-          } else {
+    try {
+      stat = await fs.stat(absFile);
+    } catch {
+      if (rootKey === 'plans' && !filePath.includes('/') && filePath.endsWith('.md')) {
+        const { projectRoot } = findDashboardRoots();
+        const found = await findPlanByBasename(projectRoot, filePath);
+        if (found) {
+          absFile = found;
+          try {
+            stat = await fs.stat(absFile);
+          } catch {
             return jsonError(res, 404, 'file not found');
           }
         } else {
           return jsonError(res, 404, 'file not found');
         }
+      } else {
+        return jsonError(res, 404, 'file not found');
       }
-    }
-
-    if (!absFile) {
-      return jsonError(res, 404, 'file not found');
     }
 
     if (!stat.isFile()) {
@@ -498,4 +516,5 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/list', handleListRequest);
   app.get('/api/file', handleFileRequest);
   app.get('/api/template', handleTemplateRequest);
+  app.get('/api/metrics/summary', handleMetricsSummaryRequest);
 }

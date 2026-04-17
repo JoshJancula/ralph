@@ -381,42 +381,6 @@ RESUME
   rm -rf "$workspace"
 }
 
-@test "orchestrator dry-run prefers sessionStrategy over sessionResume" {
-  local workspace
-  workspace="$(setup_orchestrator_workspace)"
-  local orch_file="$workspace/session-strategy-precedence.orch.json"
-  cat <<'STRATEGY' > "$orch_file"
-{
-  "name": "bats session strategy precedence",
-  "namespace": "bats-strategy",
-  "stages": [
-    {
-      "id": "strategy-stage",
-      "agent": "strategy-agent",
-      "runtime": "cursor",
-      "plan": "stages/strategy.plan.md",
-      "sessionStrategy": "reset",
-      "sessionResume": true,
-      "artifacts": [
-        {
-          "path": ".ralph-workspace/artifacts/bats-strategy/strategy-output.md",
-          "required": true
-        }
-      ]
-    }
-  ]
-}
-STRATEGY
-  write_plan_file "$workspace" "stages/strategy.plan.md"
-  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-strategy/strategy-output.md"
-  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
-  [ "$status" -eq 0 ] \
-    && [[ "$output" == *"--session-strategy reset"* ]] \
-    && [[ "$output" != *"--session-strategy resume"* ]] \
-    || return 1
-  rm -rf "$workspace"
-}
-
 @test "orchestrator dry-run shows parallel wave steps" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
   local workspace
@@ -487,7 +451,7 @@ STRATEGY
   rm -rf "$workspace"
 }
 
-@test "validator accepts parallelStages with loopControl" {
+@test "orchestrator rejects parallelStages with loopControl" {
   local workspace
   workspace="$(setup_orchestrator_workspace)"
   local orch_file="$workspace/parallel-loop.orch.json"
@@ -520,7 +484,8 @@ STRATEGY
 ORCH
   write_plan_file "$workspace" "stages/parallel-loop.plan.md"
   run bash "$REPO_ROOT/scripts/validate-orchestration-schema.sh" "$orch_file" 2>&1
-  [ "$status" -eq 0 ] \
+  [ "$status" -ne 0 ] \
+    && [[ "$output" == *"schema validation failed"* ]] \
     || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
   rm -rf "$workspace"
 }
