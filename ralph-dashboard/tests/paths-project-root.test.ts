@@ -1,7 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { findWorkspaceProjectRoot } from '../src/paths';
 
@@ -39,19 +38,24 @@ function withProjectRootEnv(
 }
 
 describe('findWorkspaceProjectRoot', () => {
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-
   for (const envKey of ['RALPH_DASHBOARD_PROJECT_ROOT', 'RALPH_PROJECT_ROOT'] as const) {
     it(`falls back to walk-up discovery when ${envKey} has no .ralph directory`, () => {
-      const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-root-'));
+      const originalCwd = process.cwd();
+      const tempRoot = realpathSync(mkdtempSync(join(tmpdir(), 'ralph-dashboard-root-')));
+      const expectedProjectRoot = join(tempRoot, 'project');
+      mkdirSync(join(expectedProjectRoot, '.ralph'), { recursive: true });
       const invalidRoot = join(tempRoot, 'workspace');
       mkdirSync(invalidRoot, { recursive: true });
+      const nestedDir = join(expectedProjectRoot, 'nested');
+      mkdirSync(nestedDir, { recursive: true });
 
       try {
+        process.chdir(nestedDir);
         withProjectRootEnv(envKey, invalidRoot, () => {
-          expect(findWorkspaceProjectRoot()).toBe(repoRoot);
+          expect(findWorkspaceProjectRoot()).toBe(expectedProjectRoot);
         });
       } finally {
+        process.chdir(originalCwd);
         rmSync(tempRoot, { recursive: true, force: true });
       }
     });
