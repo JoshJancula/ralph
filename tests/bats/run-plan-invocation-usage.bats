@@ -15,8 +15,8 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
     set -euo pipefail
     sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
     source "$2"
-    _ralph_append_invocation_usage_history "$3" 1 "m1" "cursor" 3 10 20 0 1 0 0
-    _ralph_append_invocation_usage_history "$3" 2 "m2" "claude" 4 11 21 0 2 500 0.75
+    _ralph_append_invocation_usage_history "$3" 1 "m1" "cursor" 3 10 20 0 1 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:03Z" "plan-1" "stage-1"
+    _ralph_append_invocation_usage_history "$3" 2 "m2" "claude" 4 11 21 0 2 500 0.75 "2026-04-17T00:00:04Z" "2026-04-17T00:00:09Z" "plan-1" "stage-2"
     python3 - <<PY
 import json
 with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
@@ -27,10 +27,60 @@ assert doc["invocations"][0]["iteration"] == 1
 assert doc["invocations"][1]["iteration"] == 2
 assert doc["invocations"][1]["max_turn_total_tokens"] == 500
 assert doc["invocations"][1]["cache_hit_ratio"] == 0.75
+assert doc["invocations"][0]["started_at"] == "2026-04-17T00:00:00Z"
+assert doc["invocations"][0]["ended_at"] == "2026-04-17T00:00:03Z"
+assert doc["invocations"][0]["plan_key"] == "plan-1"
+assert doc["invocations"][0]["stage_id"] == "stage-1"
+assert doc["invocations"][1]["started_at"] == "2026-04-17T00:00:04Z"
+assert doc["invocations"][1]["ended_at"] == "2026-04-17T00:00:09Z"
+assert doc["invocations"][1]["plan_key"] == "plan-1"
+assert doc["invocations"][1]["stage_id"] == "stage-2"
 PY
   ' _ "$core_lib" "$funcs" "$usage_file"
 
   [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history fallback writes optional fields without python3" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
+
+  local tmpdir core_lib funcs usage_file tmpbin
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+  tmpbin="$tmpdir/bin"
+  mkdir -p "$tmpbin"
+  ln -s "$(command -v mkdir)" "$tmpbin/mkdir"
+  ln -s "$(command -v dirname)" "$tmpbin/dirname"
+  ln -s "$(command -v cat)" "$tmpbin/cat"
+  sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$core_lib" >"$funcs"
+
+  run bash -c '
+    set -euo pipefail
+    PATH="$1"
+    source "$2"
+    _ralph_append_invocation_usage_history "$3" 3 "m3" "codex" 7 12 13 1 4 25 0.125 "2026-04-17T02:00:00Z" "2026-04-17T02:00:07Z" "plan-2" "stage-3"
+  ' _ "$tmpbin" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
+  python3 - "$usage_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+
+record = doc["invocations"][0]
+assert record["iteration"] == 3
+assert record["started_at"] == "2026-04-17T02:00:00Z"
+assert record["ended_at"] == "2026-04-17T02:00:07Z"
+assert record["plan_key"] == "plan-2"
+assert record["stage_id"] == "stage-3"
+PY
 
   rm -rf "$tmpdir"
 }
@@ -86,6 +136,45 @@ PY
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"codex demux assertions passed"* ]]
+  rm -rf "$tmpdir"
+}
+
+@test "demux extracts Codex turn.completed usage events" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local demux tmpdir usage_file fixture
+  demux="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-cli-json-demux.py"
+  tmpdir="$(mktemp -d)"
+  usage_file="$tmpdir/codex-turn-completed.usage.json"
+  fixture="$REPO_ROOT/tests/fixtures/run-plan-cli-json-demux/codex-turn-completed.jsonl"
+
+  run python3 - "$demux" "$usage_file" "$fixture" <<'PY'
+import json, subprocess, sys
+
+demux = sys.argv[1]
+usage_file = sys.argv[2]
+fixture = sys.argv[3]
+
+with open(fixture, encoding="utf-8") as fh:
+    stdin_data = fh.read().encode()
+
+proc = subprocess.run([sys.executable, demux, "codex", "", usage_file], input=stdin_data, capture_output=True)
+assert proc.returncode == 0, proc.stderr.decode()
+
+with open(usage_file) as fh:
+    d = json.load(fh)
+
+assert d["input_tokens"] == 16384, f"input_tokens={d['input_tokens']}"
+assert d["cache_read_input_tokens"] == 2560, f"cache_read={d['cache_read_input_tokens']}"
+assert d["output_tokens"] == 33, f"output_tokens={d['output_tokens']}"
+assert d["cache_creation_input_tokens"] == 0
+# Derived fallback when total_tokens is absent in turn.completed.usage.
+assert d["max_turn_total_tokens"] == 18977, f"max_turn={d['max_turn_total_tokens']}"
+print("codex turn.completed demux assertions passed")
+PY
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex turn.completed demux assertions passed"* ]]
   rm -rf "$tmpdir"
 }
 

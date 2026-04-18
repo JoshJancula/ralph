@@ -107,13 +107,17 @@ for stage in "${stages[@]}"; do
   if [[ "$pipeline_session_strategy_all_stages" == "true" ]]; then
     stage_session_strategy+=("$pipeline_session_strategy_default")
   else
-    _stage_strategy_default_index=1
-    case "${pipeline_session_strategy_default:-fresh}" in
-      resume) _stage_strategy_default_index=2 ;;
-      reset) _stage_strategy_default_index=3 ;;
-    esac
     if [[ "$runtime" == "claude" ]]; then
-      print_hint "Claude often benefits from resume/reset because prompt-cache reuse is stronger."
+      echo "Session resume is strongly recommended for Claude because it reuses the prompt cache." >&2
+    else
+      echo "Session resume keeps context across TODOs." >&2
+    fi
+    read -rp "Enable session resume for \"$stage_id\"? (y/N) " sr_one_stage
+    sr_one_stage="${sr_one_stage:-N}"
+    if [[ "$sr_one_stage" =~ ^[Yy] ]]; then
+      stage_session_resume+=("true")
+    else
+      stage_session_resume+=("false")
     fi
     _stage_strategy="$(ralph_menu_select --prompt "Session strategy for \"$stage_id\"" --default "$_stage_strategy_default_index" -- "fresh" "resume" "reset")"
     stage_session_strategy+=("${_stage_strategy:-fresh}")

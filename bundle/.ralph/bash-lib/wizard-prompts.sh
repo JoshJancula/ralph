@@ -114,14 +114,17 @@ read_pipeline_info() {
   pipeline_name="$name"
   namespace="$ns"
   pipeline_description_default="Multi-stage pipeline for $pipeline_name"
-  description_input="$(ralph_prompt_text "Description" "$pipeline_description_default")"
-  pipeline_description="$description_input"
-  print_hint "Session strategy controls per-stage CLI session behavior."
-  print_hint "fresh (default) = strict isolation, resume = continue context, reset = reuse session id with reset-oriented prompts."
-  print_hint "resume/reset rely on Python 3 for robust session-id capture."
-  pipeline_session_strategy_default="$(ralph_menu_select --prompt "Default session strategy" --default 1 -- "fresh" "resume" "reset")"
-  if [[ "$pipeline_session_strategy_default" != "fresh" ]]; then
-    print_hint "resume/reset can lower token cost on short iterative stage plans."
+  read -rp "Description [default $pipeline_description_default]: " description_input
+  pipeline_description="${description_input:-$pipeline_description_default}"
+  print_hint "Session resume keeps the same CLI session across all stages."
+  print_hint "It is strongly recommended for Claude stages because it reuses the prompt cache and can substantially reduce token cost."
+  print_hint "Session resume requires Python 3 on PATH."
+  read -rp "Enable session resume for all stages? (y/N) " session_resume_input
+  session_resume_input="${session_resume_input:-N}"
+  if [[ "$session_resume_input" =~ ^[Yy] ]]; then
+    pipeline_resume_all_stages="true"
+  else
+    pipeline_resume_all_stages="false"
   fi
   session_strategy_scope_input="$(ralph_prompt_yesno "Use this session strategy for all stages" "y")"
   if [[ "$session_strategy_scope_input" == "y" ]]; then

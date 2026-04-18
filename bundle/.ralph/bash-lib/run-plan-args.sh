@@ -9,6 +9,66 @@
 PROJECT_ROOT_OVERRIDE=""
 WORKSPACE_ROOT_OVERRIDE=""
 
+ralph_validate_claude_permission_mode() {
+  local mode="${1:-}"
+  case "$mode" in
+    default|acceptEdits|auto|bypassPermissions|dontAsk|plan)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      ralph_die "Error: --claude-permission-mode / CLAUDE_PLAN_PERMISSION_MODE must be one of default, acceptEdits, auto, bypassPermissions, dontAsk, or plan."
+      ;;
+  esac
+}
+
+ralph_validate_codex_sandbox_mode() {
+  local mode="${1:-}"
+  case "$mode" in
+    read-only|workspace-write|danger-full-access)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      ralph_die "Error: --codex-sandbox / CODEX_PLAN_SANDBOX must be one of read-only, workspace-write, or danger-full-access."
+      ;;
+  esac
+}
+
+ralph_validate_codex_boolean() {
+  local value="${1:-}"
+  case "$value" in
+    0|1|true|false|yes|no|on|off)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ralph_normalize_codex_boolean() {
+  local value="${1:-}"
+  case "$value" in
+    1|true|yes|on)
+      printf '1'
+      ;;
+    0|false|no|off|"")
+      printf '0'
+      ;;
+    *)
+      printf '0'
+      ;;
+  esac
+}
+
 # Print the run-plan CLI usage summary.
 # Args: none
 # Returns: 0 on success, non-zero on error
@@ -30,9 +90,7 @@ Common options:
   --select-agent                       Pick a prebuilt agent interactively.
   --non-interactive / --no-interactive  Skip interactive prompts.
   --model <id>                         CLI model id (overrides agent default).
-  --claude-bare                        Enable Claude --bare / CLAUDE_PLAN_BARE (default: on; --no-claude-bare or CLAUDE_PLAN_BARE=0 restores CLAUDE.md auto-discovery, auto-memory, and plugin sync).
-  --claude-allow-mcp                   In Claude minimal mode, omit empty MCP lockdown so project MCP servers load (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0).
-  --no-claude-allow-mcp                Restore default minimal MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1).
+  --claude-bare                        Enable Claude --bare / CLAUDE_PLAN_BARE (default: off; fewer automatic context sources, lower overhead).
   --claude-permission-mode <default|acceptEdits|auto|bypassPermissions|dontAsk|plan>
                                        Set CLAUDE_PLAN_PERMISSION_MODE for Claude exec (omit to use the CLI default; modes that skip or auto-approve permissions reduce safety).
   --codex-sandbox <read-only|workspace-write|danger-full-access>
@@ -41,10 +99,6 @@ Common options:
                                         Sets CODEX_PLAN_FULL_AUTO for Codex exec (default: 1; 0 disables --full-auto flag).
   --codex-dangerously-bypass <0|1>
                                         Sets CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX (default: 0; 1 adds --dangerously-bypass-approvals-and-sandbox; isolated-runner-only).
-  --session-strategy <fresh|resume|reset>
-                                       Session behavior between TODOs.
-                                       fresh=default strict isolation, resume=keep same conversation,
-                                       reset=reuse session id with reset-oriented prompts.
   --cli-resume / --no-cli-resume       Enable/disable CLI resume prompts.
   --allow-unsafe-resume                Allow bare CLI resume without session id.
   --resume <id>                        Force a CLI session id for this run.
@@ -100,26 +154,6 @@ ralph_run_plan_parse_args() {
         CLAUDE_PLAN_BARE=1
         shift
         ;;
-      --no-claude-bare)
-        CLAUDE_PLAN_BARE=0
-        shift
-        ;;
-      --claude-minimal)
-        CLAUDE_PLAN_MINIMAL=1
-        shift
-        ;;
-      --no-claude-minimal)
-        CLAUDE_PLAN_MINIMAL=0
-        shift
-        ;;
-      --claude-allow-mcp)
-        CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
-        shift
-        ;;
-      --no-claude-allow-mcp)
-        CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
-        shift
-        ;;
       --claude-permission-mode)
         if [[ -z "${2:-}" ]]; then
           ralph_die "Error: --claude-permission-mode requires a mode (default, acceptEdits, auto, bypassPermissions, dontAsk, or plan)."
@@ -152,16 +186,6 @@ ralph_run_plan_parse_args() {
           ralph_die "Error: --codex-dangerously-bypass / CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX must be one of 0, 1, true, false, yes, no, on, or off."
         fi
         CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX="$2"
-        shift 2
-        ;;
-      --session-strategy)
-        if [[ -z "${2:-}" ]]; then
-          ralph_die "Error: --session-strategy requires one of fresh, resume, or reset."
-        fi
-        if ! ralph_validate_session_strategy "$2"; then
-          ralph_die "Error: --session-strategy must be one of fresh, resume, or reset."
-        fi
-        SESSION_STRATEGY_FLAG="$2"
         shift 2
         ;;
       --agent)
@@ -300,49 +324,13 @@ ralph_run_plan_parse_args() {
     export CLAUDE_PLAN_BARE
   fi
 
-  if [[ -n "${CLAUDE_PLAN_MINIMAL:-}" ]]; then
-    case "${CLAUDE_PLAN_MINIMAL}" in
-      1|true|yes|on)
-        CLAUDE_PLAN_MINIMAL=1
-        ;;
-      0|false|no|off)
-        CLAUDE_PLAN_MINIMAL=0
-        ;;
-      *)
-        ralph_die "Error: --claude-minimal / CLAUDE_PLAN_MINIMAL must be one of 1, true, yes, on, 0, false, no, or off."
-        ;;
-    esac
-    export CLAUDE_PLAN_MINIMAL
-  fi
-
-  if [[ -n "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-}" ]]; then
-    case "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP}" in
-      1|true|yes|on)
-        CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
-        ;;
-      0|false|no|off)
-        CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
-        ;;
-      *)
-        ralph_die "Error: CLAUDE_PLAN_MINIMAL_DISABLE_MCP / --claude-allow-mcp must be one of 1, true, yes, on, 0, false, no, or off."
-        ;;
-    esac
-    export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
-  fi
-
   if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
     ralph_validate_claude_permission_mode "$CLAUDE_PLAN_PERMISSION_MODE"
     export CLAUDE_PLAN_PERMISSION_MODE
   fi
 
-  if [[ -n "${SESSION_STRATEGY_FLAG:-}" ]]; then
-    RALPH_PLAN_SESSION_STRATEGY="$SESSION_STRATEGY_FLAG"
-  elif [[ "$_ralph_session_strategy_env_was_set" == "1" ]]; then
-    if ! ralph_validate_session_strategy "${RALPH_PLAN_SESSION_STRATEGY:-}"; then
-      ralph_die "Error: RALPH_PLAN_SESSION_STRATEGY must be one of fresh, resume, or reset."
-    fi
-  elif [[ "$NO_CLI_RESUME_FLAG" == "1" ]]; then
-    RALPH_PLAN_SESSION_STRATEGY="fresh"
+  if [[ "$NO_CLI_RESUME_FLAG" == "1" ]]; then
+    RALPH_PLAN_CLI_RESUME=0
   elif [[ "$CLI_RESUME_FLAG" == "1" ]]; then
     RALPH_PLAN_SESSION_STRATEGY="resume"
   elif [[ "$_RALPH_CLI_RESUME_ENV_WAS_SET" == "1" ]]; then
