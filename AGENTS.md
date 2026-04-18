@@ -233,13 +233,6 @@ Every plan run appends a record to `.ralph-workspace/logs/<PLAN_KEY>/invocation-
 
 Both fields are shown in the Ralph dashboard as "Cache hit" and "Peak turn" columns in the Plan Metrics and Orchestration Metrics tables, and in the per-plan-folder metric strip on plan cards.
 
-#### Optimization rules of thumb
-
-- **Cursor: favor Claude or Codex for large plans.** Cursor's `composer-2` has no prompt cache; every invocation pays the full codebase-index cost (~77K input tokens in the PLAN2 run). A 10-TODO plan on Cursor costs roughly 770K input tokens versus ~142K cache-create + ~600K cheap cache-read on Claude. Reserve Cursor for short, one-shot plans.
-- **Claude: enable session resume (`--cli-resume`) within a plan.** The first invocation in a new session creates the prompt cache (~142K tokens in PLAN2); subsequent invocations read it cheaply. Session resume amortizes this cost and keeps `cache_hit_ratio` above 0.8. The runner prompt's stable portions are automatically placed in `PROMPT_STATIC` (fed to `--system-prompt` for caching) to further reduce per-call cache creation.
-- **Codex: watch `max_turn_total_tokens`.** Slow or retried invocations strongly correlate with single turns that approach the context window limit. If `max_turn_total_tokens` exceeds ~50K on a model with a 258K window, the agent is loading too much context. Review the TODO scope or reduce file reads in the agent prompt.
-- **OpenCode: mostly model-side.** The `glm-5.1` and similar throughput-limited models have high latency per token regardless of context size. No Ralph-side optimization closes that gap; choose a faster model when elapsed time matters.
-
 ## Important patterns
 
 ### Adding a new agent

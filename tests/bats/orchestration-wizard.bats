@@ -23,7 +23,8 @@ n
 EOF
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'cd "$1" && bash "$2" < "$3"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  # Strip CR so scripted answers stay aligned if the repo is checked out with CRLF (e.g. CI).
+  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
   [ "$status" -ne 0 ]
   [[ "$output" == *'sanitizes to empty; skip'* ]]
   [[ "$output" != *"command not found"* ]]
@@ -38,15 +39,11 @@ EOF
   workspace="$(mktemp -d)"
   mkdir -p "$bundle_root/.ralph/bash-lib"
   mkdir -p "$workspace/.cursor/agents/research"
-  mkdir -p "$workspace/.cursor/agents/implementation"
   cp "$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/orchestration-wizard.sh"
   cp "$REPO_ROOT/bundle/.ralph/bash-lib/"*.sh "$bundle_root/.ralph/bash-lib/"
   cp "$REPO_ROOT/bundle/.ralph/plan.template" "$bundle_root/.ralph/plan.template"
   chmod +x "$bundle_root/.ralph/orchestration-wizard.sh"
   cat >"$workspace/.cursor/agents/research/config.json" <<'JSON'
-{"model":"auto"}
-JSON
-  cat >"$workspace/.cursor/agents/implementation/config.json" <<'JSON'
 {"model":"auto"}
 JSON
 
@@ -56,27 +53,29 @@ demo
 
 n
 research,implementation
-1
-2
 
-1
+
+
+
 n
 
-1
-1
 
-1
+
+
+
 n
 
 y
-research,implementation
+1,2
 
 n
 n
 EOF
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'cd "$1" && bash "$2" < "$3"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  # Locale-stable agent sort order (list_agents | sort) so scripted numeric picks stay correct in CI.
+  # Strip CR so scripted answers stay aligned if the repo is checked out with CRLF (e.g. CI).
+  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
   [ "$status" -eq 0 ]
 
   orch_file="$workspace/.ralph-workspace/orchestration-plans/demo/demo.orch.json"

@@ -112,6 +112,9 @@ read_pipeline_info() {
   pipeline_description_default="Multi-stage pipeline for $pipeline_name"
   read -rp "Description [default $pipeline_description_default]: " description_input
   pipeline_description="${description_input:-$pipeline_description_default}"
+  print_hint "Session resume keeps the same CLI session across all stages."
+  print_hint "It is strongly recommended for Claude stages because it reuses the prompt cache and can substantially reduce token cost."
+  print_hint "Session resume requires Python 3 on PATH."
   read -rp "Enable session resume for all stages? (y/N) " session_resume_input
   session_resume_input="${session_resume_input:-N}"
   if [[ "$session_resume_input" =~ ^[Yy] ]]; then

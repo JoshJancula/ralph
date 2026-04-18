@@ -676,6 +676,7 @@ _ralph_write_plan_usage_summary() {
   local _ended_at
   _ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local _summary_dir="$RALPH_LOG_DIR"
+  local _summary_text=""
   mkdir -p "$_summary_dir"
   local _summary_cache_hit_ratio=0
   local _summary_total_input=$(( _total_input_tokens + _total_cache_read_tokens + _total_cache_creation_tokens ))
@@ -683,19 +684,94 @@ _ralph_write_plan_usage_summary() {
   if [[ "$_summary_total_input" -gt 0 ]]; then
     _summary_cache_hit_ratio="$(python3 -c "print(round(${_total_cache_read_tokens}/${_summary_total_input},4))" 2>/dev/null || echo 0)"
   fi
-  #region agent log
-  if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
-    printf '%s\n' "{\"sessionId\":\"1c2b9f\",\"id\":\"log_$(date +%s%3N)_plan_usage_summary\",\"timestamp\":$(date +%s%3N),\"location\":\"bundle/.ralph/bash-lib/run-plan-core.sh:667\",\"message\":\"summary token breakdown\",\"data\":{\"input_tokens\":${_total_input_tokens},\"output_tokens\":${_total_output_tokens},\"cache_creation_input_tokens\":${_total_cache_creation_tokens},\"cache_read_input_tokens\":${_total_cache_read_tokens},\"total_tokens\":${_summary_total_tokens}},\"runId\":\"initial\",\"hypothesisId\":\"H1\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-1c2b9f.log" || true
-  fi
-  #endregion agent log
   cat > "$_summary_dir/plan-usage-summary.json" << _SUMMARY_EOF
 {"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","invocations":${total_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_total_input_tokens},"output_tokens":${_total_output_tokens},"cache_creation_input_tokens":${_total_cache_creation_tokens},"cache_read_input_tokens":${_total_cache_read_tokens},"max_turn_total_tokens":${_total_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio}}
 _SUMMARY_EOF
+  if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
+    python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" <<'PY'
+import json
+import os
+import sys
+
+summary_path = sys.argv[1]
+usage_path = sys.argv[2]
+
+try:
+    with open(summary_path, "r", encoding="utf-8") as fh:
+        summary = json.load(fh)
+    with open(usage_path, "r", encoding="utf-8") as fh:
+        usage = json.load(fh)
+    invocations = usage.get("invocations")
+    if not isinstance(summary, dict) or not isinstance(invocations, list):
+        raise ValueError("invalid summary or usage data")
+    grouped = {}
+    for record in invocations:
+        if not isinstance(record, dict):
+            continue
+        key = (str(record.get("runtime") or ""), str(record.get("model") or ""))
+        bucket = grouped.setdefault(key, {
+            "runtime": key[0],
+            "model": key[1],
+            "invocations": 0,
+            "elapsed_seconds": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "max_turn_total_tokens": 0,
+        })
+        bucket["invocations"] += 1
+        bucket["elapsed_seconds"] += int(record.get("elapsed_seconds") or 0)
+        bucket["input_tokens"] += int(record.get("input_tokens") or 0)
+        bucket["output_tokens"] += int(record.get("output_tokens") or 0)
+        bucket["cache_creation_input_tokens"] += int(record.get("cache_creation_input_tokens") or 0)
+        bucket["cache_read_input_tokens"] += int(record.get("cache_read_input_tokens") or 0)
+        bucket["max_turn_total_tokens"] = max(bucket["max_turn_total_tokens"], int(record.get("max_turn_total_tokens") or 0))
+    breakdown = []
+    for key in sorted(grouped):
+        bucket = grouped[key]
+        total_input = bucket["input_tokens"] + bucket["cache_creation_input_tokens"] + bucket["cache_read_input_tokens"]
+        cache_hit_ratio = 0.0
+        if total_input > 0:
+            cache_hit_ratio = round(bucket["cache_read_input_tokens"] / total_input, 4)
+        breakdown.append({
+            "runtime": bucket["runtime"],
+            "model": bucket["model"],
+            "invocations": bucket["invocations"],
+            "elapsed_seconds": bucket["elapsed_seconds"],
+            "input_tokens": bucket["input_tokens"],
+            "output_tokens": bucket["output_tokens"],
+            "cache_creation_input_tokens": bucket["cache_creation_input_tokens"],
+            "cache_read_input_tokens": bucket["cache_read_input_tokens"],
+            "max_turn_total_tokens": bucket["max_turn_total_tokens"],
+            "cache_hit_ratio": cache_hit_ratio,
+        })
+    summary["model_breakdown"] = breakdown
+    tmp = f"{summary_path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(summary, fh)
+        fh.write("\n")
+    os.replace(tmp, summary_path)
+except Exception as exc:
+    sys.stderr.write(f"plan-usage-summary model_breakdown update failed: {type(exc).__name__}: {exc}\n")
+PY
+  fi
+  if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
+    _summary_text="$(
+      python3 "$SCRIPT_DIR/bash-lib/ralph-usage-summary-text.py" plan \
+        --summary "$_summary_dir/plan-usage-summary.json" \
+        --invocations "$RALPH_LOG_DIR/invocation-usage.json" 2>/dev/null || true
+    )"
+  fi
   local _elapsed_fmt
   _elapsed_fmt="$(ralph_format_elapsed_secs "$_elapsed")"
   ralph_run_plan_log "plan usage summary: invocations=${total_invocations} input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} max_turn=${_total_max_turn_tokens} cache_hit_ratio=${_summary_cache_hit_ratio} elapsed=${_elapsed_fmt}"
   echo -e "${C_DIM}Token usage: input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} total=${_summary_total_tokens} elapsed=${_elapsed_fmt}${C_RST}"
-  echo -e "${C_DIM}Total elapsed time: ${_elapsed_fmt}${C_RST}"
+  if [[ -n "$_summary_text" ]]; then
+    printf '%s\n' "${C_DIM}${_summary_text}${C_RST}"
+  else
+    echo -e "${C_DIM}Total elapsed time: ${_elapsed_fmt}${C_RST}"
+  fi
 }
 
 _ralph_append_invocation_usage_history() {
@@ -710,11 +786,15 @@ _ralph_append_invocation_usage_history() {
   local _cache_read="$9"
   local _max_turn="${10:-0}"
   local _cache_hit_ratio="${11:-0}"
+  local _started_at="${12:-}"
+  local _ended_at="${13:-}"
+  local _plan_key="${14:-}"
+  local _stage_id="${15:-}"
 
   mkdir -p "$(dirname "$_path")"
 
   if command -v python3 &>/dev/null; then
-    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" <<'PY'
+    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" "$_started_at" "$_ended_at" "$_plan_key" "$_stage_id" <<'PY'
 import json
 import os
 import sys
@@ -734,6 +814,10 @@ try:
     cache_hit_ratio = float(sys.argv[11])
 except (ValueError, IndexError):
     cache_hit_ratio = 0.0
+started_at = sys.argv[12] if len(sys.argv) > 12 else ""
+ended_at = sys.argv[13] if len(sys.argv) > 13 else ""
+plan_key = sys.argv[14] if len(sys.argv) > 14 else ""
+stage_id = sys.argv[15] if len(sys.argv) > 15 else ""
 
 record = {
     "iteration": iteration,
@@ -747,6 +831,15 @@ record = {
     "max_turn_total_tokens": max_turn_total_tokens,
     "cache_hit_ratio": round(cache_hit_ratio, 4),
     }
+
+for key, value in (
+    ("started_at", started_at),
+    ("ended_at", ended_at),
+    ("plan_key", plan_key),
+    ("stage_id", stage_id),
+):
+    if value:
+        record[key] = value
 
 doc = {
     "schema_version": 1,
@@ -777,8 +870,22 @@ PY
     return 0
   fi
 
+  local _extra_fields=""
+  if [[ -n "$_started_at" ]]; then
+    _extra_fields+=",\"started_at\":\"${_started_at}\""
+  fi
+  if [[ -n "$_ended_at" ]]; then
+    _extra_fields+=",\"ended_at\":\"${_ended_at}\""
+  fi
+  if [[ -n "$_plan_key" ]]; then
+    _extra_fields+=",\"plan_key\":\"${_plan_key}\""
+  fi
+  if [[ -n "$_stage_id" ]]; then
+    _extra_fields+=",\"stage_id\":\"${_stage_id}\""
+  fi
+
   cat >"$_path" <<USAGE_EOF
-{"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}}]}
+{"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}${_extra_fields}}]}
 USAGE_EOF
 }
 
@@ -1057,6 +1164,7 @@ Use namespace-aware artifact paths when writing handoff files."
     rm -f "$USAGE_FILE"
     PROGRESS_INTERVAL="${CURSOR_PLAN_PROGRESS_INTERVAL:-30}"
     START_TIME="$(date +%s)"
+    _inv_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     LOG_SIZE_AT_START="$(wc -c < "$OUTPUT_LOG" 2>/dev/null || echo 0)"
     FIRST_RESPONSE_SHOWN=0
     LAST_PROGRESS_AT=0
@@ -1142,6 +1250,7 @@ Use namespace-aware artifact paths when writing handoff files."
       rm -f "$EXIT_CODE_FILE"
     fi
     set -e
+    _inv_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     _inv_elapsed=$(( $(date +%s) - START_TIME ))
     ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code elapsed=${_inv_elapsed}s)"
 
@@ -1185,7 +1294,11 @@ Use namespace-aware artifact paths when writing handoff files."
       "$_inv_cache_create" \
       "$_inv_cache_read" \
       "$_inv_max_turn" \
-      "$_inv_cache_hit_ratio"
+      "$_inv_cache_hit_ratio" \
+      "$_inv_started_at" \
+      "$_inv_ended_at" \
+      "${RALPH_PLAN_KEY:-}" \
+      "${RALPH_STAGE_ID:-}"
     ralph_run_plan_log "invocation $iteration usage: input=${_inv_input} output=${_inv_output} cache_create=${_inv_cache_create} cache_read=${_inv_cache_read} max_turn=${_inv_max_turn} cache_hit_ratio=${_inv_cache_hit_ratio} elapsed=${_inv_elapsed}s"
 
     echo "" >>"$OUTPUT_LOG"

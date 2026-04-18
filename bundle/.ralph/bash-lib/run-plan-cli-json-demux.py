@@ -11,6 +11,30 @@ import sys
 from typing import Any, Dict, List, Optional
 
 
+def _apply_codex_usage_snapshot(usage: Dict[str, Any], acc: Dict[str, int], include_max: bool = True) -> None:
+    """Apply a Codex usage snapshot (overwrite semantics)."""
+    raw_input = int(usage.get("input_tokens") or 0)
+    cached = int(usage.get("cached_input_tokens") or 0)
+    reasoning = int(usage.get("reasoning_output_tokens") or 0)
+    output = int(usage.get("output_tokens") or 0) + reasoning
+
+    # input_tokens in Codex includes cached tokens; split cached read out.
+    acc["input_tokens"] = max(raw_input - cached, 0)
+    acc["cache_read_input_tokens"] = cached
+    acc["output_tokens"] = output
+    # Codex does not currently emit cache creation as a separate field.
+    acc["cache_creation_input_tokens"] = 0
+
+    if include_max:
+        # Older/newer event variants may omit total_tokens; derive when absent.
+        total_tokens = usage.get("total_tokens")
+        if total_tokens is None:
+            total_tokens = raw_input + output
+        total_tokens = int(total_tokens or 0)
+        if total_tokens > acc.get("max_turn_total_tokens", 0):
+            acc["max_turn_total_tokens"] = total_tokens
+
+
 def session_id_from(obj: Any, mode: str) -> Optional[str]:
     if isinstance(obj, dict):
         if mode == "claude":
@@ -29,7 +53,7 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                 if n:
                     return n
         elif mode == "opencode":
-            for k in ("session_id", "sessionId", "chat_id", "id"):
+            for k in ("session_id", "sessionId", "sessionID", "chat_id", "id"):
                 v = obj.get(k)
                 if isinstance(v, (str, int)) and str(v).strip():
                     return str(v).strip()
@@ -43,7 +67,7 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                     if n:
                         return n
         else:
-            for k in ("session_id", "sessionId", "chat_id", "id"):
+            for k in ("session_id", "sessionId", "sessionID", "chat_id", "id"):
                 v = obj.get(k)
                 if isinstance(v, (str, int)) and str(v).strip():
                     return str(v).strip()
@@ -51,7 +75,7 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                 v = obj.get(k)
                 if isinstance(v, (str, int)) and str(v).strip():
                     return str(v).strip()
-            for k in ("payload", "result", "data"):
+            for k in ("payload", "part", "result", "data"):
                 if k in obj:
                     n = session_id_from(obj.get(k), mode)
                     if n:
@@ -72,30 +96,49 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
         # Codex emits repeated token_count events. Each carries:
         #   payload.info.total_token_usage  -- running cumulative (OVERWRITE, not sum)
         #   payload.info.last_token_usage   -- this turn only (track max)
-        # We must NOT recurse generically here to avoid double-counting both sub-dicts.
+        # Newer Codex CLIs emit turn-completion usage snapshots at:
+        #   turn.completed.usage
+        # We must NOT recurse generically here to avoid double-counting usage payloads.
         payload = obj.get("payload")
-        if not isinstance(payload, dict):
-            return
-        if payload.get("type") != "token_count":
-            return
-        info = payload.get("info")
-        if not isinstance(info, dict):
-            return
-        total = info.get("total_token_usage")
-        if isinstance(total, dict):
-            # input_tokens in Codex includes cached tokens; separate them out.
-            raw_input = int(total.get("input_tokens") or 0)
-            cached = int(total.get("cached_input_tokens") or 0)
-            acc["input_tokens"] = raw_input - cached
-            acc["cache_read_input_tokens"] = cached
-            acc["output_tokens"] = int(total.get("output_tokens") or 0) + int(total.get("reasoning_output_tokens") or 0)
-            # Codex does not distinguish cache creation; leave at 0.
-            acc["cache_creation_input_tokens"] = 0
-        last = info.get("last_token_usage")
-        if isinstance(last, dict):
-            last_total = int(last.get("total_tokens") or 0)
-            if last_total > acc.get("max_turn_total_tokens", 0):
-                acc["max_turn_total_tokens"] = last_total
+        if isinstance(payload, dict) and payload.get("type") == "token_count":
+            info = payload.get("info")
+            if isinstance(info, dict):
+                total = info.get("total_token_usage")
+                if isinstance(total, dict):
+                    _apply_codex_usage_snapshot(total, acc, include_max=False)
+                last = info.get("last_token_usage")
+                if isinstance(last, dict):
+                    last_total = int(last.get("total_tokens") or 0)
+                    if last_total > acc.get("max_turn_total_tokens", 0):
+                        acc["max_turn_total_tokens"] = last_total
+
+        event_type = obj.get("type")
+        if event_type in {"turn.completed", "turn_completed", "result"}:
+            usage = obj.get("usage")
+            if isinstance(usage, dict):
+                _apply_codex_usage_snapshot(usage, acc)
+
+        if event_type == "step_finish":
+            part = obj.get("part")
+            if isinstance(part, dict):
+                tokens = part.get("tokens")
+                if isinstance(tokens, dict):
+                    raw_input = int(tokens.get("input") or 0)
+                    output = int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
+                    cache = tokens.get("cache")
+                    cache_read = 0
+                    cache_create = 0
+                    if isinstance(cache, dict):
+                        cache_read = int(cache.get("read") or 0)
+                        cache_create = int(cache.get("write") or 0)
+                    # step_finish is a snapshot in some Codex/OpenCode variants; keep overwrite semantics.
+                    acc["input_tokens"] = max(raw_input - cache_read, 0)
+                    acc["output_tokens"] = output
+                    acc["cache_read_input_tokens"] = cache_read
+                    acc["cache_creation_input_tokens"] = cache_create
+                    step_total = int(tokens.get("total") or 0)
+                    if step_total > acc.get("max_turn_total_tokens", 0):
+                        acc["max_turn_total_tokens"] = step_total
         return
     if mode == "opencode":
         # Implementation note -- OpenCode token event semantics (evidence from

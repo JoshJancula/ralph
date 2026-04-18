@@ -126,6 +126,154 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   rm -rf "$workspace"
 }
 
+@test "ralph_run_plan_parse_args accepts --codex-sandbox and exports it" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime codex --plan "$4" --workspace "$WORKSPACE" --codex-sandbox danger-full-access
+    export -p | grep -F "declare -x CODEX_PLAN_SANDBOX=\"danger-full-access\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CODEX_PLAN_SANDBOX="danger-full-access"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --claude-bare and exports it" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --claude-bare
+    export -p | grep -F "declare -x CLAUDE_PLAN_BARE=\"1\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_BARE="1"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --claude-permission-mode and exports it" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --claude-permission-mode bypassPermissions
+    export -p | grep -F "declare -x CLAUDE_PLAN_PERMISSION_MODE=\"bypassPermissions\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_PERMISSION_MODE="bypassPermissions"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects invalid --claude-permission-mode" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --claude-permission-mode invalid-mode
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--claude-permission-mode / CLAUDE_PLAN_PERMISSION_MODE must be one of default, acceptEdits, auto, bypassPermissions, dontAsk, or plan."* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects invalid --codex-sandbox" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime codex --plan "$4" --workspace "$WORKSPACE" --codex-sandbox invalid-mode
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--codex-sandbox / CODEX_PLAN_SANDBOX must be one of read-only, workspace-write, or danger-full-access."* ]]
+  rm -rf "$workspace"
+}
+
 @test "ralph_shared_ralph_dir_complete succeeds when layout is present" {
   [ -f "$RUN_PLAN_RUNTIME_FILE" ] || skip "run-plan runtime helper missing"
 

@@ -8,7 +8,8 @@ RALPH_RUN_PLAN_INVOKE_CODEX_LOADED=1
 # Public interface:
 #   ralph_run_plan_invoke_codex -- run Codex via codex-exec-prompt.sh; exports env for the wrapper and demux
 #     (OUTPUT_LOG, EXIT_CODE_FILE, SESSION_ID_FILE, RALPH_PLAN_CLI_RESUME, resume session/bare flags,
-#     CODEX_PLAN_CLI, CODEX_PLAN_MODEL).
+#     CODEX_PLAN_CLI, CODEX_PLAN_MODEL, CODEX_PLAN_SANDBOX, CODEX_PLAN_FULL_AUTO,
+#     CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
 
@@ -52,6 +53,9 @@ ralph_run_plan_invoke_codex() {
     # Explicit empty tells the wrapper to omit model override (use Codex default).
     export CODEX_PLAN_MODEL=""
   fi
+  export CODEX_PLAN_SANDBOX
+  export CODEX_PLAN_FULL_AUTO
+  export CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX
 
   run_plan_invoke_codex_cli() {
     "$WORKSPACE/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"

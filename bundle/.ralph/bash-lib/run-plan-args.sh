@@ -9,6 +9,66 @@
 PROJECT_ROOT_OVERRIDE=""
 WORKSPACE_ROOT_OVERRIDE=""
 
+ralph_validate_claude_permission_mode() {
+  local mode="${1:-}"
+  case "$mode" in
+    default|acceptEdits|auto|bypassPermissions|dontAsk|plan)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      ralph_die "Error: --claude-permission-mode / CLAUDE_PLAN_PERMISSION_MODE must be one of default, acceptEdits, auto, bypassPermissions, dontAsk, or plan."
+      ;;
+  esac
+}
+
+ralph_validate_codex_sandbox_mode() {
+  local mode="${1:-}"
+  case "$mode" in
+    read-only|workspace-write|danger-full-access)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      ralph_die "Error: --codex-sandbox / CODEX_PLAN_SANDBOX must be one of read-only, workspace-write, or danger-full-access."
+      ;;
+  esac
+}
+
+ralph_validate_codex_boolean() {
+  local value="${1:-}"
+  case "$value" in
+    0|1|true|false|yes|no|on|off)
+      return 0
+      ;;
+    "")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ralph_normalize_codex_boolean() {
+  local value="${1:-}"
+  case "$value" in
+    1|true|yes|on)
+      printf '1'
+      ;;
+    0|false|no|off|"")
+      printf '0'
+      ;;
+    *)
+      printf '0'
+      ;;
+  esac
+}
+
 # Print the run-plan CLI usage summary.
 # Args: none
 # Returns: 0 on success, non-zero on error
@@ -30,6 +90,15 @@ Common options:
   --select-agent                       Pick a prebuilt agent interactively.
   --non-interactive / --no-interactive  Skip interactive prompts.
   --model <id>                         CLI model id (overrides agent default).
+  --claude-bare                        Enable Claude --bare / CLAUDE_PLAN_BARE (default: off; fewer automatic context sources, lower overhead).
+  --claude-permission-mode <default|acceptEdits|auto|bypassPermissions|dontAsk|plan>
+                                       Set CLAUDE_PLAN_PERMISSION_MODE for Claude exec (omit to use the CLI default; modes that skip or auto-approve permissions reduce safety).
+  --codex-sandbox <read-only|workspace-write|danger-full-access>
+                                        Sets CODEX_PLAN_SANDBOX for Codex exec (default: workspace-write; danger-full-access is high risk).
+  --codex-full-auto <0|1>
+                                        Sets CODEX_PLAN_FULL_AUTO for Codex exec (default: 1; 0 disables --full-auto flag).
+  --codex-dangerously-bypass <0|1>
+                                        Sets CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX (default: 0; 1 adds --dangerously-bypass-approvals-and-sandbox; isolated-runner-only).
   --cli-resume / --no-cli-resume       Enable/disable CLI resume prompts.
   --allow-unsafe-resume                Allow bare CLI resume without session id.
   --resume <id>                        Force a CLI session id for this run.
@@ -76,6 +145,44 @@ ralph_run_plan_parse_args() {
           ralph_die "Error: --model requires a model id string."
         fi
         PLAN_MODEL_CLI="$2"
+        shift 2
+        ;;
+      --claude-bare)
+        CLAUDE_PLAN_BARE=1
+        shift
+        ;;
+      --claude-permission-mode)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --claude-permission-mode requires a mode (default, acceptEdits, auto, bypassPermissions, dontAsk, or plan)."
+        fi
+        CLAUDE_PLAN_PERMISSION_MODE="$2"
+        shift 2
+        ;;
+      --codex-sandbox)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --codex-sandbox requires a mode (read-only, workspace-write, or danger-full-access)."
+        fi
+        CODEX_PLAN_SANDBOX="$2"
+        shift 2
+        ;;
+      --codex-full-auto)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --codex-full-auto requires a value (0 or 1)."
+        fi
+        if ! ralph_validate_codex_boolean "$2"; then
+          ralph_die "Error: --codex-full-auto / CODEX_PLAN_FULL_AUTO must be one of 0, 1, true, false, yes, no, on, or off."
+        fi
+        CODEX_PLAN_FULL_AUTO="$2"
+        shift 2
+        ;;
+      --codex-dangerously-bypass)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --codex-dangerously-bypass requires a value (0 or 1)."
+        fi
+        if ! ralph_validate_codex_boolean "$2"; then
+          ralph_die "Error: --codex-dangerously-bypass / CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX must be one of 0, 1, true, false, yes, no, on, or off."
+        fi
+        CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX="$2"
         shift 2
         ;;
       --agent)
@@ -182,6 +289,41 @@ ralph_run_plan_parse_args() {
 
   if [[ -z "${PLAN_OVERRIDE:-}" ]]; then
     ralph_die "Error: --plan <path> is required."
+  fi
+
+  if [[ -n "${CODEX_PLAN_SANDBOX:-}" ]]; then
+    ralph_validate_codex_sandbox_mode "$CODEX_PLAN_SANDBOX"
+    export CODEX_PLAN_SANDBOX
+  fi
+
+  if [[ -n "${CODEX_PLAN_FULL_AUTO:-}" ]]; then
+    CODEX_PLAN_FULL_AUTO="$(ralph_normalize_codex_boolean "$CODEX_PLAN_FULL_AUTO")"
+    export CODEX_PLAN_FULL_AUTO
+  fi
+
+  if [[ -n "${CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX:-}" ]]; then
+    CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX="$(ralph_normalize_codex_boolean "$CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX")"
+    export CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX
+  fi
+
+  if [[ -n "${CLAUDE_PLAN_BARE:-}" ]]; then
+    case "${CLAUDE_PLAN_BARE}" in
+      1|true|yes|on)
+        CLAUDE_PLAN_BARE=1
+        ;;
+      0|false|no|off)
+        CLAUDE_PLAN_BARE=0
+        ;;
+      *)
+        ralph_die "Error: --claude-bare / CLAUDE_PLAN_BARE must be one of 1, true, yes, on, 0, false, no, or off."
+        ;;
+    esac
+    export CLAUDE_PLAN_BARE
+  fi
+
+  if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
+    ralph_validate_claude_permission_mode "$CLAUDE_PLAN_PERMISSION_MODE"
+    export CLAUDE_PLAN_PERMISSION_MODE
   fi
 
   if [[ "$NO_CLI_RESUME_FLAG" == "1" ]]; then

@@ -95,6 +95,11 @@ for stage in "${stages[@]}"; do
   if [[ "$pipeline_resume_all_stages" == "true" ]]; then
     stage_session_resume+=("true")
   else
+    if [[ "$runtime" == "claude" ]]; then
+      echo "Session resume is strongly recommended for Claude because it reuses the prompt cache." >&2
+    else
+      echo "Session resume keeps context across TODOs." >&2
+    fi
     read -rp "Enable session resume for \"$stage_id\"? (y/N) " sr_one_stage
     sr_one_stage="${sr_one_stage:-N}"
     if [[ "$sr_one_stage" =~ ^[Yy] ]]; then
