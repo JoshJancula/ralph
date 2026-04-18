@@ -202,10 +202,11 @@ describe('AppComponent', () => {
     const spy = vi.spyOn(nav, 'refresh');
     await renderDashboard(fixture, httpMock);
 
-    const btns = fixture.nativeElement.querySelectorAll('ion-button');
-    // Find the refresh button by its icon
-    const refreshBtn = Array.from(btns).find((btn: any) => 
-      btn.querySelector('ion-icon[name="refresh-outline"]'));
+    const endToolbarButtons = fixture.nativeElement.querySelectorAll(
+      'ion-toolbar ion-buttons[slot="end"] ion-button',
+    );
+    expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
+    const refreshBtn = endToolbarButtons[1];
     expect(refreshBtn).toBeTruthy();
     (refreshBtn as HTMLElement).click();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -249,10 +250,11 @@ describe('AppComponent', () => {
 
      expect(fixture.componentInstance.isLightTheme()).toBe(false);
 
-     const btns = fixture.nativeElement.querySelectorAll('ion-button');
-     // Find the theme button by its icon
-     const themeBtn = Array.from(btns).find((btn: any) =>
-       btn.querySelector('ion-icon[name="sunny-outline"], ion-icon[name="moon-outline"]'));
+     const endToolbarButtons = fixture.nativeElement.querySelectorAll(
+       'ion-toolbar ion-buttons[slot="end"] ion-button',
+     );
+     expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
+     const themeBtn = endToolbarButtons[2];
      expect(themeBtn).toBeTruthy();
      (themeBtn as HTMLElement).click();
      fixture.detectChanges();
