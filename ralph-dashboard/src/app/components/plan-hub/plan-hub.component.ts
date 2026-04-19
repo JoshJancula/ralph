@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
-import { ApiService, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
+import { ApiService, MetricsSummary, MetricsSummaryItem, MetricsSummaryOverall } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { formatElapsedSeconds } from '../../utils/format-elapsed';
@@ -396,6 +396,15 @@ export class PlanHubComponent implements OnInit {
   formatTokens(item: MetricsSummaryItem): string {
     const total =
       item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens;
+    if (total <= 0) {
+      return '--';
+    }
+    return this.formatNumber(total);
+  }
+
+  formatOverallTokens(overall: MetricsSummaryOverall): string {
+    const total =
+      overall.input_tokens + overall.output_tokens + overall.cache_creation_input_tokens + overall.cache_read_input_tokens;
     if (total <= 0) {
       return '--';
     }
