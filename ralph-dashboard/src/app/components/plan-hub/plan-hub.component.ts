@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
-import { ApiService, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
+import { ApiService, MetricsSummary, MetricsSummaryItem, MetricsSummaryOverall } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { formatElapsedSeconds } from '../../utils/format-elapsed';
@@ -38,6 +38,33 @@ type PlanCardRow = PlanItem & { folderMetrics: MetricsSummaryItem | null; mtimeL
       } @else if (planCards.length === 0) {
         <div class="empty-state">No plan directories found</div>
       } @else {
+        @if (!metricsLoading && !metricsError && metricsSummary && metricsSummary.overall) {
+          <ion-card class="overall-metrics-card">
+            <ion-card-header>
+              <ion-card-title>Overall Metrics</ion-card-title>
+            </ion-card-header>
+            <ion-card-content>
+              <div class="overall-metrics" aria-label="Overall usage metrics">
+                <div class="overall-metric">
+                  <span class="overall-metric-label">Total Elapsed</span>
+                  <span class="overall-metric-value">{{ formatSeconds(metricsSummary.overall.elapsed_seconds) }}</span>
+                </div>
+                <div class="overall-metric">
+                  <span class="overall-metric-label">Total Tokens</span>
+                  <span class="overall-metric-value">{{ formatOverallTokens(metricsSummary.overall) }}</span>
+                </div>
+                <div class="overall-metric">
+                  <span class="overall-metric-label">Cache Hit Ratio</span>
+                  <span class="overall-metric-value">{{ formatPercent(metricsSummary.overall.cache_hit_ratio) }}</span>
+                </div>
+                <div class="overall-metric">
+                  <span class="overall-metric-label">Peak Turn</span>
+                  <span class="overall-metric-value">{{ formatPeakTurn(metricsSummary.overall.max_turn_total_tokens) }}</span>
+                </div>
+              </div>
+            </ion-card-content>
+          </ion-card>
+        }
         <div class="plan-list">
           @for (row of planCards; track row.name) {
             <ion-card>
@@ -145,6 +172,37 @@ type PlanCardRow = PlanItem & { folderMetrics: MetricsSummaryItem | null; mtimeL
       background: var(--surface);
       border-radius: 8px;
       border: 1px solid var(--border);
+    }
+    .overall-metrics-card {
+      margin-bottom: 2rem;
+      --background: var(--surface);
+      --color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: none;
+    }
+    .overall-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1.5rem;
+      font-size: 0.9rem;
+    }
+    .overall-metric {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .overall-metric-label {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .overall-metric-value {
+      color: var(--text-primary);
+      font-family: var(--monospace-font);
+      font-weight: 600;
+      font-size: 1.1rem;
     }
     .plan-list {
       display: grid;
@@ -338,6 +396,15 @@ export class PlanHubComponent implements OnInit {
   formatTokens(item: MetricsSummaryItem): string {
     const total =
       item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens;
+    if (total <= 0) {
+      return '--';
+    }
+    return this.formatNumber(total);
+  }
+
+  formatOverallTokens(overall: MetricsSummaryOverall): string {
+    const total =
+      overall.input_tokens + overall.output_tokens + overall.cache_creation_input_tokens + overall.cache_read_input_tokens;
     if (total <= 0) {
       return '--';
     }
