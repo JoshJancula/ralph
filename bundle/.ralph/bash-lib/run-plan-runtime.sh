@@ -54,29 +54,7 @@ prompt_select_runtime() {
     echo "Error: runtime must be provided via --runtime or RALPH_PLAN_RUNTIME when stdin is not a terminal." >&2
     return 1
   fi
-  echo "" >&2
-  echo -e "${C_C}${C_BOLD}Plan runner${C_RST} ${C_DIM}--${C_RST} ${C_BOLD}which CLI runs each TODO?${C_RST}" >&2
-  echo "" >&2
-  echo -e "  ${C_G}1)${C_RST} Cursor" >&2
-  echo -e "  ${C_G}2)${C_RST} Claude Code" >&2
-  echo -e "  ${C_G}3)${C_RST} Codex" >&2
-  echo -e "  ${C_G}4)${C_RST} Opencode" >&2
-  echo "" >&2
-  local runtime_choice
-  printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
-  read -r runtime_choice </dev/tty 2>/dev/null || runtime_choice="1"
-  runtime_choice="${runtime_choice:-1}"
-  case "$runtime_choice" in
-    1) printf '%s' "cursor" ;;
-    2) printf '%s' "claude" ;;
-    3) printf '%s' "codex" ;;
-    4) printf '%s' "opencode" ;;
-    cursor|claude|codex|opencode) printf '%s' "$runtime_choice" ;;
-    *)
-      echo "Error: invalid runtime selection (use 1-4 or cursor, claude, codex, or opencode)." >&2
-      return 1
-      ;;
-  esac
+  ralph_menu_select --prompt "runtime" --default 1 -- cursor claude codex opencode
 }
 
 # Ensure the Cursor CLI is installed and available, exiting when it is missing.

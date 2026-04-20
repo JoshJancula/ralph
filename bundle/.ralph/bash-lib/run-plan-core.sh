@@ -5,7 +5,9 @@
 ##   RALPH_PLAN_KEY -- stable id for this plan (logs, sessions, defaults).
 ##   RALPH_ARTIFACT_NS -- artifact namespace (defaults to plan key).
 ##   OUTPUT_LOG -- file path for tee'd assistant CLI output.
-##   RALPH_PLAN_CLI_RESUME -- 1 after optional prompt when one session is reused across TODOs.
+##   RALPH_PLAN_SESSION_STRATEGY -- fresh | resume | reset.
+##   RALPH_PLAN_CLI_RESUME -- derived compatibility flag (1 for resume/reset).
+##   RALPH_PLAN_RESET_COMMAND(_<RUNTIME>) -- optional reset command prefix for reset strategy prompts.
 ##
 ## Public interface (functions): ralph_run_plan_log, ralph_ensure_*_cli, ralph_path_to_file_uri,
 ## ralph_human_* / ralph_operator_* for human-in-the-loop flows, and related helpers below.
@@ -19,6 +21,7 @@ CLI_RESUME_FLAG=0
 NO_CLI_RESUME_FLAG=0
 ALLOW_UNSAFE_RESUME_FLAG=0
 RESUME_SESSION_ID_OVERRIDE=""
+SESSION_STRATEGY_FLAG=""
 RUNTIME=""
 RALPH_PLAN_TODO_MAX_ITERATIONS=""
 CLAUDE_TOOLS_FROM_AGENT=""
@@ -132,9 +135,12 @@ fi
 # Log to file and optionally stdout (if CURSOR_PLAN_VERBOSE=1)
 ralph_run_plan_log() {
   local ts
+  local log_path="${LOG_FILE:-}"
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  mkdir -p "$(dirname "$LOG_FILE")"
-  echo "[$ts] $*" >> "$LOG_FILE"
+  if [[ -n "$log_path" ]]; then
+    mkdir -p "$(dirname "$log_path")"
+    echo "[$ts] $*" >> "$log_path"
+  fi
   if [[ "${CURSOR_PLAN_VERBOSE:-0}" == "1" ]]; then
     echo -e "${C_DIM}[$ts]${C_RST} $*" >&2
   fi
@@ -573,7 +579,8 @@ fi
 ralph_run_plan_log "session dir=$RALPH_SESSION_DIR"
 
 ralph_session_prompt_cli_resume
-# Whether to reuse one assistant session across TODOs (0/1); read by invoke and demux scripts.
+# Session strategy is interactive when unset on TTY; CLI resume flag is derived for compatibility.
+export RALPH_PLAN_SESSION_STRATEGY
 export RALPH_PLAN_CLI_RESUME
 
 # After this point, offer optional cleanup on exit (logs and Ralph artifacts).
@@ -685,7 +692,7 @@ _ralph_write_plan_usage_summary() {
     _summary_cache_hit_ratio="$(python3 -c "print(round(${_total_cache_read_tokens}/${_summary_total_input},4))" 2>/dev/null || echo 0)"
   fi
   cat > "$_summary_dir/plan-usage-summary.json" << _SUMMARY_EOF
-{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","invocations":${total_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_total_input_tokens},"output_tokens":${_total_output_tokens},"cache_creation_input_tokens":${_total_cache_creation_tokens},"cache_read_input_tokens":${_total_cache_read_tokens},"max_turn_total_tokens":${_total_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio}}
+{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${total_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_total_input_tokens},"output_tokens":${_total_output_tokens},"cache_creation_input_tokens":${_total_cache_creation_tokens},"cache_read_input_tokens":${_total_cache_read_tokens},"max_turn_total_tokens":${_total_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio}}
 _SUMMARY_EOF
   if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
     python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" <<'PY'
@@ -766,7 +773,51 @@ PY
   local _elapsed_fmt
   _elapsed_fmt="$(ralph_format_elapsed_secs "$_elapsed")"
   ralph_run_plan_log "plan usage summary: invocations=${total_invocations} input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} max_turn=${_total_max_turn_tokens} cache_hit_ratio=${_summary_cache_hit_ratio} elapsed=${_elapsed_fmt}"
-  echo -e "${C_DIM}Token usage: input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} total=${_summary_total_tokens} elapsed=${_elapsed_fmt}${C_RST}"
+  local _summary_count_fmt
+  _summary_count_fmt="$(ralph_format_int_commas "$total_invocations")"
+  local _summary_input_fmt _summary_cache_create_fmt _summary_cache_read_fmt _summary_output_fmt
+  _summary_input_fmt="$(ralph_format_int_commas "$_total_input_tokens")"
+  _summary_cache_create_fmt="$(ralph_format_int_commas "$_total_cache_creation_tokens")"
+  _summary_cache_read_fmt="$(ralph_format_int_commas "$_total_cache_read_tokens")"
+  _summary_output_fmt="$(ralph_format_int_commas "$_total_output_tokens")"
+  local _summary_input_avg=0 _summary_cache_create_avg=0 _summary_cache_read_avg=0 _summary_output_avg=0
+  if [[ "$total_invocations" -gt 0 ]]; then
+    _summary_input_avg=$(( (_total_input_tokens + total_invocations / 2) / total_invocations ))
+    _summary_cache_create_avg=$(( (_total_cache_creation_tokens + total_invocations / 2) / total_invocations ))
+    _summary_cache_read_avg=$(( (_total_cache_read_tokens + total_invocations / 2) / total_invocations ))
+    _summary_output_avg=$(( (_total_output_tokens + total_invocations / 2) / total_invocations ))
+  fi
+  local _summary_input_avg_fmt _summary_cache_create_avg_fmt _summary_cache_read_avg_fmt _summary_output_avg_fmt
+  _summary_input_avg_fmt="$(ralph_format_int_commas "$_summary_input_avg")"
+  _summary_cache_create_avg_fmt="$(ralph_format_int_commas "$_summary_cache_create_avg")"
+  _summary_cache_read_avg_fmt="$(ralph_format_int_commas "$_summary_cache_read_avg")"
+  _summary_output_avg_fmt="$(ralph_format_int_commas "$_summary_output_avg")"
+  local _summary_rate_input=5 _summary_rate_cache_create=5 _summary_rate_cache_read=5 _summary_rate_output=25
+  case "${SELECTED_MODEL:-}" in
+    *haiku*4.5*|*sonnet*4.6*|*sonnet*4.7*|*opus*4.*)
+      _summary_rate_input=3
+      _summary_rate_cache_create=3
+      _summary_rate_cache_read=3
+      _summary_rate_output=15
+      ;;
+  esac
+  local _summary_total_cost_weighted _summary_total_cost_cents _summary_avg_cost_cents
+  _summary_total_cost_weighted=$(( \
+    (_total_input_tokens * _summary_rate_input) + \
+    (_total_cache_creation_tokens * _summary_rate_cache_create) + \
+    (_total_cache_read_tokens * _summary_rate_cache_read) + \
+    (_total_output_tokens * _summary_rate_output) \
+  ))
+  _summary_total_cost_cents=$(( (_summary_total_cost_weighted * 100 + 500000) / 1000000 ))
+  _summary_avg_cost_cents=0
+  if [[ "$total_invocations" -gt 0 ]]; then
+    _summary_avg_cost_cents=$(( (_summary_total_cost_cents + total_invocations / 2) / total_invocations ))
+  fi
+  local _summary_total_cost_fmt _summary_avg_cost_fmt
+  _summary_total_cost_fmt="$(printf '%d.%02d' $(( _summary_total_cost_cents / 100 )) $(( _summary_total_cost_cents % 100 )))"
+  _summary_avg_cost_fmt="$(printf '%d.%02d' $(( _summary_avg_cost_cents / 100 )) $(( _summary_avg_cost_cents % 100 )))"
+  echo -e "${C_DIM}Plan total across ${_summary_count_fmt} invocations: input=${_summary_input_fmt} cache_create=${_summary_cache_create_fmt} cache_read=${_summary_cache_read_fmt} output=${_summary_output_fmt} est=\$${_summary_total_cost_fmt}${C_RST}"
+  echo -e "${C_DIM}Per-invocation average: input=${_summary_input_avg_fmt} cache_create=${_summary_cache_create_avg_fmt} cache_read=${_summary_cache_read_avg_fmt} output=${_summary_output_avg_fmt} est=\$${_summary_avg_cost_fmt}${C_RST}"
   if [[ -n "$_summary_text" ]]; then
     printf '%s\n' "${C_DIM}${_summary_text}${C_RST}"
   else
@@ -790,11 +841,12 @@ _ralph_append_invocation_usage_history() {
   local _ended_at="${13:-}"
   local _plan_key="${14:-}"
   local _stage_id="${15:-}"
+  local _session_strategy="${16:-fresh}"
 
   mkdir -p "$(dirname "$_path")"
 
   if command -v python3 &>/dev/null; then
-    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" "$_started_at" "$_ended_at" "$_plan_key" "$_stage_id" <<'PY'
+    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" "$_started_at" "$_ended_at" "$_plan_key" "$_stage_id" "$_session_strategy" <<'PY'
 import json
 import os
 import sys
@@ -818,11 +870,13 @@ started_at = sys.argv[12] if len(sys.argv) > 12 else ""
 ended_at = sys.argv[13] if len(sys.argv) > 13 else ""
 plan_key = sys.argv[14] if len(sys.argv) > 14 else ""
 stage_id = sys.argv[15] if len(sys.argv) > 15 else ""
+session_strategy = sys.argv[16] if len(sys.argv) > 16 else ""
 
 record = {
     "iteration": iteration,
     "model": model,
     "runtime": runtime,
+    "session_strategy": session_strategy or "fresh",
     "elapsed_seconds": elapsed_seconds,
     "input_tokens": input_tokens,
     "output_tokens": output_tokens,
@@ -883,6 +937,9 @@ PY
   if [[ -n "$_stage_id" ]]; then
     _extra_fields+=",\"stage_id\":\"${_stage_id}\""
   fi
+  if [[ -n "$_session_strategy" ]]; then
+    _extra_fields+=",\"session_strategy\":\"${_session_strategy}\""
+  fi
 
   cat >"$_path" <<USAGE_EOF
 {"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}${_extra_fields}}]}
@@ -915,6 +972,7 @@ while true; do
 
   attempts_on_line=0
   human_gate_satisfied_for_line=0
+  _reset_retry_done_for_line=0
   # Same checklist line: re-invoke assistant if the box stayed [ ], pending-human was cleared, or gutter retry.
   while true; do
     total_invocations=$((total_invocations + 1))
@@ -936,7 +994,7 @@ while true; do
     elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
       _session_label="bare"
     fi
-    ralph_run_plan_log "current task line=$line_num session=$_session_label"
+    ralph_run_plan_log "current task line=$line_num session=$_session_label strategy=${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
 
     task_ordinal="$(plan_todo_ordinal_at_line "$PLAN_PATH" "$line_num")"
     _banner_plan_secs=$(( $(date +%s) - _plan_start_ts ))
@@ -954,13 +1012,85 @@ while true; do
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
     echo ""
 
-    # Refresh resume env from session-id.txt / flags before building PROMPT (compact vs full context).
+    # Refresh resume env from runtime-specific session-id files / flags before building PROMPT (compact vs full context).
     ralph_session_apply_resume_strategy
 
     _hc_included_bytes=0
     _ds_stage_count=0
     _prompt_mode="fresh"
-    if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
+    RALPH_RUN_PLAN_RESET_COMMAND_USED=0
+    export RALPH_RUN_PLAN_RESET_COMMAND_USED
+    _session_strategy="${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
+    if [[ "$_session_strategy" == "reset" ]] && ([[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]])); then
+      _prompt_mode="reset"
+      _reset_command=""
+      if [[ -n "${RALPH_PLAN_RESET_COMMAND:-}" ]]; then
+        _reset_command="${RALPH_PLAN_RESET_COMMAND}"
+      else
+        case "$RUNTIME" in
+          claude)
+            _reset_command="${RALPH_PLAN_RESET_COMMAND_CLAUDE:-/clear}"
+            ;;
+          cursor)
+            _reset_command="${RALPH_PLAN_RESET_COMMAND_CURSOR:-}"
+            ;;
+          codex)
+            _reset_command="${RALPH_PLAN_RESET_COMMAND_CODEX:-}"
+            ;;
+          opencode)
+            _reset_command="${RALPH_PLAN_RESET_COMMAND_OPENCODE:-}"
+            ;;
+          *)
+            _reset_command=""
+            ;;
+        esac
+      fi
+      _reset_prefix=""
+      if [[ -n "$_reset_command" ]]; then
+        _reset_prefix="${_reset_command}"$'\n\n'
+        RALPH_RUN_PLAN_RESET_COMMAND_USED=1
+        export RALPH_RUN_PLAN_RESET_COMMAND_USED
+      fi
+      if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+        if [[ -n "$_reset_command" ]]; then
+          _resume_intro="Reusing the same CLI session id in reset mode (--resume) and issuing a reset command first."
+        else
+          _resume_intro="Reusing the same CLI session id in reset mode (--resume)."
+        fi
+      else
+        if [[ -n "$_reset_command" ]]; then
+          _resume_intro="Reusing bare CLI resume in reset mode (last-session semantics; isolated CI only) and issuing a reset command first."
+        else
+          _resume_intro="Reusing bare CLI resume in reset mode (last-session semantics; isolated CI only)."
+        fi
+      fi
+      PROMPT_STATIC=""
+      PROMPT="${_reset_prefix}$_resume_intro
+
+**TODO (line $line_num):** $todo_text
+
+Reset contract:
+- Treat this as a fresh task.
+- Ignore previous task-specific conversation state unless re-verified from files.
+- Keep only durable system/tool constraints that still apply.
+
+Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, and stop. Do not start the next item.
+
+If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]."
+
+      if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
+        _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
+        _hc_size="$(wc -c < "$HUMAN_CONTEXT" 2>/dev/null || echo 0)"
+        if [[ "$_hc_size" -gt "$_hc_max" ]]; then
+          _hc_content="$(tail -c "$_hc_max" "$HUMAN_CONTEXT")"
+          PROMPT+=$'\n\n## Human operator answers\n[Note: trimmed to last '"$_hc_max"' bytes]\n'"$_hc_content"
+          _hc_included_bytes="$_hc_max"
+        else
+          PROMPT+=$'\n\n## Human operator answers\n'"$(<"$HUMAN_CONTEXT")"
+          _hc_included_bytes="$_hc_size"
+        fi
+      fi
+    elif [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
       _prompt_mode="resume"
       if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
         _resume_intro="Continuing the same CLI session (--resume)."
@@ -1170,6 +1300,12 @@ Use namespace-aware artifact paths when writing handoff files."
     LAST_PROGRESS_AT=0
 
     set +e
+    _inv_used_resume_session_id=0
+    _inv_resume_session_id=""
+    if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+      _inv_used_resume_session_id=1
+      _inv_resume_session_id="${RALPH_RUN_PLAN_RESUME_SESSION_ID}"
+    fi
     case "$RUNTIME" in
       cursor)
         # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-invoke-cursor.sh
@@ -1267,6 +1403,19 @@ Use namespace-aware artifact paths when writing handoff files."
       fi
       rm -f "$USAGE_FILE"
     fi
+
+    if [[ "$exit_code" -ne 0 ]] && [[ "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" == "reset" ]] && [[ "$_inv_used_resume_session_id" == "1" ]] && [[ "$_reset_retry_done_for_line" -eq 0 ]] && [[ -z "${RESUME_SESSION_ID_OVERRIDE:-}" ]]; then
+      if ralph_session_reset_resume_error_detected "$RUNTIME" "$OUTPUT_LOG"; then
+        ralph_run_plan_log "reset strategy detected stale session id ($_inv_resume_session_id) after failed invocation; clearing stored id and retrying once fresh"
+        rm -f "$SESSION_ID_FILE" 2>/dev/null || true
+        unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+        unset RALPH_RUN_PLAN_NEW_SESSION_ID
+        unset RALPH_RUN_PLAN_RESUME_BARE
+        _reset_retry_done_for_line=1
+        sleep 1
+        continue
+      fi
+    fi
     # Compute per-invocation cache_hit_ratio = cache_read / (input + cache_read + cache_create).
     _inv_cache_hit_ratio=0
     _inv_total_input=$(( _inv_input + _inv_cache_read + _inv_cache_create ))
@@ -1298,8 +1447,38 @@ Use namespace-aware artifact paths when writing handoff files."
       "$_inv_started_at" \
       "$_inv_ended_at" \
       "${RALPH_PLAN_KEY:-}" \
-      "${RALPH_STAGE_ID:-}"
+      "${RALPH_STAGE_ID:-}" \
+      "${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
     ralph_run_plan_log "invocation $iteration usage: input=${_inv_input} output=${_inv_output} cache_create=${_inv_cache_create} cache_read=${_inv_cache_read} max_turn=${_inv_max_turn} cache_hit_ratio=${_inv_cache_hit_ratio} elapsed=${_inv_elapsed}s"
+
+    # Per-invocation stderr breakdown with cost estimate (single ASCII line, no emoji)
+    _inv_cost_est=0
+    if [[ -n "${SELECTED_MODEL:-}" ]]; then
+      # Approximate cost calculation (per-million rates)
+      case "${SELECTED_MODEL:-}" in
+        *haiku*4.5*|*sonnet*4.6*|*sonnet*4.7*|*opus*4.*)
+          # Claude rates (approximate): input $3/million, output $15/million
+          _inv_cost_est=$(( (_inv_input * 3 + _inv_output * 15 + 500000) / 1000000 ))
+          ;;
+        *)
+          # Default rates for unknown models
+          _inv_cost_est=$(( (_inv_input * 5 + _inv_output * 25 + 500000) / 1000000 ))
+          ;;
+      esac
+    fi
+    printf 'invocation %d  input=%s  cache_create=%s  cache_read=%s  output=%s  est=$%s  cache_hit=%s%%\n' \
+      "$iteration" \
+      "$(ralph_format_int_commas "$_inv_input")" \
+      "$(ralph_format_int_commas "$_inv_cache_create")" \
+      "$(ralph_format_int_commas "$_inv_cache_read")" \
+      "$(ralph_format_int_commas "$_inv_output")" \
+      "$(printf '%.3f' "$_inv_cost_est")" \
+      "$(printf '%.0f' "$(echo "$_inv_cache_hit_ratio * 100" | bc 2>/dev/null || echo 0)")" \
+      >&2
+
+    # Bump session turn counter and maybe rotate to cap cache growth
+    ralph_session_bump_turn_counter > /dev/null
+    ralph_session_maybe_rotate "${RALPH_PLAN_SESSION_MAX_TURNS:-0}"
 
     echo "" >>"$OUTPUT_LOG"
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
@@ -1359,9 +1538,39 @@ Use namespace-aware artifact paths when writing handoff files."
         echo -e "${C_Y}${C_BOLD}--- Agent question (TODO stays open until resolved) ---${C_RST}" >&2
         echo "$_saved_q" >&2
         echo "" >&2
-      echo -e "${C_B}Your answer (finish with a line containing only a dot):${C_RST}" >&2
-        while IFS= read -r _hl </dev/tty; do
+        echo -e "${C_B}Your answer (finish with ".", ":edit" opens \$EDITOR, ":cancel" aborts):${C_RST}" >&2
+        while IFS= read -e -r _hl </dev/tty; do
           [[ "$_hl" == "." ]] && break
+          if [[ "$_hl" == ":cancel" ]]; then
+            rm -f "$PENDING_HUMAN"
+            {
+              echo ""
+              echo "### $(date '+%Y-%m-%d %H:%M:%S')"
+              echo "**Agent asked:**"
+              echo "$_saved_q"
+              echo "**Operator answered:**"
+              echo "operator cancelled:"
+            } >>"$HUMAN_CONTEXT"
+            ralph_run_plan_log "human cancelled reply (TTY); exiting as stuck for line $line_num"
+            echo -e "${C_Y}operator cancelled: aborting plan run.${C_RST}" >&2
+            exit 4
+          fi
+          if [[ "$_hl" == ":edit" ]]; then
+            # Create tmpfile for editing
+            local _edit_dir="$WORKSPACE/.ralph-workspace/human-reply"
+            mkdir -p "$_edit_dir"
+            local _edit_file="$_edit_dir/edit-$(echo "$PLAN_PATH" | sha256sum | head -c 16)-${line_num}.txt"
+            printf '%s' "$human_block" > "$_edit_file"
+            local _editor="${VISUAL:-${EDITOR:-nano}}"
+            if $_editor "$_edit_file" </dev/tty >/dev/tty 2>&1; then
+              human_block="$(cat "$_edit_file")"
+              rm -f "$_edit_file"
+              echo "- (edited via $_editor)" >&2
+            else
+              echo "- (edit cancelled)" >&2
+            fi
+            continue
+          fi
           human_block+="${_hl}"$'\n'
         done
         if [[ -z "${human_block//[$' \t\n']/}" ]]; then

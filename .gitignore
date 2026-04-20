@@ -9,8 +9,8 @@
 /PLAN.md
 /PLAN*.md
 /HUMAN_ACTION_REQUIRED.md
-ralph-dashboard/__pycache__/
 /dashboard.orch.json
 .agents
 /.opencode
 /.playwright-mcp
+__pycache__

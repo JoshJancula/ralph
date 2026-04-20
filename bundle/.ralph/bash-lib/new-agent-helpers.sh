@@ -40,6 +40,8 @@ confirm_overwrite_all() {
   agent_dir_nonempty "$CURSOR_DIR" && echo "  - $CURSOR_DIR"
   [[ "$SCAFFOLD_CLAUDE" -eq 1 ]] && agent_dir_nonempty "$CLAUDE_DIR" && echo "  - $CLAUDE_DIR"
   [[ "$SCAFFOLD_CODEX" -eq 1 ]] && agent_dir_nonempty "$CODEX_DIR" && echo "  - $CODEX_DIR"
+  # This stays bespoke (not using ralph_prompt_yesno) because it's a destructive
+  # confirmation prompt that should fail safe (no default) and abort immediately.
   read -rp "Overwrite all of the above? Existing scaffolding will be removed. [y/N]: " confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Aborting without changes."

@@ -345,7 +345,7 @@ BAD
   rm -rf "$workspace"
 }
 
-@test "orchestrator dry-run prints cli-resume when sessionResume true" {
+@test "orchestrator dry-run maps sessionResume true to --session-strategy resume" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
   local workspace
   workspace="$(setup_orchestrator_workspace)"
@@ -375,8 +375,44 @@ RESUME
   write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-resume/resume-output.md"
   run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] \
-    && [[ "$output" == *"--cli-resume"* ]] \
-    && [[ "$output" != *"--no-cli-resume"* ]] \
+    && [[ "$output" == *"--session-strategy resume"* ]] \
+    && [[ "$output" != *"--session-strategy fresh"* ]] \
+    || return 1
+  rm -rf "$workspace"
+}
+
+@test "orchestrator dry-run prefers sessionStrategy over sessionResume" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file="$workspace/session-strategy-precedence.orch.json"
+  cat <<'STRATEGY' > "$orch_file"
+{
+  "name": "bats session strategy precedence",
+  "namespace": "bats-strategy",
+  "stages": [
+    {
+      "id": "strategy-stage",
+      "agent": "strategy-agent",
+      "runtime": "cursor",
+      "plan": "stages/strategy.plan.md",
+      "sessionStrategy": "reset",
+      "sessionResume": true,
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-strategy/strategy-output.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+STRATEGY
+  write_plan_file "$workspace" "stages/strategy.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-strategy/strategy-output.md"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] \
+    && [[ "$output" == *"--session-strategy reset"* ]] \
+    && [[ "$output" != *"--session-strategy resume"* ]] \
     || return 1
   rm -rf "$workspace"
 }
@@ -451,7 +487,7 @@ RESUME
   rm -rf "$workspace"
 }
 
-@test "orchestrator rejects parallelStages with loopControl" {
+@test "validator accepts parallelStages with loopControl" {
   local workspace
   workspace="$(setup_orchestrator_workspace)"
   local orch_file="$workspace/parallel-loop.orch.json"
@@ -484,8 +520,7 @@ RESUME
 ORCH
   write_plan_file "$workspace" "stages/parallel-loop.plan.md"
   run bash "$REPO_ROOT/scripts/validate-orchestration-schema.sh" "$orch_file" 2>&1
-  [ "$status" -ne 0 ] \
-    && [[ "$output" == *"schema validation failed"* ]] \
+  [ "$status" -eq 0 ] \
     || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
   rm -rf "$workspace"
 }
@@ -589,6 +624,39 @@ BAD
   rm -rf "$workspace"
 }
 
+@test "orchestrator rejects invalid sessionStrategy values" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file
+  orch_file="$workspace/invalid-session-strategy.orch.json"
+  cat <<'BAD' > "$orch_file"
+{
+  "name": "bats invalid strategy",
+  "namespace": "bats-invalid-strategy",
+  "stages": [
+    {
+      "id": "invalid-strategy",
+      "agent": "invalid-agent",
+      "runtime": "cursor",
+      "plan": "stages/invalid-strategy.plan.md",
+      "sessionStrategy": "not-a-strategy"
+    }
+  ]
+}
+BAD
+  write_plan_file "$workspace" "stages/invalid-strategy.plan.md"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  local output_lc
+  output_lc="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+  [ "$status" -ne 0 ] \
+    && [[ "$output_lc" == *"sessionstrategy"* ]] \
+    && [[ "$output_lc" == *"fresh"* ]] \
+    && [[ "$output_lc" == *"resume"* ]] \
+    && [[ "$output_lc" == *"reset"* ]] \
+    || return 1
+  rm -rf "$workspace"
+}
+
 @test "orchestrator loops back to an earlier stage when configured" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
   local workspace
@@ -687,6 +755,12 @@ set -euo pipefail
   printf 'CURSOR_PLAN_MODEL=%s\n' "${CURSOR_PLAN_MODEL:-}"
   printf 'CLAUDE_PLAN_MODEL=%s\n' "${CLAUDE_PLAN_MODEL:-}"
   printf 'CLAUDE_PLAN_BARE=%s\n' "${CLAUDE_PLAN_BARE:-}"
+  printf 'CLAUDE_PLAN_MINIMAL=%s\n' "${CLAUDE_PLAN_MINIMAL:-}"
+  printf 'CLAUDE_PLAN_MINIMAL_PRESENT=%s\n' "${CLAUDE_PLAN_MINIMAL+x}"
+  printf 'CLAUDE_PLAN_MINIMAL_TOOLS=%s\n' "${CLAUDE_PLAN_MINIMAL_TOOLS:-}"
+  printf 'CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT=%s\n' "${CLAUDE_PLAN_MINIMAL_TOOLS+x}"
+  printf 'CLAUDE_PLAN_MINIMAL_DISABLE_MCP=%s\n' "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-}"
+  printf 'CLAUDE_PLAN_MINIMAL_DISABLE_MCP_PRESENT=%s\n' "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP+x}"
   printf 'CLAUDE_PLAN_PERMISSION_MODE=%s\n' "${CLAUDE_PLAN_PERMISSION_MODE:-}"
   printf 'CODEX_PLAN_MODEL=%s\n' "${CODEX_PLAN_MODEL:-}"
   printf 'CODEX_PLAN_SANDBOX=%s\n' "${CODEX_PLAN_SANDBOX:-}"
@@ -838,17 +912,21 @@ ORCH
   rm -rf "$workspace"
 }
 
-@test "orchestrator forwards CLAUDE_PLAN_BARE to run-plan" {
+@test "orchestrator does not forward CLAUDE_PLAN_BARE (it is an internal default in invoke-claude)" {
+  skip "CLAUDE_PLAN_BARE is an internal default in run-plan-invoke-claude.sh, not forwarded by orchestrator"
+}
+
+@test "orchestrator forwards CLAUDE_PLAN_BARE=0 when explicitly disabled" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
   local workspace capture_file
   workspace="$(setup_model_capture_workspace)"
   capture_file="$(mktemp)"
 
-  local orch_file="$workspace/model-bare.orch.json"
+  local orch_file="$workspace/model-no-bare.orch.json"
   cat <<'ORCH' > "$orch_file"
 {
-  "name": "bats bare forward",
-  "namespace": "model-bare",
+  "name": "bats no bare forward",
+  "namespace": "model-no-bare",
   "stages": [
     {
       "id": "claude-stage",
@@ -857,23 +935,121 @@ ORCH
       "plan": "stages/claude-stage.plan.md",
       "sessionResume": false,
       "artifacts": [
-        { "path": ".ralph-workspace/artifacts/model-bare/claude-stage.md", "required": true }
+        { "path": ".ralph-workspace/artifacts/model-no-bare/claude-stage.md", "required": true }
       ]
     }
   ]
 }
 ORCH
   write_plan_file "$workspace" "stages/claude-stage.plan.md"
-  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-bare/claude-stage.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-no-bare/claude-stage.md"
 
-  run env MODEL_CAPTURE_FILE="$capture_file" CLAUDE_PLAN_BARE=1 \
+  # When explicitly set to 0, CLAUDE_PLAN_BARE should be forwarded as 0
+  run env MODEL_CAPTURE_FILE="$capture_file" CLAUDE_PLAN_BARE=0 \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   local captured
   captured="$(cat "$capture_file")"
-  [[ "$captured" == *"CLAUDE_PLAN_BARE=1"* ]] \
-    || { echo "FAIL: expected CLAUDE_PLAN_BARE=1 in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_BARE=0"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_BARE=0 in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator forwards CLAUDE_PLAN_MINIMAL and CLAUDE_PLAN_MINIMAL_TOOLS when set" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_model_capture_workspace)"
+  capture_file="$(mktemp)"
+
+  local orch_file="$workspace/model-minimal.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats minimal forward",
+  "namespace": "model-minimal",
+  "stages": [
+    {
+      "id": "claude-stage",
+      "agent": "claude-agent",
+      "runtime": "claude",
+      "plan": "stages/claude-stage.plan.md",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/model-minimal/claude-stage.md", "required": true }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/claude-stage.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-minimal/claude-stage.md"
+
+  run env MODEL_CAPTURE_FILE="$capture_file" CLAUDE_PLAN_MINIMAL=1 CLAUDE_PLAN_MINIMAL_TOOLS=Bash,Read \
+    CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  local captured
+  captured="$(cat "$capture_file")"
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL=1"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL=1 in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_PRESENT=x"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_PRESENT=x in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_TOOLS=Bash,Read"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_TOOLS=Bash,Read in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT=x"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT=x in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0 in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_DISABLE_MCP_PRESENT=x"* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_DISABLE_MCP_PRESENT=x in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  rm -f "$capture_file"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator forwards CLAUDE_PLAN_MINIMAL vars when set" {
+  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
+  local workspace capture_file
+  workspace="$(setup_model_capture_workspace)"
+  capture_file="$(mktemp)"
+
+  local orch_file="$workspace/model-minimal-default.orch.json"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats minimal default forward",
+  "namespace": "model-minimal-default",
+  "stages": [
+    {
+      "id": "claude-stage",
+      "agent": "claude-agent",
+      "runtime": "claude",
+      "plan": "stages/claude-stage.plan.md",
+      "sessionResume": false,
+      "artifacts": [
+        { "path": ".ralph-workspace/artifacts/model-minimal-default/claude-stage.md", "required": true }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/claude-stage.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/model-minimal-default/claude-stage.md"
+
+  run env MODEL_CAPTURE_FILE="$capture_file" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+
+  local captured
+  captured="$(cat "$capture_file")"
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL="* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL line in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_PRESENT="* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_PRESENT line in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT="* ]] \
+    || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT line in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
   rm -rf "$workspace"

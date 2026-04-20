@@ -23,10 +23,13 @@ run_plan_invoke_common_add_model_flag() {
 run_plan_invoke_common_add_resume_args() {
   local args_name="$1"
   local session_fn="$2"
-  local bare_fn="$3"
-  local warn_fn="$4"
+  local new_fn="$3"
+  local bare_fn="$4"
+  local warn_fn="$5"
 
-  if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+  if [[ -n "${RALPH_RUN_PLAN_NEW_SESSION_ID:-}" ]]; then
+    "$new_fn" "$args_name"
+  elif [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
     "$session_fn" "$args_name"
   elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
     if [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then

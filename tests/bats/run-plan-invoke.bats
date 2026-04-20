@@ -41,7 +41,9 @@ setup() {
   unset RALPH_RUN_PLAN_RESUME_BARE
   unset RALPH_PLAN_CLI_RESUME
   unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+  unset RALPH_RUN_PLAN_RESET_COMMAND_USED
   unset PREBUILT_AGENT
+  unset CLAUDE_PLAN_MINIMAL_DISABLE_MCP
 }
 
 teardown() {
@@ -136,7 +138,249 @@ EOF
   [ "$(cat "$stdin_cap")" = "claude-prompt" ]
 }
 
-@test "claude invoke helper appends --bare when CLAUDE_PLAN_BARE is enabled" {
+@test "claude minimal mode helper appends auth-safe flags in order" {
+  local -a args=()
+
+  run_plan_invoke_claude_apply_minimal_flags args
+
+  [ "${#args[@]}" -eq 8 ]
+  [ "${args[0]}" = "--disable-slash-commands" ]
+  [ "${args[1]}" = "--strict-mcp-config" ]
+  [ "${args[2]}" = "--mcp-config" ]
+  [ "${args[3]}" = '{"mcpServers":{}}' ]
+  [ "${args[4]}" = "--setting-sources" ]
+  [ "${args[5]}" = "project,local" ]
+  [ "${args[6]}" = "--tools" ]
+  [ "${args[7]}" = "Bash,Read,Edit,Write" ]
+
+  local -a override_args=()
+  CLAUDE_PLAN_MINIMAL_TOOLS="Bash,Read"
+  run_plan_invoke_claude_apply_minimal_flags override_args
+
+  [ "${#override_args[@]}" -eq 8 ]
+  [ "${override_args[0]}" = "--disable-slash-commands" ]
+  [ "${override_args[1]}" = "--strict-mcp-config" ]
+  [ "${override_args[2]}" = "--mcp-config" ]
+  [ "${override_args[3]}" = '{"mcpServers":{}}' ]
+  [ "${override_args[4]}" = "--setting-sources" ]
+  [ "${override_args[5]}" = "project,local" ]
+  [ "${override_args[6]}" = "--tools" ]
+  [ "${override_args[7]}" = "Bash,Read" ]
+
+  unset CLAUDE_PLAN_MINIMAL_TOOLS
+  local -a reset_args=()
+  RALPH_RUN_PLAN_RESET_COMMAND_USED=1
+  run_plan_invoke_claude_apply_minimal_flags reset_args
+  unset RALPH_RUN_PLAN_RESET_COMMAND_USED
+
+  [ "${#reset_args[@]}" -eq 7 ]
+  [ "${reset_args[0]}" = "--strict-mcp-config" ]
+  [ "${reset_args[1]}" = "--mcp-config" ]
+  [ "${reset_args[2]}" = '{"mcpServers":{}}' ]
+  [ "${reset_args[3]}" = "--setting-sources" ]
+  [ "${reset_args[4]}" = "project,local" ]
+  [ "${reset_args[5]}" = "--tools" ]
+  [ "${reset_args[6]}" = "Bash,Read,Edit,Write" ]
+}
+
+@test "claude minimal mode validator normalizes accepted values" {
+  unset CLAUDE_PLAN_MINIMAL
+
+  run_plan_invoke_claude_minimal_mode_validate
+  [ "$?" -eq 0 ]
+  [ "$CLAUDE_PLAN_MINIMAL" = "1" ]
+
+  local case_value expected_value
+  for case_value in true yes on 0 false no off; do
+    case "$case_value" in
+      true|yes|on) expected_value=1 ;;
+      0|false|no|off) expected_value=0 ;;
+    esac
+    CLAUDE_PLAN_MINIMAL="$case_value"
+    run_plan_invoke_claude_minimal_mode_validate
+    [ "$?" -eq 0 ]
+    [ "$CLAUDE_PLAN_MINIMAL" = "$expected_value" ]
+  done
+}
+
+@test "claude minimal mode validator rejects invalid values" {
+  CLAUDE_PLAN_MINIMAL="garbage"
+
+  run run_plan_invoke_claude_minimal_mode_validate
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Error: CLAUDE_PLAN_MINIMAL must be one of 1, true, yes, on, 0, false, no, or off."* ]]
+}
+
+@test "claude minimal MCP lockdown validator rejects invalid values" {
+  CLAUDE_PLAN_MINIMAL_DISABLE_MCP="garbage"
+
+  run run_plan_invoke_claude_minimal_mcp_lockdown_validate
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Error: CLAUDE_PLAN_MINIMAL_DISABLE_MCP must be one of 1, true, yes, on, 0, false, no, or off."* ]]
+}
+
+@test "claude invoke helper appends minimal flags by default" {
+  local record="$TEST_TMPDIR/claude-minimal-default.args"
+  local stdin_cap="$TEST_TMPDIR/claude-minimal-default.stdin"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+cat >"$stdin_cap"
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="claude-minimal-prompt"
+  export PROMPT
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" == *"--disable-slash-commands"* ]]
+  [[ "$captured" == *"--strict-mcp-config"* ]]
+  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+  [[ "$captured" == *"--setting-sources"* ]]
+  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"--tools"* ]]
+  [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
+  [[ "$captured" != *"--bare"* ]]
+  [ "$(cat "$stdin_cap")" = "claude-minimal-prompt" ]
+}
+
+@test "claude invoke helper omits MCP lockdown in minimal mode when CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0" {
+  local record="$TEST_TMPDIR/claude-minimal-allow-mcp.args"
+  local stdin_cap="$TEST_TMPDIR/claude-minimal-allow-mcp.stdin"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+cat >"$stdin_cap"
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="claude-minimal-allow-mcp-prompt"
+  export PROMPT
+  CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" == *"--disable-slash-commands"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+  [[ "$captured" == *"--setting-sources"* ]]
+  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"--tools"* ]]
+  [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
+  [ "$(cat "$stdin_cap")" = "claude-minimal-allow-mcp-prompt" ]
+}
+
+@test "claude invoke helper leaves slash commands enabled when reset command is used" {
+  local record="$TEST_TMPDIR/claude-minimal-reset.args"
+  local stdin_cap="$TEST_TMPDIR/claude-minimal-reset.stdin"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+cat >"$stdin_cap"
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="/clear
+
+claude-minimal-reset-prompt"
+  export PROMPT
+  RALPH_RUN_PLAN_RESET_COMMAND_USED=1
+  export RALPH_RUN_PLAN_RESET_COMMAND_USED
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--disable-slash-commands"* ]]
+  [[ "$captured" == *"--strict-mcp-config"* ]]
+  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+  [[ "$captured" == *"--setting-sources"* ]]
+  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"--tools"* ]]
+  [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
+  [ "$(cat "$stdin_cap")" = "$PROMPT" ]
+}
+
+@test "claude invoke helper reset mode omits MCP lockdown when CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0" {
+  local record="$TEST_TMPDIR/claude-minimal-reset-allow-mcp.args"
+  local stdin_cap="$TEST_TMPDIR/claude-minimal-reset-allow-mcp.stdin"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+cat >"$stdin_cap"
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="/clear
+
+claude-minimal-reset-allow-mcp-prompt"
+  export PROMPT
+  RALPH_RUN_PLAN_RESET_COMMAND_USED=1
+  export RALPH_RUN_PLAN_RESET_COMMAND_USED
+  CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--disable-slash-commands"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+  [[ "$captured" == *"--setting-sources"* ]]
+  [[ "$captured" == *"--tools"* ]]
+  [ "$(cat "$stdin_cap")" = "$PROMPT" ]
+}
+
+@test "claude invoke helper omits --bare when CLAUDE_PLAN_BARE=0" {
+  local record="$TEST_TMPDIR/claude-no-bare.args"
+  local stdin_cap="$TEST_TMPDIR/claude-no-bare.stdin"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+cat >"$stdin_cap"
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="claude-no-bare-prompt"
+  export PROMPT
+  CLAUDE_PLAN_BARE=0
+  CLAUDE_PLAN_MINIMAL=0
+  export CLAUDE_PLAN_BARE
+  export CLAUDE_PLAN_MINIMAL
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--bare"* ]]
+  [[ "$captured" != *"--disable-slash-commands"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+  [[ "$captured" != *"--setting-sources"* ]]
+  [[ "$captured" != *"--tools"* ]]
+  [ "$(cat "$stdin_cap")" = "claude-no-bare-prompt" ]
+}
+
+@test "claude invoke helper appends --bare when CLAUDE_PLAN_BARE=1" {
   local record="$TEST_TMPDIR/claude-bare.args"
   local stdin_cap="$TEST_TMPDIR/claude-bare.stdin"
   cat <<EOF >"$BIN_DIR/claude"
@@ -158,7 +402,110 @@ EOF
   local captured
   captured="$(cat "$record")"
   [[ "$captured" == *"--bare"* ]]
+  [[ "$captured" != *"--disable-slash-commands"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+  [[ "$captured" != *"--setting-sources"* ]]
+  [[ "$captured" != *"--tools"* ]]
   [ "$(cat "$stdin_cap")" = "claude-bare-prompt" ]
+}
+
+@test "claude invoke helper retries with minimal flags on Not logged in" {
+  local first_record="$TEST_TMPDIR/claude-retry-first.args"
+  local second_record="$TEST_TMPDIR/claude-retry-second.args"
+  local call_count="$TEST_TMPDIR/claude-retry-count"
+  export CLAUDE_RETRY_FIRST="$first_record"
+  export CLAUDE_RETRY_SECOND="$second_record"
+  export CLAUDE_RETRY_COUNT="$call_count"
+  cat <<'EOF' >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+count=0
+if [[ -f "$CLAUDE_RETRY_COUNT" ]]; then
+  count="$(cat "$CLAUDE_RETRY_COUNT")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$CLAUDE_RETRY_COUNT"
+
+if [[ "$count" -eq 1 ]]; then
+  printf '%s\n' "$@" >>"$CLAUDE_RETRY_FIRST"
+  echo "Not logged in - Please run /login"
+  exit 1
+fi
+
+printf '%s\n' "$@" >>"$CLAUDE_RETRY_SECOND"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="claude-retry-prompt"
+  export PROMPT
+  CLAUDE_PLAN_BARE=1
+  export CLAUDE_PLAN_BARE
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$first_record" ]
+  [ -s "$second_record" ]
+  [ "$(cat "$call_count")" = "2" ]
+
+  local first_captured second_captured
+  first_captured="$(cat "$first_record")"
+  second_captured="$(cat "$second_record")"
+  [[ "$first_captured" == *"--bare"* ]]
+  [[ "$first_captured" != *"--disable-slash-commands"* ]]
+  [[ "$first_captured" != *"--strict-mcp-config"* ]]
+  [[ "$first_captured" != *"--mcp-config"* ]]
+  [[ "$first_captured" != *"--setting-sources"* ]]
+  [[ "$first_captured" != *"--tools"* ]]
+  [[ "$second_captured" != *"--bare"* ]]
+  [[ "$second_captured" == *"--disable-slash-commands"* ]]
+  [[ "$second_captured" == *"--strict-mcp-config"* ]]
+  [[ "$second_captured" == *"--mcp-config"* ]]
+  [[ "$second_captured" == *'{"mcpServers":{}}'* ]]
+  [[ "$second_captured" == *"--setting-sources"* ]]
+  [[ "$second_captured" == *"project,local"* ]]
+  [[ "$second_captured" == *"--tools"* ]]
+  [[ "$second_captured" == *"Bash,Read,Edit,Write"* ]]
+  [[ "$output" == *"Retrying once with CLAUDE_PLAN_MINIMAL=1"* ]]
+}
+
+@test "claude invoke helper does not retry when bare is already off" {
+  local record="$TEST_TMPDIR/claude-no-retry.args"
+  local call_count="$TEST_TMPDIR/claude-no-retry-count"
+  export CLAUDE_NO_RETRY_RECORD="$record"
+  export CLAUDE_NO_RETRY_COUNT="$call_count"
+  cat <<'EOF' >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+count=0
+if [[ -f "$CLAUDE_NO_RETRY_COUNT" ]]; then
+  count="$(cat "$CLAUDE_NO_RETRY_COUNT")"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$CLAUDE_NO_RETRY_COUNT"
+printf '%s\n' "$@" >>"$CLAUDE_NO_RETRY_RECORD"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/claude"
+
+  PROMPT="claude-no-retry-prompt"
+  export PROMPT
+  CLAUDE_PLAN_BARE=0
+  export CLAUDE_PLAN_BARE
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ "$(cat "$call_count")" = "1" ]
+  [ -s "$record" ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--bare"* ]]
+  [[ "$captured" == *"--disable-slash-commands"* ]]
+  [[ "$captured" == *"--strict-mcp-config"* ]]
+  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" == *"--setting-sources"* ]]
+  [[ "$captured" == *"--tools"* ]]
+  [[ "$output" != *"Retrying once with CLAUDE_PLAN_MINIMAL=1"* ]]
 }
 
 @test "claude invoke helper appends --permission-mode when CLAUDE_PLAN_PERMISSION_MODE is set" {
@@ -342,6 +689,25 @@ EOF
   grep -Fxq -- "--model" "$record"
   grep -Fxq -- "anthropic/claude-sonnet-4-6" "$record"
   grep -Fxq -- "opencode-prompt" "$record"
+}
+
+@test "opencode invoke helper adds --continue for bare resume when unsafe allowed" {
+  local record="$TEST_TMPDIR/opencode-bare.args"
+  write_stub_script "opencode" "$record"
+
+  PROMPT="opencode-bare-prompt"
+  export PROMPT
+  export RALPH_RUN_PLAN_RESUME_BARE=1
+  export RALPH_PLAN_ALLOW_UNSAFE_RESUME=1
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+
+  run ralph_run_plan_invoke_opencode
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  grep -Fxq -- "run" "$record"
+  grep -Fxq -- "--continue" "$record"
+  grep -Fxq -- "opencode-bare-prompt" "$record"
 }
 
 @test "cursor bare resume passes --resume and --continue when unsafe allowed" {

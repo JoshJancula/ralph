@@ -46,9 +46,18 @@ ralph_menu_select() {
     default_idx=1
   fi
 
-  local raw
+  local raw idx=1
+  printf '\n' >&2
+  for choice in "${choices[@]}"; do
+    printf '  %s%2d)%s %s\n' "${C_G:-}" "$idx" "${C_RST:-}" "$choice" >&2
+    idx=$((idx + 1))
+  done
   printf '%s' "${C_Y:-}${C_BOLD:-}${prompt}${C_RST:-} ${C_DIM:-}[${default_idx}]${C_RST:-}: " >&2
-  read -r raw </dev/tty 2>/dev/null || raw=""
+  if [[ -t 0 && -r /dev/tty ]]; then
+    read -r raw </dev/tty 2>/dev/null || raw=""
+  else
+    read -r raw || raw=""
+  fi
   raw="${raw:-$default_idx}"
 
   if ! [[ "$raw" =~ ^[0-9]+$ ]]; then

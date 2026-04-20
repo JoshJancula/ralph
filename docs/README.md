@@ -30,17 +30,20 @@ Pick what matches what you are doing. You can read them in any order.
 
 ## CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude prebuilt agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude prebuilt agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
 
 **Enable CLI session resume (pick one):**
 
+- Set `RALPH_PLAN_SESSION_STRATEGY=resume` (or `reset`) before running `.ralph/run-plan.sh`, or pass `--session-strategy resume|reset`.
 - Set `RALPH_PLAN_CLI_RESUME=1` before running `.ralph/run-plan.sh`.
 - Pass `--cli-resume` to the runner command.
 - Answer `yes` when the interactive prompt appears (TTY-attached runs ask unless `RALPH_PLAN_CLI_RESUME`, `--cli-resume`, or `--no-cli-resume` is already provided).
 
+`reset` mode reuses the session ID but prefixes each TODO prompt with a reset command when configured (Claude defaults to `/clear`). Override with `RALPH_PLAN_RESET_COMMAND` globally or `RALPH_PLAN_RESET_COMMAND_<RUNTIME>` per runtime.
+
 **Storage and prerequisites:**
 
-- `session-id.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`, so restarts always read the newest ID for that namespace when they resume.
+- `session-id.<runtime>.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`, so restarts always read the newest ID for that runtime when they resume.
 - Python 3 is required for `.ralph/bash-lib/run-plan-cli-json-demux.py`, the helper that extracts the session ID from the CLI’s JSON demux output. If Python 3 is unavailable, CLI resume is skipped and the plan starts from a fresh session.
 
 **Optional unsafe bare resume:**
@@ -48,5 +51,5 @@ Out-of-process restarts and operator-driven re-invocations can pick up the most 
 In CI or isolated workflows where you trust there will be no session mix-up, you can resume without a stored ID:
 
 - Set `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` or pass `--allow-unsafe-resume` when running `.ralph/run-plan.sh`.
-- The runner attempts to resume without consulting `.ralph-workspace/sessions/.../session-id.txt` (e.g., Codex `--last` semantics).
+- The runner attempts to resume without consulting `.ralph-workspace/sessions/.../session-id.<runtime>.txt` (e.g., Codex `--last` semantics).
 - **Warning:** Bare resume without a session ID may attach to the wrong session on a shared box; prefer stored session files when possible.

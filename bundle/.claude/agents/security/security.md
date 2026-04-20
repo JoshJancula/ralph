@@ -1,7 +1,7 @@
 ---
 name: security
 description: Reviews changed code scanning for security vulnerabilities. Writes security.md summarizing findings and blocking issues.
-model: claude-sonnet-4-6
+model: claude-haiku-4-5
 tools:
   - Read
   - Edit

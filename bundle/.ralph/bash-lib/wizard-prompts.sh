@@ -2,14 +2,19 @@
 # Wizard prompt helpers shared by orchestration-wizard.sh.
 #
 # Public interface (selection and I/O helpers):
+#   ralph_menu_select -- menu selection helper from menu-select.sh.
 #   runtime_default, agent_default, artifact_file_for_stage, agent_dir_for_runtime -- defaults per stage/runtime.
 #   ralph_internal_wizard_sanitize, list_agents, escape_sed, escape_json -- string and agent listing utilities.
 #   read_pipeline_info, read_stages, choose_stage_id_from_list -- wizard flow state.
 #   select_runtime, pick_model_for_runtime, select_model_override, select_agent, agent_model_default -- picks.
 #   print_info, print_hint, print_step, offer_prompt_execution -- TTY messaging and optional run hint.
 
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/menu-select.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/menu-select.sh"
+
 default_stages=("research" "architecture" "implementation" "code-review" "qa")
-pipeline_resume_all_stages="false"
+pipeline_session_strategy_default="fresh"
+pipeline_session_strategy_all_stages="true"
 
 runtime_default() {
   case "$1" in
@@ -99,51 +104,66 @@ escape_sed() {
 
 read_pipeline_info() {
   local name default_ns ns
-  read -rp "Pipeline name (human-friendly): " name
+  name="$(ralph_prompt_text "Pipeline name (human-friendly)")"
   [[ -n "$name" ]] || ralph_die "Pipeline name is required"
   default_ns="$(ralph_internal_wizard_sanitize "$name")"
   [[ -n "$default_ns" ]] || default_ns="pipeline"
-  read -rp "Namespace [default $default_ns]: " ns
-  ns="${ns:-$default_ns}"
+  ns="$(ralph_prompt_text "Namespace" "$default_ns")"
   ns="$(ralph_internal_wizard_sanitize "$ns")"
   [[ -n "$ns" ]] || ralph_die "Namespace cannot be empty after sanitization"
   pipeline_name="$name"
   namespace="$ns"
   pipeline_description_default="Multi-stage pipeline for $pipeline_name"
-  read -rp "Description [default $pipeline_description_default]: " description_input
-  pipeline_description="${description_input:-$pipeline_description_default}"
-  print_hint "Session resume keeps the same CLI session across all stages."
-  print_hint "It is strongly recommended for Claude stages because it reuses the prompt cache and can substantially reduce token cost."
-  print_hint "Session resume requires Python 3 on PATH."
-  read -rp "Enable session resume for all stages? (y/N) " session_resume_input
-  session_resume_input="${session_resume_input:-N}"
-  if [[ "$session_resume_input" =~ ^[Yy] ]]; then
-    pipeline_resume_all_stages="true"
-  else
-    pipeline_resume_all_stages="false"
+  description_input="$(ralph_prompt_text "Description" "$pipeline_description_default")"
+  pipeline_description="$description_input"
+  print_hint "Session strategy controls per-stage CLI session behavior."
+  print_hint "fresh (default) = strict isolation, resume = continue context, reset = reuse session id with reset-oriented prompts."
+  print_hint "resume/reset rely on Python 3 for robust session-id capture."
+  pipeline_session_strategy_default="$(ralph_menu_select --prompt "Default session strategy" --default 1 -- "fresh" "resume" "reset")"
+  if [[ "$pipeline_session_strategy_default" != "fresh" ]]; then
+    print_hint "resume/reset can lower token cost on short iterative stage plans."
   fi
-  if [[ "$pipeline_resume_all_stages" != "true" ]]; then
-    print_hint "You can enable session resume per stage while configuring each stage."
+  session_strategy_scope_input="$(ralph_prompt_yesno "Use this session strategy for all stages" "y")"
+  if [[ "$session_strategy_scope_input" == "y" ]]; then
+    pipeline_session_strategy_all_stages="true"
+  else
+    pipeline_session_strategy_all_stages="false"
+    print_hint "You can override session strategy per stage during stage configuration."
   fi
 }
 
 read_stages() {
-  local input default_list raw
-  default_list="${default_stages[*]}"
-  read -rp "Stages (comma-separated, default $default_list): " input
+  local default_csv known_csv
+  # Build comma-separated default and known lists
+  default_csv=""
+  known_csv=""
+  local IFS=','
+  default_csv="${default_stages[*]}"
+  known_csv="${default_stages[*]}"
+  unset IFS
+  
+  local result
+  result="$(ralph_prompt_list "Stages" "$default_csv" "$known_csv" "1")"
+  
   selected_stages=()
-  if [[ -z "$input" ]]; then
-    selected_stages=("${default_stages[@]}")
+  if [[ -z "$result" ]]; then
     return
   fi
-  local IFS=,
-  for raw in $input; do
-    raw="$(echo "$raw" | tr -d '[:space:]')"
+  
+  local IFS=','
+  for raw in $result; do
     [[ -n "$raw" ]] || continue
     selected_stages+=("$raw")
   done
+  unset IFS
 }
 
+# choose_stage_id_from_list -- specialized stage picker for loop targets.
+# This stays bespoke (not using ralph_menu_select) because it supports:
+#   - Empty/none selection via allow_empty parameter
+#   - Both numeric indices and stage name matching
+#   - Custom display with stage listing
+#   - Zero/none as valid selection options for loop back-to targets
 choose_stage_id_from_list() {
   local prompt="$1"
   local allow_empty="${2:-0}"
@@ -198,25 +218,15 @@ select_runtime() {
   local stage="$1"
   local default
   default="$(runtime_default "$stage")"
-  local runtime options idx=1 default_index=1 choice
+  local runtime options idx=1 default_index=1
   options=("cursor" "claude" "codex" "opencode")
-  printf 'Available runtimes:\n' >&2
   for opt in "${options[@]}"; do
     if [[ "$opt" == "$default" ]]; then
       default_index="$idx"
     fi
-    printf '  %d) %s\n' "$idx" "$opt" >&2
     idx=$((idx + 1))
   done
-  while true; do
-    read -rp "Runtime for \"$stage\" [default $default_index, input number selection]: " choice
-    choice="${choice:-$default_index}"
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
-      runtime="${options[$((choice - 1))]}"
-      break
-    fi
-    echo "Invalid selection. Enter a number from 1 to ${#options[@]}." >&2
-  done
+  runtime="$(ralph_menu_select --prompt "runtime for \"$stage\"" --default "$default_index" -- "${options[@]}")"
   printf '%s' "$runtime"
 }
 
@@ -252,32 +262,19 @@ select_model_override() {
   local model_default="${3:-}"
   local choice picked_model
 
-  echo "Model override for \"$agent\":" >&2
+  local option1="use agent default"
   if [[ -n "$model_default" ]]; then
-    echo "  1) No override (use agent default: $model_default)" >&2
-  else
-    echo "  1) No override (use agent default)" >&2
+    option1="use agent default ($model_default)"
   fi
-  echo "  2) Pick model from list" >&2
 
-  while true; do
-    read -rp "Select option [1]: " choice
-    choice="${choice:-1}"
-    case "$choice" in
-      1)
-        printf ''
-        return
-        ;;
-      2)
-        picked_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
-        printf '%s' "$picked_model"
-        return
-        ;;
-      *)
-        echo "Invalid selection. Enter 1 or 2." >&2
-        ;;
-    esac
-  done
+  choice="$(ralph_menu_select --prompt "model for \"$agent\"" --default 1 -- "$option1" "pick from list")"
+
+  if [[ "$choice" == "pick from list" ]]; then
+    picked_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
+    printf '%s' "$picked_model"
+  else
+    printf '%s' "$model_default"
+  fi
 }
 
 select_agent() {
@@ -292,46 +289,28 @@ select_agent() {
     agents+=("$line")
   done < <(list_agents "$runtime")
 
-  printf 'Available %s agents:\n' "$runtime" >&2
-  local idx=1
+  local options=()
   local default_index=1
   local agent
   if [[ ${#agents[@]} -gt 0 ]]; then
     for agent in "${agents[@]}"; do
-      [[ "$agent" == "$default" ]] && default_index="$idx"
-      printf '  %2d) %s\n' "$idx" "$agent" >&2
-      idx=$((idx + 1))
+      [[ "$agent" == "$default" ]] && default_index="$((${#options[@]} + 1))"
+      options+=("$agent")
     done
-  else
-    echo "  (no prebuilt agents found)" >&2
   fi
-  local custom_index="$idx"
-  printf '  %2d) custom\n' "$custom_index" >&2
-  echo "Pick custom to use runtime defaults and choose a model." >&2
+  options+=("custom")
 
-  local answer
-  while true; do
-    read -rp "Select existing agent number [default $default_index]: " answer
-    answer="${answer:-$default_index}"
-    if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer == custom_index )); then
-      local custom_model
-      custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
-      printf '%s\t1\t%s' "custom" "$custom_model"
-      return
-    fi
-    if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= ${#agents[@]} )); then
-      printf '%s\t0\t' "${agents[$((answer - 1))]}"
-      return
-    fi
-    answer="$(ralph_internal_wizard_sanitize "$answer")"
-    if [[ "$answer" == "custom" ]]; then
-      local custom_model
-      custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
-      printf '%s\t1\t%s' "custom" "$custom_model"
-      return
-    fi
-    echo "Invalid selection. Enter a listed number or 'custom'." >&2
-  done
+  local selected
+  selected="$(ralph_menu_select --prompt "agent for \"$stage\"" --default "$default_index" -- "${options[@]}")"
+
+  if [[ "$selected" == "custom" ]]; then
+    local custom_model
+    custom_model="$(pick_model_for_runtime "$runtime" | tr -d '\n')"
+    printf '%s\t1\t%s' "custom" "$custom_model"
+    return
+  fi
+
+  printf '%s\t0\t' "$selected"
 }
 
 agent_model_default() {
@@ -394,8 +373,8 @@ offer_prompt_execution() {
     return
   fi
   local answer
-  read -rp "Execute the generated prompt now to populate these stage plans? (y/N): " answer
-  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+  answer="$(ralph_prompt_yesno "Execute the generated prompt now to populate these stage plans" "n")"
+  if [[ "$answer" == "n" ]]; then
     return
   fi
 
@@ -483,14 +462,11 @@ EOF
 }
 
 # Prompts the user to configure handoff declarations between stages.
-
-# Prompts the user to configure handoff declarations between stages.
 # Populates: stage_handoff_targets, stage_handoff_kinds
 configure_handoff_declarations() {
   local stage_count=${#stages[@]}
   
-  read -rp "Configure handoffs between stages? (y/N) " handoff_prompt_response
-  handoff_prompt_response="${handoff_prompt_response:-N}"
+  handoff_prompt_response="$(ralph_prompt_yesno "Configure handoffs between stages" "n")"
   
   if [[ ! "$handoff_prompt_response" =~ ^[Yy] ]]; then
     print_info "Skipping handoff configuration."
@@ -516,17 +492,15 @@ configure_handoff_declarations() {
       continue
     fi
     
-    read -rp "  Enable handoff from \"$current_stage_id\"? (y/N) " enable_handoff
-    enable_handoff="${enable_handoff:-N}"
+    enable_handoff="$(ralph_prompt_yesno "Enable handoff from \"$current_stage_id\"" "n")"
     
-    if [[ "$enable_handoff" =~ ^[Yy] ]]; then
+    if [[ "$enable_handoff" == "y" ]]; then
       local target_stage
       if (( ${#target_options[@]} == 1 )); then
         target_stage="${target_options[0]}"
         print_info "    Using default target: $target_stage"
       else
-        read -rp "    Select target stage [${target_options[0]}]: " target_input
-        target_stage="${target_input:-${target_options[0]}}"
+        target_stage="$(ralph_menu_select --prompt "target for \"$current_stage_id\"" --default 1 -- "${target_options[@]}")"
       fi
       
       stage_handoff_targets+=("$target_stage")

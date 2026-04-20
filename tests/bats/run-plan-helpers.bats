@@ -186,6 +186,218 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   rm -rf "$workspace"
 }
 
+@test "ralph_run_plan_parse_args accepts --no-claude-bare and exports CLAUDE_PLAN_BARE=0" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --no-claude-bare
+    export -p | grep -F "declare -x CLAUDE_PLAN_BARE=\"0\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_BARE="0"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --claude-minimal and exports CLAUDE_PLAN_MINIMAL=1" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --claude-minimal
+    export -p | grep -F "declare -x CLAUDE_PLAN_MINIMAL=\"1\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL="1"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --no-claude-minimal and exports CLAUDE_PLAN_MINIMAL=0" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --no-claude-minimal
+    export -p | grep -F "declare -x CLAUDE_PLAN_MINIMAL=\"0\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL="0"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --claude-allow-mcp and exports CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --claude-allow-mcp
+    export -p | grep -F "declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP=\"0\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP="0"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args accepts --no-claude-allow-mcp and exports CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE" --no-claude-allow-mcp
+    export -p | grep -F "declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP=\"1\""
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP="1"'* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects invalid CLAUDE_PLAN_MINIMAL value" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    CLAUDE_PLAN_MINIMAL="maybe"
+    export CLAUDE_PLAN_MINIMAL
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE"
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--claude-minimal / CLAUDE_PLAN_MINIMAL must be one of 1, true, yes, on, 0, false, no, or off."* ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_run_plan_parse_args rejects invalid CLAUDE_PLAN_MINIMAL_DISABLE_MCP value" {
+  [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
+
+  local workspace plan
+  workspace="$(mktemp -d)"
+  plan="plan.md"
+
+  run bash -c '
+    set -euo pipefail
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    source "$2"
+    WORKSPACE="$3"
+    CLAUDE_PLAN_MINIMAL_DISABLE_MCP="maybe"
+    export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+    ralph_run_plan_parse_args --runtime claude --plan "$4" --workspace "$WORKSPACE"
+  ' _ "$RUN_PLAN_ARGS_FILE" "$ERROR_HANDLING_FILE" "$workspace" "$plan"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDE_PLAN_MINIMAL_DISABLE_MCP / --claude-allow-mcp must be one of"* ]]
+  rm -rf "$workspace"
+}
+
 @test "ralph_run_plan_parse_args accepts --claude-permission-mode and exports it" {
   [ -f "$RUN_PLAN_ARGS_FILE" ] || skip "run-plan args helper missing"
 
@@ -396,12 +608,89 @@ SCRIPT
     RALPH_PLAN_SESSION_HOME="$2"
     export RALPH_PLAN_SESSION_HOME
     ralph_session_init "$3" "plan.log"
-    printf "%s" "$RALPH_SESSION_DIR"
+    printf "%s|%s" "$RALPH_SESSION_DIR" "$SESSION_ID_FILE"
   ' _ "$RUN_PLAN_SESSION_FILE" "$session_home" "$workspace"
 
   [ "$status" -eq 0 ]
-  session_dir="$output"
+  session_dir="${output%%|*}"
   [ -d "$session_dir" ]
+  [[ "$output" == *"/session-id.cursor.txt" ]]
+  rm -rf "$workspace"
+}
+
+@test "ralph_session_init scopes session ids by runtime" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  local workspace session_home
+  workspace="$(mktemp -d)"
+  session_home="$workspace/sessions"
+
+  run bash -c '
+    set -euo pipefail
+    log(){ :; }
+    ralph_run_plan_log(){ :; }
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    _RALPH_PROMPT_CLI_RESUME_INTERACTIVE=0
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    RALPH_PLAN_KEY="test-session"
+    export RALPH_PLAN_KEY
+    RALPH_PLAN_SESSION_HOME="$2"
+    export RALPH_PLAN_SESSION_HOME
+    RUNTIME="opencode"
+    export RUNTIME
+    ralph_session_init "$3" "plan.log"
+    printf "%s" "$SESSION_ID_FILE"
+  ' _ "$RUN_PLAN_SESSION_FILE" "$session_home" "$workspace"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "$session_home/test-session/session-id.opencode.txt" ]
+  rm -rf "$workspace"
+}
+
+@test "ralph_session_init ignores legacy shared session ids" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  local workspace session_home legacy_file
+  workspace="$(mktemp -d)"
+  session_home="$workspace/sessions"
+
+  run bash -c '
+    set -euo pipefail
+    log(){ :; }
+    ralph_run_plan_log(){ :; }
+    PREBUILT_AGENT=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=0
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    _RALPH_PROMPT_CLI_RESUME_INTERACTIVE=0
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    source "$1"
+    RALPH_PLAN_KEY="test-session"
+    export RALPH_PLAN_KEY
+    RALPH_PLAN_SESSION_HOME="$2"
+    export RALPH_PLAN_SESSION_HOME
+    RUNTIME="opencode"
+    export RUNTIME
+    mkdir -p "$3/.ralph-workspace/sessions/test-session"
+    printf '%s\n' "shared-legacy-id" > "$3/.ralph-workspace/sessions/test-session/session-id.txt"
+    ralph_session_init "$3" "plan.log"
+    [[ ! -s "$SESSION_ID_FILE" ]]
+  ' _ "$RUN_PLAN_SESSION_FILE" "$session_home" "$workspace"
+
+  [ "$status" -eq 0 ]
+  legacy_file="$workspace/.ralph-workspace/sessions/test-session/session-id.txt"
+  [ -f "$legacy_file" ]
+  [ ! -s "$session_home/test-session/session-id.opencode.txt" ]
   rm -rf "$workspace"
 }
 

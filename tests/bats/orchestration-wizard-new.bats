@@ -15,28 +15,26 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   # Create agent config
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/research/config.json"
 
-  # Input: go through wizard, then 'n' at summary prompt to abort
-  cat >"$workspace/input.txt" <<'EOF'
+  # Input: go through wizard, then 'n' at summary prompt to abort.
+  # One stage: six blank lines (defaults), then parallel/input/loop/handoff/confirm each one line.
+  {
+    cat <<'EOF'
 Demo Pipeline
 demo
 
+
 n
 research
-
-
+EOF
+    printf '\n%.0s' {1..6}
+    cat <<'EOF'
 n
-
-
 n
-
-
 n
-
-
 n
-
 n
 EOF
+  } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
   run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
@@ -62,28 +60,25 @@ EOF
   # Create agent config
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/research/config.json"
 
-  # Input: go through wizard, then 'y' at summary prompt to confirm
-  cat >"$workspace/input.txt" <<'EOF'
+  # Input: go through wizard, then 'y' at summary prompt to confirm.
+  {
+    cat <<'EOF'
 Demo Pipeline
 demo
 
+
 n
 research
-
-
-n
-
-
-n
-
-
-n
-
-
-y
-
-n
 EOF
+    printf '\n%.0s' {1..6}
+    cat <<'EOF'
+n
+n
+n
+n
+y
+EOF
+  } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
   run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
@@ -112,37 +107,27 @@ EOF
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/research/config.json"
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/implementation/config.json"
 
-  # Input: configure 2 stages with parallelStages (both in wave 1)
-  cat >"$workspace/input.txt" <<'EOF'
+  # Input: configure 2 stages with parallelStages (both in wave 1).
+  # After the stage list, each stage consumes six reads (runtime, agent, describe, model, session, context).
+  # Use blank lines for menu defaults; do not interleave extra "y"/"n" lines or they reach ralph_menu_select (digits only).
+  {
+    cat <<'EOF'
 Demo Pipeline
 demo
 
+
 n
 research,implementation
-
-
-n
-
-
-n
-
-
-n
-
-
-n
-
+EOF
+    printf '\n%.0s' {1..12}
+    cat <<'EOF'
 y
-1,2
 
 n
-
 n
-
-n
-
 y
 EOF
+  } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
   run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"

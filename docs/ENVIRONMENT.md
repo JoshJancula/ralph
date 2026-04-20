@@ -20,12 +20,17 @@ For **runtime-specific** knobs (`CURSOR_PLAN_*`, `CLAUDE_PLAN_*`, `CODEX_PLAN_*`
 
 | Variable | Purpose |
 |----------|---------|
-| `RALPH_PLAN_CLI_RESUME` | `1` enables CLI session resume (`session-id.txt` and stream parsing). Often set via `--cli-resume` / `--no-cli-resume`. |
+| `RALPH_PLAN_SESSION_STRATEGY` | Session behavior between TODOs: `fresh` (default strict isolation), `resume` (continue context), or `reset` (reuse session id and prefix a runtime reset command when configured). |
+| `RALPH_PLAN_RESET_COMMAND` | Optional global reset command prefix used in reset mode before each TODO prompt (example: `/clear`). When set, overrides runtime-specific reset command defaults. |
+| `RALPH_PLAN_RESET_COMMAND_CLAUDE` / `RALPH_PLAN_RESET_COMMAND_CURSOR` / `RALPH_PLAN_RESET_COMMAND_CODEX` / `RALPH_PLAN_RESET_COMMAND_OPENCODE` | Runtime-specific reset command prefix. Default for Claude is `/clear`; other runtimes default empty. |
+| `RALPH_PLAN_CLI_RESUME` | `1` enables CLI session resume (`session-id.<runtime>.txt` and stream parsing). Often set via `--cli-resume` / `--no-cli-resume`. |
 | `RALPH_PLAN_SESSION_HOME` | Directory containing `sessions/<plan-key>/` (or equivalent). Default: `${RALPH_PLAN_WORKSPACE_ROOT}/sessions`. |
 | `RALPH_PLAN_ALLOW_UNSAFE_RESUME` | `1` allows resume without a stored session id (unsafe on shared machines). `--allow-unsafe-resume` sets this. |
 | `RALPH_HUMAN_POLL_INTERVAL` | Seconds between polls for `operator-response.txt` when waiting offline (default commonly `2`). |
 | `RALPH_HUMAN_OFFLINE_EXIT` | When `1`, non-TTY human wait may exit instead of blocking (see run-plan-core). |
 | `RALPH_HANDOFFS_ENABLED` | `1` (default) injects handoff tasks into plans; `0` disables injection. |
+| `RALPH_SKIP_FZF_HINT` | `1` silences the fzf install hint in interactive prompts (set automatically when `fzf` is installed). |
+| `RALPH_PLAN_SESSION_MAX_TURNS` | Claude-specific session rotation threshold (default `8`). After this many invocations, the CLI session rotates to cap cache growth. Set `0` to disable rotation. Other runtimes are unaffected. |
 
 ## Limits, budgets, and timeouts
 
@@ -89,7 +94,8 @@ Non-interactive runs require `--agent`, `--model`, or `CURSOR_PLAN_MODEL` (see r
 | `CLAUDE_TOOLS_FROM_AGENT` | Tools string from agent config when not overridden. |
 | `RALPH_CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS` | When `1` (default), passes `--exclude-dynamic-system-prompt-sections`. |
 | `RALPH_CLAUDE_MAX_BUDGET_USD` / `RALPH_AGENT_MAX_BUDGET` | Soft budget caps passed as `--max-budget-usd` when set. |
-| `CLAUDE_PLAN_BARE` | `1`/truthy enables `claude --bare` (also via `--claude-bare`). `--bare` skips hooks, LSP, plugin sync, attribution, auto-memory, prefetches, keychain reads, and CLAUDE.md auto-discovery; it sets `CLAUDE_CODE_SIMPLE=1`, lowers overhead, and may reduce prompt/input cost at the expense of fewer automatic context sources. Default off. |
+| `CLAUDE_PLAN_BARE` | `1`/truthy enables `claude --bare` (also via `--claude-bare`), `0` disables it (also via `--no-claude-bare`). Upstream says `--bare` "skips hooks, LSP, plugin sync, attribution, auto-memory, prefetches, keychain reads, and CLAUDE.md auto-discovery." This axis defaults to `0` and should be treated as an opt-in API-key mode. `CLAUDE_PLAN_MINIMAL` defaults to `1` and enables auth-safe flag composition (`--disable-slash-commands`, `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, `--setting-sources project,local`, `--tools ...`). When reset mode is actively using a reset command, Ralph omits `--disable-slash-commands` so the reset command can run. `CLAUDE_PLAN_MINIMAL_TOOLS` defaults to `Bash,Read,Edit,Write` and overrides the tools list used in minimal mode. |
+| `CLAUDE_PLAN_MINIMAL_DISABLE_MCP` | When `1` (default) and Claude minimal mode is active, Ralph passes `--strict-mcp-config` and an empty `--mcp-config`. Set to `0` or use `--claude-allow-mcp` so project-defined MCP servers still load while other minimal flags remain. `--no-claude-allow-mcp` sets `1` explicitly. |
 | `CLAUDE_PLAN_PERMISSION_MODE` | Claude permission mode passed to `claude --permission-mode` (also via `--claude-permission-mode`). Allowed values: `default`, `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `plan`. Default: omit the flag and let Claude use its own default. Modes such as `auto`, `bypassPermissions`, and `dontAsk` can skip or auto-approve prompts, so use them only in trusted workspaces. |
 
 ## Orchestrator

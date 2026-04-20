@@ -301,6 +301,8 @@ install_ops_copy_tree() {
   printf '\n'
 
   local choice
+  # This stays bespoke (not using ralph_menu_select) because it's a single-character
+  # action menu (o/s/r) with conditional review sub-loop, not a list selection.
   while true; do
     printf '%b' "${C_Y}${C_BOLD}Conflicts: [o]verwrite all / [s]kip all / [r]eview each:${C_RST} "
     if ! read -r -t 0 choice < /dev/tty; then

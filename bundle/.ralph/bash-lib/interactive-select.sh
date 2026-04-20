@@ -5,9 +5,28 @@ if [[ -n "${RALPH_INTERACTIVE_SELECT_LIB_LOADED:-}" ]]; then
 fi
 RALPH_INTERACTIVE_SELECT_LIB_LOADED=1
 
+# Module-level variable to track if fzf hint has been shown
+_RALPH_FZF_HINT_SHOWN=0
+
 # Public interface:
 #   ralph_menu_select -- numbered menu with optional fzf; prints chosen item (see --help in implementation).
 # Internal: _ralph_menu_read_tty, _ralph_menu_numeric_prompt, _ralph_menu_run_fzf.
+
+# Internal: print fzf installation hint once per process
+_ralph_menu_print_fzf_hint() {
+  if [[ "${RALPH_SKIP_FZF_HINT:-}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "$_RALPH_FZF_HINT_SHOWN" -eq 1 ]]; then
+    return 0
+  fi
+  _RALPH_FZF_HINT_SHOWN=1
+  if [[ -t 2 ]] && [[ -z "${NO_COLOR:-}" ]]; then
+    echo -e "\033[2mtip: install fzf for arrow-key menus (brew install fzf / apt install fzf). set RALPH_SKIP_FZF_HINT=1 to silence.\033[0m" >&2
+  else
+    echo "tip: install fzf for arrow-key menus (brew install fzf / apt install fzf). set RALPH_SKIP_FZF_HINT=1 to silence." >&2
+  fi
+}
 
 _ralph_menu_read_tty() {
   local var_name="$1"
@@ -51,8 +70,19 @@ _ralph_menu_numeric_prompt() {
       echo -e "${C_R:-}Invalid selection.${C_RST:-}" >&2
       continue
     fi
-    printf '%s' "$input"
-    return 0
+    # Validate literal input against choices
+    local valid_choice=0
+    for choice in "${choices[@]}"; do
+      if [[ "$choice" == "$input" ]]; then
+        valid_choice=1
+        break
+      fi
+    done
+    if (( valid_choice == 1 )); then
+      printf '%s' "$input"
+      return 0
+    fi
+    echo -e "${C_R:-}unknown runtime \"${input}\"; valid: ${choices[*]}${C_RST:-}" >&2
   done
 }
 
@@ -117,6 +147,8 @@ ralph_menu_select() {
   fi
 
   if [[ -z "$selection" ]]; then
+    # Numeric fallback: show fzf hint once
+    _ralph_menu_print_fzf_hint
     selection="$(_ralph_menu_numeric_prompt "$prompt" "$default_index" "${choices[@]}")"
   fi
 

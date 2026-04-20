@@ -31,10 +31,14 @@
 #                  CURSOR_PLAN_NO_OPEN / CLAUDE_PLAN_NO_OPEN / CODEX_PLAN_NO_OPEN / OPENCODE_PLAN_NO_OPEN
 #   Human offline (no TTY): RALPH_HUMAN_POLL_INTERVAL (default 2), RALPH_HUMAN_OFFLINE_EXIT=1 to exit 4 instead of waiting
 #   Usage risk (first run): interactive YES prompt once; marker under ${XDG_CONFIG_HOME:-~/.config}/ralph/usage-risk-acknowledgment; RALPH_USAGE_RISKS_ACKNOWLEDGED=1 skips (CI/automation)
-#   CLI session resume (optional): RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
-#     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt and, when that file exists, passes --resume <id> (or runtime
+#   Session strategy: RALPH_PLAN_SESSION_STRATEGY or --session-strategy (fresh|resume|reset).
+#     fresh (default): strict isolation between TODO invocations.
+#     resume: continue same CLI session context between TODOs.
+#     reset: reuse session ids and prefix a runtime reset command before each reset TODO (Claude defaults to `/clear`).
+#   CLI session resume compatibility: RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
+#     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt and, when that file exists, passes --resume <id> (or runtime
 #     equivalent) with a compact prompt (TODO + plan path + human-replies only). Interactive TTY runs ask unless
-#     you set the env var or pass --cli-resume / --no-cli-resume.
+#     you set a session strategy explicitly or pass --cli-resume / --no-cli-resume.
 #   Unsafe bare resume: RALPH_PLAN_ALLOW_UNSAFE_RESUME=1 or --allow-unsafe-resume is required before the runner
 #     passes resume without a stored session id (e.g. Codex resume --last). Invoke helpers ignore bare resume without
 #     this flag so ad-hoc RALPH_RUN_PLAN_RESUME_BARE cannot resume the wrong session during interactive use.
@@ -46,6 +50,18 @@
 #     standard: lowers human context byte cap (RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME, default 2048).
 #     lean: standard + skips downstream stage context (RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME, default 0).
 #     full: no trimming applied. Set per-stage via contextBudget in .orch.json (orchestrator injects automatically).
+# Optional tooling:
+#   fzf: Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf).
+#        Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
+# Cost defaults for Claude:
+#   CLAUDE_PLAN_BARE: Default 0; `CLAUDE_PLAN_MINIMAL=1` keeps subscription users on the auth-safe path.
+#     `CLAUDE_PLAN_BARE=1` is an opt-in API-key mode, while minimal mode composes `--disable-slash-commands`,
+#     optional MCP lockdown (`--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'` when `CLAUDE_PLAN_MINIMAL_DISABLE_MCP` is unset or `1`),
+#     `--setting-sources project,local`, and `--tools ...` so Claude starts with a narrower, safer surface without relying on keychain-backed auth.
+#     Set `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0` or pass `--claude-allow-mcp` to keep other minimal flags but load project MCP servers.
+#     During reset-command invocations, Ralph omits `--disable-slash-commands` so reset commands can execute.
+#   RALPH_PLAN_SESSION_MAX_TURNS: Default 8 for Claude. Rotates CLI session after this many invocations to cap cache
+#     growth. Set 0 to disable. Other runtimes unaffected.
 # Model tier configuration (for cost control):
 #   Agent config `model` field (.claude/agents/<id>/config.json etc.) sets the default model for that agent type.
 #   Orchestration stage `model` field in .orch.json overrides the agent config default for that stage.
@@ -104,6 +120,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan-env.sh"
 source "$SCRIPT_DIR/bash-lib/menu-select.sh"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/error-handling.sh
 source "$SCRIPT_DIR/bash-lib/error-handling.sh"
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/ui-prompt.sh
+source "$SCRIPT_DIR/bash-lib/ui-prompt.sh"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-args.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-args.sh"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/.ralph/bash-lib/run-plan-session.sh

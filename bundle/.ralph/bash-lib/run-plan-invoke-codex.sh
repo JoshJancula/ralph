@@ -64,7 +64,7 @@ ralph_run_plan_invoke_codex() {
   run_plan_invoke_common_execute \
     run_plan_invoke_codex_cli \
     codex \
-    "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse --json and update session-id.txt; running without it."
+    "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse --json and update session-id.codex.txt; running without it."
 
   rm -f "$prompt_file"
 }

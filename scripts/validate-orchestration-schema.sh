@@ -92,6 +92,14 @@ schema_filter='
       ($sr == null) or ($sr | type == "boolean")
     );
 
+  def session_strategy_ok:
+    ((.sessionStrategy? // null) as $ss |
+      ($ss == null) or (
+        ($ss | type == "string") and
+        ($ss == "fresh" or $ss == "resume" or $ss == "reset")
+      )
+    );
+
   def stage_id_ok:
     ((.id? // null) as $id |
       ($id | type == "string") and
@@ -107,7 +115,8 @@ schema_filter='
     ((.outputArtifacts? // []) | artifacts_ok($root; $all_stage_ids; $stage_id; $has_parallel_stages)) and
     (has("inputFromStages") | not) and
     loop_control_ok and
-    session_resume_ok;
+    session_resume_ok and
+    session_strategy_ok;
 
   def parallel_stages_ok:
     ((.parallelStages? // null) as $parallel_stages |
@@ -116,8 +125,7 @@ schema_filter='
         (all(.parallelStages[]; type == "string" and test("^\\s*[a-z0-9_]+(-[a-z0-9_]+)*(\\s*,\\s*[a-z0-9_]+(-[a-z0-9_]+)*)*\\s*$"))) and
         ((parallel_stage_ids | unique | length) == (parallel_stage_ids | length)) and
         ((parallel_stage_ids - stage_ids | length) == 0) and
-        ((stage_ids - parallel_stage_ids | length) == 0) and
-        (all(.stages[]; has("loopControl") | not))
+        ((stage_ids - parallel_stage_ids | length) == 0)
       )
     );
 

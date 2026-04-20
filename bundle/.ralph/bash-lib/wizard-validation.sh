@@ -3,8 +3,58 @@
 # Validation helpers used by the orchestration wizard.
 #
 # Public interface:
+#   configure_parallel_stages -- optional parallelStages waves (before input deps and loops).
 #   configure_stage_input_dependencies -- interactive inputArtifacts wiring between stages.
 #   configure_loop_rules -- loopControl defaults for review stages.
+
+# Scratch array for parallel wave tokenization (configure_parallel_stages only).
+_wizard_parallel_wave_toks=()
+
+# Split a wave CSV into _wizard_parallel_wave_toks (trim whitespace; skip empties).
+_wizard_parallel_wave_split() {
+  local raw="${1-}"
+  _wizard_parallel_wave_toks=()
+  [[ -n "${raw// }" ]] || return 0
+  local IFS=','
+  local -a _parts
+  read -ra _parts <<< "$raw"
+  unset IFS
+  local p trimmed
+  for p in "${_parts[@]}"; do
+    trimmed="$(printf '%s' "$p" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "$trimmed" ]] || continue
+    local w
+    for w in $trimmed; do
+      [[ -n "$w" ]] || continue
+      _wizard_parallel_wave_toks+=("$w")
+    done
+  done
+}
+
+# Return 0 if _wizard_parallel_wave_toks contains duplicate ids.
+_wizard_parallel_wave_toks_have_duplicates() {
+  local i j
+  (( ${#_wizard_parallel_wave_toks[@]} <= 1 )) && return 1
+  for ((i = 0; i < ${#_wizard_parallel_wave_toks[@]}; i++)); do
+    for ((j = i + 1; j < ${#_wizard_parallel_wave_toks[@]}; j++)); do
+      if [[ "${_wizard_parallel_wave_toks[i]}" == "${_wizard_parallel_wave_toks[j]}" ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+# Return 0 if id appears in wave CSV (comma tokens, trimmed).
+_wizard_parallel_wave_csv_contains_id() {
+  local id="$1" wave_csv="$2"
+  _wizard_parallel_wave_split "$wave_csv"
+  local t
+  for t in "${_wizard_parallel_wave_toks[@]}"; do
+    [[ "$t" == "$id" ]] && return 0
+  done
+  return 1
+}
 
 configure_stage_input_dependencies() {
   stage_input_sources=()
@@ -17,78 +67,44 @@ configure_stage_input_dependencies() {
   print_hint "- Type numbers or stage names, with commas or spaces."
   print_hint "- Type 'none' for no handoff, or Enter for the default."
 
-  read -rp "Set custom stage inputs? (inputArtifacts) [y/N]: " handoff_choice
-  if [[ "$handoff_choice" =~ ^[Yy] ]]; then
-    print_info "Available stages for stage inputs (inputArtifacts)"
+  handoff_choice="$(ralph_prompt_yesno "Set custom stage inputs (inputArtifacts)" "n")"
+  if [[ "$handoff_choice" == "y" ]]; then
     for idx in "${!stage_ids[@]}"; do
-      printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}"
-    done
-    print_hint "Type numbers or stage names. Commas and spaces both work."
-    for idx in "${!stage_ids[@]}"; do
-      local current_stage default_input input_line normalized_input raw_inputs candidate is_valid already_added
+      local current_stage default_input known_csv
       current_stage="${stage_ids[$idx]}"
       default_input=""
       if (( idx > 0 )); then
         default_input="${stage_ids[$((idx - 1))]}"
       fi
-      read -rp "Which earlier stages should \"$current_stage\" read from? (inputArtifacts${default_input:+, default $default_input}; use 'none' for no input): " input_line
-      if [[ -z "$input_line" ]]; then
-        input_line="$default_input"
+
+      # Build known-csv of stages before current (earlier stages only).
+      # Use array slicing so the first stage naturally gets an empty list.
+      local earlier_stages=()
+      if (( idx > 0 )); then
+        earlier_stages=("${stage_ids[@]:0:idx}")
       fi
-      local parsed_inputs=()
-      normalized_input="$(printf '%s' "$input_line" | tr ',' ' ')"
-      if [[ -n "$normalized_input" ]]; then
-        IFS=' ' read -r -a raw_inputs <<< "$normalized_input"
-        for raw_input in "${raw_inputs[@]-}"; do
-          raw_input="$(printf '%s' "$raw_input" | tr -d '[:space:]')"
-          if [[ "$raw_input" =~ ^[0-9]+$ ]] && (( raw_input >= 1 && raw_input <= ${#stage_ids[@]} )); then
-            candidate="${stage_ids[$((raw_input - 1))]}"
-          else
-            candidate="$(ralph_internal_wizard_sanitize "$raw_input")"
-          fi
-          [[ -n "$candidate" ]] || continue
-          if [[ "$candidate" == "none" || "$candidate" == "no-input" || "$candidate" == "no-inputs" ]]; then
-            parsed_inputs=()
-            break
-          fi
-          if [[ "$candidate" == "$current_stage" ]]; then
-            echo "Ignoring self-reference for $current_stage in inputArtifacts." >&2
-            continue
-          fi
-          is_valid=0
-          for stage_opt in "${stage_ids[@]}"; do
-            if [[ "$candidate" == "$stage_opt" ]]; then
-              is_valid=1
-              break
-            fi
-          done
-          if (( is_valid == 1 )); then
-            already_added=0
-            for existing in "${parsed_inputs[@]-}"; do
-              if [[ "$existing" == "$candidate" ]]; then
-                already_added=1
-                break
-              fi
-            done
-            (( already_added == 0 )) && parsed_inputs+=("$candidate")
-          else
-            echo "Ignoring unknown stage id \"$candidate\" for $current_stage input mapping." >&2
-          fi
-        done
-      fi
-      if [[ ${#parsed_inputs[@]} -gt 0 ]]; then
-        stage_input_sources+=("$(IFS=,; printf '%s' "${parsed_inputs[*]}")")
-      else
+
+      if (( ${#earlier_stages[@]} == 0 )); then
+        # First stage has no earlier stages to depend on
         stage_input_sources+=("")
+        continue
       fi
+
+      local IFS=','
+      known_csv="${earlier_stages[*]}"
+      unset IFS
+
+      local result
+      result="$(ralph_prompt_list "Which earlier stages should \"$current_stage\" read from (inputArtifacts)" "$default_input" "$known_csv")"
+
+      # ralph_prompt_list handles validation and echo-back; self-references and
+      # downstream stages automatically land in "ignored" because they're not in known_csv
+      stage_input_sources+=("$result")
     done
   else
-    for idx in "${!stage_ids[@]}"; do
-      if (( idx == 0 )); then
-        stage_input_sources+=("")
-      else
-        stage_input_sources+=("${stage_ids[$((idx - 1))]}")
-      fi
+    # Populate empty strings for each stage when not setting custom inputs
+    for _ in "${!stage_ids[@]}"; do
+      stage_input_sources+=("")
     done
   fi
 }
@@ -100,74 +116,87 @@ configure_parallel_stages() {
   print_step "4/7" "Parallel stages (optional)"
   print_hint "- Use this to run independent stages in parallel waves."
   print_hint "- Each wave runs all listed stages concurrently; waves run in order."
-  print_hint "- Parallelism cannot be combined with loopControl."
+  print_hint "- parallelStages in JSON is a string array: one JSON string per wave, comma-separated stage ids (same wave order as below)."
+  print_hint "- Commas or spaces in answers are accepted; ids are trimmed and stored as comma-separated strings."
   print_hint "- Enter one wave per line as comma-separated stage ids (example: research,implementation)."
-  print_hint "- Press Enter on an empty line to finish, or type 'none' to disable."
+  print_hint "- Press Enter on an empty line to use all remaining stages for the current wave."
 
-  read -rp "Enable parallel stage waves? (parallelStages) [y/N]: " parallel_choice
-  if [[ ! "$parallel_choice" =~ ^[Yy] ]]; then
+  parallel_choice="$(ralph_prompt_yesno "Enable parallel stage waves (parallelStages)" "n")"
+  if [[ "$parallel_choice" == "n" ]]; then
     return 0
   fi
 
   parallel_stages_enabled="true"
-  print_info "Available stages for parallel waves:"
-  for idx in "${!stage_ids[@]}"; do
-    printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}" >&2
+
+  # Build the pool of stages available for waves (start with all stages)
+  local available_stages=()
+  for s in "${stage_ids[@]}"; do
+    available_stages+=("$s")
   done
 
-  while true; do
-    read -rp "Wave stages (comma-separated ids or numbers; empty to finish): " wave_line
-    wave_line="${wave_line:-}"
-    if [[ -z "$wave_line" ]]; then
-      break
-    fi
-    if [[ "$wave_line" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
-      parallel_stage_waves=()
-      parallel_stages_enabled="false"
-      break
+  local wave_num=1
+  while (( ${#available_stages[@]} > 0 )); do
+    # Build comma-separated known list for this wave
+    local known_csv=""
+    local IFS=','
+    known_csv="${available_stages[*]}"
+    unset IFS
+
+    local wave_result
+    wave_result="$(ralph_prompt_list "Wave $wave_num stages" "$known_csv" "$known_csv")"
+
+    # Empty input should expand to the remaining stages for this wave.
+    if [[ -z "$wave_result" ]]; then
+      wave_result="$known_csv"
     fi
 
-    local normalized candidate is_valid already_added
-    local parsed_wave=()
-    normalized="$(printf '%s' "$wave_line" | tr ',' ' ')"
-    local tokens=()
-    IFS=' ' read -r -a tokens <<< "$normalized"
-    for token in "${tokens[@]-}"; do
-      token="$(printf '%s' "$token" | tr -d '[:space:]')"
-      [[ -n "$token" ]] || continue
-      if [[ "$token" =~ ^[0-9]+$ ]] && (( token >= 1 && token <= ${#stage_ids[@]} )); then
-        candidate="${stage_ids[$((token - 1))]}"
-      else
-        candidate="$(ralph_internal_wizard_sanitize "$token")"
-      fi
-      [[ -n "$candidate" ]] || continue
-      is_valid=0
-      for stage_opt in "${stage_ids[@]}"; do
-        if [[ "$candidate" == "$stage_opt" ]]; then
-          is_valid=1
+    _wizard_parallel_wave_split "$wave_result"
+    if (( ${#_wizard_parallel_wave_toks[@]} == 0 )); then
+      ralph_die "Wave $wave_num: no stage ids in this wave (use ids from the remaining list: $known_csv)."
+    fi
+    if _wizard_parallel_wave_toks_have_duplicates; then
+      ralph_die "Wave $wave_num: duplicate stage id in the same wave; each stage id must appear once across all waves."
+    fi
+
+    local tok
+    for tok in "${_wizard_parallel_wave_toks[@]}"; do
+      local in_pool=0
+      for stage in "${available_stages[@]}"; do
+        if [[ "$stage" == "$tok" ]]; then
+          in_pool=1
           break
         fi
       done
-      if (( is_valid == 0 )); then
-        echo "Ignoring unknown stage id \"$candidate\" in wave." >&2
-        continue
+      if (( in_pool == 0 )); then
+        ralph_die "Wave $wave_num: stage \"$tok\" is not in the remaining pool ($known_csv). Unknown ids and ids already placed in an earlier wave are rejected."
       fi
-      already_added=0
-      for existing in "${parsed_wave[@]-}"; do
-        if [[ "$existing" == "$candidate" ]]; then
-          already_added=1
-          break
-        fi
-      done
-      (( already_added == 0 )) && parsed_wave+=("$candidate")
     done
 
-    if (( ${#parsed_wave[@]} == 0 )); then
-      echo "Wave is empty after parsing; try again." >&2
-      continue
+    local joined_wave=""
+    joined_wave="$(IFS=','; printf '%s' "${_wizard_parallel_wave_toks[*]}")"
+    parallel_stage_waves+=("$joined_wave")
+
+    # Update available stages (remove assigned ones)
+    local new_available=()
+    for stage in "${available_stages[@]}"; do
+      local in_wave=0
+      for tok in "${_wizard_parallel_wave_toks[@]}"; do
+        if [[ "$stage" == "$tok" ]]; then
+          in_wave=1
+          break
+        fi
+      done
+      if (( in_wave == 0 )); then
+        new_available+=("$stage")
+      fi
+    done
+    if (( ${#new_available[@]} > 0 )); then
+      available_stages=("${new_available[@]}")
+    else
+      available_stages=()
     fi
 
-    parallel_stage_waves+=("$(IFS=,; printf '%s' "${parsed_wave[*]}")")
+    wave_num=$((wave_num + 1))
   done
 
   if [[ "$parallel_stages_enabled" != "true" ]]; then
@@ -180,34 +209,20 @@ configure_parallel_stages() {
     return 0
   fi
 
-  local seen_ids=()
-  local wave ids id already_seen
-  for wave in "${parallel_stage_waves[@]}"; do
-    IFS=',' read -r -a ids <<< "$wave"
-    for id in "${ids[@]-}"; do
-      already_seen=0
-      for existing_id in "${seen_ids[@]-}"; do
-        if [[ "$existing_id" == "$id" ]]; then
-          already_seen=1
-          break
-        fi
-      done
-      if (( already_seen == 1 )); then
-        ralph_die "Stage \"$id\" appears in parallel waves more than once."
-      fi
-      seen_ids+=("$id")
-    done
-  done
-
+  # Validate that all stages were assigned exactly once across waves
   for id in "${stage_ids[@]}"; do
-    already_seen=0
-    for existing_id in "${seen_ids[@]-}"; do
-      if [[ "$existing_id" == "$id" ]]; then
-        already_seen=1
-        break
+    local found=0
+    for wave in "${parallel_stage_waves[@]}"; do
+      if _wizard_parallel_wave_csv_contains_id "$id" "$wave"; then
+        found=$((found + 1))
       fi
     done
-    (( already_seen == 1 )) || ralph_die "Parallel waves must include every stage exactly once; missing \"$id\"."
+    if (( found == 0 )); then
+      ralph_die "Parallel waves must include every stage; missing \"$id\"."
+    fi
+    if (( found > 1 )); then
+      ralph_die "Parallel waves: stage \"$id\" appears in more than one wave."
+    fi
   done
 }
 
@@ -225,67 +240,43 @@ configure_loop_rules() {
   print_hint "- Then pick where each source stage should send work back."
   print_hint "- In loop prompts, Enter (or 0/none) means no loop."
 
-  read -rp "Add loop rules? (loopControl) [y/N]: " loop_choice
-  if [[ "$loop_choice" =~ ^[Yy] ]]; then
+  loop_choice="$(ralph_prompt_yesno "Add loop rules (loopControl)" "n")"
+  if [[ "$loop_choice" == "y" ]]; then
     print_info "Loop setup mode (loopControl)"
-    print_hint "1) Pick source stages in one line, then configure each picked stage."
-    print_hint "2) Walk every stage one-by-one and choose loop targets."
-    read -rp "Choose mode [2]: " loop_mode
-    loop_mode="${loop_mode:-2}"
-    if [[ "$loop_mode" == "1" ]]; then
-      echo "Available stages for loop sources:" >&2
-      for idx in "${!stage_ids[@]}"; do
-        printf '  %2d) %s\n' "$((idx + 1))" "${stage_ids[$idx]}" >&2
-      done
-      read -rp "Stages that should loop (numbers/names, comma or space; Enter/none for no loops): " loop_sources_line
-      loop_sources_line="${loop_sources_line:-none}"
-      local normalized_sources source_tokens source_token source_stage is_valid already_added
-      normalized_sources="$(printf '%s' "$loop_sources_line" | tr ',' ' ')"
-      local selected_loop_sources=()
-      IFS=' ' read -r -a source_tokens <<< "$normalized_sources"
-      for source_token in "${source_tokens[@]-}"; do
-        source_token="$(printf '%s' "$source_token" | tr -d '[:space:]')"
-        [[ -n "$source_token" ]] || continue
-        if [[ "$source_token" =~ ^[Nn][Oo][Nn][Ee]$ ]]; then
-          selected_loop_sources=()
-          break
-        fi
-        if [[ "$source_token" =~ ^[0-9]+$ ]] && (( source_token >= 1 && source_token <= ${#stage_ids[@]} )); then
-          source_stage="${stage_ids[$((source_token - 1))]}"
-        else
-          source_stage="$(ralph_internal_wizard_sanitize "$source_token")"
-        fi
-        is_valid=0
-        for stage_opt in "${stage_ids[@]}"; do
-          if [[ "$source_stage" == "$stage_opt" ]]; then
-            is_valid=1
-            break
-          fi
+    local loop_mode
+    loop_mode="$(ralph_menu_select --prompt "loop source mode" --default 2 -- "pick source stages once, then configure each" "walk every stage one-by-one")"
+    if [[ "$loop_mode" == "pick source stages once, then configure each" ]]; then
+      # Build known-csv from all stage_ids
+      local known_csv=""
+      local IFS=','
+      known_csv="${stage_ids[*]}"
+      unset IFS
+
+      local sources_result
+      sources_result="$(ralph_prompt_list "Stages that should loop (loop sources)" "" "$known_csv")"
+
+      # Empty or "none" means no loop sources
+      if [[ -z "$sources_result" || "$sources_result" == "none" ]]; then
+        selected_loop_sources=()
+      else
+        # Parse comma-separated result
+        local IFS=','
+        for stage in $sources_result; do
+          [[ -n "$stage" ]] || continue
+          selected_loop_sources+=("$stage")
         done
-        if (( is_valid == 0 )); then
-          echo "Ignoring unknown loop source \"$source_token\"." >&2
-          continue
-        fi
-        already_added=0
-        for existing_source in "${selected_loop_sources[@]-}"; do
-          if [[ "$existing_source" == "$source_stage" ]]; then
-            already_added=1
-            break
-          fi
-        done
-        (( already_added == 0 )) && selected_loop_sources+=("$source_stage")
-      done
+        unset IFS
+      fi
 
       for loop_stage in "${selected_loop_sources[@]-}"; do
         echo "" >&2
-        local loop_back loop_iterations_input loop_iterations
+        local loop_back loop_iterations
         loop_back="$(choose_stage_id_from_list "Send \"$loop_stage\" back to which stage? (loopBackTo, number/id, Enter for none): " 1 "${stage_ids[@]}")"
         if [[ -z "$loop_back" ]]; then
           echo "No loop target set for $loop_stage. Skipping this loop rule." >&2
           continue
         fi
-        read -rp "Max iterations for \"$loop_stage\" [default 2]: " loop_iterations_input
-        loop_iterations="${loop_iterations_input:-2}"
+        loop_iterations="$(ralph_prompt_text "Max iterations for \"$loop_stage\"" "2")"
         if ! [[ "$loop_iterations" =~ ^[0-9]+$ ]]; then
           echo "Invalid number. Using 2." >&2
           loop_iterations=2
@@ -297,13 +288,12 @@ configure_loop_rules() {
     else
       for loop_stage in "${stage_ids[@]}"; do
         echo "" >&2
-        local loop_back loop_iterations_input loop_iterations
+        local loop_back loop_iterations
         loop_back="$(choose_stage_id_from_list "Send \"$loop_stage\" back to which stage? (loopBackTo, number/id, Enter for none): " 1 "${stage_ids[@]}")"
         if [[ -z "$loop_back" ]]; then
           continue
         fi
-        read -rp "Max iterations for \"$loop_stage\" [default 2]: " loop_iterations_input
-        loop_iterations="${loop_iterations_input:-2}"
+        loop_iterations="$(ralph_prompt_text "Max iterations for \"$loop_stage\"" "2")"
         if ! [[ "$loop_iterations" =~ ^[0-9]+$ ]]; then
           echo "Invalid number. Using 2." >&2
           loop_iterations=2

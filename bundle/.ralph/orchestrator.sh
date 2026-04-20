@@ -17,7 +17,8 @@
 #         "runtime": "cursor", "claude", or "codex" (optional, default: cursor),
 #         "plan": "path/to/stage-plan.md",
 #         "planTemplate": "path/to/stage-plan.template.md (optional)",
-#         "sessionResume": true or false (optional JSON boolean; forwards --cli-resume / --no-cli-resume to run-plan),
+#         "sessionStrategy": "fresh" | "resume" | "reset" (optional; preferred),
+#         "sessionResume": true or false (optional legacy fallback; mapped to session strategy resume/fresh),
 #         "inputArtifacts": ["path/to/{{ARTIFACT_NS}}/input.md"],
 #         "outputArtifacts": [
 #           "path/to/{{ARTIFACT_NS}}/output.md"
@@ -406,7 +407,8 @@ orch_stage_execute() {
   local runner_label=".ralph/run-plan.sh (runtime=$runtime)"
   local human_ack_rel human_ack_abs human_ack_msg
   local _dry_sr _dry_model_label _step_model_label _plan_tag_stream _runner_stream_log _runner_env _runner_args _art_check
-  local _session_resume_cli=()
+  local _session_strategy_cli=()
+  local _session_strategy_type _session_strategy_value
   local _session_resume_type _session_resume_value
   local _stage_usage_file=""
 
@@ -491,18 +493,43 @@ orch_stage_execute() {
   fi
   ralph_orchestrator_log "step $step_n: runtime=$runtime agent=$agent agent_source=$agent_source plan=$plan_abs_file expected_artifacts=$art_log"
 
-  _session_resume_type="$(echo "$stage" | jq -r 'if has("sessionResume") then (.sessionResume|type) else "absent" end' 2>/dev/null || echo "error")"
-  if [[ "$_session_resume_type" == "boolean" ]]; then
-    _session_resume_value="$(echo "$stage" | jq -r '.sessionResume' 2>/dev/null || echo "false")"
-    if [[ "$_session_resume_value" == "true" ]]; then
-      _session_resume_cli+=(--cli-resume)
-    else
-      _session_resume_cli+=(--no-cli-resume)
+  _session_strategy_type="$(echo "$stage" | jq -r 'if has("sessionStrategy") then (.sessionStrategy|type) else "absent" end' 2>/dev/null || echo "error")"
+  if [[ "$_session_strategy_type" == "string" ]]; then
+    _session_strategy_value="$(echo "$stage" | jq -r '.sessionStrategy' 2>/dev/null || echo "")"
+    case "$_session_strategy_value" in
+      fresh|resume|reset)
+        _session_strategy_cli+=(--session-strategy "$_session_strategy_value")
+        ;;
+      *)
+        ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be one of fresh|resume|reset (got $_session_strategy_value)"
+        echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionStrategy)${C_RST}" >&2
+        echo "  sessionStrategy must be one of fresh, resume, or reset in $ORCH_FILE." >&2
+        echo "  Log: $LOG_FILE" >&2
+        printf -v "$step_status_var" '%s' 1
+        return 1
+        ;;
+    esac
+  elif [[ "$_session_strategy_type" == "absent" ]]; then
+    _session_resume_type="$(echo "$stage" | jq -r 'if has("sessionResume") then (.sessionResume|type) else "absent" end' 2>/dev/null || echo "error")"
+    if [[ "$_session_resume_type" == "boolean" ]]; then
+      _session_resume_value="$(echo "$stage" | jq -r '.sessionResume' 2>/dev/null || echo "false")"
+      if [[ "$_session_resume_value" == "true" ]]; then
+        _session_strategy_cli+=(--session-strategy resume)
+      else
+        _session_strategy_cli+=(--session-strategy fresh)
+      fi
+    elif [[ "$_session_resume_type" != "absent" ]]; then
+      ralph_orchestrator_log "FAIL step $step_n: sessionResume must be a boolean (got $_session_resume_type)"
+      echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionResume)${C_RST}" >&2
+      echo "  sessionResume must be a boolean true/false in $ORCH_FILE." >&2
+      echo "  Log: $LOG_FILE" >&2
+      printf -v "$step_status_var" '%s' 1
+      return 1
     fi
-  elif [[ "$_session_resume_type" != "absent" ]]; then
-    ralph_orchestrator_log "FAIL step $step_n: sessionResume must be a boolean (got $_session_resume_type)"
-    echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionResume)${C_RST}" >&2
-    echo "  sessionResume must be a boolean true/false in $ORCH_FILE." >&2
+  else
+    ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be a string (got $_session_strategy_type)"
+    echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionStrategy)${C_RST}" >&2
+    echo "  sessionStrategy must be a string in $ORCH_FILE." >&2
     echo "  Log: $LOG_FILE" >&2
     printf -v "$step_status_var" '%s' 1
     return 1
@@ -510,8 +537,8 @@ orch_stage_execute() {
 
   if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
     _dry_sr=""
-    if ((${#_session_resume_cli[@]} > 0)); then
-      _dry_sr=" ${_session_resume_cli[*]}"
+    if ((${#_session_strategy_cli[@]} > 0)); then
+      _dry_sr=" ${_session_strategy_cli[*]}"
     fi
     _dry_model_label="${stage_model:-agent-config default}"
     if [[ "$agent_source" == "prebuilt" ]]; then
@@ -576,6 +603,15 @@ orch_stage_execute() {
   if [[ -n "${CLAUDE_PLAN_BARE:-}" ]]; then
     _runner_env+=(CLAUDE_PLAN_BARE="$CLAUDE_PLAN_BARE")
   fi
+  if [[ -n "${CLAUDE_PLAN_MINIMAL:-}" ]]; then
+    _runner_env+=(CLAUDE_PLAN_MINIMAL="$CLAUDE_PLAN_MINIMAL")
+  fi
+  if [[ -n "${CLAUDE_PLAN_MINIMAL_TOOLS:-}" ]]; then
+    _runner_env+=(CLAUDE_PLAN_MINIMAL_TOOLS="$CLAUDE_PLAN_MINIMAL_TOOLS")
+  fi
+  if [[ -n "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-}" ]]; then
+    _runner_env+=(CLAUDE_PLAN_MINIMAL_DISABLE_MCP="$CLAUDE_PLAN_MINIMAL_DISABLE_MCP")
+  fi
   if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
     _runner_env+=(CLAUDE_PLAN_PERMISSION_MODE="$CLAUDE_PLAN_PERMISSION_MODE")
   fi
@@ -597,8 +633,8 @@ orch_stage_execute() {
   if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
     _runner_args+=(--workspace-root "$WORKSPACE_ROOT_OVERRIDE")
   fi
-  if ((${#_session_resume_cli[@]} > 0)); then
-    _runner_args+=("${_session_resume_cli[@]}")
+  if ((${#_session_strategy_cli[@]} > 0)); then
+    _runner_args+=("${_session_strategy_cli[@]}")
   fi
   if [[ "$agent_source" == "prebuilt" ]]; then
     _runner_args+=(--agent "$agent")

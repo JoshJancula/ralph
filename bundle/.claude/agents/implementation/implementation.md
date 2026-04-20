@@ -3,7 +3,7 @@ name: implementation
 description: >-
   Implements or changes code per architecture and tasks and summarizes what
   changed, how to verify it, and open risks for the handoff document.
-model: claude-sonnet-4-6
+model: claude-haiku-4-5
 tools:
   - Read
   - Edit

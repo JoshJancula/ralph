@@ -45,10 +45,10 @@ plan_log_basename() {
 
 plan_detect_format() {
   local plan_path="$1"
-  local override="${RALPH_PLAN_TODO_STYLE:-}"
+  local override="${RALPH_PLAN_FORMAT:-}"
 
   if [[ -n "$override" && "$override" != "default" && "$override" != "cursor" ]]; then
-    echo "Invalid RALPH_PLAN_TODO_STYLE: $override (must be 'default' or 'cursor')" >&2
+    echo "Invalid RALPH_PLAN_FORMAT: $override (must be 'default' or 'cursor')" >&2
     return 1
   fi
 

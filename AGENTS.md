@@ -83,6 +83,11 @@ The dashboard reads plan state, logs, and artifacts from `.ralph-workspace/` and
 bash scripts/validate-orchestration-schema.sh <orchestration-file.orch.json>
 ```
 
+## Recommended optional tools
+
+- `fzf` - Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf). Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
+- `python3` - Required for CLI session resume functionality (captures session IDs from tool output).
+
 ## Architecture
 
 ### Bundle structure
@@ -141,6 +146,12 @@ Both must be kept in sync. Agents declare:
 
 Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtimes).
 
+### Cost defaults for Claude
+
+To reduce token consumption and keep subscription users on the auth-safe path, Ralph defaults to `CLAUDE_PLAN_BARE=0` and `CLAUDE_PLAN_MINIMAL=1`. `CLAUDE_PLAN_BARE=1` remains an opt-in mode for API-key workflows, while minimal mode composes `--disable-slash-commands`, `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, `--setting-sources project,local`, and `--tools ...` so Claude starts with a narrower, safer surface without relying on keychain-backed auth. During reset-command invocations, Ralph omits `--disable-slash-commands` so the reset command can execute. Set `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0` or pass `--claude-allow-mcp` to keep minimal mode but allow project MCP servers (for example Playwright MCP on a QA stage).
+
+Session rotation caps cache growth: `RALPH_PLAN_SESSION_MAX_TURNS` defaults to `8` for Claude, rotating the CLI session after this many invocations. Set to `0` to disable rotation. Other runtimes are unaffected.
+
 ### How plans and orchestration work
 
 1. **Single plan:** User writes a `.md` file with tasks like `- [ ] Do this` and `- [x] Done`. The runner picks the next open task, invokes the CLI assistant (Cursor/Claude/Codex), updates the plan, repeats until done.
@@ -158,11 +169,17 @@ Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtim
 
    The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
 
-   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs. When present, each wave is an array of stage IDs that must all exist in `stages[].id`, every stage ID must appear exactly once across all waves, and every stage in the orchestration must be covered. Do not combine `parallelStages` with any stage that declares `loopControl`; that combination is rejected.
+   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs followed by an optional sequential tail. Assumptions:
+   - When `parallelStages` is absent, existing sequential orchestration behavior is preserved.
+   - When `parallelStages` is present, stages are grouped into waves (arrays of stage IDs). Each wave executes in parallel; waves run sequentially.
+   - Partial `parallelStages` coverage is supported: stages not listed in any wave run sequentially (in `stages[].id` declaration order) after all waves complete. This sequential tail preserves the declaration order from the orchestration JSON.
+   - Deterministic failure semantics: the orchestrator completes the active parallel wave (waits for all stages in the wave), then fails with per-stage status if any stage in that wave fails. Remaining waves and the sequential tail do not run.
+   
+   When `parallelStages` is present, each wave is a comma-separated string of stage IDs. All stage IDs in waves must exist in `stages[].id`, and no stage ID may appear more than once across all waves. Stages not listed in `parallelStages` run sequentially after all waves, in `stages[]` declaration order. A stage in a parallel wave may declare `loopControl` to loop back to any earlier stage; the loop cycles at the end of the wave.
 
 #### Handoffs
 
-Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer; with `parallelStages`, the target must be in a later wave.
+Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer in `stages[]` order. With `parallelStages` (including partial coverage with a sequential tail), the target stage must run after the producer in execution order: waves run in order, and stages within the same wave cannot have handoffs between them (same rank); stages in the sequential tail run after all waves, in `stages[]` declaration order.
 
 Non-handoff artifact entries may still set `kind` to `design`, `review`, `research`, or `notes`. Leave `kind` and `to` off ordinary artifact declarations.
 
@@ -174,7 +191,34 @@ Handoff markdown files should follow `bundle/.ralph/handoff.template.md`:
 
 Before each stage runs, the orchestrator scans incoming handoffs for that stage, resolves template tokens in the artifact path, extracts unchecked tasks from `## Tasks`, and injects them into the stage plan inside guarded `RALPH_HANDOFF` blocks. Identical blocks are skipped, same-iteration content changes replace the stale block, and missing or malformed handoff files are logged as warnings instead of failing the run. Injection is enabled by default with `RALPH_HANDOFFS_ENABLED=1`; set it to `0` to disable the behavior.
 
-3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a `session-id.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
+3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a runtime-specific `session-id.<runtime>.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
+
+### Plan format modes
+
+The runner supports two plan file formats:
+
+1. **Default (markdown checkbox):** Standard Ralph format with lines like `- [ ] Task` and `- [x] Done`. Detected when the file does not start with `---` or lacks a `todos:` array in frontmatter.
+
+2. **Cursor frontmatter:** YAML frontmatter format with a `todos` array:
+   ```yaml
+   ---
+   todos:
+     - id: "1"
+       content: "Task description"
+       status: pending
+     - id: "2"
+       content: "Another task"
+       status: completed
+   ---
+   # Plan content follows
+   ```
+   Valid status values: `pending`, `in_progress`, `completed`. The runner updates the frontmatter when completing tasks.
+
+**Format selection:**
+- **Auto-detect (default):** The runner examines the file for `---` frontmatter markers and a `todos:` array.
+- **Override:** Set `RALPH_PLAN_FORMAT=cursor` or `RALPH_PLAN_FORMAT=default` to force a specific format regardless of content.
+
+**Implementation:** Format detection and manipulation are handled in `bundle/.ralph/bash-lib/plan-todo.sh` using Python 3 with PyYAML when available.
 
 ### Key environment variables
 
@@ -183,13 +227,14 @@ Before each stage runs, the orchestrator scans incoming handoffs for that stage,
 - `RALPH_PLAN_CLI_RESUME=1` -- Enable CLI session resume
 - `RALPH_ARTIFACT_NS` -- Override artifact namespace (defaults to plan file basename)
 - `RALPH_PLAN_KEY` -- Explicit plan namespace (defaults to plan file basename)
-- `RALPH_PLAN_SESSION_HOME` -- Directory that holds `session-id.txt`, `pending-human.txt`, and the rest of the session artifacts. When unset, defaults to `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (workspace-local). Set explicitly to override (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions` if you prefer the user config area).
+- `RALPH_PLAN_SESSION_HOME` -- Directory that holds `session-id.<runtime>.txt`, `pending-human.txt`, and the rest of the session artifacts. When unset, defaults to `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (workspace-local). Set explicitly to override (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions` if you prefer the user config area).
 - `RALPH_HUMAN_POLL_INTERVAL=2` -- Poll interval (seconds) when waiting for offline human input
 - `ORCHESTRATOR_VERBOSE=1` -- Log each orchestrator step to stderr
 - `ORCHESTRATOR_DRY_RUN=1` -- Print orchestration steps without running
-- `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` -- Allow CLI resume without an existing session-id.txt; use only in isolated environments to avoid session mix-ups.
+- `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` -- Allow CLI resume without an existing session-id.<runtime>.txt; use only in isolated environments to avoid session mix-ups.
 - `RALPH_MCP_AUTH_TOKEN` -- When set, the MCP server rejects JSON-RPC tool calls missing the matching `authToken` field (code `-32001`).
 - `RALPH_MCP_ALLOWLIST` -- Comma-separated workspace/orchestration path prefixes that the MCP server will accept; requests referencing other locations are rejected.
+- `RALPH_PLAN_FORMAT` -- Force plan format: `default` (markdown checkbox) or `cursor` (frontmatter with `todos[]` array). When unset, auto-detects based on file content.
 
 ### Human interaction flow
 
@@ -200,7 +245,7 @@ When the runner needs human input:
 All Q&A is logged to `human-replies.md` in the session directory for auditing.
 
 ### Session storage choices
-- **Default location:** When `RALPH_PLAN_SESSION_HOME` is unset, Ralph stores `session-id.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
+- **Default location:** When `RALPH_PLAN_SESSION_HOME` is unset, Ralph stores `session-id.<runtime>.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
 - **Python 3 dependency:** CLI resume relies on the JSON demux helper which is written in Python; if Python 3 is missing the runtime logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (see `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and continues without resuming the previous session.
 - **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files outside the workspace tree. If you use Codex with a custom session home, ensure the sandbox can read that path.
 - **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/`) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
@@ -232,6 +277,31 @@ Every plan run appends a record to `.ralph-workspace/logs/<PLAN_KEY>/invocation-
 - `cache_hit_ratio` -- `cache_read_input_tokens / (input_tokens + cache_read_input_tokens + cache_creation_input_tokens)`. Values near 1 mean the prompt cache absorbed almost all input cost. Values near 0 on Claude indicate cold starts (no active session) or that session resume is not enabled.
 
 Both fields are shown in the Ralph dashboard as "Cache hit" and "Peak turn" columns in the Plan Metrics and Orchestration Metrics tables, and in the per-plan-folder metric strip on plan cards.
+
+### Dashboard metrics
+
+The Ralph dashboard provides a web UI for monitoring plan execution and token usage:
+
+**Metrics sections:**
+
+1. **Overall metrics:** Aggregated statistics across all plans
+   - Total elapsed time, input/output tokens, cache hit ratio
+   - Per-runtime breakdowns
+
+2. **Per-plan metrics:** Individual plan statistics
+   - Each plan folder shows: elapsed time, tokens, cache hit ratio, peak turn
+   - Sortable and filterable by runtime, date, status
+
+3. **Per-orchestration metrics:** Stage-level breakdowns for multi-stage pipelines
+   - Shows each stage's contribution to total tokens/time
+   - Identifies which stages consumed the most resources
+
+**Access:** The dashboard runs at `http://127.0.0.1:8123` by default (use `PORT=8124 npm start` to override). It reads from `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/`.
+
+**API endpoints:**
+- `GET /api/metrics/summary` -- Overall aggregated metrics
+- `GET /api/metrics/plan/:planKey` -- Per-plan metrics
+- `GET /api/metrics/orchestration/:namespace` -- Per-orchestration stage metrics
 
 ## Important patterns
 

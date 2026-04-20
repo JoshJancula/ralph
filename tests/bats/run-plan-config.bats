@@ -19,3 +19,11 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
   [ "$status" -ne 0 ]
   [[ "$output" != *"Error: --plan <path> is required."* ]]
 }
+
+@test "run-plan accepts --session-strategy" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  run env PATH="/usr/bin:/bin" \
+    "$RUN_PLAN_SH" --runtime cursor --session-strategy reset --plan "$REPO_ROOT/PLAN.md"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"unknown argument --session-strategy"* ]]
+}
