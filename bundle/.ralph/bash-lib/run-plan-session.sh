@@ -125,32 +125,16 @@ ralph_session_generate_uuid_from_proc() {
 # Generate a UUID using the best available source on this system.
 # Returns: UUID on stdout, non-zero on error
 ralph_session_generate_uuid() {
-  local _ralph_debug_log_path="/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-214144.log"
-  # #region agent log
-  printf '{"sessionId":"214144","runId":"uuid-pre-fix","hypothesisId":"S1","location":"run-plan-session.sh:104","message":"generate_uuid entry","data":{"path":"%s"},"timestamp":%s}\n' "$PATH" "$(( $(date +%s) * 1000 ))" >>"$_ralph_debug_log_path"
-  # #endregion
   if command -v uuidgen >/dev/null 2>&1; then
-    # #region agent log
-    printf '{"sessionId":"214144","runId":"uuid-pre-fix","hypothesisId":"S2","location":"run-plan-session.sh:108","message":"uuidgen detected","data":{"uuidgen_path":"%s"},"timestamp":%s}\n' "$(command -v uuidgen 2>/dev/null || printf missing)" "$(( $(date +%s) * 1000 ))" >>"$_ralph_debug_log_path"
-    # #endregion
     uuidgen
-    # #region agent log
-    printf '{"sessionId":"214144","runId":"uuid-pre-fix","hypothesisId":"S3","location":"run-plan-session.sh:111","message":"uuidgen finished","data":{"exit_code":"%s"},"timestamp":%s}\n' "$?" "$(( $(date +%s) * 1000 ))" >>"$_ralph_debug_log_path"
-    # #endregion
     return $?
   fi
 
   if ralph_session_generate_uuid_from_proc; then
-    # #region agent log
-    printf '{"sessionId":"214144","runId":"uuid-pre-fix","hypothesisId":"S4","location":"run-plan-session.sh:117","message":"proc uuid succeeded","data":{},"timestamp":%s}\n' "$(( $(date +%s) * 1000 ))" >>"$_ralph_debug_log_path"
-    # #endregion
     return $?
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    # #region agent log
-    printf '{"sessionId":"214144","runId":"uuid-pre-fix","hypothesisId":"S5","location":"run-plan-session.sh:124","message":"python3 fallback selected","data":{"python3_path":"%s"},"timestamp":%s}\n' "$(command -v python3 2>/dev/null || printf missing)" "$(( $(date +%s) * 1000 ))" >>"$_ralph_debug_log_path"
-    # #endregion
     python3 -c 'import uuid; print(uuid.uuid4())'
     return $?
   fi

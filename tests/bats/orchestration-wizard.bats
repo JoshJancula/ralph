@@ -234,13 +234,14 @@ EOF
     printf "r1,r2,r3\n"
     printf '\n%.0s' {1..18}
     printf "y\nr1,r2\n\n"
-    printf "y\n\nr1\nr1,r2\n"
-    printf "y\ny\n1\ny\n1\n"
+    printf "y\n\n\n"
+    printf "n\n"
+    printf "n\n"
     printf "y\n"
   } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
 
   [ "$status" -eq 0 ]
 
@@ -304,14 +305,15 @@ EOF
     printf "n\n"
     printf "stage-research,stage-design,stage-impl\n"
     printf '\n%.0s' {1..18}
-    printf "y\nstage-research,stage-design\n\n"
-    printf "y\n\nstage-research\nstage-research,stage-design\n"
-    printf "y\ny\n1\ny\n1\n"
+    printf "n\n"
+    printf "y\n\n\n"
+    printf "n\n"
+    printf "n\n"
     printf "y\n"
   } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
 
   [ "$status" -eq 0 ]
 

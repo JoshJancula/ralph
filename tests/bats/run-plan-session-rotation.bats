@@ -46,7 +46,7 @@ RUN_PLAN_SESSION_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-session.sh"
 
   run bash -c '
     set -euo pipefail
-    ralph_run_plan_log(){ :; }
+    ralph_run_plan_log(){ printf '%s\n' "$*"; }
     source "$1"
     # Bump 3 times with threshold 3
     for i in 1 2 3; do
@@ -78,7 +78,7 @@ RUN_PLAN_SESSION_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-session.sh"
 
   run bash -c '
     set -euo pipefail
-    ralph_run_plan_log(){ :; }
+    ralph_run_plan_log(){ printf '%s\n' "$*"; }
     source "$1"
     # Bump once more (counter goes from 1 to 2)
     ralph_session_bump_turn_counter
