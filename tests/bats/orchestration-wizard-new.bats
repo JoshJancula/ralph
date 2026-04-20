@@ -37,7 +37,7 @@ EOF
   } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && { tr -d "\r" < "$3" | bash "$2"; } 2>&1' bash "$workspace" "$wizard" "$workspace/input.txt"
 
   [ "$status" -eq 0 ]
   [ ! -d "$workspace/.ralph-workspace/orchestration-plans/demo" ]
@@ -81,7 +81,7 @@ EOF
   } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && { tr -d "\r" < "$3" | bash "$2"; } 2>&1' bash "$workspace" "$wizard" "$workspace/input.txt"
 
   [ "$status" -eq 0 ]
   orch_file="$workspace/.ralph-workspace/orchestration-plans/demo/demo.orch.json"
@@ -130,7 +130,7 @@ EOF
   } >"$workspace/input.txt"
 
   wizard="$bundle_root/.ralph/orchestration-wizard.sh"
-  run bash -c 'export LC_ALL=C LANG=C; cd "$1" && tr -d "\r" < "$3" | bash "$2"' bash "$workspace" "$wizard" "$workspace/input.txt"
+  run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && { tr -d "\r" < "$3" | bash "$2"; } 2>&1' bash "$workspace" "$wizard" "$workspace/input.txt"
 
   [ "$status" -eq 0 ]
   orch_file="$workspace/.ralph-workspace/orchestration-plans/demo/demo.orch.json"
