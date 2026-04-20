@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Turns research into system and module design, outlines boundaries, flows, and risks, and aligns other agents on execution plans.
-model: claude-sonnet-4-6
+model: claude-haiku-4-5
 tools:
   - Read
   - Edit

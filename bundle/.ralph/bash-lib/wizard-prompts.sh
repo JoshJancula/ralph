@@ -114,17 +114,14 @@ read_pipeline_info() {
   pipeline_name="$name"
   namespace="$ns"
   pipeline_description_default="Multi-stage pipeline for $pipeline_name"
-  read -rp "Description [default $pipeline_description_default]: " description_input
-  pipeline_description="${description_input:-$pipeline_description_default}"
-  print_hint "Session resume keeps the same CLI session across all stages."
-  print_hint "It is strongly recommended for Claude stages because it reuses the prompt cache and can substantially reduce token cost."
-  print_hint "Session resume requires Python 3 on PATH."
-  read -rp "Enable session resume for all stages? (y/N) " session_resume_input
-  session_resume_input="${session_resume_input:-N}"
-  if [[ "$session_resume_input" =~ ^[Yy] ]]; then
-    pipeline_resume_all_stages="true"
-  else
-    pipeline_resume_all_stages="false"
+  description_input="$(ralph_prompt_text "Description" "$pipeline_description_default")"
+  pipeline_description="$description_input"
+  print_hint "Session strategy controls per-stage CLI session behavior."
+  print_hint "fresh (default) = strict isolation, resume = continue context, reset = reuse session id with reset-oriented prompts."
+  print_hint "resume/reset rely on Python 3 for robust session-id capture."
+  pipeline_session_strategy_default="$(ralph_menu_select --prompt "Default session strategy" --default 1 -- "fresh" "resume" "reset")"
+  if [[ "$pipeline_session_strategy_default" != "fresh" ]]; then
+    print_hint "resume/reset can lower token cost on short iterative stage plans."
   fi
   session_strategy_scope_input="$(ralph_prompt_yesno "Use this session strategy for all stages" "y")"
   if [[ "$session_strategy_scope_input" == "y" ]]; then
@@ -466,14 +463,11 @@ EOF
 }
 
 # Prompts the user to configure handoff declarations between stages.
-
-# Prompts the user to configure handoff declarations between stages.
 # Populates: stage_handoff_targets, stage_handoff_kinds
 configure_handoff_declarations() {
   local stage_count=${#stages[@]}
   
-  read -rp "Configure handoffs between stages? (y/N) " handoff_prompt_response
-  handoff_prompt_response="${handoff_prompt_response:-N}"
+  handoff_prompt_response="$(ralph_prompt_yesno "Configure handoffs between stages" "n")"
   
   if [[ ! "$handoff_prompt_response" =~ ^[Yy] ]]; then
     print_info "Skipping handoff configuration."
@@ -499,17 +493,15 @@ configure_handoff_declarations() {
       continue
     fi
     
-    read -rp "  Enable handoff from \"$current_stage_id\"? (y/N) " enable_handoff
-    enable_handoff="${enable_handoff:-N}"
+    enable_handoff="$(ralph_prompt_yesno "Enable handoff from \"$current_stage_id\"" "n")"
     
-    if [[ "$enable_handoff" =~ ^[Yy] ]]; then
+    if [[ "$enable_handoff" == "y" ]]; then
       local target_stage
       if (( ${#target_options[@]} == 1 )); then
         target_stage="${target_options[0]}"
         print_info "    Using default target: $target_stage"
       else
-        read -rp "    Select target stage [${target_options[0]}]: " target_input
-        target_stage="${target_input:-${target_options[0]}}"
+        target_stage="$(ralph_menu_select --prompt "target for \"$current_stage_id\"" --default 1 -- "${target_options[@]}")"
       fi
       
       stage_handoff_targets+=("$target_stage")

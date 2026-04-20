@@ -68,7 +68,7 @@ wizard_render_summary() {
 
     printf '  %-12s %-10s %-15s %-20s %-10s %-10s\n' \
       "$stage_id" "$runtime" "$agent" "${model:-(default)}" "$session_strategy" "${budget:-(none)}"
-    ((++idx))
+    ((idx++))
   done
   printf '\n'
 
@@ -78,7 +78,7 @@ wizard_render_summary() {
     local wave_num=1
     for wave in "${parallel_stage_waves[@]}"; do
       printf '  Wave %d: %s\n' "$wave_num" "$wave"
-      wave_num=$((wave_num + 1))
+      ((wave_num++))
     done
     printf '\n'
   fi
@@ -164,7 +164,7 @@ wizard_render_plan_template() {
 
 # Builds the JSON entry for a stage, including optional artifacts and control data.
 # Args: 1 namespace, 2 stage_label, 3 runtime, 4 agent, 5 agent_source, 6 plan_rel_path, 7 artifact_path,
-#       8 stage_desc, 9 stage_model, 10 session_resume, 11 stage_input_list, 12 context_budget,
+#       8 stage_desc, 9 stage_model, 10 session_strategy, 11 stage_input_list, 12 context_budget,
 #       13 handoff_target, 14 handoff_kind
 # Returns: prints the JSON entry to stdout.
 wizard_build_stage_entry() {
@@ -182,6 +182,10 @@ wizard_build_stage_entry() {
   local context_budget="${12:-}"
   local handoff_target="${13:-}"
   local handoff_kind="${14:-}"
+  local session_resume="false"
+  if [[ "$session_strategy" == "resume" ]]; then
+    session_resume="true"
+  fi
 
   local entry
   entry="    {\n      \"id\": \"$stage_label\",\n      \"runtime\": \"$runtime\",\n      \"agent\": \"$agent\",\n      \"agentSource\": \"$agent_source\",\n      \"plan\": \"$plan_rel_path\",\n      \"artifacts\": [\n        {\n          \"path\": \"$artifact_path\",\n          \"required\": true\n        }\n      ]"
@@ -202,6 +206,7 @@ wizard_build_stage_entry() {
     entry="$entry,\n      \"contextBudget\": \"$context_budget\""
   fi
 
+  entry="$entry,\n      \"sessionStrategy\": \"$session_strategy\""
   entry="$entry,\n      \"sessionResume\": $session_resume"
 
   if [[ -n "$stage_input_list" ]]; then

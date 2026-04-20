@@ -125,8 +125,7 @@ schema_filter='
         (all(.parallelStages[]; type == "string" and test("^\\s*[a-z0-9_]+(-[a-z0-9_]+)*(\\s*,\\s*[a-z0-9_]+(-[a-z0-9_]+)*)*\\s*$"))) and
         ((parallel_stage_ids | unique | length) == (parallel_stage_ids | length)) and
         ((parallel_stage_ids - stage_ids | length) == 0) and
-        ((stage_ids - parallel_stage_ids | length) == 0) and
-        (all(.stages[]; has("loopControl") | not))
+        ((stage_ids - parallel_stage_ids | length) == 0)
       )
     );
 

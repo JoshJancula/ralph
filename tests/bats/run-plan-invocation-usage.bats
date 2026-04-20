@@ -2,6 +2,8 @@
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 
+CORE_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-core.sh"
+
 @test "invocation usage history is written to a single JSON file" {
   [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
 
@@ -243,11 +245,160 @@ PY
   [ "$hits" -eq 1 ]
 }
 
-@test "plan usage summary reports cache creation and total tokens" {
-  local core="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-core.sh"
+@test "plan usage summary reports cumulative and average labels" {
   local hits
-  hits="$(grep -cE 'echo -e.*Token usage:.*cache_create=.*total=' "$core" || true)"
+  hits="$(grep -cE 'echo -e.*Plan total across .*cache_create=.*cache_read=.*output=.*est=' "$CORE_FILE" || true)"
   [ "$hits" -eq 1 ]
+
+  hits="$(grep -cE 'echo -e.*Per-invocation average:.*cache_create=.*cache_read=.*output=.*est=' "$CORE_FILE" || true)"
+  [ "$hits" -eq 1 ]
+}
+
+@test "per-invocation usage stderr includes cost and zero-aware estimate when USAGE_FILE is populated" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local tmpdir usage_file snippet script
+  tmpdir="$(mktemp -d)"
+  usage_file="$tmpdir/usage.json"
+  snippet="$tmpdir/per-invocation.snip.sh"
+  script="$tmpdir/per-invocation.sh"
+
+  cat <<'JSON' >"$usage_file"
+{
+  "schema_version": 1,
+  "kind": "plan_invocation_usage_history",
+  "invocations": [
+    {
+      "iteration": 1,
+      "model": "claude-sonnet-4-6",
+      "runtime": "claude",
+      "plan_key": "PLAN9",
+      "stage_id": "stage-1",
+      "started_at": "2026-04-17T00:00:00Z",
+      "ended_at": "2026-04-17T00:00:03Z",
+      "elapsed_seconds": 3,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "max_turn_total_tokens": 0,
+      "cache_hit_ratio": 0
+    }
+  ]
+}
+JSON
+
+  sed -n '/^    # Read per-invocation token usage from demux.py output (only when JSON streaming was active)\./,/^    # Bump session turn counter and maybe rotate to cap cache growth/p' "$CORE_FILE" >"$snippet"
+
+  cat <<EOF >"$script"
+#!/usr/bin/env bash
+set -euo pipefail
+ralph_run_plan_log() { :; }
+_ralph_append_invocation_usage_history() { :; }
+
+source "${REPO_ROOT}/bundle/.ralph/bash-lib/ralph-format-elapsed.sh"
+
+USAGE_FILE="\$1"
+SELECTED_MODEL="claude-sonnet-4-6"
+iteration=3
+RUNTIME="claude"
+PLAN_PATH="PLAN9.md"
+RALPH_PLAN_KEY="PLAN9"
+RALPH_STAGE_ID="stage-1"
+RALPH_LOG_DIR="\$2"
+OUTPUT_LOG="\$2/output.log"
+EXIT_CODE_FILE="\$2/exit-code"
+START_TIME="\$(date +%s)"
+_inv_started_at="2026-04-17T00:00:00Z"
+_total_input_tokens=0
+_total_output_tokens=0
+_total_cache_creation_tokens=0
+_total_cache_read_tokens=0
+_total_max_turn_tokens=0
+_inv_input=0
+_inv_output=0
+_inv_cache_create=0
+_inv_cache_read=0
+_inv_max_turn=0
+_inv_cache_hit_ratio=0
+_inv_elapsed=0
+_inv_ended_at="2026-04-17T00:00:03Z"
+exit_code=0
+_inv_used_resume_session_id=0
+_inv_resume_session_id=""
+_reset_retry_done_for_line=0
+SESSION_ID_FILE="\$2/session-id.claude.txt"
+RALPH_PLAN_SESSION_STRATEGY="fresh"
+RESUME_SESSION_ID_OVERRIDE=""
+
+ralph_session_reset_resume_error_detected() { return 1; }
+
+source "\$3"
+EOF
+  chmod +x "$script"
+
+  run "$script" "$usage_file" "$tmpdir" "$snippet"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"invocation 3  input=0  cache_create=0  cache_read=0  output=0  est=\$0.000  cache_hit=0%"* ]]
+
+  rm -rf "$tmpdir"
+}
+
+@test "plan summary stderr includes cumulative and average lines and respects NO_COLOR" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local tmpdir snippet script
+  tmpdir="$(mktemp -d)"
+  snippet="$tmpdir/summary.fn.sh"
+  script="$tmpdir/summary.sh"
+
+  sed -n '/^_ralph_write_plan_usage_summary() {/,/^}$/p' "$CORE_FILE" >"$snippet"
+
+  cat <<EOF >"$script"
+#!/usr/bin/env bash
+set -euo pipefail
+source "${REPO_ROOT}/bundle/.ralph/bash-lib/ralph-format-elapsed.sh"
+EOF
+  cat <<'EOF' >>"$script"
+source "$1"
+ralph_run_plan_log() { :; }
+
+if [[ "${NO_COLOR:-0}" == "1" ]]; then
+  C_DIM=""
+  C_RST=""
+else
+  C_DIM=$'\033[2m'
+  C_RST=$'\033[0m'
+fi
+
+SELECTED_MODEL="claude-sonnet-4-6"
+RUNTIME="claude"
+PLAN_PATH="PLAN9.md"
+RALPH_PLAN_KEY="PLAN9"
+RALPH_ARTIFACT_NS="PLAN9"
+RALPH_STAGE_ID="stage-1"
+RALPH_LOG_DIR="$2"
+mkdir -p "$RALPH_LOG_DIR"
+total_invocations=3
+_plan_start_ts="$(( $(date +%s) - 5 ))"
+_plan_started_at="2026-04-17T00:00:00Z"
+_total_input_tokens=12345
+_total_output_tokens=4321
+_total_cache_creation_tokens=67
+_total_cache_read_tokens=89
+_total_max_turn_tokens=500
+
+_ralph_write_plan_usage_summary 1 3
+EOF
+  chmod +x "$script"
+
+  run env NO_COLOR=1 "$script" "$snippet" "$tmpdir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Plan total across 3 invocations: input=12,345 cache_create=67 cache_read=89 output=4,321 est=\$"* ]]
+  [[ "$output" == *"Per-invocation average: input=4,115 cache_create=22 cache_read=30 output=1,440 est=\$"* ]]
+  [[ "$output" != *$'\e['* ]]
+
+  rm -rf "$tmpdir"
 }
 
 @test "demux extracts Claude message.usage and top-level usage blocks" {

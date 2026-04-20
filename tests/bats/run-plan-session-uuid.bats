@@ -18,19 +18,18 @@ RUN_PLAN_SESSION_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-session.sh"
       local case_dir
       case_dir="$(mktemp -d)"
       mkdir -p "$case_dir/bin"
-      # Narrow PATH must still resolve core utilities (helpers use cat for /proc fallback). Do not prepend /bin or
-      # /usr/bin wholesale on Linux merged-usr: that exposes system uuidgen and breaks proc/python cases.
-      if command -v cat >/dev/null 2>&1; then
-        cp "$(command -v cat)" "$case_dir/bin/cat"
-        chmod +x "$case_dir/bin/cat"
-      fi
+      cat <<'EOF' >"$case_dir/bin/date"
+#!/usr/bin/env bash
+printf "%s\n" "1700000000"
+EOF
+      chmod +x "$case_dir/bin/date"
 
       case "$mode" in
         uuidgen)
-          cat <<H_STUB_UUIDGEN >"$case_dir/bin/uuidgen"
-#!/bin/sh
+          cat <<EOF >"$case_dir/bin/uuidgen"
+#!/usr/bin/env bash
 printf "%s\n" "11111111-1111-4111-8111-111111111111"
-H_STUB_UUIDGEN
+EOF
           chmod +x "$case_dir/bin/uuidgen"
           ;;
         proc)
@@ -42,19 +41,17 @@ H_STUB_UUIDGEN
           ralph_session_generate_uuid_from_proc() {
             return 1
           }
-          cat <<H_STUB_PY >"$case_dir/bin/python3"
-#!/bin/sh
+          cat <<EOF >"$case_dir/bin/python3"
+#!/usr/bin/env bash
 printf "%s\n" "33333333-3333-4333-8333-333333333333"
-H_STUB_PY
+EOF
           chmod +x "$case_dir/bin/python3"
           ;;
       esac
 
       local old_path="$PATH"
       local actual=""
-      # Only expose our stub binaries. On merged-usr Linux, /bin/uuidgen can exist; including /bin in PATH
-      # makes the "proc" and "python" cases accidentally invoke the real uuidgen and fail the test.
-      PATH="$case_dir/bin"
+      PATH="$case_dir/bin:/bin"
       actual="$(ralph_session_generate_uuid)"
       PATH="$old_path"
 

@@ -19,21 +19,6 @@ ralph_ui_init_colors() {
 }
 ralph_ui_init_colors
 
-# Read one line from the operator. Prefer real stdin when it is a pipe (piped wizard/CI); use /dev/tty only for
-# interactive terminals so stdin can still be redirected while the user types on the console.
-# Args: $1 = name of variable to set (printf -v avoids bash 4.3 nameref for macOS bash 3.2).
-ralph_ui_read_line() {
-  local __line
-  if [[ -p /dev/stdin ]]; then
-    IFS= read -r __line || true
-  elif [[ -t 0 ]] && [[ -r /dev/tty ]]; then
-    IFS= read -r __line </dev/tty
-  else
-    IFS= read -r __line || true
-  fi
-  printf -v "$1" '%s' "$__line"
-}
-
 # Must stay aligned with ralph_internal_wizard_sanitize in wizard-prompts.sh (orchestration stage ids).
 ralph_prompt_list_sanitize_stage_label() {
   local value="$1"
@@ -70,7 +55,11 @@ ralph_prompt_text() {
       printf '%s: ' "$label" >&2
     fi
 
-    ralph_ui_read_line input
+    if [[ -t 0 ]]; then
+      read -r input </dev/tty
+    else
+      read -r input
+    fi
 
     if [[ -z "$input" ]]; then
       if [[ $has_default -eq 1 ]]; then
@@ -109,7 +98,11 @@ ralph_prompt_yesno() {
       printf '%s [y/N]: ' "$label" >&2
     fi
 
-    ralph_ui_read_line input
+    if [[ -t 0 ]]; then
+      read -r input </dev/tty
+    else
+      read -r input
+    fi
 
     input="${input:-$default}"
     input="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
@@ -169,7 +162,11 @@ ralph_prompt_choice() {
       printf '%s (options: %s): ' "$label" "${opts[*]}" >&2
     fi
 
-    ralph_ui_read_line input
+    if [[ -t 0 ]]; then
+      read -r input </dev/tty
+    else
+      read -r input
+    fi
 
     if [[ -z "$input" ]]; then
       if [[ $has_default -eq 1 ]]; then
@@ -220,7 +217,11 @@ ralph_prompt_list() {
   while true; do
     printf '%s (comma or space separated, enter for default): ' "$label" >&2
 
-    ralph_ui_read_line input
+    if [[ -t 0 ]]; then
+      read -r input </dev/tty
+    else
+      read -r input
+    fi
 
     if [[ -z "$input" ]]; then
       input="$default_csv"
@@ -306,7 +307,11 @@ ralph_prompt_list() {
       printf '\npress Enter to keep, or type anything to re-enter: ' >&2
 
       local confirm
-      ralph_ui_read_line confirm
+      if [[ -t 0 ]]; then
+        read -r confirm </dev/tty
+      else
+        read -r confirm
+      fi
 
       if [[ -n "$confirm" ]]; then
         printf '\n' >&2

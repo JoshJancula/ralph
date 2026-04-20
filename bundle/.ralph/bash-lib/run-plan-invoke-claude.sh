@@ -7,12 +7,18 @@ RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 
 # Public interface:
 #   run_plan_invoke_claude_bare_mode_validate -- normalize CLAUDE_PLAN_BARE.
+#   run_plan_invoke_claude_minimal_mode_validate -- normalize CLAUDE_PLAN_MINIMAL.
+#   run_plan_invoke_claude_minimal_mcp_lockdown_validate -- normalize CLAUDE_PLAN_MINIMAL_DISABLE_MCP.
+#   run_plan_invoke_claude_apply_minimal_flags -- append CLAUDE_PLAN_MINIMAL auth-safe flags.
 #   run_plan_invoke_claude_permission_mode_validate -- normalize CLAUDE_PLAN_PERMISSION_MODE.
-#   run_plan_invoke_claude_session_resume_args / run_plan_invoke_claude_bare_resume_args -- build argv fragments.
+#   run_plan_invoke_claude_session_resume_args / run_plan_invoke_claude_session_new_args / run_plan_invoke_claude_bare_resume_args -- build argv fragments.
 #   run_plan_invoke_claude_bare_resume_warn -- stderr warning when bare resume is not allowed.
 #   ralph_run_plan_invoke_claude -- run Claude headless with model, tools, resume; exports log/session paths for demux.
 # Env:
-#   CLAUDE_PLAN_BARE (truthy enables --bare; default off)
+#   CLAUDE_PLAN_BARE (truthy enables --bare; default off — requires ANTHROPIC_API_KEY)
+#   CLAUDE_PLAN_MINIMAL (truthy enables auth-safe minimal flag composition; default on)
+#   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (default on: pass --strict-mcp-config and empty --mcp-config in minimal mode; off loads project MCP)
+#   CLAUDE_PLAN_MINIMAL_TOOLS (csv tool names for --tools in minimal mode; default "Bash,Read,Edit,Write")
 #   CLAUDE_PLAN_PERMISSION_MODE (one of default, acceptEdits, auto, bypassPermissions, dontAsk, plan; default unset)
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
@@ -54,6 +60,60 @@ run_plan_invoke_claude_bare_mode_validate() {
       return 1
       ;;
   esac
+}
+
+run_plan_invoke_claude_minimal_mode_validate() {
+  local minimal="${CLAUDE_PLAN_MINIMAL:-1}"
+  case "$minimal" in
+    1|true|yes|on)
+      CLAUDE_PLAN_MINIMAL=1
+      export CLAUDE_PLAN_MINIMAL
+      return 0
+      ;;
+    0|false|no|off)
+      CLAUDE_PLAN_MINIMAL=0
+      export CLAUDE_PLAN_MINIMAL
+      return 0
+      ;;
+    *)
+      echo "Error: CLAUDE_PLAN_MINIMAL must be one of 1, true, yes, on, 0, false, no, or off." >&2
+      return 1
+      ;;
+  esac
+}
+
+run_plan_invoke_claude_minimal_mcp_lockdown_validate() {
+  local lock="${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-1}"
+  case "$lock" in
+    1|true|yes|on)
+      CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
+      export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+      return 0
+      ;;
+    0|false|no|off)
+      CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
+      export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+      return 0
+      ;;
+    *)
+      echo "Error: CLAUDE_PLAN_MINIMAL_DISABLE_MCP must be one of 1, true, yes, on, 0, false, no, or off." >&2
+      return 1
+      ;;
+  esac
+}
+
+run_plan_invoke_claude_apply_minimal_flags() {
+  local args_name="$1"
+  local tools="${CLAUDE_PLAN_MINIMAL_TOOLS:-Bash,Read,Edit,Write}"
+  if [[ "${RALPH_RUN_PLAN_RESET_COMMAND_USED:-0}" != "1" ]]; then
+    eval "$args_name+=(--disable-slash-commands)"
+  fi
+  if [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP}" == "1" ]]; then
+    eval "$args_name+=(--strict-mcp-config)"
+    eval "$args_name+=(--mcp-config '{\"mcpServers\":{}}')"
+  fi
+  eval "$args_name+=(--setting-sources project,local)"
+  eval "$args_name+=(--tools \"$tools\")"
 }
 
 run_plan_invoke_claude_permission_mode_validate() {
@@ -118,14 +178,19 @@ ralph_run_plan_invoke_claude() {
     args+=(--max-budget-usd "$budget")
   fi
 
-  if ! run_plan_invoke_claude_bare_mode_validate; then
-    return 1
-  fi
+  if ! run_plan_invoke_claude_bare_mode_validate; then return 1; fi
+  if ! run_plan_invoke_claude_minimal_mode_validate; then return 1; fi
+  if ! run_plan_invoke_claude_minimal_mcp_lockdown_validate; then return 1; fi
+
+  local _bare_idx=-1
   if [[ "${CLAUDE_PLAN_BARE:-0}" == "1" ]]; then
+    _bare_idx=${#args[@]}
     # `--bare` skips hooks, LSP, plugin sync, attribution, auto-memory, prefetches,
     # keychain reads, and CLAUDE.md auto-discovery. It lowers overhead but also
     # removes automatic context sources.
     args+=(--bare)
+  elif [[ "${CLAUDE_PLAN_MINIMAL:-1}" == "1" ]]; then
+    run_plan_invoke_claude_apply_minimal_flags args
   fi
 
   if ! run_plan_invoke_claude_permission_mode_validate; then
@@ -164,22 +229,6 @@ ralph_run_plan_invoke_claude() {
   if [[ -n "${PROMPT_STATIC:-}" ]]; then
     args+=(--system-prompt "$PROMPT_STATIC")
   fi
-
-  #region agent log
-  if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
-    _dbg_ts=$(( $(date +%s) * 1000 ))
-    _dbg_has_resume_flag=0
-    _dbg_has_system_prompt_flag=0
-    _dbg_has_exclude_dynamic_sections_flag=0
-    local _dbg_arg=""
-    for _dbg_arg in "${args[@]}"; do
-      [[ "$_dbg_arg" == "--resume" ]] && _dbg_has_resume_flag=1
-      [[ "$_dbg_arg" == "--system-prompt" ]] && _dbg_has_system_prompt_flag=1
-      [[ "$_dbg_arg" == "--exclude-dynamic-system-prompt-sections" ]] && _dbg_has_exclude_dynamic_sections_flag=1
-    done
-    printf '%s\n' "{\"sessionId\":\"91b133\",\"id\":\"log_${_dbg_ts}_claude_args_$$\",\"timestamp\":${_dbg_ts},\"location\":\"bundle/.ralph/bash-lib/run-plan-invoke-claude.sh:ralph_run_plan_invoke_claude\",\"message\":\"claude invoke args prepared\",\"data\":{\"has_resume_flag\":${_dbg_has_resume_flag},\"has_system_prompt_flag\":${_dbg_has_system_prompt_flag},\"has_exclude_dynamic_sections_flag\":${_dbg_has_exclude_dynamic_sections_flag},\"prompt_len\":${#PROMPT},\"prompt_static_len\":${#PROMPT_STATIC},\"context_budget\":\"${RALPH_PLAN_CONTEXT_BUDGET:-standard}\",\"runtime\":\"claude\"},\"runId\":\"initial\",\"hypothesisId\":\"H4\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-91b133.log" || true
-  fi
-  #endregion agent log
 
   run_plan_invoke_claude_cli() {
     printf '%s' "$PROMPT" | "$cli" "${args[@]}"

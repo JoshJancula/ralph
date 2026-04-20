@@ -186,16 +186,30 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
         return
     if mode == "claude":
         # Claude stream-json usage appears in usage blocks (top-level and/or under message).
+        # To avoid double-counting, we track if we've seen a result event and prefer
+        # its cumulative usage over summing per-assistant deltas.
+        is_result_event = obj.get("type") == "result" or "result" in obj
+        if is_result_event:
+            acc["_claude_result_seen"] = True
+        
         usage = obj.get("usage")
         if not usage and isinstance(obj.get("message"), dict):
             usage = obj.get("message", {}).get("usage")
         if isinstance(usage, dict):
-            acc["input_tokens"] += int(usage.get("input_tokens") or 0)
-            acc["output_tokens"] += int(usage.get("output_tokens") or 0)
-            acc["cache_creation_input_tokens"] += int(usage.get("cache_creation_input_tokens") or 0)
-            acc["cache_read_input_tokens"] += int(usage.get("cache_read_input_tokens") or 0)
-        # Also check top-level usage fields (some event types)
-        if "input_tokens" in obj or "output_tokens" in obj:
+            if acc.get("_claude_result_seen") and is_result_event:
+                # Replace with result event's cumulative usage
+                acc["input_tokens"] = int(usage.get("input_tokens") or 0)
+                acc["output_tokens"] = int(usage.get("output_tokens") or 0)
+                acc["cache_creation_input_tokens"] = int(usage.get("cache_creation_input_tokens") or 0)
+                acc["cache_read_input_tokens"] = int(usage.get("cache_read_input_tokens") or 0)
+            else:
+                # Sum as before
+                acc["input_tokens"] += int(usage.get("input_tokens") or 0)
+                acc["output_tokens"] += int(usage.get("output_tokens") or 0)
+                acc["cache_creation_input_tokens"] += int(usage.get("cache_creation_input_tokens") or 0)
+                acc["cache_read_input_tokens"] += int(usage.get("cache_read_input_tokens") or 0)
+        # Also check top-level usage fields, but guard against re-adding result usage
+        if not acc.get("_claude_result_seen") and ("input_tokens" in obj or "output_tokens" in obj):
             acc["input_tokens"] += int(obj.get("input_tokens") or 0)
             acc["output_tokens"] += int(obj.get("output_tokens") or 0)
             acc["cache_creation_input_tokens"] += int(obj.get("cache_creation_input_tokens") or 0)

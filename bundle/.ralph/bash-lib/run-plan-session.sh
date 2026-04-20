@@ -7,8 +7,9 @@
 #   ralph_session_migrate_legacy -- copies old .ralph-workspace session files into the new home.
 #   ralph_session_write_manual_resume -- writes --resume session id to session-id.<runtime>.txt.
 #   ralph_session_generate_uuid -- returns a UUID for pre-generated CLI resume ids.
-#   ralph_session_prompt_cli_resume -- interactive y/n for RALPH_PLAN_CLI_RESUME.
+#   ralph_session_prompt_cli_resume -- interactive session-strategy picker for TTY runs.
 #   ralph_session_apply_resume_strategy -- sets RALPH_RUN_PLAN_RESUME_SESSION_ID or RALPH_RUN_PLAN_RESUME_BARE.
+#   ralph_session_reset_resume_error_detected -- true when recent logs imply stale/invalid resumed sessions.
 #   ralph_session_bump_turn_counter -- increments and returns session turn count.
 #   ralph_session_maybe_rotate -- rotates session when threshold reached to cap cache growth.
 #
@@ -158,7 +159,7 @@ ralph_session_generate_uuid() {
   return 1
 }
 
-# Prompt the user interactively about reusing the CLI session across TODOs.
+# Prompt the user interactively about session behavior across TODOs.
 # Args: none
 # Returns: 0 after updating RALPH_PLAN_SESSION_STRATEGY / RALPH_PLAN_CLI_RESUME, non-zero on unexpected errors
 ralph_session_prompt_cli_resume() {
@@ -190,10 +191,9 @@ ralph_session_prompt_cli_resume() {
   echo -e "${C_DIM}  ${SESSION_ID_FILE}${C_RST}" >&2
   echo -e "${C_DIM}Python 3 on PATH is required to capture/update ids from JSON output.${C_RST}" >&2
   echo "" >&2
-  local _cr_ans
-  _cr_ans="$(ralph_prompt_yesno "Your answer (y=Yes: same session, n=No: new session per TODO)" "n")"
-  if [[ "$_cr_ans" == "y" ]]; then
-    RALPH_PLAN_CLI_RESUME=1
+  local _cr_choice _cr_strategy
+  if declare -F ralph_menu_select >/dev/null 2>&1; then
+    _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset")"
   else
     _cr_choice="$(ralph_prompt_text "Session strategy (fresh/resume/reset)" "fresh")"
   fi
@@ -258,23 +258,56 @@ ralph_session_apply_resume_strategy() {
     fi
   fi
 
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ ! -s "$SESSION_ID_FILE" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" != "1" ]]; then
+  if [[ "$_strategy" == "resume" ]] && [[ ! -s "$SESSION_ID_FILE" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" != "1" ]]; then
     local _new_session_id=""
     if _new_session_id="$(ralph_session_generate_uuid)"; then
       printf '%s\n' "$_new_session_id" > "$SESSION_ID_FILE"
       chmod 600 "$SESSION_ID_FILE"
       export RALPH_RUN_PLAN_NEW_SESSION_ID="$_new_session_id"
-      ralph_run_plan_log "RALPH_PLAN_CLI_RESUME: pre-generated new session id and will use --session-id on first run"
+      ralph_run_plan_log "session strategy resume: pre-generated new session id and will use --session-id on first run"
       return 0
     fi
   fi
 
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
+  if [[ "$_strategy" == "reset" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" != "1" ]]; then
+    if [[ "${RUNTIME:-}" == "claude" ]]; then
+      local _reset_new_session_id=""
+      if _reset_new_session_id="$(ralph_session_generate_uuid)"; then
+        printf '%s\n' "$_reset_new_session_id" > "$SESSION_ID_FILE"
+        chmod 600 "$SESSION_ID_FILE"
+        export RALPH_RUN_PLAN_NEW_SESSION_ID="$_reset_new_session_id"
+        ralph_run_plan_log "session strategy reset: pre-generated first Claude session id for bootstrap"
+        return 0
+      fi
+    fi
+    ralph_run_plan_log "session strategy reset: no stored session id yet; running fresh once to capture it"
+    return 0
+  fi
+
+  if [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
     # Flag for runtimes that support resume-without-id (e.g. Codex --last); only when unsafe resume is allowed.
     export RALPH_RUN_PLAN_RESUME_BARE=1
     ralph_run_plan_log "session strategy $_strategy with RALPH_PLAN_ALLOW_UNSAFE_RESUME=1: using bare resume (wrong session possible on a busy host)"
     echo "Warning: bare CLI resume without a stored session id can attach to the wrong session when several projects use the same CLI on one machine. Prefer isolated CI or fix session capture." >&2
   fi
+}
+
+ralph_session_reset_resume_error_detected() {
+  local runtime="${1:-}"
+  local output_log="${2:-}"
+  [[ -n "$runtime" ]] || return 1
+  [[ -n "$output_log" ]] || return 1
+  [[ -f "$output_log" ]] || return 1
+
+  local _recent
+  _recent="$(tail -n 240 "$output_log" 2>/dev/null || true)"
+  [[ -n "$_recent" ]] || return 1
+
+  if printf '%s\n' "$_recent" | grep -Eiq \
+    'session[^[:alnum:]]*(not[[:space:]-_]*found|does[[:space:]-_]*not[[:space:]-_]*exist|missing|invalid)|unknown[[:space:]-_]*session|no[[:space:]-_]*such[[:space:]-_]*session|chat[^[:alnum:]]*not[[:space:]-_]*found|thread[^[:alnum:]]*not[[:space:]-_]*found'; then
+    return 0
+  fi
+  return 1
 }
 
 # Bump the session turn counter atomically.
