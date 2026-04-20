@@ -53,7 +53,9 @@ ralph_menu_select() {
     idx=$((idx + 1))
   done
   printf '%s' "${C_Y:-}${C_BOLD:-}${prompt}${C_RST:-} ${C_DIM:-}[${default_idx}]${C_RST:-}: " >&2
-  if [[ -t 0 && -r /dev/tty ]]; then
+  if [[ -p /dev/stdin ]]; then
+    read -r raw || raw=""
+  elif [[ -t 0 && -r /dev/tty ]]; then
     read -r raw </dev/tty 2>/dev/null || raw=""
   else
     read -r raw || raw=""
