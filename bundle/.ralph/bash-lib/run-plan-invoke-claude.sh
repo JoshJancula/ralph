@@ -108,7 +108,7 @@ run_plan_invoke_claude_apply_minimal_flags() {
   if [[ "${RALPH_RUN_PLAN_RESET_COMMAND_USED:-0}" != "1" ]]; then
     eval "$args_name+=(--disable-slash-commands)"
   fi
-  if [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP}" == "1" ]]; then
+  if [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-1}" == "1" ]]; then
     eval "$args_name+=(--strict-mcp-config)"
     eval "$args_name+=(--mcp-config '{\"mcpServers\":{}}')"
   fi
