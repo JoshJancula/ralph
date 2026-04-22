@@ -181,7 +181,8 @@ choose_stage_id_from_list() {
     idx=$((idx + 1))
   done
   while true; do
-    read -rp "$prompt" answer
+    printf '%s' "$prompt" >&2
+    ralph_ui_read_line answer
     if [[ -z "$answer" ]]; then
       if [[ "$allow_empty" == "1" ]]; then
         printf ''

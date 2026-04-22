@@ -60,6 +60,9 @@ ralph_menu_select() {
   else
     read -r raw || raw=""
   fi
+  # Strip leading/trailing whitespace so piped/CI input cannot leave a whitespace-only line
+  # that would bypass the empty default below and fail the numeric check.
+  raw="$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   raw="${raw:-$default_idx}"
 
   if ! [[ "$raw" =~ ^[0-9]+$ ]]; then

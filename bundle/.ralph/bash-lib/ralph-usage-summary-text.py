@@ -237,6 +237,36 @@ def aggregate(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def parse_invocations_doc(invocation_doc: Any) -> List[Dict[str, Any]]:
+    if isinstance(invocation_doc, dict):
+        invocations = invocation_doc.get("invocations", []) or []
+    elif isinstance(invocation_doc, list):
+        invocations = invocation_doc
+    else:
+        invocations = []
+    if not isinstance(invocations, list):
+        return []
+    return [record for record in invocations if isinstance(record, dict)]
+
+
+def plan_summary_with_invocation_fallback(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    effective = dict(summary)
+    if not invocations:
+        return effective
+
+    totals = aggregate(invocations)
+    total_input = totals["input_tokens"] + totals["cache_creation_input_tokens"] + totals["cache_read_input_tokens"]
+    effective["invocations"] = len(invocations)
+    effective["elapsed_seconds"] = totals["elapsed_seconds"]
+    effective["input_tokens"] = totals["input_tokens"]
+    effective["output_tokens"] = totals["output_tokens"]
+    effective["cache_creation_input_tokens"] = totals["cache_creation_input_tokens"]
+    effective["cache_read_input_tokens"] = totals["cache_read_input_tokens"]
+    effective["max_turn_total_tokens"] = totals["max_turn_total_tokens"]
+    effective["cache_hit_ratio"] = round(totals["cache_read_input_tokens"] / total_input, 4) if total_input > 0 else 0
+    return effective
+
+
 def model_label(record: Dict[str, Any]) -> str:
     return as_text(record.get("model")).strip() or "-"
 
@@ -407,8 +437,10 @@ def discover_summaries(logs_dir: str) -> Tuple[List[Tuple[str, str]], List[Tuple
 def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, str]]) -> Dict[str, Any]:
     all_invocations: List[Dict[str, Any]] = []
     plan_summaries: Dict[str, Dict[str, Any]] = {}
+    plan_effective_summaries: Dict[str, Dict[str, Any]] = {}
     orch_summaries: Dict[str, Dict[str, Any]] = {}
     runtime_buckets: Dict[str, Dict[str, Any]] = {}
+    invocations_by_summary_path: Dict[str, List[Dict[str, Any]]] = {}
 
     for summary_path, invocations_path in plans:
         summary = load_json_quiet(summary_path)
@@ -425,11 +457,8 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
 
     for summary_path, invocations_path in loaded_plans + loaded_orchestrations:
         invocation_doc = load_json_quiet(invocations_path) if os.path.isfile(invocations_path) else None
-        invocations = []
-        if isinstance(invocation_doc, dict):
-            invocations = invocation_doc.get("invocations", []) or []
-        elif isinstance(invocation_doc, list):
-            invocations = invocation_doc
+        invocations = parse_invocations_doc(invocation_doc)
+        invocations_by_summary_path[summary_path] = invocations
 
         if invocations:
             all_invocations.extend(invocations)
@@ -459,6 +488,12 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
                 bucket["max_turn_total_tokens"] = max_turn
             bucket["invocation_count"] += 1
 
+    for summary_path, _ in loaded_plans:
+        summary = plan_summaries.get(summary_path) or {}
+        plan_effective_summaries[summary_path] = plan_summary_with_invocation_fallback(
+            summary, invocations_by_summary_path.get(summary_path, [])
+        )
+
     overall_totals = aggregate(all_invocations)
     denom = overall_totals["input_tokens"] + overall_totals["cache_creation_input_tokens"] + overall_totals["cache_read_input_tokens"]
     overall_totals["cache_hit_ratio"] = round(overall_totals["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
@@ -483,6 +518,7 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
         "by_runtime": runtime_buckets,
         "by_model": by_model,
         "plan_summaries": plan_summaries,
+        "plan_effective_summaries": plan_effective_summaries,
         "orch_summaries": orch_summaries,
         "loaded_plans": loaded_plans,
         "loaded_orchestrations": loaded_orchestrations,
@@ -572,7 +608,7 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
         emit("  (none)")
     emit()
 
-    plan_summaries = aggregated.get("plan_summaries") or {}
+    plan_summaries = aggregated.get("plan_effective_summaries") or aggregated.get("plan_summaries") or {}
     loaded_plans = aggregated.get("loaded_plans") or [
         (s, i) for (s, i) in plans if s in plan_summaries
     ]
@@ -704,7 +740,7 @@ def main(argv: Sequence[str]) -> int:
         aggregated = aggregate_all(plans, orchestrations)
 
         if args.format == "json":
-            plan_summaries = aggregated.get("plan_summaries") or {}
+            plan_summaries = aggregated.get("plan_effective_summaries") or aggregated.get("plan_summaries") or {}
             orch_summaries = aggregated.get("orch_summaries") or {}
             plans_data = [plan_summaries[p] for p, _ in (aggregated.get("loaded_plans") or []) if p in plan_summaries]
             orchestrations_data = [orch_summaries[p] for p, _ in (aggregated.get("loaded_orchestrations") or []) if p in orch_summaries]
