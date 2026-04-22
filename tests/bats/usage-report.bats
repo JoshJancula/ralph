@@ -19,18 +19,18 @@ setup() {
   "stage_id": "stage-1",
   "model": "claude-sonnet-4-6",
   "runtime": "claude",
-  "invocations": 2,
+  "invocations": 1,
   "todos_done": 2,
   "todos_total": 2,
   "started_at": "2026-04-17T00:00:00Z",
   "ended_at": "2026-04-17T00:00:10Z",
-  "elapsed_seconds": 10,
-  "input_tokens": 100,
-  "output_tokens": 50,
-  "cache_creation_input_tokens": 10,
-  "cache_read_input_tokens": 20,
-  "max_turn_total_tokens": 500,
-  "cache_hit_ratio": 0.15
+  "elapsed_seconds": 1,
+  "input_tokens": 1,
+  "output_tokens": 1,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "max_turn_total_tokens": 1,
+  "cache_hit_ratio": 0
 }
 JSON
 
@@ -231,6 +231,75 @@ JSON
   local input_tokens
   input_tokens=$(echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["overall"]["input_tokens"])')
   [ "$input_tokens" -eq 190 ] || { echo "Expected 190 input_tokens, got $input_tokens"; return 1; }
+}
+
+@test "text output uses cumulative invocation history for per-plan rows" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  run python3 "$SCRIPT" all --logs-dir "$tmpdir"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+
+  echo "$output" | python3 -c '
+import re
+import sys
+
+line = ""
+for candidate in sys.stdin.read().splitlines():
+    if re.match(r"^\s*\|\s*PLAN1\s*\|", candidate):
+        line = candidate
+        break
+
+if not line:
+    raise SystemExit("PLAN1 row not found")
+
+parts = [p.strip() for p in line.split("|")[1:-1]]
+if len(parts) != 10:
+    raise SystemExit(f"unexpected PLAN1 column count: {len(parts)}")
+
+if parts[3] != "2":
+    raise SystemExit(f"expected PLAN1 invocations=2, got {parts[3]}")
+if parts[5] != "10s":
+    raise SystemExit(f"expected PLAN1 elapsed=10s, got {parts[5]}")
+if parts[6] != "100":
+    raise SystemExit(f"expected PLAN1 input=100, got {parts[6]}")
+if parts[7] != "50":
+    raise SystemExit(f"expected PLAN1 output=50, got {parts[7]}")
+if parts[8] != "15.38%":
+    raise SystemExit(f"expected PLAN1 cache_hit=15.38%, got {parts[8]}")
+'
+}
+
+@test "JSON format reports cumulative plan metrics when summary is stale" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  run python3 "$SCRIPT" all --logs-dir "$tmpdir" --format json
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+
+  echo "$output" | python3 -c '
+import json
+import sys
+
+doc = json.load(sys.stdin)
+plans = doc.get("plans", [])
+plan1 = None
+for plan in plans:
+    if plan.get("plan_key") == "PLAN1":
+        plan1 = plan
+        break
+
+if not plan1:
+    raise SystemExit("PLAN1 entry missing from JSON output")
+
+assert plan1.get("invocations") == 2, plan1
+assert plan1.get("elapsed_seconds") == 10, plan1
+assert plan1.get("input_tokens") == 100, plan1
+assert plan1.get("output_tokens") == 50, plan1
+assert plan1.get("cache_creation_input_tokens") == 10, plan1
+assert plan1.get("cache_read_input_tokens") == 20, plan1
+assert abs(float(plan1.get("cache_hit_ratio", 0)) - 0.1538) < 1e-9, plan1
+assert plan1.get("todos_done") == 2, plan1
+assert plan1.get("todos_total") == 2, plan1
+'
 }
 
 @test "empty logs directory produces Overall totals with zero counts" {

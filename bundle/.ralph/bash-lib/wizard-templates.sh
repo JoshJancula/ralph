@@ -78,7 +78,7 @@ wizard_render_summary() {
     local wave_num=1
     for wave in "${parallel_stage_waves[@]}"; do
       printf '  Wave %d: %s\n' "$wave_num" "$wave"
-      ((wave_num++))
+      wave_num=$((wave_num + 1))
     done
     printf '\n'
   fi
