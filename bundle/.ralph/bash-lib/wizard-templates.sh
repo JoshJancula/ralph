@@ -68,7 +68,7 @@ wizard_render_summary() {
 
     printf '  %-12s %-10s %-15s %-20s %-10s %-10s\n' \
       "$stage_id" "$runtime" "$agent" "${model:-(default)}" "$session_strategy" "${budget:-(none)}"
-    ((idx++))
+    ((++idx))
   done
   printf '\n'
 
