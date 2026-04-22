@@ -2,7 +2,7 @@
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 
-@test "orchestration wizard runs its sanitize helper path end to end" {
+@test "orchestration wizard rejects all-invalid stage tokens" {
   bundle_root="$(mktemp -d)"
   workspace="$(mktemp -d)"
   mkdir -p "$bundle_root/.ralph/bash-lib"
@@ -14,6 +14,7 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   cat >"$workspace/.cursor/agents/research/config.json" <<'JSON'
 {"model":"auto"}
 JSON
+  # Only non-resolvable stage tokens: nothing is accepted, so the wizard fails before per-stage config.
   cat >"$workspace/input.txt" <<'EOF'
 Demo Pipeline
 demo-pipeline
@@ -27,7 +28,7 @@ EOF
   # Strip CR so scripted answers stay aligned if the repo is checked out with CRLF (e.g. CI).
   run bash -c 'export LC_ALL=C LANG=C RALPH_SKIP_FZF_HINT=1; cd "$1" && { tr -d "\r" < "$3" | bash "$2"; } 2>&1' bash "$workspace" "$wizard" "$workspace/input.txt"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'sanitizes to empty; skip'* ]]
+  [[ "$output" == *'No stages configured'* ]]
   [[ "$output" != *"command not found"* ]]
 
   rm -rf "$bundle_root"
