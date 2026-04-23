@@ -91,12 +91,14 @@ EOF
 cat <<'EOF' >"$RULES_DIR/README.md"
 # Rules
 
+This scaffold is inert until a rules file is referenced from `config.json`.
 Add agent-specific rules here. Global Codex policy stays under `.codex/rules/`.
 EOF
 
 cat <<'EOF' >"$SKILLS_DIR/README.md"
 # Skills
 
+This scaffold is inert until a skill file is referenced from `config.json`.
 List Codex-relevant skills and workflows for this agent.
 EOF
 

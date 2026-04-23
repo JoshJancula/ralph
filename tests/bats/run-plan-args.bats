@@ -53,6 +53,17 @@ CAFFEINATE
   rm -f "$plan_file"
 }
 
+@test "run-plan help documents project/workspace root overrides" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash "$RUN_PLAN_SH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--project-root"* ]]
+  [[ "$output" == *"--workspace-root"* ]]
+  [[ "$output" == *"--codex-sandbox"* ]]
+  [[ "$output" == *"danger-full-access"* ]]
+}
+
 @test "ralph restart command hint exposes restart instructions" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
@@ -85,4 +96,94 @@ CAFFEINATE
   [ "$output" = ".ralph/orchestrator.sh --orchestration /tmp/restart\\ plan/orch.json" ]
 
   rm -f "$helper"
+}
+
+@test "run-plan --codex-full-auto sets CODEX_PLAN_FULL_AUTO env" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test that --codex-full-auto 1 sets the env var
+  run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-full-auto 1 --help 2>&1
+  [ "$status" -eq 0 ]
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --codex-dangerously-bypass sets env var" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test that --codex-dangerously-bypass 1 sets the env var
+  run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-dangerously-bypass 1 --help 2>&1
+  [ "$status" -eq 0 ]
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --codex-full-auto rejects invalid values" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test invalid value
+  run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-full-auto invalid
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--codex-full-auto"* ]] || [[ "$output" == *"CODEX_PLAN_FULL_AUTO"* ]]
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --codex-dangerously-bypass rejects invalid values" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test invalid value
+  run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-dangerously-bypass invalid
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--codex-dangerously-bypass"* ]] || [[ "$output" == *"CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX"* ]]
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --codex-full-auto accepts boolean-like values" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test various valid boolean values
+  for value in 0 1 true false yes no on off; do
+    run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-full-auto "$value" --help 2>&1
+    [ "$status" -eq 0 ]
+  done
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --codex-dangerously-bypass accepts boolean-like values" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  # Test various valid boolean values
+  for value in 0 1 true false yes no on off; do
+    run bash "$RUN_PLAN_SH" --runtime codex --plan "$plan_file" --codex-dangerously-bypass "$value" --help 2>&1
+    [ "$status" -eq 0 ]
+  done
+
+  rm -f "$plan_file"
 }

@@ -1,17 +1,29 @@
 {
   "name": "qa",
-  "model": "claude-sonnet-4",
+  "model": "claude-sonnet-4-6",
+  "max_budget_usd": "2.00",
   "description": "Tests code changes. Produces qa-handoff.md summarizing if the changes meet the acceptance criteria",
-  "rules": [".claude/rules/no-emoji.md"],
-  "skills": [".claude/skills/repo-context/SKILL.md"],
+  "rules": [
+    ".claude/rules/no-emoji.md"
+  ],
+  "skills": [
+    ".claude/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md",
-      "required": true
+      "required": true,
+      "kind": "review"
     },
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
       "required": false
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/qa-to-implementation.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "implementation"
     }
   ]
 }

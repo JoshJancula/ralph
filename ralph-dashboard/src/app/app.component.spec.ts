@@ -1,10 +1,10 @@
 import '../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
 import { RouterTestingModule } from '@angular/router/testing';
 import { AppComponent } from './app.component';
-import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 import { NavService } from './services/nav.service';
 
 @Component({
@@ -14,11 +14,71 @@ import { NavService } from './services/nav.service';
 })
 class PlanHubStubComponent {}
 
+@Component({
+  selector: 'app-file-viewer',
+  standalone: true,
+  template: '',
+})
+class FileViewerStubComponent {}
+
+@Component({
+  selector: 'ralph-log-viewer',
+  standalone: true,
+  template: '',
+})
+class LogViewerStubComponent {}
+
+@Component({
+  selector: 'app-workspace-view',
+  standalone: true,
+  imports: [PlanHubStubComponent, FileViewerStubComponent, LogViewerStubComponent],
+  template: `
+    @switch (viewKind()) {
+      @case ('plan') {
+        <ralph-plan-hub></ralph-plan-hub>
+      }
+      @case ('file') {
+        <app-file-viewer></app-file-viewer>
+      }
+      @case ('log') {
+        <ralph-log-viewer></ralph-log-viewer>
+      }
+      @default {
+        @if (activeRoot()) {
+          <div class="empty-state">Select a file to inspect its contents.</div>
+        } @else {
+          <div class="empty-state">Select a section from the sidebar to get started.</div>
+        }
+      }
+    }
+  `,
+})
+class WorkspaceViewStubComponent {
+  private readonly nav = inject(NavService);
+  readonly activeRoot = this.nav.activeRoot;
+  readonly activeFile = this.nav.activeFile;
+  readonly viewKind = () => {
+    const root = this.activeRoot();
+    const file = this.activeFile();
+
+    if (!root) {
+      return 'empty';
+    }
+    if (file) {
+      return file.endsWith('.log') ? 'log' : 'file';
+    }
+    return root === 'plans' ? 'plan' : 'empty';
+  };
+}
+
 const testRoutes = [
   { path: '', redirectTo: 'plans', pathMatch: 'full' },
-  { path: 'plans', component: PlanHubStubComponent },
-  { path: ':root', component: PlanHubStubComponent },
-  { path: '**', component: PlanHubStubComponent },
+  { path: 'plans', component: WorkspaceViewStubComponent },
+  { path: ':root/path/:path/file/:file', component: WorkspaceViewStubComponent },
+  { path: ':root/file/:file', component: WorkspaceViewStubComponent },
+  { path: ':root/path/:path', component: WorkspaceViewStubComponent },
+  { path: ':root', component: WorkspaceViewStubComponent },
+  { path: '**', redirectTo: 'plans' },
 ];
 
 function requestPath(url: string): string {
@@ -63,6 +123,23 @@ function flushOutstandingHttp(httpMock: HttpTestingController): void {
   }
 }
 
+async function renderDashboard(
+  fixture: {
+    detectChanges(): void;
+    whenStable(): Promise<unknown>;
+  },
+  httpMock: HttpTestingController,
+): Promise<void> {
+  await fixture.whenStable();
+  fixture.detectChanges();
+  flushOutstandingHttp(httpMock);
+  await fixture.whenStable();
+  fixture.detectChanges();
+  flushOutstandingHttp(httpMock);
+  await fixture.whenStable();
+  fixture.detectChanges();
+}
+
 describe('AppComponent', () => {
   let httpMock: HttpTestingController;
 
@@ -70,12 +147,9 @@ describe('AppComponent', () => {
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [AppComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
-    })
-      .overrideComponent(AppComponent, {
-        remove: { imports: [PlanHubComponent] },
-        add: { imports: [PlanHubStubComponent] },
-      })
-      .compileComponents();
+    }).compileComponents();
+    const router = TestBed.inject(Router);
+    await router.initialNavigation();
     httpMock = TestBed.inject(HttpTestingController);
   });
 
@@ -85,18 +159,17 @@ describe('AppComponent', () => {
 
   it('renders ion-split-pane for responsive layout', async () => {
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const compiled = fixture.nativeElement as HTMLElement;
     const splitPane = compiled.querySelector('ion-split-pane');
     const menu = compiled.querySelector('ion-menu');
     const contentTarget = compiled.querySelector('#main-content');
+    const routerOutlet = compiled.querySelector('router-outlet');
     expect(splitPane).toBeTruthy();
     expect(menu).toBeTruthy();
     expect(contentTarget).toBeTruthy();
+    expect(routerOutlet).toBeTruthy();
     expect(menu?.getAttribute('contentid')).toBe('main-content');
     expect(menu?.getAttribute('menuid')).toBe('workspace-menu');
   });
@@ -105,10 +178,7 @@ describe('AppComponent', () => {
     localStorage.setItem('ralph-dashboard-theme', 'light');
 
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     expect(fixture.componentInstance.isLightTheme()).toBe(true);
 
@@ -119,10 +189,7 @@ describe('AppComponent', () => {
     localStorage.setItem('ralph-dashboard-theme', 'dark');
 
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     expect(fixture.componentInstance.isLightTheme()).toBe(false);
 
@@ -133,15 +200,13 @@ describe('AppComponent', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     const spy = vi.spyOn(nav, 'refresh');
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
-    const btns = fixture.nativeElement.querySelectorAll('ion-button');
-    // Find the refresh button by its icon
-    const refreshBtn = Array.from(btns).find((btn: any) => 
-      btn.querySelector('ion-icon[name="refresh-outline"]'));
+    const endToolbarButtons = fixture.nativeElement.querySelectorAll(
+      'ion-toolbar ion-buttons[slot="end"] ion-button',
+    );
+    expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
+    const refreshBtn = endToolbarButtons[1];
     expect(refreshBtn).toBeTruthy();
     (refreshBtn as HTMLElement).click();
     expect(spy).toHaveBeenCalledTimes(1);
@@ -149,10 +214,7 @@ describe('AppComponent', () => {
 
   it('with no active file: plan hub is shown and file viewers are not rendered', async () => {
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('ralph-plan-hub')).toBeTruthy();
@@ -164,13 +226,7 @@ describe('AppComponent', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     nav.navigate('plans', 'PLAN2');
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('ralph-plan-hub')).toBeTruthy();
@@ -180,13 +236,7 @@ describe('AppComponent', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     nav.navigate('logs', 'PLAN2', 'runner.log');
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('ralph-log-viewer')).toBeTruthy();
@@ -196,17 +246,15 @@ describe('AppComponent', () => {
      localStorage.setItem('ralph-dashboard-theme', 'dark');
 
      const fixture = TestBed.createComponent(AppComponent);
-     fixture.detectChanges();
-     flushOutstandingHttp(httpMock);
-     await fixture.whenStable();
-     fixture.detectChanges();
+     await renderDashboard(fixture, httpMock);
 
      expect(fixture.componentInstance.isLightTheme()).toBe(false);
 
-     const btns = fixture.nativeElement.querySelectorAll('ion-button');
-     // Find the theme button by its icon
-     const themeBtn = Array.from(btns).find((btn: any) =>
-       btn.querySelector('ion-icon[name="sunny-outline"], ion-icon[name="moon-outline"]'));
+     const endToolbarButtons = fixture.nativeElement.querySelectorAll(
+       'ion-toolbar ion-buttons[slot="end"] ion-button',
+     );
+     expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
+     const themeBtn = endToolbarButtons[2];
      expect(themeBtn).toBeTruthy();
      (themeBtn as HTMLElement).click();
      fixture.detectChanges();
@@ -225,10 +273,7 @@ describe('AppComponent', () => {
     localStorage.setItem('ralph-dashboard-theme', 'light');
 
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     expect(fixture.componentInstance.isLightTheme()).toBe(true);
 
@@ -239,10 +284,7 @@ describe('AppComponent', () => {
     localStorage.setItem('ralph-dashboard-theme', 'dark');
 
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     expect(fixture.componentInstance.isLightTheme()).toBe(false);
 
@@ -253,13 +295,7 @@ describe('AppComponent', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     nav.navigate('plans', 'PLAN2', 'notes.md');
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-file-viewer')).toBeTruthy();
@@ -267,10 +303,7 @@ describe('AppComponent', () => {
 
   it('renders ion-menu-button for mobile navigation', async () => {
     const fixture = TestBed.createComponent(AppComponent);
-    fixture.detectChanges();
-    flushOutstandingHttp(httpMock);
-    await fixture.whenStable();
-    fixture.detectChanges();
+    await renderDashboard(fixture, httpMock);
 
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('ion-menu-button')).toBeTruthy();

@@ -7,6 +7,23 @@
       <ion-button *ngIf="isMarkdown()" fill="clear" size="small" (click)="toggleView()">
         {{ isRendered() ? 'View Raw' : 'View Pretty' }}
       </ion-button>
+      <div class="toolbar-metrics" *ngIf="planMetrics() as metrics">
+        <span class="metric-elapsed">Elapsed: {{ formatSeconds(metrics.elapsed_seconds) }}</span>
+        @if (metrics.model_breakdown?.length) {
+          @for (entry of metrics.model_breakdown; track $index; let last = $last) {
+            <span class="metric-model-chip">
+              {{ entry.runtime }} {{ formatCompactTokens(totalTokensForEntry(entry)) }}
+            </span>
+            @if (!last) {
+              <span class="metric-separator">·</span>
+            }
+          }
+        } @else {
+          <span class="metric-model-chip">
+            {{ formatCompactTokens(totalTokensForEntry(metrics)) }}
+          </span>
+        }
+      </div>
     </div>
     <div class="toolbar-right" *ngIf="runSnippet">
       <span class="snippet-label">Run: </span>

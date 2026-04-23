@@ -6,6 +6,9 @@
       </ion-buttons>
       <ion-title class="app-title">Workspace Explorer</ion-title>
       <ion-buttons slot="end">
+        <ion-button (click)="openUsage()" fill="clear" aria-label="Usage">
+          <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
+        </ion-button>
         <ion-button (click)="refresh()" fill="clear" aria-label="Refresh">
           <ion-icon slot="icon-only" name="refresh-outline"></ion-icon>
         </ion-button>
@@ -26,21 +29,7 @@
     <div class="ion-page main-shell" id="main-content">
       <ion-content class="main-content" [forceOverscroll]="false" [scrollY]="false">
         <div class="content-wrapper">
-          @if (nav.activeRoot(); as root) {
-            @if (nav.activeFile(); as file) {
-              @if (file.endsWith('.log')) {
-                <ralph-log-viewer [root]="root" [filePath]="file"></ralph-log-viewer>
-              } @else {
-                <app-file-viewer [root]="root" [filePath]="file"></app-file-viewer>
-              }
-            } @else if (root === 'plans') {
-              <ralph-plan-hub></ralph-plan-hub>
-            } @else {
-              <div class="empty-state">Select a file to inspect its contents.</div>
-            }
-          } @else {
-            <div class="empty-state">Select a section from the sidebar to get started.</div>
-          }
+          <router-outlet></router-outlet>
         </div>
       </ion-content>
     </div>

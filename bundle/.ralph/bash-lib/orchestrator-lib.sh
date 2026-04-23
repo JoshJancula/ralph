@@ -71,6 +71,8 @@ merge_required_artifacts_from_agent() {
     agents_root="$WORKSPACE/.cursor/agents"
   elif [[ "$runtime" == "codex" ]]; then
     agents_root="$WORKSPACE/.codex/agents"
+  elif [[ "$runtime" == "opencode" ]]; then
+    agents_root="$WORKSPACE/.opencode/agents"
   else
     agents_root="$WORKSPACE/.claude/agents"
   fi
@@ -97,7 +99,7 @@ orchestrator_validate_runtime() {
   local runtime
   runtime="$(orchestrator_normalize_runtime "$1")"
   case "$runtime" in
-    cursor|claude|codex)
+    cursor|claude|codex|opencode)
       printf '%s' "$runtime"
       return 0
       ;;

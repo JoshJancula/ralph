@@ -70,5 +70,5 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"ollama-cloud/kimi-k2.5"* ]]
   [[ "$output" == *"opencode/gpt-5-nano"* ]]
-  [[ "$output" != *"anthropic/claude-sonnet-4-5"* ]]
+  [[ "$output" != *"anthropic/claude-sonnet-4-6"* ]]
 }

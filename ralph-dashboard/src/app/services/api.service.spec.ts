@@ -119,22 +119,66 @@ describe('ApiService', () => {
   });
 
   describe('fetchTemplate()', () => {
-    it('should make GET to /api/template?name=', async () => {
-      const name = 'my-template';
-      const mockTemplate = {
-        name,
-        content: 'template content here',
+    it.each(['plan', 'orchestration'] as const)(
+      'should make GET to /api/template?name=%s',
+      async (name) => {
+        const mockTemplate = {
+          name,
+          content: 'template content here',
+        };
+
+        const responsePromise = firstValueFrom(service.fetchTemplate(name));
+        const req = httpMock.expectOne(
+          (r) => r.urlWithParams.startsWith('/api/template') && r.params.get('name') === name,
+        );
+        expect(req.request.method).toBe('GET');
+        req.flush(mockTemplate);
+
+        const template = await responsePromise;
+        expect(template).toEqual(mockTemplate);
+      },
+    );
+
+    it('should reject invalid template names at compile time', () => {
+      const invalidName = 'my-template' as const;
+      // @ts-expect-error - only plan and orchestration are valid template names
+      service.fetchTemplate(invalidName);
+    });
+  });
+
+  describe('fetchMetricsSummary()', () => {
+    it('should make GET to /api/metrics/summary and return typed metrics payload', async () => {
+      const mockSummary = {
+        overall: {
+          input_tokens: 123,
+          output_tokens: 456,
+          cache_creation_input_tokens: 78,
+          cache_read_input_tokens: 90,
+          elapsed_seconds: 12.5,
+          count: 2,
+        },
+        plans: [
+          {
+            path: '/logs/plan-1/plan-usage-summary.json',
+            plan_key: 'plan-1',
+            artifact_ns: 'plan-1',
+            elapsed_seconds: 5,
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 1,
+          },
+        ],
+        orchestrations: [],
       };
 
-      const responsePromise = firstValueFrom(service.fetchTemplate(name));
-      const req = httpMock.expectOne(
-        (r) => r.urlWithParams.startsWith('/api/template') && r.params.get('name') === name,
-      );
+      const responsePromise = firstValueFrom(service.fetchMetricsSummary());
+      const req = httpMock.expectOne('/api/metrics/summary');
       expect(req.request.method).toBe('GET');
-      req.flush(mockTemplate);
+      req.flush(mockSummary);
 
-      const template = await responsePromise;
-      expect(template).toEqual(mockTemplate);
+      const summary = await responsePromise;
+      expect(summary).toEqual(mockSummary);
     });
   });
 

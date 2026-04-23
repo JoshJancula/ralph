@@ -22,7 +22,7 @@ _claude_select_model_interactive() {
   echo "" >&2
   echo -e "${C_C:-}${C_BOLD:-}--- Claude (.claude/agents) ---${C_RST:-}" >&2
   echo -e "${C_DIM:-}Pick a model for the Claude Code CLI.${C_RST:-}" >&2
-  local choices=("claude-haiku-4-5" "claude-sonnet-4" "claude-sonnet-4-5")
+  local choices=("claude-haiku-4-5" "claude-sonnet-4-6" "claude-sonnet-4-6")
   local placeholder="Enter custom model id"
   local selection custom_model
   while true; do

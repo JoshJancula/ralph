@@ -146,7 +146,8 @@ EOF
   stub_dir="$(mktemp -d)"
   cat <<'EOF' >"$stub_dir/cursor-agent"
 #!/usr/bin/env bash
-plan_file="PLAN.md"
+plan_file="${WORKSPACE:-}/PLAN.md"
+[[ -z "$WORKSPACE" ]] && plan_file="PLAN.md"
 if [[ -f "$plan_file" ]]; then
   python3 - "$plan_file" <<'PY'
 import pathlib, sys
@@ -167,6 +168,7 @@ EOF
     export RALPH_PLAN_WORKSPACE_ROOT="$1/.ralph-workspace"
     export RALPH_HUMAN_OFFLINE_EXIT=1
     export RALPH_HUMAN_POLL_INTERVAL=0
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
     PATH="$2:$PATH"
     export PATH
     CURSOR_PLAN_NO_COLOR=1
@@ -192,7 +194,7 @@ PY
   rm -rf "$stub_dir" "$tmp_workspace"
 }
 
-@test "run-plan writes session-id.txt with mode 600 when resume override is provided" {
+@test "run-plan writes runtime-specific session-id file with mode 600 when resume override is provided" {
   RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
@@ -214,7 +216,7 @@ PY
 
   session_dir="$(find "$session_home" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [ -n "$session_dir" ]
-  session_id_file="$session_dir/session-id.txt"
+  session_id_file="$session_dir/session-id.cursor.txt"
   [ -f "$session_id_file" ]
 
   mode="$(TARGET_FILE="$session_id_file" python3 - <<'PY'

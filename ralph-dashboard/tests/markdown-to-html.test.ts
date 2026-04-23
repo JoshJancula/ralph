@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import { markdownToHtml, isMermaidBlock } from '../src/app/utils/markdown-to-html';
 import { parseDashboardFileHash, buildDashboardFileHash } from '../src/app/utils/dashboard-file-hash';
+import { isUnsafeUrl, sanitizeHtmlDocument } from '../src/app/utils/sanitize-html';
 
 describe('markdownToHtml', () => {
   it('converts plain markdown (headings, bold, lists) to HTML without mermaid wrappers', () => {
@@ -158,3 +159,107 @@ describe('buildDashboardFileHash', () => {
     expect(parsed).toEqual({ root, path, file });
   });
 });
+
+describe('sanitizeHtmlDocument', () => {
+  it('removes blocked tags and unsafe attributes while keeping safe content', () => {
+    const script = createFakeElement('script', {});
+    const iframe = createFakeElement('iframe', { src: 'https://example.com' });
+    const link = createFakeElement('a', {
+      href: 'javascript:alert(1)',
+      onclick: 'evil()',
+      'data-safe': 'keep',
+    });
+    const image = createFakeElement('img', {
+      src: 'https://example.com/image.png',
+      onerror: 'evil()',
+      srcdoc: '<p>ignored</p>',
+    });
+    const form = createFakeElement('form', {
+      action: ' data:application/javascript,alert(1) ',
+      formaction: '/submit',
+    });
+    const root = createFakeRoot([script, iframe, link, image, form]);
+
+    sanitizeHtmlDocument(root);
+
+    expect(script.removed).toBe(true);
+    expect(iframe.removed).toBe(true);
+    expect(link.getAttribute('href')).toBeNull();
+    expect(link.getAttribute('data-safe')).toBe('keep');
+    expect(link.hasAttribute('onclick')).toBe(false);
+    expect(image.getAttribute('src')).toBe('https://example.com/image.png');
+    expect(image.hasAttribute('onerror')).toBe(false);
+    expect(image.hasAttribute('srcdoc')).toBe(false);
+    expect(form.getAttribute('action')).toBeNull();
+    expect(form.getAttribute('formaction')).toBe('/submit');
+  });
+});
+
+describe('isUnsafeUrl', () => {
+  it.each([
+    ['javascript:alert(1)', true],
+    ['  JaVaScRiPt:alert(1)', true],
+    ['vbscript:alert(1)', true],
+    ['data:text/html,<svg></svg>', true],
+    ['data:application/javascript,alert(1)', true],
+    ['data:application/ecmascript,alert(1)', true],
+    ['data:application/x-javascript,alert(1)', true],
+    ['https://example.com', false],
+    ['/relative/path', false],
+    ['mailto:team@example.com', false],
+  ])('returns %s -> %s', (value, expected) => {
+    expect(isUnsafeUrl(value)).toBe(expected);
+  });
+});
+
+function createFakeRoot(elements: FakeElement[]): ParentNode {
+  return {
+    querySelectorAll: () => elements,
+  } as unknown as ParentNode;
+}
+
+function createFakeElement(
+  tagName: string,
+  initialAttributes: Record<string, string>,
+): FakeElement {
+  const attributes = new Map(Object.entries(initialAttributes));
+
+  return {
+    tagName: tagName.toUpperCase(),
+    removed: false,
+    get attributes() {
+      return Array.from(attributes.entries()).map(([name, value]) => ({ name, value }));
+    },
+    remove() {
+      this.removed = true;
+    },
+    removeAttribute(name: string) {
+      for (const key of Array.from(attributes.keys())) {
+        if (key.toLowerCase() === name.toLowerCase()) {
+          attributes.delete(key);
+        }
+      }
+    },
+    getAttribute(name: string) {
+      for (const [key, value] of attributes.entries()) {
+        if (key.toLowerCase() === name.toLowerCase()) {
+          return value;
+        }
+      }
+      return null;
+    },
+    hasAttribute(name: string) {
+      return this.getAttribute(name) !== null;
+    },
+  } as FakeElement;
+}
+
+type FakeElement = {
+  tagName: string;
+  removed: boolean;
+  readonly attributes: Array<{ name: string; value: string }>;
+  remove: () => void;
+  removeAttribute: (name: string) => void;
+  getAttribute: (name: string) => string | null;
+  hasAttribute: (name: string) => boolean;
+};

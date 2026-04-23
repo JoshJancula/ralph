@@ -28,6 +28,7 @@ describe('AppComponent (root)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    document.body.classList.remove('theme-light');
   });
 
   it('should create the app', () => {
@@ -46,6 +47,7 @@ describe('AppComponent (root)', () => {
   it('should read theme preference from localStorage on init', () => {
     localStorageMock.getItem.mockReturnValue('light');
     const fixture = TestBed.createComponent(AppComponent);
+    fixture.detectChanges();
     expect(fixture.componentInstance.isLightTheme()).toBe(true);
   });
 
@@ -69,5 +71,13 @@ describe('AppComponent (root)', () => {
     const spy = vi.spyOn(nav, 'refresh');
     fixture.componentInstance.refresh();
     expect(spy).toHaveBeenCalled();
+  });
+
+  it('should navigate to usage when openUsage is called', () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+    fixture.componentInstance.openUsage();
+    expect(spy).toHaveBeenCalledWith('usage');
   });
 });

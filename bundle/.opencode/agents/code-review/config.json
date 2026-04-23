@@ -1,13 +1,20 @@
 {
   "name": "code-review",
-  "model": "anthropic/claude-sonnet-4-5",
+  "model": "anthropic/claude-sonnet-4-6",
   "description": "Reviews changed code for correctness, security, and convention compliance. Writes code-review.md summarizing findings and blocking issues.",
   "rules": [".opencode/rules/no-emoji.md"],
   "skills": [".opencode/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
-      "required": true
+      "required": true,
+      "kind": "review"
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/code-review-to-implementation.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "implementation"
     }
   ]
 }

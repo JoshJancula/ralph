@@ -23,10 +23,13 @@ run_plan_invoke_common_add_model_flag() {
 run_plan_invoke_common_add_resume_args() {
   local args_name="$1"
   local session_fn="$2"
-  local bare_fn="$3"
-  local warn_fn="$4"
+  local new_fn="$3"
+  local bare_fn="$4"
+  local warn_fn="$5"
 
-  if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+  if [[ -n "${RALPH_RUN_PLAN_NEW_SESSION_ID:-}" ]]; then
+    "$new_fn" "$args_name"
+  elif [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
     "$session_fn" "$args_name"
   elif [[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]]; then
     if [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
@@ -42,7 +45,7 @@ run_plan_invoke_common_add_cli_resume_flags() {
   shift
   local flags=("$@")
 
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && command -v python3 &>/dev/null; then
+  if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
     local flag
     for flag in "${flags[@]}"; do
       eval "$args_name+=(\"$flag\")"
@@ -58,9 +61,17 @@ run_plan_invoke_common_execute() {
   local demux_py
   demux_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-cli-json-demux.py"
 
+  # USAGE_FILE receives token usage JSON from demux when JSON streaming is active.
+  export USAGE_FILE="${USAGE_FILE:-}"
+  if [[ -z "$USAGE_FILE" && -n "${EXIT_CODE_FILE:-}" ]]; then
+    # Match run-plan-core naming: .plan-runner-usage.<pid>.json (not .plan-runner-exit.<pid>.usage...)
+    _exit_base="${EXIT_CODE_FILE%.$$}"
+    USAGE_FILE="${_exit_base/.plan-runner-exit/.plan-runner-usage}.$$.json"
+  fi
+
   local exit_code
-  if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && command -v python3 &>/dev/null; then
-    "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "$SESSION_ID_FILE" | tee -a "$OUTPUT_LOG"
+  if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
+    "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
     exit_code="${PIPESTATUS[0]}"
   else
     if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -n "$python_warning" ]]; then

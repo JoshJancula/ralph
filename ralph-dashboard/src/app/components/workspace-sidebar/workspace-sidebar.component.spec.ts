@@ -87,9 +87,8 @@ describe('WorkspaceSidebarComponent', () => {
     const nav = TestBed.inject(NavService);
     const spy = vi.spyOn(nav, 'navigate');
 
-    // Navigate to artifacts first so it's the active root
-    nav.navigate('artifacts', '');
-    tick();
+    // Seed the active root directly so the component starts in the expected state
+    nav['activeRootSignal'].set('artifacts');
 
     fixture.detectChanges();
     tick(); // Allow ngOnInit to execute
@@ -113,6 +112,49 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.componentInstance.selectRoot(root);
     // Should be called with 'artifacts' (was already called during setup)
     expect(spy).toHaveBeenCalledWith('artifacts');
+  }));
+
+  it('waits for the active-root lifecycle path before scrolling the selected root', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    const nav = TestBed.inject(NavService);
+    const navigateSpy = vi.spyOn(nav, 'navigate').mockImplementation(() => {});
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+
+    nav['activeRootSignal'].set(null);
+
+    fixture.detectChanges();
+    tick();
+
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
+    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    tick();
+    flush();
+    httpMock.match(() => true).forEach((req) => {
+      req.flush({
+        root: 'logs',
+        path: '',
+        parent: null,
+        entries: [],
+      });
+    });
+    fixture.detectChanges();
+    flush();
+
+    scrollSpy.mockClear();
+
+    const root: Root = { key: 'logs', label: 'Logs', exists: true };
+    fixture.componentInstance.selectRoot(root);
+    flush();
+
+    expect(navigateSpy).toHaveBeenCalledWith('logs');
+    expect(scrollSpy).not.toHaveBeenCalled();
+
+    nav['activeRootSignal'].set('logs');
+    fixture.detectChanges();
+    flush();
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' });
   }));
 
   it('toggleExpansion adds root to expanded set when not present', fakeAsync(() => {
@@ -192,7 +234,7 @@ describe('WorkspaceSidebarComponent', () => {
     expect(spy).not.toHaveBeenCalled();
   }));
 
-  it('selectRoot adds to expanded set when not in collapsedByUser', fakeAsync(() => {
+  it('selectRoot expands the root and clears user-collapsed state', fakeAsync(() => {
     const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
 
     fixture.detectChanges();
@@ -207,6 +249,10 @@ describe('WorkspaceSidebarComponent', () => {
     });
 
     const logs: Root = { key: 'logs', label: 'Logs', exists: true };
+    fixture.componentInstance.toggleExpansion(logs);
+    fixture.componentInstance.toggleExpansion(logs);
+    expect(fixture.componentInstance.isExpanded(logs)).toBe(false);
+
     fixture.componentInstance.selectRoot(logs);
     expect(fixture.componentInstance.isExpanded(logs)).toBe(true);
   }));

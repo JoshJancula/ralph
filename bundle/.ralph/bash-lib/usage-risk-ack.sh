@@ -81,17 +81,27 @@ ralph_require_usage_risk_acknowledgment() {
   echo -e "${UR_C_R}${UR_C_BOLD}You must supervise runs and use Ralph only in projects you trust.${UR_C_RST}" >&2
 
   if [[ -t 0 ]] && [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; then
-    local line
-    echo "" >&2
-    echo -e "${UR_C_C}Type ${UR_C_BOLD}YES${UR_C_RST}${UR_C_C} (all caps) to confirm you understand and accept this risk, or press Enter to abort.${UR_C_RST}" >&2
-    read -r line </dev/tty || line=""
-    if [[ "$line" == "YES" ]]; then
-      ralph_usage_risk_ack_write_marker
-      echo -e "${UR_C_G}Acknowledgment saved.${UR_C_RST}" >&2
-      return 0
-    fi
-    echo -e "${UR_C_R}Aborted (no acknowledgment).${UR_C_RST}" >&2
-    exit 2
+    local line retry=0
+    while true; do
+      echo "" >&2
+      if (( retry == 0 )); then
+        echo -e "${UR_C_C}Type ${UR_C_BOLD}yes${UR_C_RST}${UR_C_C} to confirm you understand and accept this risk, or press Enter to abort.${UR_C_RST}" >&2
+      else
+        echo -e "${UR_C_C}type yes to confirm or press Ctrl+C to abort${UR_C_RST}" >&2
+      fi
+      read -r line </dev/tty || line=""
+      # Accept y|Y|yes|YES|Yes (case-insensitive positive confirmation)
+      if [[ "$line" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        ralph_usage_risk_ack_write_marker
+        echo -e "${UR_C_G}Acknowledgment saved.${UR_C_RST}" >&2
+        return 0
+      fi
+      if (( retry == 1 )); then
+        echo -e "${UR_C_R}Aborted (no acknowledgment).${UR_C_RST}" >&2
+        exit 2
+      fi
+      retry=$((retry + 1))
+    done
   fi
 
   echo "" >&2

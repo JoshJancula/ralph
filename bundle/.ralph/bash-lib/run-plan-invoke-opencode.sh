@@ -22,6 +22,10 @@ run_plan_invoke_opencode_session_resume_args() {
   eval "$args_name+=(--session \"\${RALPH_RUN_PLAN_RESUME_SESSION_ID}\")"
 }
 
+run_plan_invoke_opencode_session_new_args() {
+  :
+}
+
 run_plan_invoke_opencode_bare_resume_args() {
   local args_name="$1"
   eval "$args_name+=(--continue)"
@@ -75,6 +79,7 @@ ralph_run_plan_invoke_opencode() {
   run_plan_invoke_common_add_resume_args \
     args \
     run_plan_invoke_opencode_session_resume_args \
+    run_plan_invoke_opencode_session_new_args \
     run_plan_invoke_opencode_bare_resume_args \
     run_plan_invoke_opencode_bare_resume_warn
   # On `opencode run`, `-f`/`--file` attaches files; JSON event stream uses `--format json`.
@@ -89,5 +94,5 @@ ralph_run_plan_invoke_opencode() {
   run_plan_invoke_common_execute \
     run_plan_invoke_opencode_cli \
     opencode \
-    "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse JSON and update session-id.txt; running without it."
+    "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse JSON and update session-id.opencode.txt; running without it."
 }

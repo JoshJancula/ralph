@@ -10,3 +10,14 @@ MENU_SELECT_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/menu-select.sh"
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 }
+
+@test "menu-select prints numbered choices before prompt" {
+  [ -f "$MENU_SELECT_LIB" ] || skip "menu-select lib missing"
+  run bash -c 'source "$1"; printf "2\n" | ralph_menu_select --prompt "runtime" -- "cursor" "claude" "codex"' _ "$MENU_SELECT_LIB"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1)"* ]]
+  [[ "$output" == *"cursor"* ]]
+  [[ "$output" == *"2)"* ]]
+  [[ "$output" == *"claude"* ]]
+  [[ "$output" == *"runtime"* ]]
+}

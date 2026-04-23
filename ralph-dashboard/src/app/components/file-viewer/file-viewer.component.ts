@@ -1,10 +1,21 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input, OnInit, inject, signal } from '@angular/core';
+import { Component, Input, OnInit, effect, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { IonSpinner, IonButton } from '@ionic/angular/standalone';
-import { ApiService, FileChunk, ListingEntry } from '../../services/api.service';
+import { Subscription } from 'rxjs';
+import { ApiService, FileChunk, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
+import { sanitizeHtmlDocument } from '../../utils/sanitize-html';
+import { formatElapsedSeconds } from '../../utils/format-elapsed';
+
+interface TokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
 
 @Component({
   selector: 'app-file-viewer',
@@ -17,7 +28,9 @@ export class FileViewerComponent implements OnInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
   private readonly sanitizer = inject(DomSanitizer);
+  private readonly planLogResolution = inject(PlanLogResolutionService);
   private mermaidImportPromise: Promise<MermaidClient | null> | null = null;
+  private loadSequence = 0;
 
   rootSignal = signal<string>('');
   filePathSignal = signal<string>('');
@@ -27,6 +40,31 @@ export class FileViewerComponent implements OnInit {
   isRendered = signal<boolean>(true);
   safeHtml = signal<SafeHtml | null>(null);
   workspaceRoot = signal<string>('');
+  planMetrics = signal<MetricsSummaryItem | null>(null);
+
+  private metricsSummary = signal<MetricsSummary | null>(null);
+
+  constructor() {
+    // Coalesce root/filePath changes into one load and cancel any in-flight request.
+    effect((onCleanup) => {
+      const root = this.rootSignal();
+      const filePath = this.filePathSignal();
+
+      if (!root || !filePath) {
+        this.loadSequence += 1;
+        this.loading.set(false);
+        this.error.set(null);
+        return;
+      }
+
+      const subscription = this.loadFile(root, filePath);
+      onCleanup(() => subscription.unsubscribe());
+    });
+
+    effect(() => {
+      this.syncPlanMetrics();
+    });
+  }
 
   ngOnInit(): void {
     this.api.fetchWorkspace().subscribe({
@@ -38,35 +76,53 @@ export class FileViewerComponent implements OnInit {
         this.workspaceRoot.set('');
       },
     });
+
+    this.api.fetchMetricsSummary().subscribe({
+      next: (summary) => {
+        this.metricsSummary.set(summary);
+        this.syncPlanMetrics();
+      },
+      error: () => {
+        this.metricsSummary.set(null);
+        this.planMetrics.set(null);
+      },
+    });
   }
 
   @Input() set root(value: string) {
     this.rootSignal.set(value);
-    this.loadFile(value, this.filePathSignal());
   }
 
   @Input() set filePath(value: string) {
     this.filePathSignal.set(value);
-    this.loadFile(this.rootSignal(), value);
   }
 
-  loadFile(root: string, filePath: string): void {
-    if (!root || !filePath) return;
+  private loadFile(root: string, filePath: string): Subscription {
+    const requestToken = ++this.loadSequence;
+    const markdownFile = this.isMarkdownPath(filePath);
 
     this.loading.set(true);
     this.error.set(null);
 
-    this.api.fetchFile(root, filePath).subscribe({
+    return this.api.fetchFile(root, filePath).subscribe({
       next: (chunk) => {
+        if (requestToken !== this.loadSequence) {
+          return;
+        }
+
         this.content.set(chunk.content);
-        this.loading.set(false);
-        if (this.isMarkdown()) {
-          void this.renderMarkdown(chunk.content);
+        if (markdownFile) {
+          void this.renderMarkdown(chunk.content, requestToken, true);
         } else {
           this.safeHtml.set(null);
+          this.loading.set(false);
         }
       },
       error: () => {
+        if (requestToken !== this.loadSequence) {
+          return;
+        }
+
         this.error.set('Failed to load file');
         this.loading.set(false);
       },
@@ -76,18 +132,45 @@ export class FileViewerComponent implements OnInit {
   toggleView(): void {
     this.isRendered.update((val) => !val);
     if (this.isRendered() && this.isMarkdown()) {
-      void this.renderMarkdown(this.content());
+      void this.renderMarkdown(this.content(), this.loadSequence);
     }
   }
 
   isMarkdown(): boolean {
-    const path = this.filePathSignal();
-    return path.endsWith('.md') || path.endsWith('.mdc');
+    return this.isMarkdownPath(this.filePathSignal());
   }
 
   isJson(): boolean {
     const path = this.filePathSignal();
     return path.endsWith('.json') || path.endsWith('.orch.json');
+  }
+
+  formatSeconds(value: number): string {
+    return formatElapsedSeconds(value);
+  }
+
+  formatCompactTokens(value: number): string {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '--';
+    }
+
+    if (value < 10000) {
+      return new Intl.NumberFormat().format(Math.round(value));
+    }
+
+    return new Intl.NumberFormat(undefined, {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(value);
+  }
+
+  totalTokensForEntry(entry: TokenTotals): number {
+    return (
+      entry.input_tokens +
+      entry.output_tokens +
+      entry.cache_creation_input_tokens +
+      entry.cache_read_input_tokens
+    );
   }
 
   formatHtml(): string {
@@ -107,16 +190,7 @@ export class FileViewerComponent implements OnInit {
   }
 
   get planDirectory(): string | null {
-    const path = this.filePathSignal();
-    if (!path) return null;
-    const parts = path.split('/').filter(Boolean);
-    if (parts.length === 0) return null;
-    const name = parts[0];
-    if (parts.length === 1) {
-      const dotIdx = name.lastIndexOf('.');
-      return dotIdx > 0 ? name.substring(0, dotIdx) : name;
-    }
-    return name;
+    return this.planLogResolution.resolvePlanDirectory(this.filePathSignal());
   }
 
   get showViewLogs(): boolean {
@@ -128,42 +202,11 @@ export class FileViewerComponent implements OnInit {
     const dir = this.planDirectory;
     if (!dir) return;
 
-    this.api.fetchListing('logs', dir).subscribe({
-      next: (listing) => {
-        const logFile = this.findMostRecentLog(listing.entries, dir);
-        if (logFile) {
-          this.nav.navigate('logs', null, logFile);
-          return;
-        }
-
-        // Look one level deeper in subdirectories (e.g. run-xxx/output.log)
-        const subdirs = listing.entries
-          .filter((e) => e.type === 'dir')
-          .sort((a, b) => b.mtime - a.mtime);
-
-        if (subdirs.length === 0) {
-          this.nav.navigate('logs', dir, null);
-          return;
-        }
-
-        const subdirPath = `${dir}/${subdirs[0].name}`;
-        this.api.fetchListing('logs', subdirPath).subscribe({
-          next: (sub) => {
-            const found = this.findMostRecentLog(sub.entries, subdirPath);
-            this.nav.navigate('logs', null, found ?? null);
-          },
-          error: () => this.nav.navigate('logs', dir, null),
-        });
+    this.planLogResolution.resolveLatestLogTarget(dir).subscribe({
+      next: (target) => {
+        this.nav.navigate('logs', target.directory, target.file);
       },
-      error: () => this.nav.navigate('logs', dir, null),
     });
-  }
-
-  private findMostRecentLog(entries: ListingEntry[], prefix: string): string | null {
-    const logs = entries
-      .filter((e) => e.type === 'file' && e.name.endsWith('.log'))
-      .sort((a, b) => b.mtime - a.mtime);
-    return logs.length > 0 ? `${prefix}/${logs[0].name}` : null;
   }
 
   handleContentClick(event: MouseEvent): void {
@@ -228,17 +271,82 @@ export class FileViewerComponent implements OnInit {
     return null;
   }
 
-  private async renderMarkdown(source: string): Promise<void> {
+  private isMarkdownPath(path: string): boolean {
+    return path.endsWith('.md') || path.endsWith('.mdc');
+  }
+
+  private syncPlanMetrics(): void {
+    const summary = this.metricsSummary();
+    const fileName = this.filePathSignal().split('/').filter(Boolean).pop() ?? '';
+    const planKey = this.stripPlanSuffix(fileName);
+
+    if (!summary || !planKey) {
+      this.planMetrics.set(null);
+      return;
+    }
+
+    this.planMetrics.set(this.findLatestPlanMetrics(summary, planKey));
+  }
+
+  private findLatestPlanMetrics(summary: MetricsSummary, planKey: string): MetricsSummaryItem | null {
+    const matches = summary.plans.filter((item) => item.plan_key === planKey);
+    if (matches.length === 0) {
+      return null;
+    }
+    return matches.reduce((latest, candidate) =>
+      this.metricTimestamp(candidate) > this.metricTimestamp(latest) ? candidate : latest,
+    );
+  }
+
+  private metricTimestamp(item: MetricsSummaryItem): number {
+    return this.parseTimestamp(item.ended_at) || this.parseTimestamp(item.started_at);
+  }
+
+  private parseTimestamp(value?: string): number {
+    if (!value) {
+      return 0;
+    }
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private stripPlanSuffix(fileName: string): string {
+    if (fileName.endsWith('.mdc')) {
+      return fileName.slice(0, -4);
+    }
+    if (fileName.endsWith('.md')) {
+      return fileName.slice(0, -3);
+    }
+    return fileName;
+  }
+
+  private async renderMarkdown(source: string, requestToken: number, finalizeLoad = false): Promise<void> {
     if (typeof document === 'undefined') {
+      if (finalizeLoad && requestToken === this.loadSequence) {
+        this.loading.set(false);
+      }
       return;
     }
 
     const html = this.formatHtmlFromSource(source);
-    this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(html));
-
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    await this.renderMermaidDiagrams(doc);
+    sanitizeHtmlDocument(doc.body);
+    if (requestToken !== this.loadSequence) {
+      return;
+    }
     this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
+
+    await this.renderMermaidDiagrams(doc);
+    if (requestToken !== this.loadSequence) {
+      return;
+    }
+    sanitizeHtmlDocument(doc.body);
+    // Angular's HTML sanitizer strips Mermaid SVG entirely, so we clean the DOM
+    // ourselves and then trust the result to preserve the rendered diagram.
+    this.safeHtml.set(this.sanitizer.bypassSecurityTrustHtml(doc.body.innerHTML));
+    if (finalizeLoad && requestToken === this.loadSequence) {
+      this.loading.set(false);
+    }
   }
 
   private formatHtmlFromSource(source: string): string {
@@ -265,7 +373,7 @@ export class FileViewerComponent implements OnInit {
     mermaidClient.initialize({
       startOnLoad: false,
       theme: isLightTheme ? 'default' : 'dark',
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: 'inherit',
     });
 
@@ -335,6 +443,8 @@ export class FileViewerComponent implements OnInit {
       proto.getComputedTextLength = () => 0;
     }
   }
+
+  // sanitizer helper replaced with shared implementation
 }
 
 interface MermaidClient {

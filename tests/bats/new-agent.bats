@@ -52,6 +52,8 @@ source "$RALPH_LIB_ROOT/new-agent.sh"
   grep -q '"model": "gpt-5.1"' "$config_file"
   [ -f "$bundle_root/.cursor/agents/test-agent/rules/README.md" ]
   [ -f "$bundle_root/.cursor/agents/test-agent/skills/README.md" ]
+  grep -q 'This scaffold is inert until a rules file is referenced from `config.json`.' "$bundle_root/.cursor/agents/test-agent/rules/README.md"
+  grep -q 'This scaffold is inert until a skill file is referenced from `config.json`.' "$bundle_root/.cursor/agents/test-agent/skills/README.md"
 
   rm -rf "$repo"
 }

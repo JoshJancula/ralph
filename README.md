@@ -8,9 +8,9 @@ Ralph is meant to become **part of your codebase**, not a separate app you drive
 
 | Idea | What it means |
 |------|----------------|
-| **Plan** | A markdown file with lines like `- [ ] Do this` and `- [x] Done`. Only that checkbox style counts as a task. |
-| **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. |
-| **Orchestrator** | Optional multi-stage pipelines with checks between steps. |
+| **Plan** | A markdown file with lines like `- [ ] Do this` and `- [x] Done`. Only that checkbox style counts as a task. Also supports Cursor frontmatter format with `todos[].id`, `todos[].content`, `todos[].status`. |
+| **Runner** | A script that picks the next open task, runs your chosen assistant, updates the plan, and repeats. Supports both markdown checkbox (`- [ ]`) and Cursor frontmatter todo formats. |
+| **Orchestrator** | Optional multi-stage pipelines with checks between steps. Supports sequential execution or parallel wave execution with `parallelStages`. |
 
 While plans run, logs and generated files will appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. The optional dashboard (Node.js/Angular) installs under **`.ralph/ralph-dashboard/`** and gives you a simple local UI over plans and logs.
 
@@ -76,6 +76,8 @@ Use `PORT=8124 npm run start` to run on a different port. By default the UI is a
 - **Codex:** `.ralph/run-plan.sh --runtime codex --non-interactive --plan PLAN.md --workspace . --agent architect`
 - **OpenCode:** `.ralph/run-plan.sh --runtime opencode --plan PLAN.md --workspace . --model opencode/nemotron-3-super-free`
 
+Ralph now treats the project root (where your `.ralph/` copy and plans live) as separate from the workspace root (where `.ralph-workspace/` stores logs, artifacts, and session files). Use `--workspace` (or the alias `--project-root`) to point at the project directory and `--workspace-root` to place `.ralph-workspace` elsewhere (it defaults to `<project>/.ralph-workspace` when you omit it). You can also override the workspace root with `RALPH_PLAN_WORKSPACE_ROOT` when you prefer environment variables to flags.
+
 **CLI contracting:** `run-plan.sh` uses the strict parser in `bundle/.ralph/bash-lib/run-plan-args.sh`: only documented flags are accepted (unknown flags are an error), and plan and workspace paths are not positional. You must pass `--plan <path>`. Pass `--workspace <path>` for an explicit repo root; if you omit it, the workspace defaults to the current working directory. Orchestration and docs usually show all three flags for clarity.
 
 ### Canonical run-plan invocation
@@ -86,6 +88,8 @@ Invoke the runner by explicitly passing the workspace root, plan file, and runti
 cd /path/to/project
 ./.ralph/run-plan.sh --workspace /path/to/project --plan plans/feature.md --runtime cursor
 ```
+
+Add `--workspace-root /path/to/.ralph-workspace` to that command whenever you need to keep logs/artifacts/sessions outside the project folder.
 
 Each invocation must supply the same flags because the parser in `bundle/.ralph/bash-lib/run-plan-args.sh` refuses positional workspace arguments.
 
@@ -107,41 +111,91 @@ results in an orchestrator command similar to:
 RALPH_ARTIFACT_NS=feature \
 ./.ralph/run-plan.sh --workspace /path/to/project --plan .ralph-workspace/orchestration-plans/feature/design.md --runtime cursor
 ```
+Add `--workspace-root /path/to/.ralph-workspace` when the workspace state lives outside the project directory so the runner and dashboard stay in sync.
 
 Stage overrides like `--agent`, `--model`, or `--cli-resume` are layered on top of this base invocation before the orchestrator starts each stage.
+
+When you define `artifacts` or `outputArtifacts` in an orchestration file, those paths are the authoritative outputs for the run. The agent config `output_artifacts` field is only a fallback when a stage does not define its own artifact declarations. Keep generated logs and artifacts under the workspace root’s `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/` so the dashboard and orchestration checks can discover them consistently.
 
 **Checklist syntax:** Open tasks must look like **`- [ ]`** (space before **`]`**). The form **`- []`** is ignored, so the runner may stop while lines still look unfinished.
 
 ### When the runner needs you
 
-**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input through a helper script configured via **`RALPH_HUMAN_ACK_TOOL`** (the orchestrator script itself does not provide `--human-ack`). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
+**`.ralph/run-plan.sh`** follows an **interactive-first** human flow: in a normal terminal it usually asks you there and continues. Without a TTY, it drops prompts into files such as **`pending-human.txt`** and **`operator-response.txt`** under the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** (default; override with **`--workspace-root`** or **`RALPH_PLAN_WORKSPACE_ROOT`**) and waits while you edit them. That directory also holds **`human-replies.md`**. Orchestrated runs can escalate human input through a helper script configured via **`RALPH_HUMAN_ACK_TOOL`** (the orchestrator script itself does not provide `--human-ack`). Optional hooks and exit behavior are described in **[Agent workflow](docs/AGENT-WORKFLOW.md)**.
 
 ### CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`** (the plan key defaults to the plan file name) and supplies that ID plus a compact prompt (TODO, plan path, and human replies only) to the next runtime invocation so the session continues where it left off.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by reusing the CLI context. When enabled, `.ralph/run-plan.sh` writes the current `session-id` to the workspace root’s **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and supplies that ID plus a compact context block to the next runtime invocation so the session continues where it left off. For non-Claude prebuilt agents, that block is compact by default and can be forced with `RALPH_COMPACT_CONTEXT=1` or the equivalent `--compact` context mode.
 
 **Enable CLI session resume (pick one):**
 
+- Set `RALPH_PLAN_SESSION_STRATEGY=resume` (or `reset`) before invoking `.ralph/run-plan.sh`, or pass `--session-strategy resume|reset`.
 - Set `RALPH_PLAN_CLI_RESUME=1` before invoking `.ralph/run-plan.sh`.
 - Pass `--cli-resume` to the runner command.
 - Answer `yes` to the interactive prompt (TTY-attached runs ask unless you already set `RALPH_PLAN_CLI_RESUME`, supplied `--cli-resume`, or explicitly opt out with `--no-cli-resume`).
 
+`reset` mode reuses the session ID but starts each TODO with a reset command prefix when configured (Claude defaults to `/clear`). Override with `RALPH_PLAN_RESET_COMMAND` globally or `RALPH_PLAN_RESET_COMMAND_<RUNTIME>` per runtime.
+
 **Storage and prerequisites:**
 
-- `session-id.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt`, and each invocation rewrites or updates the file so future restarts always read the newest ID for that namespace.
+- `session-id.<runtime>.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/` and each invocation rewrites or updates the runtime-specific file so future restarts always read the newest ID for that runtime.
 - Python 3 is required for `.ralph/bash-lib/run-plan-cli-json-demux.py`, the helper that pulls the session ID from the CLI’s JSON demux stream. If Python 3 is unavailable, the runner logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (per `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and skips resume, starting a fresh session.
 
 **Manual resume from a known session id:**
 
-If you already captured a session id (for example from `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` or the earlier prompt that confirmed session reuse), pass `--resume <session-id>` to `.ralph/run-plan.sh`. The runner reuses that CLI session without requiring `--cli-resume`, and it writes whichever session id you use back into `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` so it stays available for future runs or automation.
+If you already captured a session id (for example from `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt` or the earlier prompt that confirmed session reuse), pass `--resume <session-id>` to `.ralph/run-plan.sh`. The runner reuses that CLI session without requiring `--cli-resume`, and it writes whichever session id you use back into `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt` so it stays available for future runs or automation.
 
 **Optional unsafe bare resume:**
 
 In CI or isolated environments where you trust there will not be session mix-ups, you can resume without relying on the stored ID:
 
 - Set `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` or pass `--allow-unsafe-resume` to `.ralph/run-plan.sh`.
-- The runner will attempt to resume directly (e.g., Codex `--last` semantics) even if `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.txt` is absent.
+- The runner will attempt to resume directly (e.g., Codex `--last` semantics) even if `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt` is absent.
 - **Warning:** Bare resume without a stored session ID may attach to the wrong session on a shared workstation; prefer isolated CI or the session files above for safety.
+
+### Plan format modes
+
+The runner supports two plan formats:
+
+1. **Default (markdown checkbox):** Lines like `- [ ] Task` and `- [x] Done`. This is the standard format.
+2. **Cursor frontmatter:** YAML frontmatter with a `todos` array:
+   ```yaml
+   ---
+   todos:
+     - id: "1"
+       content: "Task description"
+       status: pending
+     - id: "2"
+       content: "Another task"
+       status: completed
+   ---
+   ```
+
+**Format selection:**
+- **Auto-detect:** The runner detects Cursor format when the file starts with `---` and contains `todos:` in the frontmatter.
+- **Override:** Set `RALPH_PLAN_FORMAT=cursor` or `RALPH_PLAN_FORMAT=default` to force a specific format.
+
+Status values for Cursor format: `pending`, `in_progress`, `completed`. The runner automatically updates the frontmatter when tasks are completed.
+
+### Metrics and dashboard
+
+Ralph tracks usage metrics for every plan run:
+
+- **Per-invocation:** Each run appends to `.ralph-workspace/logs/<PLAN_KEY>/invocation-usage.json`
+- **Plan summary:** Final rollup written to `.ralph-workspace/logs/<PLAN_KEY>/plan-usage-summary.json`
+- **Overall summary:** Aggregated metrics across all plans available via the dashboard API
+
+**Metrics include:**
+- `input_tokens`, `output_tokens` -- token counts
+- `cache_creation_input_tokens`, `cache_read_input_tokens` -- cache activity (Claude)
+- `cache_hit_ratio` -- percentage of input tokens served from cache
+- `max_turn_total_tokens` -- peak single-turn token count (Codex)
+- `elapsed_seconds` -- wall-clock time for the plan run
+
+The Ralph dashboard (at `http://127.0.0.1:8123` by default) displays:
+- **Overall metrics:** Aggregated usage across all plans
+- **Per-plan metrics:** Individual plan statistics with timing and token totals
+- **Per-orchestration metrics:** Stage-level breakdowns for multi-stage pipelines
 
 ### Orchestration (multi-stage)
 
@@ -150,6 +204,38 @@ In CI or isolated environments where you trust there will not be session mix-ups
 ```
 
 You can pass the **`.orch.json`** path as the first argument with no flag; details are in the header of **`.ralph/orchestrator.sh`** (see [bundle copy](bundle/.ralph/orchestrator.sh) on GitHub). To scaffold a pipeline, run **`.ralph/orchestration-wizard.sh`**.
+
+**Parallel execution with `parallelStages`:**
+
+The orchestrator supports wave-based parallel execution via the optional `parallelStages` field in the orchestration JSON:
+
+- **Wave syntax:** `[["stage1,stage2", "stage3,stage4"]]` runs stage1+stage2 in parallel (wave 1), then stage3+stage4 in parallel (wave 2).
+- **Partial coverage:** Stages not listed in any wave run sequentially after all waves complete, in declaration order.
+- **Deterministic failure:** If any stage in a wave fails, the orchestrator waits for all stages in that wave to complete, then fails with per-stage status. Remaining waves and sequential stages do not run.
+- **Handoffs:** Handoffs (artifacts with `kind: "handoff"` and `to: "<target-stage>"`) require strict producer-before-target execution order. Same-wave handoffs are invalid.
+
+**Example with `parallelStages`:**
+
+```json
+{
+  "name": "parallel-pipeline",
+  "namespace": "feature",
+  "stages": [
+    { "id": "research", "runtime": "cursor", "agent": "research", "plan": "..." },
+    { "id": "architect", "runtime": "cursor", "agent": "architect", "plan": "..." },
+    { "id": "implementation", "runtime": "cursor", "agent": "implementation", "plan": "..." },
+    { "id": "qa", "runtime": "cursor", "agent": "qa", "plan": "..." }
+  ],
+  "parallelStages": [
+    ["research,architect"],
+    ["implementation"]
+  ]
+}
+```
+
+This runs research+architect in parallel (wave 1), then implementation (wave 2), then qa sequentially (not in any wave).
+
+**Incompatibility:** `parallelStages` cannot be combined with `loopControl`. A stage with `loopControl` must be in a sequential pipeline without `parallelStages`.
 
 **Walkthroughs:** [Orchestrated example](docs/orchestrated-ralph-example.md) and [single-runner example](docs/worker-ralph-example.md).
 
@@ -186,7 +272,7 @@ Ralph can run **many** agent turns in a row, repeatedly without human interventi
 
 ## Monitor your token usage
 
-Cost depends on the **model** you choose (or that a prebuilt agent pins) and on **how big and vague each task is**. Prefer a model that fits the job, keep TODOs concrete, and watch Cursor, Anthropic, or OpenAI billing so you are not surprised.
+Cost comes from two places: the **prompt bytes** sent at the start of each turn, and the **runtime context/tool-output** that can accumulate as the session grows. Keep prompts short and targeted, prefer partial reads over full logs or huge files, and write TODOs that point at the smallest relevant path or line range so the next turn does not have to re-read unnecessary data. Also choose a model that fits the job, keep TODOs concrete, and watch Cursor, Anthropic, or OpenAI billing so you are not surprised.
 
 ## License
 

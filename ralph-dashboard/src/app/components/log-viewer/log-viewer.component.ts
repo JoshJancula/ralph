@@ -1,4 +1,4 @@
-import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChanges, ElementRef, ViewChild, ChangeDetectorRef, inject } from '@angular/core';
+import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChanges, ElementRef, ViewChild, ChangeDetectorRef, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { IonSpinner, IonBadge, IonSearchbar } from '@ionic/angular/standalone';
@@ -27,7 +27,6 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   @ViewChild('logContent', { static: false }) logContentElement?: ElementRef<HTMLPreElement>;
   @ViewChild('prettyContent', { static: false }) prettyContentElement?: ElementRef<HTMLDivElement>;
 
-  content: string = '';
   prettyMode = false;
   searchQuery: string = '';
   filteredLines: string[] = [];
@@ -40,9 +39,19 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   private tailInterval: number | null = null;
   private subscription: Subscription = new Subscription();
   private readonly nav = inject(NavService);
+  private readonly contentSignal = signal('');
+  private readonly prettyHtmlSignal = computed(() => markdownToHtml(this.contentSignal()));
   waitingForOutput: boolean = false;
 
   constructor(private apiService: ApiService, private cdr: ChangeDetectorRef) {}
+
+  get content(): string {
+    return this.contentSignal();
+  }
+
+  set content(value: string) {
+    this.contentSignal.set(value);
+  }
 
   ngOnInit(): void {
     this.loadFile(0);
@@ -218,7 +227,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   get prettyHtml(): string {
-    return markdownToHtml(this.content);
+    return this.prettyHtmlSignal();
   }
 
   nextMatch(): void {

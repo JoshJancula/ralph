@@ -30,13 +30,64 @@ export interface FileChunk {
   nextOffset: number;
 }
 
+export type TemplateName = 'plan' | 'orchestration';
+
 export interface Template {
-  name: string;
+  name: TemplateName;
   content: string;
 }
 
 export interface WorkspaceInfo {
   root: string;
+}
+
+export interface MetricsSummaryOverall {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  max_turn_total_tokens: number;
+  cache_hit_ratio: number;
+  elapsed_seconds: number;
+  count: number;
+}
+
+export interface ModelBreakdownItem {
+  runtime: string;
+  model: string;
+  invocations: number;
+  elapsed_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  max_turn_total_tokens: number;
+  cache_hit_ratio: number;
+}
+
+export interface MetricsSummaryItem {
+  path: string;
+  plan_key: string;
+  artifact_ns: string;
+  stage_id?: string;
+  model?: string;
+  runtime?: string;
+  started_at?: string;
+  ended_at?: string;
+  elapsed_seconds: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  max_turn_total_tokens: number;
+  cache_hit_ratio: number;
+  model_breakdown?: ModelBreakdownItem[];
+}
+
+export interface MetricsSummary {
+  overall: MetricsSummaryOverall;
+  plans: MetricsSummaryItem[];
+  orchestrations: MetricsSummaryItem[];
 }
 
 @Injectable({
@@ -63,8 +114,12 @@ export class ApiService {
     return this.http.get<FileChunk>('/api/file', { params });
   }
 
-  fetchTemplate(name: string): Observable<Template> {
+  fetchTemplate(name: TemplateName): Observable<Template> {
     const params = { name };
     return this.http.get<Template>('/api/template', { params });
+  }
+
+  fetchMetricsSummary(): Observable<MetricsSummary> {
+    return this.http.get<MetricsSummary>('/api/metrics/summary');
   }
 }

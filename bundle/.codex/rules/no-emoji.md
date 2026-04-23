@@ -1,6 +1,11 @@
 ---
 name: no-emoji
 description: Do not use emojis in comments, logs, READMEs, or any code. Keep all project text plain (ASCII).
+globs:
+  - "**/*"
+alwaysApply: true
+paths:
+  - "**/*"
 ---
 
 # No emojis

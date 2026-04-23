@@ -7,7 +7,14 @@
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
-      "required": true
+      "required": true,
+      "kind": "review"
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/qa-to-implementation.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "implementation"
     }
   ]
 }

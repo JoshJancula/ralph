@@ -12,5 +12,6 @@ When invoked:
 2. Run relevant tests and any verification steps (build, lint, integration tests).
 3. Report clearly: what passed, what failed, and whether the changes satisfy the acceptance criteria.
 4. If tests fail, analyze the failure, fix issues while preserving test intent, and re-run to verify.
+5. Optionally produce qa-to-implementation.md (kind: handoff, to: implementation) if issues are discovered that require fixes.
 
 Produce a concise summary. When orchestrated by Ralph, write the main deliverable to the path specified in the plan (e.g. code-review.md or qa report under the artifact namespace). Do not use emojis in any output.

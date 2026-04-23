@@ -30,7 +30,7 @@ Use **hooks** (e.g. pre-tool-use) to block reads or edits you care about. Ralph 
 
 ## Session and human-interaction controls
 
-Files under `.ralph-workspace/sessions/{{PLAN_KEY}}/` are now created with owner-only permissions: the directory itself is `700`, both `pending-human.txt` and `session-id.txt` are `600`, and response processing double-checks that the current user owns `operator-response.txt` before honoring it. These permissions prevent other tenants from reading pending interactions or session tokens while the plan is running.
+Files under `.ralph-workspace/sessions/{{PLAN_KEY}}/` are now created with owner-only permissions: the directory itself is `700`, both `pending-human.txt` and `session-id.<runtime>.txt` are `600`, and response processing double-checks that the current user owns `operator-response.txt` before honoring it. These permissions prevent other tenants from reading pending interactions or session tokens while the plan is running.
 
 Because these files can contain prompts, responses, and session identifiers, do not commit `.ralph-workspace/` into multi-tenant or shared repositories. Keep the directory outside the tracked tree and treat it like other sensitive runtime state.
 

@@ -7,11 +7,18 @@
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
-      "required": true
+      "required": true,
+      "kind": "notes"
     },
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
       "required": false
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "qa"
     }
   ]
 }

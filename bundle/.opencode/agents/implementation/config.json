@@ -1,17 +1,24 @@
 {
   "name": "implementation",
-  "model": "anthropic/claude-sonnet-4-5",
+  "model": "anthropic/claude-sonnet-4-6",
   "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks.",
   "rules": [".opencode/rules/no-emoji.md"],
   "skills": [".opencode/skills/repo-context/SKILL.md"],
   "output_artifacts": [
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
-      "required": true
+      "required": true,
+      "kind": "notes"
     },
     {
       "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
       "required": false
+    },
+    {
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
+      "required": false,
+      "kind": "handoff",
+      "to": "qa"
     }
   ]
 }

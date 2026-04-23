@@ -1,5 +1,6 @@
-import { CommonModule } from '@angular/common';
-import { Component, inject, signal } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
+import { Component, OnInit, PLATFORM_ID, inject, signal } from '@angular/core';
+import { RouterOutlet } from '@angular/router';
 import {
   IonApp,
   IonButton,
@@ -14,10 +15,7 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { menuOutline, refreshOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
-import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
-import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
-import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
+import { menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
 import { WorkspaceSidebarComponent } from './components/workspace-sidebar/workspace-sidebar.component';
 import { NavService } from './services/nav.service';
 
@@ -25,11 +23,8 @@ import { NavService } from './services/nav.service';
   selector: 'app-root',
   standalone: true,
   imports: [
-    CommonModule,
-    FileViewerComponent,
-    LogViewerComponent,
-    PlanHubComponent,
     WorkspaceSidebarComponent,
+    RouterOutlet,
     IonApp,
     IonSplitPane,
     IonMenu,
@@ -45,38 +40,54 @@ import { NavService } from './services/nav.service';
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.scss'],
 })
-export class AppComponent {
+export class AppComponent implements OnInit {
   readonly nav = inject(NavService);
   readonly isLightTheme = signal(false);
+  private readonly platformId = inject(PLATFORM_ID);
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
-    addIcons({ menuOutline, refreshOutline, sunnyOutline, moonOutline });
-    const storedPreference = this.readStoredThemePreference();
-    const prefersLight = this.prefersLightColorScheme();
-    const initialTheme = storedPreference ?? prefersLight;
-    this.isLightTheme.set(initialTheme);
+    addIcons({ menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline });
+  }
 
-    if (typeof document !== 'undefined') {
-      this.applyThemeClass(initialTheme);
+  ngOnInit(): void {
+    if (!isPlatformBrowser(this.platformId)) {
+      return;
     }
+
+    this.initializeTheme();
   }
 
   refresh(): void {
     this.nav.refresh();
   }
 
+  openUsage(): void {
+    this.nav.navigate('usage');
+  }
+
   toggleTheme(): void {
     const next = !this.isLightTheme();
     this.isLightTheme.set(next);
 
-    if (typeof document !== 'undefined') {
-      this.applyThemeClass(next);
-    }
+    this.applyThemeClass(next);
     this.storeThemePreference(next);
   }
 
+  private initializeTheme(): void {
+    const storedPreference = this.readStoredThemePreference();
+    const prefersLight = this.prefersLightColorScheme();
+    const initialTheme = storedPreference ?? prefersLight;
+
+    this.isLightTheme.set(initialTheme);
+    this.applyThemeClass(initialTheme);
+  }
+
   private readStoredThemePreference(): boolean | undefined {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
     const item = window.localStorage.getItem(AppComponent.THEME_STORAGE_KEY);
     if (item === 'light') {
       return true;
@@ -89,6 +100,10 @@ export class AppComponent {
   }
 
   private storeThemePreference(isLight: boolean): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     window.localStorage.setItem(
       AppComponent.THEME_STORAGE_KEY,
       isLight ? 'light' : 'dark',
@@ -96,6 +111,10 @@ export class AppComponent {
   }
 
   private applyThemeClass(isLight: boolean): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
     document.body.classList.toggle('theme-light', isLight);
   }
 

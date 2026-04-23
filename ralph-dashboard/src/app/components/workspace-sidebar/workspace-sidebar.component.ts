@@ -3,15 +3,16 @@ import {
   AfterViewInit,
   Component,
   ElementRef,
-  OnDestroy,
   OnInit,
   QueryList,
   ViewChildren,
   computed,
   effect,
+  DestroyRef,
   inject,
   signal,
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 
 import { ApiService, Root } from '../../services/api.service';
@@ -27,9 +28,11 @@ const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'plans', 'artifacts',
   templateUrl: './workspace-sidebar.component.html',
   styleUrls: ['./workspace-sidebar.component.scss'],
 })
-export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestroy {
+export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
   private readonly api = inject(ApiService);
   private readonly nav = inject(NavService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly rootHostsVisibilityVersion = signal(0);
 
   roots = signal<Root[]>([]);
   expandedRoots = signal<Set<string>>(new Set());
@@ -38,19 +41,17 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
   @ViewChildren('rootHost', { read: ElementRef })
   rootHosts!: QueryList<ElementRef<HTMLElement>>;
 
-  allRoots = computed(() => {
-    const available = this.roots();
-    return ROOT_ORDER
-      .map(key => available.find(r => r.key === key))
-      .filter((r): r is Root => r !== undefined);
-  });
+  allRoots = computed(() =>
+    ROOT_ORDER
+      .map(key => this.roots().find(r => r.key === key))
+      .filter((r): r is Root => r !== undefined)
+  );
 
   constructor() {
     effect(() => {
-      const activeRoot = this.nav.activeRoot();
-      if (activeRoot) {
-        this.ensureActiveRootVisible();
-      }
+      this.nav.activeRoot();
+      this.rootHostsVisibilityVersion();
+      this.ensureActiveRootVisible();
     });
   }
 
@@ -76,11 +77,12 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
   }
 
   ngAfterViewInit(): void {
-    this.rootHosts.changes.subscribe(() => this.ensureActiveRootVisible());
-    this.ensureActiveRootVisible();
-  }
-
-  ngOnDestroy(): void {
+    this.rootHosts.changes
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(() => {
+        this.rootHostsVisibilityVersion.update((version) => version + 1);
+      });
+    this.rootHostsVisibilityVersion.update((version) => version + 1);
   }
 
   isExpanded(root: Root): boolean {
@@ -89,6 +91,13 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
 
   isActive(root: Root): boolean {
     return this.nav.activeRoot() === root.key;
+  }
+
+  rootMeta(root: Root): string {
+    if (!root.exists) {
+      return 'Section unavailable';
+    }
+    return 'Browse entries';
   }
 
   toggleExpansion(root: Root): void {
@@ -116,20 +125,22 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit, OnDestr
 
   selectRoot(root: Root): void {
     if (!root.exists) return;
+    this.collapsedByUser.update((current) => {
+      const next = new Set(current);
+      next.delete(root.key);
+      return next;
+    });
+    this.expandedRoots.update((current) => {
+      const next = new Set(current);
+      next.add(root.key);
+      return next;
+    });
     this.nav.navigate(root.key);
-    if (!this.collapsedByUser().has(root.key)) {
-      this.expandedRoots.update((current) => {
-        const next = new Set(current);
-        next.add(root.key);
-        return next;
-      });
-    }
-    this.ensureActiveRootVisible();
   }
 
   private ensureActiveRootVisible(): void {
     const activeRootKey = this.nav.activeRoot();
-    if (!activeRootKey || !this.rootHosts) {
+    if (!activeRootKey || !this.rootHosts?.length) {
       return;
     }
     Promise.resolve().then(() => {
