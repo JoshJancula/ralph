@@ -72,6 +72,12 @@ Replace `<RUNTIME>` with `CURSOR`, `CLAUDE`, `CODEX`, or `OPENCODE` as appropria
 
 Non-interactive runs require `--agent`, `--model`, or `CURSOR_PLAN_MODEL` (see run-plan-core).
 
+## Cursor-specific
+
+| Variable | Purpose / options |
+|----------|-------------------|
+| `CURSOR_PLAN_OUTPUT_FORMAT` | Cursor CLI output format used when `RALPH_PLAN_CAPTURE_USAGE=1` or CLI resume is active. Defaults to `stream-json` so Ralph can capture streamed tool-call events when Cursor emits them. Set to `json` to restore the older summary-only output mode. |
+
 ## Codex-specific
 
 | Variable | Purpose / options |

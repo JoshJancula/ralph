@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { findDashboardRoots } from '../src/paths';
+import { clearDashboardRootsCache, findDashboardRoots } from '../src/paths';
 
 describe('determineWorkspaceRoot populated-workspace preference', () => {
   let tempRoot = '';
@@ -11,6 +11,10 @@ describe('determineWorkspaceRoot populated-workspace preference', () => {
   let originalProjectRoot: string | undefined;
   let originalDashboardWorkspaceRoot: string | undefined;
   let originalWorkspaceRoot: string | undefined;
+
+  beforeEach(() => {
+    clearDashboardRootsCache();
+  });
 
   beforeEach(() => {
     originalCwd = process.cwd();
@@ -45,7 +49,7 @@ describe('determineWorkspaceRoot populated-workspace preference', () => {
     restore('RALPH_PLAN_WORKSPACE_ROOT', originalWorkspaceRoot);
   });
 
-  it('prefers a populated .ralph-workspace over a stray empty one when walking up from CWD', () => {
+  it('prefers a direct .ralph-workspace in CWD over a populated ancestor workspace', () => {
     const populatedProject = join(tempRoot, 'populated');
     mkdirSync(join(populatedProject, '.ralph'), { recursive: true });
     mkdirSync(join(populatedProject, '.ralph-workspace', 'logs'), { recursive: true });
@@ -55,7 +59,7 @@ describe('determineWorkspaceRoot populated-workspace preference', () => {
 
     process.chdir(strayChild);
     const { workspaceRoot } = findDashboardRoots();
-    expect(workspaceRoot).toBe(join(populatedProject, '.ralph-workspace'));
+    expect(workspaceRoot).toBe(join(strayChild, '.ralph-workspace'));
   });
 
   it('returns the matched .ralph-workspace path itself, not its parent directory', () => {

@@ -124,6 +124,9 @@ Common options:
                                        Overrides CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER.
   --timeout <duration>                 Invocation timeout (default: 30m). Format: e.g. 30m, 1800s, 2h.
   --help                               Show this message.
+
+Environment variables:
+  RALPH_PLAN_CONSOLIDATE=1             Collapse adjacent unchecked todos once at run start (off by default).
 EOU
 }
 

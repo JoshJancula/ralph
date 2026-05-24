@@ -4,9 +4,16 @@
       <ion-buttons slot="start">
         <ion-menu-button menu="workspace-menu"></ion-menu-button>
       </ion-buttons>
-      <ion-title class="app-title">Workspace Explorer</ion-title>
+      <ion-title class="app-title">{{ headerTitle() }}</ion-title>
+      <app-workspace-switcher></app-workspace-switcher>
       <ion-buttons slot="end">
-        <ion-button (click)="openUsage()" fill="clear" aria-label="Usage">
+        <ion-button
+          (click)="openUsage()"
+          fill="clear"
+          aria-label="Usage metrics"
+          [class.usage-route-active]="isUsageRoute()"
+          title="Usage: tokens and tool calls"
+        >
           <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
         </ion-button>
         <ion-button (click)="refresh()" fill="clear" aria-label="Refresh">

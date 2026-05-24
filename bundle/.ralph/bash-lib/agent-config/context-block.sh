@@ -38,7 +38,7 @@ context_block() {
       [[ "$line" =~ ^[[:space:]]*\"([^\"]+)\"[[:space:]]*,?[[:space:]]*$ ]] || continue
       local rule="${BASH_REMATCH[1]}"
       echo "--- Rule file: \`$rule\` ---"
-      inline_rule_file "$workspace" "$rule"
+      inline_rule_file "$workspace" "$rule" "$agents_root"
       echo ""
     done <<< "$rules"
   fi

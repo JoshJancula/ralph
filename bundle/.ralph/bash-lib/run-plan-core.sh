@@ -102,7 +102,7 @@ ralph_resolve_timeout() {
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/ralph-format-elapsed.sh"
 
-AGENT_CONFIG_TOOL="$WORKSPACE/.ralph/agent-config-tool.sh"
+AGENT_CONFIG_TOOL="$SCRIPT_DIR/agent-config-tool.sh"
 
 if [[ -z "$RUNTIME" ]]; then
   if [[ -n "${RALPH_PLAN_RUNTIME:-}" ]]; then
@@ -120,12 +120,18 @@ if [[ -z "$RUNTIME" ]]; then
 fi
 HUMAN_ACTION_FILE="$WORKSPACE/HUMAN_ACTION_REQUIRED.md"
 
+RUNTIME_ROOT="$(ralph_resolve_runtime_root "$RUNTIME" "$WORKSPACE")" || {
+  ralph_die "Error: runtime config root not found for $RUNTIME. Checked $WORKSPACE/.$RUNTIME, ${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.$RUNTIME, and ${RALPH_HOME:-$HOME/.ralph}/bundle/.$RUNTIME."
+}
+export RALPH_RUNTIME_ROOT="$RUNTIME_ROOT"
 AGENTS_ROOT_REL=".${RUNTIME}/agents"
+AGENTS_ROOT="$RUNTIME_ROOT/agents"
 
 RALPH_RUN_PLAN_RELATIVE=".ralph/run-plan.sh --runtime ${RUNTIME}"
 
-SELECT_MODEL_SCRIPT="$WORKSPACE/.${RUNTIME}/ralph/select-model.sh"
+SELECT_MODEL_SCRIPT="$RUNTIME_ROOT/ralph/select-model.sh"
 if [[ -f "$SELECT_MODEL_SCRIPT" ]]; then
+  export RALPH_SHARED_RALPH_DIR="$SCRIPT_DIR"
   # shellcheck disable=SC1090
   source "$SELECT_MODEL_SCRIPT"
 else
@@ -234,6 +240,8 @@ RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORK
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
 
+ralph_run_plan_record_workspace_registry "$WORKSPACE" "$RUNTIME" "$RALPH_PLAN_KEY"
+
 ralph_session_init "$WORKSPACE" "$PLAN_LOG_NAME"
 
 if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
@@ -296,6 +304,7 @@ case "$RUNTIME" in
 esac
 GUTTER_ITERATIONS="${RALPH_PLAN_TODO_MAX_ITERATIONS:-$_ralph_gutter_default}"
 unset _ralph_gutter_default
+RALPH_PLAN_RESUME_HINT_EMITTED=0
 
 RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS=""
 if ! RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS="$(ralph_resolve_timeout)"; then
@@ -331,6 +340,32 @@ if [[ ! -f "$PLAN_PATH" ]]; then
 fi
 
 ralph_run_plan_log "plan file found: $PLAN_PATH"
+
+# Apply consolidation pass if enabled
+if [[ "${RALPH_PLAN_CONSOLIDATE:-0}" == "1" ]]; then
+  ralph_run_plan_log "applying todo consolidation (RALPH_PLAN_CONSOLIDATE=1)"
+  ralph_run_plan_consolidate_todos "$PLAN_PATH"
+fi
+
+RALPH_PLAN_SPLIT_MODE="${RALPH_PLAN_SPLIT_MODE:-warn}"
+if [[ "${RALPH_PLAN_AUTO_SPLIT:-0}" == "1" && "$RALPH_PLAN_SPLIT_MODE" == "warn" ]]; then
+  RALPH_PLAN_SPLIT_MODE="rewrite"
+fi
+case "$RALPH_PLAN_SPLIT_MODE" in
+  warn|rewrite|fail)
+    ralph_run_plan_log "running todo preflight (RALPH_PLAN_SPLIT_MODE=$RALPH_PLAN_SPLIT_MODE)"
+    if ! ralph_plan_split_preflight "$PLAN_PATH" "$RALPH_PLAN_SPLIT_MODE"; then
+      ralph_run_plan_log "ERROR: todo preflight failed mode=$RALPH_PLAN_SPLIT_MODE"
+      echo -e "${C_R}${C_BOLD}Plan preflight failed:${C_RST} broad TODOs must be split before execution." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    ralph_run_plan_log "ERROR: invalid RALPH_PLAN_SPLIT_MODE=$RALPH_PLAN_SPLIT_MODE"
+    echo "Error: RALPH_PLAN_SPLIT_MODE must be warn, rewrite, or fail." >&2
+    exit 1
+    ;;
+esac
 
 ralph_path_to_file_uri() {
   if command -v python3 &>/dev/null; then
@@ -585,7 +620,7 @@ export RALPH_PLAN_CLI_RESUME
 
 # After this point, offer optional cleanup on exit (logs and Ralph artifacts).
 ALLOW_CLEANUP_PROMPT=1
-CLEANUP_SCRIPT="$WORKSPACE/.ralph/cleanup-plan.sh"
+CLEANUP_SCRIPT="$SCRIPT_DIR/cleanup-plan.sh"
 EXIT_STATUS="incomplete"
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-cleanup.sh
 source "$SCRIPT_DIR/bash-lib/run-plan-cleanup.sh"
@@ -605,7 +640,7 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
   fi
   _agents_root="$(prebuilt_agents_root "$WORKSPACE")"
   _discovered="$(list_prebuilt_agent_ids "$WORKSPACE" | paste -sd', ' -)"
-  ralph_run_plan_log "agent discovery (Cursor): root=$_agents_root ids=[${_discovered:-none}]"
+  ralph_run_plan_log "agent discovery ($RUNTIME): root=$_agents_root ids=[${_discovered:-none}]"
   if ! validate_prebuilt_agent_config "$WORKSPACE" "$PREBUILT_AGENT"; then
     echo -e "${C_R}Invalid agent config for '${PREBUILT_AGENT}'.${C_RST} See .cursor/agents/README.md" >&2
     ralph_run_plan_log "ERROR: validate failed for agent $PREBUILT_AGENT"
@@ -685,14 +720,110 @@ _ralph_write_plan_usage_summary() {
   local _summary_dir="$RALPH_LOG_DIR"
   local _summary_text=""
   mkdir -p "$_summary_dir"
-  local _summary_cache_hit_ratio=0
-  local _summary_total_input=$(( _total_input_tokens + _total_cache_read_tokens + _total_cache_creation_tokens ))
-  local _summary_total_tokens=$(( _total_input_tokens + _total_output_tokens + _total_cache_creation_tokens + _total_cache_read_tokens ))
-  if [[ "$_summary_total_input" -gt 0 ]]; then
-    _summary_cache_hit_ratio="$(python3 -c "print(round(${_total_cache_read_tokens}/${_summary_total_input},4))" 2>/dev/null || echo 0)"
+  local _summary_invocations="$total_invocations"
+  local _summary_input_tokens="$_total_input_tokens"
+  local _summary_output_tokens="$_total_output_tokens"
+  local _summary_cache_creation_tokens="$_total_cache_creation_tokens"
+  local _summary_cache_read_tokens="$_total_cache_read_tokens"
+  local _summary_max_turn_tokens="$_total_max_turn_tokens"
+  local _history_summary=""
+  if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
+    _history_summary="$(
+      python3 - "$RALPH_LOG_DIR/invocation-usage.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+
+invocations = doc.get("invocations") if isinstance(doc, dict) else []
+if not isinstance(invocations, list):
+    invocations = []
+records = [record for record in invocations if isinstance(record, dict)]
+if not records:
+    raise SystemExit(0)
+
+def as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+input_tokens = sum(as_int(r.get("input_tokens")) for r in records)
+output_tokens = sum(as_int(r.get("output_tokens")) for r in records)
+cache_create = sum(as_int(r.get("cache_creation_input_tokens")) for r in records)
+cache_read = sum(as_int(r.get("cache_read_input_tokens")) for r in records)
+max_turn = max((as_int(r.get("max_turn_total_tokens")) for r in records), default=0)
+prompt_bytes = sum(as_int(r.get("prompt_bytes")) for r in records)
+todo_bytes = sum(as_int(r.get("todo_bytes")) for r in records)
+todo_continuation_lines = sum(as_int(r.get("todo_continuation_lines")) for r in records)
+direct_verification_count = sum(1 for r in records if r.get("direct_verification") is True)
+rate_limit_count = sum(1 for r in records if str(r.get("rate_limit_status") or "").strip())
+tool_turns = sum(as_int(r.get("tool_turns")) for r in records)
+tool_calls_total = sum(as_int(r.get("tool_calls_total")) for r in records)
+elapsed = sum(as_int(r.get("elapsed_seconds")) for r in records)
+started = [str(r.get("started_at") or "") for r in records if r.get("started_at")]
+ended = [str(r.get("ended_at") or "") for r in records if r.get("ended_at")]
+print("\t".join([
+    str(len(records)),
+    str(elapsed),
+    str(input_tokens),
+    str(output_tokens),
+    str(cache_create),
+    str(cache_read),
+    str(max_turn),
+    str(prompt_bytes),
+    str(todo_bytes),
+    str(todo_continuation_lines),
+    str(direct_verification_count),
+    str(rate_limit_count),
+    str(tool_turns),
+    str(tool_calls_total),
+    min(started) if started else "",
+    max(ended) if ended else "",
+]))
+PY
+    )"
+    if [[ -n "$_history_summary" ]]; then
+      IFS=$'\t' read -r \
+        _summary_invocations \
+        _elapsed \
+        _summary_input_tokens \
+        _summary_output_tokens \
+        _summary_cache_creation_tokens \
+        _summary_cache_read_tokens \
+        _summary_max_turn_tokens \
+        _summary_prompt_bytes \
+        _summary_todo_bytes \
+        _summary_todo_continuation_lines \
+        _summary_direct_verification_count \
+        _summary_rate_limit_count \
+        _summary_tool_turns \
+        _summary_tool_calls_total \
+        _history_started_at \
+        _history_ended_at <<<"$_history_summary"
+      [[ -n "${_history_started_at:-}" ]] && _plan_started_at="$_history_started_at"
+      [[ -n "${_history_ended_at:-}" ]] && _ended_at="$_history_ended_at"
+    fi
   fi
+  local _summary_cache_hit_ratio=0
+  local _summary_total_input=$(( _summary_input_tokens + _summary_cache_read_tokens + _summary_cache_creation_tokens ))
+  local _summary_total_tokens=$(( _summary_input_tokens + _summary_output_tokens + _summary_cache_creation_tokens + _summary_cache_read_tokens ))
+  if [[ "$_summary_total_input" -gt 0 ]]; then
+    _summary_cache_hit_ratio="$(python3 -c "print(round(${_summary_cache_read_tokens}/${_summary_total_input},4))" 2>/dev/null || echo 0)"
+  fi
+  : "${_summary_prompt_bytes:=0}"
+  : "${_summary_todo_bytes:=0}"
+  : "${_summary_todo_continuation_lines:=0}"
+  : "${_summary_direct_verification_count:=0}"
+  : "${_summary_rate_limit_count:=0}"
+  : "${_summary_tool_turns:=0}"
+  : "${_summary_tool_calls_total:=0}"
   cat > "$_summary_dir/plan-usage-summary.json" << _SUMMARY_EOF
-{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${total_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_total_input_tokens},"output_tokens":${_total_output_tokens},"cache_creation_input_tokens":${_total_cache_creation_tokens},"cache_read_input_tokens":${_total_cache_read_tokens},"max_turn_total_tokens":${_total_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio}}
+{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${_summary_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_summary_input_tokens},"output_tokens":${_summary_output_tokens},"cache_creation_input_tokens":${_summary_cache_creation_tokens},"cache_read_input_tokens":${_summary_cache_read_tokens},"max_turn_total_tokens":${_summary_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio},"prompt_bytes":${_summary_prompt_bytes},"todo_bytes":${_summary_todo_bytes},"todo_continuation_lines":${_summary_todo_continuation_lines},"direct_verification_count":${_summary_direct_verification_count},"rate_limit_count":${_summary_rate_limit_count},"tool_turns":${_summary_tool_turns},"tool_calls_total":${_summary_tool_calls_total}}
 _SUMMARY_EOF
   if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
     python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" <<'PY'
@@ -726,6 +857,13 @@ try:
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
             "max_turn_total_tokens": 0,
+            "prompt_bytes": 0,
+            "todo_bytes": 0,
+            "todo_continuation_lines": 0,
+            "direct_verification_count": 0,
+            "rate_limit_count": 0,
+            "tool_turns": 0,
+            "tool_calls_total": 0,
         })
         bucket["invocations"] += 1
         bucket["elapsed_seconds"] += int(record.get("elapsed_seconds") or 0)
@@ -733,6 +871,15 @@ try:
         bucket["output_tokens"] += int(record.get("output_tokens") or 0)
         bucket["cache_creation_input_tokens"] += int(record.get("cache_creation_input_tokens") or 0)
         bucket["cache_read_input_tokens"] += int(record.get("cache_read_input_tokens") or 0)
+        bucket["prompt_bytes"] += int(record.get("prompt_bytes") or 0)
+        bucket["todo_bytes"] += int(record.get("todo_bytes") or 0)
+        bucket["todo_continuation_lines"] += int(record.get("todo_continuation_lines") or 0)
+        bucket["tool_turns"] += int(record.get("tool_turns") or 0)
+        bucket["tool_calls_total"] += int(record.get("tool_calls_total") or 0)
+        if record.get("direct_verification") is True:
+            bucket["direct_verification_count"] += 1
+        if str(record.get("rate_limit_status") or "").strip():
+            bucket["rate_limit_count"] += 1
         bucket["max_turn_total_tokens"] = max(bucket["max_turn_total_tokens"], int(record.get("max_turn_total_tokens") or 0))
     breakdown = []
     for key in sorted(grouped):
@@ -752,6 +899,13 @@ try:
             "cache_read_input_tokens": bucket["cache_read_input_tokens"],
             "max_turn_total_tokens": bucket["max_turn_total_tokens"],
             "cache_hit_ratio": cache_hit_ratio,
+            "prompt_bytes": bucket["prompt_bytes"],
+            "todo_bytes": bucket["todo_bytes"],
+            "todo_continuation_lines": bucket["todo_continuation_lines"],
+            "direct_verification_count": bucket["direct_verification_count"],
+            "rate_limit_count": bucket["rate_limit_count"],
+            "tool_turns": bucket["tool_turns"],
+            "tool_calls_total": bucket["tool_calls_total"],
         })
     summary["model_breakdown"] = breakdown
     tmp = f"{summary_path}.tmp.{os.getpid()}"
@@ -772,20 +926,20 @@ PY
   fi
   local _elapsed_fmt
   _elapsed_fmt="$(ralph_format_elapsed_secs "$_elapsed")"
-  ralph_run_plan_log "plan usage summary: invocations=${total_invocations} input=${_total_input_tokens} output=${_total_output_tokens} cache_create=${_total_cache_creation_tokens} cache_read=${_total_cache_read_tokens} max_turn=${_total_max_turn_tokens} cache_hit_ratio=${_summary_cache_hit_ratio} elapsed=${_elapsed_fmt}"
+  ralph_run_plan_log "plan usage summary: invocations=${_summary_invocations} input=${_summary_input_tokens} output=${_summary_output_tokens} cache_create=${_summary_cache_creation_tokens} cache_read=${_summary_cache_read_tokens} max_turn=${_summary_max_turn_tokens} cache_hit_ratio=${_summary_cache_hit_ratio} elapsed=${_elapsed_fmt}"
   local _summary_count_fmt
-  _summary_count_fmt="$(ralph_format_int_commas "$total_invocations")"
+  _summary_count_fmt="$(ralph_format_int_commas "$_summary_invocations")"
   local _summary_input_fmt _summary_cache_create_fmt _summary_cache_read_fmt _summary_output_fmt
-  _summary_input_fmt="$(ralph_format_int_commas "$_total_input_tokens")"
-  _summary_cache_create_fmt="$(ralph_format_int_commas "$_total_cache_creation_tokens")"
-  _summary_cache_read_fmt="$(ralph_format_int_commas "$_total_cache_read_tokens")"
-  _summary_output_fmt="$(ralph_format_int_commas "$_total_output_tokens")"
+  _summary_input_fmt="$(ralph_format_int_commas "$_summary_input_tokens")"
+  _summary_cache_create_fmt="$(ralph_format_int_commas "$_summary_cache_creation_tokens")"
+  _summary_cache_read_fmt="$(ralph_format_int_commas "$_summary_cache_read_tokens")"
+  _summary_output_fmt="$(ralph_format_int_commas "$_summary_output_tokens")"
   local _summary_input_avg=0 _summary_cache_create_avg=0 _summary_cache_read_avg=0 _summary_output_avg=0
-  if [[ "$total_invocations" -gt 0 ]]; then
-    _summary_input_avg=$(( (_total_input_tokens + total_invocations / 2) / total_invocations ))
-    _summary_cache_create_avg=$(( (_total_cache_creation_tokens + total_invocations / 2) / total_invocations ))
-    _summary_cache_read_avg=$(( (_total_cache_read_tokens + total_invocations / 2) / total_invocations ))
-    _summary_output_avg=$(( (_total_output_tokens + total_invocations / 2) / total_invocations ))
+  if [[ "$_summary_invocations" -gt 0 ]]; then
+    _summary_input_avg=$(( (_summary_input_tokens + _summary_invocations / 2) / _summary_invocations ))
+    _summary_cache_create_avg=$(( (_summary_cache_creation_tokens + _summary_invocations / 2) / _summary_invocations ))
+    _summary_cache_read_avg=$(( (_summary_cache_read_tokens + _summary_invocations / 2) / _summary_invocations ))
+    _summary_output_avg=$(( (_summary_output_tokens + _summary_invocations / 2) / _summary_invocations ))
   fi
   local _summary_input_avg_fmt _summary_cache_create_avg_fmt _summary_cache_read_avg_fmt _summary_output_avg_fmt
   _summary_input_avg_fmt="$(ralph_format_int_commas "$_summary_input_avg")"
@@ -803,15 +957,15 @@ PY
   esac
   local _summary_total_cost_weighted _summary_total_cost_cents _summary_avg_cost_cents
   _summary_total_cost_weighted=$(( \
-    (_total_input_tokens * _summary_rate_input) + \
-    (_total_cache_creation_tokens * _summary_rate_cache_create) + \
-    (_total_cache_read_tokens * _summary_rate_cache_read) + \
-    (_total_output_tokens * _summary_rate_output) \
+    (_summary_input_tokens * _summary_rate_input) + \
+    (_summary_cache_creation_tokens * _summary_rate_cache_create) + \
+    (_summary_cache_read_tokens * _summary_rate_cache_read) + \
+    (_summary_output_tokens * _summary_rate_output) \
   ))
   _summary_total_cost_cents=$(( (_summary_total_cost_weighted * 100 + 500000) / 1000000 ))
   _summary_avg_cost_cents=0
-  if [[ "$total_invocations" -gt 0 ]]; then
-    _summary_avg_cost_cents=$(( (_summary_total_cost_cents + total_invocations / 2) / total_invocations ))
+  if [[ "$_summary_invocations" -gt 0 ]]; then
+    _summary_avg_cost_cents=$(( (_summary_total_cost_cents + _summary_invocations / 2) / _summary_invocations ))
   fi
   local _summary_total_cost_fmt _summary_avg_cost_fmt
   _summary_total_cost_fmt="$(printf '%d.%02d' $(( _summary_total_cost_cents / 100 )) $(( _summary_total_cost_cents % 100 )))"
@@ -842,11 +996,26 @@ _ralph_append_invocation_usage_history() {
   local _plan_key="${14:-}"
   local _stage_id="${15:-}"
   local _session_strategy="${16:-fresh}"
+  local _todo_line="${17:-}"
+  local _todo_ordinal="${18:-}"
+  local _todo_completed="${19:-}"
+  local _todo_class="${20:-}"
+  local _todo_hash="${21:-}"
+  local _validation_failed="${22:-}"
+  local _override_used="${23:-}"
+  local _prompt_bytes="${24:-0}"
+  local _todo_bytes="${25:-0}"
+  local _todo_continuation_lines="${26:-0}"
+  local _split_parent_id="${27:-}"
+  local _direct_verification="${28:-0}"
+  local _rate_limit_status="${29:-}"
+  local _tool_turns="${30:-0}"
+  local _usage_merge_path="${31:-}"
 
   mkdir -p "$(dirname "$_path")"
 
   if command -v python3 &>/dev/null; then
-    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" "$_started_at" "$_ended_at" "$_plan_key" "$_stage_id" "$_session_strategy" <<'PY'
+    python3 - "$_path" "$_iteration" "$_model" "$_runtime" "$_elapsed_seconds" "$_input_tokens" "$_output_tokens" "$_cache_create" "$_cache_read" "$_max_turn" "$_cache_hit_ratio" "$_started_at" "$_ended_at" "$_plan_key" "$_stage_id" "$_session_strategy" "$_todo_line" "$_todo_ordinal" "$_todo_completed" "$_todo_class" "$_todo_hash" "$_validation_failed" "$_override_used" "$_prompt_bytes" "$_todo_bytes" "$_todo_continuation_lines" "$_split_parent_id" "$_direct_verification" "$_rate_limit_status" "$_tool_turns" "$_usage_merge_path" <<'PY'
 import json
 import os
 import sys
@@ -871,6 +1040,21 @@ ended_at = sys.argv[13] if len(sys.argv) > 13 else ""
 plan_key = sys.argv[14] if len(sys.argv) > 14 else ""
 stage_id = sys.argv[15] if len(sys.argv) > 15 else ""
 session_strategy = sys.argv[16] if len(sys.argv) > 16 else ""
+todo_line = sys.argv[17] if len(sys.argv) > 17 else ""
+todo_ordinal = sys.argv[18] if len(sys.argv) > 18 else ""
+todo_completed = sys.argv[19] if len(sys.argv) > 19 else ""
+todo_class = sys.argv[20] if len(sys.argv) > 20 else ""
+todo_hash = sys.argv[21] if len(sys.argv) > 21 else ""
+validation_failed = sys.argv[22] if len(sys.argv) > 22 else ""
+override_used = sys.argv[23] if len(sys.argv) > 23 else ""
+prompt_bytes = sys.argv[24] if len(sys.argv) > 24 else "0"
+todo_bytes = sys.argv[25] if len(sys.argv) > 25 else "0"
+todo_continuation_lines = sys.argv[26] if len(sys.argv) > 26 else "0"
+split_parent_id = sys.argv[27] if len(sys.argv) > 27 else ""
+direct_verification = sys.argv[28] if len(sys.argv) > 28 else ""
+rate_limit_status = sys.argv[29] if len(sys.argv) > 29 else ""
+tool_turns = sys.argv[30] if len(sys.argv) > 30 else "0"
+merge_path = sys.argv[31] if len(sys.argv) > 31 else ""
 
 record = {
     "iteration": iteration,
@@ -891,9 +1075,66 @@ for key, value in (
     ("ended_at", ended_at),
     ("plan_key", plan_key),
     ("stage_id", stage_id),
+    ("todo_line", todo_line),
+    ("todo_ordinal", todo_ordinal),
 ):
     if value:
-        record[key] = value
+        if key in ("todo_line", "todo_ordinal"):
+            try:
+                record[key] = int(value)
+            except ValueError:
+                record[key] = value
+        else:
+            record[key] = value
+
+if todo_completed:
+    record["todo_completed"] = todo_completed == "1"
+if todo_class:
+    record["todo_risk_class"] = todo_class
+if todo_hash:
+    record["todo_hash"] = todo_hash
+if validation_failed:
+    record["todo_validation_failed"] = validation_failed == "1"
+if override_used:
+    record["completion_override_used"] = override_used == "1"
+for key, value in (
+    ("prompt_bytes", prompt_bytes),
+    ("todo_bytes", todo_bytes),
+    ("todo_continuation_lines", todo_continuation_lines),
+    ("tool_turns", tool_turns),
+):
+    try:
+        record[key] = int(value or 0)
+    except ValueError:
+        record[key] = 0
+
+if merge_path.strip():
+    try:
+        mp = merge_path.strip()
+        if os.path.isfile(mp):
+            with open(mp, "r", encoding="utf-8") as mfh:
+                mu = json.load(mfh)
+            if isinstance(mu, dict):
+                raw_tc = mu.get("tool_calls_total")
+                if raw_tc is not None:
+                    try:
+                        record["tool_calls_total"] = int(raw_tc)
+                    except (TypeError, ValueError):
+                        record["tool_calls_total"] = 0
+                bt = mu.get("tool_calls_by_tool")
+                if isinstance(bt, dict):
+                    record["tool_calls_by_tool"] = bt
+                sq = mu.get("tool_calls_sequence")
+                if isinstance(sq, list):
+                    record["tool_calls_sequence"] = sq
+    except Exception:
+        pass
+if split_parent_id:
+    record["split_parent_id"] = split_parent_id
+if direct_verification:
+    record["direct_verification"] = direct_verification == "1"
+if rate_limit_status:
+    record["rate_limit_status"] = rate_limit_status
 
 doc = {
     "schema_version": 1,
@@ -940,10 +1181,81 @@ PY
   if [[ -n "$_session_strategy" ]]; then
     _extra_fields+=",\"session_strategy\":\"${_session_strategy}\""
   fi
+  if [[ -n "$_todo_line" ]]; then
+    _extra_fields+=",\"todo_line\":${_todo_line}"
+  fi
+  if [[ -n "$_todo_ordinal" ]]; then
+    _extra_fields+=",\"todo_ordinal\":${_todo_ordinal}"
+  fi
+  if [[ -n "$_todo_completed" ]]; then
+    if [[ "$_todo_completed" == "1" ]]; then
+      _extra_fields+=",\"todo_completed\":true"
+    else
+      _extra_fields+=",\"todo_completed\":false"
+    fi
+  fi
+  if [[ -n "$_todo_class" ]]; then
+    _extra_fields+=",\"todo_risk_class\":\"${_todo_class}\""
+  fi
+  if [[ -n "$_todo_hash" ]]; then
+    _extra_fields+=",\"todo_hash\":\"${_todo_hash}\""
+  fi
+  if [[ -n "$_validation_failed" ]]; then
+    if [[ "$_validation_failed" == "1" ]]; then
+      _extra_fields+=",\"todo_validation_failed\":true"
+    else
+      _extra_fields+=",\"todo_validation_failed\":false"
+    fi
+  fi
+  if [[ -n "$_override_used" ]]; then
+    if [[ "$_override_used" == "1" ]]; then
+      _extra_fields+=",\"completion_override_used\":true"
+    else
+      _extra_fields+=",\"completion_override_used\":false"
+    fi
+  fi
+  _extra_fields+=",\"prompt_bytes\":${_prompt_bytes},\"todo_bytes\":${_todo_bytes},\"todo_continuation_lines\":${_todo_continuation_lines},\"direct_verification\":$([[ "$_direct_verification" == "1" ]] && printf true || printf false),\"tool_turns\":${_tool_turns}"
+  if [[ -n "$_split_parent_id" ]]; then
+    _extra_fields+=",\"split_parent_id\":\"${_split_parent_id}\""
+  fi
+  if [[ -n "$_rate_limit_status" ]]; then
+    _extra_fields+=",\"rate_limit_status\":\"${_rate_limit_status}\""
+  fi
 
   cat >"$_path" <<USAGE_EOF
 {"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}${_extra_fields}}]}
 USAGE_EOF
+}
+
+ralph_current_invocation_output_segment() {
+  local log_path="$1"
+  local start_size="$3"
+
+  [[ -f "$log_path" ]] || return 0
+  tail -c +"$((start_size + 1))" "$log_path" 2>/dev/null
+}
+
+ralph_detect_rate_limit_status() {
+  local text="$1"
+  local lower
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$lower" == *"five_hour"* || "$lower" == *"5-hour"* || "$lower" == *"5 hour"* ]]; then
+    printf 'five_hour\n'
+    return 0
+  fi
+  if [[ "$lower" == *"out of credits"* || "$lower" == *"credit balance"* || "$lower" == *"insufficient credits"* ]]; then
+    printf 'out_of_credits\n'
+    return 0
+  fi
+  if [[ "$lower" == *"rate limit"* || "$lower" == *"rate_limit"* || "$lower" == *"usage limit"* ]]; then
+    printf 'rate_limited\n'
+    return 0
+  fi
+  return 1
+}
+
+ralph_plan_manual_ack_path() {
+  printf '%s\n' "$RALPH_SESSION_DIR/manual-ack.txt"
 }
 
 # Outer loop: one iteration per "next open TODO" in the plan file.
@@ -969,10 +1281,15 @@ while true; do
   line_num="${next%%|*}"
   full_line="${next#*|}"
   todo_text="$(plan_open_todo_body "$full_line")"
+  todo_multiline_note=""
+  if plan_todo_has_continuation_lines "$todo_text" 2>/dev/null; then
+    todo_multiline_note=$'\n\nThis TODO spans multiple lines. Treat every continuation line as required work, and do not stop after completing only the first numbered item.'
+  fi
 
   attempts_on_line=0
   human_gate_satisfied_for_line=0
   _reset_retry_done_for_line=0
+  _opencode_empty_resume_retry_done_for_line=0
   # Same checklist line: re-invoke assistant if the box stayed [ ], pending-human was cleared, or gutter retry.
   while true; do
     total_invocations=$((total_invocations + 1))
@@ -985,6 +1302,19 @@ while true; do
 
     read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
     remaining=$((total_count - done_count))
+    _resume_hint_threshold="${RALPH_PLAN_RESUME_HINT_THRESHOLD:-25}"
+    if [[ ! "$_resume_hint_threshold" =~ ^[0-9]+$ ]]; then
+      _resume_hint_threshold=25
+    fi
+    if [[ "${RALPH_PLAN_RESUME_HINT:-1}" != "0" ]] && \
+       [[ "${RALPH_PLAN_CLI_RESUME:-0}" != "1" ]] && \
+       [[ "$RALPH_PLAN_RESUME_HINT_EMITTED" != "1" ]] && \
+       (( remaining > _resume_hint_threshold )); then
+      echo "Hint: $remaining unchecked TODOs remain. Set RALPH_PLAN_CLI_RESUME=1 or pass --cli-resume to reuse the CLI session for long plans." >&2
+      ralph_run_plan_log "resume hint emitted (remaining=$remaining threshold=$_resume_hint_threshold)"
+      RALPH_PLAN_RESUME_HINT_EMITTED=1
+    fi
+    unset _resume_hint_threshold
 
     ralph_run_plan_log "invocation=$iteration next_todo line=$line_num done=$done_count total=$total_count remaining=$remaining attempts_on_line=$attempts_on_line"
     ralph_run_plan_log "todo_text: $todo_text"
@@ -996,9 +1326,93 @@ while true; do
     fi
     ralph_run_plan_log "current task line=$line_num session=$_session_label strategy=${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
 
-    task_ordinal="$(plan_todo_ordinal_at_line "$PLAN_PATH" "$line_num")"
+    plan_format="$(plan_detect_format "$PLAN_PATH" 2>/dev/null || printf 'default')"
+    task_ordinal="$(plan_todo_ordinal_for_next "$PLAN_PATH" "$plan_format" "$line_num")"
+    todo_class="$(plan_todo_risk_classify "$todo_text" 2>/dev/null || printf 'normal')"
+    todo_hash="$(plan_todo_hash "$todo_text" 2>/dev/null || printf '%s' "$todo_text")"
+    _todo_bytes="${#todo_text}"
+    _todo_continuation_lines=0
+    if [[ "$todo_text" == *$'\n'* ]]; then
+      _todo_continuation_lines=$(( $(printf '%s\n' "$todo_text" | wc -l | tr -d ' ') - 1 ))
+    fi
+    _split_parent_id=""
+    if printf '%s\n' "$todo_text" | grep -q "Ralph split parent:"; then
+      _split_parent_id="$(printf '%s\n' "$todo_text" | sed -n 's/.*Ralph split parent: \([^ ]*\).*/\1/p' | head -1)"
+    fi
     _banner_plan_secs=$(( $(date +%s) - _plan_start_ts ))
     _banner_plan_str="$(ralph_format_elapsed_secs "$_banner_plan_secs")"
+
+    if [[ "${RALPH_PLAN_VERIFY_DIRECT:-0}" == "1" ]]; then
+      _direct_command=""
+      _direct_command="$(ralph_plan_direct_verification_command "$todo_text" 2>/dev/null || true)"
+      if [[ -n "$_direct_command" ]]; then
+        ralph_run_plan_log "direct verification selected for line=$line_num command=$_direct_command"
+        start_ts="$(date '+%Y-%m-%d %H:%M:%S')"
+        _inv_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        START_TIME="$(date +%s)"
+        echo -e "${C_G}Running direct verification for TODO line $line_num at ${start_ts}: ${_direct_command}${C_RST}" >&2
+        {
+          echo ""
+          echo "================================================================================"
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Direct verification $iteration | TODO (line $line_num): $todo_text"
+          echo "Command: $_direct_command"
+          echo "================================================================================"
+          echo ""
+        } >> "$OUTPUT_LOG"
+        set +e
+        (cd "$WORKSPACE" && bash -lc "$_direct_command") >>"$OUTPUT_LOG" 2>&1
+        _direct_exit=$?
+        set -e
+        _inv_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        _inv_elapsed=$(( $(date +%s) - START_TIME ))
+        _direct_completed=0
+        if [[ "$_direct_exit" -eq 0 ]]; then
+          _direct_mark_target="$line_num"
+          [[ "$plan_format" == "cursor" ]] && _direct_mark_target="$todo_text"
+          if plan_mark_todo_done_by_format "$PLAN_PATH" "$plan_format" "$_direct_mark_target"; then
+            _direct_completed=1
+            ralph_run_plan_log "direct verification completed line=$line_num elapsed=${_inv_elapsed}s"
+          else
+            ralph_run_plan_log "ERROR: direct verification passed but could not mark line=$line_num complete"
+            exit 1
+          fi
+        else
+          ralph_run_plan_log "direct verification failed line=$line_num exit=$_direct_exit elapsed=${_inv_elapsed}s"
+        fi
+        _ralph_append_invocation_usage_history \
+          "$RALPH_LOG_DIR/invocation-usage.json" \
+          "$iteration" \
+          "${SELECTED_MODEL:-}" \
+          "$RUNTIME" \
+          "$_inv_elapsed" \
+          0 0 0 0 0 0 \
+          "$_inv_started_at" \
+          "$_inv_ended_at" \
+          "${RALPH_PLAN_KEY:-}" \
+          "${RALPH_STAGE_ID:-}" \
+          "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" \
+          "$line_num" \
+          "$task_ordinal" \
+          "$_direct_completed" \
+          "$todo_class" \
+          "$todo_hash" \
+          "$([[ "$_direct_exit" -eq 0 ]] && printf 0 || printf 1)" \
+          "0" \
+          "0" \
+          "$_todo_bytes" \
+          "$_todo_continuation_lines" \
+          "$_split_parent_id" \
+          "1" \
+          "" \
+          "0" \
+          ""
+        if [[ "$_direct_exit" -eq 0 ]]; then
+          break
+        fi
+        echo -e "${C_R}Direct verification failed for TODO line $line_num. See $OUTPUT_LOG.${C_RST}" >&2
+        exit 1
+      fi
+    fi
 
     echo ""
     echo -e "${C_C}${C_BOLD}═══════════════════════════════════════════════════════════════════════════════════${C_RST}"
@@ -1011,6 +1425,7 @@ while true; do
     echo -e "${C_BOLD}$todo_text${C_RST}"
     echo -e "${C_DIM}Log: $LOG_FILE  |  Output: $OUTPUT_LOG${C_RST}"
     echo ""
+    ralph_run_plan_log "todo classification: class=$todo_class hash=$todo_hash format=$plan_format ordinal=$task_ordinal"
 
     # Refresh resume env from runtime-specific session-id files / flags before building PROMPT (compact vs full context).
     ralph_session_apply_resume_strategy
@@ -1067,16 +1482,18 @@ while true; do
       PROMPT_STATIC=""
       PROMPT="${_reset_prefix}$_resume_intro
 
-**TODO (line $line_num):** $todo_text
+**TODO (line $line_num):** $todo_text$todo_multiline_note
 
 Reset contract:
 - Treat this as a fresh task.
 - Ignore previous task-specific conversation state unless re-verified from files.
 - Keep only durable system/tool constraints that still apply.
 
-Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, and stop. Do not start the next item.
+Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, print \`AGENT_INVOCATION_COMPLETE\` on its own line, and stop. Do not start the next item.
 
-If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]."
+If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
+
+If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO."
 
       if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
         _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
@@ -1100,11 +1517,13 @@ If you need operator input before finishing, write your question to \`$PENDING_A
       PROMPT_STATIC=""
       PROMPT="$_resume_intro
 
-**TODO (line $line_num):** $todo_text
+**TODO (line $line_num):** $todo_text$todo_multiline_note
 
-Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, and stop. Do not start the next item.
+Open \`$PLAN_PATH\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, print \`AGENT_INVOCATION_COMPLETE\` on its own line, and stop. Do not start the next item.
 
-If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]."
+If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
+
+If you need operator input before finishing, write your question to \`$PENDING_ABS\` and stop without marking [x]. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO."
 
       if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
         _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
@@ -1130,7 +1549,9 @@ Rules:
 - Use the repo toolchain documented in README/AGENTS.md. Follow verification steps in the plan.
 - Prefer targeted search and partial file/log reads first; avoid full log reads unless needed.
 - When done, mark \`- [ ]\` on line $line_num as \`- [x]\` and stop.
-- If operator input is needed first, write your question to \`$PENDING_ABS\` and stop without marking [x]."
+- If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
+- After completing and checking off the TODO, print \`AGENT_INVOCATION_COMPLETE\` on its own line.
+- If operator input is needed first, write your question to \`$PENDING_ABS\` and stop without marking [x]. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO."
 
       if [[ -f "$HUMAN_CONTEXT" ]] && [[ -s "$HUMAN_CONTEXT" ]]; then
         _hc_max="${RALPH_HUMAN_CONTEXT_MAX_BYTES:-8192}"
@@ -1235,17 +1656,6 @@ Use namespace-aware artifact paths when writing handoff files."
       esac
     fi
 
-    #region agent log
-    if [[ -d "/Users/joshuajancula/Documents/projects/ralph/.cursor" ]]; then
-      _dbg_ts=$(( $(date +%s) * 1000 ))
-      _dbg_prompt_static_len=${#PROMPT_STATIC}
-      _dbg_prompt_len=${#PROMPT}
-      _dbg_has_resume_sid=0
-      [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && _dbg_has_resume_sid=1
-      printf '%s\n' "{\"sessionId\":\"91b133\",\"id\":\"log_${_dbg_ts}_prompt_shape_$$\",\"timestamp\":${_dbg_ts},\"location\":\"bundle/.ralph/bash-lib/run-plan-core.sh:while_loop_prompt_build\",\"message\":\"prompt branch built\",\"data\":{\"prompt_mode\":\"${_prompt_mode}\",\"line_num\":\"${line_num}\",\"has_resume_session_id\":${_dbg_has_resume_sid},\"resume_bare\":\"${RALPH_RUN_PLAN_RESUME_BARE:-0}\",\"prompt_len\":${_dbg_prompt_len},\"prompt_static_len\":${_dbg_prompt_static_len}},\"runId\":\"initial\",\"hypothesisId\":\"H2\"}" >> "/Users/joshuajancula/Documents/projects/ralph/.cursor/debug-91b133.log" || true
-    fi
-    #endregion agent log
-
     # Export PROMPT_STATIC so invoke scripts can use it for --system-prompt caching.
     export PROMPT_STATIC
     # Prompt size measurement and warning.
@@ -1285,6 +1695,7 @@ Use namespace-aware artifact paths when writing handoff files."
     } >> "$OUTPUT_LOG"
 
     cd "$WORKSPACE"
+    GIT_STATUS_AT_START="$(git -C "$WORKSPACE" status --short --untracked-files=all 2>/dev/null || true)"
 
     # Sidecar files for this invocation: CLI exit code; AGENT_PID watches the background shell.
     EXIT_CODE_FILE="$RALPH_LOG_DIR/.plan-runner-exit.$$"
@@ -1389,9 +1800,15 @@ Use namespace-aware artifact paths when writing handoff files."
     _inv_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     _inv_elapsed=$(( $(date +%s) - START_TIME ))
     ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code elapsed=${_inv_elapsed}s)"
+    GIT_STATUS_AT_END="$(git -C "$WORKSPACE" status --short --untracked-files=all 2>/dev/null || true)"
+    _inv_output_segment="$(ralph_current_invocation_output_segment "$OUTPUT_LOG" "$iteration" "$LOG_SIZE_AT_START")"
+    _rate_limit_status=""
+    if declare -F ralph_detect_rate_limit_status >/dev/null 2>&1; then
+      _rate_limit_status="$(ralph_detect_rate_limit_status "$_inv_output_segment" 2>/dev/null || true)"
+    fi
 
     # Read per-invocation token usage from demux.py output (only when JSON streaming was active).
-    _inv_input=0; _inv_output=0; _inv_cache_create=0; _inv_cache_read=0; _inv_max_turn=0
+    _inv_input=0; _inv_output=0; _inv_cache_create=0; _inv_cache_read=0; _inv_max_turn=0; _inv_tool_turns=0
     if [[ -f "$USAGE_FILE" ]]; then
       if command -v python3 &>/dev/null; then
         _inv_usage_json="$(<"$USAGE_FILE")"
@@ -1400,8 +1817,9 @@ Use namespace-aware artifact paths when writing handoff files."
         _inv_cache_create="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_creation_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
         _inv_cache_read="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_read_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
         _inv_max_turn="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('max_turn_total_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_tool_turns="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('tool_turns',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        _inv_tool_calls_total="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('tool_calls_total',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
       fi
-      rm -f "$USAGE_FILE"
     fi
 
     if [[ "$exit_code" -ne 0 ]] && [[ "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" == "reset" ]] && [[ "$_inv_used_resume_session_id" == "1" ]] && [[ "$_reset_retry_done_for_line" -eq 0 ]] && [[ -z "${RESUME_SESSION_ID_OVERRIDE:-}" ]]; then
@@ -1416,6 +1834,22 @@ Use namespace-aware artifact paths when writing handoff files."
         continue
       fi
     fi
+    if [[ "$RUNTIME" == "opencode" ]] && \
+       [[ "$exit_code" -eq 0 ]] && \
+       [[ "$_inv_used_resume_session_id" == "1" ]] && \
+       [[ "$_opencode_empty_resume_retry_done_for_line" -eq 0 ]] && \
+       [[ -z "${RESUME_SESSION_ID_OVERRIDE:-}" ]] && \
+       [[ "$_inv_input" -eq 0 && "$_inv_output" -eq 0 && "$_inv_cache_create" -eq 0 && "$_inv_cache_read" -eq 0 ]] && \
+       ! printf '%s\n' "$_inv_output_segment" | grep -Eq '^[[:space:]]*\{'; then
+      ralph_run_plan_log "opencode resumed session produced no JSON events or token usage; clearing stored session id ($_inv_resume_session_id) and retrying fresh once"
+      rm -f "$SESSION_ID_FILE" 2>/dev/null || true
+      unset RALPH_RUN_PLAN_RESUME_SESSION_ID
+      unset RALPH_RUN_PLAN_NEW_SESSION_ID
+      unset RALPH_RUN_PLAN_RESUME_BARE
+      _opencode_empty_resume_retry_done_for_line=1
+      sleep 1
+      continue
+    fi
     # Compute per-invocation cache_hit_ratio = cache_read / (input + cache_read + cache_create).
     _inv_cache_hit_ratio=0
     _inv_total_input=$(( _inv_input + _inv_cache_read + _inv_cache_create ))
@@ -1429,6 +1863,38 @@ Use namespace-aware artifact paths when writing handoff files."
     if [[ "$_inv_max_turn" -gt "$_total_max_turn_tokens" ]]; then
       _total_max_turn_tokens="$_inv_max_turn"
     fi
+
+    _inv_next_after=""
+    _inv_next_line=""
+    _inv_plan_complete=0
+    _inv_todo_completed=0
+    if ! _inv_next_after=$(get_next_todo "$PLAN_PATH"); then
+      _inv_plan_complete=1
+      _inv_todo_completed=1
+    else
+      _inv_next_line="${_inv_next_after%%|*}"
+      if [[ "$_inv_next_line" != "$line_num" ]]; then
+        _inv_todo_completed=1
+      fi
+    fi
+
+    _validation_failed=0
+    if [[ "$_inv_todo_completed" == "1" ]]; then
+      if grep -Fxq "AGENT_INVOCATION_COMPLETE" <<<"$_inv_output_segment"; then
+        ralph_run_plan_log "completion sentinel observed for line $line_num"
+      else
+        ralph_run_plan_log "completion sentinel missing for line $line_num (non-blocking)"
+      fi
+    fi
+    : "${_prompt_bytes:=0}"
+    : "${_todo_bytes:=0}"
+    : "${_todo_continuation_lines:=0}"
+    : "${_split_parent_id:=}"
+    : "${_rate_limit_status:=}"
+    : "${_inv_tool_turns:=0}"
+    : "${_inv_tool_calls_total:=0}"
+    : "${todo_class:=normal}"
+    : "${todo_hash:=}"
 
     # Write consolidated per-invocation usage history JSON.
     _inv_usage_file="$RALPH_LOG_DIR/invocation-usage.json"
@@ -1448,8 +1914,33 @@ Use namespace-aware artifact paths when writing handoff files."
       "$_inv_ended_at" \
       "${RALPH_PLAN_KEY:-}" \
       "${RALPH_STAGE_ID:-}" \
-      "${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
-    ralph_run_plan_log "invocation $iteration usage: input=${_inv_input} output=${_inv_output} cache_create=${_inv_cache_create} cache_read=${_inv_cache_read} max_turn=${_inv_max_turn} cache_hit_ratio=${_inv_cache_hit_ratio} elapsed=${_inv_elapsed}s"
+      "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" \
+      "$line_num" \
+      "$task_ordinal" \
+      "$_inv_todo_completed" \
+      "$todo_class" \
+      "$todo_hash" \
+      "${_validation_failed:-0}" \
+      "${RALPH_PLAN_ALLOW_UNVERIFIED_COMPLETION:-0}" \
+      "$_prompt_bytes" \
+      "$_todo_bytes" \
+      "$_todo_continuation_lines" \
+      "$_split_parent_id" \
+      "0" \
+      "$_rate_limit_status" \
+      "${_inv_tool_turns:-0}" \
+      "${USAGE_FILE:-}"
+    [[ -f "${USAGE_FILE:-}" ]] && rm -f "$USAGE_FILE"
+    ralph_run_plan_log "invocation $iteration usage: input=${_inv_input} output=${_inv_output} cache_create=${_inv_cache_create} cache_read=${_inv_cache_read} max_turn=${_inv_max_turn} cache_hit_ratio=${_inv_cache_hit_ratio} tool_calls=${_inv_tool_calls_total:-0} prompt_bytes=${_prompt_bytes} todo_bytes=${_todo_bytes} todo_continuation_lines=${_todo_continuation_lines} rate_limit_status=${_rate_limit_status:-none} elapsed=${_inv_elapsed}s"
+
+    if [[ -n "$_rate_limit_status" && "$exit_code" -ne 0 ]]; then
+      ralph_run_plan_log "hard rate-limit rejection detected status=$_rate_limit_status; stopping without retry"
+      echo "" >&2
+      echo -e "${C_R}${C_BOLD}Runtime rejected the request (${_rate_limit_status}); stopping without retrying this TODO.${C_RST}" >&2
+      echo -e "${C_DIM}Plan: $PLAN_PATH  Line $line_num${C_RST}" >&2
+      _ralph_write_plan_usage_summary "$done_count" "$total_count"
+      exit 4
+    fi
 
     # Per-invocation stderr breakdown with cost estimate (single ASCII line, no emoji)
     _inv_cost_est=0
@@ -1466,12 +1957,13 @@ Use namespace-aware artifact paths when writing handoff files."
           ;;
       esac
     fi
-    printf 'invocation %d  input=%s  cache_create=%s  cache_read=%s  output=%s  est=$%s  cache_hit=%s%%\n' \
+    printf 'invocation %d  input=%s  cache_create=%s  cache_read=%s  output=%s  tools=%s  est=$%s  cache_hit=%s%%\n' \
       "$iteration" \
       "$(ralph_format_int_commas "$_inv_input")" \
       "$(ralph_format_int_commas "$_inv_cache_create")" \
       "$(ralph_format_int_commas "$_inv_cache_read")" \
       "$(ralph_format_int_commas "$_inv_output")" \
+      "$(ralph_format_int_commas "${_inv_tool_calls_total:-0}")" \
       "$(printf '%.3f' "$_inv_cost_est")" \
       "$(printf '%.0f' "$(echo "$_inv_cache_hit_ratio * 100" | bc 2>/dev/null || echo 0)")" \
       >&2
@@ -1483,9 +1975,11 @@ Use namespace-aware artifact paths when writing handoff files."
     echo "" >>"$OUTPUT_LOG"
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
 
-    if ! next_after=$(get_next_todo "$PLAN_PATH"); then
+    if [[ "$_inv_plan_complete" == "1" ]]; then
       read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
       ralph_run_plan_log "all complete (done=$done_count total=$total_count)"
+      # A successful completion invalidates any stale manual-ack artifact for this plan/session.
+      rm -f "$(ralph_plan_manual_ack_path)" 2>/dev/null || true
       {
         echo ""
         echo "################################################################################"
@@ -1499,27 +1993,15 @@ Use namespace-aware artifact paths when writing handoff files."
       EXIT_STATUS="complete"
       exit 0
     fi
-    next_line="${next_after%%|*}"
+    next_after="$_inv_next_after"
+    next_line="$_inv_next_line"
 
     if [[ "$next_line" != "$line_num" ]]; then
-      if plan_todo_implies_operator_dialog "$todo_text" && [[ "$human_gate_satisfied_for_line" -eq 0 ]]; then
-        ralph_run_plan_log "TODO line $line_num implies operator dialog but advanced without a recorded human reply; reopening checklist line and pausing"
-        echo "" >&2
-        echo -e "${C_Y}${C_BOLD}This TODO asks the user for input, but the agent marked it done without using pending-human.txt.${C_RST}" >&2
-        echo -e "${C_DIM}Reopening the item and pausing for your reply (same rules as a normal agent question).${C_RST}" >&2
-        if ! plan_reopen_todo_at_line "$PLAN_PATH" "$line_num"; then
-          ralph_run_plan_log "ERROR: could not reopen TODO at line $line_num after missing human gate"
-          echo -e "${C_R}Could not reopen plan line $line_num; fix PLAN.md manually.${C_RST}" >&2
-          exit 1
-        fi
-        printf '%s\n' "$todo_text" >"$PENDING_HUMAN"
-        chmod 600 "$PENDING_HUMAN"
-        ralph_sync_human_action_file_state
-      else
-        ralph_run_plan_log "TODO line $line_num completed; next open TODO is line $next_line"
-        rm -f "$PENDING_HUMAN"
-        break
-      fi
+      ralph_run_plan_log "TODO line $line_num completed; next open TODO is line $next_line"
+      # Clear the per-session manual-ack file after any successful TODO completion.
+      rm -f "$(ralph_plan_manual_ack_path)" 2>/dev/null || true
+      rm -f "$PENDING_HUMAN"
+      break
     fi
 
     ralph_sync_human_action_file_state

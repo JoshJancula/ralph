@@ -14,6 +14,8 @@ interface TreeNode {
   loading: boolean;
   requestToken: number;
   children: TreeNode[] | null; // null = not loaded, [] = loaded empty
+  /** Logs/artifacts aggregate scope: absolute `.ralph-workspace` path when listing spans multiple workspaces. */
+  workspaceScope?: string;
 }
 
 function formatSize(bytes: number): string {
@@ -48,6 +50,12 @@ export class SidebarTreeComponent implements OnInit {
 
   @Input() autoOpen = false;
 
+  /** When set (e.g. from NavService), scopes aggregated logs/artifacts listings to one workspace. */
+  @Input() listingWorkspaceScope: string | null = null;
+
+  /** When set, scopes non-aggregated roots (plans, docs, sessions, orchestration-plans) to this project directory. */
+  @Input() projectRoot: string | null = null;
+
   rootNodes = signal<TreeNode[]>([]);
   flatNodes = signal<TreeNode[]>([]);
   loading = signal(false);
@@ -65,7 +73,9 @@ export class SidebarTreeComponent implements OnInit {
   loadRoot(): void {
     this.loading.set(true);
     this.error.set(null);
-    this.api.fetchListing(this._root, this._path).subscribe({
+    this.api
+      .fetchListing(this._root, this._path, this.effectiveListingScope(), this.effectiveProjectRoot())
+      .subscribe({
       next: (listing) => {
         const nodes = listing.entries.map(e => this.entryToNode(e, 0));
         this.rootNodes.set(nodes);
@@ -94,7 +104,22 @@ export class SidebarTreeComponent implements OnInit {
       loading: false,
       requestToken: 0,
       children: null,
+      workspaceScope: entry.workspaceRoot,
     };
+  }
+
+  private effectiveListingScope(): string | undefined {
+    const s = this.listingWorkspaceScope?.trim();
+    return s || undefined;
+  }
+
+  private effectiveProjectRoot(): string | undefined {
+    const p = this.projectRoot?.trim();
+    return p || undefined;
+  }
+
+  private scopeForNode(node: TreeNode): string | undefined {
+    return node.workspaceScope ?? this.effectiveListingScope();
   }
 
   private rebuildFlat(): void {
@@ -140,7 +165,9 @@ export class SidebarTreeComponent implements OnInit {
     node.loading = true;
     this.rebuildFlat();
 
-    this.api.fetchListing(this._root, node.path).subscribe({
+    this.api
+      .fetchListing(this._root, node.path, this.scopeForNode(node), this.effectiveProjectRoot())
+      .subscribe({
       next: (listing) => {
         if (node.requestToken !== requestToken) return;
         node.children = listing.entries.map(e => this.entryToNode(e, node.depth + 1));
@@ -164,7 +191,13 @@ export class SidebarTreeComponent implements OnInit {
     if (node.type === 'dir') {
       this.toggleDirectory(node);
     } else {
-      this.nav.navigate(this._root, '', node.path);
+      this.nav.navigate(
+        this._root,
+        '',
+        node.path,
+        this.scopeForNode(node) ?? null,
+        this.effectiveProjectRoot() ?? null,
+      );
     }
   }
 
@@ -175,7 +208,13 @@ export class SidebarTreeComponent implements OnInit {
   private openFirstFile(nodes: TreeNode[]): void {
     for (const node of nodes) {
       if (node.type === 'file') {
-        this.nav.navigate(this._root, '', node.path);
+        this.nav.navigate(
+          this._root,
+          '',
+          node.path,
+          this.scopeForNode(node) ?? null,
+          this.effectiveProjectRoot() ?? null,
+        );
         return;
       }
     }

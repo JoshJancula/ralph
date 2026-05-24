@@ -4,16 +4,93 @@ import { TestBed, fakeAsync, tick, flush } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 import { WorkspaceSidebarComponent } from './workspace-sidebar.component';
 import { NavService } from '../../services/nav.service';
-import type { Root } from '../../services/api.service';
+import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
+import type { Root, WorkspaceRegistry } from '../../services/api.service';
 
 const testRoutes = [
   { path: '', redirectTo: 'plans', pathMatch: 'full' },
   { path: '**', redirectTo: 'plans' },
 ];
 
-function requestPath(url: string): string {
-  const q = url.indexOf('?');
-  return q === -1 ? url : url.slice(0, q);
+const allSections = {
+  logs: true,
+  artifacts: true,
+  sessions: true,
+  'orchestration-plans': true,
+  docs: true,
+  plans: true,
+};
+
+function workspace(path: string, sections: Record<string, boolean> = allSections): WorkspaceRegistry {
+  return {
+    path,
+    workspaceRoot: `${path}/.ralph-workspace`,
+    projectRoot: path,
+    label: path.split('/').pop() || path,
+    exists: true,
+    sections,
+  };
+}
+
+function flushSidebarBootstrap(
+  httpMock: HttpTestingController,
+  roots: Root[],
+  options: { projectRoot?: string; workspaces?: unknown[] } = {},
+): void {
+  const projectRoot = options.projectRoot ?? '/mock/project';
+  const workspaces = options.workspaces ?? [];
+  let workspaceDone = false;
+  let workspacesDone = false;
+  let rootsDone = false;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (workspaceDone && workspacesDone && rootsDone) {
+      return;
+    }
+    let progressed = false;
+
+    if (!workspaceDone) {
+      try {
+        httpMock
+          .expectOne((r) => r.url.includes('/api/workspace') && !r.url.includes('/api/workspaces'))
+          .flush({ root: projectRoot });
+        workspaceDone = true;
+        progressed = true;
+        continue;
+      } catch {
+        // try other types this round
+      }
+    }
+
+    if (!workspacesDone) {
+      const batch = httpMock.match((r) => r.url.includes('/api/workspaces'));
+      if (batch.length > 0) {
+        for (const q of batch) {
+          q.flush(workspaces);
+        }
+        workspacesDone = true;
+        progressed = true;
+        continue;
+      }
+    }
+
+    if (!rootsDone) {
+      try {
+        httpMock.expectOne((r) => r.url.includes('/api/roots')).flush(roots);
+        rootsDone = true;
+        progressed = true;
+        continue;
+      } catch {
+        // no-op
+      }
+    }
+
+    if (!progressed) {
+      break;
+    }
+  }
+
+  expect(workspaceDone && workspacesDone && rootsDone).toBe(true);
 }
 
 describe('WorkspaceSidebarComponent', () => {
@@ -21,7 +98,6 @@ describe('WorkspaceSidebarComponent', () => {
   let originalScrollIntoView: typeof Element.prototype.scrollIntoView;
 
   beforeEach(async () => {
-    // Mock scrollIntoView since it's not available in jsdom
     originalScrollIntoView = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = vi.fn();
 
@@ -33,7 +109,6 @@ describe('WorkspaceSidebarComponent', () => {
   });
 
   afterEach(() => {
-    // Restore original scrollIntoView before each test
     Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
@@ -43,25 +118,17 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    // Get the component's injected NavService - now initialized
     const nav = fixture.componentInstance['nav'];
 
-    // Manually set the active root via the internal signal after initialization
-    // This simulates what happens when user navigates to logs
     nav['activeRootSignal'].set('logs');
 
-    // Handle the API call for roots
-    const rootsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    rootsReq.flush([
+    flushSidebarBootstrap(httpMock, [
       { key: 'logs', label: 'Logs', exists: true },
       { key: 'plans', label: 'Plans', exists: true },
     ]);
     tick();
 
-    // Flush any pending async operations
     flush();
-
-    // Consume any pending HTTP requests from the sidebar-tree component
     httpMock.match(() => true).forEach((req) => {
       req.flush({
         root: 'logs',
@@ -71,13 +138,11 @@ describe('WorkspaceSidebarComponent', () => {
       });
     });
 
-    // Force change detection after async operations
     fixture.detectChanges();
 
     const logs: Root = { key: 'logs', label: 'Logs', exists: true };
     const plans: Root = { key: 'plans', label: 'Plans', exists: true };
     expect(fixture.componentInstance.roots()).toEqual([logs, plans]);
-    // The logs root should be active since we set it after initialization
     expect(fixture.componentInstance.isActive(logs)).toBe(true);
     expect(fixture.componentInstance.isActive(plans)).toBe(false);
   }));
@@ -87,17 +152,14 @@ describe('WorkspaceSidebarComponent', () => {
     const nav = TestBed.inject(NavService);
     const spy = vi.spyOn(nav, 'navigate');
 
-    // Seed the active root directly so the component starts in the expected state
     nav['activeRootSignal'].set('artifacts');
 
     fixture.detectChanges();
-    tick(); // Allow ngOnInit to execute
+    tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'artifacts', label: 'Artifacts', exists: true }]);
-    tick(); // Allow any follow-up to process
+    flushSidebarBootstrap(httpMock, [{ key: 'artifacts', label: 'Artifacts', exists: true }]);
+    tick();
 
-    // Flush any pending async operations and consume HTTP requests
     flush();
     httpMock.match(() => true).forEach((req) => {
       req.flush({
@@ -110,7 +172,6 @@ describe('WorkspaceSidebarComponent', () => {
 
     const root: Root = { key: 'artifacts', label: 'Artifacts', exists: true };
     fixture.componentInstance.selectRoot(root);
-    // Should be called with 'artifacts' (was already called during setup)
     expect(spy).toHaveBeenCalledWith('artifacts');
   }));
 
@@ -125,8 +186,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: true }]);
     tick();
     flush();
     httpMock.match(() => true).forEach((req) => {
@@ -163,8 +223,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: true }]);
     tick();
     flush();
     httpMock.match(() => true).forEach((req) => {
@@ -184,8 +243,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: true }]);
     tick();
     flush();
     httpMock.match(() => true).forEach((req) => {
@@ -206,8 +264,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: false }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: false }]);
     tick();
     flush();
 
@@ -224,8 +281,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: false }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: false }]);
     tick();
     flush();
 
@@ -240,8 +296,7 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([{ key: 'logs', label: 'Logs', exists: true }]);
+    flushSidebarBootstrap(httpMock, [{ key: 'logs', label: 'Logs', exists: true }]);
     tick();
     flush();
     httpMock.match(() => true).forEach((req) => {
@@ -264,11 +319,9 @@ describe('WorkspaceSidebarComponent', () => {
     fixture.detectChanges();
     tick();
 
-    const navService = fixture.componentInstance['nav'] as any;
-    navService.activeRootSignal.set('logs');
+    nav['activeRootSignal'].set('logs');
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/roots');
-    req.flush([
+    flushSidebarBootstrap(httpMock, [
       { key: 'logs', label: 'Logs', exists: true },
       { key: 'plans', label: 'Plans', exists: true },
     ]);
@@ -285,4 +338,119 @@ describe('WorkspaceSidebarComponent', () => {
     expect(fixture.componentInstance.isActive(plans)).toBe(false);
   }));
 
+  it('project layout lists workspaces when registry returns entries', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    fixture.detectChanges();
+    tick();
+
+    const wsRoot = '/tmp/ws/.ralph-workspace';
+    const proj = '/tmp/ws';
+    flushSidebarBootstrap(
+      httpMock,
+      [{ key: 'plans', label: 'Plans', exists: true }],
+      {
+        projectRoot: proj,
+        workspaces: [
+          {
+            path: proj,
+            workspaceRoot: wsRoot,
+            projectRoot: proj,
+            label: 'ws',
+            exists: true,
+          },
+        ],
+      },
+    );
+    tick();
+    flush();
+    httpMock.match(() => true).forEach((req) => {
+      req.flush({ root: 'plans', path: '', parent: null, entries: [] });
+    });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.useProjectLayout()).toBe(true);
+    expect(fixture.componentInstance.sortedWorkspaces().length).toBe(1);
+  }));
+
+  it('project layout filters to the selected workspace', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    const selector = TestBed.inject(WorkspaceSelectorService);
+    fixture.detectChanges();
+    tick();
+
+    flushSidebarBootstrap(
+      httpMock,
+      [{ key: 'plans', label: 'Plans', exists: true }],
+      {
+        projectRoot: '/tmp/a',
+        workspaces: [workspace('/tmp/a'), workspace('/tmp/b')],
+      },
+    );
+    tick();
+
+    selector.selectWorkspace('/tmp/b');
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.sortedWorkspaces().map((w) => w.path)).toEqual(['/tmp/b']);
+  }));
+
+  it('uses per-project section availability', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    fixture.detectChanges();
+    tick();
+    const ws = workspace('/tmp/project', { ...allSections, logs: false, plans: true });
+
+    flushSidebarBootstrap(
+      httpMock,
+      [
+        { key: 'logs', label: 'Logs', exists: true },
+        { key: 'plans', label: 'Plans', exists: true },
+      ],
+      { projectRoot: ws.projectRoot, workspaces: [ws] },
+    );
+    tick();
+
+    expect(fixture.componentInstance.sectionExists(ws, 'logs')).toBe(false);
+    expect(fixture.componentInstance.sectionExists(ws, 'plans')).toBe(true);
+  }));
+
+  it('passes projectRoot or workspaceRoot when expanding project sections', fakeAsync(() => {
+    const fixture = TestBed.createComponent(WorkspaceSidebarComponent);
+    fixture.detectChanges();
+    tick();
+    const ws = workspace('/tmp/project');
+
+    flushSidebarBootstrap(
+      httpMock,
+      [
+        { key: 'logs', label: 'Logs', exists: true },
+        { key: 'artifacts', label: 'Artifacts', exists: true },
+        { key: 'sessions', label: 'Sessions', exists: true },
+        { key: 'orchestration-plans', label: 'Orchestration Plans', exists: true },
+        { key: 'plans', label: 'Plans', exists: true },
+      ],
+      { projectRoot: ws.projectRoot, workspaces: [ws] },
+    );
+    tick();
+
+    for (const section of ['plans', 'sessions', 'orchestration-plans']) {
+      fixture.componentInstance.selectSection(ws, section);
+      fixture.detectChanges();
+      const req = httpMock.expectOne((r) => r.url.includes('/api/list') && r.params.get('root') === section);
+      expect(req.request.params.get('projectRoot')).toBe(ws.projectRoot);
+      expect(req.request.params.get('workspaceRoot')).toBeNull();
+      req.flush({ root: section, path: '', parent: null, entries: [] });
+      fixture.componentInstance.toggleSectionExpansion(ws, section);
+    }
+
+    for (const section of ['logs', 'artifacts']) {
+      fixture.componentInstance.selectSection(ws, section);
+      fixture.detectChanges();
+      const req = httpMock.expectOne((r) => r.url.includes('/api/list') && r.params.get('root') === section);
+      expect(req.request.params.get('workspaceRoot')).toBe(ws.workspaceRoot);
+      expect(req.request.params.get('projectRoot')).toBeNull();
+      req.flush({ root: section, path: '', parent: null, entries: [] });
+      fixture.componentInstance.toggleSectionExpansion(ws, section);
+    }
+  }));
 });

@@ -17,6 +17,7 @@ install_colors_init
 #   install_ops_parse_flags -- consume argv into install mode flags.
 #   install_ops_default_selection, install_ops_resolve_target, install_ops_verify_bundle -- target resolution.
 #   install_ops_has_any_stack, install_ops_should_install_dashboard -- derived install choices.
+#   install_ops_config_root, install_ops_state_root, install_ops_global_runtime_root -- global install paths.
 #   install_ops_emit_copy, install_ops_add_optional_copy, install_ops_build_copy_plan -- plan assembly.
 #   install_ops_execute_plan, install_ops_copy_tree -- run the file copy plan.
 #   install_ops_collect_remove_file_paths, install_ops_build_remove_prune_roots, install_ops_execute_remove,
@@ -25,12 +26,16 @@ install_colors_init
 install_ops_reset_state() {
   DRY_RUN=0
   SILENT=0
+  ASSUME_YES=0
+  OVERWRITE_EXISTING=0
   INSTALL_SHARED=0
   INSTALL_CURSOR=0
   INSTALL_CODEX=0
   INSTALL_CLAUDE=0
   INSTALL_OPENCODE=0
   INSTALL_DASHBOARD=1
+  GLOBAL_INSTALL=0
+  FORCE_GLOBAL_RUNTIME=0
   SELECTION_SPECIFIED=0
   INSTALL_TARGET_ARG=""
   REMOVE_INSTALLED=0
@@ -78,12 +83,24 @@ install_ops_parse_flags() {
         INSTALL_DASHBOARD=0
         shift
         ;;
+      --global)
+        GLOBAL_INSTALL=1
+        shift
+        ;;
+      --force-global-runtime)
+        FORCE_GLOBAL_RUNTIME=1
+        shift
+        ;;
       -n|--dry-run)
         DRY_RUN=1
         shift
         ;;
       -s|--silent)
         SILENT=1
+        shift
+        ;;
+      -y|--yes)
+        ASSUME_YES=1
         shift
         ;;
       -h|--help)
@@ -123,6 +140,14 @@ install_ops_parse_flags() {
         ;;
     esac
   done
+  if [[ "$GLOBAL_INSTALL" -eq 1 && -n "$INSTALL_TARGET_ARG" ]]; then
+    install_log_err "Error: --global cannot be combined with TARGET_DIR."
+    return 1
+  fi
+  if [[ "$FORCE_GLOBAL_RUNTIME" -eq 1 && "$GLOBAL_INSTALL" -ne 1 ]]; then
+    install_log_err "Error: --force-global-runtime requires --global."
+    return 1
+  fi
   return 0
 }
 
@@ -137,6 +162,24 @@ install_ops_default_selection() {
 }
 
 install_ops_resolve_target() {
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    local global_root="${RALPH_HOME:-$HOME/.ralph}"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      mkdir -p "$global_root"
+      (cd "$global_root" && pwd)
+      return
+    fi
+    local parent base
+    parent="$(dirname "$global_root")"
+    base="$(basename "$global_root")"
+    if [[ -d "$parent" ]]; then
+      (cd "$parent" && printf '%s/%s\n' "$(pwd)" "$base")
+    else
+      printf '%s\n' "$global_root"
+    fi
+    return
+  fi
+
   local raw="${1:-.}"
   [[ -z "$raw" ]] && raw="."
   if [[ ! -d "$raw" ]]; then
@@ -154,12 +197,74 @@ install_ops_verify_bundle() {
   fi
 }
 
+# Detects an existing Ralph install at TARGET and resolves how to proceed.
+# Sets OVERWRITE_EXISTING=1 when the user (or a flag) opts to replace it.
+# Honors --yes (overwrite, no prompt) and --silent (keep existing, skip conflicts).
+# Without a TTY and no flag, errors out so we never silently leave stale files behind.
+install_ops_check_existing_install() {
+  local existing_marker=""
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    [[ -d "$TARGET/bundle/.ralph/bash-lib" ]] && existing_marker="$TARGET/bundle"
+  else
+    [[ -d "$TARGET/.ralph/bash-lib" ]] && existing_marker="$TARGET/.ralph"
+  fi
+
+  [[ -z "$existing_marker" ]] && return 0
+  [[ "${DRY_RUN:-0}" -eq 1 ]] && return 0
+
+  if [[ "$ASSUME_YES" -eq 1 ]]; then
+    OVERWRITE_EXISTING=1
+    install_log_warn "Existing Ralph install detected; overwriting (--yes):" "$existing_marker"
+    return 0
+  fi
+
+  if [[ "$SILENT" -eq 1 ]]; then
+    OVERWRITE_EXISTING=0
+    install_log_warn "Existing Ralph install detected; keeping existing files (--silent):" "$existing_marker"
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    install_log_err "Ralph is already installed at $existing_marker"
+    install_log_err "Re-run with --yes to overwrite, or --silent to keep existing files."
+    return 1
+  fi
+
+  printf '\n%bRalph is already installed at%b %s\n' "${C_Y}${C_BOLD}" "${C_RST}" "$existing_marker"
+  printf '%bOverwrite the previous installation?%b [y/N]: ' "${C_Y}${C_BOLD}" "${C_RST}"
+  local reply
+  read -r reply < /dev/tty
+  case "$reply" in
+    y|Y|yes|YES)
+      OVERWRITE_EXISTING=1
+      install_log_ok "Overwriting existing install:" "$existing_marker"
+      ;;
+    *)
+      install_log_warn "Aborted: leaving existing install untouched."
+      exit 0
+      ;;
+  esac
+}
+
 install_ops_has_any_stack() {
   [[ "$INSTALL_SHARED$INSTALL_CURSOR$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE" != "00000" ]]
 }
 
 install_ops_should_install_dashboard() {
   [[ "$INSTALL_DASHBOARD" -eq 1 ]] && install_ops_has_any_stack
+}
+
+install_ops_config_root() {
+  printf '%s\n' "${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}"
+}
+
+install_ops_state_root() {
+  printf '%s\n' "${RALPH_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/ralph}"
+}
+
+install_ops_global_runtime_root() {
+  local runtime="$1"
+  printf '%s/.%s\n' "${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}" "$runtime"
 }
 
 install_ops_emit_copy() {
@@ -178,7 +283,30 @@ install_ops_add_optional_copy() {
   fi
 }
 
+install_ops_add_global_runtime_copy() {
+  local runtime="$1"
+  local src="$BUNDLE/.$runtime"
+  local dest
+  dest="$(install_ops_global_runtime_root "$runtime")"
+  [[ -d "$src" ]] || return 0
+  if [[ "${FORCE_GLOBAL_RUNTIME:-0}" -eq 1 || ! -d "$dest" ]]; then
+    install_ops_emit_copy "$src" "$dest" "global-$runtime"
+  fi
+}
+
 install_ops_build_copy_plan() {
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    install_ops_emit_copy "$BUNDLE" "$TARGET/bundle" "global-bundle"
+    if [[ -n "${RALPH_INSTALL_SOURCE_ROOT:-}" ]]; then
+      install_ops_add_optional_copy "$RALPH_INSTALL_SOURCE_ROOT/docs" "$TARGET/docs" "global-ralph-docs"
+    fi
+    [[ "$INSTALL_CURSOR" -eq 1 ]] && install_ops_add_global_runtime_copy "cursor"
+    [[ "$INSTALL_CODEX" -eq 1 ]] && install_ops_add_global_runtime_copy "codex"
+    [[ "$INSTALL_CLAUDE" -eq 1 ]] && install_ops_add_global_runtime_copy "claude"
+    [[ "$INSTALL_OPENCODE" -eq 1 ]] && install_ops_add_global_runtime_copy "opencode"
+    return 0
+  fi
+
   if [[ "$INSTALL_SHARED" -eq 1 ]]; then
     install_ops_emit_copy "$BUNDLE/.ralph" "$TARGET/.ralph" "shared"
     if [[ -n "${RALPH_INSTALL_SOURCE_ROOT:-}" && -d "$RALPH_INSTALL_SOURCE_ROOT/docs" ]]; then
@@ -238,8 +366,6 @@ install_ops_copy_tree() {
     return 0
   fi
 
-  mkdir -p "$dest"
-
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "$label" ]]; then
       install_log_dry "[dry-run]" "[$label] rsync -a $src/ $dest/"
@@ -248,6 +374,8 @@ install_ops_copy_tree() {
     fi
     return 0
   fi
+
+  mkdir -p "$dest"
 
   local -a conflicts=()
   local file relpath
@@ -266,6 +394,17 @@ install_ops_copy_tree() {
       install_log_ok_detail "component" "$label"
     else
       install_log_ok "Installed" "$dest"
+    fi
+    return 0
+  fi
+
+  if [[ "${OVERWRITE_EXISTING:-0}" -eq 1 ]]; then
+    rsync -a "$src/" "$dest/"
+    if [[ -n "$label" ]]; then
+      install_log_ok "Installed (overwrote existing)" "$dest"
+      install_log_ok_detail "component" "$label"
+    else
+      install_log_ok "Installed (overwrote existing)" "$dest"
     fi
     return 0
   fi

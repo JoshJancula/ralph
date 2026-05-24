@@ -3,6 +3,11 @@
 ## Execution instructions
 Treat this stage as a structured review of the implementation described in `implementation-handoff.md`. Verify the delivered code follows the architecture, tests, and any documented constraints before approving it.
 
+## Todo granularity
+Each todo must represent one logical, independently verifiable unit of work, not one keystroke.
+- Good: `Update plan-todo.sh to preserve cursor-frontmatter outside the todo block while adding consolidation logging.`
+- Bad: `Change one line in plan-todo.sh.`
+
 ## Context
 Use `implementation-handoff.md` as the input summary of what changed, how it was verified, and what risks remain. Describe the review scope, including the areas you will validate, any assumptions the author made, and which parts of the implementation need extra scrutiny.
 

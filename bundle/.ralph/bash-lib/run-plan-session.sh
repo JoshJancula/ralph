@@ -25,7 +25,7 @@ ralph_session_strategy_is_truthy() {
 ralph_session_effective_strategy() {
   local strategy="${RALPH_PLAN_SESSION_STRATEGY:-}"
   case "$strategy" in
-    fresh|resume|reset)
+    reset)
       printf '%s\n' "$strategy"
       return 0
       ;;
@@ -33,9 +33,17 @@ ralph_session_effective_strategy() {
 
   if ralph_session_strategy_is_truthy "${RALPH_PLAN_CLI_RESUME:-0}"; then
     printf '%s\n' "resume"
-  else
-    printf '%s\n' "fresh"
+    return 0
   fi
+
+  case "$strategy" in
+    fresh|resume)
+      printf '%s\n' "$strategy"
+      return 0
+      ;;
+  esac
+
+  printf '%s\n' "fresh"
 }
 
 # Initialize CLI session directories and helpers for this plan.
@@ -48,9 +56,15 @@ ralph_session_init() {
   local _plan_session_home="${RALPH_PLAN_SESSION_HOME:-}"
   if [[ -z "$_plan_session_home" ]]; then
     local _workspace_root="${workspace%/}"
-    local _workspace_sessions_root="${RALPH_PLAN_WORKSPACE_ROOT:-${_workspace_root}/.ralph-workspace}"
-    _workspace_sessions_root="${_workspace_sessions_root%/}"
-    _plan_session_home="${_workspace_sessions_root}/sessions"
+    local _project_local_ralph="${_workspace_root}/.ralph"
+
+    if [[ -n "${RALPH_HOME:-}" ]] && [[ ! -d "$_project_local_ralph" ]]; then
+      _plan_session_home="${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions"
+    else
+      local _workspace_sessions_root="${RALPH_PLAN_WORKSPACE_ROOT:-${_workspace_root}/.ralph-workspace}"
+      _workspace_sessions_root="${_workspace_sessions_root%/}"
+      _plan_session_home="${_workspace_sessions_root}/sessions"
+    fi
   fi
   RALPH_PLAN_SESSION_HOME="$_plan_session_home"
   # Root directory containing per-plan session folders (runtime-specific session ids, human files, etc.).
@@ -243,6 +257,10 @@ ralph_session_apply_resume_strategy() {
   fi
 
   if [[ "$_strategy" == "resume" ]] && [[ ! -s "$SESSION_ID_FILE" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" != "1" ]]; then
+    if [[ "${RUNTIME:-}" == "opencode" ]]; then
+      ralph_run_plan_log "session strategy resume: no stored opencode session id yet; running fresh once to capture it"
+      return 0
+    fi
     local _new_session_id=""
     if _new_session_id="$(ralph_session_generate_uuid)"; then
       printf '%s\n' "$_new_session_id" > "$SESSION_ID_FILE"

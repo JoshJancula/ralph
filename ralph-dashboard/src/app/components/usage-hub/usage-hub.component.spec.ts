@@ -1,10 +1,13 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 
+import type { WorkspaceRegistry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { UsageHubComponent } from './usage-hub.component';
+import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 
 describe('UsageHubComponent', () => {
   let httpMock: HttpTestingController;
@@ -84,6 +87,7 @@ describe('UsageHubComponent', () => {
           cache_hit_ratio: 0.3333,
         },
       ],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -167,6 +171,7 @@ describe('UsageHubComponent', () => {
           cache_hit_ratio: 0.3333,
         },
       ],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -202,6 +207,7 @@ describe('UsageHubComponent', () => {
       },
       plans: [],
       orchestrations: [],
+      projects: [],
     });
 
     fixture.componentInstance.goToPlans();
@@ -282,6 +288,7 @@ describe('UsageHubComponent', () => {
           cache_hit_ratio: 0,
         },
       ],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -340,6 +347,7 @@ describe('UsageHubComponent', () => {
         },
       ],
       orchestrations: [],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -415,6 +423,7 @@ describe('UsageHubComponent', () => {
         },
       ],
       orchestrations: [],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -458,6 +467,7 @@ describe('UsageHubComponent', () => {
         },
       ],
       orchestrations: [],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -512,6 +522,7 @@ describe('UsageHubComponent', () => {
         },
       ],
       orchestrations: [],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -562,6 +573,7 @@ describe('UsageHubComponent', () => {
         },
       ],
       orchestrations: [],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -633,6 +645,7 @@ describe('UsageHubComponent', () => {
           cache_hit_ratio: 0,
         },
       ],
+      projects: [],
     });
     fixture.detectChanges();
 
@@ -641,5 +654,305 @@ describe('UsageHubComponent', () => {
     expect(component.filterRuntime).toBe('codex');
     component.setFilterKind('orchestration');
     expect(component.filterRuntime).toBe('all');
+  });
+});
+
+describe('UsageHubComponent multi-project behavior', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('scopes breakdown runs to the selected workspace_root when plan_key collides across projects', async () => {
+    const projA = '/mock/proj-a';
+    const projB = '/mock/proj-b';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const wsRootB = `${projB}/.ralph-workspace`;
+    const registry: WorkspaceRegistry[] = [
+      { path: projA, workspaceRoot: wsRootA, projectRoot: projA, label: 'proj-a', exists: true },
+      { path: projB, workspaceRoot: wsRootB, projectRoot: projB, label: 'proj-b', exists: true },
+    ];
+
+    await TestBed.configureTestingModule({
+      imports: [UsageHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
+      providers: [
+        {
+          provide: WorkspaceSelectorService,
+          useValue: {
+            workspaces: signal(registry),
+            selectedWorkspacePath: signal(projA),
+          },
+        },
+      ],
+    }).compileComponents();
+
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    fixture.detectChanges();
+
+    httpMock.expectOne('/api/metrics/summary').flush({
+      overall: {
+        input_tokens: 300,
+        output_tokens: 20,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 20,
+        count: 2,
+      },
+      plans: [
+        {
+          path: `${wsRootA}/logs/feature/plan-usage-summary.json`,
+          plan_key: 'feature',
+          artifact_ns: 'feature',
+          workspace_root: wsRootA,
+          project_root: projA,
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 10,
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          model_breakdown: [
+            {
+              runtime: 'codex',
+              model: 'm-a',
+              invocations: 1,
+              elapsed_seconds: 10,
+              input_tokens: 100,
+              output_tokens: 10,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+        },
+        {
+          path: `${wsRootB}/logs/feature/plan-usage-summary.json`,
+          plan_key: 'feature',
+          artifact_ns: 'feature',
+          workspace_root: wsRootB,
+          project_root: projB,
+          started_at: '2026-04-16T10:00:00.000Z',
+          elapsed_seconds: 10,
+          input_tokens: 200,
+          output_tokens: 10,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          model_breakdown: [
+            {
+              runtime: 'claude',
+              model: 'm-b',
+              invocations: 1,
+              elapsed_seconds: 10,
+              input_tokens: 200,
+              output_tokens: 10,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+        },
+      ],
+      orchestrations: [],
+      projects: [],
+    });
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance;
+    expect(component.totalRunCount).toBe(1);
+    expect(component.filteredRunCount).toBe(1);
+    expect(component.runtimeRows).toHaveLength(1);
+    expect(component.runtimeRows[0].runtime).toBe('codex');
+    expect(component.modelRows).toHaveLength(1);
+    expect(component.modelRows[0].input_tokens).toBe(100);
+
+    httpMock.verify();
+  });
+
+  it('renders per-project rollup headings when multiple projects are registered', async () => {
+    const projA = '/mock/proj-a';
+    const projB = '/mock/proj-b';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const wsRootB = `${projB}/.ralph-workspace`;
+    const registry: WorkspaceRegistry[] = [
+      { path: projA, workspaceRoot: wsRootA, projectRoot: projA, label: 'proj-a', exists: true },
+      { path: projB, workspaceRoot: wsRootB, projectRoot: projB, label: 'proj-b', exists: true },
+    ];
+
+    await TestBed.configureTestingModule({
+      imports: [UsageHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
+      providers: [
+        {
+          provide: WorkspaceSelectorService,
+          useValue: {
+            workspaces: signal(registry),
+            selectedWorkspacePath: signal<string | null>(null),
+          },
+        },
+      ],
+    }).compileComponents();
+
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    fixture.detectChanges();
+
+    httpMock.expectOne('/api/metrics/summary').flush({
+      overall: {
+        input_tokens: 10,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 2,
+        count: 2,
+      },
+      plans: [],
+      orchestrations: [],
+      projects: [
+        {
+          workspace_root: wsRootA,
+          project_root: projA,
+          label: 'Alpha',
+          overall: {
+            input_tokens: 5,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            elapsed_seconds: 1,
+            count: 1,
+          },
+          plans: [],
+          orchestrations: [],
+        },
+        {
+          workspace_root: wsRootB,
+          project_root: projB,
+          label: 'Beta',
+          overall: {
+            input_tokens: 5,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            elapsed_seconds: 1,
+            count: 1,
+          },
+          plans: [],
+          orchestrations: [],
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('By project');
+    expect(text).toContain('Alpha');
+    expect(text).toContain('Beta');
+
+    httpMock.verify();
+  });
+
+  it('Plan Runs table clip cells expose full plan_key and model in title', async () => {
+    const projA = '/mock/proj-a';
+    const projB = '/mock/proj-b';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const wsRootB = `${projB}/.ralph-workspace`;
+    const longPlan = `${'x'.repeat(60)}_suffix.plan`;
+    const longModel = 'vendor/subsystem/model-name-extra-long';
+    const registry: WorkspaceRegistry[] = [
+      { path: projA, workspaceRoot: wsRootA, projectRoot: projA, label: 'proj-a', exists: true },
+      { path: projB, workspaceRoot: wsRootB, projectRoot: projB, label: 'proj-b', exists: true },
+    ];
+
+    await TestBed.configureTestingModule({
+      imports: [UsageHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
+      providers: [
+        {
+          provide: WorkspaceSelectorService,
+          useValue: {
+            workspaces: signal(registry),
+            selectedWorkspacePath: signal<string | null>(null),
+            getWorkspaceForMetricPath: (p: string) =>
+              p.startsWith(wsRootA) ? projA : p.startsWith(wsRootB) ? projB : null,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    fixture.detectChanges();
+
+    httpMock.expectOne('/api/metrics/summary').flush({
+      overall: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 1,
+        count: 1,
+      },
+      plans: [
+        {
+          path: `${wsRootA}/logs/${longPlan}/plan-usage-summary.json`,
+          plan_key: longPlan,
+          artifact_ns: longPlan,
+          workspace_root: wsRootA,
+          runtime: 'codex',
+          model: longModel,
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 1,
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          model_breakdown: [
+            {
+              runtime: 'codex',
+              model: longModel,
+              invocations: 1,
+              elapsed_seconds: 1,
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+        },
+      ],
+      orchestrations: [],
+      projects: [],
+    });
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const planRow = host.querySelector('.usage-row.plan-columns:not(.usage-header)');
+    expect(planRow).toBeTruthy();
+    const clips = planRow!.querySelectorAll('.cell-clip');
+    expect(clips.length).toBeGreaterThanOrEqual(4);
+    const planKeyCell = clips[1] as HTMLElement;
+    const modelCell = clips[3] as HTMLElement;
+    expect(planKeyCell.getAttribute('title')).toBe(longPlan);
+    expect(modelCell.getAttribute('title')).toBe(longModel);
+    expect(getComputedStyle(planKeyCell).whiteSpace).toBe('nowrap');
+
+    httpMock.verify();
   });
 });

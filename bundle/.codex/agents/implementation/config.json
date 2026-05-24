@@ -1,7 +1,7 @@
 {
   "name": "implementation",
   "model": "auto",
-  "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks.",
+  "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
   "rules": [".codex/rules/no-emoji.md"],
   "skills": [".codex/skills/repo-context/SKILL.md"],
   "output_artifacts": [

@@ -8,6 +8,7 @@ setup_orchestrator_workspace() {
   mkdir -p "$workspace/.ralph/bash-lib"
   cp "$REPO_ROOT/.ralph/ralph-env-safety.sh" "$workspace/.ralph/"
   cp "$REPO_ROOT/.ralph/bash-lib/error-handling.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/runtime-resolve.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-logging.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator-lib.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-format-elapsed.sh" "$workspace/.ralph/bash-lib/"

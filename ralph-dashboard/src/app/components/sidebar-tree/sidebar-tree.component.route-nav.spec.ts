@@ -128,7 +128,7 @@ describe('SidebarTreeComponent - Route-Driven Navigation', () => {
       (rows[rows.length - 1] as HTMLElement).click();
 
       // Updated: now navigates with full path in the file parameter
-      expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md');
+      expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md', null, null);
     }));
 
     it('clicking directory row expands children', fakeAsync(async () => {

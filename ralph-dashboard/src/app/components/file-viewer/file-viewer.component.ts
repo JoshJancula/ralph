@@ -49,6 +49,8 @@ export class FileViewerComponent implements OnInit {
     effect((onCleanup) => {
       const root = this.rootSignal();
       const filePath = this.filePathSignal();
+      this.nav.activeWorkspaceRoot();
+      this.nav.activeProjectRoot();
 
       if (!root || !filePath) {
         this.loadSequence += 1;
@@ -104,29 +106,37 @@ export class FileViewerComponent implements OnInit {
     this.loading.set(true);
     this.error.set(null);
 
-    return this.api.fetchFile(root, filePath).subscribe({
-      next: (chunk) => {
-        if (requestToken !== this.loadSequence) {
-          return;
-        }
+    return this.api
+      .fetchFile(
+        root,
+        filePath,
+        0,
+        this.nav.activeWorkspaceRoot() ?? undefined,
+        this.nav.activeProjectRoot() ?? undefined,
+      )
+      .subscribe({
+        next: (chunk) => {
+          if (requestToken !== this.loadSequence) {
+            return;
+          }
 
-        this.content.set(chunk.content);
-        if (markdownFile) {
-          void this.renderMarkdown(chunk.content, requestToken, true);
-        } else {
-          this.safeHtml.set(null);
+          this.content.set(chunk.content);
+          if (markdownFile) {
+            void this.renderMarkdown(chunk.content, requestToken, true);
+          } else {
+            this.safeHtml.set(null);
+            this.loading.set(false);
+          }
+        },
+        error: () => {
+          if (requestToken !== this.loadSequence) {
+            return;
+          }
+
+          this.error.set('Failed to load file');
           this.loading.set(false);
-        }
-      },
-      error: () => {
-        if (requestToken !== this.loadSequence) {
-          return;
-        }
-
-        this.error.set('Failed to load file');
-        this.loading.set(false);
-      },
-    });
+        },
+      });
   }
 
   toggleView(): void {
@@ -202,9 +212,14 @@ export class FileViewerComponent implements OnInit {
     const dir = this.planDirectory;
     if (!dir) return;
 
-    this.planLogResolution.resolveLatestLogTarget(dir).subscribe({
+    const ws = this.planMetrics()?.workspace_root;
+    this.planLogResolution.resolveLatestLogTarget(dir, ws).subscribe({
       next: (target) => {
-        this.nav.navigate('logs', target.directory, target.file);
+        if (!target.file) {
+          return;
+        }
+        const dirArg = target.directory ?? '';
+        this.nav.navigate('logs', dirArg, target.file, ws ?? null, this.nav.activeProjectRoot());
       },
     });
   }
@@ -251,7 +266,13 @@ export class FileViewerComponent implements OnInit {
     const targetPath = resolved.join('/');
     if (!targetPath) return;
 
-    this.nav.navigate(currentRoot, null, targetPath);
+    this.nav.navigate(
+      currentRoot,
+      null,
+      targetPath,
+      this.nav.activeWorkspaceRoot(),
+      this.nav.activeProjectRoot(),
+    );
   }
 
   get runSnippet(): string | null {

@@ -9,7 +9,16 @@ MAX_RULE_INLINE_BYTES=65536
 
 inline_rule_file() {
   local workspace="$1" rel="$2"
+  local agents_root="${3:-}"
   local p="$workspace/${rel#/}"
+  if [[ ! -f "$p" && -n "$agents_root" ]]; then
+    local runtime_root runtime_dir rel_without_runtime alt
+    runtime_root="$(cd "$(dirname "$agents_root")" 2>/dev/null && pwd || true)"
+    runtime_dir="$(basename "$runtime_root")"
+    rel_without_runtime="${rel#"$runtime_dir"/}"
+    alt="$runtime_root/${rel_without_runtime#/}"
+    [[ -f "$alt" ]] && p="$alt"
+  fi
   local base="${p##*/}"
   if is_env_secret_basename "$base"; then
     echo "(blocked: Ralph does not inline .env* files; use a non-secret rules path.)"

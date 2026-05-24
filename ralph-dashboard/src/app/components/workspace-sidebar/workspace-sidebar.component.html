@@ -1,44 +1,144 @@
 <div class="workspace-sidebar">
-  <ul class="root-list" role="list">
-    <li
-      class="root-item"
-      #rootHost
-      *ngFor="let root of allRoots()"
-      [attr.data-root-key]="root.key"
-    >
-      <div class="root-summary" [class.disabled]="!root.exists">
-        <button
-          type="button"
-          class="expander-toggle"
-          [class.expanded]="isExpanded(root)"
-          [attr.aria-expanded]="isExpanded(root)"
-          [attr.aria-controls]="'tree-' + root.key"
-          [attr.aria-label]="isExpanded(root) ? 'Collapse ' + root.label : 'Expand ' + root.label"
-          (click)="toggleExpansion(root)"
-          [disabled]="!root.exists"
-        >
-          <span class="expander-icon">{{ isExpanded(root) ? '▾' : '▸' }}</span>
-        </button>
-        <button
-          type="button"
-          class="root-button"
-          [class.active]="isActive(root)"
-          (click)="selectRoot(root)"
-          [disabled]="!root.exists"
-        >
-          <span class="root-label">{{ root.label }}</span>
-          <span class="root-meta">
-            {{ rootMeta(root) }}
-          </span>
-        </button>
-      </div>
-      <div
-        class="root-tree"
-        *ngIf="isExpanded(root) && root.exists"
-        [attr.id]="'tree-' + root.key"
-      >
-        <app-sidebar-tree [root]="root.key" [path]="''" [autoOpen]="isActive(root)"></app-sidebar-tree>
-      </div>
-    </li>
-  </ul>
+  @if (useProjectLayout()) {
+    <ul class="root-list project-list" role="list">
+      @for (ws of sortedWorkspaces(); track ws.projectRoot; let pi = $index) {
+        <li class="project-block">
+          <div
+            class="project-summary"
+            [class.disabled]="!ws.exists"
+            [class.expanded]="isProjectExpanded(ws)"
+          >
+            <button
+              type="button"
+              class="expander-toggle"
+              [class.expanded]="isProjectExpanded(ws)"
+              [attr.aria-expanded]="isProjectExpanded(ws)"
+              [attr.aria-controls]="'project-tree-' + pi"
+              [attr.aria-label]="
+                isProjectExpanded(ws) ? 'Collapse ' + ws.label : 'Expand ' + ws.label
+              "
+              (click)="toggleProject(ws)"
+              [disabled]="!ws.exists"
+            >
+              <ion-icon class="expander-icon" name="chevron-forward-outline"></ion-icon>
+            </button>
+            <div
+              class="project-label-wrap"
+              (click)="toggleProject(ws)"
+              (keydown.enter)="toggleProject(ws)"
+              (keydown.space)="$event.preventDefault(); toggleProject(ws)"
+              [attr.tabindex]="ws.exists ? 0 : -1"
+              [attr.role]="'button'"
+            >
+              <span class="project-title-row">
+                <ion-icon class="project-icon" [name]="projectIcon(ws)"></ion-icon>
+                <span class="project-label">{{ ws.label }}</span>
+              </span>
+              @if (!ws.exists) {
+                <span class="project-meta">Workspace missing</span>
+              } @else {
+                <span class="project-meta">{{ visibleSectionKeys(ws).length }} sections</span>
+              }
+            </div>
+          </div>
+          @if (isProjectExpanded(ws) && ws.exists) {
+            <ul class="section-list" [attr.id]="'project-tree-' + pi" role="list">
+              @for (sectionKey of visibleSectionKeys(ws); track sectionKey) {
+                <li
+                  class="section-item"
+                  #sectionHost
+                  [attr.data-section-anchor]="sectionHostAnchor(ws, sectionKey)"
+                >
+                  <div class="root-summary" [class.disabled]="!sectionExists(ws, sectionKey)">
+                    <button
+                      type="button"
+                      class="expander-toggle"
+                      [class.expanded]="isSectionExpanded(ws, sectionKey)"
+                      [attr.aria-expanded]="isSectionExpanded(ws, sectionKey)"
+                      [attr.aria-controls]="'tree-' + pi + '-' + sectionKey"
+                      [attr.aria-label]="
+                        isSectionExpanded(ws, sectionKey)
+                          ? 'Collapse ' + sectionLabel(sectionKey)
+                        : 'Expand ' + sectionLabel(sectionKey)
+                      "
+                      (click)="toggleSectionExpansion(ws, sectionKey)"
+                    >
+                      <ion-icon class="expander-icon" name="chevron-forward-outline"></ion-icon>
+                    </button>
+                    <button
+                      type="button"
+                      class="root-button"
+                      [class.active]="isSectionActive(ws, sectionKey)"
+                      (click)="selectSection(ws, sectionKey)"
+                    >
+                      <ion-icon class="root-icon" [name]="sectionIcon(sectionKey)"></ion-icon>
+                      <span class="root-label">{{ sectionLabel(sectionKey) }}</span>
+                      <span class="root-meta">
+                        Browse entries
+                      </span>
+                    </button>
+                  </div>
+                  @if (isSectionExpanded(ws, sectionKey) && sectionExists(ws, sectionKey)) {
+                    <div class="root-tree" [attr.id]="'tree-' + pi + '-' + sectionKey">
+                      <app-sidebar-tree
+                        [root]="sectionKey"
+                        [path]="''"
+                        [listingWorkspaceScope]="listingWorkspaceScopeForTree(ws, sectionKey)"
+                        [projectRoot]="projectRootForTree(ws, sectionKey)"
+                        [autoOpen]="isSectionActive(ws, sectionKey)"
+                      ></app-sidebar-tree>
+                    </div>
+                  }
+                </li>
+              }
+            </ul>
+          }
+        </li>
+      }
+    </ul>
+  } @else {
+    <ul class="root-list" role="list">
+      @for (root of allRoots(); track root.key) {
+        <li class="root-item" #legacyRootHost [attr.data-root-key]="root.key">
+          <div class="root-summary" [class.disabled]="!root.exists">
+            <button
+              type="button"
+              class="expander-toggle"
+              [class.expanded]="isExpanded(root)"
+              [attr.aria-expanded]="isExpanded(root)"
+              [attr.aria-controls]="'tree-' + root.key"
+            [attr.aria-label]="isExpanded(root) ? 'Collapse ' + root.label : 'Expand ' + root.label"
+              (click)="toggleExpansion(root)"
+              [disabled]="!root.exists"
+            >
+              <ion-icon class="expander-icon" name="chevron-forward-outline"></ion-icon>
+            </button>
+            <button
+              type="button"
+              class="root-button"
+              [class.active]="isActive(root)"
+              (click)="selectRoot(root)"
+              [disabled]="!root.exists"
+            >
+              <ion-icon class="root-icon" [name]="sectionIcon(root.key)"></ion-icon>
+              <span class="root-label">{{ root.label }}</span>
+              <span class="root-meta">
+                {{ rootMeta(root) }}
+              </span>
+            </button>
+          </div>
+          @if (isExpanded(root) && root.exists) {
+            <div class="root-tree" [attr.id]="'tree-' + root.key">
+              <app-sidebar-tree
+                [root]="root.key"
+                [path]="''"
+                [listingWorkspaceScope]="listingScope(root)"
+                [autoOpen]="isActive(root)"
+              ></app-sidebar-tree>
+            </div>
+          }
+        </li>
+      }
+    </ul>
+  }
 </div>

@@ -1,9 +1,17 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit, inject } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
+  Component,
+  OnInit,
+  effect,
+  inject,
+} from '@angular/core';
 import { IonCard, IonCardContent, IonCardHeader, IonCardSubtitle, IonCardTitle, IonSpinner } from '@ionic/angular/standalone';
 
 import { ApiService, MetricsSummary, MetricsSummaryItem, ModelBreakdownItem } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 import { formatElapsedSeconds } from '../../utils/format-elapsed';
 
 interface UsageModelRow {
@@ -17,6 +25,7 @@ interface UsageModelRow {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
+  tool_calls_total: number;
   cache_hit_ratio: number;
   total_tokens: number;
 }
@@ -32,6 +41,7 @@ interface UsageRuntimeRow {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
+  tool_calls_total: number;
   cache_hit_ratio: number;
   total_tokens: number;
 }
@@ -47,6 +57,7 @@ interface MutableModelBucket {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
+  tool_calls_total: number;
 }
 
 interface MutableRuntimeBucket {
@@ -60,6 +71,7 @@ interface MutableRuntimeBucket {
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
   max_turn_total_tokens: number;
+  tool_calls_total: number;
 }
 
 interface StatItem {
@@ -87,7 +99,7 @@ interface UsageRunRecord {
       <div class="header">
         <div class="title-wrap">
           <h2>Usage</h2>
-          <p>Token usage breakdown by runtime and model.</p>
+          <p>Token and tool-call totals from plan logs, by runtime and model. Open this view with the chart icon in the header.</p>
         </div>
         <div class="header-actions">
           <button class="btn-secondary" (click)="goToPlans()">Back to Plans</button>
@@ -161,6 +173,53 @@ interface UsageRunRecord {
           }
         </section>
 
+        @if (isShowingAllWorkspaces() && summary.projects && summary.projects.length > 1) {
+          <section class="project-rollups" aria-label="Per-project usage rollups">
+            <h3 class="project-rollups-title">By project</h3>
+            <div class="project-rollups-grid">
+              @for (proj of summary.projects; track proj.workspace_root) {
+                <ion-card>
+                  <ion-card-header>
+                    <ion-card-title>{{ proj.label }}</ion-card-title>
+                    <ion-card-subtitle>{{ proj.workspace_root }}</ion-card-subtitle>
+                  </ion-card-header>
+                  <ion-card-content>
+                    <div class="project-rollup-metrics">
+                      <div class="project-rollup-metric">
+                        <span class="metric-label">Elapsed</span>
+                        <span class="metric-value">{{ formatSeconds(proj.overall.elapsed_seconds) }}</span>
+                      </div>
+                      <div class="project-rollup-metric">
+                        <span class="metric-label">Total tokens</span>
+                        <span class="metric-value">{{
+                          formatNumber(
+                            proj.overall.input_tokens +
+                              proj.overall.output_tokens +
+                              proj.overall.cache_creation_input_tokens +
+                              proj.overall.cache_read_input_tokens
+                          )
+                        }}</span>
+                      </div>
+                      <div class="project-rollup-metric">
+                        <span class="metric-label">Cache hit</span>
+                        <span class="metric-value">{{ formatPercent(proj.overall.cache_hit_ratio) }}</span>
+                      </div>
+                      <div class="project-rollup-metric">
+                        <span class="metric-label">Peak turn</span>
+                        <span class="metric-value">{{ formatPeakTurn(proj.overall.max_turn_total_tokens) }}</span>
+                      </div>
+                      <div class="project-rollup-metric">
+                        <span class="metric-label">Tool calls</span>
+                        <span class="metric-value">{{ formatNumber(proj.overall.tool_calls_total ?? 0) }}</span>
+                      </div>
+                    </div>
+                  </ion-card-content>
+                </ion-card>
+              }
+            </div>
+          </section>
+        }
+
         <section class="quality-note">
           <span>{{ detailedBreakdownRuns }} runs include model-level breakdown.</span>
           <span>{{ inferredBreakdownRuns }} runs are inferred from summary-level runtime/model fields.</span>
@@ -186,12 +245,13 @@ interface UsageRunRecord {
                     <span>Output</span>
                     <span>Cache Read</span>
                     <span>Total</span>
+                    <span>Tool calls</span>
                     <span>Cache hit</span>
                     <span>Peak turn</span>
                   </div>
                   @for (row of runtimeRows; track row.runtime) {
                     <div class="usage-row runtime-columns">
-                      <span class="mono">{{ row.runtime }}</span>
+                      <span class="mono cell-clip" [title]="row.runtime">{{ row.runtime }}</span>
                       <span>{{ row.model_count }}</span>
                       <span>{{ formatNumber(row.runs) }}</span>
                       <span>{{ formatNumber(row.invocations) }}</span>
@@ -199,6 +259,7 @@ interface UsageRunRecord {
                       <span>{{ formatNumber(row.output_tokens) }}</span>
                       <span>{{ formatNumber(row.cache_read_input_tokens) }}</span>
                       <span class="mono">{{ formatNumber(row.total_tokens) }}</span>
+                      <span>{{ formatNumber(row.tool_calls_total) }}</span>
                       <span>{{ formatPercent(row.cache_hit_ratio) }}</span>
                       <span>{{ formatPeakTurn(row.max_turn_total_tokens) }}</span>
                     </div>
@@ -227,19 +288,21 @@ interface UsageRunRecord {
                     <span>Output</span>
                     <span>Cache Read</span>
                     <span>Total</span>
+                    <span>Tool calls</span>
                     <span>Cache hit</span>
                     <span>Peak turn</span>
                   </div>
                   @for (row of modelRows; track row.runtime + '-' + row.model) {
                     <div class="usage-row model-columns">
-                      <span class="mono">{{ row.runtime }}</span>
-                      <span class="mono">{{ row.model }}</span>
+                      <span class="mono cell-clip" [title]="row.runtime">{{ row.runtime }}</span>
+                      <span class="mono cell-clip" [title]="row.model">{{ row.model }}</span>
                       <span>{{ formatNumber(row.runs) }}</span>
                       <span>{{ formatNumber(row.invocations) }}</span>
                       <span>{{ formatNumber(row.input_tokens) }}</span>
                       <span>{{ formatNumber(row.output_tokens) }}</span>
                       <span>{{ formatNumber(row.cache_read_input_tokens) }}</span>
                       <span class="mono">{{ formatNumber(row.total_tokens) }}</span>
+                      <span>{{ formatNumber(row.tool_calls_total) }}</span>
                       <span>{{ formatPercent(row.cache_hit_ratio) }}</span>
                       <span>{{ formatPeakTurn(row.max_turn_total_tokens) }}</span>
                     </div>
@@ -248,6 +311,100 @@ interface UsageRunRecord {
               }
             </ion-card-content>
           </ion-card>
+
+          @if (isShowingAllWorkspaces() && summary.plans.length > 0) {
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>Plan Runs</ion-card-title>
+                <ion-card-subtitle>{{ summary.plans.length }} plan runs</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="usage-table">
+                  <div class="usage-row usage-header plan-columns">
+                    <span>Workspace</span>
+                    <span>Plan Key</span>
+                    <span>Runtime</span>
+                    <span>Model</span>
+                    <span>Input</span>
+                    <span>Output</span>
+                    <span>Cache Read</span>
+                    <span>Total</span>
+                    <span>Tool calls</span>
+                    <span>Cache hit</span>
+                  </div>
+                  @for (run of summary.plans; track run.path) {
+                    <div class="usage-row plan-columns">
+                      <span class="cell-clip" [title]="getWorkspaceDisplayName(run.path)">{{
+                        getWorkspaceDisplayName(run.path)
+                      }}</span>
+                      <span class="mono cell-clip" [title]="run.plan_key">{{ run.plan_key }}</span>
+                      <span class="mono cell-clip" [title]="run.runtime || '(unspecified)'">{{
+                        run.runtime || '(unspecified)'
+                      }}</span>
+                      <span class="mono cell-clip" [title]="run.model || '(unspecified)'">{{
+                        run.model || '(unspecified)'
+                      }}</span>
+                      <span>{{ formatNumber(run.input_tokens) }}</span>
+                      <span>{{ formatNumber(run.output_tokens) }}</span>
+                      <span>{{ formatNumber(run.cache_read_input_tokens) }}</span>
+                      <span class="mono">{{ formatNumber(run.input_tokens + run.output_tokens + run.cache_creation_input_tokens + run.cache_read_input_tokens) }}</span>
+                      <span>{{ formatNumber(run.tool_calls_total ?? 0) }}</span>
+                      <span>{{ formatPercent(run.cache_hit_ratio) }}</span>
+                    </div>
+                  }
+                </div>
+              </ion-card-content>
+            </ion-card>
+          }
+
+          @if (isShowingAllWorkspaces() && summary.orchestrations.length > 0) {
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>Orchestration Runs</ion-card-title>
+                <ion-card-subtitle>{{ summary.orchestrations.length }} orchestration runs</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="usage-table">
+                  <div class="usage-row usage-header orch-columns">
+                    <span>Workspace</span>
+                    <span>Plan Key</span>
+                    <span>Stage ID</span>
+                    <span>Runtime</span>
+                    <span>Model</span>
+                    <span>Input</span>
+                    <span>Output</span>
+                    <span>Cache Read</span>
+                    <span>Total</span>
+                    <span>Tool calls</span>
+                    <span>Cache hit</span>
+                  </div>
+                  @for (run of summary.orchestrations; track run.path) {
+                    <div class="usage-row orch-columns">
+                      <span class="cell-clip" [title]="getWorkspaceDisplayName(run.path)">{{
+                        getWorkspaceDisplayName(run.path)
+                      }}</span>
+                      <span class="mono cell-clip" [title]="run.plan_key">{{ run.plan_key }}</span>
+                      <span class="mono cell-clip" [title]="run.stage_id || '(root)'">{{
+                        run.stage_id || '(root)'
+                      }}</span>
+                      <span class="mono cell-clip" [title]="run.runtime || '(unspecified)'">{{
+                        run.runtime || '(unspecified)'
+                      }}</span>
+                      <span class="mono cell-clip" [title]="run.model || '(unspecified)'">{{
+                        run.model || '(unspecified)'
+                      }}</span>
+                      <span>{{ formatNumber(run.input_tokens) }}</span>
+                      <span>{{ formatNumber(run.output_tokens) }}</span>
+                      <span>{{ formatNumber(run.cache_read_input_tokens) }}</span>
+                      <span class="mono">{{ formatNumber(run.input_tokens + run.output_tokens + run.cache_creation_input_tokens + run.cache_read_input_tokens) }}</span>
+                      <span>{{ formatNumber(run.tool_calls_total ?? 0) }}</span>
+                      <span>{{ formatPercent(run.cache_hit_ratio) }}</span>
+                    </div>
+                  }
+                </div>
+              </ion-card-content>
+            </ion-card>
+          }
         </section>
       }
     </div>
@@ -335,6 +492,37 @@ interface UsageRunRecord {
       grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 1rem;
     }
+    .project-rollups {
+      display: grid;
+      gap: 0.75rem;
+    }
+    .project-rollups-title {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .project-rollups-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .project-rollup-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+    .project-rollup-metric {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .project-rollup-metric .metric-label {
+      margin-bottom: 0;
+    }
+    .project-rollup-metric .metric-value {
+      font-size: 1rem;
+    }
     ion-card {
       --background: var(--surface);
       --color: var(--text-primary);
@@ -371,23 +559,58 @@ interface UsageRunRecord {
       grid-template-columns: 1fr;
       gap: 1rem;
     }
+    :host ion-card-content:has(.usage-table) {
+      --padding-start: 12px;
+      --padding-end: 12px;
+      --padding-top: 12px;
+      --padding-bottom: 12px;
+    }
     .usage-table {
       display: grid;
-      gap: 0.5rem;
+      gap: 0;
       overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-muted);
     }
     .usage-row {
       display: grid;
       gap: 0.7rem;
       align-items: center;
       font-size: 0.88rem;
-      min-width: 860px;
+      min-width: 940px;
+      padding: 0.48rem 0.65rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .usage-row:nth-child(even):not(.usage-header) {
+      background: var(--surface-muted);
+    }
+    .usage-row:last-child {
+      border-bottom: none;
+    }
+    .usage-row.usage-header {
+      padding-bottom: 0.55rem;
+      border-bottom: 2px solid var(--border);
+      background: var(--surface-muted);
+    }
+    .cell-clip {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .runtime-columns {
-      grid-template-columns: 1fr 0.55fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.8fr 0.8fr;
+      grid-template-columns: 1fr 0.55fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr 0.8fr;
     }
     .model-columns {
-      grid-template-columns: 0.9fr 1.5fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.8fr 0.8fr;
+      grid-template-columns: 0.9fr 1.5fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr 0.8fr;
+    }
+    .plan-columns {
+      grid-template-columns: 1fr 1.2fr 0.9fr 1.2fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr;
+    }
+    .orch-columns {
+      grid-template-columns: 1fr 1.2fr 0.9fr 0.9fr 1.2fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr;
     }
     .usage-header {
       font-size: 0.78rem;
@@ -468,9 +691,24 @@ export class UsageHubComponent implements OnInit {
   private readonly apiService = inject(ApiService);
   private readonly navService = inject(NavService);
   private readonly cdr = inject(ChangeDetectorRef);
+  readonly workspaceSelectorService = inject(WorkspaceSelectorService);
+  private skipWorkspaceReloadEffect = true;
+
+  constructor() {
+    effect(() => {
+      this.workspaceSelectorService.selectedWorkspacePath();
+      if (this.skipWorkspaceReloadEffect) {
+        return;
+      }
+      this.refresh();
+    });
+  }
 
   ngOnInit(): void {
     this.refresh();
+    queueMicrotask(() => {
+      this.skipWorkspaceReloadEffect = false;
+    });
   }
 
   goToPlans(): void {
@@ -495,7 +733,7 @@ export class UsageHubComponent implements OnInit {
     this.apiService.fetchMetricsSummary().subscribe({
       next: (summary) => {
         this.summary = summary;
-        this.totalRunCount = summary.plans.length + summary.orchestrations.length;
+        this.totalRunCount = this.countWorkspaceScopedRecords(summary);
         this.recomputeRuntimeOptions(summary);
         this.recomputeModelOptions(summary);
         this.applyFilters(summary);
@@ -606,7 +844,8 @@ export class UsageHubComponent implements OnInit {
       return;
     }
 
-    const records = this.buildRunRecords(summary);
+    let records = this.buildRunRecords(summary);
+    records = records.filter((record) => this.passesWorkspaceScopeFilter(record));
     this.totalRunCount = records.length;
     const fromMs = this.parseDateStartMs(this.filterDateFrom);
     const toMs = this.parseDateEndMs(this.filterDateTo);
@@ -652,6 +891,7 @@ export class UsageHubComponent implements OnInit {
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
           max_turn_total_tokens: 0,
+          tool_calls_total: 0,
         };
         modelBucket.invocations += this.normalizeInvocations(entry.invocations);
         modelBucket.runKeys.add(runKey);
@@ -660,6 +900,7 @@ export class UsageHubComponent implements OnInit {
         modelBucket.output_tokens += this.toNumber(entry.output_tokens);
         modelBucket.cache_creation_input_tokens += this.toNumber(entry.cache_creation_input_tokens);
         modelBucket.cache_read_input_tokens += this.toNumber(entry.cache_read_input_tokens);
+        modelBucket.tool_calls_total += this.toNumber(entry.tool_calls_total);
         const modelMaxTurn = this.toNumber(entry.max_turn_total_tokens);
         if (modelMaxTurn > modelBucket.max_turn_total_tokens) {
           modelBucket.max_turn_total_tokens = modelMaxTurn;
@@ -677,6 +918,7 @@ export class UsageHubComponent implements OnInit {
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
           max_turn_total_tokens: 0,
+          tool_calls_total: 0,
         };
         runtimeBucket.models.add(model);
         runtimeBucket.invocations += this.normalizeInvocations(entry.invocations);
@@ -686,6 +928,7 @@ export class UsageHubComponent implements OnInit {
         runtimeBucket.output_tokens += this.toNumber(entry.output_tokens);
         runtimeBucket.cache_creation_input_tokens += this.toNumber(entry.cache_creation_input_tokens);
         runtimeBucket.cache_read_input_tokens += this.toNumber(entry.cache_read_input_tokens);
+        runtimeBucket.tool_calls_total += this.toNumber(entry.tool_calls_total);
         const runtimeMaxTurn = this.toNumber(entry.max_turn_total_tokens);
         if (runtimeMaxTurn > runtimeBucket.max_turn_total_tokens) {
           runtimeBucket.max_turn_total_tokens = runtimeMaxTurn;
@@ -713,6 +956,7 @@ export class UsageHubComponent implements OnInit {
           cache_creation_input_tokens: bucket.cache_creation_input_tokens,
           cache_read_input_tokens: bucket.cache_read_input_tokens,
           max_turn_total_tokens: bucket.max_turn_total_tokens,
+          tool_calls_total: bucket.tool_calls_total,
           cache_hit_ratio: totalInput > 0 ? this.round4(bucket.cache_read_input_tokens / totalInput) : 0,
           total_tokens: totalTokens,
         };
@@ -743,6 +987,7 @@ export class UsageHubComponent implements OnInit {
           cache_creation_input_tokens: bucket.cache_creation_input_tokens,
           cache_read_input_tokens: bucket.cache_read_input_tokens,
           max_turn_total_tokens: bucket.max_turn_total_tokens,
+          tool_calls_total: bucket.tool_calls_total,
           cache_hit_ratio: totalInput > 0 ? this.round4(bucket.cache_read_input_tokens / totalInput) : 0,
           total_tokens: totalTokens,
         };
@@ -757,6 +1002,7 @@ export class UsageHubComponent implements OnInit {
         acc.output_tokens += row.output_tokens;
         acc.cache_creation_input_tokens += row.cache_creation_input_tokens;
         acc.cache_read_input_tokens += row.cache_read_input_tokens;
+        acc.tool_calls_total += row.tool_calls_total;
         if (row.max_turn_total_tokens > acc.max_turn_total_tokens) {
           acc.max_turn_total_tokens = row.max_turn_total_tokens;
         }
@@ -770,6 +1016,7 @@ export class UsageHubComponent implements OnInit {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
         max_turn_total_tokens: 0,
+        tool_calls_total: 0,
       },
     );
 
@@ -786,6 +1033,7 @@ export class UsageHubComponent implements OnInit {
       { label: 'Output Tokens', value: this.formatNumber(runtimeTotals.output_tokens) },
       { label: 'Cache Created', value: this.formatNumber(runtimeTotals.cache_creation_input_tokens) },
       { label: 'Cache Read', value: this.formatNumber(runtimeTotals.cache_read_input_tokens) },
+      { label: 'Tool Calls', value: this.formatNumber(runtimeTotals.tool_calls_total) },
       { label: 'Cache Hit', value: this.formatPercent(cacheHitRatio) },
       { label: 'Peak Turn', value: this.formatPeakTurn(runtimeTotals.max_turn_total_tokens) },
       { label: 'Elapsed', value: this.formatSeconds(runtimeTotals.elapsed_seconds) },
@@ -824,7 +1072,7 @@ export class UsageHubComponent implements OnInit {
     const fromMs = this.parseDateStartMs(this.filterDateFrom);
     const toMs = this.parseDateEndMs(this.filterDateTo);
     const runtimes = new Set<string>();
-    for (const record of this.buildRunRecords(summary)) {
+    for (const record of this.buildRunRecords(summary).filter((r) => this.passesWorkspaceScopeFilter(r))) {
       if (!this.passesKindFilter(record)) {
         continue;
       }
@@ -850,7 +1098,7 @@ export class UsageHubComponent implements OnInit {
     const fromMs = this.parseDateStartMs(this.filterDateFrom);
     const toMs = this.parseDateEndMs(this.filterDateTo);
     const models = new Set<string>();
-    for (const record of this.buildRunRecords(summary)) {
+    for (const record of this.buildRunRecords(summary).filter((r) => this.passesWorkspaceScopeFilter(r))) {
       if (!this.passesKindFilter(record)) {
         continue;
       }
@@ -979,11 +1227,46 @@ export class UsageHubComponent implements OnInit {
     return Math.max(1, Math.round(parsed));
   }
 
-  private toNumber(value: number): number {
+  private toNumber(value: number | undefined | null): number {
+    if (value === undefined || value === null) {
+      return 0;
+    }
     return Number.isFinite(value) ? value : 0;
   }
 
   private round4(value: number): number {
     return Math.round(value * 10000) / 10000;
+  }
+
+  getWorkspaceDisplayName(metricPath: string): string {
+    const workspacePath = this.workspaceSelectorService.getWorkspaceForMetricPath(metricPath);
+    if (!workspacePath) {
+      return '(unknown)';
+    }
+    const entry = this.workspaceSelectorService.workspaces().find((w) => w.path === workspacePath);
+    return entry?.label ?? (workspacePath.split('/').pop() || workspacePath);
+  }
+
+  isShowingAllWorkspaces(): boolean {
+    return this.workspaceSelectorService.selectedWorkspacePath() === null &&
+           this.workspaceSelectorService.workspaces().length > 1;
+  }
+
+  private passesWorkspaceScopeFilter(record: UsageRunRecord): boolean {
+    const selected = this.workspaceSelectorService.selectedWorkspacePath();
+    if (!selected) {
+      return true;
+    }
+    const entry = this.workspaceSelectorService.workspaces().find((w) => w.path === selected);
+    if (!entry?.workspaceRoot) {
+      return true;
+    }
+    return record.item.workspace_root === entry.workspaceRoot;
+  }
+
+  private countWorkspaceScopedRecords(summary: MetricsSummary): number {
+    let records = this.buildRunRecords(summary);
+    records = records.filter((r) => this.passesWorkspaceScopeFilter(r));
+    return records.length;
   }
 }

@@ -259,12 +259,12 @@ JSON
   [ "$status" -eq 0 ] || { echo "$output"; rm -rf "$tmpdir"; return 1; }
 
   echo "$output" | python3 -c '
-import re
 import sys
 
 line = ""
 for candidate in sys.stdin.read().splitlines():
-    if re.match(r"^\s*\|\s*PLANR\s*\|", candidate):
+    parts_try = [p.strip() for p in candidate.split("|")[1:-1]]
+    if len(parts_try) >= 2 and parts_try[1] == "PLANR":
         line = candidate
         break
 
@@ -272,19 +272,19 @@ if not line:
     raise SystemExit("PLANR row not found")
 
 parts = [p.strip() for p in line.split("|")[1:-1]]
-if len(parts) != 10:
+if len(parts) != 11:
     raise SystemExit(f"unexpected PLANR column count: {len(parts)}")
 
-if parts[3] != "2":
-    raise SystemExit(f"expected invocations=2, got {parts[3]}")
-if parts[5] != "15s":
-    raise SystemExit(f"expected elapsed=15s, got {parts[5]}")
-if parts[6] != "30":
-    raise SystemExit(f"expected input=30, got {parts[6]}")
-if parts[7] != "7":
-    raise SystemExit(f"expected output=7, got {parts[7]}")
-if parts[8] != "8.33%":
-    raise SystemExit(f"expected cache_hit=8.33%, got {parts[8]}")
+if parts[4] != "2":
+    raise SystemExit(f"expected invocations=2, got {parts[4]}")
+if parts[6] != "15s":
+    raise SystemExit(f"expected elapsed=15s, got {parts[6]}")
+if parts[7] != "30":
+    raise SystemExit(f"expected input=30, got {parts[7]}")
+if parts[8] != "7":
+    raise SystemExit(f"expected output=7, got {parts[8]}")
+if parts[9] != "8.33%":
+    raise SystemExit(f"expected cache_hit=8.33%, got {parts[9]}")
 '
 
   rm -rf "$tmpdir"
@@ -376,6 +376,123 @@ assert abs(float(plan.get("cache_hit_ratio", 0)) - 0.0833) < 1e-9, plan
 assert plan.get("todos_done") == 2, plan
 assert plan.get("todos_total") == 2, plan
 '
+
+  rm -rf "$tmpdir"
+}
+
+@test "usage summary text all mode accepts multiple --logs-dir with dedup" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local tmpdir logs_a logs_b plan_a plan_b
+  tmpdir="$(mktemp -d)"
+  logs_a="$tmpdir/logs-a"
+  logs_b="$tmpdir/logs-b"
+  plan_a="$logs_a/PLANA"
+  plan_b="$logs_b/PLANB"
+  mkdir -p "$plan_a" "$plan_b"
+
+  cat <<'JSON' >"$plan_a/plan-usage-summary.json"
+{
+  "schema_version": 1,
+  "kind": "plan_usage_summary",
+  "plan": "PLANA.md",
+  "plan_key": "PLANA",
+  "artifact_ns": "PLANA",
+  "stage_id": "s-a",
+  "model": "ma",
+  "runtime": "claude",
+  "invocations": 1,
+  "todos_done": 1,
+  "todos_total": 1,
+  "started_at": "2026-04-17T00:00:00Z",
+  "ended_at": "2026-04-17T00:00:05Z",
+  "elapsed_seconds": 5,
+  "input_tokens": 100,
+  "output_tokens": 10,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "max_turn_total_tokens": 200,
+  "cache_hit_ratio": 0
+}
+JSON
+
+  cat <<'JSON' >"$plan_a/invocation-usage.json"
+{
+  "schema_version": 1,
+  "kind": "plan_invocation_usage_history",
+  "invocations": [
+    {
+      "iteration": 1,
+      "model": "ma",
+      "runtime": "claude",
+      "elapsed_seconds": 5,
+      "input_tokens": 100,
+      "output_tokens": 10,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "max_turn_total_tokens": 200,
+      "cache_hit_ratio": 0
+    }
+  ]
+}
+JSON
+
+  cat <<'JSON' >"$plan_b/plan-usage-summary.json"
+{
+  "schema_version": 1,
+  "kind": "plan_usage_summary",
+  "plan": "PLANB.md",
+  "plan_key": "PLANB",
+  "artifact_ns": "PLANB",
+  "stage_id": "s-b",
+  "model": "mb",
+  "runtime": "codex",
+  "invocations": 1,
+  "todos_done": 2,
+  "todos_total": 2,
+  "started_at": "2026-04-17T00:01:00Z",
+  "ended_at": "2026-04-17T00:01:10Z",
+  "elapsed_seconds": 10,
+  "input_tokens": 200,
+  "output_tokens": 20,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "max_turn_total_tokens": 300,
+  "cache_hit_ratio": 0
+}
+JSON
+
+  cat <<'JSON' >"$plan_b/invocation-usage.json"
+{
+  "schema_version": 1,
+  "kind": "plan_invocation_usage_history",
+  "invocations": [
+    {
+      "iteration": 1,
+      "model": "mb",
+      "runtime": "codex",
+      "elapsed_seconds": 10,
+      "input_tokens": 200,
+      "output_tokens": 20,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "max_turn_total_tokens": 300,
+      "cache_hit_ratio": 0
+    }
+  ]
+}
+JSON
+
+  run python3 "$SCRIPT" all --logs-dir "$logs_a" --logs-dir "$logs_b"
+  [ "$status" -eq 0 ] || { echo "$output"; rm -rf "$tmpdir"; return 1; }
+  [[ "$output" == *"PLANA"* ]]
+  [[ "$output" == *"PLANB"* ]]
+
+  run python3 "$SCRIPT" all --logs-dir "$logs_a" --logs-dir "$logs_a"
+  [ "$status" -eq 0 ] || { echo "$output"; rm -rf "$tmpdir"; return 1; }
+  local plana_count
+  plana_count="$(echo "$output" | grep -c 'PLANA' || true)"
+  [ "$plana_count" -eq 1 ]
 
   rm -rf "$tmpdir"
 }

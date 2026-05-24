@@ -64,6 +64,42 @@ describe('ApiService', () => {
       const listing = await responsePromise;
       expect(listing).toEqual(mockListing);
     });
+
+    it('includes projectRoot in query when provided', async () => {
+      const root = 'plans';
+      const path = '';
+      const mockListing = { root, path, parent: null, entries: [] };
+      const pr = '/data/my-repo';
+
+      const responsePromise = firstValueFrom(service.fetchListing(root, path, undefined, pr));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/list') &&
+          r.params.get('root') === root &&
+          r.params.get('path') === path &&
+          r.params.get('projectRoot') === pr,
+      );
+      req.flush(mockListing);
+      await responsePromise;
+    });
+
+    it('includes workspaceRoot and projectRoot together when both provided', async () => {
+      const root = 'plans';
+      const path = '';
+      const ws = '/w/.ralph-workspace';
+      const pr = '/w';
+      const mockListing = { root, path, parent: null, entries: [] };
+
+      const responsePromise = firstValueFrom(service.fetchListing(root, path, ws, pr));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/list') &&
+          r.params.get('workspaceRoot') === ws &&
+          r.params.get('projectRoot') === pr,
+      );
+      req.flush(mockListing);
+      await responsePromise;
+    });
   });
 
   describe('fetchFile()', () => {
@@ -116,6 +152,41 @@ describe('ApiService', () => {
       const chunk = await responsePromise;
       expect(chunk).toEqual(mockChunk);
     });
+
+    it('includes projectRoot in query when provided', async () => {
+      const root = 'plans';
+      const filePath = 'x.md';
+      const pr = '/p/root';
+      const mockChunk = { content: '', size: 0, offset: 0, nextOffset: 0 };
+
+      const responsePromise = firstValueFrom(service.fetchFile(root, filePath, 0, undefined, pr));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/file') &&
+          r.params.get('projectRoot') === pr &&
+          r.params.get('root') === root,
+      );
+      req.flush(mockChunk);
+      await responsePromise;
+    });
+
+    it('includes workspaceRoot and projectRoot together when offset fetch', async () => {
+      const root = 'plans';
+      const filePath = 'a.md';
+      const ws = '/w/.ralph-workspace';
+      const pr = '/w';
+      const mockChunk = { content: '', size: 0, offset: 0, nextOffset: 0 };
+
+      const responsePromise = firstValueFrom(service.fetchFile(root, filePath, 0, ws, pr));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/file') &&
+          r.params.get('workspaceRoot') === ws &&
+          r.params.get('projectRoot') === pr,
+      );
+      req.flush(mockChunk);
+      await responsePromise;
+    });
   });
 
   describe('fetchTemplate()', () => {
@@ -139,6 +210,21 @@ describe('ApiService', () => {
       },
     );
 
+    it('includes projectRoot in template request when provided', async () => {
+      const name = 'plan' as const;
+      const pr = '/proj/a';
+      const mockTemplate = { name, content: 'x' };
+      const responsePromise = firstValueFrom(service.fetchTemplate(name, pr));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/template') &&
+          r.params.get('name') === name &&
+          r.params.get('projectRoot') === pr,
+      );
+      req.flush(mockTemplate);
+      await responsePromise;
+    });
+
     it('should reject invalid template names at compile time', () => {
       const invalidName = 'my-template' as const;
       // @ts-expect-error - only plan and orchestration are valid template names
@@ -154,22 +240,29 @@ describe('ApiService', () => {
           output_tokens: 456,
           cache_creation_input_tokens: 78,
           cache_read_input_tokens: 90,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
           elapsed_seconds: 12.5,
           count: 2,
         },
         plans: [
           {
-            path: '/logs/plan-1/plan-usage-summary.json',
+            path: '/mock/w/.ralph-workspace/logs/plan-1/plan-usage-summary.json',
             plan_key: 'plan-1',
             artifact_ns: 'plan-1',
+            workspace_root: '/mock/w/.ralph-workspace',
+            project_root: '/mock/w',
             elapsed_seconds: 5,
             input_tokens: 10,
             output_tokens: 20,
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 1,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
           },
         ],
         orchestrations: [],
+        projects: [] as const,
       };
 
       const responsePromise = firstValueFrom(service.fetchMetricsSummary());

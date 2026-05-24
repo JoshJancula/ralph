@@ -35,6 +35,7 @@ describe('FileViewerComponent', () => {
       },
       plans: [],
       orchestrations: [],
+      projects: [],
     };
     vi.spyOn(api, 'fetchMetricsSummary').mockReturnValue(of(emptySummary));
     httpMock = TestBed.inject(HttpTestingController);
@@ -461,7 +462,7 @@ describe('FileViewerComponent', () => {
 
     fixture.componentInstance.handleContentClick(clickEvent);
 
-    expect(spy).toHaveBeenCalledWith('plans', null, 'PLAN2/other.md');
+    expect(spy).toHaveBeenCalledWith('plans', null, 'PLAN2/other.md', null, null);
   });
 
   it('handleContentClick ignores external links', async () => {

@@ -10,8 +10,182 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
+_TOOL_SEQUENCE_CAP = 50000
 
-def _apply_codex_usage_snapshot(usage: Dict[str, Any], acc: Dict[str, int], include_max: bool = True) -> None:
+# Codex NDJSON: chat-like item types on item.completed (not tool invocations).
+_CODEX_CHAT_ITEM_TYPES = frozenset(
+    {
+        "agent_message",
+        "user_message",
+        "system_message",
+        "reasoning",
+        "thread_summary",
+        "summary",
+    }
+)
+
+
+def _tool_call_id(item: Dict[str, Any]) -> Optional[str]:
+    for key in ("callID", "callId", "call_id", "tool_call_id", "toolCallId", "id"):
+        v = item.get(key)
+        if isinstance(v, (str, int)) and str(v).strip():
+            return str(v).strip()
+    return None
+
+
+def _merge_tool_call(acc: Dict[str, Any], name: str, call_id: Optional[str] = None) -> None:
+    if call_id:
+        seen = acc.setdefault("_tool_call_ids_seen", set())
+        if isinstance(seen, set):
+            if call_id in seen:
+                return
+            seen.add(call_id)
+    label = (name or "unknown").strip() or "unknown"
+    acc["tool_calls_total"] = int(acc.get("tool_calls_total", 0)) + 1
+    by_tool = acc.setdefault("tool_calls_by_tool", {})
+    if not isinstance(by_tool, dict):
+        by_tool = {}
+        acc["tool_calls_by_tool"] = by_tool
+    by_tool[label] = int(by_tool.get(label, 0)) + 1
+    seq = acc.setdefault("tool_calls_sequence", [])
+    if isinstance(seq, list) and len(seq) < _TOOL_SEQUENCE_CAP:
+        seq.append(label)
+
+
+def _codex_item_tool_name(item: Dict[str, Any]) -> Optional[str]:
+    """If item is a tool invocation, return a display name; else None."""
+    itype = str(item.get("type") or "").strip()
+    il = itype.lower()
+    if il in _CODEX_CHAT_ITEM_TYPES:
+        return None
+    if il in (
+        "tool_use",
+        "function_call",
+        "custom_tool",
+        "command_execution",
+        "shell_command",
+        "exec",
+        "mcp_tool",
+        "mcp_tool_use",
+    ):
+        return _pick_tool_label(item, fallback=itype)
+    tu = item.get("tool_use")
+    if isinstance(tu, dict):
+        return _pick_tool_label(tu, fallback="tool_use")
+    fc = item.get("function_call")
+    if isinstance(fc, dict):
+        return _pick_tool_label(fc, fallback="function_call")
+    if item.get("command") is not None or item.get("argv") is not None:
+        return "shell"
+    return None
+
+
+def _pick_tool_label(item: Dict[str, Any], fallback: str) -> str:
+    for key in ("name", "tool_name", "toolName", "tool"):
+        v = item.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    fn = item.get("function")
+    if isinstance(fn, dict):
+        v = fn.get("name")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return (fallback or "unknown").strip() or "unknown"
+
+
+def _walk_claude_tool_uses(obj: Any, acc: Dict[str, Any]) -> None:
+    if isinstance(obj, dict):
+        if obj.get("type") == "tool_use":
+            _merge_tool_call(acc, _pick_tool_label(obj, fallback="tool_use"), _tool_call_id(obj))
+        for v in obj.values():
+            _walk_claude_tool_uses(v, acc)
+    elif isinstance(obj, list):
+        for i in obj:
+            _walk_claude_tool_uses(i, acc)
+
+
+def _walk_generic_tool_calls(obj: Any, acc: Dict[str, Any], *, _depth: int = 0) -> None:
+    """Cursor / unknown JSON: common stream tool call shapes, plus shallow recursion."""
+    if _depth > 24:
+        return
+    if isinstance(obj, dict):
+        tc = obj.get("tool_calls")
+        if not isinstance(tc, list):
+            tc = obj.get("toolCalls")
+        if isinstance(tc, list):
+            for entry in tc:
+                if not isinstance(entry, dict):
+                    continue
+                _merge_tool_call(acc, _pick_tool_label(entry, fallback="tool_call"), _tool_call_id(entry))
+
+        for key in ("tool_call", "toolCall", "function_call", "functionCall"):
+            entry = obj.get(key)
+            if isinstance(entry, dict):
+                _merge_tool_call(acc, _pick_tool_label(entry, fallback=key), _tool_call_id(entry))
+
+        typ = str(obj.get("type") or "").strip()
+        typ_l = typ.lower().replace("-", "_")
+        if typ_l in {"tool_call", "tool_use", "function_call"}:
+            _merge_tool_call(acc, _pick_tool_label(obj, fallback=typ), _tool_call_id(obj))
+
+        for k, v in obj.items():
+            if k in {"tool_calls", "toolCalls", "tool_call", "toolCall", "function_call", "functionCall"}:
+                continue
+            _walk_generic_tool_calls(v, acc, _depth=_depth + 1)
+    elif isinstance(obj, list):
+        for i in obj:
+            _walk_generic_tool_calls(i, acc, _depth=_depth + 1)
+
+
+def extract_tool_calls(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
+    """Count tool invocations and optional per-tool breakdown (best-effort per runtime)."""
+    if not isinstance(obj, dict):
+        return
+    if mode == "codex":
+        if obj.get("type") == "item.completed":
+            item = obj.get("item")
+            if isinstance(item, dict):
+                label = _codex_item_tool_name(item)
+                if label:
+                    _merge_tool_call(acc, label, _tool_call_id(item))
+        return
+    if mode == "opencode":
+        _walk_opencode_tool_parts(obj, acc)
+        return
+    if mode == "claude":
+        _walk_claude_tool_uses(obj, acc)
+        return
+    _walk_generic_tool_calls(obj, acc)
+
+
+def _walk_opencode_tool_parts(obj: Any, acc: Dict[str, Any], *, _depth: int = 0) -> None:
+    if _depth > 24:
+        return
+    if isinstance(obj, dict):
+        part = obj.get("part")
+        if isinstance(part, dict):
+            _walk_opencode_tool_parts(part, acc, _depth=_depth + 1)
+
+        props = obj.get("properties")
+        if isinstance(props, dict):
+            _walk_opencode_tool_parts(props, acc, _depth=_depth + 1)
+
+        typ = str(obj.get("type") or "").strip().lower()
+        if typ in {"tool", "tool_call", "tool-call"}:
+            _merge_tool_call(acc, _pick_tool_label(obj, fallback="tool"), _tool_call_id(obj))
+            return
+
+        for k, v in obj.items():
+            if k in {"part", "properties"}:
+                continue
+            if isinstance(v, (dict, list)):
+                _walk_opencode_tool_parts(v, acc, _depth=_depth + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_opencode_tool_parts(item, acc, _depth=_depth + 1)
+
+
+def _apply_codex_usage_snapshot(usage: Dict[str, Any], acc: Dict[str, Any], include_max: bool = True) -> None:
     """Apply a Codex usage snapshot (overwrite semantics)."""
     raw_input = int(usage.get("input_tokens") or 0)
     cached = int(usage.get("cached_input_tokens") or 0)
@@ -53,7 +227,7 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                 if n:
                     return n
         elif mode == "opencode":
-            for k in ("session_id", "sessionId", "sessionID", "chat_id", "id"):
+            for k in ("session_id", "sessionId", "sessionID", "chat_id"):
                 v = obj.get(k)
                 if isinstance(v, (str, int)) and str(v).strip():
                     return str(v).strip()
@@ -88,7 +262,7 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
     return None
 
 
-def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
+def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
     """Accumulate token usage fields from a JSON event into acc."""
     if not isinstance(obj, dict):
         return
@@ -113,6 +287,8 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
                         acc["max_turn_total_tokens"] = last_total
 
         event_type = obj.get("type")
+        if event_type in {"turn.completed", "turn_completed", "step_finish"}:
+            acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
         if event_type in {"turn.completed", "turn_completed", "result"}:
             usage = obj.get("usage")
             if isinstance(usage, dict):
@@ -177,6 +353,7 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
             if isinstance(part, dict):
                 tokens = part.get("tokens")
         if isinstance(tokens, dict):
+            acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
             acc["input_tokens"] += int(tokens.get("input") or 0)
             acc["output_tokens"] += int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
             cache = tokens.get("cache")
@@ -196,6 +373,7 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, int]) -> None:
         if not usage and isinstance(obj.get("message"), dict):
             usage = obj.get("message", {}).get("usage")
         if isinstance(usage, dict):
+            acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
             if acc.get("_claude_result_seen") and is_result_event:
                 # Replace with result event's cumulative usage
                 acc["input_tokens"] = int(usage.get("input_tokens") or 0)
@@ -271,12 +449,16 @@ def main() -> None:
     path = sys.argv[2] if len(sys.argv) > 2 else ""
     usage_path = sys.argv[3] if len(sys.argv) > 3 else ""
     sid: Optional[str] = None
-    usage_acc: Dict[str, int] = {
+    usage_acc: Dict[str, Any] = {
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "max_turn_total_tokens": 0,
+        "tool_turns": 0,
+        "tool_calls_total": 0,
+        "tool_calls_by_tool": {},
+        "tool_calls_sequence": [],
     }
     for raw in sys.stdin:
         line = raw.rstrip("\n")
@@ -298,10 +480,12 @@ def main() -> None:
             if sid is None and path:
                 sid = session_id_from(o, mode)
             extract_usage(o, mode, usage_acc)
+            extract_tool_calls(o, mode, usage_acc)
             continue
         if sid is None and path:
             sid = session_id_from(o, mode)
         extract_usage(o, mode, usage_acc)
+        extract_tool_calls(o, mode, usage_acc)
         texts = extract_text(o, mode)
         if texts:
             for t in texts:
@@ -320,8 +504,9 @@ def main() -> None:
     if usage_path:
         try:
             os.makedirs(os.path.dirname(usage_path) or ".", exist_ok=True)
+            public_usage = {k: v for k, v in usage_acc.items() if not k.startswith("_")}
             with open(usage_path, "w", encoding="utf-8") as fh:
-                json.dump(usage_acc, fh)
+                json.dump(public_usage, fh)
                 fh.write("\n")
         except OSError:
             pass

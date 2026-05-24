@@ -282,3 +282,37 @@ EOF
   printf '%s\n' "$first_line" | jq -e '.result.structuredContent.stdout_tail | test("dry run mode")'
   rm -rf "$workspace"
 }
+
+@test "MCP server stays explicitly scoped under global" {
+  local temp_home
+  temp_home="$(mktemp -d)"
+  local workspace
+  workspace="$(mktemp -d)"
+  mkdir -p "$workspace/.ralph"
+
+  mkdir -p "$temp_home/.claude/agents/global-agent"
+  cat > "$temp_home/.claude/agents/global-agent/config.json" <<'EOF'
+{
+  "name": "Global Agent",
+  "model": "claude-3-5-sonnet-20241022",
+  "description": "This is a global agent from ~/.claude/"
+}
+EOF
+
+  local payload=$'{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"resource://ralph/agents"}}\n{"jsonrpc":"2.0","id":2,"method":"exit"}\n'
+  run_mcp_server_with_payload "$payload" "HOME=$temp_home" "RALPH_MCP_WORKSPACE=$workspace"
+
+  [ "$status" -eq 0 ]
+  local first_line
+  first_line="$(json_response_line 0)"
+
+  local catalog
+  catalog="$(printf '%s\n' "$first_line" | jq -r '.result.contents[0].text')"
+
+  [ "$catalog" != "" ]
+  [[ "$catalog" == *"No agent configurations were found"* ]]
+  [[ "$catalog" != *"Global Agent"* ]]
+  [[ "$catalog" != *"global-agent"* ]]
+
+  rm -rf "$temp_home" "$workspace"
+}

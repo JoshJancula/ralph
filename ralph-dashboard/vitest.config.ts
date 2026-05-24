@@ -29,6 +29,7 @@ export default defineConfig({
         'src/app/app.config.server.ts',
         'src/app/app.routes.ts',
         'src/app/app.routes.server.ts',
+        'src/app/test.routes.ts',
       ],
       thresholds: {
         statements: 80,

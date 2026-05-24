@@ -14,6 +14,60 @@
 # Public interface:
 #   ralph_run_plan_load_env_for_runtime <runtime> -- normalizes env into shared CURSOR_PLAN_*-style variables
 #     used by run-plan-core (verbose, colors, logs, iterations, human prompt toggles).
+#   ralph_run_plan_record_workspace_registry <workspace> <runtime> <plan-key> -- best-effort update of the
+#     user-level workspace registry used by global Ralph installs.
+
+ralph_run_plan_workspace_registry_file() {
+  if [[ -n "${RALPH_WORKSPACES_FILE:-}" ]]; then
+    printf '%s\n' "$RALPH_WORKSPACES_FILE"
+    return 0
+  fi
+
+  local config_home="${XDG_CONFIG_HOME:-}"
+  if [[ -z "$config_home" && -n "${HOME:-}" ]]; then
+    config_home="$HOME/.config"
+  fi
+  if [[ -z "$config_home" ]]; then
+    echo "Warning: HOME or XDG_CONFIG_HOME must be set to update Ralph workspace registry." >&2
+    return 1
+  fi
+  printf '%s\n' "$config_home/ralph/workspaces.json"
+}
+
+ralph_run_plan_record_workspace_registry() {
+  local workspace="${1:-${WORKSPACE:-}}"
+  local runtime="${2:-${RUNTIME:-}}"
+  local plan_key="${3:-${RALPH_PLAN_KEY:-}}"
+  local registry_file lib_dir helper source_path
+
+  if [[ -z "$workspace" || -z "$runtime" || -z "$plan_key" ]]; then
+    echo "Warning: skipping Ralph workspace registry write; workspace, runtime, or plan key is missing." >&2
+    return 0
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Warning: python3 not found; skipping Ralph workspace registry write." >&2
+    return 0
+  fi
+
+  if ! registry_file="$(ralph_run_plan_workspace_registry_file)"; then
+    return 0
+  fi
+
+  source_path="${BASH_SOURCE[0]}"
+  lib_dir="${source_path%/*}"
+  [[ "$lib_dir" == "$source_path" ]] && lib_dir="."
+  helper="$lib_dir/workspace-registry.py"
+  if [[ ! -f "$helper" ]]; then
+    echo "Warning: Ralph workspace registry helper missing: $helper" >&2
+    return 0
+  fi
+
+  if ! python3 "$helper" "$registry_file" "$workspace" "$plan_key" "$runtime"; then
+    echo "Warning: failed to update Ralph workspace registry: $registry_file" >&2
+    return 0
+  fi
+}
 
 ralph_run_plan_load_env_for_runtime() {
   local runtime="${1:-${RUNTIME:-}}"

@@ -86,6 +86,10 @@ function requestPath(url: string): string {
   return q === -1 ? url : url.slice(0, q);
 }
 
+function endToolbarIonButtons(native: HTMLElement): HTMLElement[] {
+  return Array.from(native.querySelectorAll('ion-toolbar ion-buttons[slot="end"] ion-button'));
+}
+
 function flushOutstandingHttp(httpMock: HttpTestingController): void {
   for (let round = 0; round < 15; round++) {
     let flushed = false;
@@ -115,6 +119,10 @@ function flushOutstandingHttp(httpMock: HttpTestingController): void {
     }
     for (const req of httpMock.match((r) => requestPath(r.url) === '/api/workspace')) {
       req.flush({ root: '/test' });
+      flushed = true;
+    }
+    for (const req of httpMock.match((r) => requestPath(r.url) === '/api/workspaces')) {
+      req.flush([]);
       flushed = true;
     }
     if (!flushed) {
@@ -202,13 +210,11 @@ describe('AppComponent', () => {
     const spy = vi.spyOn(nav, 'refresh');
     await renderDashboard(fixture, httpMock);
 
-    const endToolbarButtons = fixture.nativeElement.querySelectorAll(
-      'ion-toolbar ion-buttons[slot="end"] ion-button',
-    );
-    expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
-    const refreshBtn = endToolbarButtons[1];
+    const endButtons = endToolbarIonButtons(fixture.nativeElement);
+    expect(endButtons.length).toBe(3);
+    const refreshBtn = endButtons[1];
     expect(refreshBtn).toBeTruthy();
-    (refreshBtn as HTMLElement).click();
+    refreshBtn.click();
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -250,18 +256,16 @@ describe('AppComponent', () => {
 
      expect(fixture.componentInstance.isLightTheme()).toBe(false);
 
-     const endToolbarButtons = fixture.nativeElement.querySelectorAll(
-       'ion-toolbar ion-buttons[slot="end"] ion-button',
-     );
-     expect(endToolbarButtons.length).toBeGreaterThanOrEqual(3);
-     const themeBtn = endToolbarButtons[2];
+     const endButtons = endToolbarIonButtons(fixture.nativeElement);
+     expect(endButtons.length).toBe(3);
+     const themeBtn = endButtons[2];
      expect(themeBtn).toBeTruthy();
-     (themeBtn as HTMLElement).click();
+     themeBtn.click();
      fixture.detectChanges();
      expect(document.body.classList.contains('theme-light')).toBe(true);
      expect(fixture.componentInstance.isLightTheme()).toBe(true);
 
-     (themeBtn as HTMLElement).click();
+     themeBtn.click();
      fixture.detectChanges();
      expect(document.body.classList.contains('theme-light')).toBe(false);
      expect(fixture.componentInstance.isLightTheme()).toBe(false);

@@ -57,6 +57,8 @@
 
 set -euo pipefail
 
+RALPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ---------------------------------------------------------------------------
 # High-level flow: parse CLI -> load JSON -> for each stage: resolve artifacts,
 # ensure plan file (template copy if missing), run .ralph/run-plan.sh non-interactively,
@@ -127,12 +129,16 @@ if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
   WORKSPACE_ROOT_OVERRIDE="$(cd "$WORKSPACE_ROOT_OVERRIDE" && pwd)"
 fi
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
-if [[ ! -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
-  echo "Orchestrator error: expected $WORKSPACE/.ralph/ralph-env-safety.sh (repo Ralph tooling)." >&2
+RALPH_ACTIVE_DIR="$RALPH_DIR"
+if [[ -f "$WORKSPACE/.ralph/run-plan.sh" && -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
+  RALPH_ACTIVE_DIR="$WORKSPACE/.ralph"
+fi
+if [[ ! -f "$RALPH_ACTIVE_DIR/ralph-env-safety.sh" ]]; then
+  echo "Orchestrator error: expected $RALPH_ACTIVE_DIR/ralph-env-safety.sh (Ralph tooling)." >&2
   exit 1
 fi
 # shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/ralph-env-safety.sh"
+source "$RALPH_ACTIVE_DIR/ralph-env-safety.sh"
 ralph_assert_path_not_env_secret "Orchestration file" "$ORCH_FILE"
 # Logs and per-plan artifacts live here; same root run-plan uses when invoked from orchestrator.
 DEFAULT_ORCH_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
@@ -148,26 +154,28 @@ ORCH_BASENAME="${ORCH_BASENAME//[^A-Za-z0-9_.-]/_}"
 LOG_FILE="$RALPH_LOG_DIR/orchestrator-${ORCH_BASENAME}.log"
 # Ensure the log path exists before the first append (some environments rely on the file for smoke checks).
 touch "$LOG_FILE"
-RALPH_RUN_PLAN="$WORKSPACE/.ralph/run-plan.sh"
+RALPH_RUN_PLAN="$RALPH_ACTIVE_DIR/run-plan.sh"
 # Populated per stage from JSON (and sometimes merged from agent config); cleared each iteration.
 EXPECTED_ARTIFACT_PATHS=()
 
 ralph_orchestrator_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 
 # Used by merge_required_artifacts_from_agent when a stage omits explicit artifacts.
-if [[ -f "$WORKSPACE/.ralph/agent-config-tool.sh" ]]; then
-  AGENT_CONFIG_TOOL_SH="$WORKSPACE/.ralph/agent-config-tool.sh"
+if [[ -f "$RALPH_ACTIVE_DIR/agent-config-tool.sh" ]]; then
+  AGENT_CONFIG_TOOL_SH="$RALPH_ACTIVE_DIR/agent-config-tool.sh"
 else
   AGENT_CONFIG_TOOL_SH=""
 fi
 
 # expand_artifact_tokens, merge_required_artifacts_from_agent, orchestrator_validate_runtime, etc.
 # shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/bash-lib/orchestrator-lib.sh"
+source "$RALPH_ACTIVE_DIR/bash-lib/runtime-resolve.sh"
 # shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/bash-lib/ralph-format-elapsed.sh"
+source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator-lib.sh"
 # shellcheck source=/dev/null
-source "$WORKSPACE/.ralph/bash-lib/orchestrator-handoffs.sh"
+source "$RALPH_ACTIVE_DIR/bash-lib/ralph-format-elapsed.sh"
+# shellcheck source=/dev/null
+source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator-handoffs.sh"
 
 # Inlined here (not only bash-lib/orchestrator-verify.sh) so this script stays self-contained for operators.
 artifact_remediation_text() {
@@ -405,7 +413,7 @@ orch_stage_execute() {
   local step_status=0
   local runner="$RALPH_RUN_PLAN"
   local runner_label=".ralph/run-plan.sh (runtime=$runtime)"
-  local human_ack_rel human_ack_abs human_ack_msg
+  local human_ack_rel human_ack_abs human_ack_msg runtime_root agent_template_dir
   local _dry_sr _dry_model_label _step_model_label _plan_tag_stream _runner_stream_log _runner_env _runner_args _art_check
   local _session_strategy_cli=()
   local _session_strategy_type _session_strategy_value
@@ -452,19 +460,12 @@ orch_stage_execute() {
       fi
     fi
     if [[ -z "$template_to_use" ]] || [[ ! -f "$template_to_use" ]]; then
-      if [[ "$runtime" == "cursor" ]]; then
-        agent_template_dir="$WORKSPACE/.cursor/ralph/templates"
-      elif [[ "$runtime" == "codex" ]]; then
-        agent_template_dir="$WORKSPACE/.codex/ralph/templates"
-      elif [[ "$runtime" == "opencode" ]]; then
-        agent_template_dir="$WORKSPACE/.opencode/ralph/templates"
-      else
-        agent_template_dir="$WORKSPACE/.claude/ralph/templates"
-      fi
-      if [[ -f "$agent_template_dir/$agent.plan.template.md" ]]; then
+      runtime_root="$(ralph_resolve_runtime_root "$runtime" "$WORKSPACE" 2>/dev/null || true)"
+      agent_template_dir="${runtime_root:+$runtime_root/ralph/templates}"
+      if [[ -n "$agent_template_dir" && -f "$agent_template_dir/$agent.plan.template.md" ]]; then
         template_to_use="$agent_template_dir/$agent.plan.template.md"
-      elif [[ -f "$WORKSPACE/.ralph/plan.template" ]]; then
-        template_to_use="$WORKSPACE/.ralph/plan.template"
+      elif [[ -f "$RALPH_ACTIVE_DIR/plan.template" ]]; then
+        template_to_use="$RALPH_ACTIVE_DIR/plan.template"
       fi
     fi
     if [[ -f "$template_to_use" ]]; then

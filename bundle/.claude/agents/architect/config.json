@@ -2,7 +2,7 @@
   "name": "architect",
   "model": "claude-sonnet-4-6",
   "max_budget_usd": "2.00",
-  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Does not implement application code unless explicitly scoped.",
+  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
   "rules": [
     ".claude/rules/no-emoji.md"
   ],

@@ -3,6 +3,11 @@
 ## Execution instructions
 Use this architect stage to synthesize the research findings into a coherent architecture proposal that can guide implementation.
 
+## Todo granularity
+Each todo must represent one logical, independently verifiable unit of work, not one keystroke.
+- Good: `Update plan-todo.sh to preserve cursor-frontmatter outside the todo block while adding consolidation logging.`
+- Bad: `Change one line in plan-todo.sh.`
+
 ## Context
 Describe how the architecture stage builds on the discoveries recorded in `research.md`.
 

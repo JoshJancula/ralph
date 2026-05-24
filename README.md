@@ -51,6 +51,20 @@ rm -rf /tmp/ralph
 
 That copies **`.ralph/`**, runtime runners and agents under **`.cursor/`**, **`.claude/`**, and **`.codex/`**, and (by default) the dashboard under **`.ralph/ralph-dashboard/`**. A **subtree-style** **`vendor/ralph`** tree (no **`.git`** inside it) is removed automatically after install. Uninstall and **`--purge`** are documented in [docs/INSTALL.md](docs/INSTALL.md).
 
+### Global install (optional)
+
+If you manage many projects or prefer a single shared Ralph installation, use global mode instead:
+
+```bash
+git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
+/tmp/ralph/install.sh --global
+rm -rf /tmp/ralph
+```
+
+Global mode installs Ralph once to `~/.ralph/`, puts a `ralph` command on `PATH`, and shares runtime configs across projects. Projects do not get local `.ralph/` copies; instead they reference the global install. This is ideal for personal workflows or teams standardizing on a common Ralph version. Existing projects with local installs can migrate via `bash ~/.ralph/bundle/.ralph/migrate-to-global.sh <project-path>`.
+
+See [docs/GLOBAL-INSTALL.md](docs/GLOBAL-INSTALL.md) for the complete guide and design rationale.
+
 ## After install
 
 1. **Plan file** -- Copy **`.ralph/plan.template`** to something like **`PLAN.md`**, then pass it with **`--plan`** whenever you run **`.ralph/run-plan.sh`**. Cursor-specific notes: [.cursor/ralph/README.md](.cursor/ralph/README.md).
@@ -118,6 +132,8 @@ Stage overrides like `--agent`, `--model`, or `--cli-resume` are layered on top 
 When you define `artifacts` or `outputArtifacts` in an orchestration file, those paths are the authoritative outputs for the run. The agent config `output_artifacts` field is only a fallback when a stage does not define its own artifact declarations. Keep generated logs and artifacts under the workspace root’s `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/` so the dashboard and orchestration checks can discover them consistently.
 
 **Checklist syntax:** Open tasks must look like **`- [ ]`** (space before **`]`**). The form **`- []`** is ignored, so the runner may stop while lines still look unfinished.
+
+Todo sizing guidance, optional consolidation with `RALPH_PLAN_CONSOLIDATE=1`, and long-plan resume hints are documented in [AGENTS.md](AGENTS.md#todo-granularity-and-consolidation).
 
 ### When the runner needs you
 
@@ -196,6 +212,8 @@ The Ralph dashboard (at `http://127.0.0.1:8123` by default) displays:
 - **Overall metrics:** Aggregated usage across all plans
 - **Per-plan metrics:** Individual plan statistics with timing and token totals
 - **Per-orchestration metrics:** Stage-level breakdowns for multi-stage pipelines
+
+By default, dashboard discovery prefers a direct `.ralph-workspace` in the current directory; set `RALPH_DASHBOARD_FULL=1` to search under `$HOME` instead.
 
 ### Orchestration (multi-stage)
 

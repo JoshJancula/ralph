@@ -74,6 +74,51 @@ EOF
   rm -rf "$tmpdir"
 }
 
+@test "ralph_session_apply_resume_strategy does not pre-generate opencode session ids" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  local tmpdir bin_dir
+  tmpdir="$(mktemp -d)"
+  bin_dir="$tmpdir/bin"
+  mkdir -p "$bin_dir"
+
+  cat <<'EOF' >"$bin_dir/uuidgen"
+#!/bin/bash
+printf '%s\n' "33333333-3333-4333-8333-333333333333"
+EOF
+  chmod +x "$bin_dir/uuidgen"
+
+  run bash -c '
+    set -euo pipefail
+    logs="$4/logs.txt"
+    ralph_run_plan_log(){ printf "%s\n" "$*" >> "$logs"; }
+    source "$1"
+    PATH="$2:$PATH"
+    RUNTIME=opencode
+    SESSION_ID_FILE="$3/session-id.opencode.txt"
+    mkdir -p "$(dirname "$SESSION_ID_FILE")"
+    export RUNTIME SESSION_ID_FILE PATH
+    RALPH_PLAN_CLI_RESUME=1
+    export RALPH_PLAN_CLI_RESUME
+    unset RESUME_SESSION_ID_OVERRIDE RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+
+    ralph_session_apply_resume_strategy
+
+    printf "NEW=%s\n" "${RALPH_RUN_PLAN_NEW_SESSION_ID:-}"
+    printf "RESUME=%s\n" "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}"
+    printf "HAS_FILE=%s\n" "$([[ -s "$SESSION_ID_FILE" ]] && printf yes || printf no)"
+    printf "LOGS=%s\n" "$(cat "$logs")"
+  ' _ "$RUN_PLAN_SESSION_FILE" "$bin_dir" "$tmpdir" "$tmpdir"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"NEW="* ]]
+  [[ "$output" == *"RESUME="* ]]
+  [[ "$output" == *"HAS_FILE=no"* ]]
+  [[ "$output" == *"no stored opencode session id yet; running fresh once to capture it"* ]]
+
+  rm -rf "$tmpdir"
+}
+
 @test "ralph_session_maybe_rotate clears the stored id so the next call generates a new one" {
   [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
   [ -f "$RUN_PLAN_INVOKE_CLAUDE_FILE" ] || skip "run-plan claude helper missing"

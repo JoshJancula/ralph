@@ -131,14 +131,14 @@ EOF
   rm -rf "$tmpdir"
 }
 
-@test "run-plan creates pending-human.txt with mode 600 when operator dialog is required" {
+@test "run-plan does not create pending-human.txt after completed operator dialog TODO" {
   RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
-  local tmp_workspace stub_dir session_home pending_file mode
+  local tmp_workspace stub_dir session_home pending_file
   tmp_workspace="$(mktemp -d)"
   create_cursor_workspace "$tmp_workspace"
-  printf '%s\n' "- [ ] ask the user for help" "- [ ] follow-up work" >"$tmp_workspace/PLAN.md"
+  printf '%s\n' "- [ ] ask the user for help" >"$tmp_workspace/PLAN.md"
 
   session_home="$tmp_workspace/.sessions"
   mkdir -p "$session_home"
@@ -166,6 +166,7 @@ EOF
     set -euo pipefail
     export RALPH_PLAN_SESSION_HOME="$1/.sessions"
     export RALPH_PLAN_WORKSPACE_ROOT="$1/.ralph-workspace"
+    export RALPH_PLAN_REQUIRE_HUMAN_PROMPT=1
     export RALPH_HUMAN_OFFLINE_EXIT=1
     export RALPH_HUMAN_POLL_INTERVAL=0
     export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
@@ -178,18 +179,11 @@ EOF
     "$3" --runtime cursor --plan PLAN.md --workspace "$1" --non-interactive --model auto
   ' _ "$tmp_workspace" "$stub_dir:$PATH" "$RUN_PLAN_SH"
 
+  [ "$status" -eq 0 ]
   session_dir="$(find "$session_home" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [ -n "$session_dir" ]
   pending_file="$session_dir/pending-human.txt"
-  [ -f "$pending_file" ]
-
-  mode="$(TARGET_FILE="$pending_file" python3 - <<'PY'
-import os
-path = os.environ["TARGET_FILE"]
-print(oct(os.stat(path).st_mode & 0o777))
-PY
-)"
-  [ "$mode" = "0o600" ]
+  [ ! -f "$pending_file" ]
 
   rm -rf "$stub_dir" "$tmp_workspace"
 }
