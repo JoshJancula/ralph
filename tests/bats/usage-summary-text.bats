@@ -83,7 +83,7 @@ JSON
   [[ "$output" == *"Summary path: $summary_file"* ]]
   [[ "$output" == *"Invocation path: $usage_file"* ]]
   [[ "$output" == *"Summary: plan=PLAN.md plan_key=plan-1 stage_id=stage-1 runtime=claude model=m1,m2 invocations=2 todos=1/2"* ]]
-  [[ "$output" == *"Totals: input=15 output=27 cache_create=3 cache_read=5 max_turn=500 cache_hit_ratio=0.25"* ]]
+  [[ "$output" == *"Totals: input=15 output=27 cache_create=3 cache_read=5 max_turn=500 tool_calls=0 cache_hit_ratio=0.25"* ]]
   [[ "$output" == *"By model (2):"* ]]
   [[ "$output" == *"model=m1 runtime=claude invocations=1 input=10 output=20"* ]]
   [[ "$output" == *"model=m2 runtime=claude invocations=1 input=5 output=7"* ]]
