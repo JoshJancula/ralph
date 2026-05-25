@@ -202,9 +202,9 @@ main() {
   local failed=0
   for project in "${projects[@]}"; do
     if migrate_project "$project" "$dry_run" "$auto_yes" "$registry_file"; then
-      ((success++))
+      (( ++success ))
     else
-      ((failed++))
+      (( ++failed ))
     fi
     echo ""
   done

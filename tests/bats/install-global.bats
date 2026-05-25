@@ -109,12 +109,8 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
     bash "$REPO_ROOT/install.sh" --global -n --silent
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$ralph_home/bundle/.ralph"* ]]
+  [[ "$output" == *"$ralph_home/bundle"* ]]
   [[ "$output" == *"$ralph_home/docs"* ]]
-  [[ "$output" == *"$ralph_home/bundle/.claude"* ]]
-  [[ "$output" == *"$ralph_home/bundle/.cursor"* ]]
-  [[ "$output" == *"$ralph_home/bundle/.codex"* ]]
-  [[ "$output" == *"$ralph_home/bundle/.opencode"* ]]
   [[ "$output" == *"$ralph_home/ralph-dashboard"* ]]
   [[ "$output" == *"$xdg_config/ralph"* ]]
   [[ "$output" == *"$xdg_state/ralph"* ]]

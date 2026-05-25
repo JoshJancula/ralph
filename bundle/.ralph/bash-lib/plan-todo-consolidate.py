@@ -175,7 +175,7 @@ def consolidate_cursor(content: str) -> tuple[str, int]:
         return content, 0
 
     data["todos"] = new_todos
-    return "---\n" + yaml.safe_dump(data, sort_keys=False) + "---" + body, total_merges
+    return "---\n" + yaml.safe_dump(data, sort_keys=False, width=2048) + "---" + body, total_merges
 
 
 def main() -> int:

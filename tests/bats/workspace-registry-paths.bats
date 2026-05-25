@@ -18,6 +18,7 @@ teardown() {
   real_a="$TEST_TMPDIR/project-a"
   real_b="$TEST_TMPDIR/project-b"
   missing="$TEST_TMPDIR/does-not-exist"
+  dup_of_a="$real_a"
   mkdir -p "$real_a" "$real_b"
 
   python3 - "$REGISTRY_FILE" "$real_a" "$real_b" "$missing" "$dup_of_a" <<'PY'
