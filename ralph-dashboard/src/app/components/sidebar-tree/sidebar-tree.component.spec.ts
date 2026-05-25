@@ -126,7 +126,40 @@ describe('SidebarTreeComponent', () => {
     (rows[rows.length - 1] as HTMLElement).click();
 
     // Updated: now navigates with full path in the file parameter
-    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md');
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md', null, null);
+  }));
+
+  it('passes projectRoot on list requests and navigate when projectRoot input is set', fakeAsync(async () => {
+    const fixture = TestBed.createComponent(SidebarTreeComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+    const pr = '/projects/other-repo';
+
+    fixture.componentInstance.root = 'plans';
+    fixture.componentInstance.path = '';
+    fixture.componentInstance.projectRoot = pr;
+    fixture.detectChanges();
+
+    flushMicrotaskQueue();
+    const listReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'plans' &&
+        r.params.get('path') === '' &&
+        r.params.get('projectRoot') === pr,
+    );
+    listReq.flush({
+      root: 'plans',
+      path: '',
+      parent: null,
+      entries: [{ name: 'scoped.md', path: 'scoped.md', type: 'file', size: 1, mtime: 0 }],
+    });
+    fixture.detectChanges();
+
+    const rows = (fixture.nativeElement as HTMLElement).querySelectorAll('.tree-row');
+    (rows[0] as HTMLElement).click();
+
+    expect(spy).toHaveBeenCalledWith('plans', '', 'scoped.md', null, pr);
   }));
 
   it('highlights the active file', fakeAsync(async () => {
@@ -313,7 +346,7 @@ describe('SidebarTreeComponent', () => {
     ]);
     fixture.detectChanges();
 
-    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md');
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/readme.md', null, null);
   }));
 
   it('autoOpen expands first directory when no files exist', fakeAsync(async () => {
@@ -350,7 +383,7 @@ describe('SidebarTreeComponent', () => {
     fixture.detectChanges();
 
     // Should navigate to the first file found in subdirectory
-    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/docs/nested.md');
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/docs/nested.md', null, null);
   }));
 
   it('autoOpen does nothing when active file already exists', fakeAsync(async () => {

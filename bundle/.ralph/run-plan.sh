@@ -175,6 +175,9 @@ source "$RALPH_DIR/ralph-env-safety.sh"
 # Markdown checklist helpers used by run-plan-core.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/plan-todo.sh
 source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
+# Runtime config root resolution (project -> user -> bundled global defaults).
+# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/runtime-resolve.sh
+source "$SCRIPT_DIR/bash-lib/runtime-resolve.sh"
 
 # Main runner: parse_args already ran inside run-plan-core; executes until all TODOs done or failure.
 # shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/run-plan-core.sh

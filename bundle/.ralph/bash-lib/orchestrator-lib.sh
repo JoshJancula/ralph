@@ -67,16 +67,10 @@ merge_required_artifacts_from_agent() {
   local agent_id="$1"
   local runtime="$2"
   local agents_root
-  if [[ "$runtime" == "cursor" ]]; then
-    agents_root="$WORKSPACE/.cursor/agents"
-  elif [[ "$runtime" == "codex" ]]; then
-    agents_root="$WORKSPACE/.codex/agents"
-  elif [[ "$runtime" == "opencode" ]]; then
-    agents_root="$WORKSPACE/.opencode/agents"
-  else
-    agents_root="$WORKSPACE/.claude/agents"
-  fi
+  agents_root="$(ralph_resolve_runtime_root "$runtime" "$WORKSPACE" 2>/dev/null || true)"
+  [[ -n "$agents_root" ]] && agents_root="$agents_root/agents"
   [[ -z "$AGENT_CONFIG_TOOL_SH" ]] && return 0
+  [[ -z "$agents_root" ]] && return 0
   [[ ! -f "$agents_root/$agent_id/config.json" ]] && return 0
   local line
   while IFS= read -r line || [[ -n "$line" ]]; do

@@ -88,6 +88,45 @@ bash scripts/validate-orchestration-schema.sh <orchestration-file.orch.json>
 - `fzf` - Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf). Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
 - `python3` - Required for CLI session resume functionality (captures session IDs from tool output).
 
+## Global install mode
+
+Ralph supports two installation modes:
+
+**Local install (default):** Project-specific Ralph installation via `./install.sh`. Copies `bundle/.ralph/`, runtime configs, and agents into `<project>/.ralph/`, `<project>/.claude/`, etc. Best for repositories requiring committed, reviewable Ralph behavior.
+
+**Global install:** Single machine-wide installation via `./install.sh --global`. Installs Ralph once to `${RALPH_HOME:-$HOME/.ralph}/`, provides a `ralph` command on `PATH`, and shares runtime configs and agents across all projects using global install. Best for personal workflows or managing many projects with consistent tooling.
+
+### Directory layout
+
+- **Install root:** `${RALPH_HOME:-$HOME/.ralph}/` contains the Ralph scripts and dashboard
+- **Config root:** `${XDG_CONFIG_HOME:-$HOME/.config}/ralph/` contains the workspace registry and user defaults
+- **State root:** `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/` stores session state for global mode
+- **User runtime configs:** `${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.<runtime>/` optional shared agent/rule/skill configs
+- **Shim binary:** `~/.local/bin/ralph` dispatches commands to the global install
+
+See [docs/GLOBAL-INSTALL.md](../docs/GLOBAL-INSTALL.md) for the complete design spec.
+
+### Resolution order (runtime configs)
+
+When looking for agent configs or runtime rules, Ralph checks in order:
+1. `<workspace>/.<runtime>/` (project-local, always wins)
+2. `${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.<runtime>/` (user-level, used as fallback in global mode)
+3. `${RALPH_HOME:-$HOME/.ralph}/bundle/.<runtime>/` (bundled defaults)
+
+Set `RALPH_DISABLE_GLOBAL_FALLBACK=1` to use only project-local tier (preserves pre-global behavior for strict environments).
+
+### Workspace registry
+
+Global mode tracks recently used projects in `${XDG_CONFIG_HOME:-$HOME/.config}/ralph/workspaces.json`. Each plan run automatically updates the registry; older entries are pruned. Use `ralph workspaces list` to view registered projects or `ralph workspaces add <path>` for manual registration. The migration helper `bash $RALPH_HOME/bundle/.ralph/migrate-to-global.sh` converts projects with local installs to use global mode.
+
+### Session storage
+
+Local installs store session state under `<workspace>/.ralph-workspace/sessions/`. Global installs store session state under `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions/` by default. Override with `RALPH_PLAN_SESSION_HOME` for both modes.
+
+### Dashboard in global mode
+
+`ralph dashboard` starts the global dashboard when `RALPH_DASHBOARD_GLOBAL=1` or when `$RALPH_HOME` is set and the current directory lacks a project `.ralph-workspace/`. The global dashboard reads the workspace registry and aggregates metrics across all registered projects. The UI includes a workspace switcher and per-workspace filtering.
+
 ## Architecture
 
 ### Bundle structure
@@ -155,6 +194,14 @@ Session rotation caps cache growth: `RALPH_PLAN_SESSION_MAX_TURNS` defaults to `
 ### How plans and orchestration work
 
 1. **Single plan:** User writes a `.md` file with tasks like `- [ ] Do this` and `- [x] Done`. The runner picks the next open task, invokes the CLI assistant (Cursor/Claude/Codex), updates the plan, repeats until done.
+
+### Todo granularity and consolidation
+
+Plan templates and architect/implementation agents should produce todos at the level of one logical, independently verifiable unit of work, not one edit or keystroke. Typical feature plans should land around 8-30 todos; if three consecutive todos can be completed without re-reading a different file, they should usually be one todo.
+
+Set `RALPH_PLAN_CONSOLIDATE=1` to run a plan-load consolidation pass once at run start. The pass collapses adjacent unchecked todos that share the same obvious verb and target, leaves checked todos alone, and does not merge across markdown headings or blank-line separators. It is off by default.
+
+For long plans, the runner emits one stderr hint suggesting `RALPH_PLAN_CLI_RESUME=1` when unchecked todos exceed `${RALPH_PLAN_RESUME_HINT_THRESHOLD:-25}` and resume is off. Set `RALPH_PLAN_RESUME_HINT=0` to suppress the hint. If Python 3 or PyYAML is unavailable, consolidation no-ops with a warning and the plan run continues.
 
 2. **Orchestration:** A `.orch.json` file defines stages (research → architect → implementation → code-review → qa → security or custom). Each stage has:
    - `id`: stage identifier
@@ -225,6 +272,7 @@ The runner supports two plan file formats:
 - `RALPH_USAGE_RISKS_ACKNOWLEDGED=1` -- Skip the one-time usage risk prompt (set in CI)
 - `RALPH_PLAN_WORKSPACE_ROOT` -- Override `.ralph-workspace/` location
 - `RALPH_PLAN_CLI_RESUME=1` -- Enable CLI session resume
+- `RALPH_PLAN_CONSOLIDATE=1` -- Collapse adjacent unchecked todos once at run start; off by default and safe to leave unset.
 - `RALPH_ARTIFACT_NS` -- Override artifact namespace (defaults to plan file basename)
 - `RALPH_PLAN_KEY` -- Explicit plan namespace (defaults to plan file basename)
 - `RALPH_PLAN_SESSION_HOME` -- Directory that holds `session-id.<runtime>.txt`, `pending-human.txt`, and the rest of the session artifacts. When unset, defaults to `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (workspace-local). Set explicitly to override (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions` if you prefer the user config area).
@@ -245,10 +293,11 @@ When the runner needs human input:
 All Q&A is logged to `human-replies.md` in the session directory for auditing.
 
 ### Session storage choices
-- **Default location:** When `RALPH_PLAN_SESSION_HOME` is unset, Ralph stores `session-id.<runtime>.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
+- **Default location — local install:** When `RALPH_PLAN_SESSION_HOME` is unset and running from a local project install, Ralph stores `session-id.<runtime>.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
+- **Default location — global install:** When running from a global install (indicated by `RALPH_HOME` being set AND no project-local `.ralph/` directory existing), the default session home becomes `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions/<plan-key>`. This centralizes session state under the user's home directory rather than inside each workspace tree.
 - **Python 3 dependency:** CLI resume relies on the JSON demux helper which is written in Python; if Python 3 is missing the runtime logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (see `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and continues without resuming the previous session.
-- **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files outside the workspace tree. If you use Codex with a custom session home, ensure the sandbox can read that path.
-- **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/`) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
+- **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files in a different location. An explicit `RALPH_PLAN_SESSION_HOME` always takes precedence over the default, regardless of install mode. If you use Codex with a custom session home, ensure the sandbox can read that path.
+- **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/` in local mode) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
 
 ### Runtime outputs
 

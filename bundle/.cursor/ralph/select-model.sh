@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 _SELECT_MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_INTERACTIVE_LIB="$_SELECT_MODEL_DIR/../../.ralph/bash-lib/interactive-select.sh"
+_INTERACTIVE_LIB="${RALPH_SHARED_RALPH_DIR:-$_SELECT_MODEL_DIR/../../.ralph}/bash-lib/interactive-select.sh"
 if [[ -r "$_INTERACTIVE_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_INTERACTIVE_LIB"

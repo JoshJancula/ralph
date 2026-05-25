@@ -32,18 +32,26 @@ export class PlanLogResolutionService {
     return name;
   }
 
-  resolveLatestLogTarget(planDirectory: string | null | undefined): Observable<LogResolutionTarget> {
+  resolveLatestLogTarget(
+    planDirectory: string | null | undefined,
+    workspaceRoot?: string | null,
+  ): Observable<LogResolutionTarget> {
     if (!planDirectory) {
       return of({ directory: null, file: null });
     }
 
-    return this.apiService.fetchListing('logs', planDirectory).pipe(
-      switchMap((listing) => this.resolveFromListing(listing.entries, planDirectory)),
+    const ws = workspaceRoot?.trim() || undefined;
+    return this.apiService.fetchListing('logs', planDirectory, ws).pipe(
+      switchMap((listing) => this.resolveFromListing(listing.entries, planDirectory, ws)),
       catchError(() => of({ directory: planDirectory, file: null })),
     );
   }
 
-  private resolveFromListing(entries: ListingEntry[], prefix: string): Observable<LogResolutionTarget> {
+  private resolveFromListing(
+    entries: ListingEntry[],
+    prefix: string,
+    workspaceRoot?: string,
+  ): Observable<LogResolutionTarget> {
     const logFile = this.findMostRecentLog(entries, prefix);
     if (logFile) {
       return of({ directory: null, file: logFile });
@@ -59,7 +67,7 @@ export class PlanLogResolutionService {
     }
 
     const subdirPath = `${prefix}/${subdirs[0].name}`;
-    return this.apiService.fetchListing('logs', subdirPath).pipe(
+    return this.apiService.fetchListing('logs', subdirPath, workspaceRoot).pipe(
       map((sub) => {
         const found = this.findMostRecentLog(sub.entries, subdirPath);
         return found ? { directory: null, file: found } : { directory: null, file: null };

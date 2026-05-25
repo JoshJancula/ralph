@@ -1,0 +1,38 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e9]:
+        - generic: Workspace Explorer
+      - generic [ref=e10]:
+        - 'generic "Usage: tokens and tool calls" [ref=e11]':
+          - button "Usage metrics" [ref=e12] [cursor=pointer]:
+            - generic [ref=e13]:
+              - generic:
+                - img:
+                  - generic:
+                    - img
+        - button "Refresh" [ref=e15] [cursor=pointer]:
+          - generic [ref=e16]:
+            - generic:
+              - img:
+                - generic:
+                  - img
+        - button "Toggle theme" [ref=e18] [cursor=pointer]:
+          - generic [ref=e19]:
+            - generic:
+              - img:
+                - generic:
+                  - img
+  - generic [ref=e20]:
+    - generic:
+      - navigation "menu" [ref=e21]:
+        - list [ref=e28]
+      - main [ref=e30]:
+        - generic [ref=e36]:
+          - generic [ref=e37]:
+            - heading "Plans" [level=2] [ref=e38]
+            - button "Usage Details" [ref=e40] [cursor=pointer]
+          - generic [ref=e41]:
+            - progressbar [ref=e42]:
+              - img [ref=e43]
+            - generic [ref=e45]: Loading plans...

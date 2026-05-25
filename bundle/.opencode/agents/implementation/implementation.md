@@ -19,6 +19,7 @@ Implement code changes according to architecture and task instructions; produce 
 ## Constraints
 - Run targeted tests only for changed code; not full suites unless the TODO specifically requests it.
 - Verify with a targeted test or build before marking TODO complete.
+- When you break work into todos, aim for 8-30 todos for a typical feature. If three consecutive todos can be completed without re-reading a different file, those todos should be one todo.
 - Plain ASCII only; no emoji.
 
 ## Deliverable

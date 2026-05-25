@@ -1,7 +1,7 @@
 {
   "name": "architect",
   "model": "auto",
-  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Does not implement application code unless explicitly scoped.",
+  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Does not implement application code unless explicitly scoped. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
   "rules": [".codex/rules/no-emoji.md"],
   "skills": [".codex/skills/repo-context/SKILL.md"],
   "output_artifacts": [

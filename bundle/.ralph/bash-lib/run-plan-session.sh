@@ -25,7 +25,7 @@ ralph_session_strategy_is_truthy() {
 ralph_session_effective_strategy() {
   local strategy="${RALPH_PLAN_SESSION_STRATEGY:-}"
   case "$strategy" in
-    fresh|resume|reset)
+    reset)
       printf '%s\n' "$strategy"
       return 0
       ;;
@@ -33,9 +33,17 @@ ralph_session_effective_strategy() {
 
   if ralph_session_strategy_is_truthy "${RALPH_PLAN_CLI_RESUME:-0}"; then
     printf '%s\n' "resume"
-  else
-    printf '%s\n' "fresh"
+    return 0
   fi
+
+  case "$strategy" in
+    fresh|resume)
+      printf '%s\n' "$strategy"
+      return 0
+      ;;
+  esac
+
+  printf '%s\n' "fresh"
 }
 
 # Initialize CLI session directories and helpers for this plan.
@@ -48,9 +56,15 @@ ralph_session_init() {
   local _plan_session_home="${RALPH_PLAN_SESSION_HOME:-}"
   if [[ -z "$_plan_session_home" ]]; then
     local _workspace_root="${workspace%/}"
-    local _workspace_sessions_root="${RALPH_PLAN_WORKSPACE_ROOT:-${_workspace_root}/.ralph-workspace}"
-    _workspace_sessions_root="${_workspace_sessions_root%/}"
-    _plan_session_home="${_workspace_sessions_root}/sessions"
+    local _project_local_ralph="${_workspace_root}/.ralph"
+
+    if [[ -n "${RALPH_HOME:-}" ]] && [[ ! -d "$_project_local_ralph" ]]; then
+      _plan_session_home="${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions"
+    else
+      local _workspace_sessions_root="${RALPH_PLAN_WORKSPACE_ROOT:-${_workspace_root}/.ralph-workspace}"
+      _workspace_sessions_root="${_workspace_sessions_root%/}"
+      _plan_session_home="${_workspace_sessions_root}/sessions"
+    fi
   fi
   RALPH_PLAN_SESSION_HOME="$_plan_session_home"
   # Root directory containing per-plan session folders (runtime-specific session ids, human files, etc.).
@@ -243,6 +257,10 @@ ralph_session_apply_resume_strategy() {
   fi
 
   if [[ "$_strategy" == "resume" ]] && [[ ! -s "$SESSION_ID_FILE" ]] && [[ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" != "1" ]]; then
+    if [[ "${RUNTIME:-}" == "opencode" ]]; then
+      ralph_run_plan_log "session strategy resume: no stored opencode session id yet; running fresh once to capture it"
+      return 0
+    fi
     local _new_session_id=""
     if _new_session_id="$(ralph_session_generate_uuid)"; then
       printf '%s\n' "$_new_session_id" > "$SESSION_ID_FILE"
@@ -273,6 +291,63 @@ ralph_session_apply_resume_strategy() {
     export RALPH_RUN_PLAN_RESUME_BARE=1
     ralph_run_plan_log "session strategy $_strategy with RALPH_PLAN_ALLOW_UNSAFE_RESUME=1: using bare resume (wrong session possible on a busy host)"
     echo "Warning: bare CLI resume without a stored session id can attach to the wrong session when several projects use the same CLI on one machine. Prefer isolated CI or fix session capture." >&2
+  fi
+}
+
+ralph_session_reset_resume_error_detected() {
+  local runtime="${1:-}"
+  local output_log="${2:-}"
+  [[ -n "$runtime" ]] || return 1
+  [[ -n "$output_log" ]] || return 1
+  [[ -f "$output_log" ]] || return 1
+
+  local _recent
+  _recent="$(tail -n 240 "$output_log" 2>/dev/null || true)"
+  [[ -n "$_recent" ]] || return 1
+
+  if printf '%s\n' "$_recent" | grep -Eiq \
+    'session[^[:alnum:]]*(not[[:space:]-_]*found|does[[:space:]-_]*not[[:space:]-_]*exist|missing|invalid)|unknown[[:space:]-_]*session|no[[:space:]-_]*such[[:space:]-_]*session|chat[^[:alnum:]]*not[[:space:]-_]*found|thread[^[:alnum:]]*not[[:space:]-_]*found'; then
+    return 0
+  fi
+  return 1
+}
+
+# Bump the session turn counter atomically.
+# Returns the new count on stdout, or empty if RALPH_SESSION_DIR is unset.
+ralph_session_bump_turn_counter() {
+  if [[ -z "${RALPH_SESSION_DIR:-}" ]]; then
+    return 0
+  fi
+  local _count_file="$RALPH_SESSION_DIR/session-turn-count.txt"
+  local _count=0
+  if [[ -f "$_count_file" ]]; then
+    _count=$(cat "$_count_file" 2>/dev/null || echo 0)
+    _count=$((_count + 1))
+  else
+    _count=1
+  fi
+  printf '%d' "$_count" > "$_count_file" || true
+  printf '%d' "$_count"
+}
+
+# Check if session should rotate based on threshold.
+# Args: $1 - threshold (number of turns before rotation, 0 means disabled)
+# If threshold reached, deletes session files and logs rotation.
+ralph_session_maybe_rotate() {
+  local _threshold="${1:-0}"
+  if [[ -z "${RALPH_SESSION_DIR:-}" ]] || [[ "$_threshold" -le 0 ]]; then
+    return 0
+  fi
+  local _count_file="$RALPH_SESSION_DIR/session-turn-count.txt"
+  local _count=0
+  if [[ -f "$_count_file" ]]; then
+    _count=$(cat "$_count_file" 2>/dev/null || echo 0)
+  fi
+  if [[ "$_count" -ge "$_threshold" ]]; then
+    # Rotation triggered
+    rm -f "$RALPH_SESSION_DIR"/session-id.*.txt 2>/dev/null || true
+    rm -f "$_count_file" 2>/dev/null || true
+    ralph_run_plan_log "session rotated after $_count turns to cap cache growth; next invocation starts a fresh CLI session."
   fi
 }
 

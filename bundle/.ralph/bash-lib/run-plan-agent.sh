@@ -35,9 +35,13 @@ prompt_for_agent() {
   esac
 }
 
-# Prebuilt agents live under WORKSPACE/.cursor/agents (or the runtime equivalent)
+# Prebuilt agents live under the resolved runtime root (project, user, or bundled fallback).
 prebuilt_agents_root() {
-  echo "$1/$AGENTS_ROOT_REL"
+  if [[ -n "${AGENTS_ROOT:-}" && -d "${AGENTS_ROOT:-}" ]]; then
+    echo "$AGENTS_ROOT"
+  else
+    echo "$1/$AGENTS_ROOT_REL"
+  fi
 }
 
 # List agent ids via agent-config-tool (enumerates agent directories with config.json)
@@ -129,7 +133,7 @@ prompt_select_prebuilt_agent() {
   echo "" >&2
   local selection_idx
   printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
-  read -r selection_idx </dev/tty 2>/dev/null || selection_idx="1"
+  read -r selection_idx 2>/dev/null || selection_idx="1"
   selection_idx="${selection_idx:-1}"
   if ! [[ "$selection_idx" =~ ^[0-9]+$ ]] || [[ "$selection_idx" -lt 1 ]] || [[ "$selection_idx" -gt ${#ids[@]} ]]; then
     echo "Error: invalid selection." >&2
@@ -169,7 +173,7 @@ prompt_agent_source_mode() {
 
   local mode_choice
   printf '%s' "${C_Y}${C_BOLD}Selection${C_RST}${C_DIM} [1]${C_RST}: " >&2
-  read -r mode_choice </dev/tty 2>/dev/null || mode_choice="1"
+  read -r mode_choice 2>/dev/null || mode_choice="1"
   mode_choice="${mode_choice:-1}"
   case "$mode_choice" in
     1)

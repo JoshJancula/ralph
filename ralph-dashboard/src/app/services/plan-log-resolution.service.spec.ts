@@ -31,6 +31,27 @@ describe('PlanLogResolutionService', () => {
     expect(service.resolvePlanDirectory('')).toBeNull();
   });
 
+  it('resolveLatestLogTarget passes workspaceRoot on log listings', () => {
+    const service = TestBed.inject(PlanLogResolutionService);
+    const ws = '/tmp/proj/.ralph-workspace';
+
+    service.resolveLatestLogTarget('PLAN2', ws).subscribe();
+
+    const req = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'PLAN2' &&
+        r.params.get('workspaceRoot') === ws,
+    );
+    req.flush({
+      root: 'logs',
+      path: 'PLAN2',
+      parent: null,
+      entries: [],
+    });
+  });
+
   it('resolveLatestLogTarget returns the newest log file at the root', () => {
     const service = TestBed.inject(PlanLogResolutionService);
     let resolved: { directory: string | null; file: string | null } | undefined;

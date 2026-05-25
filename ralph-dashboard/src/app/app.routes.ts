@@ -18,6 +18,41 @@ import { NavService } from './services/nav.service';
       @case ('usage') {
         <ralph-usage-hub></ralph-usage-hub>
       }
+      @case ('browse') {
+        <div class="browse-state">
+          @if (activeRoot(); as root) {
+            @switch (root) {
+              @case ('docs') {
+                <p class="browse-title">Docs</p>
+                <p class="browse-body">
+                  Choose a file in the sidebar under Docs for this workspace, or expand another project to browse its
+                  documentation tree.
+                </p>
+              }
+              @case ('logs') {
+                <p class="browse-title">Logs</p>
+                <p class="browse-body">Expand Logs in the sidebar and pick a log file to open it here.</p>
+              }
+              @case ('artifacts') {
+                <p class="browse-title">Artifacts</p>
+                <p class="browse-body">Expand Artifacts in the sidebar and select a file to preview it here.</p>
+              }
+              @case ('sessions') {
+                <p class="browse-title">Sessions</p>
+                <p class="browse-body">Expand Sessions in the sidebar and open a file to view it here.</p>
+              }
+              @case ('orchestration-plans') {
+                <p class="browse-title">Orchestration plans</p>
+                <p class="browse-body">Expand Orchestration plans in the sidebar and pick a plan file.</p>
+              }
+              @default {
+                <p class="browse-title">Browse</p>
+                <p class="browse-body">Pick a file from the sidebar to inspect it here.</p>
+              }
+            }
+          }
+        </div>
+      }
       @case ('file') {
         @if (activeRoot(); as root) {
           @if (activeFile(); as file) {
@@ -62,13 +97,44 @@ import { NavService } from './services/nav.service';
       border-radius: 8px;
       border: 1px solid var(--border);
     }
+
+    .browse-state {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      gap: 0.75rem;
+      max-width: 32rem;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+      text-align: center;
+      background: var(--surface);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .browse-title {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .browse-body {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.45;
+      color: var(--text-muted);
+    }
   `,
 })
 export class WorkspaceViewComponent {
   private readonly nav = inject(NavService);
   readonly activeRoot = this.nav.activeRoot;
   readonly activeFile = this.nav.activeFile;
-  readonly viewKind = computed<'plan' | 'usage' | 'file' | 'log' | 'empty'>(() => {
+  readonly viewKind = computed<'plan' | 'usage' | 'file' | 'log' | 'browse' | 'empty'>(() => {
     const root = this.activeRoot();
     const file = this.activeFile();
 
@@ -81,7 +147,19 @@ export class WorkspaceViewComponent {
     if (root === 'usage') {
       return 'usage';
     }
-    return root === 'plans' ? 'plan' : 'empty';
+    if (root === 'plans') {
+      return 'plan';
+    }
+    if (
+      root === 'docs' ||
+      root === 'logs' ||
+      root === 'artifacts' ||
+      root === 'sessions' ||
+      root === 'orchestration-plans'
+    ) {
+      return 'browse';
+    }
+    return 'empty';
   });
 }
 

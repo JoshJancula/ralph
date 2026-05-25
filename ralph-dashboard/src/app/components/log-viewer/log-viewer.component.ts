@@ -80,7 +80,15 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
     this.error = null;
     this.cdr.markForCheck();
     this.subscription.add(
-      this.apiService.fetchFile(this.root, this.filePath, offset).subscribe({
+      this.apiService
+        .fetchFile(
+          this.root,
+          this.filePath,
+          offset,
+          this.nav.activeWorkspaceRoot() ?? undefined,
+          this.nav.activeProjectRoot() ?? undefined,
+        )
+        .subscribe({
         next: (response) => {
           this.content = response.content;
           this.nextOffset = response.nextOffset;
@@ -128,7 +136,15 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   fetchNewContent(forceScroll = false): void {
     if (!this.root || !this.filePath) return;
     this.subscription.add(
-      this.apiService.fetchFile(this.root, this.filePath, this.nextOffset).subscribe({
+      this.apiService
+        .fetchFile(
+          this.root,
+          this.filePath,
+          this.nextOffset,
+          this.nav.activeWorkspaceRoot() ?? undefined,
+          this.nav.activeProjectRoot() ?? undefined,
+        )
+        .subscribe({
         next: (response) => {
           const hasContent = Boolean(response.content);
           if (hasContent) {
@@ -321,6 +337,12 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   viewPlanFile(): void {
     const dir = this.planDirectory;
     if (!dir) return;
-    this.nav.navigate('plans', dir, `${dir}.md`);
+    this.nav.navigate(
+      'plans',
+      dir,
+      `${dir}.md`,
+      this.nav.activeWorkspaceRoot(),
+      this.nav.activeProjectRoot(),
+    );
   }
 }

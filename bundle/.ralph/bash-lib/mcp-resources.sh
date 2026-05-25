@@ -144,6 +144,12 @@ generate_agent_catalog_markdown() {
     if [[ ! -d "$runtime_dir" ]]; then
       continue
     fi
+    # MCP server must stay explicitly scoped to the workspace tier and never silently
+    # fall back to global runtime tiers (~/.claude/, ~/.cursor/, etc). This ensures
+    # that agent availability is transparent and deterministic: if an agent is not
+    # present in the workspace, the MCP server will not serve it, even if a global
+    # fallback would make it available. This prevents subtle differences in tool
+    # behavior between local and global install contexts.
     local section=""
     local agent_dir
     for agent_dir in "$runtime_dir"/*; do

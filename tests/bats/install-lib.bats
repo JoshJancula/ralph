@@ -22,6 +22,28 @@ setup() {
   set -e
 }
 
+@test "flag parsing supports global install flags" {
+  install_ops_parse_flags --global --force-global-runtime
+  [ "$?" -eq 0 ]
+  [ "$GLOBAL_INSTALL" -eq 1 ]
+  [ "$FORCE_GLOBAL_RUNTIME" -eq 1 ]
+  [ "$INSTALL_TARGET_ARG" = "" ]
+}
+
+@test "global install rejects positional target" {
+  set +e
+  install_ops_parse_flags --global /tmp/project
+  [ "$?" -ne 0 ]
+  set -e
+}
+
+@test "force global runtime requires global install" {
+  set +e
+  install_ops_parse_flags --force-global-runtime
+  [ "$?" -ne 0 ]
+  set -e
+}
+
 @test "cleanup flag is vendor removal only" {
   install_ops_parse_flags --cleanup
   [ "$?" -eq 0 ]
@@ -182,6 +204,20 @@ setup() {
   rm -rf "$workspace"
 }
 
+@test "global target resolves to RALPH_HOME and creates it outside dry-run" {
+  workspace="$(mktemp -d)"
+  RALPH_HOME="$workspace/home/.ralph"
+  export RALPH_HOME
+  GLOBAL_INSTALL=1
+  DRY_RUN=0
+  output="$(install_ops_resolve_target "")"
+  [ "$?" -eq 0 ]
+  [ "$output" = "$RALPH_HOME" ]
+  [ -d "$RALPH_HOME" ]
+  rm -rf "$workspace"
+  unset RALPH_HOME
+}
+
 @test "stack helper toggles when selections change" {
   set +e
   install_ops_has_any_stack
@@ -236,6 +272,66 @@ setup() {
   BUNDLE=""
   TARGET=""
   unset RALPH_INSTALL_SOURCE_ROOT
+}
+
+@test "global copy plan uses install root bundle and user runtime dirs" {
+  bundle_dir="$(mktemp -d)"
+  target_dir="$(mktemp -d)"
+  home_dir="$(mktemp -d)"
+  mkdir -p "$bundle_dir/.ralph" "$bundle_dir/.cursor" "$bundle_dir/.claude" "$bundle_dir/.codex" "$bundle_dir/.opencode"
+
+  BUNDLE="$bundle_dir"
+  TARGET="$target_dir"
+  HOME="$home_dir"
+  export HOME
+  GLOBAL_INSTALL=1
+  INSTALL_SHARED=1
+  INSTALL_CURSOR=1
+  INSTALL_CODEX=1
+  INSTALL_CLAUDE=1
+  INSTALL_OPENCODE=1
+
+  run install_ops_build_copy_plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$bundle_dir|$target_dir/bundle|global-bundle"* ]]
+  [[ "$output" == *"$bundle_dir/.cursor|$home_dir/.cursor|global-cursor"* ]]
+  [[ "$output" == *"$bundle_dir/.claude|$home_dir/.claude|global-claude"* ]]
+  [[ "$output" == *"$bundle_dir/.codex|$home_dir/.codex|global-codex"* ]]
+  [[ "$output" == *"$bundle_dir/.opencode|$home_dir/.opencode|global-opencode"* ]]
+  [[ "$output" != *"$target_dir/.cursor"* ]]
+  [[ "$output" != *"$target_dir/.claude"* ]]
+
+  rm -rf "$bundle_dir" "$target_dir" "$home_dir"
+  BUNDLE=""
+  TARGET=""
+}
+
+@test "global copy plan skips existing user runtime unless forced" {
+  bundle_dir="$(mktemp -d)"
+  target_dir="$(mktemp -d)"
+  home_dir="$(mktemp -d)"
+  mkdir -p "$bundle_dir/.cursor" "$home_dir/.cursor"
+
+  BUNDLE="$bundle_dir"
+  TARGET="$target_dir"
+  HOME="$home_dir"
+  export HOME
+  GLOBAL_INSTALL=1
+  INSTALL_CURSOR=1
+  FORCE_GLOBAL_RUNTIME=0
+
+  run install_ops_build_copy_plan
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"$bundle_dir/.cursor|$home_dir/.cursor|global-cursor"* ]]
+
+  FORCE_GLOBAL_RUNTIME=1
+  run install_ops_build_copy_plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$bundle_dir/.cursor|$home_dir/.cursor|global-cursor"* ]]
+
+  rm -rf "$bundle_dir" "$target_dir" "$home_dir"
+  BUNDLE=""
+  TARGET=""
 }
 
 @test "copy tree skips missing source directories" {

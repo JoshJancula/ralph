@@ -44,6 +44,7 @@ setup() {
   unset RALPH_RUN_PLAN_RESET_COMMAND_USED
   unset PREBUILT_AGENT
   unset CLAUDE_PLAN_MINIMAL_DISABLE_MCP
+  unset CURSOR_PLAN_OUTPUT_FORMAT
 }
 
 teardown() {
@@ -598,6 +599,73 @@ EOF
   [ "$(cat "$SESSION_ID_FILE" | tr -d '\n')" = "cursor-sid-9" ]
 }
 
+@test "cursor usage capture defaults to stream-json output format" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON demux"
+
+  local record="$TEST_TMPDIR/cursor-stream-format.args"
+  cat <<EOF >"$BIN_DIR/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+echo '{"session_id":"cursor-sid-stream","content":"ok"}'
+exit 0
+EOF
+  chmod +x "$BIN_DIR/cursor-agent"
+
+  export SESSION_ID_FILE="$TEST_TMPDIR/cursor-sid-stream.txt"
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=1
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--output-format" "$record"
+  grep -Fxq -- "stream-json" "$record"
+}
+
+@test "cursor usage capture honors CURSOR_PLAN_OUTPUT_FORMAT json fallback" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON demux"
+
+  local record="$TEST_TMPDIR/cursor-json-format.args"
+  cat <<EOF >"$BIN_DIR/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+echo '{"session_id":"cursor-sid-json","content":"ok"}'
+exit 0
+EOF
+  chmod +x "$BIN_DIR/cursor-agent"
+
+  export SESSION_ID_FILE="$TEST_TMPDIR/cursor-sid-json.txt"
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=1
+  export CURSOR_PLAN_OUTPUT_FORMAT=json
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--output-format" "$record"
+  grep -Fxq -- "json" "$record"
+  ! grep -Fxq -- "stream-json" "$record"
+}
+
+@test "cursor usage capture rejects invalid CURSOR_PLAN_OUTPUT_FORMAT" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON demux"
+
+  local record="$TEST_TMPDIR/cursor-invalid-format.args"
+  write_stub_script "cursor-agent" "$record"
+
+  export RALPH_PLAN_CAPTURE_USAGE=1
+  export CURSOR_PLAN_OUTPUT_FORMAT=xml
+  PROMPT="p"
+  export PROMPT
+
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Error: CURSOR_PLAN_OUTPUT_FORMAT must be one of json or stream-json."* ]]
+  [ ! -e "$record" ]
+}
+
 @test "cursor usage capture writes USAGE_FILE even without CLI resume" {
   [ -x "$(command -v python3)" ] || skip "python3 required for JSON demux"
   cat <<'EOF' >"$BIN_DIR/cursor-agent"
@@ -1127,4 +1195,50 @@ EOF
   [[ "$captured" == *"--timeout"* ]]
   [[ "$captured" == *"30"* ]]
   [[ "$captured" == *"argv-prompt"* ]]
+}
+
+@test "codex-exec-prompt adds --add-dir when global runtime fallback is active" {
+  local record="$TEST_TMPDIR/codex.args"
+  cat <<EOF >"$BIN_DIR/codex"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local global_runtime_root="$TEST_TMPDIR/global-codex"
+  mkdir -p "$global_runtime_root"
+
+  local prompt_file="$TEST_TMPDIR/prompt.txt"
+  echo "prompt-body" >"$prompt_file"
+
+  export CODEX_PLAN_CLI=codex
+  export CODEX_GLOBAL_RUNTIME_ROOT="$global_runtime_root"
+  export RALPH_PLAN_CLI_RESUME=0
+
+  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--add-dir" "$record"
+  grep -Fxq -- "$global_runtime_root" "$record"
+}
+
+@test "codex-exec-prompt omits --add-dir when global runtime fallback is not active" {
+  local record="$TEST_TMPDIR/codex-no-global.args"
+  cat <<EOF >"$BIN_DIR/codex"
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+exit 0
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local prompt_file="$TEST_TMPDIR/prompt-no-global.txt"
+  echo "prompt-body" >"$prompt_file"
+
+  export CODEX_PLAN_CLI=codex
+  unset CODEX_GLOBAL_RUNTIME_ROOT
+  export RALPH_PLAN_CLI_RESUME=0
+
+  run bash "$REPO_ROOT/bundle/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
+  [ "$status" -eq 0 ]
+  ! grep -q "CODEX_GLOBAL_RUNTIME_ROOT" "$record" || true
 }

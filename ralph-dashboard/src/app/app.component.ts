@@ -1,5 +1,5 @@
 import { isPlatformBrowser } from '@angular/common';
-import { Component, OnInit, PLATFORM_ID, inject, signal } from '@angular/core';
+import { Component, OnInit, PLATFORM_ID, computed, inject, signal } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import {
   IonApp,
@@ -15,8 +15,15 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline } from 'ionicons/icons';
+import {
+  menuOutline,
+  moonOutline,
+  refreshOutline,
+  statsChartOutline,
+  sunnyOutline,
+} from 'ionicons/icons';
 import { WorkspaceSidebarComponent } from './components/workspace-sidebar/workspace-sidebar.component';
+import { WorkspaceSwitcherComponent } from './components/workspace-switcher/workspace-switcher.component';
 import { NavService } from './services/nav.service';
 
 @Component({
@@ -24,6 +31,7 @@ import { NavService } from './services/nav.service';
   standalone: true,
   imports: [
     WorkspaceSidebarComponent,
+    WorkspaceSwitcherComponent,
     RouterOutlet,
     IonApp,
     IonSplitPane,
@@ -42,12 +50,23 @@ import { NavService } from './services/nav.service';
 })
 export class AppComponent implements OnInit {
   readonly nav = inject(NavService);
+  /** Shows whether the main pane is Usage (metrics) vs file/plan explorer. */
+  readonly headerTitle = computed(() =>
+    this.nav.activeRoot() === 'usage' ? 'Usage' : 'Workspace Explorer',
+  );
+  readonly isUsageRoute = computed(() => this.nav.activeRoot() === 'usage');
   readonly isLightTheme = signal(false);
   private readonly platformId = inject(PLATFORM_ID);
   private static readonly THEME_STORAGE_KEY = 'ralph-dashboard-theme';
 
   constructor() {
-    addIcons({ menuOutline, refreshOutline, statsChartOutline, sunnyOutline, moonOutline });
+    addIcons({
+      menuOutline,
+      refreshOutline,
+      statsChartOutline,
+      sunnyOutline,
+      moonOutline,
+    });
   }
 
   ngOnInit(): void {

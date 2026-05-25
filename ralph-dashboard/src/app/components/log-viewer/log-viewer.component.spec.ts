@@ -377,7 +377,7 @@ describe('LogViewerComponent', () => {
 
     fixture.componentInstance.viewPlanFile();
 
-    expect(spy).toHaveBeenCalledWith('plans', 'PLAN2', 'PLAN2.md');
+    expect(spy).toHaveBeenCalledWith('plans', 'PLAN2', 'PLAN2.md', null, null);
   }));
 
   it('togglePrettyMode switches between raw and pretty view', fakeAsync(() => {

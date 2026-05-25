@@ -51,6 +51,7 @@ describe('NavService', () => {
     expect(service.activeRoot()).toBe('plans');
     expect(service.activePath()).toBeNull();
     expect(service.activeFile()).toBeNull();
+    expect(service.activeProjectRoot()).toBeNull();
     expect(service.mode()).toBe('hub');
   });
 
@@ -160,6 +161,19 @@ describe('NavService', () => {
     service.navigate('   ');
 
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('navigate with projectRoot updates URL and activeProjectRoot signal', async () => {
+    const service = TestBed.inject(NavService);
+    const navEnd = firstValueFrom(
+      router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
+    );
+
+    service.navigate('plans', 'PLAN2', 'notes.md', null, '/tmp/other-project');
+    await navEnd;
+
+    expect(service.activeProjectRoot()).toBe('/tmp/other-project');
+    expect(router.parseUrl(router.url).queryParams['projectRoot']).toBe('/tmp/other-project');
   });
 
   it('decodeSegment returns original segment when decodeURIComponent fails', () => {

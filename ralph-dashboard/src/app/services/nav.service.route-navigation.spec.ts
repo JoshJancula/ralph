@@ -91,6 +91,20 @@ describe('NavService - Route-Driven Navigation', () => {
       expect(router.parseUrl(router.url).queryParams['path']).toBe('PLAN2');
       expect(router.parseUrl(router.url).queryParams['file']).toBe('runner.log');
     });
+    it('navigate with workspaceRoot and projectRoot includes both query params', async () => {
+      const navEnd = firstValueFrom(
+        router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
+      );
+
+      service.navigate('logs', 'd1', 'a.log', '/ws/root', '/proj/root');
+      await navEnd;
+
+      const qp = router.parseUrl(router.url).queryParams;
+      expect(qp['workspaceRoot']).toBe('/ws/root');
+      expect(qp['projectRoot']).toBe('/proj/root');
+      expect(service.activeWorkspaceRoot()).toBe('/ws/root');
+      expect(service.activeProjectRoot()).toBe('/proj/root');
+    });
   });
 
   describe('Direct file links', () => {
@@ -138,6 +152,15 @@ describe('NavService - Route-Driven Navigation', () => {
   });
 
   describe('Refresh/reload state restoration', () => {
+    it('parses projectRoot from direct URL navigation', async () => {
+      await router.navigateByUrl('/plans?path=P1&file=n.md&projectRoot=/abs/project');
+
+      expect(service.activeRoot()).toBe('plans');
+      expect(service.activePath()).toBe('P1');
+      expect(service.activeFile()).toBe('n.md');
+      expect(service.activeProjectRoot()).toBe('/abs/project');
+    });
+
     it('refresh re-parses the current URL after navigation completes', async () => {
       const navEnd = firstValueFrom(
         router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),

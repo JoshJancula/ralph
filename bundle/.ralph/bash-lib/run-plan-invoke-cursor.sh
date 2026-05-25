@@ -56,7 +56,16 @@ ralph_run_plan_invoke_cursor() {
     run_plan_invoke_cursor_session_new_args \
     run_plan_invoke_cursor_bare_resume_args \
     run_plan_invoke_cursor_bare_resume_warn
-  run_plan_invoke_common_add_cli_resume_flags args --output-format json
+
+  local cursor_output_format="${CURSOR_PLAN_OUTPUT_FORMAT:-stream-json}"
+  case "$cursor_output_format" in
+    json|stream-json) ;;
+    *)
+      echo "Error: CURSOR_PLAN_OUTPUT_FORMAT must be one of json or stream-json." >&2
+      return 1
+      ;;
+  esac
+  run_plan_invoke_common_add_cli_resume_flags args --output-format "$cursor_output_format"
   args+=("$PROMPT")
 
   run_plan_invoke_cursor_cli() {

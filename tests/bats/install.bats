@@ -7,7 +7,86 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   run bash "$REPO_ROOT/install.sh" --help "$target_dir"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage:"* ]]
+  [[ "$output" == *"--global"* ]]
   rm -rf "$target_dir"
+}
+
+@test "install.sh rejects global install with target dir" {
+  target_dir="$(mktemp -d)"
+  run bash "$REPO_ROOT/install.sh" --global "$target_dir"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--global cannot be combined with TARGET_DIR"* ]]
+  rm -rf "$target_dir"
+}
+
+@test "install.sh global dry-run lists global destinations" {
+  temp_home="$(mktemp -d)"
+  ralph_home="$temp_home/global-ralph"
+  xdg_config="$temp_home/config"
+  xdg_state="$temp_home/state"
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" XDG_CONFIG_HOME="$xdg_config" XDG_STATE_HOME="$xdg_state" \
+    bash "$REPO_ROOT/install.sh" --global -n --silent
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$ralph_home"* ]]
+  [[ "$output" == *"$ralph_home/bundle"* ]]
+  [[ "$output" == *"$ralph_home/ralph-dashboard"* ]]
+  [[ "$output" == *"$xdg_config/ralph"* ]]
+  [[ "$output" == *"$xdg_state/ralph"* ]]
+  [[ "$output" == *"$temp_home/.local/bin"* ]]
+  [[ "$output" == *"$temp_home/.local/bin/ralph"* ]]
+  [[ "$output" == *"$temp_home/.cursor"* ]]
+  [[ "$output" == *"$temp_home/.claude"* ]]
+  [[ "$output" == *"$temp_home/.codex"* ]]
+  [[ "$output" == *"$temp_home/.opencode"* ]]
+  [[ "$output" != *"$PWD/.cursor"* ]]
+  [ ! -e "$ralph_home" ]
+
+  rm -rf "$temp_home"
+}
+
+@test "install.sh global install writes idempotent shim that dispatches" {
+  temp_home="$(mktemp -d)"
+  ralph_home="$temp_home/global-ralph"
+  xdg_config="$temp_home/config"
+  xdg_state="$temp_home/state"
+  shim="$temp_home/.local/bin/ralph"
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" XDG_CONFIG_HOME="$xdg_config" XDG_STATE_HOME="$xdg_state" \
+    bash "$REPO_ROOT/install.sh" --global --silent --no-dashboard
+
+  [ "$status" -eq 0 ]
+  [ -x "$shim" ]
+  [[ "$output" == *"~/.local/bin is not on PATH"* ]]
+  [ -f "$xdg_config/ralph/path-hint-shown" ]
+
+  cp "$shim" "$temp_home/first-shim"
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" "$shim" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: ralph <command>"* ]]
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" "$shim" run-plan --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: .ralph/run-plan.sh"* ]]
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" "$shim" install --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--global"* ]]
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" XDG_CONFIG_HOME="$xdg_config" "$shim" workspaces list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No workspaces registered."* ]]
+
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" XDG_CONFIG_HOME="$xdg_config" XDG_STATE_HOME="$xdg_state" \
+    bash "$REPO_ROOT/install.sh" --global --silent --no-dashboard
+
+  [ "$status" -eq 0 ]
+  cmp "$temp_home/first-shim" "$shim"
+  [[ "$output" != *"~/.local/bin is not on PATH"* ]]
+
+  rm -rf "$temp_home"
 }
 
 @test "install.sh removes subtree-style vendor after silent install" {

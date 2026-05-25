@@ -1,7 +1,7 @@
 {
   "name": "architect",
   "model": "anthropic/claude-sonnet-4-6",
-  "description": "Turns research into system and module design, outlines boundaries, flows, and risks, and aligns other agents on execution plans.",
+  "description": "Turns research into system and module design, outlines boundaries, flows, and risks, and aligns other agents on execution plans. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
   "rules": [".opencode/rules/no-emoji.md"],
   "skills": [".opencode/skills/repo-context/SKILL.md"],
   "output_artifacts": [

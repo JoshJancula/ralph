@@ -4,19 +4,42 @@ import {
   writeResponseToNodeResponse,
 } from '@angular/ssr/node';
 import express, { type Request, type Response } from 'express';
-import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerDashboardApi } from './server/dashboard-api';
 
-const serverDir = dirname(fileURLToPath(import.meta.url));
-const browserDistFolder = join(serverDir, '../browser');
+function resolveBrowserDistFolder(): string {
+  const envDir = process.env['RALPH_DASHBOARD_BROWSER_DIST']?.trim();
+  if (envDir) {
+    return resolve(envDir);
+  }
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const fromModule = resolve(moduleDir, '..', 'browser');
+  if (existsSync(join(fromModule, 'index.csr.html'))) {
+    return fromModule;
+  }
+  const fromProject = resolve(process.cwd(), 'dist', 'ralph-dashboard', 'browser');
+  if (existsSync(join(fromProject, 'index.csr.html'))) {
+    return fromProject;
+  }
+  return fromModule;
+}
+
+const browserDistFolder = resolveBrowserDistFolder();
+// Express uses `send`; absolute paths containing a segment like `$HOME/.ralph` are classified as dotfiles unless allowed.
+const csrShellSendFileOptions = { dotfiles: 'allow' as const };
 const shouldServeSpaShell = (pathname: string): boolean => !/^\/api(?:\/|$)/.test(pathname);
 type ErrorWithMessage = { message?: string } | null | undefined;
 type SendFileError = { message?: string; code?: string; status?: number; statusCode?: number } | null | undefined;
 
 export const app = express();
 registerDashboardApi(app);
+
+// Serve `/` before express.static: otherwise serve-static treats `/` as the browser root
+// directory; with `redirect: false` it responds 404 for directory access and the CSR shell
+// never runs (see serve-static `createNotFoundDirectoryListener`).
 
 let angularApp: AngularNodeAppEngine | null = null;
 
@@ -39,7 +62,15 @@ export function logErrorMessage(prefix: string, error: ErrorWithMessage): void {
 }
 
 function isSendFileNotFoundError(error: SendFileError): boolean {
-  return error?.code === 'ENOENT' || error?.status === 404 || error?.statusCode === 404;
+  if (!error) {
+    return false;
+  }
+  if (error.code === 'ENOENT' || error.status === 404 || error.statusCode === 404) {
+    return true;
+  }
+  // Express 5 / send may surface missing files as NotFoundError instead of ENOENT.
+  const named = error as { name?: string };
+  return named.name === 'NotFoundError';
 }
 
 export function startDashboardServer(
@@ -48,6 +79,7 @@ export function startDashboardServer(
 ) {
   const server = app.listen(port, host, () => {
     console.log(`Node Express server listening on http://${host}:${port}`);
+    console.log(`Dashboard CSR bundle directory: ${browserDistFolder}`);
   });
 
   server.on('error', (error: NodeJS.ErrnoException) => {
@@ -66,6 +98,24 @@ export function startDashboardServer(
   return server;
 }
 
+app.get('/', (req, res) => {
+  res.sendFile(join(browserDistFolder, 'index.csr.html'), csrShellSendFileOptions, (err) => {
+    if (!err) {
+      return;
+    }
+
+    if (isSendFileNotFoundError(err as SendFileError)) {
+      res.status(404).send('Not found');
+      return;
+    }
+
+    logErrorMessage('Error serving index:', err as ErrorWithMessage);
+    if (!res.headersSent) {
+      res.status(500).send('Internal server error');
+    }
+  });
+});
+
 app.use(
   express.static(browserDistFolder, {
     maxAge: '1d',
@@ -76,11 +126,6 @@ app.use(
     },
   }),
 );
-
-// Serve index.csr.html for root path
-app.get('/', (req, res) => {
-  res.sendFile(join(browserDistFolder, 'index.csr.html'));
-});
 
 app.use((req, res, next) => {
   try {
@@ -112,7 +157,7 @@ export function handleSpaFallback(req: Request, res: Response): void {
 
   const indexPath = join(browserDistFolder, 'index.csr.html');
   res.status(200);
-  res.sendFile(indexPath, (err) => {
+  res.sendFile(indexPath, csrShellSendFileOptions, (err) => {
     if (!err) {
       return;
     }

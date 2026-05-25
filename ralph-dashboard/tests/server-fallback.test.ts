@@ -57,6 +57,7 @@ describe('server fallback routing', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.sentFile).toContain('index.csr.html');
+    expect(response.sendFileOptions).toEqual({ dotfiles: 'allow' });
   });
 
   it('logs only the error message for handled server errors', () => {
@@ -144,6 +145,7 @@ function createMockResponse(sendFileError?: { code?: string; message?: string })
   return {
     body: '',
     sentFile: '',
+    sendFileOptions: undefined as Record<string, unknown> | undefined,
     statusCode: 0,
     status(code: number) {
       this.statusCode = code;
@@ -153,9 +155,17 @@ function createMockResponse(sendFileError?: { code?: string; message?: string })
       this.body = body;
       return this;
     },
-    sendFile(filePath: string, callback?: (error?: unknown) => void) {
+    sendFile(filePath: string, optionsOrCallback?: unknown, callback?: (error?: unknown) => void) {
       this.sentFile = filePath;
-      callback?.(sendFileError);
+      const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
+      if (
+        typeof optionsOrCallback === 'object' &&
+        optionsOrCallback !== null &&
+        typeof cb === 'function'
+      ) {
+        this.sendFileOptions = optionsOrCallback as Record<string, unknown>;
+      }
+      cb?.(sendFileError);
       return this;
     },
   };

@@ -1,9 +1,12 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 import { PlanHubComponent } from './plan-hub.component';
+import type { WorkspaceRegistry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 
 const testRoutes = [
   { path: '', redirectTo: 'plans', pathMatch: 'full' },
@@ -15,10 +18,13 @@ function requestPath(url: string): string {
   return q === -1 ? url : url.slice(0, q);
 }
 
-function flushMetricsSummary(httpMock: HttpTestingController, body = defaultMetricsSummary): void {
+function flushMetricsSummary(httpMock: HttpTestingController, body?: unknown): void {
   const req = httpMock.expectOne('/api/metrics/summary');
-  req.flush(body);
+  req.flush(body !== undefined ? body : defaultMetricsSummary);
 }
+
+const mockWorkspaceRoot = '/mock/proj/.ralph-workspace';
+const mockProjectRoot = '/mock/proj';
 
 const defaultMetricsSummary = {
   overall: {
@@ -33,9 +39,11 @@ const defaultMetricsSummary = {
   },
   plans: [
     {
-      path: '/logs/plan-1/plan-usage-summary.json',
+      path: `${mockWorkspaceRoot}/logs/plan-1/plan-usage-summary.json`,
       plan_key: 'plan-1',
       artifact_ns: 'plan-1',
+      workspace_root: mockWorkspaceRoot,
+      project_root: mockProjectRoot,
       elapsed_seconds: 5,
       input_tokens: 10,
       output_tokens: 20,
@@ -47,9 +55,11 @@ const defaultMetricsSummary = {
   ],
   orchestrations: [
     {
-      path: '/logs/orch-1/orchestration-usage-summary.json',
+      path: `${mockWorkspaceRoot}/logs/orch-1/orchestration-usage-summary.json`,
       plan_key: 'orch-1',
       artifact_ns: 'orch-1',
+      workspace_root: mockWorkspaceRoot,
+      project_root: mockProjectRoot,
       stage_id: 'build',
       elapsed_seconds: 8.5,
       input_tokens: 30,
@@ -58,6 +68,56 @@ const defaultMetricsSummary = {
       cache_read_input_tokens: 3,
       max_turn_total_tokens: 0,
       cache_hit_ratio: 0,
+    },
+  ],
+  projects: [
+    {
+      workspace_root: mockWorkspaceRoot,
+      project_root: mockProjectRoot,
+      label: 'proj',
+      overall: {
+        input_tokens: 1234,
+        output_tokens: 5678,
+        cache_creation_input_tokens: 90,
+        cache_read_input_tokens: 12,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 45.6,
+        count: 2,
+      },
+      plans: [
+        {
+          path: `${mockWorkspaceRoot}/logs/plan-1/plan-usage-summary.json`,
+          plan_key: 'plan-1',
+          artifact_ns: 'plan-1',
+          workspace_root: mockWorkspaceRoot,
+          project_root: mockProjectRoot,
+          elapsed_seconds: 5,
+          input_tokens: 10,
+          output_tokens: 20,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 1,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+        },
+      ],
+      orchestrations: [
+        {
+          path: `${mockWorkspaceRoot}/logs/orch-1/orchestration-usage-summary.json`,
+          plan_key: 'orch-1',
+          artifact_ns: 'orch-1',
+          workspace_root: mockWorkspaceRoot,
+          project_root: mockProjectRoot,
+          stage_id: 'build',
+          elapsed_seconds: 8.5,
+          input_tokens: 30,
+          output_tokens: 40,
+          cache_creation_input_tokens: 2,
+          cache_read_input_tokens: 3,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+        },
+      ],
     },
   ],
 };
@@ -75,9 +135,11 @@ const metricsWithNewFields = {
   },
   plans: [
     {
-      path: '/logs/plan-x/plan-usage-summary.json',
+      path: `${mockWorkspaceRoot}/logs/plan-x/plan-usage-summary.json`,
       plan_key: 'plan-x',
       artifact_ns: 'plan-x',
+      workspace_root: mockWorkspaceRoot,
+      project_root: mockProjectRoot,
       elapsed_seconds: 12,
       input_tokens: 100,
       output_tokens: 20,
@@ -88,6 +150,40 @@ const metricsWithNewFields = {
     },
   ],
   orchestrations: [],
+  projects: [
+    {
+      workspace_root: mockWorkspaceRoot,
+      project_root: mockProjectRoot,
+      label: 'proj',
+      overall: {
+        input_tokens: 100,
+        output_tokens: 20,
+        cache_creation_input_tokens: 10,
+        cache_read_input_tokens: 40,
+        max_turn_total_tokens: 55000,
+        cache_hit_ratio: 0.267,
+        elapsed_seconds: 12,
+        count: 1,
+      },
+      plans: [
+        {
+          path: `${mockWorkspaceRoot}/logs/plan-x/plan-usage-summary.json`,
+          plan_key: 'plan-x',
+          artifact_ns: 'plan-x',
+          workspace_root: mockWorkspaceRoot,
+          project_root: mockProjectRoot,
+          elapsed_seconds: 12,
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_creation_input_tokens: 10,
+          cache_read_input_tokens: 40,
+          max_turn_total_tokens: 55000,
+          cache_hit_ratio: 0.267,
+        },
+      ],
+      orchestrations: [],
+    },
+  ],
 };
 
 describe('PlanHubComponent', () => {
@@ -174,7 +270,7 @@ describe('PlanHubComponent', () => {
 
     const item = fixture.componentInstance.items[0];
     fixture.componentInstance.openPlan(item);
-    expect(spy).toHaveBeenCalledWith('plans', '', 'PLAN2.md');
+    expect(spy).toHaveBeenCalledWith('plans', '', 'PLAN2.md', null, null);
   });
 
   it('openUsage delegates to NavService.navigate', () => {
@@ -207,8 +303,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     // Flush the async API call that viewLogs makes
     tick();
@@ -221,7 +317,7 @@ describe('PlanHubComponent', () => {
     });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null);
+    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
   }));
 
   it('viewLogs navigates directly when log file is found', fakeAsync(() => {
@@ -240,8 +336,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     tick();
     const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
@@ -255,7 +351,7 @@ describe('PlanHubComponent', () => {
     });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', null, 'PLAN2/output.log');
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/output.log', null);
   }));
 
   it('viewLogs looks in subdirectories when no logs at root', fakeAsync(() => {
@@ -274,8 +370,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     tick();
     const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
@@ -301,7 +397,7 @@ describe('PlanHubComponent', () => {
     });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', null, 'PLAN2/run-001/output.log');
+    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/run-001/output.log', null);
   }));
 
   it('viewLogs navigates to directory when subdirectory has no logs', fakeAsync(() => {
@@ -320,8 +416,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     tick();
     const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
@@ -345,7 +441,7 @@ describe('PlanHubComponent', () => {
     });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', null, null);
+    expect(spy).toHaveBeenCalledWith('logs', null, null, null);
   }));
 
   it('viewLogs handles error when subdirectory fetch fails', fakeAsync(() => {
@@ -364,8 +460,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     tick();
     const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
@@ -384,7 +480,7 @@ describe('PlanHubComponent', () => {
     subdirReq.flush('error', { status: 500, statusText: 'Error' });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null);
+    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
   }));
 
   it('viewLogs navigates to directory when listing has no log files or subdirs', fakeAsync(() => {
@@ -403,8 +499,8 @@ describe('PlanHubComponent', () => {
     });
     flushMetricsSummary(httpMock);
 
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.viewLogs(item);
+    const row = fixture.componentInstance.planCards[0];
+    fixture.componentInstance.viewLogs(row);
 
     tick();
     const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
@@ -419,7 +515,7 @@ describe('PlanHubComponent', () => {
     tick();
 
     // No log files and no subdirectories, so should navigate to dir
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null);
+    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
   }));
 
   it('renders metrics summary and fallback states', () => {
@@ -523,4 +619,248 @@ describe('PlanHubComponent', () => {
     expect(fixture.componentInstance.metricsError).toContain('metrics unavailable');
     expect(fixture.componentInstance.items.map((item) => item.name)).toEqual(['PLAN2']);
   });
+});
+
+describe('PlanHubComponent multi-project grouping', () => {
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    const projA = '/mock/proj-a';
+    const projB = '/mock/proj-b';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const wsRootB = `${projB}/.ralph-workspace`;
+    const registry: WorkspaceRegistry[] = [
+      { path: projA, workspaceRoot: wsRootA, projectRoot: projA, label: 'proj-a', exists: true },
+      { path: projB, workspaceRoot: wsRootB, projectRoot: projB, label: 'proj-b', exists: true },
+    ];
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [PlanHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
+      providers: [
+        {
+          provide: WorkspaceSelectorService,
+          useValue: {
+            workspaces: signal(registry),
+            selectedWorkspacePath: signal<string | null>(null),
+          },
+        },
+      ],
+    }).compileComponents();
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('groups rows by workspaceRoot and scopes folder metrics per project when plan_key collides', () => {
+    const projA = '/mock/proj-a';
+    const projB = '/mock/proj-b';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const wsRootB = `${projB}/.ralph-workspace`;
+
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    fixture.detectChanges();
+
+    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
+    listReq.flush({
+      root: 'plans',
+      path: '',
+      parent: null,
+      entries: [
+        { name: 'feature', path: 'feature/', type: 'dir', size: 200, mtime: 2, workspaceRoot: wsRootA },
+        { name: 'feature', path: 'feature/', type: 'dir', size: 100, mtime: 1, workspaceRoot: wsRootB },
+      ],
+    });
+
+    const metricsPayload = {
+      overall: {
+        input_tokens: 300,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 7,
+        count: 2,
+      },
+      plans: [
+        {
+          path: `${wsRootA}/logs/feature/plan-usage-summary.json`,
+          plan_key: 'feature',
+          artifact_ns: 'feature',
+          workspace_root: wsRootA,
+          project_root: projA,
+          elapsed_seconds: 3,
+          input_tokens: 100,
+          output_tokens: 5,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+        },
+        {
+          path: `${wsRootB}/logs/feature/plan-usage-summary.json`,
+          plan_key: 'feature',
+          artifact_ns: 'feature',
+          workspace_root: wsRootB,
+          project_root: projB,
+          elapsed_seconds: 4,
+          input_tokens: 200,
+          output_tokens: 5,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+        },
+      ],
+      orchestrations: [],
+      projects: [
+        {
+          workspace_root: wsRootA,
+          project_root: projA,
+          label: 'proj-a',
+          overall: {
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            elapsed_seconds: 3,
+            count: 1,
+          },
+          plans: [
+            {
+              path: `${wsRootA}/logs/feature/plan-usage-summary.json`,
+              plan_key: 'feature',
+              artifact_ns: 'feature',
+              workspace_root: wsRootA,
+              project_root: projA,
+              elapsed_seconds: 3,
+              input_tokens: 100,
+              output_tokens: 5,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+          orchestrations: [],
+        },
+        {
+          workspace_root: wsRootB,
+          project_root: projB,
+          label: 'proj-b',
+          overall: {
+            input_tokens: 200,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            elapsed_seconds: 4,
+            count: 1,
+          },
+          plans: [
+            {
+              path: `${wsRootB}/logs/feature/plan-usage-summary.json`,
+              plan_key: 'feature',
+              artifact_ns: 'feature',
+              workspace_root: wsRootB,
+              project_root: projB,
+              elapsed_seconds: 4,
+              input_tokens: 200,
+              output_tokens: 5,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+          orchestrations: [],
+        },
+      ],
+    };
+
+    flushMetricsSummary(httpMock, metricsPayload);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    expect(comp.planSections.length).toBe(2);
+    const rowA = comp.planSections.find((s) => s.workspaceRoot === wsRootA)?.rows[0];
+    const rowB = comp.planSections.find((s) => s.workspaceRoot === wsRootB)?.rows[0];
+    expect(rowA?.folderMetrics?.input_tokens).toBe(100);
+    expect(rowB?.folderMetrics?.input_tokens).toBe(200);
+    expect(comp.planSections.map((s) => s.label)).toEqual(expect.arrayContaining(['proj-a', 'proj-b']));
+  });
+
+  it('openPlan passes projectRoot derived from row workspaceRoot in global mode', () => {
+    const projA = '/mock/proj-a';
+    const wsRootA = `${projA}/.ralph-workspace`;
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.detectChanges();
+
+    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
+    listReq.flush({
+      root: 'plans',
+      path: '',
+      parent: null,
+      entries: [
+        { name: 'feature', path: 'feature/', type: 'dir', size: 1, mtime: 1, workspaceRoot: wsRootA },
+      ],
+    });
+    flushMetricsSummary(httpMock);
+
+    const row = fixture.componentInstance.planSections[0]?.rows[0];
+    expect(row).toBeDefined();
+    fixture.componentInstance.openPlan(row!);
+    expect(spy).toHaveBeenCalledWith('plans', '', 'feature.md', null, projA);
+  });
+
+  it('viewLogs passes workspaceRoot from row when metrics are not loaded yet', fakeAsync(() => {
+    const projB = '/mock/proj-b';
+    const wsRootB = `${projB}/.ralph-workspace`;
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    const nav = TestBed.inject(NavService);
+    const spy = vi.spyOn(nav, 'navigate');
+
+    fixture.detectChanges();
+
+    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
+    listReq.flush({
+      root: 'plans',
+      path: '',
+      parent: null,
+      entries: [
+        { name: 'feature', path: 'feature/', type: 'dir', size: 1, mtime: 1, workspaceRoot: wsRootB },
+      ],
+    });
+    flushMetricsSummary(httpMock);
+    fixture.detectChanges();
+
+    const row = { ...fixture.componentInstance.items[0], folderMetrics: null };
+    fixture.componentInstance.viewLogs(row);
+    tick();
+
+    const viewLogsReq = httpMock.expectOne(
+      (r) =>
+        requestPath(r.url) === '/api/list' &&
+        r.params.get('root') === 'logs' &&
+        r.params.get('path') === 'feature' &&
+        r.params.get('workspaceRoot') === wsRootB,
+    );
+    viewLogsReq.flush({
+      root: 'logs',
+      path: 'feature',
+      parent: null,
+      entries: [{ name: 'run.log', path: 'feature/run.log', type: 'file', size: 1, mtime: 1 }],
+    });
+    tick();
+
+    expect(spy).toHaveBeenCalledWith('logs', '', 'feature/run.log', wsRootB);
+  }));
 });

@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { clearDashboardRootsCache } from '../src/paths';
 import { findWorkspaceProjectRoot } from '../src/paths';
 
 function withProjectRootEnv(
@@ -38,6 +39,10 @@ function withProjectRootEnv(
 }
 
 describe('findWorkspaceProjectRoot', () => {
+  beforeEach(() => {
+    clearDashboardRootsCache();
+  });
+
   for (const envKey of ['RALPH_DASHBOARD_PROJECT_ROOT', 'RALPH_PROJECT_ROOT'] as const) {
     it(`falls back to walk-up discovery when ${envKey} has no .ralph directory`, () => {
       const originalCwd = process.cwd();

@@ -3,6 +3,11 @@
 ## Execution instructions
 After substantive changes, run this repository's standard verification commands (build, test, lint, typecheck, or equivalents) as documented in the project README, AGENTS.md, or this plan. Use the runtime and environment the project specifies before running them.
 
+## Todo granularity
+Each todo must represent one logical, independently verifiable unit of work, not one keystroke.
+- Good: `Update plan-todo.sh to preserve cursor-frontmatter outside the todo block while adding consolidation logging.`
+- Bad: `Change one line in plan-todo.sh.`
+
 ## Context
 Describe how this implementation stage translates the decisions captured in `architecture.md` into concrete coding deliverables.
 

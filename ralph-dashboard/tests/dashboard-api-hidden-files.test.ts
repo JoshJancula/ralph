@@ -46,4 +46,13 @@ describe('dashboard API hidden file handling', () => {
     expect(() => resolveUnderRoot(plans, '.hidden-dir')).toThrow('invalid path');
     expect(() => resolveUnderRoot(plans, 'visible/.nested.md')).toThrow('invalid path');
   });
+
+  it('allows .ralph-workspace as a plans path segment for workspace-backed plan trees', () => {
+    const roots = getAllowedRoots({
+      projectRoot: tempRoot,
+      workspaceRoot: join(tempRoot, '.ralph-workspace'),
+    });
+    const plans = roots.plans;
+    expect(resolveUnderRoot(plans, '.ralph-workspace')).toBe(join(tempRoot, '.ralph-workspace'));
+  });
 });

@@ -97,6 +97,9 @@ if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
     mkdir -p "$_ws_abs/.ralph-workspace"
     args+=(--add-dir "$_ws_abs/.ralph-workspace")
   fi
+  if [[ -n "${CODEX_GLOBAL_RUNTIME_ROOT:-}" ]]; then
+    args+=(--add-dir "$CODEX_GLOBAL_RUNTIME_ROOT")
+  fi
 fi
 
 # Append bypass flag after sandbox/model/add-dir logic, before --json or prompt.

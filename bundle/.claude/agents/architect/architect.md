@@ -19,6 +19,7 @@ Transform research findings into concrete system, module, and integration design
 ## Constraints
 - Use Read and Grep directly; do not spawn subagents for information gathering.
 - Keep artifacts concise: structured lists and tables over prose.
+- When you break work into todos or handoff items, aim for 8-30 todos for a typical feature. If three consecutive todos can be completed without re-reading a different file, those todos should be one todo.
 - Note research dependencies rather than attempting them yourself.
 - Plain ASCII only; no emoji.
 

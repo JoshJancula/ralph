@@ -12,6 +12,7 @@ RALPH_RUN_PLAN_INVOKE_CODEX_LOADED=1
 #     CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime-resolve.sh"
 
 ralph_run_plan_invoke_codex() {
   # Demux/tee inputs: combined output log, sidecar exit code, session id file path.
@@ -58,7 +59,17 @@ ralph_run_plan_invoke_codex() {
   export CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX
 
   run_plan_invoke_codex_cli() {
-    "$WORKSPACE/.codex/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
+    local runtime_root
+    runtime_root="$(ralph_resolve_runtime_root codex "$WORKSPACE")" || runtime_root="$WORKSPACE/.codex"
+
+    local global_runtime_root=""
+    local user_runtime_root="${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.codex"
+    if [[ ! -d "$WORKSPACE/.codex" ]] && [[ -d "$user_runtime_root" ]]; then
+      global_runtime_root="$user_runtime_root"
+    fi
+
+    export CODEX_GLOBAL_RUNTIME_ROOT="$global_runtime_root"
+    "$runtime_root/ralph/codex-exec-prompt.sh" "$prompt_file" "$WORKSPACE"
   }
 
   run_plan_invoke_common_execute \

@@ -18,7 +18,6 @@ ion-split-pane {
   --side-width: 280px;
   --side-max-width: 320px;
   --side-min-width: 280px;
-  --border: 1px solid var(--border);
 }
 
 .app-header {
@@ -32,6 +31,16 @@ ion-split-pane {
 
 .app-title {
   text-align: left;
+}
+
+ion-button.usage-route-active {
+  --color: var(--accent);
+  position: relative;
+}
+
+ion-button.usage-route-active::part(native) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 8px;
 }
 
 ion-menu {

@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Run an executable script with stdin and stdout on a real PTY (portable; GNU script is inconsistent)."""
+"""Run a command with stdin and stdout on a real PTY (portable; GNU script is inconsistent)."""
 import os
 import pty
 import sys
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("usage: ralph-pty-exec /path/to/script", file=sys.stderr)
+        print("usage: ralph-pty-exec command [args...]", file=sys.stderr)
         sys.exit(2)
-    runner = sys.argv[1]
-    pid, _master_fd = pty.fork()
-    if pid == 0:
-        try:
-            os.execvp(runner, [runner])
-        except OSError as exc:
-            print(exc, file=sys.stderr)
-            sys.exit(127)
-    _pid2, status = os.waitpid(pid, 0)
+    cmd = sys.argv[1:]
+    try:
+        status = pty.spawn(cmd)
+    except OSError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(127)
     if os.WIFEXITED(status):
         sys.exit(os.WEXITSTATUS(status))
+    if os.WIFSIGNALED(status):
+        sys.exit(128 + os.WTERMSIG(status))
     sys.exit(1)
 
 

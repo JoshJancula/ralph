@@ -3,6 +3,11 @@
 ## Execution instructions
 Use the toolchain this repository documents, then run the test or QA commands specified in this plan or in the project README / AGENTS.md so checks validate the latest changes.
 
+## Todo granularity
+Each todo must represent one logical, independently verifiable unit of work, not one keystroke.
+- Good: `Update plan-todo.sh to preserve cursor-frontmatter outside the todo block while adding consolidation logging.`
+- Bad: `Change one line in plan-todo.sh.`
+
 ## Context
 Describe how this QA stage uses the information captured in `implementation-handoff.md` to confirm the implementation works as expected.
 

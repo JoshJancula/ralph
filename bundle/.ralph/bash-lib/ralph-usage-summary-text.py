@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Set, Tuple
 
 
 def emit(line: str = "") -> None:
@@ -30,6 +30,11 @@ _COLOR_CODES = {
     "bold_white": "\x1b[1;37m",
 }
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+ROW_DIVIDER = "__RALPH_ROW_DIVIDER__"
+# Horizontal rule only under columns after "project" — keeps the project column visually open within a workspace group.
+ROW_DIVIDER_WITHIN_PROJECT = "__RALPH_ROW_DIVIDER_WITHIN_PROJECT__"
+# Limit plan column width in aggregate text tables (long artifact filenames should not stretch the whole row).
+PLAN_COLUMN_DISPLAY_MAX = 36
 
 
 def c(name: str, text: str) -> str:
@@ -43,6 +48,17 @@ def c(name: str, text: str) -> str:
 
 def visible_len(text: str) -> int:
     return len(_ANSI_RE.sub("", text))
+
+
+def truncate_plan_display(text: str, max_len: int = PLAN_COLUMN_DISPLAY_MAX) -> str:
+    """Shorten plan labels for table display (plain text cells; keeps terminal tables readable)."""
+    if max_len <= 0:
+        return text
+    if visible_len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[: max_len - 3] + "..."
 
 
 def color_cache_hit(ratio: Any) -> str:
@@ -68,6 +84,8 @@ def render_table(
 ) -> List[str]:
     widths = [visible_len(h) for h in headers]
     for row in rows:
+        if len(row) == 1 and row[0] in (ROW_DIVIDER, ROW_DIVIDER_WITHIN_PROJECT):
+            continue
         for i, cell in enumerate(row):
             if i < len(widths):
                 widths[i] = max(widths[i], visible_len(cell))
@@ -92,7 +110,22 @@ def render_table(
 
     lines = [border_line, format_row(header_cells, header_aligns), border_line]
     for row in rows:
-        lines.append(format_row(list(row), list(aligns)))
+        if len(row) == 1 and row[0] == ROW_DIVIDER:
+            lines.append(border_line)
+        elif len(row) == 1 and row[0] == ROW_DIVIDER_WITHIN_PROJECT:
+            if len(widths) <= 1:
+                lines.append(border_line)
+            else:
+                inner = (
+                    "|"
+                    + pad("", widths[0], "l")
+                    + "+"
+                    + "+".join("-" * (w + 2) for w in widths[1:])
+                    + "+"
+                )
+                lines.append(indent + c("dim", inner))
+        else:
+            lines.append(format_row(list(row), list(aligns)))
     lines.append(border_line)
     return lines
 
@@ -234,6 +267,7 @@ def aggregate(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "cache_read_input_tokens": sum(as_int(r.get("cache_read_input_tokens")) for r in records),
         "max_turn_total_tokens": max((as_int(r.get("max_turn_total_tokens")) for r in records), default=0),
         "elapsed_seconds": sum(as_int(r.get("elapsed_seconds")) for r in records),
+        "tool_calls_total": sum(as_int(r.get("tool_calls_total")) for r in records),
     }
 
 
@@ -263,12 +297,62 @@ def plan_summary_with_invocation_fallback(summary: Dict[str, Any], invocations: 
     effective["cache_creation_input_tokens"] = totals["cache_creation_input_tokens"]
     effective["cache_read_input_tokens"] = totals["cache_read_input_tokens"]
     effective["max_turn_total_tokens"] = totals["max_turn_total_tokens"]
+    effective["tool_calls_total"] = totals["tool_calls_total"]
     effective["cache_hit_ratio"] = round(totals["cache_read_input_tokens"] / total_input, 4) if total_input > 0 else 0
+    effective["runtimes"] = unique_record_values(invocations, "runtime")
+    effective["models"] = unique_record_values(invocations, "model")
     return effective
 
 
 def model_label(record: Dict[str, Any]) -> str:
     return as_text(record.get("model")).strip() or "-"
+
+
+def unique_record_values(records: Sequence[Dict[str, Any]], key: str) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        value = as_text(record.get(key)).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def unique_summary_breakdown_values(summary: Dict[str, Any], key: str) -> List[str]:
+    breakdown = summary.get("model_breakdown")
+    if not isinstance(breakdown, list):
+        return []
+    return unique_record_values([item for item in breakdown if isinstance(item, dict)], key)
+
+
+def plan_values(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]], key: str) -> List[str]:
+    values = unique_record_values(invocations, key) or unique_summary_breakdown_values(summary, key)
+    if values:
+        return values
+    fallback = as_text(summary.get(key)).strip()
+    return [fallback] if fallback else []
+
+
+def total_values_label(values: Sequence[str], total_label: str) -> str:
+    if not values:
+        return "-"
+    if len(values) == 1:
+        return values[0]
+    return total_label
+
+
+def plan_runtime_label(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]]) -> str:
+    values = plan_values(summary, invocations, "runtime")
+    return ",".join(values) if values else "-"
+
+
+def plan_model_label(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]]) -> str:
+    values = plan_values(summary, invocations, "model")
+    return ",".join(values) if values else "-"
 
 
 def runtimes_for_model(records: Sequence[Dict[str, Any]]) -> str:
@@ -307,6 +391,38 @@ def aggregate_by_model(invocations: Sequence[Dict[str, Any]]) -> List[Tuple[str,
     return out
 
 
+def aggregate_by_runtime_model(invocations: Sequence[Dict[str, Any]]) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """Group invocations by runtime/model pair; preserve first-seen pair order."""
+    buckets: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    order: List[Tuple[str, str]] = []
+    for record in invocations:
+        if not isinstance(record, dict):
+            continue
+        runtime = as_text(record.get("runtime")).strip() or "-"
+        model = as_text(record.get("model")).strip() or "-"
+        key = (runtime, model)
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = []
+        buckets[key].append(record)
+    out: List[Tuple[str, str, Dict[str, Any]]] = []
+    for runtime, model in order:
+        recs = buckets[(runtime, model)]
+        agg = aggregate(recs)
+        denom = agg["input_tokens"] + agg["cache_creation_input_tokens"] + agg["cache_read_input_tokens"]
+        agg["cache_hit_ratio"] = round(agg["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
+        agg["invocation_count"] = len(recs)
+        has_todo_completion = any("todo_completed" in record for record in recs)
+        if has_todo_completion:
+            agg["todos_done"] = sum(1 for record in recs if record.get("todo_completed") is True)
+            agg["todos_estimated"] = False
+        else:
+            agg["todos_done"] = len(recs)
+            agg["todos_estimated"] = True
+        out.append((runtime, model, agg))
+    return out
+
+
 def emit_model_totals_line(model_name: str, agg: Dict[str, Any], recs: Sequence[Dict[str, Any]]) -> None:
     rt = runtimes_for_model(list(recs))
     parts = [
@@ -318,6 +434,7 @@ def emit_model_totals_line(model_name: str, agg: Dict[str, Any], recs: Sequence[
         f"cache_create={fmt_value(agg.get('cache_creation_input_tokens'))}",
         f"cache_read={fmt_value(agg.get('cache_read_input_tokens'))}",
         f"max_turn={fmt_value(agg.get('max_turn_total_tokens'))}",
+        f"tool_calls={fmt_value(agg.get('tool_calls_total'))}",
         f"cache_hit_ratio={fmt_value(agg.get('cache_hit_ratio'))}",
     ]
     emit("  " + " ".join(parts))
@@ -332,8 +449,8 @@ def summarize_plan(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]
         f"plan={as_text(summary.get('plan')).strip() or '-'} "
         f"plan_key={as_text(summary.get('plan_key')).strip() or '-'} "
         f"stage_id={as_text(summary.get('stage_id')).strip() or '-'} "
-        f"runtime={as_text(summary.get('runtime')).strip() or '-'} "
-        f"model={as_text(summary.get('model')).strip() or '-'} "
+        f"runtime={plan_runtime_label(summary, invocations)} "
+        f"model={plan_model_label(summary, invocations)} "
         f"invocations={summary_value(summary, 'invocations', invocations, len(invocations))} "
         f"todos={summary_value(summary, 'todos_done', invocations, 0)}/{summary_value(summary, 'todos_total', invocations, 0)}"
     )
@@ -348,6 +465,7 @@ def summarize_plan(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]
         f"cache_create={fmt_value(summary_value(summary, 'cache_creation_input_tokens', invocations, totals['cache_creation_input_tokens']))} "
         f"cache_read={fmt_value(summary_value(summary, 'cache_read_input_tokens', invocations, totals['cache_read_input_tokens']))} "
         f"max_turn={fmt_value(summary_value(summary, 'max_turn_total_tokens', invocations, totals['max_turn_total_tokens']))} "
+        f"tool_calls={fmt_value(summary_value(summary, 'tool_calls_total', invocations, totals['tool_calls_total']))} "
         f"cache_hit_ratio={fmt_value(summary_value(summary, 'cache_hit_ratio', invocations, 0))}"
     )
     grouped = aggregate_by_model(invocations)
@@ -434,6 +552,65 @@ def discover_summaries(logs_dir: str) -> Tuple[List[Tuple[str, str]], List[Tuple
     return plans, orchestrations
 
 
+def _has_usage_summary_children(path: str) -> bool:
+    try:
+        for entry in os.listdir(path):
+            entry_path = os.path.join(path, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if os.path.isfile(os.path.join(entry_path, "plan-usage-summary.json")):
+                return True
+            if os.path.isfile(os.path.join(entry_path, "orchestration-usage-summary.json")):
+                return True
+    except (OSError, IOError):
+        return False
+    return False
+
+
+def discover_logs_roots(search_root: str) -> List[str]:
+    roots: List[str] = []
+    seen: Set[str] = set()
+    if not os.path.isdir(search_root):
+        return roots
+
+    noisy_dirs = {".git", "node_modules"}
+
+    def add_root(path: str) -> None:
+        if not _has_usage_summary_children(path):
+            return
+        resolved = os.path.realpath(path)
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        roots.append(path)
+
+    try:
+        for current, dirs, _files in os.walk(search_root, topdown=True, followlinks=False):
+            dirs[:] = [d for d in sorted(dirs) if d not in noisy_dirs]
+            add_root(current)
+    except (OSError, IOError):
+        pass
+
+    roots.sort(key=os.path.realpath)
+    return roots
+
+
+def source_label_for_summary_path(summary_path: str) -> str:
+    """Infer a compact workspace/project label from a summary file path."""
+    plan_dir = os.path.dirname(summary_path)
+    logs_root = os.path.dirname(plan_dir)
+    workspace_root = os.path.dirname(os.path.dirname(logs_root))
+
+    # Standard layout: <workspace>/.ralph-workspace/logs/<plan>/plan-usage-summary.json
+    if os.path.basename(logs_root) == "logs" and os.path.basename(os.path.dirname(logs_root)) == ".ralph-workspace":
+        label = os.path.basename(workspace_root.rstrip(os.sep))
+        return label or workspace_root
+
+    # Fallback for explicit custom logs dirs or nonstandard test fixtures.
+    label = os.path.basename(logs_root.rstrip(os.sep))
+    return label or logs_root
+
+
 def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, str]]) -> Dict[str, Any]:
     all_invocations: List[Dict[str, Any]] = []
     plan_summaries: Dict[str, Dict[str, Any]] = {}
@@ -476,12 +653,14 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
                     "max_turn_total_tokens": 0,
                     "elapsed_seconds": 0,
                     "invocation_count": 0,
+                    "tool_calls_total": 0,
                 }
             bucket = runtime_buckets[rt]
             bucket["input_tokens"] += as_int(record.get("input_tokens"))
             bucket["output_tokens"] += as_int(record.get("output_tokens"))
             bucket["cache_creation_input_tokens"] += as_int(record.get("cache_creation_input_tokens"))
             bucket["cache_read_input_tokens"] += as_int(record.get("cache_read_input_tokens"))
+            bucket["tool_calls_total"] += as_int(record.get("tool_calls_total"))
             bucket["elapsed_seconds"] += float(record.get("elapsed_seconds", 0)) if record.get("elapsed_seconds") else 0.0
             max_turn = as_int(record.get("max_turn_total_tokens"))
             if max_turn > bucket["max_turn_total_tokens"]:
@@ -522,6 +701,7 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
         "orch_summaries": orch_summaries,
         "loaded_plans": loaded_plans,
         "loaded_orchestrations": loaded_orchestrations,
+        "invocations_by_summary_path": invocations_by_summary_path,
     }
 
 
@@ -551,6 +731,7 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
     )
     emit(
         f"  max_turn={fmt_int(overall.get('max_turn_total_tokens'))} "
+        f"tool_calls={fmt_int(overall.get('tool_calls_total'))} "
         f"cache_hit={color_cache_hit(overall.get('cache_hit_ratio'))}"
     )
     emit()
@@ -558,8 +739,18 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
     by_runtime = aggregated["by_runtime"]
     emit(c("bold", f"By runtime ({len(by_runtime)}):"))
     if by_runtime:
-        headers = ["runtime", "invocations", "elapsed", "input", "output", "cache_create", "cache_read", "cache_hit"]
-        aligns = ["l", "r", "r", "r", "r", "r", "r", "r"]
+        headers = [
+            "runtime",
+            "invocations",
+            "elapsed",
+            "input",
+            "output",
+            "cache_create",
+            "cache_read",
+            "tool_calls",
+            "cache_hit",
+        ]
+        aligns = ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r"]
         rows = []
         for runtime in sorted(by_runtime.keys()):
             agg = by_runtime[runtime]
@@ -571,6 +762,7 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
                 fmt_int(agg.get("output_tokens")),
                 fmt_int(agg.get("cache_creation_input_tokens")),
                 fmt_int(agg.get("cache_read_input_tokens")),
+                fmt_int(agg.get("tool_calls_total")),
                 color_cache_hit(agg.get("cache_hit_ratio")),
             ])
         for line in render_table(headers, rows, aligns):
@@ -582,8 +774,18 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
     by_model = aggregated["by_model"]
     emit(c("bold", f"By model ({len(by_model)}):"))
     if by_model:
-        headers = ["model", "runtime", "invocations", "elapsed", "input", "output", "cache_read", "cache_hit"]
-        aligns = ["l", "l", "r", "r", "r", "r", "r", "r"]
+        headers = [
+            "model",
+            "runtime",
+            "invocations",
+            "elapsed",
+            "input",
+            "output",
+            "cache_read",
+            "tool_calls",
+            "cache_hit",
+        ]
+        aligns = ["l", "l", "r", "r", "r", "r", "r", "r", "r", "r"]
         rows = []
         sorted_models = sorted(
             by_model,
@@ -600,6 +802,7 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
                 fmt_int(agg.get("input_tokens")),
                 fmt_int(agg.get("output_tokens")),
                 fmt_int(agg.get("cache_read_input_tokens")),
+                fmt_int(agg.get("tool_calls_total")),
                 color_cache_hit(agg.get("cache_hit_ratio")),
             ])
         for line in render_table(headers, rows, aligns):
@@ -614,38 +817,102 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
     ]
     emit(c("bold", f"Plans ({len(loaded_plans)}):"))
     if loaded_plans:
+        invocations_by_summary_path = aggregated.get("invocations_by_summary_path") or {}
+        show_plan_tool_calls = os.environ.get("RALPH_USAGE_REPORT_SHOW_TOOLS") == "1"
+        if len(loaded_plans) > 1:
+            show_plan_tool_calls = True
+
         def _plan_sort_key(entry: Tuple[str, str]) -> str:
             s = plan_summaries.get(entry[0], {})
             return as_text(s.get("started_at")).strip() or entry[0]
 
-        headers = ["plan", "runtime", "model", "invocations", "todos", "elapsed", "input", "output", "cache_hit", "status"]
-        aligns = ["l", "l", "l", "r", "r", "r", "r", "r", "r", "l"]
-        rows = []
-        for summary_path, invocations_path in sorted(loaded_plans, key=_plan_sort_key, reverse=True):
-            summary = plan_summaries.get(summary_path) or {}
-            plan_key = as_text(summary.get("plan_key")).strip() or "-"
-            runtime = as_text(summary.get("runtime")).strip() or "-"
-            model = as_text(summary.get("model")).strip() or "-"
-            invocations = as_int(summary.get("invocations"), 0)
-            todos_done = as_int(summary.get("todos_done"), 0)
-            todos_total = as_int(summary.get("todos_total"), 0)
-            elapsed = format_elapsed(summary.get("elapsed_seconds", 0))
-            input_tokens = fmt_int(summary.get("input_tokens", 0))
-            output_tokens = fmt_int(summary.get("output_tokens", 0))
-            cache_hit_val = summary.get("cache_hit_ratio", 0)
-            status = c("yellow", "incomplete") if todos_done < todos_total else c("dim", "ok")
-            rows.append([
-                plan_key,
-                runtime,
-                model,
-                str(invocations),
-                f"{todos_done}/{todos_total}",
-                elapsed,
-                input_tokens,
-                output_tokens,
-                color_cache_hit(cache_hit_val),
-                status,
-            ])
+        headers = ["project", "plan", "runtime", "model", "invocations", "todos", "elapsed", "input", "output"]
+        aligns = ["l", "l", "l", "l", "r", "r", "r", "r", "r"]
+        if show_plan_tool_calls:
+            headers.append("tools")
+            aligns.append("r")
+        headers.extend(["cache_hit", "status"])
+        aligns.extend(["r", "l"])
+        rows: List[List[str]] = []
+
+        by_project: Dict[str, List[Tuple[str, str]]] = {}
+        for entry in loaded_plans:
+            project = source_label_for_summary_path(entry[0])
+            by_project.setdefault(project, []).append(entry)
+
+        sorted_projects = sorted(by_project.keys())
+        for pidx, project in enumerate(sorted_projects):
+            project_entries = sorted(by_project[project], key=_plan_sort_key, reverse=True)
+            first_in_project = True
+            n_in_project = len(project_entries)
+            for idx, (summary_path, invocations_path) in enumerate(project_entries):
+                summary = plan_summaries.get(summary_path) or {}
+                plan_key = as_text(summary.get("plan_key")).strip() or "-"
+                plan_cell = truncate_plan_display(plan_key)
+                plan_invocations = invocations_by_summary_path.get(summary_path, [])
+                effective_summary = plan_summary_with_invocation_fallback(summary, plan_invocations)
+                runtime_values = plan_values(summary, plan_invocations, "runtime")
+                model_values = plan_values(summary, plan_invocations, "model")
+                runtime = total_values_label(runtime_values, "total")
+                model = total_values_label(model_values, "all")
+                invocations = as_int(effective_summary.get("invocations"), 0)
+                todos_done = as_int(summary.get("todos_done"), 0)
+                todos_total = as_int(summary.get("todos_total"), 0)
+                elapsed = format_elapsed(effective_summary.get("elapsed_seconds", 0))
+                input_tokens = fmt_int(effective_summary.get("input_tokens", 0))
+                output_tokens = fmt_int(effective_summary.get("output_tokens", 0))
+                cache_hit_val = effective_summary.get("cache_hit_ratio", 0)
+                status = c("yellow", "incomplete") if todos_done < todos_total else c("dim", "ok")
+                proj_cell = project if first_in_project else ""
+                rows.append([
+                    proj_cell,
+                    plan_cell,
+                    runtime,
+                    model,
+                    str(invocations),
+                    f"{todos_done}/{todos_total}",
+                    elapsed,
+                    input_tokens,
+                    output_tokens,
+                ])
+                if show_plan_tool_calls:
+                    rows[-1].append(fmt_int(effective_summary.get("tool_calls_total", 0)))
+                rows[-1].extend([
+                    color_cache_hit(cache_hit_val),
+                    status,
+                ])
+                pair_breakdown = aggregate_by_runtime_model(plan_invocations)
+                if len(pair_breakdown) > 1:
+                    for runtime_name, model_name, pair in pair_breakdown:
+                        pair_todos = as_int(pair.get("todos_done"), 0)
+                        pair_todos_label = f"~{pair_todos}" if pair.get("todos_estimated") else str(pair_todos)
+                        pair_row = [
+                            "",
+                            "",
+                            runtime_name,
+                            model_name,
+                            str(pair.get("invocation_count", 0)),
+                            pair_todos_label,
+                            format_elapsed(pair.get("elapsed_seconds", 0)),
+                            fmt_int(pair.get("input_tokens", 0)),
+                            fmt_int(pair.get("output_tokens", 0)),
+                        ]
+                        if show_plan_tool_calls:
+                            pair_row.append(fmt_int(pair.get("tool_calls_total", 0)))
+                        pair_row.extend([
+                            color_cache_hit(pair.get("cache_hit_ratio", 0)),
+                            "",
+                        ])
+                        rows.append(pair_row)
+                first_in_project = False
+                last_in_project = idx == n_in_project - 1
+                last_project = pidx == len(sorted_projects) - 1
+                if last_in_project and last_project:
+                    rows.append([ROW_DIVIDER_WITHIN_PROJECT])
+                elif last_in_project:
+                    rows.append([ROW_DIVIDER])
+                else:
+                    rows.append([ROW_DIVIDER_WITHIN_PROJECT])
         for line in render_table(headers, rows, aligns):
             emit(line)
     else:
@@ -658,19 +925,20 @@ def summarize_all(aggregated: Dict[str, Any], plans: List[Tuple[str, str]], orch
     ]
     emit(c("bold", f"Orchestrations ({len(loaded_orchestrations)}):"))
     if loaded_orchestrations:
-        headers = ["artifact_ns", "steps", "elapsed", "input", "output", "cache_read"]
-        aligns = ["l", "r", "r", "r", "r", "r"]
+        headers = ["project", "artifact_ns", "steps", "elapsed", "input", "output", "cache_read"]
+        aligns = ["l", "l", "r", "r", "r", "r", "r"]
         rows = []
         stage_lines: List[Tuple[str, List[List[str]]]] = []
         for summary_path, invocations_path in loaded_orchestrations:
             summary = orch_summaries.get(summary_path) or {}
+            project = source_label_for_summary_path(summary_path)
             ns = as_text(summary.get("artifact_ns")).strip() or as_text(summary.get("plan_key")).strip() or "-"
             steps = as_int(summary.get("steps"), 0)
             elapsed = format_elapsed(summary.get("elapsed_seconds", 0))
             input_tokens = fmt_int(summary.get("input_tokens", 0))
             output_tokens = fmt_int(summary.get("output_tokens", 0))
             cache_read = fmt_int(summary.get("cache_read_input_tokens", 0))
-            rows.append([ns, str(steps), elapsed, input_tokens, output_tokens, cache_read])
+            rows.append([project, ns, str(steps), elapsed, input_tokens, output_tokens, cache_read])
 
             stages = summary.get("stages")
             if not isinstance(stages, list):
@@ -725,7 +993,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     orch.add_argument("--invocations", required=True, help="Path to invocation-usage.json")
 
     all_mode = subparsers.add_parser("all", help="Aggregate and render usage summaries for all plans and orchestrations.")
-    all_mode.add_argument("--logs-dir", required=True, help="Directory containing plan and orchestration logs")
+    all_mode.add_argument("--logs-dir", required=True, action="append", help="Directory containing plan and orchestration logs (may be specified multiple times)")
     all_mode.add_argument("--format", choices=["text", "json"], default="text", help="Output format (default: text)")
     all_mode.add_argument("--workspace", default=None, help="Workspace path (informational, included in output header)")
 
@@ -736,7 +1004,18 @@ def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
 
     if args.mode == "all":
-        plans, orchestrations = discover_summaries(args.logs_dir)
+        plans: List[Tuple[str, str]] = []
+        orchestrations: List[Tuple[str, str]] = []
+        seen_roots: Set[str] = set()
+        for logs_dir in args.logs_dir:
+            resolved = os.path.realpath(logs_dir)
+            if resolved in seen_roots:
+                continue
+            seen_roots.add(resolved)
+            for logs_root in discover_logs_roots(logs_dir):
+                root_plans, root_orchestrations = discover_summaries(logs_root)
+                plans.extend(root_plans)
+                orchestrations.extend(root_orchestrations)
         aggregated = aggregate_all(plans, orchestrations)
 
         if args.format == "json":
@@ -757,6 +1036,7 @@ def main(argv: Sequence[str]) -> int:
                         "cache_creation_input_tokens": agg.get("cache_creation_input_tokens"),
                         "cache_read_input_tokens": agg.get("cache_read_input_tokens"),
                         "max_turn_total_tokens": agg.get("max_turn_total_tokens"),
+                        "tool_calls_total": agg.get("tool_calls_total"),
                         "cache_hit_ratio": agg.get("cache_hit_ratio"),
                     }
                     for model, agg, recs in aggregated["by_model"]
@@ -766,7 +1046,7 @@ def main(argv: Sequence[str]) -> int:
             }
             emit(json.dumps(output, sort_keys=True))
         else:
-            summarize_all(aggregated, plans, orchestrations, args.workspace, args.logs_dir)
+            summarize_all(aggregated, plans, orchestrations, args.workspace, ", ".join(args.logs_dir))
         return 0
 
     summary = load_json(args.summary)
