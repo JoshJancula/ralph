@@ -1,0 +1,182 @@
+{
+  "name": "default",
+  "toolAllowlist": [
+    "ralph_plan_status",
+    "ralph_next_todo"
+  ],
+  "toolDenylist": [
+    "ralph_write_file"
+  ],
+  "deniedArgumentPatterns": [
+    {
+      "tool": "ralph_run_plan",
+      "argument": "plan_path",
+      "pattern": "^/tmp/",
+      "description": "Do not allow temporary plan paths"
+    }
+  ],
+  "truncationMarker": "...[truncated]",
+  "resultByteCap": 4096,
+  "toolResultByteCaps": {
+    "ralph_proxy_read": 65536,
+    "ralph_proxy_grep": 8192,
+    "ralph_proxy_glob": 8192,
+    "ralph_proxy_shell": 8192,
+    "ralph_proxy_search": 8192,
+    "ralph_proxy_repomap": 8192,
+    "resources/read": 1024
+  },
+  "resultTokenCap": 0,
+  "toolResultTokenCaps": {},
+  "cache": {
+    "enabled": true,
+    "readOnly": true,
+    "rules": [
+      "resources/read"
+    ]
+  },
+  "upstreams": [
+    {
+      "name": "ralph",
+      "type": "wrapped-upstream",
+      "command": "bash",
+      "args": [
+        ".ralph/mcp-server.sh"
+      ],
+      "env": {
+        "RALPH_MCP_WORKSPACE": "."
+      }
+    }
+  ],
+  "logging": {
+    "requests": true,
+    "responses": true,
+    "upstreams": false
+  },
+  "proxyOwnedTools": {
+    "enabled": false,
+    "searchEnabled": false,
+    "repoMapEnabled": false,
+    "maxReadBytes": 65536,
+    "maxReadLines": 500,
+    "maxGrepMatches": 100,
+    "maxGlobResults": 200,
+    "maxSearchCandidates": 500,
+    "maxSearchResults": 50,
+    "maxRepoMapFiles": 500,
+    "maxShellOutputBytes": 32768,
+    "shellTimeoutSeconds": 10,
+    "shellAllowlist": [
+      "git status",
+      "git diff",
+      "git log -5 --oneline",
+      "ls",
+      "pwd"
+    ]
+  },
+  "policies": {
+    "readonly": {
+      "name": "readonly",
+      "toolAllowlist": [
+        "ralph_plan_status",
+        "ralph_next_todo",
+        "ralph_plan_tree"
+      ],
+      "toolDenylist": [
+        "ralph_write_file",
+        "ralph_append_file"
+      ],
+      "deniedArgumentPatterns": [
+        {
+          "tool": "ralph_run_plan",
+          "argument": "workspace",
+          "pattern": "^/tmp/",
+          "description": "Only allow workspaces inside Ralph-owned storage"
+        }
+      ],
+      "resultByteCap": 2048,
+      "toolResultByteCaps": {
+        "resources/read": 512
+      },
+      "cache": {
+        "enabled": true,
+        "readOnly": true,
+        "rules": [
+          "resources/read",
+          "tools/list"
+        ]
+      },
+      "logging": {
+        "requests": true,
+        "responses": true,
+        "upstreams": true
+      }
+    },
+    "minimal": {
+      "name": "minimal",
+      "toolAllowlist": [
+        "ralph_plan_status"
+      ],
+      "toolDenylist": [
+        "ralph_write_file",
+        "ralph_append_file",
+        "ralph_edit_file"
+      ],
+      "resultByteCap": 1024,
+      "cache": {
+        "enabled": false,
+        "readOnly": true,
+        "rules": []
+      },
+      "logging": {
+        "requests": true,
+        "responses": false,
+        "upstreams": false
+      }
+    },
+    "trusted-local": {
+      "name": "trusted-local",
+      "description": "This profile trades sandboxing for convenience and relies on output bounding only.",
+      "toolAllowlist": [
+        "ralph_plan_status",
+        "ralph_next_todo",
+        "ralph_plan_tree",
+        "ralph_proxy_read",
+        "ralph_proxy_grep",
+        "ralph_proxy_glob",
+        "ralph_proxy_shell",
+        "ralph_proxy_search"
+      ],
+      "resultByteCap": 65536,
+      "toolResultByteCaps": {
+        "ralph_proxy_read": 131072,
+        "ralph_proxy_grep": 65536,
+        "ralph_proxy_glob": 65536,
+        "ralph_proxy_shell": 131072,
+        "ralph_proxy_search": 65536,
+        "resources/read": 8192
+      },
+      "proxyOwnedTools": {
+        "enabled": true,
+        "searchEnabled": false,
+        "allowAllCommands": true,
+        "allowShellOperators": true,
+        "shellTimeoutSeconds": 600,
+        "maxShellOutputBytes": 131072
+      },
+      "cache": {
+        "enabled": true,
+        "readOnly": true,
+        "rules": [
+          "resources/read",
+          "tools/list"
+        ]
+      },
+      "logging": {
+        "requests": true,
+        "responses": true,
+        "upstreams": true
+      }
+    }
+  }
+}

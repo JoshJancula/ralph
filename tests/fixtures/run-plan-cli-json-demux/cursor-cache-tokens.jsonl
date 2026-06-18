@@ -1,1 +1,2 @@
 {"usage":{"promptTokens":100,"completionTokens":40,"cacheReadTokens":15,"cacheWriteTokens":9}}
+{"type":"tool_call","tool_call":{"ralph_proxy_read":{"callId":"call-1"}}}

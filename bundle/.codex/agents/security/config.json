@@ -1,20 +1,17 @@
 {
   "name": "security",
-  "description": "audits code for security vulnerabilities",
-  "model": "gpt-5.1-codex-mini",
-  "rules": [".codex/rules/no-emoji.md"],
-  "skills": [".codex/skills/repo-context/SKILL.md"],
+  "_generated": "GENERATED from bundle/.ralph/agents/security.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "",
+  "description": "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.",
+  "rules": [
+    "bundle/.codex/rules/no-emoji.md",
+    "bundle/.codex/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.codex/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md",
-      "required": true,
-      "kind": "review"
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md", "required": true, "kind": "review"},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }

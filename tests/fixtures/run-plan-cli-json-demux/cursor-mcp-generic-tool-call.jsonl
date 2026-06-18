@@ -1,0 +1,12 @@
+{"type":"tool_call","subtype":"started","call_id":"mcp_1","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","path":"/some/file.txt"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_1","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","path":"/some/file.txt"},"result":{"success":{"content":"file content"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_2","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","pattern":"test"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_2","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","pattern":"test"},"result":{"success":{"matches":[]}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_3","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_glob","globPattern":"**/*.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_3","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_glob","globPattern":"**/*.md"},"result":{"success":{"files":["a.md"]}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_4","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_shell","command":"ls -la"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_4","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_shell","command":"ls -la"},"result":{"success":{"output":"total 0"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_5","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_result_read","resultId":"abc123"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_5","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_result_read","resultId":"abc123"},"result":{"success":{"content":"result content"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_6","tool_call":{"mcpToolCall":{"args":{"toolName":"mcp__other__some_tool","param":"value"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_6","tool_call":{"mcpToolCall":{"args":{"toolName":"mcp__other__some_tool","param":"value"},"result":{"success":{}}}}}

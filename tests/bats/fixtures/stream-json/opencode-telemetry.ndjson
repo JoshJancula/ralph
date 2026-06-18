@@ -1,0 +1,9 @@
+{"type":"step_start","timestamp":1,"sessionID":"s","part":{"id":"p0","type":"step-start"}}
+{"type":"tool_use","timestamp":2,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_read","callID":"c1","state":{"status":"completed","input":{"path":"/abs/project/.ralph-workspace/plans/tool-use-optimization.plan.md","limit":20}},"id":"prt_1"}}
+{"type":"tool_use","timestamp":3,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_read","callID":"c2","state":{"status":"completed","input":{"path":"/abs/project/.ralph-workspace/plans/tool-use-optimization.plan.md","limit":20}},"id":"prt_2"}}
+{"type":"tool_use","timestamp":4,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_read","callID":"c3","state":{"status":"completed","input":{"path":"/abs/project/src/app.py"}},"id":"prt_3"}}
+{"type":"tool_use","timestamp":5,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_grep","callID":"c4","state":{"status":"completed","input":{"pattern":"duplicate.telemetry"}},"id":"prt_4"}}
+{"type":"tool_use","timestamp":6,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_grep","callID":"c5","state":{"status":"completed","input":{"pattern":"duplicate.telemetry"}},"id":"prt_5"}}
+{"type":"tool_use","timestamp":7,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_read","callID":"c6","state":{"status":"completed","input":{"path":"/abs/project/src/app.py"}},"id":"prt_6"}}
+{"type":"tool_use","timestamp":8,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_shell","callID":"c7","state":{"status":"completed","input":{"command":"echo SENSITIVE_LARGE_COMMAND_BLOB_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},"id":"prt_7"}}
+{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":100}}}

@@ -6,6 +6,7 @@ import {
   handleFileRequest,
   handleListRequest,
   handleMetricsSummaryRequest,
+  handleSavingsRequest,
   handleTemplateRequest,
   handleWorkspacesRequest,
 } from '../../src/server/dashboard-api';
@@ -176,6 +177,14 @@ async function invoke(method: string, path: string): Promise<ResponseResult> {
   };
   const res = new InMemoryResponse();
 
+  if (parsed.pathname.startsWith('/api/metrics/discover/')) {
+    const planKey = decodeURIComponent(parsed.pathname.slice('/api/metrics/discover/'.length));
+    req.params = { planKey };
+    const { handleMetricsDiscoverRequest } = await import('../../src/server/dashboard-api');
+    await handleMetricsDiscoverRequest(req as any, res as any);
+    return res.toResult();
+  }
+
   switch (parsed.pathname) {
     case '/api/list':
       await handleListRequest(req as any, res as any);
@@ -185,6 +194,9 @@ async function invoke(method: string, path: string): Promise<ResponseResult> {
       break;
     case '/api/template':
       await handleTemplateRequest(req as any, res as any);
+      break;
+    case '/api/benchmarks':
+      await handleSavingsRequest(req as any, res as any);
       break;
     case '/api/metrics/summary':
       await handleMetricsSummaryRequest(req as any, res as any);

@@ -1,20 +1,17 @@
 {
   "name": "security",
-  "model": "anthropic/claude-sonnet-4-6",
-  "description": "Audits code for security vulnerabilities. Writes security.md summarizing findings and blocking issues.",
-  "rules": [".opencode/rules/no-emoji.md"],
-  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "_generated": "GENERATED from bundle/.ralph/agents/security.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "ollama-cloud/kimi-k2.5",
+  "description": "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.",
+  "rules": [
+    "bundle/.opencode/rules/no-emoji.md",
+    "bundle/.opencode/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.opencode/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md",
-      "required": true,
-      "kind": "review"
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md", "required": true, "kind": "review"},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }

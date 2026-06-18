@@ -1,0 +1,10 @@
+{
+  "stdout": "gh pr view (exit 0) \"Implement feature X with improved performance\" [OPEN] by john-doe https://github.com/user/repo/pull/123\ntitle: Implement feature X with improved performance\nstate: OPEN\nauthor: john-doe\nurl: https://github.com/user/repo/pull/123\n\nbody:\nThis PR implements feature X with significant performance improvements.\n\nChanges:\n- Added new caching layer\n- Optimized database queries\n- Refactored API endpoints\n\nTests:\n- Added 15 new unit tests\n... and 14 more line(s)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "gh_pr_view",
+  "status": "compacted",
+  "exit_status": 0
+}

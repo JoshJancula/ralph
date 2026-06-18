@@ -10,8 +10,9 @@ Usage: usage-report.sh [OPTIONS]
 Options:
   --workspace <path>                   Workspace root (default: the current directory; use --full to search $HOME).
   --logs-dir <path>                    Directory containing usage logs (may be specified multiple times).
-                                       Default: <workspace>/.ralph-workspace/logs when inside a workspace;
-                                       all registered workspace logs when --full or outside any workspace.
+                                        Default: <workspace>/.ralph-workspace/logs when the current
+                                        directory is or directly contains a .ralph-workspace;
+                                        all registered workspace logs when --full or outside any workspace.
   --format text|json                   Output format: text or json (default: text).
   --full                               Search all registered workspaces instead of the current workspace.
   -h, --help                           Show this message.
@@ -36,6 +37,26 @@ add_logs_dir() {
   esac
   seen_logs_dirs+="$logs_dir"$'\n'
   logs_dirs+=("$logs_dir")
+}
+
+# Detect a workspace at the current directory level only: PWD itself is a
+# .ralph-workspace directory, or PWD has a .ralph-workspace child. This keeps
+# `ralph usage` scoped like `.claude` / `.ralph-workspace` discovery.
+find_local_logs_dir() {
+  local dir="${1:-$PWD}"
+  [[ -d "$dir" ]] || return 1
+  dir="$(cd "$dir" && pwd)"
+  local base
+  base="$(basename "$dir")"
+  if [[ "$base" == ".ralph-workspace" ]]; then
+    printf '%s\n' "$dir/logs"
+    return 0
+  fi
+  if [[ -d "$dir/.ralph-workspace" ]]; then
+    printf '%s\n' "$dir/.ralph-workspace/logs"
+    return 0
+  fi
+  return 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -97,7 +118,7 @@ fi
 
 workspace="$(cd "$workspace" && pwd)"
 
-_registry_py="$SCRIPT_DIR/bash-lib/workspace-registry.py"
+_registry_py="$SCRIPT_DIR/python/workspace-registry.py"
 
 _registry_paths() {
   local registry_file
@@ -134,17 +155,18 @@ collect_home_logs_dirs() {
 
 # Build logs_dirs if none were explicitly provided.
 if [[ ${#logs_dirs[@]} -eq 0 ]]; then
-  if [[ "$full" -eq 1 ]] || [[ ! -d "$PWD/.ralph-workspace" ]]; then
-    # Global mode: collect logs from the registry and filesystem.
+  _local_logs_dir=""
+  if [[ "$full" -eq 0 ]]; then
+    _local_logs_dir="$(find_local_logs_dir "$workspace" 2>/dev/null)" || true
+  fi
+  if [[ -n "$_local_logs_dir" ]]; then
+    add_logs_dir "$_local_logs_dir"
+  else
     collect_registry_logs_dirs
     collect_home_logs_dirs
-
     if [[ ${#logs_dirs[@]} -eq 0 ]]; then
       add_logs_dir "${workspace}/.ralph-workspace/logs"
     fi
-  else
-    # Local mode: only the current workspace.
-    add_logs_dir "$PWD/.ralph-workspace/logs"
   fi
 fi
 
@@ -158,4 +180,4 @@ for d in "${logs_dirs[@]}"; do
   logs_args+=(--logs-dir "$d")
 done
 
-RALPH_USAGE_REPORT_SHOW_TOOLS=1 exec python3 "$SCRIPT_DIR/bash-lib/ralph-usage-summary-text.py" all "${logs_args[@]}" --workspace "$workspace" --format "$format"
+RALPH_USAGE_REPORT_SHOW_TOOLS=1 exec python3 "$SCRIPT_DIR/python/ralph-usage-summary-text.py" all "${logs_args[@]}" --workspace "$workspace" --format "$format"

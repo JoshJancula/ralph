@@ -1,0 +1,10 @@
+{
+  "stdout": ".\n|-- src/\n|   |-- components/\n|   |   |-- Button.js\n|   |   |-- Header.js\n|   |   `-- Footer.js\n|   |-- utils/\n|   |   |-- helpers.js\n|   |   |-- constants.js\n|   |   `-- validators.js\n|   `-- index.js\n|-- tests/\n|   |-- unit/\n|   |   |-- components.test.js\n|   |   |-- utils.test.js\n|   |   `-- integration.test.js\n|   `-- fixtures/\n|       `-- sample.json\n|-- docs/\n|   |-- README.md\n|   |-- API.md\n|   `-- CONTRIBUTING.md\n|-- config/\n|   |-- webpack.js\n|   |-- babel.js\n|   `-- tsconfig.json\n|-- .gitignore\n|-- package.json\n|-- LICENSE\n|-- node_modules/\n|   |-- dep1/\n|   |-- dep2/\n|   |-- dep3/\n|   |-- dep4/\n|   |-- dep5/\n|   |-- dep6/\n|   |-- dep7/\n|   |-- dep8/\n|   |-- dep9/\n|   `-- dep10/\n\n30 directories, 25 files",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

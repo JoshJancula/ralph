@@ -41,10 +41,10 @@ setup() {
     return 0
   fi
   local bash_lib_dir="$REPO_ROOT/bundle/.ralph/bash-lib"
-  local run_plan_runtime_lib="$bash_lib_dir/run-plan-runtime.sh"
-  local run_plan_agent_lib="$bash_lib_dir/run-plan-agent.sh"
-  local run_plan_cleanup_lib="$bash_lib_dir/run-plan-cleanup.sh"
-  local run_plan_core_lib="$bash_lib_dir/run-plan-core.sh"
+  local run_plan_runtime_lib="$bash_lib_dir/run-plan/run-plan-runtime.sh"
+  local run_plan_agent_lib="$bash_lib_dir/run-plan/run-plan-agent.sh"
+  local run_plan_cleanup_lib="$bash_lib_dir/run-plan/run-plan-cleanup.sh"
+  local run_plan_core_lib="$bash_lib_dir/run-plan/run-plan-core.sh"
 
   RUN_PLAN_FUNCS_FILE="$(mktemp)"
   write_source_bundle "$RUN_PLAN_FUNCS_FILE" "$run_plan_runtime_lib"
@@ -109,10 +109,10 @@ run_operator_has_real_answer_from_file() {
 create_shared_layout() {
   local shared_root
   shared_root="$(mktemp -d)"
-  mkdir -p "$shared_root/bash-lib"
+  mkdir -p "$shared_root/bash-lib/run-plan"
   touch "$shared_root/ralph-env-safety.sh"
-  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh run-plan-invoke-opencode.sh; do
-    touch "$shared_root/bash-lib/$helper"
+  for helper in run-plan-env.sh run-plan-invoke-cursor.sh run-plan-invoke-claude.sh run-plan-invoke-codex.sh run-plan-invoke-opencode.sh run-plan-invoke-antigravity.sh; do
+    touch "$shared_root/bash-lib/run-plan/$helper"
   done
   printf '%s' "$shared_root"
 }

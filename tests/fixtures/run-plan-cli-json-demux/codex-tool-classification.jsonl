@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"fixture-codex-tool-classification"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_read","type":"tool_use","name":"read_file"}}
+{"type":"item.completed","item":{"id":"item_grep","type":"tool_use","name":"grep"}}
+{"type":"item.completed","item":{"id":"item_shell","type":"tool_use","name":"shell"}}
+{"type":"item.completed","item":{"id":"item_proxy","type":"tool_use","name":"mcp__ralph__ralph_proxy_read"}}
+{"type":"item.completed","item":{"id":"item_other_mcp","type":"tool_use","name":"mcp__custom__lookup"}}
+{"type":"item.completed","item":{"id":"item_rewrite","type":"tool_use","name":"rewrite-bash-command"}}
+{"type":"item.completed","item":{"id":"item_compact","type":"tool_use","name":"compact-bash-output"}}
+{"type":"item.completed","item":{"id":"item_unknown","type":"tool_use","name":"custom_unknown_tool"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}

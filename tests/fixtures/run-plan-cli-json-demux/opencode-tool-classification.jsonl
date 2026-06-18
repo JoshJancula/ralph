@@ -1,0 +1,8 @@
+{"type":"message.part.updated","properties":{"part":{"id":"part_read","type":"tool","callID":"call_read","tool":"read","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_grep","type":"tool","callID":"call_grep","tool":"grep","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_bash","type":"tool","callID":"call_bash","tool":"bash","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_proxy","type":"tool","callID":"call_proxy","tool":"ralph_proxy_read","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_other","type":"tool","callID":"call_other","tool":"mcp__other__lookup","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_rewrite","type":"tool","callID":"call_rewrite","tool":"shell-command-rewrite","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_compact","type":"tool","callID":"call_compact","tool":"shell-output-compact","state":{"status":"completed"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"part_unknown","type":"tool","callID":"call_unknown","tool":"custom_unknown_tool","state":{"status":"completed"}}}}

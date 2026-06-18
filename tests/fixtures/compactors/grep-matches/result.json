@@ -1,0 +1,10 @@
+{
+  "stdout": "rg (exit 0): 3 match(es) in 2 file(s)\n  /bar.py: 1 match(es) (lines 1)\n  /foo.py: 2 match(es) (lines 10, 20)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "grep",
+  "status": "compacted",
+  "exit_status": 0
+}

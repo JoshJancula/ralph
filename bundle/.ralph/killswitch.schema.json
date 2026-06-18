@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ralph killswitch configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Increment when the configuration format changes."
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Set to false to temporarily disable the killswitch (overrides env)."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, log violations without killing the runner."
+    },
+    "banned_tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tool names or glob patterns disallowed before invocation."
+    },
+    "banned_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "File/path glob patterns the killswitch will block."
+    },
+    "custom_rules": {
+      "type": "array",
+      "description": "Command rules using plain string matching (match) or regex (pattern).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable rule name for logging."
+          },
+          "match": {
+            "type": "string",
+            "description": "Plain substring to match against the command (case-sensitive)."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Regex pattern to match against the command."
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "command"
+            ],
+            "default": "command",
+            "description": "What to match against (currently only 'command')."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "oneOf": [
+          {"required": ["match"]},
+          {"required": ["pattern"]}
+        ]
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "enabled",
+    "dry_run",
+    "banned_tools",
+    "banned_paths",
+    "custom_rules"
+  ]
+}

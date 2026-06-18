@@ -1,0 +1,10 @@
+{
+  "stdout": "2024-06-03T10:15:32.123Z Server starting on port 3000\n2024-06-03T10:15:33.456Z Connected to database\n2024-06-03T10:15:34.789Z Cache initialized\n2024-06-03T10:15:35.012Z Ready to accept connections\n2024-06-03T10:16:01.234Z Request: GET /api/users\n2024-06-03T10:16:02.567Z Response: 200 OK\n2024-06-03T10:16:03.890Z Request: POST /api/users\n2024-06-03T10:16:04.123Z Response: 201 Created\n2024-06-03T10:16:30.456Z Cleanup: old connections\n2024-06-03T10:16:31.789Z Cleanup: old connections\n2024-06-03T10:16:32.012Z Cleanup: old connections\n2024-06-03T10:17:01.234Z Background job: sync data\n2024-06-03T10:17:02.567Z Background job: sync data\n2024-06-03T10:17:03.890Z Background job: sync data\n2024-06-03T10:17:04.123Z Background job: sync data\n2024-06-03T10:17:30.456Z ERROR: Database connection timeout\n2024-06-03T10:17:31.789Z WARNING: Retrying connection\n2024-06-03T10:17:32.012Z ERROR: Fallback cache enabled\n2024-06-03T10:17:33.345Z Request: GET /health\n2024-06-03T10:17:34.678Z Response: 503 Service Unavailable",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

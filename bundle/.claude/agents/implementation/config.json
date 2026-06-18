@@ -1,29 +1,18 @@
 {
   "name": "implementation",
+  "_generated": "GENERATED from bundle/.ralph/agents/implementation.md by scripts/sync-runtime-assets.sh - edit the canonical file",
   "model": "claude-sonnet-4-6",
-  "max_budget_usd": "5.00",
   "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
   "rules": [
-    ".claude/rules/no-emoji.md"
+    "bundle/.claude/rules/no-emoji.md",
+    "bundle/.claude/rules/efficient-tool-usage.md"
   ],
   "skills": [
-    ".claude/skills/repo-context/SKILL.md"
+    "bundle/.claude/skills/repo-context/SKILL.md"
   ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
-      "required": true,
-      "kind": "notes"
-    },
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
-      "required": false
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "qa"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md", "required": true, "kind": "notes"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md", "required": false, "kind": "handoff", "to": "qa"}
   ]
 }

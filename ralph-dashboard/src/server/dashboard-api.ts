@@ -1,7 +1,6 @@
 import type { Express, Request, Response } from 'express';
-import { type Dirent, existsSync, promises as fs, realpathSync, statSync } from 'node:fs';
+import { type Dirent, existsSync, readFileSync, promises as fs, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-
 import {
   clearDashboardRootsCache,
   clearWorkspaceRootsCache,
@@ -22,6 +21,106 @@ import {
 
 const FILE_CHUNK_BYTES = 256 * 1024;
 const SUMMARY_FILE_NAMES = new Set(['plan-usage-summary.json', 'orchestration-usage-summary.json']);
+
+// The Python savings report reuses a simple "4 bytes per token" estimate; mirror it here so both endpoints agree.
+const SAVINGS_BYTES_PER_TOKEN_ESTIMATE = 4;
+const SAVINGS_PATH_NAMES = [
+  'pre_tool_rewrite',
+  'hook_compaction',
+  'proxy_shell_compaction',
+  'result_windowing',
+] as const;
+const SAVINGS_PATHS_WITH_HIDDEN = new Set(['hook_compaction', 'proxy_shell_compaction', 'result_windowing']);
+
+type SavingsPathName = (typeof SAVINGS_PATH_NAMES)[number];
+
+interface SessionUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  prompt_bytes: number;
+  tool_calls_total: number;
+}
+
+interface ToolOutputCounterfactual {
+  hypothetical_without_ralph_bytes: number;
+  actual_with_ralph_bytes: number;
+  net_savings_bytes: number;
+  hypothetical_without_ralph_tokens: number;
+  actual_with_ralph_tokens: number;
+  net_savings_tokens: number;
+  net_savings_percent: number;
+  compaction_measured_not_applied_bytes: number;
+  compaction_measured_not_applied_tokens: number;
+}
+
+interface SavingsBucket {
+  pre_optimization_bytes: number;
+  post_optimization_bytes: number;
+  saved_bytes: number;
+  count: number;
+  pre_optimization_tokens: number;
+  post_optimization_tokens: number;
+  saved_tokens: number;
+  token_cap_triggers: number;
+  hidden_from_context?: number;
+  hidden_from_context_tokens?: number;
+  savings_percent?: number;
+  savings_percent_tokens?: number;
+  status?: string;
+  status_label?: string;
+  gross_hidden_bytes?: number;
+  gross_hidden_tokens?: number;
+  gross_readback_bytes?: number;
+  gross_readback_tokens?: number;
+  net_readback_cost_bytes?: number;
+  effective_windowing_savings_rate?: number;
+  compaction_measured_not_applied_bytes?: number;
+}
+
+interface ReadbackSummary {
+  envelope_count: number;
+  readback_count: number;
+  raw_readback_count: number;
+  compacted_readback_count: number;
+  readback_bytes: number;
+  envelope_original_bytes: number;
+  full_preview_rereads: number;
+  raw_readback_share: number;
+  readback_negation_rate: number;
+  gross_readback_bytes: number;
+  gross_readback_tokens: number;
+  net_consumed_bytes: number;
+  net_consumed_tokens: number;
+  effective_windowing_savings_rate: number;
+}
+
+interface SavingsReportDateRange {
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+interface SavingsReport {
+  schema_version: number;
+  kind: 'ralph_benchmark_report';
+  run_count: number;
+  date_range: SavingsReportDateRange;
+  saved_bytes: number;
+  saved_tokens: number;
+  savings_percent: number;
+  session_usage: SessionUsage;
+  tool_output_counterfactual: ToolOutputCounterfactual;
+  per_path: Record<SavingsPathName, SavingsBucket>;
+  cache: {
+    cache_read_tokens: number;
+    cache_hit_ratio: number;
+  };
+  could_have_saved: {
+    compaction_measured_not_applied_bytes: number;
+  };
+  readback_summary?: ReadbackSummary;
+}
 
 const DASHBOARD_EXPLORER_ROOT_KEYS = new Set([
   'logs',
@@ -60,12 +159,57 @@ interface UsageSummaryRecord {
   rate_limit_count?: number;
   tool_turns?: number;
   tool_calls_total?: number;
+  compaction_measured_not_applied_bytes?: number;
   model_breakdown?: ModelBreakdownItem[];
+  byte_savings_by_path?: Record<string, unknown>;
   invocations?: number;
   steps?: number;
   todos_done?: number;
   todos_total?: number;
+  native_hooks_effective?: boolean;
+  mcp_effective?: boolean;
+  native_hook_events?: number;
+  hook_compactions?: number;
+  hook_rewrites?: number;
+  hook_original_bytes?: number;
+  hook_compacted_bytes?: number;
+  runtime_overlay_mode?: string;
+  runtime_overlay_warnings?: string[];
 }
+
+export interface RuntimeOverlayMetrics {
+  native_hooks_effective: boolean;
+  mcp_effective: boolean;
+  native_hook_events: number;
+  hook_compactions: number;
+  hook_rewrites: number;
+  hook_original_bytes: number;
+  hook_compacted_bytes: number;
+  hook_bytes_saved: number;
+  runtime_overlay_mode: string;
+  runtime_overlay_warnings: string[];
+}
+
+/** Per-category tool call counters emitted by Ralph usage accounting (legacy + granular). */
+export const TOOL_CALL_ACCOUNTING_KEYS = [
+  'ralph_proxy_calls',
+  'ralph_knowledge_calls',
+  'other_mcp_calls',
+  'native_read_like_calls',
+  'native_write_like_calls',
+  'native_file_read_calls',
+  'native_read_compatibility_calls',
+  'native_search_calls',
+  'native_shell_calls',
+  'ralph_mcp_calls',
+  'runtime_hook_rewrite_calls',
+  'runtime_hook_compaction_calls',
+  'unknown_tool_calls',
+] as const;
+
+export type ToolCallAccountingKey = (typeof TOOL_CALL_ACCOUNTING_KEYS)[number];
+
+export type ToolCallClassificationMetrics = Record<ToolCallAccountingKey, number>;
 
 interface ModelBreakdownItem {
   runtime: string;
@@ -85,6 +229,21 @@ interface ModelBreakdownItem {
   rate_limit_count?: number;
   tool_turns?: number;
   tool_calls_total?: number;
+  overlay?: RuntimeOverlayMetrics;
+  tool_calls?: ToolCallClassificationMetrics;
+}
+
+interface OverlayAccumulator {
+  saw_overlay_fields: boolean;
+  native_hooks_effective: boolean;
+  mcp_effective: boolean;
+  native_hook_events: number;
+  hook_compactions: number;
+  hook_rewrites: number;
+  hook_original_bytes: number;
+  hook_compacted_bytes: number;
+  runtime_overlay_mode: string;
+  runtime_overlay_warnings: Set<string>;
 }
 
 interface WorkspaceRegistryEntry {
@@ -104,6 +263,28 @@ interface MetricsSummaryOverallShape {
   elapsed_seconds: number;
   count: number;
   tool_calls_total: number;
+}
+
+export interface DiscoverPatternSummary {
+  pattern_id: string;
+  count: number;
+  description?: string;
+}
+
+export interface DiscoverReportPayload {
+  schema_version: number;
+  kind: string;
+  generated_at?: string;
+  plan_key?: string;
+  data_sources?: string[];
+  limitations?: string[];
+  totals?: Record<string, unknown>;
+  sequence_patterns?: DiscoverPatternSummary[];
+  sequence_findings?: Record<string, unknown>[];
+  aggregate_findings?: Record<string, unknown>[];
+  runtime_tool_access?: Record<string, unknown>[];
+  runtime_differences?: Record<string, unknown>[];
+  high_token_low_cache_invocations?: Record<string, unknown>[];
 }
 
 interface MetricsSummaryItem {
@@ -133,6 +314,8 @@ interface MetricsSummaryItem {
   tool_calls_total?: number;
   model_breakdown?: ModelBreakdownItem[];
   invocations?: number;
+  overlay?: RuntimeOverlayMetrics;
+  tool_calls?: ToolCallClassificationMetrics;
 }
 
 type AggregatedListingEntry = {
@@ -231,6 +414,843 @@ async function collectSummaryPathsFromLogs(logRoots: string[]): Promise<string[]
     }
   }
   return Array.from(seen).sort();
+}
+
+function createEmptySavingsBucket(includeHidden: boolean): SavingsBucket {
+  const bucket: SavingsBucket = {
+    pre_optimization_bytes: 0,
+    post_optimization_bytes: 0,
+    saved_bytes: 0,
+    count: 0,
+    pre_optimization_tokens: 0,
+    post_optimization_tokens: 0,
+    saved_tokens: 0,
+    token_cap_triggers: 0,
+  };
+  if (includeHidden) {
+    bucket.hidden_from_context = 0;
+    bucket.hidden_from_context_tokens = 0;
+  }
+  return bucket;
+}
+
+function createEmptySavingsBuckets(): Record<SavingsPathName, SavingsBucket> {
+  const buckets = {} as Record<SavingsPathName, SavingsBucket>;
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    buckets[pathName] = createEmptySavingsBucket(SAVINGS_PATHS_WITH_HIDDEN.has(pathName));
+  }
+  return buckets;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toInt(value: unknown): number {
+  const coerced = toNumber(value);
+  if (!Number.isFinite(coerced)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(coerced));
+}
+
+function roundOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function estimateTokensFromBytes(bytes: number): number {
+  if (bytes <= 0) {
+    return 0;
+  }
+  return Math.ceil(bytes / SAVINGS_BYTES_PER_TOKEN_ESTIMATE);
+}
+
+function mergeSavingsBucket(target: SavingsBucket, source: Record<string, unknown>): void {
+  const numericKeys: (keyof SavingsBucket)[] = [
+    'pre_optimization_bytes',
+    'post_optimization_bytes',
+    'saved_bytes',
+    'count',
+    'pre_optimization_tokens',
+    'post_optimization_tokens',
+    'saved_tokens',
+    'token_cap_triggers',
+  ];
+  for (const key of numericKeys) {
+    if (key in source) {
+      target[key] += toInt(source[key]);
+    }
+  }
+  if ('hidden_from_context' in source && target.hidden_from_context !== undefined) {
+    target.hidden_from_context! += toInt(source['hidden_from_context']);
+  }
+  if ('hidden_from_context_tokens' in source && target.hidden_from_context_tokens !== undefined) {
+    target.hidden_from_context_tokens! += toInt(source['hidden_from_context_tokens']);
+  }
+  if ('gross_readback_bytes' in source) {
+    target.gross_readback_bytes = (target.gross_readback_bytes ?? 0) + toInt(source['gross_readback_bytes']);
+  }
+  if ('gross_readback_tokens' in source) {
+    target.gross_readback_tokens = (target.gross_readback_tokens ?? 0) + toInt(source['gross_readback_tokens']);
+  }
+  if ('net_readback_cost_bytes' in source) {
+    target.net_readback_cost_bytes = (target.net_readback_cost_bytes ?? 0) + toInt(source['net_readback_cost_bytes']);
+  }
+  if ('effective_windowing_savings_rate' in source) {
+    const rate = toNumber(source['effective_windowing_savings_rate']);
+    if (target.effective_windowing_savings_rate === undefined || rate > target.effective_windowing_savings_rate) {
+      target.effective_windowing_savings_rate = rate;
+    }
+  }
+  if ('compaction_measured_not_applied_bytes' in source) {
+    target.compaction_measured_not_applied_bytes =
+      (target.compaction_measured_not_applied_bytes ?? 0) + toInt(source['compaction_measured_not_applied_bytes']);
+  }
+}
+
+function mergeSavingsBuckets(
+  target: Record<SavingsPathName, SavingsBucket>,
+  source: Record<SavingsPathName, SavingsBucket>,
+): void {
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    const bucket = source[pathName];
+    mergeSavingsBucket(target[pathName], (bucket as unknown) as Record<string, unknown>);
+  }
+}
+
+function hasSavings(bucket: SavingsBucket): boolean {
+  return bucket.saved_bytes > 0 || bucket.saved_tokens > 0;
+}
+
+function finalizeSavingsBucket(bucket: SavingsBucket): void {
+  if (bucket.pre_optimization_tokens === 0 && bucket.pre_optimization_bytes > 0) {
+    bucket.pre_optimization_tokens = estimateTokensFromBytes(bucket.pre_optimization_bytes);
+  }
+  if (bucket.post_optimization_tokens === 0 && bucket.post_optimization_bytes > 0) {
+    bucket.post_optimization_tokens = estimateTokensFromBytes(bucket.post_optimization_bytes);
+  }
+  if (bucket.saved_tokens === 0) {
+    const delta = bucket.pre_optimization_tokens - bucket.post_optimization_tokens;
+    bucket.saved_tokens = Math.max(0, delta);
+  }
+  if (bucket.pre_optimization_bytes > 0) {
+    bucket.savings_percent = roundOneDecimal((bucket.saved_bytes / bucket.pre_optimization_bytes) * 100);
+  }
+  if (bucket.pre_optimization_tokens > 0) {
+    bucket.savings_percent_tokens = roundOneDecimal(
+      (bucket.saved_tokens / bucket.pre_optimization_tokens) * 100,
+    );
+  }
+}
+
+function finalizeAllSavingsBuckets(buckets: Record<SavingsPathName, SavingsBucket>): void {
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    finalizeSavingsBucket(buckets[pathName]);
+  }
+}
+
+function savingsPathFromFamily(family: string): SavingsPathName | null {
+  const normalized = family.trim().toLowerCase();
+  if (['hook_compaction', 'hook', 'bash'].includes(normalized)) {
+    return 'hook_compaction';
+  }
+  if (['proxy_shell_compaction', 'proxy_shell', 'proxy-shell', 'proxy'].includes(normalized)) {
+    return 'proxy_shell_compaction';
+  }
+  if (['result_windowing', 'result-windowing', 'windowing', 'result'].includes(normalized)) {
+    return 'result_windowing';
+  }
+  if (['pre_tool_rewrite', 'pre-tool-rewrite', 'rewrite', 'bash-rewrite'].includes(normalized)) {
+    return 'pre_tool_rewrite';
+  }
+  return null;
+}
+
+async function collectInvocationSavings(invocationsPath: string): Promise<Record<SavingsPathName, SavingsBucket>> {
+  const buckets = createEmptySavingsBuckets();
+  if (!existsSync(invocationsPath)) {
+    return buckets;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(invocationsPath, 'utf8'));
+  } catch {
+    return buckets;
+  }
+  if (!isObject(payload)) {
+    return buckets;
+  }
+  const invocations = Array.isArray(payload['invocations']) ? payload['invocations'] : [];
+  // The runtime overlay writes each invocation's byte_savings_by_path as a
+  // cumulative running total. Summing those snapshots across iterations
+  // multiplies real savings, so keep the final (largest) snapshot per
+  // (plan_key, stage_id, path_name) rather than per-iteration.
+  const latest = new Map<string, Record<string, unknown>>();
+  for (const record of invocations) {
+    if (!isObject(record)) {
+      continue;
+    }
+    const byteSavings = record['byte_savings_by_path'];
+    if (!isObject(byteSavings)) {
+      continue;
+    }
+    const planKey = String(record['plan_key'] ?? '');
+    const stageId = String(record['stage_id'] ?? '');
+    for (const pathName of SAVINGS_PATH_NAMES) {
+      const pathData = byteSavings[pathName];
+      if (!isObject(pathData)) {
+        continue;
+      }
+      const key = `${planKey}\u0000${stageId}\u0000${pathName}`;
+      latest.set(key, pathData);
+    }
+  }
+  for (const pathData of latest.values()) {
+    const pathName = savingsPathFromFamily(String(pathData['path_name'] ?? pathData['name'] ?? ''));
+    if (pathName) {
+      mergeSavingsBucket(buckets[pathName], pathData);
+    } else {
+      // Fallback: try to infer the target bucket from any explicit path_name
+      // field in the stored snapshot; otherwise the caller will not merge it.
+      for (const name of SAVINGS_PATH_NAMES) {
+        if (String(pathData['path_name'] ?? pathData['name'] ?? '').toLowerCase().includes(name.replace('_', ''))) {
+          mergeSavingsBucket(buckets[name], pathData);
+          break;
+        }
+      }
+    }
+  }
+  return buckets;
+}
+
+async function collectCompactionTelemetrySavings(
+  invocationsPath: string,
+): Promise<Record<SavingsPathName, SavingsBucket>> {
+  const buckets = createEmptySavingsBuckets();
+  if (!existsSync(invocationsPath)) {
+    return buckets;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(invocationsPath, 'utf8'));
+  } catch {
+    return buckets;
+  }
+  if (!isObject(payload)) {
+    return buckets;
+  }
+  const invocations = Array.isArray(payload['invocations']) ? payload['invocations'] : [];
+  const seen = new Set<string>();
+  for (const record of invocations) {
+    if (!isObject(record)) {
+      continue;
+    }
+    const telemetryList = Array.isArray(record['compaction_telemetry'])
+      ? record['compaction_telemetry']
+      : [];
+    const planKey = String(record['plan_key'] ?? '');
+    const stageId = String(record['stage_id'] ?? '');
+    const iteration = String(record['iteration'] ?? '');
+    for (const telemetry of telemetryList) {
+      if (!isObject(telemetry)) {
+        continue;
+      }
+      if (telemetry['compactionSkipped'] === true || telemetry['compaction_skipped'] === true) {
+        continue;
+      }
+      const pathName = savingsPathFromFamily(String(telemetry['family'] ?? ''));
+      if (!pathName) {
+        continue;
+      }
+      const originalBytes = toInt(telemetry['originalBytes'] ?? telemetry['original_bytes']);
+      if (originalBytes <= 0) {
+        continue;
+      }
+      const compactedBytes = toInt(telemetry['compactedBytes'] ?? telemetry['compacted_bytes']);
+      const key = `${planKey}\u0000${stageId}\u0000${iteration}\u0000${pathName}\u0000${originalBytes}\u0000${compactedBytes}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const bucket = buckets[pathName];
+      let originalTokens = toInt(telemetry['originalTokens'] ?? telemetry['original_tokens']);
+      let compactedTokens = toInt(
+        telemetry['compactedTokens'] ??
+          telemetry['compacted_tokens'] ??
+          telemetry['returnedTokens'] ??
+          telemetry['returned_tokens'],
+      );
+      if (originalTokens <= 0) {
+        originalTokens = estimateTokensFromBytes(originalBytes);
+      }
+      if (compactedTokens <= 0 && compactedBytes > 0) {
+        compactedTokens = estimateTokensFromBytes(compactedBytes);
+      }
+      bucket.pre_optimization_bytes += originalBytes;
+      bucket.post_optimization_bytes += compactedBytes;
+      bucket.saved_bytes += Math.max(0, originalBytes - compactedBytes);
+      bucket.pre_optimization_tokens += originalTokens;
+      bucket.post_optimization_tokens += compactedTokens;
+      bucket.saved_tokens += Math.max(0, originalTokens - compactedTokens);
+      bucket.count += 1;
+      if (telemetry['tokenCapTriggered'] === true || telemetry['token_cap_triggered'] === true) {
+        bucket.token_cap_triggers += 1;
+      }
+      if (bucket.hidden_from_context !== undefined) {
+        bucket.hidden_from_context += Math.max(0, originalBytes - compactedBytes);
+      }
+      if (bucket.hidden_from_context_tokens !== undefined) {
+        bucket.hidden_from_context_tokens += Math.max(0, originalTokens - compactedTokens);
+      }
+    }
+  }
+  return buckets;
+}
+
+function mergeSavingsBucketsFromSummary(
+  target: Record<SavingsPathName, SavingsBucket>,
+  summaryRecord: UsageSummaryRecord,
+): boolean {
+  const bucketDescription = summaryRecord.byte_savings_by_path;
+  if (!isObject(bucketDescription)) {
+    return false;
+  }
+  let populated = false;
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    const bucket = bucketDescription[pathName];
+    if (!isObject(bucket)) {
+      continue;
+    }
+    mergeSavingsBucket(target[pathName], bucket);
+    if (hasSavings(target[pathName])) {
+      populated = true;
+    }
+  }
+  return populated;
+}
+
+async function collectSavingsForRecord(
+  summaryPath: string,
+  summaryRecord: UsageSummaryRecord,
+): Promise<Record<SavingsPathName, SavingsBucket>> {
+  const buckets = createEmptySavingsBuckets();
+  if (mergeSavingsBucketsFromSummary(buckets, summaryRecord)) {
+    return buckets;
+  }
+  const invocationsPath = join(dirname(summaryPath), 'invocation-usage.json');
+  const invocationBuckets = await collectInvocationSavings(invocationsPath);
+  mergeSavingsBuckets(buckets, invocationBuckets);
+  if (Object.values(invocationBuckets).some(hasSavings)) {
+    return buckets;
+  }
+  const compactionBuckets = await collectCompactionTelemetrySavings(invocationsPath);
+  mergeSavingsBuckets(buckets, compactionBuckets);
+  return buckets;
+}
+
+function parseTimestampMs(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatIsoDateMs(ms: number | null): string | null {
+  if (ms === null) {
+    return null;
+  }
+  const date = new Date(ms);
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function getBreakdownEntries(record: UsageSummaryRecord): ModelBreakdownItem[] {
+  const breakdown = normalizeModelBreakdownRows(record.model_breakdown);
+  if (breakdown && breakdown.length > 0) {
+    return breakdown;
+  }
+  return [
+    {
+      runtime: record.runtime || '',
+      model: record.model || '',
+      invocations: toInt(record.invocations ?? record.steps ?? 1),
+      elapsed_seconds: toNumber(record.elapsed_seconds),
+      input_tokens: toNumber(record.input_tokens),
+      output_tokens: toNumber(record.output_tokens),
+      cache_creation_input_tokens: toNumber(record.cache_creation_input_tokens),
+      cache_read_input_tokens: toNumber(record.cache_read_input_tokens),
+      max_turn_total_tokens: toNumber(record.max_turn_total_tokens),
+      cache_hit_ratio: toNumber(record.cache_hit_ratio),
+      tool_calls_total: toNumber(record.tool_calls_total),
+    },
+  ];
+}
+
+function passesSavingsFilters(
+  record: UsageSummaryRecord,
+  summaryPath: string,
+  runtimeFilter: string,
+  modelFilter: string,
+  planFilter: string,
+): boolean {
+  if (planFilter) {
+    const planCandidates = new Set<string>();
+    planCandidates.add(String(record.plan_key ?? '').trim());
+    planCandidates.add(String(record.artifact_ns ?? '').trim());
+    const directoryName = basename(dirname(summaryPath)).trim();
+    if (directoryName) {
+      planCandidates.add(directoryName);
+    }
+    if (![...planCandidates.values()].some((value) => value === planFilter)) {
+      return false;
+    }
+  }
+  const breakdown = getBreakdownEntries(record);
+  if (runtimeFilter) {
+    const matchesRuntime = breakdown.some((row) => String(row.runtime).trim() === runtimeFilter);
+    if (!matchesRuntime) {
+      return false;
+    }
+  }
+  if (modelFilter) {
+    const matchesModel = breakdown.some((row) => String(row.model).trim() === modelFilter);
+    if (!matchesModel) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function windowingLogForSummary(summaryPath: string): string | null {
+  const logDir = dirname(summaryPath);
+  const planKey = basename(logDir);
+  if (!planKey) {
+    return null;
+  }
+  const candidate = join(logDir, '..', '..', 'runtime-config', planKey, 'result-windowing.jsonl');
+  return existsSync(candidate) ? candidate : null;
+}
+
+function analyzeResultWindowingLog(path: string): ReadbackSummary {
+  const empty: ReadbackSummary = {
+    envelope_count: 0,
+    readback_count: 0,
+    raw_readback_count: 0,
+    compacted_readback_count: 0,
+    readback_bytes: 0,
+    envelope_original_bytes: 0,
+    full_preview_rereads: 0,
+    raw_readback_share: 0,
+    readback_negation_rate: 0,
+    gross_readback_bytes: 0,
+    gross_readback_tokens: 0,
+    net_consumed_bytes: 0,
+    net_consumed_tokens: 0,
+    effective_windowing_savings_rate: 0,
+  };
+  let raw = '';
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return empty;
+  }
+  const envelopes = new Map<string, { original_bytes: number; returned_bytes: number; original_tokens: number; returned_tokens: number }>();
+  const readbacks: Array<{ resultId?: string; view?: string; returnedBytes?: number; returnedTokens?: number }> = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const record = JSON.parse(trimmed) as Record<string, unknown>;
+      const event = String(record.event ?? '');
+      const resultId = String(record.resultId ?? '');
+      if (event === 'envelope' && resultId) {
+        const originalBytes = toInt(record.originalBytes);
+        const returnedBytes = toInt(record.returnedBytes);
+        let originalTokens = toInt(record.originalTokens);
+        let returnedTokens = toInt(record.returnedTokens);
+        if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
+          originalTokens = estimateTokensFromBytes(originalBytes);
+          returnedTokens = estimateTokensFromBytes(returnedBytes);
+        }
+        envelopes.set(resultId, {
+          original_bytes: originalBytes,
+          returned_bytes: returnedBytes,
+          original_tokens: originalTokens,
+          returned_tokens: returnedTokens,
+        });
+      } else if (event === 'readback' && resultId) {
+        const returnedBytes = toInt(record.returnedBytes);
+        let returnedTokens = toInt(record.returnedTokens);
+        if (returnedTokens <= 0 && returnedBytes > 0) {
+          returnedTokens = estimateTokensFromBytes(returnedBytes);
+        }
+        readbacks.push({
+          resultId,
+          view: String(record.view ?? 'compacted'),
+          returnedBytes,
+          returnedTokens,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+  let rawCount = 0;
+  let compactedCount = 0;
+  let readbackBytes = 0;
+  let grossReadbackTokens = 0;
+  let fullRereads = 0;
+  for (const record of readbacks) {
+    const returned = toInt(record.returnedBytes);
+    const returnedTokens = toInt(record.returnedTokens);
+    readbackBytes += returned;
+    grossReadbackTokens += returnedTokens;
+    if (record.view === 'raw') {
+      rawCount += 1;
+    } else {
+      compactedCount += 1;
+    }
+    const envelope = record.resultId ? envelopes.get(record.resultId) : undefined;
+    if (envelope && returned > 0) {
+      const preview = envelope.returned_bytes;
+      if (preview > 0 && returned >= Math.floor(preview * 0.95)) {
+        fullRereads += 1;
+      }
+    }
+  }
+  const envelopeBytes = [...envelopes.values()].reduce(
+    (sum, item) => sum + item.original_bytes,
+    0,
+  );
+  const envelopeTokens = [...envelopes.values()].reduce(
+    (sum, item) => sum + item.original_tokens,
+    0,
+  );
+  let netConsumedBytes = 0;
+  let netConsumedTokens = 0;
+  for (const [resultId, envelope] of envelopes) {
+    let extraBytes = 0;
+    let extraTokens = 0;
+    for (const readback of readbacks) {
+      if (readback.resultId === resultId) {
+        extraBytes += toInt(readback.returnedBytes);
+        extraTokens += toInt(readback.returnedTokens);
+      }
+    }
+    const consumedBytes = envelope.returned_bytes + extraBytes;
+    const consumedTokens = envelope.returned_tokens + extraTokens;
+    netConsumedBytes +=
+      envelope.original_bytes > 0 ? Math.min(envelope.original_bytes, consumedBytes) : consumedBytes;
+    netConsumedTokens +=
+      envelope.original_tokens > 0
+        ? Math.min(envelope.original_tokens, consumedTokens)
+        : consumedTokens;
+  }
+  const totalReadbacks = rawCount + compactedCount;
+  const rawShare = totalReadbacks > 0 ? Math.round((rawCount / totalReadbacks) * 10000) / 10000 : 0;
+  const negationRate =
+    envelopeBytes > 0 ? Math.round((readbackBytes / envelopeBytes) * 10000) / 10000 : 0;
+  const effectiveRate =
+    envelopeBytes > 0
+      ? Math.round(((envelopeBytes - netConsumedBytes) / envelopeBytes) * 10000) / 10000
+      : 0;
+  return {
+    envelope_count: envelopes.size,
+    readback_count: totalReadbacks,
+    raw_readback_count: rawCount,
+    compacted_readback_count: compactedCount,
+    readback_bytes: readbackBytes,
+    envelope_original_bytes: envelopeBytes,
+    full_preview_rereads: fullRereads,
+    raw_readback_share: rawShare,
+    readback_negation_rate: negationRate,
+    gross_readback_bytes: readbackBytes,
+    gross_readback_tokens: grossReadbackTokens,
+    net_consumed_bytes: netConsumedBytes,
+    net_consumed_tokens: netConsumedTokens,
+    effective_windowing_savings_rate: effectiveRate,
+  };
+}
+
+function savingsPathStatusLabel(status: string): string {
+  switch (status) {
+    case 'negated':
+      return 'negated by readback';
+    default:
+      return status;
+  }
+}
+
+function savingsPathStatus(
+  pathName: SavingsPathName,
+  bucket: SavingsBucket,
+  readbackStats: ReadbackSummary,
+): string {
+  const preBytes = bucket.pre_optimization_bytes;
+  const savedBytes = bucket.saved_bytes;
+  const count = bucket.count;
+  if (preBytes <= 0 && count <= 0) {
+    return 'inactive';
+  }
+  if (savedBytes > 0) {
+    return 'saved';
+  }
+  if (pathName === 'result_windowing' && readbackStats.readback_count > 0 && preBytes > 0) {
+    return 'negated';
+  }
+  if (preBytes > 0 || count > 0) {
+    return 'active';
+  }
+  return 'inactive';
+}
+
+function mergeReadbackSummary(target: ReadbackSummary, source: ReadbackSummary): void {
+  target.envelope_count += source.envelope_count;
+  target.readback_count += source.readback_count;
+  target.raw_readback_count += source.raw_readback_count;
+  target.compacted_readback_count += source.compacted_readback_count;
+  target.readback_bytes += source.readback_bytes;
+  target.envelope_original_bytes += source.envelope_original_bytes;
+  target.full_preview_rereads += source.full_preview_rereads;
+  target.gross_readback_bytes += source.gross_readback_bytes;
+  target.gross_readback_tokens += source.gross_readback_tokens;
+  target.net_consumed_bytes += source.net_consumed_bytes;
+  target.net_consumed_tokens += source.net_consumed_tokens;
+  // Recalculate derived ratios after aggregation.
+  if (target.readback_count > 0) {
+    target.raw_readback_share = Math.round((target.raw_readback_count / target.readback_count) * 10000) / 10000;
+  }
+  if (target.envelope_original_bytes > 0) {
+    target.readback_negation_rate =
+      Math.round((target.readback_bytes / target.envelope_original_bytes) * 10000) / 10000;
+    target.effective_windowing_savings_rate =
+      Math.round(
+        ((target.envelope_original_bytes - target.net_consumed_bytes) / target.envelope_original_bytes) * 10000,
+      ) / 10000;
+  }
+}
+
+function emptyReadbackSummary(): ReadbackSummary {
+  return {
+    envelope_count: 0,
+    readback_count: 0,
+    raw_readback_count: 0,
+    compacted_readback_count: 0,
+    readback_bytes: 0,
+    envelope_original_bytes: 0,
+    full_preview_rereads: 0,
+    raw_readback_share: 0,
+    readback_negation_rate: 0,
+    gross_readback_bytes: 0,
+    gross_readback_tokens: 0,
+    net_consumed_bytes: 0,
+    net_consumed_tokens: 0,
+    effective_windowing_savings_rate: 0,
+  };
+}
+
+async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport> {
+  if (summaryPaths.length === 0) {
+    return emptySavingsReport();
+  }
+
+  const aggregateBuckets = createEmptySavingsBuckets();
+  let runCount = 0;
+  let startedAtMs: number | null = null;
+  let endedAtMs: number | null = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
+  let promptBytes = 0;
+  let toolCallsTotal = 0;
+  let couldHaveSavedBytes = 0;
+  const readbackTotals = emptyReadbackSummary();
+
+  for (const summaryPath of summaryPaths) {
+    let record: UsageSummaryRecord;
+    try {
+      const raw = await fs.readFile(summaryPath, 'utf8');
+      record = JSON.parse(raw) as UsageSummaryRecord;
+    } catch {
+      continue;
+    }
+
+    runCount += toInt(record.invocations ?? record.steps ?? 1);
+    inputTokens += toNumber(record.input_tokens);
+    outputTokens += toNumber(record.output_tokens);
+    cacheCreationTokens += toNumber(record.cache_creation_input_tokens);
+    cacheReadTokens += toNumber(record.cache_read_input_tokens);
+    promptBytes += toInt(record.prompt_bytes);
+    toolCallsTotal += toInt(record.tool_calls_total);
+    couldHaveSavedBytes += toInt(record.compaction_measured_not_applied_bytes);
+
+    const startMs = parseTimestampMs(record.started_at);
+    if (startMs !== null && (startedAtMs === null || startMs < startedAtMs)) {
+      startedAtMs = startMs;
+    }
+    const endMs = parseTimestampMs(record.ended_at);
+    if (endMs !== null && (endedAtMs === null || endMs > endedAtMs)) {
+      endedAtMs = endMs;
+    }
+
+    const recordBuckets = await collectSavingsForRecord(summaryPath, record);
+    mergeSavingsBuckets(aggregateBuckets, recordBuckets);
+
+    const windowingLog = windowingLogForSummary(summaryPath);
+    if (windowingLog) {
+      mergeReadbackSummary(readbackTotals, analyzeResultWindowingLog(windowingLog));
+    }
+  }
+
+  finalizeAllSavingsBuckets(aggregateBuckets);
+
+  let savedBytes = 0;
+  let savedTokens = 0;
+  let preOptimizationBytes = 0;
+
+  const perPath = {} as Record<SavingsPathName, SavingsBucket>;
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    const bucket = aggregateBuckets[pathName];
+    const status = savingsPathStatus(pathName, bucket, readbackTotals);
+    bucket.status = status;
+    bucket.status_label = savingsPathStatusLabel(status);
+    perPath[pathName] = bucket;
+    savedBytes += bucket.saved_bytes;
+    savedTokens += bucket.saved_tokens;
+    preOptimizationBytes += bucket.pre_optimization_bytes;
+  }
+
+  const savingsPercent =
+    preOptimizationBytes > 0 ? roundOneDecimal((savedBytes / preOptimizationBytes) * 100) : 0;
+  const cacheDenominator = inputTokens + cacheCreationTokens + cacheReadTokens;
+  const cacheHitRatio =
+    cacheDenominator > 0
+      ? Math.round((cacheReadTokens / cacheDenominator) * 10000) / 10000
+      : 0;
+
+  // Add diagnostic fields to per-path buckets to mirror Python schema v2.
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    const bucket = perPath[pathName];
+    if (SAVINGS_PATHS_WITH_HIDDEN.has(pathName)) {
+      bucket.gross_hidden_bytes = bucket.hidden_from_context ?? 0;
+      bucket.gross_hidden_tokens = bucket.hidden_from_context_tokens ?? 0;
+    }
+    if (pathName === 'result_windowing') {
+      bucket.gross_readback_bytes = readbackTotals.gross_readback_bytes;
+      bucket.gross_readback_tokens = readbackTotals.gross_readback_tokens;
+      bucket.net_readback_cost_bytes = Math.max(
+        0,
+        readbackTotals.net_consumed_bytes - bucket.post_optimization_bytes,
+      );
+      bucket.effective_windowing_savings_rate = readbackTotals.effective_windowing_savings_rate;
+    }
+    if (pathName === 'proxy_shell_compaction') {
+      bucket.compaction_measured_not_applied_bytes = couldHaveSavedBytes;
+    }
+  }
+
+  // Compute tool-output counterfactuals that mirror ralph-benchmark-report.py.
+  let hypotheticalWithoutRalphBytes = 0;
+  let actualWithRalphBytes = 0;
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    const bucket = perPath[pathName];
+    hypotheticalWithoutRalphBytes += bucket.pre_optimization_bytes;
+    actualWithRalphBytes += bucket.post_optimization_bytes;
+  }
+
+  // Result-windowing buckets already reflect net post in saved_bytes; derive
+  // aggregate counterfactual totals from the summary bucket's pre/post bytes
+  // to stay aligned with ralph-benchmark-report.py's aggregate_windowing_totals.
+  const windowOriginalBytes = perPath['result_windowing'].pre_optimization_bytes;
+  const windowReturnedBytes = perPath['result_windowing'].post_optimization_bytes;
+  if (windowOriginalBytes > 0) {
+    hypotheticalWithoutRalphBytes +=
+      windowOriginalBytes - perPath['result_windowing'].pre_optimization_bytes;
+    actualWithRalphBytes += windowReturnedBytes - perPath['result_windowing'].post_optimization_bytes;
+  }
+  // When no windowing summary bucket is present but a readback log is, add
+  // net readback cost so actual_with_ralph includes re-consumed bytes.
+  else if (readbackTotals.envelope_original_bytes > 0) {
+    actualWithRalphBytes += Math.max(
+      0,
+      perPath['result_windowing'].net_readback_cost_bytes ?? 0,
+    );
+  }
+  hypotheticalWithoutRalphBytes = Math.max(0, hypotheticalWithoutRalphBytes);
+  actualWithRalphBytes = Math.max(0, actualWithRalphBytes);
+
+  const hypotheticalWithoutRalphTokens = estimateTokensFromBytes(hypotheticalWithoutRalphBytes);
+  const actualWithRalphTokens = estimateTokensFromBytes(actualWithRalphBytes);
+  const netSavingsBytes = Math.max(0, hypotheticalWithoutRalphBytes - actualWithRalphBytes);
+  const netSavingsTokens = Math.max(0, hypotheticalWithoutRalphTokens - actualWithRalphTokens);
+  const netSavingsPercent =
+    hypotheticalWithoutRalphBytes > 0
+      ? roundOneDecimal((netSavingsBytes / hypotheticalWithoutRalphBytes) * 100)
+      : 0;
+
+  const counterfactualOpportunityBytes = Math.max(0, couldHaveSavedBytes);
+  const counterfactualOpportunityTokens = estimateTokensFromBytes(counterfactualOpportunityBytes);
+
+  const sessionUsage: SessionUsage = {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_creation_input_tokens: cacheCreationTokens,
+    cache_read_input_tokens: cacheReadTokens,
+    prompt_bytes: promptBytes,
+    tool_calls_total: toolCallsTotal,
+  };
+
+  const toolOutputCounterfactual: ToolOutputCounterfactual = {
+    hypothetical_without_ralph_bytes: hypotheticalWithoutRalphBytes,
+    actual_with_ralph_bytes: actualWithRalphBytes,
+    net_savings_bytes: netSavingsBytes,
+    hypothetical_without_ralph_tokens: hypotheticalWithoutRalphTokens,
+    actual_with_ralph_tokens: actualWithRalphTokens,
+    net_savings_tokens: netSavingsTokens,
+    net_savings_percent: netSavingsPercent,
+    compaction_measured_not_applied_bytes: counterfactualOpportunityBytes,
+    compaction_measured_not_applied_tokens: counterfactualOpportunityTokens,
+  };
+
+  return {
+    schema_version: 2,
+    kind: 'ralph_benchmark_report',
+    run_count: runCount,
+    date_range: {
+      started_at: formatIsoDateMs(startedAtMs),
+      ended_at: formatIsoDateMs(endedAtMs),
+    },
+    saved_bytes: savedBytes,
+    saved_tokens: savedTokens,
+    savings_percent: savingsPercent,
+    session_usage: sessionUsage,
+    tool_output_counterfactual: toolOutputCounterfactual,
+    per_path: perPath,
+    cache: {
+      cache_read_tokens: cacheReadTokens,
+      cache_hit_ratio: cacheHitRatio,
+    },
+    could_have_saved: {
+      compaction_measured_not_applied_bytes: couldHaveSavedBytes,
+    },
+    readback_summary: {
+      ...readbackTotals,
+      raw_readback_share:
+        readbackTotals.readback_count > 0
+          ? Math.round((readbackTotals.raw_readback_count / readbackTotals.readback_count) * 10000) /
+            10000
+          : 0,
+      readback_negation_rate:
+        readbackTotals.envelope_original_bytes > 0
+          ? Math.round(
+              (readbackTotals.readback_bytes / readbackTotals.envelope_original_bytes) * 10000,
+            ) / 10000
+          : 0,
+    },
+  };
 }
 
 function normalizeAggregatePath(pathParam: string): string {
@@ -655,6 +1675,271 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function coerceBool(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return false;
+  }
+  const text = String(value).trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return text === '1' || text === 'true' || text === 'yes' || text === 'on';
+}
+
+function coerceWarnings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item).trim()).filter((item) => item.length > 0);
+}
+
+function emptyOverlayAccumulator(): OverlayAccumulator {
+  return {
+    saw_overlay_fields: false,
+    native_hooks_effective: false,
+    mcp_effective: false,
+    native_hook_events: 0,
+    hook_compactions: 0,
+    hook_rewrites: 0,
+    hook_original_bytes: 0,
+    hook_compacted_bytes: 0,
+    runtime_overlay_mode: '',
+    runtime_overlay_warnings: new Set<string>(),
+  };
+}
+
+const OVERLAY_INVOCATION_KEYS = [
+  'native_hooks_effective',
+  'mcp_effective',
+  'hook_compactions',
+  'hook_rewrites',
+  'native_hook_events',
+  'hook_original_bytes',
+  'hook_compacted_bytes',
+  'runtime_overlay_mode',
+  'runtime_overlay_warnings',
+] as const;
+
+function invocationRecordHasOverlayFields(record: Record<string, unknown>): boolean {
+  return OVERLAY_INVOCATION_KEYS.some((key) => record[key] !== undefined && record[key] !== null);
+}
+
+function accumulateOverlayFromRecord(acc: OverlayAccumulator, record: Record<string, unknown>): void {
+  if (!invocationRecordHasOverlayFields(record)) {
+    return;
+  }
+  acc.saw_overlay_fields = true;
+  if (coerceBool(record['native_hooks_effective'])) {
+    acc.native_hooks_effective = true;
+  }
+  if (coerceBool(record['mcp_effective'])) {
+    acc.mcp_effective = true;
+  }
+  acc.native_hook_events += toNumber(record['native_hook_events']);
+  acc.hook_compactions += toNumber(record['hook_compactions']);
+  acc.hook_rewrites += toNumber(record['hook_rewrites']);
+  acc.hook_original_bytes += toNumber(record['hook_original_bytes']);
+  acc.hook_compacted_bytes += toNumber(record['hook_compacted_bytes']);
+  const mode = String(record['runtime_overlay_mode'] ?? '').trim();
+  if (mode) {
+    acc.runtime_overlay_mode = mode;
+  }
+  for (const warning of coerceWarnings(record['runtime_overlay_warnings'])) {
+    acc.runtime_overlay_warnings.add(warning);
+  }
+}
+
+function finalizeOverlayMetrics(acc: OverlayAccumulator): RuntimeOverlayMetrics | undefined {
+  if (!acc.saw_overlay_fields) {
+    return undefined;
+  }
+  const hook_bytes_saved = Math.max(0, acc.hook_original_bytes - acc.hook_compacted_bytes);
+  return {
+    native_hooks_effective: acc.native_hooks_effective,
+    mcp_effective: acc.mcp_effective,
+    native_hook_events: acc.native_hook_events,
+    hook_compactions: acc.hook_compactions,
+    hook_rewrites: acc.hook_rewrites,
+    hook_original_bytes: acc.hook_original_bytes,
+    hook_compacted_bytes: acc.hook_compacted_bytes,
+    hook_bytes_saved,
+    runtime_overlay_mode: acc.runtime_overlay_mode,
+    runtime_overlay_warnings: [...acc.runtime_overlay_warnings].sort(),
+  };
+}
+
+function overlayMetricsFromSummaryRecord(record: UsageSummaryRecord): RuntimeOverlayMetrics | undefined {
+  const acc = emptyOverlayAccumulator();
+  const pseudo: Record<string, unknown> = {};
+  if (record.native_hooks_effective !== undefined) {
+    pseudo['native_hooks_effective'] = record.native_hooks_effective;
+  }
+  if (record.mcp_effective !== undefined) {
+    pseudo['mcp_effective'] = record.mcp_effective;
+  }
+  if (record.native_hook_events !== undefined) {
+    pseudo['native_hook_events'] = record.native_hook_events;
+  }
+  if (record.hook_compactions !== undefined) {
+    pseudo['hook_compactions'] = record.hook_compactions;
+  }
+  if (record.hook_rewrites !== undefined) {
+    pseudo['hook_rewrites'] = record.hook_rewrites;
+  }
+  if (record.hook_original_bytes !== undefined) {
+    pseudo['hook_original_bytes'] = record.hook_original_bytes;
+  }
+  if (record.hook_compacted_bytes !== undefined) {
+    pseudo['hook_compacted_bytes'] = record.hook_compacted_bytes;
+  }
+  if (record.runtime_overlay_mode !== undefined) {
+    pseudo['runtime_overlay_mode'] = record.runtime_overlay_mode;
+  }
+  if (record.runtime_overlay_warnings !== undefined) {
+    pseudo['runtime_overlay_warnings'] = record.runtime_overlay_warnings;
+  }
+  accumulateOverlayFromRecord(acc, pseudo);
+  return finalizeOverlayMetrics(acc);
+}
+
+function emptyToolCallCounts(): ToolCallClassificationMetrics {
+  const counts = {} as ToolCallClassificationMetrics;
+  for (const key of TOOL_CALL_ACCOUNTING_KEYS) {
+    counts[key] = 0;
+  }
+  return counts;
+}
+
+function recordHasToolCallClassification(record: Record<string, unknown>): boolean {
+  return TOOL_CALL_ACCOUNTING_KEYS.some((key) => record[key] !== undefined && record[key] !== null);
+}
+
+function toolCallsFromRecord(record: Record<string, unknown>): ToolCallClassificationMetrics | undefined {
+  if (!recordHasToolCallClassification(record)) {
+    return undefined;
+  }
+  const counts = emptyToolCallCounts();
+  for (const key of TOOL_CALL_ACCOUNTING_KEYS) {
+    counts[key] = toNumber(record[key]);
+  }
+  return counts;
+}
+
+function mergeToolCallCounts(
+  target: ToolCallClassificationMetrics,
+  source: ToolCallClassificationMetrics,
+): void {
+  for (const key of TOOL_CALL_ACCOUNTING_KEYS) {
+    target[key] += source[key];
+  }
+}
+
+function accumulateToolCallsFromRecord(
+  acc: { saw: boolean; counts: ToolCallClassificationMetrics },
+  record: Record<string, unknown>,
+): void {
+  const extracted = toolCallsFromRecord(record);
+  if (!extracted) {
+    return;
+  }
+  acc.saw = true;
+  mergeToolCallCounts(acc.counts, extracted);
+}
+
+function finalizeToolCallMetrics(
+  acc: { saw: boolean; counts: ToolCallClassificationMetrics },
+): ToolCallClassificationMetrics | undefined {
+  if (!acc.saw) {
+    return undefined;
+  }
+  return { ...acc.counts };
+}
+
+function emptyToolCallAccumulator(): { saw: boolean; counts: ToolCallClassificationMetrics } {
+  return { saw: false, counts: emptyToolCallCounts() };
+}
+
+function sumToolCallsFromBreakdownRows(rows: ModelBreakdownItem[]): ToolCallClassificationMetrics | undefined {
+  const acc = emptyToolCallAccumulator();
+  for (const row of rows) {
+    if (row.tool_calls) {
+      acc.saw = true;
+      mergeToolCallCounts(acc.counts, row.tool_calls);
+    }
+  }
+  return finalizeToolCallMetrics(acc);
+}
+
+function normalizeModelBreakdownRow(item: Record<string, unknown>): ModelBreakdownItem {
+  const totalInput =
+    toNumber(item['input_tokens']) +
+    toNumber(item['cache_creation_input_tokens']) +
+    toNumber(item['cache_read_input_tokens']);
+  const cache_hit_ratio =
+    totalInput > 0
+      ? Math.round((toNumber(item['cache_read_input_tokens']) / totalInput) * 10000) / 10000
+      : 0;
+  const row: ModelBreakdownItem = {
+    runtime: String(item['runtime'] ?? ''),
+    model: String(item['model'] ?? ''),
+    invocations: toNumber(item['invocations']),
+    elapsed_seconds: toNumber(item['elapsed_seconds']),
+    input_tokens: toNumber(item['input_tokens']),
+    output_tokens: toNumber(item['output_tokens']),
+    cache_creation_input_tokens: toNumber(item['cache_creation_input_tokens']),
+    cache_read_input_tokens: toNumber(item['cache_read_input_tokens']),
+    max_turn_total_tokens: toNumber(item['max_turn_total_tokens']),
+    cache_hit_ratio,
+    prompt_bytes: toNumber(item['prompt_bytes']),
+    todo_bytes: toNumber(item['todo_bytes']),
+    todo_continuation_lines: toNumber(item['todo_continuation_lines']),
+    direct_verification_count: toNumber(item['direct_verification_count']),
+    rate_limit_count: toNumber(item['rate_limit_count']),
+    tool_turns: toNumber(item['tool_turns']),
+    tool_calls_total: toNumber(item['tool_calls_total']),
+  };
+  const rowToolCalls = toolCallsFromRecord(item);
+  if (rowToolCalls) {
+    row.tool_calls = rowToolCalls;
+  }
+  const overlayAcc = emptyOverlayAccumulator();
+  accumulateOverlayFromRecord(overlayAcc, item);
+  const rowOverlayMetrics = finalizeOverlayMetrics(overlayAcc);
+  if (rowOverlayMetrics) {
+    row.overlay = rowOverlayMetrics;
+  }
+  return row;
+}
+
+function normalizeModelBreakdownRows(raw: unknown): ModelBreakdownItem[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const rows: ModelBreakdownItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    rows.push(normalizeModelBreakdownRow(entry as Record<string, unknown>));
+  }
+  return rows.length > 0 ? rows : undefined;
+}
+
+async function invocationUsageIsNewerThanSummary(
+  summaryPath: string,
+  usagePath: string,
+): Promise<boolean> {
+  try {
+    const [summaryStat, usageStat] = await Promise.all([fs.stat(summaryPath), fs.stat(usagePath)]);
+    return usageStat.mtimeMs > summaryStat.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 function workspaceRootsFromSummaryPath(summaryPath: string): { workspace_root: string; project_root: string } {
   const abs = resolve(summaryPath);
   const workspace_root = dirname(dirname(dirname(abs)));
@@ -755,6 +2040,8 @@ function normalizeSummaryRecord(
 
   const inferredKey = basename(dirname(summaryPath));
   const { workspace_root, project_root } = workspaceRootsFromSummaryPath(summaryPath);
+  const modelBreakdown = normalizeModelBreakdownRows(record.model_breakdown);
+  const recordObj = record as Record<string, unknown>;
 
   return {
     path: summaryPath,
@@ -781,8 +2068,10 @@ function normalizeSummaryRecord(
     rate_limit_count: toNumber(record.rate_limit_count),
     tool_turns: toNumber(record.tool_turns),
     tool_calls_total: toNumber(record.tool_calls_total),
-    model_breakdown: record.model_breakdown,
+    model_breakdown: modelBreakdown,
     invocations: record.invocations === undefined ? undefined : toNumber(record.invocations),
+    overlay: overlayMetricsFromSummaryRecord(record),
+    tool_calls: toolCallsFromRecord(recordObj) ?? (modelBreakdown ? sumToolCallsFromBreakdownRows(modelBreakdown) : undefined),
   };
 }
 
@@ -791,6 +2080,7 @@ async function applyModelBreakdownFallback(
   summaryPath: string,
 ): Promise<MetricsSummaryItem> {
   const usagePath = join(dirname(summaryPath), 'invocation-usage.json');
+
   if (!existsSync(usagePath)) {
     return normalized;
   }
@@ -804,6 +2094,10 @@ async function applyModelBreakdownFallback(
     if (parsed.invocations.length === 0) {
       return normalized;
     }
+
+    const stale = await invocationUsageIsNewerThanSummary(summaryPath, usagePath);
+    const planOverlayAcc = emptyOverlayAccumulator();
+    const planToolCallAcc = emptyToolCallAccumulator();
 
     const grouped = new Map<
       string,
@@ -824,6 +2118,8 @@ async function applyModelBreakdownFallback(
         rate_limit_count: number;
         tool_turns: number;
         tool_calls_total: number;
+        overlay: OverlayAccumulator;
+        tool_calls: { saw: boolean; counts: ToolCallClassificationMetrics };
       }
     >();
 
@@ -833,6 +2129,8 @@ async function applyModelBreakdownFallback(
       }
 
       const item = record as Record<string, unknown>;
+      accumulateOverlayFromRecord(planOverlayAcc, item);
+      accumulateToolCallsFromRecord(planToolCallAcc, item);
       const runtime = String(item['runtime'] ?? '');
       const model = String(item['model'] ?? '');
       const key = `${runtime}\u0000${model}`;
@@ -853,6 +2151,8 @@ async function applyModelBreakdownFallback(
         rate_limit_count: 0,
         tool_turns: 0,
         tool_calls_total: 0,
+        overlay: emptyOverlayAccumulator(),
+        tool_calls: emptyToolCallAccumulator(),
       };
 
       bucket.invocations += 1;
@@ -866,6 +2166,8 @@ async function applyModelBreakdownFallback(
       bucket.todo_continuation_lines += toNumber(item['todo_continuation_lines']);
       bucket.tool_turns += toNumber(item['tool_turns']);
       bucket.tool_calls_total += toNumber(item['tool_calls_total']);
+      accumulateOverlayFromRecord(bucket.overlay, item);
+      accumulateToolCallsFromRecord(bucket.tool_calls, item);
       if (item['direct_verification'] === true) {
         bucket.direct_verification_count += 1;
       }
@@ -888,7 +2190,7 @@ async function applyModelBreakdownFallback(
           totalInput > 0
             ? Math.round((bucket.cache_read_input_tokens / totalInput) * 10000) / 10000
             : 0;
-        return {
+        const row: ModelBreakdownItem = {
           runtime: bucket.runtime,
           model: bucket.model,
           invocations: bucket.invocations,
@@ -907,6 +2209,15 @@ async function applyModelBreakdownFallback(
           tool_turns: bucket.tool_turns,
           tool_calls_total: bucket.tool_calls_total,
         };
+        const rowOverlay = finalizeOverlayMetrics(bucket.overlay);
+        if (rowOverlay) {
+          row.overlay = rowOverlay;
+        }
+        const rowToolCalls = finalizeToolCallMetrics(bucket.tool_calls);
+        if (rowToolCalls) {
+          row.tool_calls = rowToolCalls;
+        }
+        return row;
       });
 
     const totals = breakdown.reduce(
@@ -917,13 +2228,13 @@ async function applyModelBreakdownFallback(
         acc.output_tokens += item.output_tokens;
         acc.cache_creation_input_tokens += item.cache_creation_input_tokens;
         acc.cache_read_input_tokens += item.cache_read_input_tokens;
-        acc.prompt_bytes += item.prompt_bytes;
-        acc.todo_bytes += item.todo_bytes;
-        acc.todo_continuation_lines += item.todo_continuation_lines;
-        acc.direct_verification_count += item.direct_verification_count;
-        acc.rate_limit_count += item.rate_limit_count;
-        acc.tool_turns += item.tool_turns;
-        acc.tool_calls_total += item.tool_calls_total;
+        acc.prompt_bytes += item.prompt_bytes ?? 0;
+        acc.todo_bytes += item.todo_bytes ?? 0;
+        acc.todo_continuation_lines += item.todo_continuation_lines ?? 0;
+        acc.direct_verification_count += item.direct_verification_count ?? 0;
+        acc.rate_limit_count += item.rate_limit_count ?? 0;
+        acc.tool_turns += item.tool_turns ?? 0;
+        acc.tool_calls_total += item.tool_calls_total ?? 0;
         if (item.max_turn_total_tokens > acc.max_turn_total_tokens) {
           acc.max_turn_total_tokens = item.max_turn_total_tokens;
         }
@@ -949,6 +2260,44 @@ async function applyModelBreakdownFallback(
     const totalInput =
       totals.input_tokens + totals.cache_creation_input_tokens + totals.cache_read_input_tokens;
 
+    const invocationOverlay = finalizeOverlayMetrics(planOverlayAcc);
+    const overlay = stale
+      ? invocationOverlay ?? normalized.overlay
+      : normalized.overlay ?? invocationOverlay;
+
+    const invocationToolCalls = finalizeToolCallMetrics(planToolCallAcc);
+    const tool_calls = stale
+      ? invocationToolCalls ?? normalized.tool_calls
+      : normalized.tool_calls ?? invocationToolCalls;
+
+    const useInvocationTotals =
+      stale ||
+      (normalized.input_tokens === 0 &&
+        normalized.output_tokens === 0 &&
+        totals.input_tokens + totals.output_tokens > 0);
+
+    const model_breakdown =
+      stale || !normalized.model_breakdown?.length
+        ? breakdown
+        : normalized.model_breakdown.map((row) => {
+            if (row.tool_calls) {
+              return row;
+            }
+            const fallback = breakdown.find(
+              (candidate) => candidate.runtime === row.runtime && candidate.model === row.model,
+            );
+            return fallback?.tool_calls ? { ...row, tool_calls: fallback.tool_calls } : row;
+          });
+
+    if (!useInvocationTotals) {
+      return {
+        ...normalized,
+        model_breakdown,
+        ...(overlay ? { overlay } : {}),
+        ...(tool_calls ? { tool_calls } : {}),
+      };
+    }
+
     return {
       ...normalized,
       invocations: totals.invocations,
@@ -969,7 +2318,9 @@ async function applyModelBreakdownFallback(
         totalInput > 0
           ? Math.round((totals.cache_read_input_tokens / totalInput) * 10000) / 10000
           : 0,
-      model_breakdown: breakdown,
+      model_breakdown,
+      ...(overlay ? { overlay } : {}),
+      ...(tool_calls ? { tool_calls } : {}),
     };
   } catch {
     return normalized;
@@ -1004,6 +2355,67 @@ async function collectSummaryFiles(dir: string): Promise<string[]> {
   }
 
   return files;
+}
+
+async function resolveDiscoverReportPath(
+  planKey: string,
+  logsRoots: string[],
+  workspaceRootFilter?: string,
+): Promise<string | null> {
+  const normalizedFilter = workspaceRootFilter ? resolve(workspaceRootFilter) : '';
+
+  for (const logsRoot of logsRoots) {
+    const candidate = join(logsRoot, planKey, 'discover-report.json');
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    if (normalizedFilter) {
+      const workspaceRoot = dirname(dirname(candidate));
+      if (resolve(workspaceRoot) !== normalizedFilter) {
+        continue;
+      }
+    }
+    return candidate;
+  }
+
+  return null;
+}
+
+export async function handleMetricsDiscoverRequest(req: Request, res: Response): Promise<void> {
+  const planKey = req.params['planKey'];
+  if (!planKey || typeof planKey !== 'string' || planKey.includes('..') || planKey.includes('/')) {
+    return jsonError(res, 400, 'invalid plan key');
+  }
+
+  const workspaceRootQuery =
+    typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
+
+  const logsRoots = await findWorkspaceLogsRootsAsync();
+  if (logsRoots.length === 0) {
+    return jsonError(res, 404, 'discover report not found');
+  }
+
+  const reportPath = await resolveDiscoverReportPath(planKey, logsRoots, workspaceRootQuery || undefined);
+  if (!reportPath) {
+    return jsonError(res, 404, 'discover report not found');
+  }
+
+  try {
+    const raw = await fs.readFile(reportPath, 'utf8');
+    const parsed = JSON.parse(raw) as DiscoverReportPayload;
+    const { workspace_root, project_root } = workspaceRootsFromSummaryPath(
+      join(dirname(reportPath), 'plan-usage-summary.json'),
+    );
+    res.json({
+      plan_key: planKey,
+      path: reportPath,
+      workspace_root,
+      project_root,
+      report: parsed,
+    });
+  } catch {
+    return jsonError(res, 500, 'failed to read discover report');
+  }
 }
 
 export async function handleMetricsSummaryRequest(_req: Request, res: Response): Promise<void> {
@@ -1052,10 +2464,8 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
         continue;
       }
 
+      const withFallback = await applyModelBreakdownFallback(normalized, summaryPath);
       const isPlanSummary = basename(summaryPath) === 'plan-usage-summary.json';
-      const withFallback = isPlanSummary
-        ? await applyModelBreakdownFallback(normalized, summaryPath)
-        : normalized;
 
       overall.input_tokens += withFallback.input_tokens;
       overall.output_tokens += withFallback.output_tokens;
@@ -1097,6 +2507,141 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
     orchestrations,
     projects,
   });
+}
+
+function emptySavingsReport(): SavingsReport {
+  const buckets = createEmptySavingsBuckets();
+  finalizeAllSavingsBuckets(buckets);
+  return {
+    schema_version: 2,
+    kind: 'ralph_benchmark_report',
+    run_count: 0,
+    date_range: { started_at: null, ended_at: null },
+    saved_bytes: 0,
+    saved_tokens: 0,
+    savings_percent: 0,
+    session_usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      prompt_bytes: 0,
+      tool_calls_total: 0,
+    },
+    tool_output_counterfactual: {
+      hypothetical_without_ralph_bytes: 0,
+      actual_with_ralph_bytes: 0,
+      net_savings_bytes: 0,
+      hypothetical_without_ralph_tokens: 0,
+      actual_with_ralph_tokens: 0,
+      net_savings_tokens: 0,
+      net_savings_percent: 0,
+      compaction_measured_not_applied_bytes: 0,
+      compaction_measured_not_applied_tokens: 0,
+    },
+    per_path: buckets,
+    cache: {
+      cache_read_tokens: 0,
+      cache_hit_ratio: 0,
+    },
+    could_have_saved: {
+      compaction_measured_not_applied_bytes: 0,
+    },
+    readback_summary: {
+      envelope_count: 0,
+      readback_count: 0,
+      raw_readback_count: 0,
+      compacted_readback_count: 0,
+      readback_bytes: 0,
+      envelope_original_bytes: 0,
+      full_preview_rereads: 0,
+      raw_readback_share: 0,
+      readback_negation_rate: 0,
+      gross_readback_bytes: 0,
+      gross_readback_tokens: 0,
+      net_consumed_bytes: 0,
+      net_consumed_tokens: 0,
+      effective_windowing_savings_rate: 0,
+    },
+  };
+}
+
+export async function handleSavingsRequest(req: Request, res: Response): Promise<void> {
+  const workspaceRootQuery =
+    typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
+  const runtimeFilter =
+    typeof req.query['runtime'] === 'string' ? req.query['runtime'].trim() : '';
+  const modelFilter = typeof req.query['model'] === 'string' ? req.query['model'].trim() : '';
+  const planFilter = typeof req.query['plan'] === 'string' ? req.query['plan'].trim() : '';
+
+  const logsRoots = await findWorkspaceLogsRootsAsync();
+  if (logsRoots.length === 0) {
+    res.json(emptySavingsReport());
+    return;
+  }
+
+  const scopedLogsRoots = filterAggregateRootsByWorkspace(logsRoots, workspaceRootQuery);
+  if (scopedLogsRoots.length === 0) {
+    res.json(emptySavingsReport());
+    return;
+  }
+
+  const aggregatedEntries = await collectAggregatedEntriesFromRoots(scopedLogsRoots, '');
+  const planDirNames = new Set<string>();
+  for (const entry of aggregatedEntries) {
+    if (entry.type !== 'dir') {
+      continue;
+    }
+    const normalized = normalizeAggregatePath(entry.path);
+    if (!normalized) {
+      continue;
+    }
+    planDirNames.add(normalized.split('/')[0]);
+  }
+  if (planFilter && planDirNames.size > 0 && !planDirNames.has(planFilter)) {
+    res.json(emptySavingsReport());
+    return;
+  }
+
+  const summaryPaths = await collectSummaryPathsFromLogs(scopedLogsRoots);
+  const pathsToProcess = planFilter
+    ? summaryPaths.filter((path) => basename(dirname(path)) === planFilter)
+    : summaryPaths;
+  if (pathsToProcess.length === 0) {
+    res.json(emptySavingsReport());
+    return;
+  }
+
+  const filteredSummaries: string[] = [];
+  for (const summaryPath of pathsToProcess) {
+    let record: UsageSummaryRecord;
+    try {
+      const raw = await fs.readFile(summaryPath, 'utf8');
+      record = JSON.parse(raw) as UsageSummaryRecord;
+    } catch {
+      continue;
+    }
+    if (!record || typeof record !== 'object') {
+      continue;
+    }
+    if (!passesSavingsFilters(record, summaryPath, runtimeFilter, modelFilter, planFilter)) {
+      continue;
+    }
+    filteredSummaries.push(summaryPath);
+  }
+
+  if (filteredSummaries.length === 0) {
+    res.json(emptySavingsReport());
+    return;
+  }
+
+  try {
+    const savingsReport = await buildSavingsReport(filteredSummaries);
+    res.json(savingsReport);
+  } catch (error) {
+    console.error('Failed to build savings report:', error);
+    res.json(emptySavingsReport());
+  }
 }
 
 export async function handleListRequest(req: Request, res: Response): Promise<void> {
@@ -1652,5 +3197,7 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/file', handleFileRequest);
   app.get('/api/template', handleTemplateRequest);
   app.get('/api/metrics/summary', handleMetricsSummaryRequest);
+  app.get('/api/benchmarks', handleSavingsRequest);
+  app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);
   app.get('/api/workspaces', handleWorkspacesRequest);
 }

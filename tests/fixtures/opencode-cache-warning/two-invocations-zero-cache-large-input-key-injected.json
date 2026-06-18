@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "kind": "plan_invocation_usage_history",
+  "invocations": [
+    {
+      "iteration": 1,
+      "model": "anthropic/claude-sonnet-4",
+      "runtime": "opencode",
+      "input_tokens": 10000,
+      "output_tokens": 120,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "opencode_cache_fields_seen": 0,
+      "opencode_cache_key_injected": true
+    },
+    {
+      "iteration": 2,
+      "model": "anthropic/claude-sonnet-4",
+      "runtime": "opencode",
+      "input_tokens": 12000,
+      "output_tokens": 90,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "opencode_cache_fields_seen": 0,
+      "opencode_cache_key_injected": true
+    }
+  ]
+}
+

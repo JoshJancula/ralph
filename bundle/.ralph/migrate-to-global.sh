@@ -57,7 +57,7 @@ migrate_add_to_registry() {
     return 1
   fi
 
-  local py_helper="$_migrate_script_dir/bash-lib/workspace-registry.py"
+  local py_helper="$_migrate_script_dir/python/workspace-registry.py"
   if [[ ! -f "$py_helper" ]]; then
     echo "Warning: workspace registry helper not found; skipping registry update for $project_path" >&2
     return 1

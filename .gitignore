@@ -1,7 +1,6 @@
 .DS_Store
 *.log
 .ralph-workspace
-.ralph-workspace
 /.cursor
 /.claude
 /.codex
@@ -11,6 +10,21 @@
 /HUMAN_ACTION_REQUIRED.md
 /dashboard.orch.json
 .agents
+!bundle/.agents/
+!bundle/.agents/**
 /.opencode
+# Repo-owned runtime roots (project-specific Ralph dev config; not install output)
+
 /.playwright-mcp
 __pycache__
+# test run temp dirs (created by mcp-server.bats and orchestration tests)
+tests/bats/next-todo.*
+tests/bats/plan-status.*
+tests/bats/mcp-*-fixture-*
+tests/bats/mcp-run-plan-*
+tests/tmp.wrk/
+# ad-hoc root debug scripts
+/test_*.sh
+.pytest_cache
+# Local Claude Code settings (machine-specific permissions)
+settings.local.json

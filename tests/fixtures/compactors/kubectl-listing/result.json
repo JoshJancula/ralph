@@ -1,0 +1,10 @@
+{
+  "stdout": "NAME                                READY   STATUS    RESTARTS   AGE\nnginx-deployment-5d59d67564-abc12   1/1     Running   0          2d\nnginx-deployment-5d59d67564-def34   1/1     Running   0          2d\npostgres-statefulset-0              1/1     Running   1          5d\npostgres-statefulset-1              1/1     Running   1          5d\nredis-cache-xyz789                  1/1     Running   2          7d\napi-server-abc456                   1/1     Running   0          1d\napi-server-def789                   1/1     Running   0          1d\napi-server-ghi012                   1/1     Running   0          1d\nworker-job-2024-06-03-jkl345        0/1     Completed 0          2h\nworker-job-2024-06-03-mno678        0/1     Completed 0          1h\nprometheus-deployment-pqr901        1/1     Running   0          3w\ngrafana-deployment-stu234           1/1     Running   1          3w\ningress-nginx-controller-vwx567     1/1     Running   0          1m\ncert-manager-webhook-yza890         1/1     Running   0          1w\nmonitoring-alertmanager-bcd123      1/1     Running   0          3w",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

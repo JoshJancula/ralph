@@ -16,20 +16,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Restore symlinks from bundle
-        run: |
-          ln -s bundle/.ralph .ralph
-          ln -s bundle/.cursor .cursor
-          ln -s bundle/.codex .codex
-          ln -s bundle/.claude .claude
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
 
       - name: Set up Bats
         uses: bats-core/bats-action@4.0.0
 
+      - name: Install GNU parallel
+        run: apt-get update && apt-get install -y parallel
+
       - name: Generate test fixtures for .ralph-workspace/
         run: bash scripts/setup-test-fixtures.sh
 
+      - name: Run Python unit tests
+        run: bash scripts/run-python-unit-tests.sh
+
       - name: Run Bats suite
-        env:
-          RALPH_USAGE_RISKS_ACKNOWLEDGED: "1"
-        run: bats tests/bats/*.bats
+        run: bash scripts/run-bats.sh -j 4

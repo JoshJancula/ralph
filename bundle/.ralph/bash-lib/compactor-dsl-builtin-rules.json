@@ -1,0 +1,60 @@
+{
+  "rules": [
+    {
+      "rule_id": "make-test-summary",
+      "command_matcher": "make test",
+      "remove_lines": ["^\\s*$"],
+      "max_lines": 100,
+      "on_empty": "passthrough"
+    },
+    {
+      "rule_id": "package-manager-install",
+      "command_matcher": [
+        "/^npm install\\b/",
+        "/^npm ci\\b/",
+        "/^yarn(?: install)?\\b/",
+        "/^pnpm install\\b/"
+      ],
+      "strip_ansi": true,
+      "keep_lines": [
+        "(?i)warn",
+        "(?i)vulnerabilit",
+        "(?i)deprecated",
+        "(?i)(added|audited|removed|changed).*( packages| package)",
+        "(?i)^found \\d",
+        "(?i)ERR!",
+        "(?i)\\berror\\b",
+        "(?i)Done in \\d",
+        "(?i)^Packages:",
+        "(?i)Progress:.*\\bdone\\b",
+        "(?i)audit ",
+        "^\\+\\d+"
+      ],
+      "max_lines": 40,
+      "on_empty": "passthrough"
+    },
+    {
+      "rule_id": "test-runner-summary",
+      "command_matcher": [
+        "/^npm test\\b/",
+        "/^jest\\b/",
+        "/^pytest\\b/",
+        "/^cargo test\\b/"
+      ],
+      "strip_ansi": true,
+      "remove_lines": [
+        "^\\s*$",
+        "^\\s*PASS\\s",
+        "^> jest\\s*$",
+        "^test .+ \\.\\.\\. ok$",
+        "^\\s*Compiling\\b",
+        "^\\s*Finished\\b",
+        "^\\s*Running unittests\\b",
+        "^tests/[^ ]+ \\.[.s]*$",
+        "^\\s*✓.*"
+      ],
+      "max_lines": 80,
+      "on_empty": "passthrough"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+src/main.js
+  5:10  error  'foo' is assigned a value but never used  no-unused-vars
+ 15:3   error  Unexpected console statement                 no-console
+
+src/utils.js
+  8:5  error  Unexpected var, use let or const instead      no-var
+
+3 problems (3 errors, 0 warnings)

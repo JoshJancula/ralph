@@ -100,6 +100,14 @@ schema_filter='
       )
     );
 
+  def mcp_proxy_policy_ok:
+    ((.mcpProxyPolicy? // null) as $policy |
+      ($policy == null) or (
+        ($policy | type == "string") and
+        ($policy | length > 0)
+      )
+    );
+
   def stage_id_ok:
     ((.id? // null) as $id |
       ($id | type == "string") and
@@ -114,6 +122,7 @@ schema_filter='
     ((.inputArtifacts? // []) | artifacts_ok($root; $all_stage_ids; $stage_id; $has_parallel_stages)) and
     ((.outputArtifacts? // []) | artifacts_ok($root; $all_stage_ids; $stage_id; $has_parallel_stages)) and
     (has("inputFromStages") | not) and
+    mcp_proxy_policy_ok and
     loop_control_ok and
     session_resume_ok and
     session_strategy_ok;

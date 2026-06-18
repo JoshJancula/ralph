@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"telemetry-test"}
+{"type":"tool_call","subtype":"completed","call_id":"t1","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","args":{"path":"/abs/project/.ralph-workspace/plans/tool-use-optimization.plan.md","limit":20}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t2","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","args":{"path":"/abs/project/.ralph-workspace/plans/tool-use-optimization.plan.md","limit":20}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t3","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","args":{"path":"/abs/project/src/app.py"}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t4","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","args":{"pattern":"duplicate.telemetry"}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t5","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","args":{"pattern":"duplicate.telemetry"}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t6","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","args":{"path":"/abs/project/src/app.py"}}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t7","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_shell","args":{"command":"echo SENSITIVE_LARGE_COMMAND_BLOB_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}}}}
+{"type":"result","subtype":"success","duration_ms":1000}

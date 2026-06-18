@@ -1,0 +1,11 @@
+{"type":"system","subtype":"init","session_id":"claude-session-1"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Planning change\nSecond line"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"description":"echo greeting","command":"printf 'hello'\n"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"docs/README.md"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_edit","name":"Edit","input":{"file_path":"src/app.py","old_string":"old_value\nsame\n","new_string":"new_value\nsame\n"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_mcp_read","name":"mcp__ralph__ralph_proxy_read","input":{"path":"tests/bats/run-plan/run-plan-demux-pretty.bats"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_mcp_read","content":"line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\nline 09\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25\nline 26\nline 27\nline 28\nline 29\nline 30"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bash","is_error":true,"content":"permission denied\nstack detail"}]}}
+{"type":"result","num_turns":5,"duration_ms":102000}
+{this is malformed json
+{"type":"unknown_event","payload":{"count":1}}

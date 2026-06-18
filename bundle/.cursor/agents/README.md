@@ -54,12 +54,13 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 
 ### `model`
 
-- **Required:** yes.
+- **Required:** yes (key must be present).
 - **Type:** string.
 - **Rules:**
-  - Non-empty after trim.
-  - No line breaks or control characters.
-  - Tooling may further restrict to an allowlist per runtime; schema validation only enforces presence and basic string hygiene.
+  - May be an empty string for Ralph prebuilt Claude/Codex agents (no bundled default). When empty, `run-plan` resolves the model from saved models (`ralph models add`), env vars, or an interactive prompt.
+  - When non-empty: no line breaks or control characters.
+  - User-authored agents may set an explicit model id; orchestration stage `model` overrides agent config for that stage.
+  - Ralph no longer ships or validates against bundled default model lists for Claude/Codex.
 
 ### `description`
 

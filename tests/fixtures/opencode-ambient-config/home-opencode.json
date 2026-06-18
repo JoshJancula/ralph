@@ -1,0 +1,12 @@
+{
+  "provider": {
+    "ollama-cloud": {
+      "options": {
+        "setCacheKey": true
+      }
+    }
+  },
+  "model": "ollama-cloud/kimi-k2.6",
+  "autoupdate": true,
+  "theme": "system"
+}

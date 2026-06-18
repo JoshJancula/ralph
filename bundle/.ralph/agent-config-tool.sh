@@ -2,34 +2,34 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/error-handling.sh
+# shellcheck source=bash-lib/error-handling.sh
 source "$script_dir/bash-lib/error-handling.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/parse-json.sh
+# shellcheck source=bash-lib/agent-config/parse-json.sh
 source "$script_dir/bash-lib/agent-config/parse-json.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/validate.sh
+# shellcheck source=bash-lib/agent-config/validate.sh
 source "$script_dir/bash-lib/agent-config/validate.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/inline-rules.sh
+# shellcheck source=bash-lib/agent-config/inline-rules.sh
 source "$script_dir/bash-lib/agent-config/inline-rules.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/cli.sh
+# shellcheck source=bash-lib/agent-config/cli.sh
 source "$script_dir/bash-lib/agent-config/cli.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/resolve-paths.sh
+# shellcheck source=bash-lib/agent-config/resolve-paths.sh
 source "$script_dir/bash-lib/agent-config/resolve-paths.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/artifacts.sh
+# shellcheck source=bash-lib/agent-config/artifacts.sh
 source "$script_dir/bash-lib/agent-config/artifacts.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/context-block.sh
+# shellcheck source=bash-lib/agent-config/context-block.sh
 source "$script_dir/bash-lib/agent-config/context-block.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/downstream.sh
+# shellcheck source=bash-lib/agent-config/downstream.sh
 source "$script_dir/bash-lib/agent-config/downstream.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/json-cache.sh
+# shellcheck source=bash-lib/json-cache.sh
 source "$script_dir/bash-lib/json-cache.sh"
 
 agent_config_json_query() {
@@ -53,7 +53,6 @@ read_model() {
   validate_config "$agents_root" "$agent_id" >/dev/null
   local model
   model="$(agent_config_json_query "$cfg" "model" -r '.model // ""' 2>/dev/null || echo "")"
-  [[ -n "$model" ]] || { echo "model missing" >&2; return 1; }
   echo "$model"
 }
 
@@ -88,6 +87,10 @@ case "$cmd" in
   max-budget)
     [[ $# -eq 3 ]] || usage
     read_max_budget "$2" "$3"
+    ;;
+  mcp-proxy-policy)
+    [[ $# -eq 3 ]] || usage
+    read_mcp_proxy_policy "$2" "$3"
     ;;
   downstream-stages)
     [[ $# -ge 3 && $# -le 4 ]] || usage

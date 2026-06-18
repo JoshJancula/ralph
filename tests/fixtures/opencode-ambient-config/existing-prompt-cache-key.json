@@ -1,0 +1,14 @@
+{
+  "provider": {
+    "ollama-cloud": {
+      "models": {
+        "kimi-k2.6": {
+          "options": {
+            "prompt_cache_key": "user-key",
+            "keep": "me"
+          }
+        }
+      }
+    }
+  }
+}

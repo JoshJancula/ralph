@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": ".agents/hooks/pre-tool-shell-policy.sh",
+        "matcher": "Shell"
+      },
+      {
+        "command": ".agents/hooks/pre-tool-proxy-read-handoff.sh",
+        "matcher": "MCP:ralph_proxy_read"
+      },
+      {
+        "command": ".agents/hooks/pre-tool-exploration-policy.sh",
+        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": ".agents/hooks/post-tool-shell-telemetry.sh",
+        "matcher": "Shell"
+      },
+      {
+        "command": ".agents/hooks/post-tool-native-result-compact.sh",
+        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
+      },
+      {
+        "command": ".agents/hooks/post-tool-mcp-compact.sh",
+        "matcher": "MCP:*"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": ".agents/hooks/after-shell-telemetry.sh"
+      }
+    ]
+  }
+}

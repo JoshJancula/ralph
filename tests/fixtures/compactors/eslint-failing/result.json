@@ -1,0 +1,10 @@
+{
+  "stdout": "eslint errors (exit 1) for: eslint src/\n  5:10  error  'foo' is assigned a value but never used  no-unused-vars\n 15:3   error  Unexpected console statement                 no-console\n  8:5  error  Unexpected var, use let or const instead      no-var\n3 problems (3 errors, 0 warnings)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "eslint",
+  "status": "compacted",
+  "exit_status": 1
+}

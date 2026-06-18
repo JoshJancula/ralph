@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "banned_paths": [
+    ".env*",
+    "**/.env*",
+    "**/secrets/**",
+    "~/.ssh/**",
+    "~/.aws/**"
+  ],
+  "custom_rules": [
+    {
+      "name": "no_sudo",
+      "pattern": "^sudo\\s",
+      "target": "command"
+    },
+    {
+      "name": "no_rm_rf_root",
+      "match": "rm -rf /",
+      "target": "command"
+    },
+    {
+      "name": "no_force_push",
+      "match": "git push --force",
+      "target": "command"
+    }
+  ]
+}

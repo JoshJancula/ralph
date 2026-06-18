@@ -4,10 +4,143 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 
-import type { WorkspaceRegistry } from '../../services/api.service';
+import type { DiscoverReportResponse, SavingsReport, WorkspaceRegistry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { UsageHubComponent } from './usage-hub.component';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
+
+function emptyDiscoverResponse(planKey: string): DiscoverReportResponse {
+  return {
+    plan_key: planKey,
+    path: `/logs/${planKey}/discover-report.json`,
+    workspace_root: '',
+    project_root: '',
+    report: {
+      schema_version: 1,
+      kind: 'discover_report',
+      plan_key: planKey,
+      sequence_patterns: [],
+      limitations: [],
+    },
+  };
+}
+
+function flushPendingDiscoverRequests(httpMock: HttpTestingController): void {
+  const pending = httpMock.match((req) => req.url.includes('/api/metrics/discover/'));
+  for (const req of pending) {
+    const url = req.request.url;
+    const marker = '/api/metrics/discover/';
+    const start = url.indexOf(marker) + marker.length;
+    const encodedKey = url.slice(start).split('?')[0];
+    const planKey = decodeURIComponent(encodedKey);
+    req.flush(emptyDiscoverResponse(planKey));
+  }
+}
+
+function flushPendingSavingsRequests(httpMock: HttpTestingController): void {
+  const pending = httpMock.match((req) => req.url === '/api/benchmarks');
+  for (const req of pending) {
+    req.flush(mockSavingsReport);
+  }
+}
+
+const mockSavingsReport: SavingsReport = {
+  schema_version: 2,
+  kind: 'ralph_benchmark_report',
+  run_count: 2,
+  date_range: {
+    started_at: '2026-05-01T00:00:00.000Z',
+    ended_at: '2026-05-02T00:00:00.000Z',
+  },
+  saved_bytes: 4096,
+  saved_tokens: 1024,
+  savings_percent: 0.4,
+  session_usage: {
+    input_tokens: 10000,
+    output_tokens: 2000,
+    cache_creation_input_tokens: 500,
+    cache_read_input_tokens: 1500,
+    prompt_bytes: 12000,
+    tool_calls_total: 42,
+  },
+  tool_output_counterfactual: {
+    hypothetical_without_ralph_bytes: 8192,
+    actual_with_ralph_bytes: 4096,
+    net_savings_bytes: 4096,
+    hypothetical_without_ralph_tokens: 2048,
+    actual_with_ralph_tokens: 1024,
+    net_savings_tokens: 1024,
+    net_savings_percent: 50,
+    compaction_measured_not_applied_bytes: 0,
+    compaction_measured_not_applied_tokens: 0,
+  },
+  per_path: {
+    pre_tool_rewrite: {
+      pre_optimization_bytes: 4096,
+      post_optimization_bytes: 2048,
+      saved_bytes: 2048,
+      count: 3,
+      pre_optimization_tokens: 1024,
+      post_optimization_tokens: 512,
+      saved_tokens: 512,
+      token_cap_triggers: 0,
+      savings_percent: 50,
+    },
+    hook_compaction: {
+      pre_optimization_bytes: 2048,
+      post_optimization_bytes: 1024,
+      saved_bytes: 1024,
+      count: 1,
+      pre_optimization_tokens: 512,
+      post_optimization_tokens: 256,
+      saved_tokens: 256,
+      token_cap_triggers: 0,
+    },
+    proxy_shell_compaction: {
+      pre_optimization_bytes: 1024,
+      post_optimization_bytes: 512,
+      saved_bytes: 512,
+      count: 1,
+      pre_optimization_tokens: 256,
+      post_optimization_tokens: 128,
+      saved_tokens: 128,
+      token_cap_triggers: 0,
+    },
+    result_windowing: {
+      pre_optimization_bytes: 1024,
+      post_optimization_bytes: 512,
+      saved_bytes: 512,
+      count: 1,
+      pre_optimization_tokens: 256,
+      post_optimization_tokens: 128,
+      saved_tokens: 128,
+      token_cap_triggers: 0,
+    },
+  },
+  cache: {
+    cache_read_tokens: 200,
+    cache_hit_ratio: 0.65,
+  },
+  could_have_saved: {
+    compaction_measured_not_applied_bytes: 0,
+  },
+  readback_summary: {
+    envelope_count: 2,
+    readback_count: 4,
+    raw_readback_count: 1,
+    compacted_readback_count: 3,
+    readback_bytes: 256,
+    envelope_original_bytes: 1024,
+    full_preview_rereads: 0,
+    raw_readback_share: 0.25,
+    readback_negation_rate: 0.25,
+    gross_readback_bytes: 256,
+    gross_readback_tokens: 64,
+    net_consumed_bytes: 512,
+    net_consumed_tokens: 128,
+    effective_windowing_savings_rate: 0.5,
+  },
+};
 
 describe('UsageHubComponent', () => {
   let httpMock: HttpTestingController;
@@ -21,6 +154,8 @@ describe('UsageHubComponent', () => {
   });
 
   afterEach(() => {
+    flushPendingDiscoverRequests(httpMock);
+    flushPendingSavingsRequests(httpMock);
     httpMock.verify();
   });
 
@@ -106,6 +241,135 @@ describe('UsageHubComponent', () => {
     expect(claudeModel).toBeDefined();
     expect(claudeModel?.invocations).toBe(1);
     expect(claudeModel?.runs).toBe(1);
+  });
+
+  it('loads the savings report once metrics summary is available', () => {
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    fixture.detectChanges();
+
+    const summaryReq = httpMock.expectOne('/api/metrics/summary');
+    summaryReq.flush({
+      overall: {
+        input_tokens: 180,
+        output_tokens: 100,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 250,
+        max_turn_total_tokens: 900,
+        cache_hit_ratio: 0.58,
+        elapsed_seconds: 21,
+        count: 2,
+      },
+      plans: [
+        {
+          path: '/logs/plan-1/plan-usage-summary.json',
+          plan_key: 'plan-1',
+          artifact_ns: 'plan-1',
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 10,
+          input_tokens: 120,
+          output_tokens: 80,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 220,
+          max_turn_total_tokens: 900,
+          cache_hit_ratio: 0.6471,
+          model_breakdown: [
+            {
+              runtime: 'codex',
+              model: 'gpt-5.4-mini',
+              invocations: 2,
+              elapsed_seconds: 10,
+              input_tokens: 120,
+              output_tokens: 80,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 220,
+              max_turn_total_tokens: 900,
+              cache_hit_ratio: 0.6471,
+            },
+          ],
+        },
+      ],
+      orchestrations: [
+        {
+          path: '/logs/orch-1/orchestration-usage-summary.json',
+          plan_key: 'orch-1',
+          artifact_ns: 'orch-1',
+          stage_id: 'impl',
+          started_at: '2026-04-17T09:00:00.000Z',
+          runtime: 'claude',
+          model: 'sonnet',
+          elapsed_seconds: 11,
+          input_tokens: 60,
+          output_tokens: 20,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 30,
+          max_turn_total_tokens: 500,
+          cache_hit_ratio: 0.3333,
+        },
+      ],
+      projects: [],
+    });
+
+    const savingsReq = httpMock.expectOne('/api/benchmarks');
+    expect(savingsReq.request.params.has('runtime')).toBe(false);
+    savingsReq.flush(mockSavingsReport);
+
+    expect(fixture.componentInstance.savingsReport).toEqual(mockSavingsReport);
+    expect(fixture.componentInstance.savingsPathEntries).toHaveLength(4);
+  });
+
+  it('re-fetches savings when the runtime filter changes', () => {
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    fixture.detectChanges();
+
+    httpMock.expectOne('/api/metrics/summary').flush({
+      overall: {
+        input_tokens: 180,
+        output_tokens: 100,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 250,
+        max_turn_total_tokens: 900,
+        cache_hit_ratio: 0.58,
+        elapsed_seconds: 21,
+        count: 2,
+      },
+      plans: [
+        {
+          path: '/logs/plan-1/plan-usage-summary.json',
+          plan_key: 'plan-1',
+          artifact_ns: 'plan-1',
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 10,
+          input_tokens: 120,
+          output_tokens: 80,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 220,
+          max_turn_total_tokens: 900,
+          cache_hit_ratio: 0.6471,
+          model_breakdown: [
+            {
+              runtime: 'codex',
+              model: 'gpt-5.4-mini',
+              invocations: 2,
+              elapsed_seconds: 10,
+              input_tokens: 120,
+              output_tokens: 80,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 220,
+              max_turn_total_tokens: 900,
+              cache_hit_ratio: 0.6471,
+            },
+          ],
+        },
+      ],
+      orchestrations: [],
+      projects: [],
+    });
+    httpMock.expectOne('/api/benchmarks').flush(mockSavingsReport);
+
+    fixture.componentInstance.setFilterRuntime('codex');
+    const savingsReq = httpMock.expectOne((req) => req.url === '/api/benchmarks');
+    expect(savingsReq.request.params.get('runtime')).toBe('codex');
+    savingsReq.flush(mockSavingsReport);
   });
 
   it('applies runtime and date filters to the breakdown tables', () => {
@@ -773,6 +1037,8 @@ describe('UsageHubComponent multi-project behavior', () => {
     expect(component.modelRows).toHaveLength(1);
     expect(component.modelRows[0].input_tokens).toBe(100);
 
+    flushPendingDiscoverRequests(httpMock);
+    flushPendingSavingsRequests(httpMock);
     httpMock.verify();
   });
 
@@ -860,6 +1126,7 @@ describe('UsageHubComponent multi-project behavior', () => {
     expect(text).toContain('Alpha');
     expect(text).toContain('Beta');
 
+    flushPendingSavingsRequests(httpMock);
     httpMock.verify();
   });
 
@@ -953,6 +1220,8 @@ describe('UsageHubComponent multi-project behavior', () => {
     expect(modelCell.getAttribute('title')).toBe(longModel);
     expect(getComputedStyle(planKeyCell).whiteSpace).toBe('nowrap');
 
+    flushPendingDiscoverRequests(httpMock);
+    flushPendingSavingsRequests(httpMock);
     httpMock.verify();
   });
 });

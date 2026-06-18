@@ -6,7 +6,7 @@ setup() {
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
   TEST_TMPDIR="$(mktemp -d)"
   REGISTRY_FILE="$TEST_TMPDIR/workspaces.json"
-  REGISTRY_PY="$REPO_ROOT/bundle/.ralph/bash-lib/workspace-registry.py"
+  REGISTRY_PY="$REPO_ROOT/bundle/.ralph/python/workspace-registry.py"
 }
 
 teardown() {

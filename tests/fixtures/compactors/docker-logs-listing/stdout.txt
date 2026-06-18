@@ -1,0 +1,20 @@
+2024-06-03T10:15:32.123Z Server starting on port 3000
+2024-06-03T10:15:33.456Z Connected to database
+2024-06-03T10:15:34.789Z Cache initialized
+2024-06-03T10:15:35.012Z Ready to accept connections
+2024-06-03T10:16:01.234Z Request: GET /api/users
+2024-06-03T10:16:02.567Z Response: 200 OK
+2024-06-03T10:16:03.890Z Request: POST /api/users
+2024-06-03T10:16:04.123Z Response: 201 Created
+2024-06-03T10:16:30.456Z Cleanup: old connections
+2024-06-03T10:16:31.789Z Cleanup: old connections
+2024-06-03T10:16:32.012Z Cleanup: old connections
+2024-06-03T10:17:01.234Z Background job: sync data
+2024-06-03T10:17:02.567Z Background job: sync data
+2024-06-03T10:17:03.890Z Background job: sync data
+2024-06-03T10:17:04.123Z Background job: sync data
+2024-06-03T10:17:30.456Z ERROR: Database connection timeout
+2024-06-03T10:17:31.789Z WARNING: Retrying connection
+2024-06-03T10:17:32.012Z ERROR: Fallback cache enabled
+2024-06-03T10:17:33.345Z Request: GET /health
+2024-06-03T10:17:34.678Z Response: 503 Service Unavailable

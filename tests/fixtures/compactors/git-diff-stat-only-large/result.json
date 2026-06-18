@@ -1,0 +1,10 @@
+{
+  "stdout": " file1.txt | 3 +++---\n file2.txt | 3 +++---\n file3.txt | 3 +++---\n file4.txt | 3 +++---\n file5.txt | 3 +++---\n file6.txt | 3 +++---\n file7.txt | 3 +++---\n file8.txt | 3 +++---\n file9.txt | 3 +++---\n file10.txt | 3 +++---\n file11.txt | 3 +++---\n file12.txt | 3 +++---\n file13.txt | 3 +++---\n file14.txt | 3 +++---\n file15.txt | 3 +++---\n file16.txt | 3 +++---\n file17.txt | 3 +++---\n file18.txt | 3 +++---\n file19.txt | 3 +++---\n file20.txt | 3 +++---\n file21.txt | 3 +++---\n file22.txt | 3 +++---\n file23.txt | 3 +++---\n file24.txt | 3 +++---\n file25.txt | 3 +++---\n file26.txt | 3 +++---\n file27.txt | 3 +++---\n file28.txt | 3 +++---\n file29.txt | 3 +++---\n file30.txt | 3 +++---\n file31.txt | 3 +++---\n file32.txt | 3 +++---\n file33.txt | 3 +++---\n file34.txt | 3 +++---\n file35.txt | 3 +++---\n file36.txt | 3 +++---\n file37.txt | 3 +++---\n file38.txt | 3 +++---\n file39.txt | 3 +++---\n file40.txt | 3 +++---\n file41.txt | 3 +++---\n file42.txt | 3 +++---\n file43.txt | 3 +++---\n file44.txt | 3 +++---\n file45.txt | 3 +++---\n 45 files changed, 135 insertions(+), 135 deletions(-)",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

@@ -225,7 +225,7 @@ PY
 }
 
 @test "operator response file owned by another UID is rejected with a warning" {
-  RUN_PLAN_CORE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan-core.sh"
+  RUN_PLAN_CORE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
   [ -f "$RUN_PLAN_CORE" ] || skip "bundle run-plan-core missing"
 
   local human_funcs="$(mktemp)" stub_stat_dir response_file

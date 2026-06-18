@@ -2,7 +2,7 @@ import '../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { firstValueFrom } from 'rxjs';
-import { ApiService } from './api.service';
+import { ApiService, SavingsReport } from './api.service';
 
 describe('ApiService', () => {
   let service: ApiService;
@@ -272,6 +272,142 @@ describe('ApiService', () => {
 
       const summary = await responsePromise;
       expect(summary).toEqual(mockSummary);
+    });
+  });
+
+  describe('fetchSavings()', () => {
+    const mockSavings: SavingsReport = {
+      schema_version: 2,
+      kind: 'ralph_benchmark_report',
+      run_count: 2,
+      date_range: {
+        started_at: '2026-06-01T00:00:00Z',
+        ended_at: '2026-06-01T01:00:00Z',
+      },
+      saved_bytes: 150,
+      saved_tokens: 38,
+      savings_percent: 15,
+      session_usage: {
+        input_tokens: 1000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 50,
+        cache_read_input_tokens: 150,
+        prompt_bytes: 1200,
+        tool_calls_total: 12,
+      },
+      tool_output_counterfactual: {
+        hypothetical_without_ralph_bytes: 1000,
+        actual_with_ralph_bytes: 850,
+        net_savings_bytes: 150,
+        hypothetical_without_ralph_tokens: 250,
+        actual_with_ralph_tokens: 213,
+        net_savings_tokens: 37,
+        net_savings_percent: 15,
+        compaction_measured_not_applied_bytes: 20,
+        compaction_measured_not_applied_tokens: 5,
+      },
+      per_path: {
+        pre_tool_rewrite: {
+          pre_optimization_bytes: 100,
+          post_optimization_bytes: 75,
+          saved_bytes: 25,
+          count: 1,
+          pre_optimization_tokens: 20,
+          post_optimization_tokens: 16,
+          saved_tokens: 4,
+          token_cap_triggers: 0,
+        },
+        hook_compaction: {
+          pre_optimization_bytes: 50,
+          post_optimization_bytes: 40,
+          saved_bytes: 10,
+          count: 1,
+          pre_optimization_tokens: 10,
+          post_optimization_tokens: 8,
+          saved_tokens: 2,
+          token_cap_triggers: 0,
+          hidden_from_context: 0,
+          hidden_from_context_tokens: 0,
+        },
+        proxy_shell_compaction: {
+          pre_optimization_bytes: 40,
+          post_optimization_bytes: 30,
+          saved_bytes: 10,
+          count: 1,
+          pre_optimization_tokens: 8,
+          post_optimization_tokens: 6,
+          saved_tokens: 2,
+          token_cap_triggers: 0,
+          hidden_from_context: 0,
+          hidden_from_context_tokens: 0,
+        },
+        result_windowing: {
+          pre_optimization_bytes: 20,
+          post_optimization_bytes: 10,
+          saved_bytes: 10,
+          count: 1,
+          pre_optimization_tokens: 4,
+          post_optimization_tokens: 2,
+          saved_tokens: 2,
+          token_cap_triggers: 0,
+          hidden_from_context: 0,
+          hidden_from_context_tokens: 0,
+        },
+      },
+      cache: {
+        cache_read_tokens: 100,
+        cache_hit_ratio: 0.5,
+      },
+      could_have_saved: {
+        compaction_measured_not_applied_bytes: 20,
+      },
+      readback_summary: {
+        envelope_count: 2,
+        readback_count: 3,
+        raw_readback_count: 1,
+        compacted_readback_count: 2,
+        readback_bytes: 30,
+        envelope_original_bytes: 100,
+        full_preview_rereads: 0,
+        raw_readback_share: 0.3333,
+        readback_negation_rate: 0.3,
+        gross_readback_bytes: 30,
+        gross_readback_tokens: 8,
+        net_consumed_bytes: 50,
+        net_consumed_tokens: 13,
+        effective_windowing_savings_rate: 0.5,
+      },
+    };
+
+    it('should request /api/benchmarks without filters and return the savings payload', async () => {
+      const responsePromise = firstValueFrom(service.fetchSavings());
+      const req = httpMock.expectOne('/api/benchmarks');
+      expect(req.request.method).toBe('GET');
+      req.flush(mockSavings);
+
+      const report = await responsePromise;
+      expect(report).toEqual(mockSavings);
+    });
+
+    it('includes workspace/runtime/model/plan when provided', async () => {
+      const filters = {
+        workspaceRoot: '/workspaces/ws-a',
+        runtime: 'claude',
+        model: 'claude-sonnet-4-6',
+        plan: 'savings-report',
+      };
+      const responsePromise = firstValueFrom(service.fetchSavings(filters));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.urlWithParams.startsWith('/api/benchmarks') &&
+          r.params.get('workspaceRoot') === filters.workspaceRoot &&
+          r.params.get('runtime') === filters.runtime &&
+          r.params.get('model') === filters.model &&
+          r.params.get('plan') === filters.plan,
+      );
+      expect(req.request.method).toBe('GET');
+      req.flush(mockSavings);
+      await responsePromise;
     });
   });
 

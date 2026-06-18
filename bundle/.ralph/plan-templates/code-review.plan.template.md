@@ -5,7 +5,7 @@ Treat this stage as a structured review of the implementation described in `impl
 
 ## Todo granularity
 Each todo must represent one logical, independently verifiable unit of work, not one keystroke.
-- Good: `Update plan-todo.sh to preserve cursor-frontmatter outside the todo block while adding consolidation logging.`
+- Good: `Update plan-todo.sh to preserve yaml-frontmatter outside the todo block while adding consolidation logging.`
 - Bad: `Change one line in plan-todo.sh.`
 
 ## Context

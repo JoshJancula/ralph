@@ -6,7 +6,8 @@ if [[ $# -lt 2 ]]; then
   exit 1
 fi
 
-# Drop the duration argument; tests rely on timeout but opt out of enforcement in this environment.
+duration="$1"
 shift
 
-exec "$@"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$script_dir/timeout.py" "$duration" "$@"

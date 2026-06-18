@@ -1,0 +1,10 @@
+{
+  "stdout": "git status (exit 0): branch main...origin/main [ahead 1]: 1 changed; 1 modified\n M file1.txt\n?? new.txt",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "git_status",
+  "status": "compacted",
+  "exit_status": 0
+}

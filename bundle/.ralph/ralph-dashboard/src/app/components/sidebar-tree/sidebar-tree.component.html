@@ -1,0 +1,47 @@
+<div class="sidebar-tree">
+  <div *ngIf="loading()" class="loading-indicator">Loading...</div>
+  <div *ngIf="error()" class="error-message">{{ error() }}</div>
+  <ng-container *ngIf="!loading() && !error()">
+    <div
+      *ngFor="let node of flatNodes()"
+      class="tree-row"
+      [class.expanded]="node.expanded"
+      [class.selected]="isSelected(node)"
+      [class.is-dir]="node.type === 'dir'"
+      [style.paddingLeft.px]="indentPx(node)"
+      (click)="selectEntry(node)"
+    >
+      <ng-container *ngIf="node.type === 'dir'; else treeExpanderPlaceholder">
+        <span *ngIf="node.loading" class="expander-loading" aria-label="Loading">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </span>
+        <svg
+          *ngIf="!node.loading"
+          class="tree-chevron"
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          aria-hidden="true"
+        >
+          <path
+            d="M4 3l4 3-4 3"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            fill="none"
+          />
+        </svg>
+      </ng-container>
+      <ng-template #treeExpanderPlaceholder>
+        <span class="tree-expander-placeholder"></span>
+      </ng-template>
+      <span class="node-name">{{ node.name }}</span>
+      <span class="node-size" *ngIf="node.type === 'file' && formatSize(node)">
+        {{ formatSize(node) }}
+      </span>
+    </div>
+  </ng-container>
+</div>

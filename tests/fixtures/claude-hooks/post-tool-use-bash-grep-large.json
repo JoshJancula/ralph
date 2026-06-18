@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"rg PATTERN"},"tool_response":{"stdout":"rg (exit 0): 100 match(es) in 10 file(s)\n  src/a.py: 10 match(es) (lines 1, 2, 3, +7 more)\n  src/b.py: 10 match(es) (lines 4, 5, 6, +7 more)","stderr":"","interrupted":false,"isImage":false},"cwd":"/workspace"}

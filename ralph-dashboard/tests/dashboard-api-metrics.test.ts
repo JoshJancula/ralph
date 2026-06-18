@@ -1,5 +1,5 @@
 import '@angular/compiler';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -261,6 +261,136 @@ describe('dashboard API metrics summary', () => {
     expect(res.status).toBe(200);
     const names = (res.body.entries as Array<{ name: string }>).map((entry) => entry.name);
     expect(names).toEqual(expect.arrayContaining(['plan-1', 'plan-extra', 'orch-1']));
+  });
+
+  it('returns schema v2 savings report with session usage and counterfactual', async () => {
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=plan-1');
+    expect(res.status).toBe(200);
+    expect(res.body.schema_version).toBe(2);
+    expect(res.body.kind).toBe('ralph_benchmark_report');
+    expect(res.body.session_usage).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_creation_input_tokens: 1,
+      cache_read_input_tokens: 2,
+      prompt_bytes: 0,
+      tool_calls_total: 0,
+    });
+    expect(res.body.tool_output_counterfactual).toMatchObject({
+      hypothetical_without_ralph_bytes: 0,
+      actual_with_ralph_bytes: 0,
+      net_savings_bytes: 0,
+      net_savings_tokens: 0,
+      net_savings_percent: 0,
+    });
+  });
+
+  it('matches Python benchmark semantics for the shared parity fixture', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'dashboard-parity');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'dashboard-parity');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'dashboard-parity',
+        artifact_ns: 'dashboard-parity',
+        elapsed_seconds: 10,
+        input_tokens: 800,
+        output_tokens: 100,
+        cache_creation_input_tokens: 50,
+        cache_read_input_tokens: 150,
+        prompt_bytes: 960,
+        tool_calls_total: 24,
+        compaction_measured_not_applied_bytes: 64,
+        started_at: '2026-06-01T00:00:00Z',
+        ended_at: '2026-06-01T00:10:00Z',
+        byte_savings_by_path: {
+          pre_tool_rewrite: {
+            pre_optimization_bytes: 400,
+            post_optimization_bytes: 200,
+            saved_bytes: 200,
+            pre_optimization_tokens: 100,
+            post_optimization_tokens: 50,
+            saved_tokens: 50,
+            count: 1,
+            token_cap_triggers: 0,
+          },
+          hook_compaction: {
+            pre_optimization_bytes: 300,
+            post_optimization_bytes: 200,
+            saved_bytes: 100,
+            pre_optimization_tokens: 75,
+            post_optimization_tokens: 50,
+            saved_tokens: 25,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 100,
+            hidden_from_context_tokens: 25,
+          },
+          proxy_shell_compaction: {
+            pre_optimization_bytes: 200,
+            post_optimization_bytes: 120,
+            saved_bytes: 80,
+            pre_optimization_tokens: 50,
+            post_optimization_tokens: 30,
+            saved_tokens: 20,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 80,
+            hidden_from_context_tokens: 20,
+          },
+          result_windowing: {
+            pre_optimization_bytes: 1000,
+            post_optimization_bytes: 200,
+            saved_bytes: 800,
+            pre_optimization_tokens: 250,
+            post_optimization_tokens: 50,
+            saved_tokens: 200,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 800,
+            hidden_from_context_tokens: 200,
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({ event: 'envelope', resultId: 'r1', originalBytes: 1000, returnedBytes: 200, originalTokens: 250, returnedTokens: 50 }),
+        JSON.stringify({ event: 'readback', resultId: 'r1', view: 'compacted', returnedBytes: 100, returnedTokens: 25 }),
+        JSON.stringify({ event: 'readback', resultId: 'r1', view: 'raw', returnedBytes: 50, returnedTokens: 13 }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=dashboard-parity');
+    expect(res.status).toBe(200);
+    expect(res.body.schema_version).toBe(2);
+    expect(res.body.run_count).toBe(1);
+    expect(res.body.saved_bytes).toBe(1180);
+    expect(res.body.session_usage).toMatchObject({
+      input_tokens: 800,
+      output_tokens: 100,
+      cache_creation_input_tokens: 50,
+      cache_read_input_tokens: 150,
+      prompt_bytes: 960,
+      tool_calls_total: 24,
+    });
+    const counterfactual = res.body.tool_output_counterfactual;
+    expect(counterfactual.hypothetical_without_ralph_bytes).toBe(1900);
+    expect(counterfactual.actual_with_ralph_bytes).toBe(720);
+    expect(counterfactual.net_savings_bytes).toBe(1180);
+    expect(counterfactual.net_savings_percent).toBe(62.1);
+    expect(counterfactual.compaction_measured_not_applied_bytes).toBe(64);
+    const readback = res.body.readback_summary;
+    expect(readback.envelope_count).toBe(1);
+    expect(readback.readback_count).toBe(2);
+    expect(readback.gross_readback_bytes).toBe(150);
+    expect(readback.net_consumed_bytes).toBe(350);
+    expect(readback.effective_windowing_savings_rate).toBe(0.65);
   });
 
   it('keeps metrics local-first when a HOME workspace is also available', async () => {
@@ -653,6 +783,462 @@ describe('dashboard API metrics summary', () => {
       runtime: 'codex',
       model: 'gpt-5.4-mini',
       max_turn_total_tokens: 700,
+    });
+  });
+
+  it('omits overlay metrics for legacy logs without overlay invocation fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'legacy-overlay');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'legacy-overlay',
+        artifact_ns: 'legacy-overlay',
+        elapsed_seconds: 2,
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 2,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'legacy-overlay');
+    expect(plan).toBeDefined();
+    expect(plan.overlay).toBeUndefined();
+  });
+
+  it('aggregates overlay metrics from invocation logs with overlay fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'overlay-plan');
+    mkdirSync(planDir, { recursive: true });
+    const summaryPath = join(planDir, 'plan-usage-summary.json');
+    const usagePath = join(planDir, 'invocation-usage.json');
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'overlay-plan',
+        artifact_ns: 'overlay-plan',
+        elapsed_seconds: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      usagePath,
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 4,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            native_hooks_effective: true,
+            mcp_effective: true,
+            hook_compactions: 2,
+            hook_rewrites: 1,
+            hook_original_bytes: 1200,
+            hook_compacted_bytes: 300,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: ['hooks disabled for bare mode'],
+          },
+        ],
+      }),
+    );
+    const now = Date.now() / 1000;
+    utimesSync(summaryPath, now - 20, now - 20);
+    utimesSync(usagePath, now, now);
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'overlay-plan');
+    expect(plan).toBeDefined();
+    expect(plan.input_tokens).toBe(100);
+    expect(plan.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 2,
+      hook_rewrites: 1,
+      hook_original_bytes: 1200,
+      hook_compacted_bytes: 300,
+      hook_bytes_saved: 900,
+      runtime_overlay_mode: 'bounded',
+      runtime_overlay_warnings: ['hooks disabled for bare mode'],
+    });
+  });
+
+  it('keeps fresh summary totals when invocation log is older than plan-usage-summary', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'fresh-summary');
+    mkdirSync(planDir, { recursive: true });
+    const summaryPath = join(planDir, 'plan-usage-summary.json');
+    const usagePath = join(planDir, 'invocation-usage.json');
+    writeFileSync(
+      usagePath,
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'cursor',
+            model: 'gpt-5.4-mini',
+            elapsed_seconds: 1,
+            input_tokens: 999,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            native_hooks_effective: false,
+            mcp_effective: true,
+            hook_compactions: 0,
+            hook_rewrites: 0,
+            hook_original_bytes: 0,
+            hook_compacted_bytes: 0,
+            runtime_overlay_mode: '',
+            runtime_overlay_warnings: [],
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'fresh-summary',
+        artifact_ns: 'fresh-summary',
+        elapsed_seconds: 5,
+        input_tokens: 50,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    const now = Date.now() / 1000;
+    utimesSync(usagePath, now - 20, now - 20);
+    utimesSync(summaryPath, now, now);
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'fresh-summary');
+    expect(plan).toBeDefined();
+    expect(plan.input_tokens).toBe(50);
+    expect(plan.output_tokens).toBe(10);
+    expect(plan.overlay).toMatchObject({
+      mcp_effective: true,
+      native_hooks_effective: false,
+    });
+  });
+
+  it('aggregates mixed-runtime overlay metrics across model breakdown rows', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'mixed-overlay');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'mixed-overlay',
+        artifact_ns: 'mixed-overlay',
+        elapsed_seconds: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 40,
+            output_tokens: 10,
+            native_hooks_effective: true,
+            mcp_effective: false,
+            hook_compactions: 1,
+            hook_rewrites: 0,
+            hook_original_bytes: 500,
+            hook_compacted_bytes: 100,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: [],
+          },
+          {
+            runtime: 'codex',
+            model: 'gpt-5.4-mini',
+            input_tokens: 60,
+            output_tokens: 15,
+            native_hooks_effective: false,
+            mcp_effective: true,
+            hook_compactions: 2,
+            hook_rewrites: 1,
+            hook_original_bytes: 800,
+            hook_compacted_bytes: 200,
+            runtime_overlay_mode: 'ralph',
+            runtime_overlay_warnings: ['codex hook output mutation unsupported'],
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'mixed-overlay');
+    expect(plan).toBeDefined();
+    expect(plan.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 3,
+      hook_rewrites: 1,
+      hook_original_bytes: 1300,
+      hook_compacted_bytes: 300,
+      hook_bytes_saved: 1000,
+    });
+    expect(plan.model_breakdown).toHaveLength(2);
+    const claudeRow = plan.model_breakdown.find((row: { runtime: string }) => row.runtime === 'claude');
+    const codexRow = plan.model_breakdown.find((row: { runtime: string }) => row.runtime === 'codex');
+    expect(claudeRow?.overlay?.native_hooks_effective).toBe(true);
+    expect(codexRow?.overlay?.mcp_effective).toBe(true);
+    expect(codexRow?.overlay?.runtime_overlay_warnings).toEqual([
+      'codex hook output mutation unsupported',
+    ]);
+  });
+
+  it('includes overlay metrics for orchestration summaries with invocation logs', async () => {
+    const orchDir = join(tempRoot, '.ralph-workspace', 'logs', 'orch-overlay');
+    mkdirSync(orchDir, { recursive: true });
+    writeFileSync(
+      join(orchDir, 'orchestration-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'orchestration_usage_summary',
+        plan_key: 'orch-overlay',
+        artifact_ns: 'orch-overlay',
+        elapsed_seconds: 3,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(orchDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'opencode',
+            model: 'glm-5',
+            input_tokens: 30,
+            output_tokens: 8,
+            native_hooks_effective: true,
+            mcp_effective: true,
+            hook_compactions: 1,
+            hook_rewrites: 0,
+            hook_original_bytes: 200,
+            hook_compacted_bytes: 50,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: [],
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const orch = res.body.orchestrations.find((o: { plan_key: string }) => o.plan_key === 'orch-overlay');
+    expect(orch).toBeDefined();
+    expect(orch.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 1,
+      hook_bytes_saved: 150,
+    });
+  });
+
+  it('omits tool call classification for legacy logs without accounting fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'legacy-tool-calls');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'legacy-tool-calls',
+        artifact_ns: 'legacy-tool-calls',
+        elapsed_seconds: 2,
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        tool_calls_total: 3,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 2,
+            input_tokens: 10,
+            output_tokens: 5,
+            tool_calls_total: 3,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'legacy-tool-calls');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toBeUndefined();
+    expect(plan.tool_calls_total).toBe(3);
+  });
+
+  it('aggregates tool call classification from invocation logs', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'classified-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'classified-plan',
+        artifact_ns: 'classified-plan',
+        elapsed_seconds: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 40,
+            output_tokens: 10,
+            ralph_proxy_calls: 2,
+            ralph_knowledge_calls: 0,
+            native_read_compatibility_calls: 1,
+            native_file_read_calls: 0,
+            native_search_calls: 0,
+            native_shell_calls: 0,
+            ralph_mcp_calls: 2,
+            native_read_like_calls: 1,
+          },
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 30,
+            output_tokens: 8,
+            ralph_proxy_calls: 0,
+            ralph_knowledge_calls: 3,
+            native_shell_calls: 1,
+            ralph_mcp_calls: 3,
+            native_read_like_calls: 1,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'classified-plan');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toMatchObject({
+      ralph_proxy_calls: 2,
+      ralph_knowledge_calls: 3,
+      native_read_compatibility_calls: 1,
+      native_shell_calls: 1,
+      ralph_mcp_calls: 5,
+    });
+    expect(plan.model_breakdown).toHaveLength(1);
+    expect(plan.model_breakdown[0].tool_calls).toMatchObject({
+      ralph_proxy_calls: 2,
+      ralph_knowledge_calls: 3,
+      native_read_compatibility_calls: 1,
+      native_shell_calls: 1,
+    });
+  });
+
+  it('passes through tool call classification from summary model_breakdown', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'summary-breakdown-tools');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'summary-breakdown-tools',
+        artifact_ns: 'summary-breakdown-tools',
+        elapsed_seconds: 5,
+        input_tokens: 50,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        model_breakdown: [
+          {
+            runtime: 'cursor',
+            model: 'gpt-5.4-mini',
+            invocations: 2,
+            elapsed_seconds: 5,
+            input_tokens: 50,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            ralph_proxy_calls: 4,
+            ralph_knowledge_calls: 1,
+            native_search_calls: 2,
+            ralph_mcp_calls: 5,
+            native_read_like_calls: 2,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'summary-breakdown-tools');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toMatchObject({
+      ralph_proxy_calls: 4,
+      ralph_knowledge_calls: 1,
+      native_search_calls: 2,
+    });
+    expect(plan.model_breakdown[0].tool_calls).toMatchObject({
+      ralph_proxy_calls: 4,
+      ralph_knowledge_calls: 1,
     });
   });
 });

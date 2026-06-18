@@ -1,25 +1,17 @@
 {
   "name": "code-review",
-  "model": "claude-sonnet-4-6",
-  "max_budget_usd": "1.00",
-  "description": "Reviews changed code for correctness, security, and convention compliance. Writes code-review.md summarizing findings and blocking issues.",
+  "_generated": "GENERATED from bundle/.ralph/agents/code-review.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "claude-haiku-4-5",
+  "description": "Reviews changed code for correctness, security, and convention compliance before downstream delivery.",
   "rules": [
-    ".claude/rules/no-emoji.md"
+    "bundle/.claude/rules/no-emoji.md",
+    "bundle/.claude/rules/efficient-tool-usage.md"
   ],
   "skills": [
-    ".claude/skills/repo-context/SKILL.md"
+    "bundle/.claude/skills/repo-context/SKILL.md"
   ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
-      "required": true,
-      "kind": "review"
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/code-review-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md", "required": true, "kind": "review"},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/code-review-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }

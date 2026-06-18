@@ -10,7 +10,7 @@
 MAX_DESCRIPTION_WARN=2000
 
 module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/parse-json.sh
+# shellcheck source=bash-lib/agent-config/parse-json.sh
 source "$module_dir/parse-json.sh"
 
 is_env_secret_basename() {
@@ -41,7 +41,7 @@ validate_config() {
 
   local ok=1
   local key
-  for key in name model description rules skills output_artifacts; do
+  for key in name model description rules skills; do
     grep -Eq "^[[:space:]]*\"$key\"[[:space:]]*:" "$cfg" || { echo "missing required key: $key" >&2; ok=0; }
   done
 
@@ -52,7 +52,6 @@ validate_config() {
 
   valid_agent_name "$name" || { echo "name must match schema (lowercase, digits, hyphens; see agents README)" >&2; ok=0; }
   [[ "$name" == "$agent_id" ]] || { echo "name \"$name\" must match directory name \"$agent_id\"" >&2; ok=0; }
-  [[ -n "$model" ]] || { echo "model must be a non-empty string" >&2; ok=0; }
   [[ -n "$desc" ]] || { echo "description must be a non-empty string" >&2; ok=0; }
   if (( ${#desc} > MAX_DESCRIPTION_WARN )); then
     echo "warning: description length ${#desc} exceeds recommended $MAX_DESCRIPTION_WARN" >&2
@@ -61,10 +60,8 @@ validate_config() {
   local rules skills arts
   rules="$(array_block "$cfg" "rules" || true)"
   skills="$(array_block "$cfg" "skills" || true)"
-  arts="$(array_block "$cfg" "output_artifacts" || true)"
   [[ -n "$rules" ]] || { echo "rules must be an array" >&2; ok=0; }
   [[ -n "$skills" ]] || { echo "skills must be an array" >&2; ok=0; }
-  [[ -n "$arts" ]] || { echo "output_artifacts must be an array" >&2; ok=0; }
 
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*\"([^\"]+)\"[[:space:]]*,?[[:space:]]*$ ]] || continue
@@ -78,11 +75,21 @@ validate_config() {
     rel_path_targets_env_secret "$rel" && { echo "skills entry must not reference a .env* path (blocked for security)" >&2; ok=0; }
   done <<< "$skills"
 
-  while IFS= read -r line; do
-    [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] || continue
-    rel="${BASH_REMATCH[1]}"
-    rel_path_targets_env_secret "$rel" && { echo "output_artifacts path must not be .env* (blocked)" >&2; ok=0; }
-  done <<< "$arts"
+  if grep -Eq "^[[:space:]]*\"output_artifacts\"[[:space:]]*:" "$cfg"; then
+    arts="$(array_block "$cfg" "output_artifacts" || true)"
+    [[ -n "$arts" ]] || { echo "output_artifacts must be an array when present" >&2; ok=0; }
+    while IFS= read -r line; do
+      [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] || continue
+      rel="${BASH_REMATCH[1]}"
+      rel_path_targets_env_secret "$rel" && { echo "output_artifacts path must not be .env* (blocked)" >&2; ok=0; }
+    done <<< "${arts:-}"
+  fi
+
+  if grep -Eq '^[[:space:]]*"mcp_proxy_policy"[[:space:]]*:' "$cfg"; then
+    local proxy_policy
+    proxy_policy="$(json_string_value "$cfg" "mcp_proxy_policy")"
+    [[ -n "$proxy_policy" ]] || { echo "mcp_proxy_policy must be a non-empty string" >&2; ok=0; }
+  fi
 
   if grep -q '"allowed_tools"' "$cfg" 2>/dev/null; then
     if command -v python3 &>/dev/null; then

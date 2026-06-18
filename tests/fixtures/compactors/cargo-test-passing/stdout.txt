@@ -1,0 +1,9 @@
+   Compiling mylib v0.1.0
+    Finished test [unoptimized + debuginfo] target(s) in 2.45s
+     Running unittests src/lib.rs
+
+test basic_test ... ok
+test math_add ... ok
+test string_concat ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out

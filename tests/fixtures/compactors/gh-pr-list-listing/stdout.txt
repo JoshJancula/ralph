@@ -1,0 +1,23 @@
+Showing 20 of 87 open pull requests in user/repo
+
+ID      TITLE                                                STATE   AUTHOR
+123     Implement feature X with improved performance        OPEN    john-doe
+124     Add database migration script                        OPEN    jane-smith
+125     DRAFT: Experimental refactor of core module         DRAFT   bob-wilson
+126     Fix memory leak in cache layer                       OPEN    alice-turner
+127     Update dependencies to latest versions               OPEN    charlie-brown
+128     Add API documentation endpoint                       OPEN    diana-prince
+129     DRAFT: Performance profiling improvements            DRAFT   evan-davis
+130     Fix typo in README                                   OPEN    fiona-green
+131     Implement OAuth integration                          OPEN    george-harris
+132     Refactor test suite for clarity                      OPEN    helen-white
+133     Add CI/CD pipeline configuration                     OPEN    ivan-ivan
+134     Security audit: patch SQL injection risk             OPEN    jackie-jones
+135     Update visual styling for mobile                     OPEN    karl-king
+136     Add internationalization support                     OPEN    lucy-lewis
+137     Implement caching strategy                           OPEN    michael-martin
+138     DRAFT: Investigate new storage backend               DRAFT   nancy-nelson
+139     Fix regression in user authentication                OPEN    oscar-oliver
+140     Performance optimization: query batching             OPEN    patricia-park
+141     Add rate limiting to API endpoints                   OPEN    quinn-quinn
+142     Migrate to new logging framework                     OPEN    rachel-rodriguez

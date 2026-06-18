@@ -4,6 +4,7 @@
 #
 # Public interface:
 #   read_allowed_tools -- prints Claude allowed_tools as a comma list (python3) or empty.
+#   read_mcp_proxy_policy -- prints a configured default MCP proxy policy name or empty.
 #   read_model -- prints model after validate_config.
 #   usage -- stderr usage and exit 2.
 
@@ -37,6 +38,16 @@ read_max_budget() {
   [[ -n "$b" ]] && echo "$b"
 }
 
+read_mcp_proxy_policy() {
+  local agents_root="$1" agent_id="$2"
+  local cfg
+  cfg="$(load_cfg_path "$agents_root" "$agent_id")"
+  [[ -f "$cfg" ]] || return 1
+  local p
+  p="$(json_string_value "$cfg" "mcp_proxy_policy")"
+  [[ -n "$p" ]] && echo "$p"
+}
+
 read_model() {
   local agents_root="$1" agent_id="$2"
   local cfg
@@ -44,7 +55,6 @@ read_model() {
   validate_config "$agents_root" "$agent_id" >/dev/null
   local m
   m="$(json_string_value "$cfg" "model")"
-  [[ -n "$m" ]] || { echo "model missing" >&2; return 1; }
   echo "$m"
 }
 
@@ -54,6 +64,7 @@ Usage: agent-config-tool.sh list <agents_root>
        agent-config-tool.sh validate <agents_root> <agent_id> <workspace>
        agent-config-tool.sh model <agents_root> <agent_id>
        agent-config-tool.sh max-budget <agents_root> <agent_id>
+       agent-config-tool.sh mcp-proxy-policy <agents_root> <agent_id>
        agent-config-tool.sh context <agents_root> <agent_id> <workspace>
        agent-config-tool.sh required-artifacts <agents_root> <agent_id>
        agent-config-tool.sh allowed-tools <agents_root> <agent_id>   # Claude --allowedTools line or empty

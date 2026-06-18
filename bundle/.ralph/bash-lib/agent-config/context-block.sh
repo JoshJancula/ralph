@@ -55,9 +55,13 @@ context_block() {
   echo ""
 
   echo "**Declared output artifacts:**"
-  required_artifacts "$agents_root" "$agent_id" | while IFS= read -r a; do
-    [[ -n "$a" ]] && echo "  - \`$a\`"
-  done
+  local had_artifact=0
+  while IFS= read -r a; do
+    [[ -n "$a" ]] || continue
+    had_artifact=1
+    echo "  - \`$a\`"
+  done < <(all_output_artifacts "$agents_root" "$agent_id")
+  [[ "$had_artifact" == "1" ]] || echo "  - (none declared; see plan produces/requires)"
   echo ""
   echo "**Agent config:** \`$cfg\` (validated)."
 }

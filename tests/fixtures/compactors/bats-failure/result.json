@@ -1,0 +1,10 @@
+{
+  "stdout": "bats failures (exit 1) for: bats tests/foo.bats\n1..2\n(1 passing test(s) omitted)\nnot ok 2 fails\n# (in test file)\n#   `false' failed",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "bats",
+  "status": "compacted",
+  "exit_status": 1
+}

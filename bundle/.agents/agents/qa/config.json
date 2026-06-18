@@ -1,0 +1,18 @@
+{
+  "name": "qa",
+  "_generated": "GENERATED from bundle/.ralph/agents/qa.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "auto",
+  "description": "Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria",
+  "rules": [
+    "bundle/.agents/rules/no-emoji.md",
+    "bundle/.agents/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.agents/skills/repo-context/SKILL.md"
+  ],
+  "output_artifacts": [
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md", "required": true, "kind": "review"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/qa-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
+  ]
+}

@@ -1,0 +1,8 @@
+{"type":"step_start","timestamp":1,"sessionID":"s","part":{"id":"p0","type":"step-start","snapshot":"abc"}}
+{"type":"tool_use","timestamp":2,"sessionID":"s","part":{"type":"tool","tool":"edit","callID":"functions.edit:15","state":{"status":"error","input":{"filePath":"/abs/project/plans/PLAN3.plan.md","oldString":"x"},"error":"Found multiple matches for oldString."},"id":"prt_1"}}
+{"type":"message.part.updated","properties":{"part":{"id":"txt1","type":"text","text":"Running the loader"}}}
+{"type":"message.part.updated","properties":{"part":{"id":"txt1","type":"text","text":"Running the loader tests next.\n"}}}
+{"type":"tool_use","timestamp":3,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_read","callID":"c2","state":{"status":"completed","input":{"path":"tests/python/ralph_script_loader.py"}},"id":"prt_2"}}
+{"type":"tool_use","timestamp":4,"sessionID":"s","part":{"type":"tool","tool":"write","callID":"c3","state":{"status":"completed","input":{"filePath":"notes.md","content":"# Notes\nfirst line"}},"id":"prt_3"}}
+{"type":"tool_use","timestamp":5,"sessionID":"s","part":{"type":"tool","tool":"mcp__ralph__ralph_proxy_grep","callID":"c4","state":{"status":"completed","input":{"pattern":"loader"},"output":"{\"preview\":\"3 matches\",\"resultId\":\"efeec2df9f877019\"}"},"id":"prt_4"}}
+{"type":"step_finish","part":{"type":"step-finish","tokens":{"total":18404}}}

@@ -63,3 +63,37 @@ CONFIG
   [ -z "$output" ]
   rm -rf "$agents_root"
 }
+
+@test "mcp-proxy-policy subcommand prints the configured policy name" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="policy-reader"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "policy-reader",
+  "model": "gpt-test",
+  "description": "Agent with a proxy policy",
+  "rules": [
+    "rule-policy-reader"
+  ],
+  "skills": [
+    "skill-policy-reader"
+  ],
+  "output_artifacts": [
+    {
+      "path": "artifacts/policy-reader.txt",
+      "required": true
+    }
+  ],
+  "mcp_proxy_policy": "readonly"
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" mcp-proxy-policy "$agents_root" "$agent_id"
+  [ "$status" -eq 0 ]
+  [ "$output" = "readonly" ]
+  rm -rf "$agents_root"
+}
+

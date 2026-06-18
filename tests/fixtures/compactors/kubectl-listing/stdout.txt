@@ -1,0 +1,16 @@
+NAME                                READY   STATUS    RESTARTS   AGE
+nginx-deployment-5d59d67564-abc12   1/1     Running   0          2d
+nginx-deployment-5d59d67564-def34   1/1     Running   0          2d
+postgres-statefulset-0              1/1     Running   1          5d
+postgres-statefulset-1              1/1     Running   1          5d
+redis-cache-xyz789                  1/1     Running   2          7d
+api-server-abc456                   1/1     Running   0          1d
+api-server-def789                   1/1     Running   0          1d
+api-server-ghi012                   1/1     Running   0          1d
+worker-job-2024-06-03-jkl345        0/1     Completed 0          2h
+worker-job-2024-06-03-mno678        0/1     Completed 0          1h
+prometheus-deployment-pqr901        1/1     Running   0          3w
+grafana-deployment-stu234           1/1     Running   1          3w
+ingress-nginx-controller-vwx567     1/1     Running   0          1m
+cert-manager-webhook-yza890         1/1     Running   0          1w
+monitoring-alertmanager-bcd123      1/1     Running   0          3w

@@ -1,0 +1,98 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/pre-tool-bash-policy.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "command_execution",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/pre-tool-bash-policy.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-bash-telemetry.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "command_execution",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-bash-telemetry.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "read_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

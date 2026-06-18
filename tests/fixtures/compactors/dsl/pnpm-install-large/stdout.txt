@@ -1,0 +1,12 @@
+Lockfile is up to date, resolution step is skipped
+Packages: +1234
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 1234, reused 1200, downloaded 34, added 1234, done
+WARN deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+
+dependencies:
++ lodash 4.17.21
++ express 4.18.2
++ react 18.2.0
+
+Done in 28.4s using pnpm v9.1.0

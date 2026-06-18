@@ -14,8 +14,9 @@
 #       {
 #         "id": "stage-id",
 #         "agent": "agent-name",
-#         "runtime": "cursor", "claude", or "codex" (optional, default: cursor),
+#         "runtime": "cursor", "claude", "codex", "opencode", or "antigravity" (optional, default: cursor),
 #         "plan": "path/to/stage-plan.md",
+#         "mcpProxyPolicy": "readonly" (optional; forwarded to RALPH_MCP_PROXY_POLICY for that stage),
 #         "planTemplate": "path/to/stage-plan.template.md (optional)",
 #         "sessionStrategy": "fresh" | "resume" | "reset" (optional; preferred),
 #         "sessionResume": true or false (optional legacy fallback; mapped to session strategy resume/fresh),
@@ -171,11 +172,22 @@ fi
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/runtime-resolve.sh"
 # shellcheck source=/dev/null
-source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator-lib.sh"
+if ! declare -F expand_artifact_tokens >/dev/null 2>&1; then
+  _artifacts_source="$RALPH_ACTIVE_DIR/bash-lib/artifacts.sh"
+  if [[ ! -f "$_artifacts_source" && -f "$RALPH_DIR/bash-lib/artifacts.sh" ]]; then
+    _artifacts_source="$RALPH_DIR/bash-lib/artifacts.sh"
+  fi
+  source "$_artifacts_source"
+  unset _artifacts_source
+fi
+# shellcheck source=bash-lib/orchestrator/orchestrator-lib.sh
+source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-lib.sh"
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/ralph-format-elapsed.sh"
+# shellcheck source=bash-lib/orchestrator/orchestrator-handoffs.sh
+source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-handoffs.sh"
 # shellcheck source=/dev/null
-source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator-handoffs.sh"
+source "$RALPH_ACTIVE_DIR/bash-lib/review-status.sh"
 
 # Inlined here (not only bash-lib/orchestrator-verify.sh) so this script stays self-contained for operators.
 artifact_remediation_text() {
@@ -242,18 +254,10 @@ verify_step_artifacts() {
 }
 
 # Extract status from code-review artifact (for loop control)
+# Uses the shared helper from review-status.sh
 extract_review_status() {
   local review_file="$1"
-  [[ ! -f "$review_file" ]] && return 1
-
-  # Extract status field between markers
-  local status=""
-  if grep -q "<!-- REVIEW_STATUS: START -->" "$review_file" 2>/dev/null; then
-    status="$(sed -n '/<!-- REVIEW_STATUS: START -->/,/<!-- REVIEW_STATUS: END -->/p' "$review_file" | grep '^status:' | head -1 | cut -d: -f2 | tr -d ' ')" || true
-  fi
-
-  [[ -n "$status" ]] && echo "$status" && return 0
-  return 1
+  ralph_extract_review_status "$review_file"
 }
 
 # Check if stage should loop back to a previous stage
@@ -408,6 +412,8 @@ orch_stage_execute() {
   local stage_iter="${12}"
   local step_status_var="${13}"
   local stage_context_budget=""
+  local stage_mcp_proxy_policy=""
+  local stage_mcp_proxy_policy_type=""
   stage_context_budget="$(echo "$stage" | jq -r '.contextBudget // ""' 2>/dev/null)" || stage_context_budget=""
   local plan_abs_file="$plan_abs"
   local step_status=0
@@ -460,12 +466,11 @@ orch_stage_execute() {
       fi
     fi
     if [[ -z "$template_to_use" ]] || [[ ! -f "$template_to_use" ]]; then
-      runtime_root="$(ralph_resolve_runtime_root "$runtime" "$WORKSPACE" 2>/dev/null || true)"
-      agent_template_dir="${runtime_root:+$runtime_root/ralph/templates}"
+      agent_template_dir="${ralph_plan_templates_dir:-$RALPH_ACTIVE_DIR/plan-templates}"
       if [[ -n "$agent_template_dir" && -f "$agent_template_dir/$agent.plan.template.md" ]]; then
         template_to_use="$agent_template_dir/$agent.plan.template.md"
-      elif [[ -f "$RALPH_ACTIVE_DIR/plan.template" ]]; then
-        template_to_use="$RALPH_ACTIVE_DIR/plan.template"
+      elif [[ -f "$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md" ]]; then
+        template_to_use="$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md"
       fi
     fi
     if [[ -f "$template_to_use" ]]; then
@@ -498,13 +503,13 @@ orch_stage_execute() {
   if [[ "$_session_strategy_type" == "string" ]]; then
     _session_strategy_value="$(echo "$stage" | jq -r '.sessionStrategy' 2>/dev/null || echo "")"
     case "$_session_strategy_value" in
-      fresh|resume|reset)
+      fresh|resume|reset|compact)
         _session_strategy_cli+=(--session-strategy "$_session_strategy_value")
         ;;
       *)
-        ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be one of fresh|resume|reset (got $_session_strategy_value)"
+        ralph_orchestrator_log "FAIL step $step_n: sessionStrategy must be one of fresh|resume|reset|compact (got $_session_strategy_value)"
         echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid sessionStrategy)${C_RST}" >&2
-        echo "  sessionStrategy must be one of fresh, resume, or reset in $ORCH_FILE." >&2
+        echo "  sessionStrategy must be one of fresh, resume, reset, or compact in $ORCH_FILE." >&2
         echo "  Log: $LOG_FILE" >&2
         printf -v "$step_status_var" '%s' 1
         return 1
@@ -564,6 +569,7 @@ orch_stage_execute() {
   fi
 
   _step_model_label="${stage_model:-agent-config default}"
+  echo -e "${C_DIM}────────────────────────────────────────────────────────────${C_RST}"
   echo -e "${C_B}Step ${step_n}${C_RST} ${C_G}$runtime${C_RST} agent=${C_BOLD}$agent${C_RST} source=${C_BOLD}$agent_source${C_RST} model=${C_DIM}${_step_model_label}${C_RST} plan=$plan_rel"
   _plan_tag_stream="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//')"
   _plan_tag_stream="${_plan_tag_stream//[^A-Za-z0-9_.-]/_}"
@@ -577,7 +583,7 @@ orch_stage_execute() {
   fi
   echo -e "${C_DIM}  orchestrator log (append):${C_RST} $LOG_FILE" >&2
   echo -e "${C_DIM}  per-plan agent output log:${C_RST} $_runner_stream_log" >&2
-  echo -e "${C_DIM}--- runner / agent output follows ---${C_RST}" >&2
+  echo -e "${C_DIM}──────────────── runner / agent output follows ────────────────${C_RST}" >&2
 
   if [[ "${RALPH_HANDOFFS_ENABLED:-1}" == "1" ]]; then
     export ORCH_FILE="$RALPH_ORCH_FILE"
@@ -594,9 +600,6 @@ orch_stage_execute() {
   )
   if [[ -n "${CODEX_PLAN_SANDBOX:-}" ]]; then
     _runner_env+=(CODEX_PLAN_SANDBOX="$CODEX_PLAN_SANDBOX")
-  fi
-  if [[ -n "${CODEX_PLAN_FULL_AUTO:-}" ]]; then
-    _runner_env+=(CODEX_PLAN_FULL_AUTO="$CODEX_PLAN_FULL_AUTO")
   fi
   if [[ -n "${CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX:-}" ]]; then
     _runner_env+=(CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX="$CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX")
@@ -616,6 +619,26 @@ orch_stage_execute() {
   if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
     _runner_env+=(CLAUDE_PLAN_PERMISSION_MODE="$CLAUDE_PLAN_PERMISSION_MODE")
   fi
+  stage_mcp_proxy_policy_type="$(echo "$stage" | jq -r 'if has("mcpProxyPolicy") then (.mcpProxyPolicy|type) else "absent" end' 2>/dev/null || echo "error")"
+  if [[ "$stage_mcp_proxy_policy_type" == "string" ]]; then
+    stage_mcp_proxy_policy="$(echo "$stage" | jq -r '.mcpProxyPolicy' 2>/dev/null || echo "")"
+    if [[ -z "$stage_mcp_proxy_policy" ]]; then
+      ralph_orchestrator_log "FAIL step $step_n: mcpProxyPolicy must be a non-empty string"
+      echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid mcpProxyPolicy)${C_RST}" >&2
+      echo "  mcpProxyPolicy must be a non-empty string in $ORCH_FILE." >&2
+      echo "  Log: $LOG_FILE" >&2
+      printf -v "$step_status_var" '%s' 1
+      return 1
+    fi
+    _runner_env+=(RALPH_MCP_PROXY_POLICY="$stage_mcp_proxy_policy")
+  elif [[ "$stage_mcp_proxy_policy_type" != "absent" ]]; then
+    ralph_orchestrator_log "FAIL step $step_n: mcpProxyPolicy must be a string (got $stage_mcp_proxy_policy_type)"
+    echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid mcpProxyPolicy)${C_RST}" >&2
+    echo "  mcpProxyPolicy must be a string in $ORCH_FILE." >&2
+    echo "  Log: $LOG_FILE" >&2
+    printf -v "$step_status_var" '%s' 1
+    return 1
+  fi
   if [[ -n "$stage_model" ]]; then
     if [[ "$runtime" == "cursor" ]]; then
       _runner_env+=(CURSOR_PLAN_MODEL="$stage_model")
@@ -623,6 +646,8 @@ orch_stage_execute() {
       _runner_env+=(CODEX_PLAN_MODEL="$stage_model")
     elif [[ "$runtime" == "opencode" ]]; then
       _runner_env+=(OPENCODE_PLAN_MODEL="$stage_model")
+    elif [[ "$runtime" == "antigravity" ]]; then
+      _runner_env+=(ANTIGRAVITY_PLAN_MODEL="$stage_model")
     else
       _runner_env+=(CLAUDE_PLAN_MODEL="$stage_model")
     fi
@@ -768,11 +793,41 @@ orch_stage_execute() {
 orch_stage_run_runner() {
   local runner="$1"
   shift
-  if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] && [[ -t 1 ]] && command -v tee >/dev/null 2>&1; then
-    env "$@" bash "$runner" "${_runner_args[@]}" 2>&1 | tee -a "$LOG_FILE"
+  if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] \
+    && ([[ -t 1 ]] || [[ "${ORCHESTRATOR_PARALLEL_PREFIX_STREAM:-0}" == "1" ]]) \
+    && command -v tee >/dev/null 2>&1; then
+    if [[ ("${ORCHESTRATOR_NO_COLOR:-0}" != "1" && -z "${NO_COLOR:-}") && (-t 1 || "${ORCHESTRATOR_PARALLEL_PREFIX_STREAM:-0}" == "1") ]]; then
+      set -- "$@" RALPH_PLAN_PRETTY=1
+    fi
+    env "$@" bash "$runner" "${_runner_args[@]}" 2>&1 \
+      | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$LOG_FILE")
     return ${PIPESTATUS[0]}
   fi
   env "$@" bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1
+}
+
+orch_parallel_stage_tag_color() {
+  local color_idx="${1:-0}"
+  case $((color_idx % 4)) in
+    0) printf '%s' "$C_B" ;;
+    1) printf '%s' "$C_G" ;;
+    2) printf '%s' "$C_Y" ;;
+    *) printf '%s' "$C_C" ;;
+  esac
+}
+
+orch_parallel_stage_prefix_stream() {
+  local stage_id="$1"
+  local stage_color="${2:-}"
+  local stage_tag
+  if [[ -n "$stage_color" ]]; then
+    stage_tag="${stage_color}[${stage_id}]${C_RST}"
+  else
+    stage_tag="[${stage_id}]"
+  fi
+  while IFS= read -r stage_line || [[ -n "$stage_line" ]]; do
+    printf '%s %s\n' "$stage_tag" "$stage_line"
+  done
 }
 
 ralph_orchestrator_log() {
@@ -784,16 +839,17 @@ ralph_orchestrator_log() {
 
 ralph_orchestrator_log "orchestrator started workspace=$WORKSPACE orchestration=$ORCH_FILE"
 
-if [[ -t 1 && "${ORCHESTRATOR_NO_COLOR:-0}" != "1" ]]; then
+if [[ -t 1 && "${ORCHESTRATOR_NO_COLOR:-0}" != "1" && -z "${NO_COLOR:-}" ]]; then
   C_R=$'\033[31m'
   C_G=$'\033[32m'
   C_Y=$'\033[33m'
   C_B=$'\033[34m'
+  C_C=$'\033[36m'
   C_DIM=$'\033[2m'
   C_BOLD=$'\033[1m'
   C_RST=$'\033[0m'
 else
-  C_R="" C_G="" C_Y="" C_B="" C_DIM="" C_BOLD="" C_RST=""
+  C_R="" C_G="" C_Y="" C_B="" C_C="" C_DIM="" C_BOLD="" C_RST=""
 fi
 
 # Human-facing step counter (1-based); can exceed idx when looping back.
@@ -807,7 +863,95 @@ _orch_start_ts="$(date +%s)"
 _orch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 _orch_stage_usages=""
 
-# Non-JSON orchestrations are rejected; all pipelines use .orch.json today.
+# Render an inline orchestration stage (its todos carried in the root plan) into a
+# standalone standard plan file that run-plan.sh can execute, mirroring planFile stages.
+orch_render_inline_stage_plan() {
+  local stage_id="$1" ns="$2" todos_json="$3"
+  python3 - "$stage_id" "$ns" "$todos_json" <<'PYRENDER'
+import json
+import sys
+
+stage_id, ns, todos_json = sys.argv[1], sys.argv[2], sys.argv[3]
+todos = json.loads(todos_json) if todos_json else []
+if not todos:
+    todos = [{"id": f"{stage_id}-task-1", "content": "Complete this stage.",
+              "verification": "Confirm the stage is complete.", "status": "pending"}]
+
+
+def block(text: str) -> str:
+    lines = (text or "").splitlines() or [""]
+    return "\n".join("      " + ln for ln in lines)
+
+
+out = ["---", f"name: {ns}-{stage_id}", f"overview: Inline stage {stage_id}",
+       "execution: standard", "instructions: Execute one TODO at a time.", "", "todos:"]
+for todo in todos:
+    out.append(f"  - id: {todo.get('id') or stage_id + '-task'}")
+    out.append("    content: |")
+    out.append(block(todo.get("content", "")))
+    out.append("    verification: |")
+    out.append(block(todo.get("verification", "")))
+    out.append(f"    status: {todo.get('status') or 'pending'}")
+out += ["isProject: false", "---"]
+print("\n".join(out))
+PYRENDER
+}
+
+# A structured orchestration plan (.plan.md with a pipeline block) is normalized into the
+# .orch.json shape this orchestrator already runs: inline stages become standalone stage
+# plan files, planFile stages are used as-is. Legacy .orch.json inputs skip this entirely.
+if [[ "$ORCH_FILE" != *.json ]]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    ralph_orchestrator_log "FAIL: python3 required for structured orchestration plan $ORCH_FILE"
+    echo -e "${C_R}${C_BOLD}Orchestrator aborted: python3 is required for a structured orchestration plan${C_RST}" >&2
+    echo "  Use a classic markdown plan with 'ralph run --plan', or install python3." >&2
+    echo "  Log: $LOG_FILE" >&2
+    exit 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    ralph_orchestrator_log "FAIL: jq required to normalize structured orchestration plan $ORCH_FILE"
+    echo -e "${C_R}${C_BOLD}Orchestrator aborted: jq is required for orchestration${C_RST}" >&2
+    echo "  Install: brew install jq (macOS) or apt install jq (Linux)" >&2
+    exit 1
+  fi
+  if ! declare -F plan_pipeline_orch_json >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    source "$RALPH_ACTIVE_DIR/bash-lib/plan-todo.sh"
+  fi
+  if ! _orch_norm_json="$(plan_pipeline_orch_json "$ORCH_FILE" 2>&1)"; then
+    ralph_orchestrator_log "FAIL parse: $ORCH_FILE"
+    echo -e "${C_R}${C_BOLD}Orchestrator parse error: invalid orchestration plan${C_RST}" >&2
+    printf '%s\n' "$_orch_norm_json" | sed 's/^/  /' >&2
+    echo "  Log: $LOG_FILE" >&2
+    exit 1
+  fi
+  _orch_norm_ns="$(printf '%s' "$_orch_norm_json" | jq -r '.namespace // empty' 2>/dev/null || echo "")"
+  [[ -n "$_orch_norm_ns" ]] || _orch_norm_ns="$ORCH_BASENAME"
+  _orch_gen_dir="$RALPH_PLAN_WORKSPACE_ROOT/orchestration-plans/$_orch_norm_ns"
+  mkdir -p "$_orch_gen_dir"
+  _orch_stage_count="$(printf '%s' "$_orch_norm_json" | jq '.stages | length' 2>/dev/null || echo 0)"
+  for ((_orch_si = 0; _orch_si < _orch_stage_count; _orch_si++)); do
+    if [[ "$(printf '%s' "$_orch_norm_json" | jq -r ".stages[$_orch_si] | has(\"_inlineTodos\")" 2>/dev/null)" != "true" ]]; then
+      continue
+    fi
+    _orch_sid="$(printf '%s' "$_orch_norm_json" | jq -r ".stages[$_orch_si].id // \"stage\"" 2>/dev/null)"
+    _orch_todos="$(printf '%s' "$_orch_norm_json" | jq -c ".stages[$_orch_si]._inlineTodos" 2>/dev/null)"
+    _orch_stage_file="$_orch_gen_dir/$(printf '%s-%02d-%s.plan.md' "$_orch_norm_ns" "$((_orch_si + 1))" "$_orch_sid")"
+    orch_render_inline_stage_plan "$_orch_sid" "$_orch_norm_ns" "$_orch_todos" > "$_orch_stage_file"
+    _orch_norm_json="$(printf '%s' "$_orch_norm_json" | jq --arg p "$_orch_stage_file" "(.stages[$_orch_si].plan) = \$p | del(.stages[$_orch_si]._inlineTodos)" 2>/dev/null)"
+  done
+  _orch_gen_file="$_orch_gen_dir/${_orch_norm_ns}.orch.json"
+  printf '%s\n' "$_orch_norm_json" > "$_orch_gen_file"
+  ORCH_FILE="$_orch_gen_file"
+  export RALPH_ORCH_FILE="$ORCH_FILE"
+  ralph_orchestrator_log "normalized structured plan -> $_orch_gen_file (ns=$_orch_norm_ns)"
+  if [[ "${ORCH_NORMALIZE_ONLY:-0}" == "1" ]]; then
+    printf '%s\n' "$_orch_gen_file"
+    exit 0
+  fi
+fi
+
+# Legacy .orch.json is parsed directly; structured plans were normalized to one above.
 if [[ "$ORCH_FILE" == *.json ]]; then
   # Parse JSON orchestration file with jq
   if ! command -v jq >/dev/null 2>&1; then
@@ -851,8 +995,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       wave_stage_ids="$(echo "$parallel_waves_raw" | jq -r ".[$wave_idx]" 2>/dev/null || true)"
       wave_pids=()
       wave_stage_refs=()
+      wave_output_logs=()
       wave_status=0
       wave_failures=()
+      wave_stage_position=0
       IFS=',' read -r -a wave_stage_id_parts <<< "$wave_stage_ids"
       for wave_stage_id in "${wave_stage_id_parts[@]}"; do
         wave_stage_id="$(printf '%s' "$wave_stage_id" | sed 's/^\s*//; s/\s*$//')"
@@ -873,8 +1019,8 @@ if [[ "$ORCH_FILE" == *.json ]]; then
         stage_iter="$(orch_stage_iteration_map_get "$stage_id")"
         runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
         if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
-          ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, codex, or opencode)"
-          echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, or opencode.${C_RST}" >&2
+          ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, codex, opencode, or antigravity)"
+          echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, opencode, or antigravity.${C_RST}" >&2
           exit 1
         fi
         agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
@@ -886,25 +1032,49 @@ if [[ "$ORCH_FILE" == *.json ]]; then
         planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
         step_index=$((step_index + 1))
         plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
+        plan_tag="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
+        plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
+        wave_output_logs+=("$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log")
         stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/parallel-wave-${wave_idx}-stage-${stage_id}.usage.json"
         mkdir -p "$(dirname "$stage_usage_file")"
         if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
           stage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/parallel-wave-${wave_idx}-stage-${stage_id}.status"
           mkdir -p "$(dirname "$stage_file")"
-          ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" ) &
+          if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
+            (
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file"
+            ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
+          else
+            ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" ) &
+          fi
           wave_pids+=("$!")
           wave_stage_refs+=("$stage_id:$stage_file")
         else
           stage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/parallel-wave-${wave_idx}-stage-${stage_id}.status"
           mkdir -p "$(dirname "$stage_file")"
-          (
-            orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file"
-            echo "$?" > "$stage_file"
-          ) &
+          if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
+            (
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file"
+              echo "$?" > "$stage_file"
+            ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
+          else
+            (
+              orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file"
+              echo "$?" > "$stage_file"
+            ) &
+          fi
           wave_pids+=("$!")
           wave_stage_refs+=("$stage_id:$stage_file")
         fi
+        wave_stage_position=$((wave_stage_position + 1))
       done
+      if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] && ((${#wave_output_logs[@]} > 0)); then
+        wave_follow_cmd="tail -F"
+        for wave_output_log in "${wave_output_logs[@]}"; do
+          printf -v wave_follow_cmd '%s %q' "$wave_follow_cmd" "$wave_output_log"
+        done
+        echo -e "${C_DIM}Parallel wave $((wave_idx + 1)) follow:${C_RST} $wave_follow_cmd" >&2
+      fi
       for pid in "${wave_pids[@]}"; do
         wait "$pid" || wave_status=1
       done
@@ -959,8 +1129,8 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       fi
       runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
       if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
-        ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, codex, or opencode)"
-        echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, or opencode.${C_RST}" >&2
+        ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' (use cursor, claude, codex, opencode, or antigravity)"
+        echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, opencode, or antigravity.${C_RST}" >&2
         echo "  Log: $LOG_FILE" >&2
         exit 1
       fi
@@ -1025,7 +1195,7 @@ ralph_orchestrator_log "orchestration usage: steps=${step_index} input=${_orch_i
 _orch_summary_text=""
 if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
   _orch_summary_text="$(
-    python3 "$WORKSPACE/.ralph/bash-lib/ralph-usage-summary-text.py" orch \
+    python3 "$WORKSPACE/.ralph/python/ralph-usage-summary-text.py" orch \
       --summary "$_orch_summary_file" \
       --invocations "$RALPH_LOG_DIR/invocation-usage.json" 2>/dev/null || true
   )"

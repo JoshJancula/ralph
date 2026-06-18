@@ -42,6 +42,39 @@ CONFIG
   rm -rf "$agents_root"
 }
 
+@test "required artifacts resolves {{STAGE_ID}} placeholders" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="artifacts-stage"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "artifacts-stage",
+  "model": "gpt-test",
+  "description": "Agent for stage token resolution",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ],
+  "output_artifacts": [
+    {
+      "path": "artifacts/{{STAGE_ID}}/stage-path.txt",
+      "required": true
+    }
+  ]
+}
+CONFIG
+
+  run env RALPH_STAGE_ID="stage-42" bash "$(agent_config_tool_path)" required-artifacts "$agents_root" "$agent_id"
+  [ "$status" -eq 0 ]
+  trimmed="${output%$'\n'}"
+  [ "$trimmed" = 'artifacts/stage-42/stage-path.txt' ]
+  rm -rf "$agents_root"
+}
+
 @test "required artifacts only returns required entries" {
   local agents_root agent_id cfg
   agents_root="$(mktemp -d)"
