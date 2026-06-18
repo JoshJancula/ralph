@@ -303,45 +303,6 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             )
         lines.append("")
 
-    lines.append("## Savings by path")
-    lines.append("")
-    path_headers = [
-        "What Ralph did",
-        "Status",
-        "Pre bytes",
-        "Post bytes",
-        "Saved bytes",
-        "Saved tokens",
-    ]
-    lines.append("| " + " | ".join(path_headers) + " |")
-    lines.append("| " + " | ".join(["---"] * len(path_headers)) + " |")
-
-    for path_name in PATH_ORDER:
-        bucket = per_path.get(path_name) or {}
-        label = PATH_LABELS.get(path_name, path_name)
-        status_label = str(bucket.get("status_label") or bucket.get("status") or "inactive")
-        pre_bytes = _as_int(bucket.get("pre_optimization_bytes"))
-        post_bytes = _as_int(bucket.get("post_optimization_bytes"))
-        saved_b = _as_int(bucket.get("saved_bytes"))
-        saved_t = _as_int(bucket.get("saved_tokens"))
-        lines.append(
-            f"| {label} | {status_label} | {fmt_int(pre_bytes)} | {fmt_int(post_bytes)} | "
-            f"{fmt_int(saved_b)} | {fmt_int(saved_t)} |"
-        )
-
-    lines.append(
-        "| **Total** | **-** | **-** | **-** | **{}** | **{}** |".format(
-            fmt_int(saved_bytes), fmt_int(saved_tokens)
-        )
-    )
-    lines.append("")
-    lines.append(
-        "**Status** explains zero-savings rows: **inactive** paths did not apply in the run mode; "
-        "**negated by readback** means windowing applied but follow-up `result_read` calls "
-        "re-consumed the payload, netting the savings to zero."
-    )
-    lines.append("")
-
     if isinstance(readback_summary, Mapping) and _as_int(
         readback_summary.get("envelope_count", 0)
     ) > 0:
@@ -398,13 +359,27 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         missed = optimization_opportunities.get("missed_compaction_opportunities")
         if isinstance(missed, list) and missed:
             lines.append("Missed compaction opportunities:")
-            for item in missed[:3]:
+            seen: set[str] = set()
+            shown = 0
+            for item in missed:
+                if not isinstance(item, Mapping):
+                    continue
+                try:
+                    key = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                except TypeError:
+                    key = repr(sorted(item.items()))
+                if key in seen:
+                    continue
+                seen.add(key)
                 reason = str(
                     item.get("skip_reason") or item.get("skip_type") or "compaction skipped"
                 )
                 lines.append(
                     f"- `{reason}` ({fmt_int(item.get('original_bytes', 0))} bytes)"
                 )
+                shown += 1
+                if shown >= 3:
+                    break
             lines.append("")
         patterns = optimization_opportunities.get("sequence_patterns")
         if isinstance(patterns, list) and patterns:
@@ -452,10 +427,6 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "- **Tool output: with vs without Ralph** estimates the bytes/tokens that reached the "
         "model from tool output. 'Actual with Ralph' includes follow-up stored-result readbacks, "
         "so heavy rereads can drive net savings toward zero even when previews were compact."
-    )
-    lines.append(
-        "- **Savings by path** shows pre/post optimization bytes per path. "
-        "The total row is the measured byte/token savings across all paths."
     )
     lines.append(
         "- **Stored result follow-ups** distinguishes gross re-read bytes (diagnostic) from "

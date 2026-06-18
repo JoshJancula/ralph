@@ -145,7 +145,12 @@ def _aggregate_windowing_from_summary(summary: Mapping[str, Any]) -> dict[str, A
 def _estimate_tokens_from_bytes(byte_count: int) -> int:
     if byte_count <= 0:
         return 0
-    return estimate_tokens("x" * byte_count)
+    # The benchmark report only needs the token estimate for an all-letter
+    # synthetic string, which is exactly ceil(byte_count / 4) under the
+    # current estimator. Avoid materializing a giant string here; large
+    # benchmarks can otherwise spend most of their time allocating and walking
+    # that temporary buffer.
+    return max(1, (byte_count + 3) // 4)
 
 
 def _path_from_family(family: str) -> str | None:
@@ -464,7 +469,21 @@ def _normalize_optimization_opportunities(
 
     missed = discover.get("missed_compaction_opportunities")
     if isinstance(missed, list) and missed:
-        out["missed_compaction_opportunities"] = missed
+        deduped: list[Any] = []
+        seen: set[str] = set()
+        for item in missed:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                key = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            except TypeError:
+                key = repr(sorted(item.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(dict(item))
+        if deduped:
+            out["missed_compaction_opportunities"] = deduped
 
     patterns = discover.get("sequence_patterns")
     if isinstance(patterns, list) and patterns:

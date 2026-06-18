@@ -51,6 +51,38 @@ class TestSavingsReport(unittest.TestCase):
             for item in value:
                 self._assert_no_pricing_fields(item)
 
+    def test_estimate_tokens_from_bytes_uses_constant_time_formula(self) -> None:
+        original_estimate_tokens = self.report_module.estimate_tokens
+
+        def fail_if_called(_: str) -> int:
+            raise AssertionError("estimate_tokens() should not be called here")
+
+        self.report_module.estimate_tokens = fail_if_called
+        self.addCleanup(setattr, self.report_module, "estimate_tokens", original_estimate_tokens)
+
+        byte_count = 1_000_003
+        self.assertEqual(
+            self.report_module._estimate_tokens_from_bytes(byte_count),
+            max(1, (byte_count + 3) // 4),
+        )
+
+    def test_normalize_optimization_opportunities_deduplicates_missed_entries(self) -> None:
+        discover = {
+            "missed_compaction_opportunities": [
+                {"original_bytes": 5000, "skip_reason": "native shell output not compacted"},
+                {"original_bytes": 5000, "skip_reason": "native shell output not compacted"},
+                {"original_bytes": 4000, "skip_reason": "low savings due to proxy limits"},
+            ],
+            "sequence_patterns": [{"pattern_id": "p1"}],
+        }
+
+        normalized = self.report_module._normalize_optimization_opportunities(discover)
+        self.assertIsNotNone(normalized)
+        missed = normalized["missed_compaction_opportunities"]
+        self.assertEqual(len(missed), 2)
+        self.assertEqual(missed[0]["skip_reason"], "native shell output not compacted")
+        self.assertEqual(missed[1]["skip_reason"], "low savings due to proxy limits")
+
     def test_build_report_aggregates_paths_and_tokens(self) -> None:
         paths_dir = self.tmp_dir / "with_paths"
         summary_with_paths = {

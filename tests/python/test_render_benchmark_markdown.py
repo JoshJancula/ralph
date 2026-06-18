@@ -14,21 +14,6 @@ from ralph_script_loader import load_ralph_script
 render_module = load_ralph_script("render-benchmark-markdown")
 render_markdown = render_module.render_markdown
 
-PLAIN_LABELS = [
-    "Shortened commands before running them",
-    "Trimmed long command output",
-    "Trimmed long command output (proxy mode)",
-    "Sent only the relevant slice of big results",
-]
-
-INTERNAL_PATH_NAMES = [
-    "pre_tool_rewrite",
-    "hook_compaction",
-    "proxy_shell_compaction",
-    "result_windowing",
-]
-
-
 def _sample_report(**overrides: object) -> dict:
     report: dict = {
         "schema_version": 2,
@@ -191,18 +176,10 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         self.assertIn("# Ralph Savings Report", output)
         self.assertIn("## Session usage", output)
         self.assertIn("## Tool output: with vs without Ralph", output)
-        self.assertIn("## Savings by path", output)
+        self.assertNotIn("## Savings by path", output)
         self.assertIn("## Stored result follow-ups", output)
         self.assertIn("## How to read this", output)
         self.assertIn("## Data quality", output)
-
-        for label in PLAIN_LABELS:
-            with self.subTest(label=label):
-                self.assertIn(label, output)
-
-        for path_name in INTERNAL_PATH_NAMES:
-            with self.subTest(path_name=path_name):
-                self.assertNotIn(path_name, output)
 
         # Session table shows actual billed tokens and prompt/tool metrics.
         self.assertIn("| Input tokens | 1,200 |", output)
@@ -217,12 +194,6 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         self.assertIn("| Net savings | 150 | 38 |", output)
         self.assertIn("| Net savings rate | 25.0% | - |", output)
         self.assertIn("**Measured but not applied:** 13 bytes", output)
-
-        # Per-path table uses Pre/Post/Saved/Status.
-        self.assertIn("| Pre bytes | Post bytes | Saved bytes | Saved tokens |", output)
-        self.assertIn("| Shortened commands before running them | saved | 100 | 60 | 40 | 10 |", output)
-        self.assertIn("| Sent only the relevant slice of big results | negated by readback | 1,000 | 1,000 | 0 | 0 |", output)
-        self.assertIn("| **Total** | **-** | **-** | **-** | **150** | **38** |", output)
 
         # Readback section distinguishes gross vs net and uses effective rate.
         self.assertIn("Effective windowing savings rate: **0.0%**", output)
@@ -284,6 +255,8 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
             optimization_opportunities={
                 "missed_compaction_opportunities": [
                     {"original_bytes": 5000, "skip_reason": "native shell output not compacted"},
+                    {"original_bytes": 5000, "skip_reason": "native shell output not compacted"},
+                    {"original_bytes": 4000, "skip_reason": "low savings due to proxy limits"},
                 ],
                 "sequence_patterns": [
                     {"pattern_id": "repeated_native_read_like", "count": 3},
@@ -301,6 +274,9 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         self.assertIn("native shell output not compacted", output)
         self.assertIn("repeated_native_read_like", output)
         self.assertIn("Prefer compacted result reads before raw views.", output)
+        self.assertEqual(output.count("Missed compaction opportunities:"), 1)
+        self.assertEqual(output.count("native shell output not compacted"), 2)
+        self.assertEqual(output.count("low savings due to proxy limits"), 1)
 
     def test_skipped_summaries_surfaced(self) -> None:
         report = _sample_report(skipped_summaries=2)
@@ -324,7 +300,7 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         self.assertIn("# Ralph Savings Report", output)
         self.assertNotIn("## Session usage", output)
         self.assertNotIn("## Tool output: with vs without Ralph", output)
-        self.assertIn("## Savings by path", output)
+        self.assertNotIn("## Savings by path", output)
 
 
 if __name__ == "__main__":
