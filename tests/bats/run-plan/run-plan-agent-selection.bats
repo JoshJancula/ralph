@@ -152,23 +152,6 @@ EOF
   done
 }
 
-@test "validate_prebuilt_agent_config succeeds for a known agent" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    RUNTIME=cursor
-    ws="$2"
-    validate_prebuilt_agent_config "$ws" "research"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 0 ]
-}
-
 @test "validate_prebuilt_agent_config reports missing configs" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"

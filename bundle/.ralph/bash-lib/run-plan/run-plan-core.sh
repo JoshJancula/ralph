@@ -4594,11 +4594,15 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
           POST_VERIFICATION_FAILURE_ARTIFACT=""
           RALPH_VERIFY_REQUEST_MSG=""
           _skip_runner_post_verify=1
-        elif [[ "$_has_verification_metadata" == "1" && "$_agent_verdict" == "fail" ]]; then
+        elif [[ "$_agent_verdict" == "fail" ]]; then
           POST_VERIFICATION_FAILURE_REASON="agent_failed_verification"
           POST_VERIFICATION_FAILURE_SUMMARY="${_agent_verify_reason:-agent-reported verification failure}"
           POST_VERIFICATION_FAILURE_ARTIFACT=""
-          ralph_run_plan_log "agent verification FAIL for line $line_num; reopening TODO"
+          if [[ "$_has_verification_metadata" == "1" ]]; then
+            ralph_run_plan_log "agent verification FAIL for line $line_num; reopening TODO"
+          else
+            ralph_run_plan_log "agent verification FAIL for line $line_num without verification metadata; reopening TODO"
+          fi
           if plan_reopen_todo_by_format "$PLAN_PATH" "$plan_format" "$todo_target"; then
             _inv_todo_completed=0
             _inv_plan_complete=0
