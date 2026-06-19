@@ -288,28 +288,7 @@ ralph_hook_telemetry_append_result_readback_log() {
   [[ "$returned_bytes" =~ ^[0-9]+$ ]] || returned_bytes=0
 
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  line="$(jq -nc \
-    --arg timestamp "$timestamp" \
-    --arg workspace "$workspace" \
-    --arg planKey "$plan_key" \
-    --arg toolName "$tool_name" \
-    --arg resultId "$result_id" \
-    --arg view "$view" \
-    --argjson returnedBytes "$returned_bytes" \
-    --arg returnedTokens "$returned_tokens" \
-    --arg reason "$reason" \
-    '{
-      timestamp: $timestamp,
-      workspace: $workspace,
-      planKey: $planKey,
-      toolName: (if $toolName == "" then null else $toolName end),
-      event: "readback",
-      resultId: $resultId,
-      view: (if $view == "" then "compacted" else $view end),
-      returnedBytes: $returnedBytes
-    }
-    + (if $returnedTokens != "" and ($returnedTokens | test("^[0-9]+$")) then {returnedTokens: ($returnedTokens | tonumber)} else {} end)
-    + (if $reason != "" then {reason: $reason} else {} end))'"
+  line="$(jq -nc --arg timestamp "$timestamp" --arg workspace "$workspace" --arg planKey "$plan_key" --arg toolName "$tool_name" --arg resultId "$result_id" --arg view "$view" --argjson returnedBytes "$returned_bytes" --arg returnedTokens "$returned_tokens" --arg reason "$reason" '{timestamp:$timestamp,workspace:$workspace,planKey:$planKey,toolName:(if $toolName == "" then null else $toolName end),event:"readback",resultId:$resultId,view:(if $view == "" then "compacted" else $view end),returnedBytes:$returnedBytes} + (if $returnedTokens != "" and ($returnedTokens | test("^[0-9]+$")) then {returnedTokens: ($returnedTokens | tonumber)} else {} end) + (if $reason != "" then {reason: $reason} else {} end)')"
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 

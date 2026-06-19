@@ -32,6 +32,15 @@ _agent_ralph_md_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$_agent_ralph_md_dir/../../runtime-normalize.sh"
 
+# Provide a JSON-output helper for mcp_servers.
+# frontmatter.sh exposes agent_source_fm_mcp_servers when python3 is available.
+_agent_ralph_md_mcp_json() {
+  local file="$1"
+  local out=""
+  out="$(agent_source_fm_mcp_servers "$file" 2>/dev/null || true)"
+  printf '%s\n' "$out"
+}
+
 agent_adapter_ralph_md_resolve() {
   local name="${1:-}"
   local runtime="${2:-}"
@@ -161,7 +170,7 @@ agent_adapter_ralph_md_to_config_json() {
     fi
   fi
 
-  local description model max_budget rules skills artifacts allowed_tools
+  local description model max_budget rules skills artifacts allowed_tools mcp_servers
   description="$(agent_source_fm_scalar "$canonical_abs" "description")"
   model="$(agent_source_fm_model "$canonical_abs" "$runtime")"
   max_budget="$(agent_source_fm_scalar "$canonical_abs" "max_budget_usd")"
@@ -176,6 +185,7 @@ agent_adapter_ralph_md_to_config_json() {
   skills="$(agent_source_fm_list "$canonical_abs" "skills")"
   artifacts="$(agent_source_fm_list "$canonical_abs" "output_artifacts")"
   allowed_tools="$(agent_source_fm_list "$canonical_abs" "allowed_tools")"
+  mcp_servers="$(agent_source_fm_mcp_servers "$canonical_abs")"
 
   local dest
   mkdir -p "$cache_dir"
@@ -242,6 +252,20 @@ agent_adapter_ralph_md_to_config_json() {
         printf '    %s' "$(agent_source_fm_artifact "$artifact")"
         first=0
       done <<< "$artifacts"
+      printf '\n  ]'
+    fi
+    if [[ -n "$mcp_servers" ]]; then
+      printf ',\n  "mcp_servers": [\n'
+      first=1
+      local entry
+      while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        if [[ "$first" -eq 0 ]]; then
+          printf ',\n'
+        fi
+        printf '    %s' "$entry"
+        first=0
+      done <<< "$mcp_servers"
       printf '\n  ]'
     fi
     printf '\n}\n'

@@ -19,7 +19,7 @@ RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 # Env:
 #   CLAUDE_PLAN_BARE (truthy enables --bare; default off — requires ANTHROPIC_API_KEY)
 #   CLAUDE_PLAN_MINIMAL (truthy enables auth-safe minimal flag composition; default on)
-#   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (default on: pass --strict-mcp-config and empty --mcp-config in minimal mode; off loads project MCP)
+#   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (default on: pass --strict-mcp-config and empty --mcp-config when no effective MCP overlay; off loads native MCP discovery)
 #   CLAUDE_PLAN_MINIMAL_TOOLS (csv tool names for --tools in minimal mode; default "Bash,Read,Edit,Write")
 #   CLAUDE_PLAN_PERMISSION_MODE (one of default, acceptEdits, auto, bypassPermissions, dontAsk, plan; default unset)
 
@@ -106,6 +106,10 @@ run_plan_invoke_claude_minimal_mcp_lockdown_validate() {
   esac
 }
 
+run_plan_invoke_claude_setting_sources() {
+  printf '%s' "user,project,local"
+}
+
 run_plan_invoke_claude_apply_minimal_flags() {
   local args_name="$1"
   local mcp_config_path="${2:-}"
@@ -120,7 +124,7 @@ run_plan_invoke_claude_apply_minimal_flags() {
     eval "$args_name+=(--strict-mcp-config)"
     eval "$args_name+=(--mcp-config '{\"mcpServers\":{}}')"
   fi
-  eval "$args_name+=(--setting-sources project,local)"
+  eval "$args_name+=(--setting-sources \"$(run_plan_invoke_claude_setting_sources)\")"
   eval "$args_name+=(--tools \"$tools\")"
 }
 
@@ -134,6 +138,13 @@ run_plan_invoke_claude_mcp_config_cleanup() {
 run_plan_invoke_claude_mcp_config_prepare() {
   local config_path="${RALPH_MCP_CONFIG_PATH:-}"
   local owns_config=0
+
+  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
+    CLAUDE_PLAN_MCP_CONFIG_PATH="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+    CLAUDE_PLAN_MCP_CONFIG_OWNED=0
+    export CLAUDE_PLAN_MCP_CONFIG_PATH CLAUDE_PLAN_MCP_CONFIG_OWNED
+    return 0
+  fi
 
   if [[ -z "$config_path" ]]; then
     config_path="$(mktemp "${TMPDIR:-/tmp}/ralph-claude-mcp-XXXXXX")"
@@ -191,6 +202,11 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   IFS="$_old_ifs"
 }
 
+ralph_run_plan_invoke_claude_completion_tool_names() {
+  printf '%s\n' \
+    mcp__ralph__ralph_complete_todo
+}
+
 ralph_run_plan_invoke_claude_allowed_tools_list() {
   local tools_use="${1:-}"
   local strip_native_read_tools="${2:-0}"
@@ -235,6 +251,17 @@ ralph_run_plan_invoke_claude_allowed_tools_list() {
   IFS="$_old_ifs"
 
   tools_use="$(ralph_run_plan_invoke_claude_proxy_tool_names)"
+  if [[ -n "$tools_use" ]]; then
+    IFS=','
+    for tool in $tools_use; do
+      IFS="$_old_ifs"
+      tools_list+=("$tool")
+      IFS=','
+    done
+    IFS="$_old_ifs"
+  fi
+
+  tools_use="$(ralph_run_plan_invoke_claude_completion_tool_names)"
   if [[ -n "$tools_use" ]]; then
     IFS=','
     for tool in $tools_use; do
@@ -339,10 +366,14 @@ ralph_run_plan_invoke_claude() {
   fi
 
   local mcp_config_path=""
-  if [[ "$ralph_tools_mode" != "1" ]] && declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
-    runtime_overlay_set_mcp_effective "false"
-  fi
-  if [[ "$ralph_tools_mode" == "1" ]]; then
+  local mcp_overlay_effective=0
+  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
+    mcp_config_path="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+    CLAUDE_PLAN_MCP_CONFIG_PATH="$mcp_config_path"
+    CLAUDE_PLAN_MCP_CONFIG_OWNED=0
+    export CLAUDE_PLAN_MCP_CONFIG_PATH CLAUDE_PLAN_MCP_CONFIG_OWNED
+    mcp_overlay_effective=1
+  elif [[ "$ralph_tools_mode" == "1" ]]; then
     if [[ "${CLAUDE_PLAN_BARE:-0}" == "1" ]]; then
       echo "Error: Agent Tool Access (ralph) is incompatible with CLAUDE_PLAN_BARE=1 because ralph mode needs the auth-safe minimal path to inject the MCP config. Re-run with --no-claude-bare (or unset CLAUDE_PLAN_BARE)." >&2
       return 1
@@ -357,9 +388,16 @@ ralph_run_plan_invoke_claude() {
       return 1
     fi
     mcp_config_path="$CLAUDE_PLAN_MCP_CONFIG_PATH"
+    mcp_overlay_effective=1
+  fi
+  if [[ "$mcp_overlay_effective" == "1" ]]; then
     if declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
       runtime_overlay_set_mcp_effective "true"
     fi
+  elif declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
+    runtime_overlay_set_mcp_effective "false"
+  fi
+  if [[ "$ralph_tools_mode" == "1" ]]; then
 
     if [[ "${RALPH_MCP_PREFLIGHT_PASSED:-0}" == "1" ]] && [[ "${RALPH_CLAUDE_RALPH_STRICT_PROXY+set}" != "set" ]] && { [[ "${_ralph_mode}" == "ralph" ]] || [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; }; then
       RALPH_CLAUDE_RALPH_STRICT_PROXY=1

@@ -51,14 +51,19 @@ def main() -> int:
 
     hint = _read_text(indir / "hint.txt")
     resume = _read_text(indir / "resume.txt").strip()
+    question = _read_text(indir / "question.txt")
+    kind = _read_text(indir / "kind.one").strip() or meta.get("kind", "permission")
+    request_decision = "allow" if kind == "permission" else "answer"
+    response_kind = kind
 
     todo_line = int(meta["todo_line"])
     doc = {
         "schema_version": 1,
-        "kind": "permission_remediation",
+        "kind": kind,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "runtime": meta.get("runtime", ""),
         "session_strategy": meta.get("session_strategy", "fresh"),
+        "question": question,
         "todo": {
             "line": todo_line,
             "text": _read_text(indir / "todo.txt"),
@@ -67,10 +72,21 @@ def main() -> int:
         "classification": meta.get("classification", ""),
         "blocked_command_or_tool": meta.get("blocked_command_or_tool", ""),
         "blocked_path": meta.get("blocked_path", ""),
+        "blocked_tool": meta.get("blocked_tool", ""),
         "raw_denial_excerpt": denial,
         "runtime_specific_explanation": hint,
         "recommended_operator_actions": _actions_from_hint(hint),
         "resume_command": resume,
+        "response_template": {
+            "kind": response_kind,
+            "decision": request_decision,
+            "runtime": meta.get("runtime", ""),
+            "classification": meta.get("classification", ""),
+            "blocked_command_or_tool": meta.get("blocked_command_or_tool", ""),
+            "blocked_path": meta.get("blocked_path", ""),
+            "blocked_tool": meta.get("blocked_tool", ""),
+            "reason": "",
+        },
     }
 
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -11,8 +11,7 @@ Modes (argv[2]):
     Headings do not define phases in this mode.
 
 The first output field matches get_next_todo for markdown plans: the 1-based
-line number of the last line of the selected TODO block (same as bash when the
-next item ends the prior block).
+line number of the selected checkbox line.
 
 Output: one line "LINE|BLOCK" where BLOCK includes continuation lines. Exit 1
 when no open TODOs.

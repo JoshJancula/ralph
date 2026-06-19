@@ -19,8 +19,13 @@
 # when any generated file is missing, differs, or is stale.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-}"
+if [[ -z "$SCRIPT_DIR" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+fi
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 
 if ! declare -F ralph_runtime_config_dirname >/dev/null 2>&1; then
   for runtime_normalize_path in \
@@ -481,6 +486,16 @@ sync_assets_agent_output_artifacts_list() {
   sync_assets_frontmatter_list "$canonical_abs" "output_artifacts"
 }
 
+sync_assets_agent_mcp_servers_list() {
+  local canonical_abs="$1"
+  local mcp_script
+  mcp_script="$REPO_ROOT/bundle/.ralph/python/agent-config-mcp.py"
+  if [[ ! -f "$mcp_script" ]] || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 "$mcp_script" --frontmatter "$canonical_abs" 2>/dev/null || true
+}
+
 sync_assets_agent_max_budget() {
   local canonical_abs="$1"
   sync_assets_frontmatter_scalar "$canonical_abs" "max_budget_usd"
@@ -531,6 +546,7 @@ sync_assets_render_agent_config_json() {
   skills="$(sync_assets_agent_skills_list "$canonical_abs")"
   artifacts="$(sync_assets_agent_output_artifacts_list "$canonical_abs")"
   allowed_tools="$(sync_assets_agent_allowed_tools "$canonical_abs")"
+  mcp_servers="$(sync_assets_agent_mcp_servers_list "$canonical_abs")"
 
   printf '{\n'
   printf '  "name": %s,\n' "$(sync_assets_json_string "$agent_id")"
@@ -592,6 +608,20 @@ sync_assets_render_agent_config_json() {
       printf '    %s' "$(sync_assets_frontmatter_artifact_json "$artifact")"
       first=0
     done <<< "$artifacts"
+    printf '\n  ]'
+  fi
+  if [[ -n "$mcp_servers" ]]; then
+    printf ',\n  "mcp_servers": [\n'
+    first=1
+    local entry
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      if [[ "$first" -eq 0 ]]; then
+        printf ',\n'
+      fi
+      printf '    %s' "$entry"
+      first=0
+    done <<< "$mcp_servers"
     printf '\n  ]'
   fi
   printf '\n}\n'

@@ -15,8 +15,9 @@ _ralph_completion_sentinel_seen_in_text() {
 }
 
 # Prints the agent's final self-reported verification verdict: "pass", "fail",
-# or "none". Used when no runnable command can be machine-extracted from a TODO's
-# verification field and the runner asks the agent to verify and report.
+# "skip", or "none". Used when no runnable command can be machine-extracted
+# from a TODO's verification field and the runner asks the agent to verify and
+# report.
 _ralph_verification_result_in_text() {
   local text="$1"
   local script="${SCRIPT_DIR:-}/python/verification_result.py"

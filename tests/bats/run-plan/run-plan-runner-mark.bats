@@ -97,6 +97,38 @@ EOF
   rm -rf "$workspace"
 }
 
+@test "runner marks markdown TODO when a blank separator follows the checkbox" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Runner mark test
+- [ ] runner-owned markdown completion
+
+EOF
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "AGENT_INVOCATION_COMPLETE"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] runner-owned markdown completion" "$plan_file"
+
+  rm -rf "$workspace"
+}
+
 @test "runner marks structured frontmatter TODO status completed" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
@@ -168,6 +200,46 @@ EOF
   rm -rf "$workspace"
 }
 
+@test "runner writes a one-shot human request for OpenCode auto-rejects" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home session_dir
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Permission pause test
+- [ ] pause when runtime rejects a permission-gated call
+EOF
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' '! permission requested: external_directory (/tmp/*); auto-rejecting' >&2
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -eq 4 ]
+  session_dir="$(find "$session_home" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  [ -n "$session_dir" ]
+  [ -f "$session_dir/pending-human.txt" ]
+  [ -f "$session_dir/permission-remediation.json" ]
+  [ -f "$session_dir/human-request.json" ]
+  [ -f "$session_dir/HUMAN-INPUT-REQUIRED.md" ]
+  grep -Fq 'external_directory' "$session_dir/pending-human.txt"
+  jq -e '.kind == "permission"' "$session_dir/human-request.json"
+  jq -e '.placeholder == true' "$session_dir/operator-response.txt"
+  jq -e '.blocked_path == "/tmp/*"' "$session_dir/permission-remediation.json"
+
+  rm -rf "$workspace"
+}
+
 @test "runner does not mark markdown TODO when completion sentinel is missing" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
@@ -195,6 +267,38 @@ EOF
 
   grep -Fq -- "- [ ] sentinel missing should stay open" "$plan_file"
   ! grep -Fq -- "- [x] sentinel missing should stay open" "$plan_file"
+
+  rm -rf "$workspace"
+}
+
+@test "runner marks markdown TODO when structured completion footer replaces the sentinel" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Runner mark test
+- [ ] structured completion should advance
+EOF
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] structured completion should advance" "$plan_file"
 
   rm -rf "$workspace"
 }
@@ -236,7 +340,9 @@ EOF
 
   [ "$status" -eq 0 ]
   [ -s "$cursor_record" ]
-  grep -Fq "the runner marks it when the sentinel is observed" "$cursor_record"
+  grep -Fq "mcp__ralph__ralph_complete_todo" "$cursor_record"
+  grep -Fq "TODO_COMPLETION: COMPLETE" "$cursor_record"
+  grep -Fq "TODO_VERIFICATION: PASS" "$cursor_record"
   ! grep -Fq "change \`- [ ]\` to \`- [x]\` on that line" "$cursor_record"
 
   rm -rf "$workspace"
@@ -529,7 +635,7 @@ EOF
   rm -rf "$workspace"
 }
 
-@test "first-pass prompt includes VERIFICATION_RESULT request for strict Verify metadata too" {
+@test "first-pass prompt includes completion helper request for strict Verify metadata too" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
 
@@ -560,12 +666,10 @@ EOF
     CURSOR_PLAN_MAX_ITER=1
 
   [ -s "$cursor_record" ]
-  grep -Fq "VERIFICATION_RESULT" "$cursor_record"
-  # The contract must tell the agent to always emit a verdict, including PASS when
-  # there was nothing to check, so a forgotten line is the agent's omission and the
-  # reopen is expected rather than a runner quirk.
-  grep -Fq "nothing required checking" "$cursor_record"
-  grep -Fq "omitting it reopens this TODO" "$cursor_record"
+  grep -Fq "mcp__ralph__ralph_complete_todo" "$cursor_record"
+  grep -Fq "TODO_VERIFICATION: PASS" "$cursor_record"
+  grep -Fq "TODO_VERIFICATION: FAIL:" "$cursor_record"
+  grep -Fq "TODO_VERIFICATION: SKIPPED" "$cursor_record"
 
   rm -rf "$workspace"
 }

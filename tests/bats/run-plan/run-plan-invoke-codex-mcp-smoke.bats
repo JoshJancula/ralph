@@ -56,11 +56,11 @@ if [[ "$1" == "exec" && "$2" == "--help" ]]; then
   exit 0
 fi
 
-if [[ "$1" == "exec" ]]; then
-  strict_config=0
-  mcp_command=""
-  mcp_workspace=""
-  prev=""
+  if [[ "$1" == "exec" ]]; then
+    strict_config=0
+    mcp_command=""
+    mcp_workspace=""
+    prev=""
 
   for arg in "$@"; do
     if [[ "$arg" == "--strict-config" ]]; then
@@ -81,6 +81,9 @@ if [[ "$1" == "exec" ]]; then
           mcp_workspace="$(sed -n 's/^mcp_servers\.ralph\.env\.RALPH_MCP_WORKSPACE="\([^"]*\)"$/\1/p' <<<"$arg")"
           ;;
       esac
+    fi
+    if [[ "$prev" == "--add-dir" ]]; then
+      printf 'ADD_DIR:%s\n' "$arg" >>"$CODEX_STUB_RECORD"
     fi
     prev="$arg"
   done
@@ -126,4 +129,22 @@ EOF
   [[ "$stub_output" == *"STRICT_CONFIG:1"* ]]
   [[ "$stub_output" == *"CONFIG:mcp_servers.ralph.enabled=true"* ]]
   [[ "$server_output" == *"SERVER_WORKSPACE:$WORKSPACE"* ]]
+}
+
+@test "Codex invoke helper appends session-local extra add-dirs" {
+  command -v jq >/dev/null || skip "jq required"
+
+  write_codex_mcp_stub_script
+  export CODEX_PLAN_CLI="$BIN_DIR/codex"
+  export RALPH_MODE="ralph"
+  export PROMPT="codex add-dir prompt"
+  export CODEX_PLAN_EXTRA_ADD_DIRS="/tmp"
+
+  run ralph_run_plan_invoke_codex
+  [ "$status" -eq 0 ]
+  [ -s "$CODEX_STUB_RECORD" ]
+
+  local stub_output
+  stub_output="$(cat "$CODEX_STUB_RECORD")"
+  [[ "$stub_output" == *"ADD_DIR:/tmp"* ]]
 }

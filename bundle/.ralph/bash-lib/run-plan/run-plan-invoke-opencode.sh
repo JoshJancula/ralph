@@ -20,6 +20,8 @@ source "$_run_plan_invoke_opencode_dir/run-plan-invoke-common.sh"
 # shellcheck source=/dev/null
 source "$_run_plan_invoke_opencode_dir/../mcp/mcp-setup.sh"
 # shellcheck source=/dev/null
+source "$_run_plan_invoke_opencode_dir/../runtime-config/runtime-config-mcp.sh"
+# shellcheck source=/dev/null
 source "$_run_plan_invoke_opencode_dir/../runtime-overlay/runtime-overlay-opencode.sh"
 unset _run_plan_invoke_opencode_dir
 
@@ -384,6 +386,92 @@ _run_plan_invoke_opencode_default_config_path() {
   return 1
 }
 
+# Enumerate OpenCode configuration layers in documented precedence order
+# (remote, global, custom, project, directory). Later layers override earlier
+# ones. Outputs lines as "<layer>:<path>" for existing files only; callers
+# must filter for existence.
+_run_plan_invoke_opencode_config_layer_paths() {
+  local project_root="${1:-${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}}"
+  local xdg="${2:-${XDG_CONFIG_HOME:-${HOME:-$PWD}/.config}}"
+  local custom="${OPENCODE_CONFIG:-}"
+  local directory="${OPENCODE_DIRECTORY_CONFIG:-}"
+  local remote="${OPENCODE_REMOTE_CONFIG:-}"
+
+  if [[ -n "$remote" ]]; then
+    printf 'remote:%s\n' "$remote"
+  fi
+  printf 'global:%s\n' "$xdg/opencode/config.json"
+  printf 'global:%s\n' "$xdg/opencode/config.jsonc"
+  printf 'global:%s\n' "$xdg/opencode/opencode.json"
+  printf 'global:%s\n' "$xdg/opencode/opencode.jsonc"
+  if [[ -n "$custom" ]]; then
+    printf 'custom:%s\n' "$custom"
+  fi
+  printf 'project:%s\n' "$project_root/opencode.json"
+  printf 'project:%s\n' "$project_root/opencode.jsonc"
+  printf 'project:%s\n' "$project_root/.opencode/opencode.json"
+  printf 'project:%s\n' "$project_root/.opencode/opencode.jsonc"
+  if [[ -n "$directory" ]]; then
+    printf 'directory:%s\n' "$directory"
+  fi
+}
+
+# Merge OpenCode configuration layers into a single JSON file. Preserves every
+# unrelated key using jq's recursive merge (*). JSONC sources are converted to
+# JSON first. Sets RALPH_OPENCODE_CONFIG_SOURCE_DESC to a comma-separated list
+# of the layers actually merged. Prints the merged JSON file path.
+_run_plan_invoke_opencode_merge_config_layers() {
+  local project_root="${1:-${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}}"
+  local xdg="${2:-${XDG_CONFIG_HOME:-${HOME:-$PWD}/.config}}"
+  local -a json_sources=()
+  local -a source_descs=()
+  local line layer path converted
+  local -A seen_paths=()
+
+  while IFS=':' read -r layer path; do
+    [[ -n "$path" ]] || continue
+    [[ -f "$path" ]] || continue
+    if [[ -n "${seen_paths[$path]:-}" ]]; then
+      continue
+    fi
+    seen_paths[$path]=1
+    if jq empty "$path" >/dev/null 2>&1; then
+      json_sources+=("$path")
+      source_descs+=("${layer}:${path}")
+    else
+      converted="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-jsonc-XXXXXX")"
+      if ralph_run_plan_opencode_jsonc_to_json "$path" "$converted"; then
+        ralph_mcp_overlay_record_temp_file "$converted"
+        json_sources+=("$converted")
+        source_descs+=("${layer}:${path}")
+      else
+        ralph_mcp_cleanup_config "$converted"
+        echo "Error: invalid JSONC in OpenCode ${layer} config: $path" >&2
+        return 1
+      fi
+    fi
+  done < <(_run_plan_invoke_opencode_config_layer_paths "$project_root" "$xdg")
+
+  local merged_json
+  merged_json="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-merged-XXXXXX")"
+  if [[ ${#json_sources[@]} -eq 0 ]]; then
+    printf '{}\n' >"$merged_json"
+    RALPH_OPENCODE_CONFIG_SOURCE_DESC="generated empty config"
+  else
+    if ! jq -s 'reduce .[] as $item ({}; . * $item)' "${json_sources[@]}" >"$merged_json" 2>/dev/null; then
+      ralph_mcp_cleanup_config "$merged_json"
+      echo "Error: failed to merge OpenCode configuration layers." >&2
+      return 1
+    fi
+    local desc
+    desc="$(printf '%s\n' "${source_descs[@]}" | paste -sd ', ' -)"
+    RALPH_OPENCODE_CONFIG_SOURCE_DESC="$desc"
+  fi
+  ralph_mcp_overlay_record_temp_file "$merged_json"
+  export RALPH_OPENCODE_CONFIG_SOURCE_DESC
+  printf '%s' "$merged_json"
+}
+
 run_plan_invoke_opencode_config_cleanup() {
   if [[ -n "${OPENCODE_PLAN_MCP_CONFIG_PATH:-}" ]]; then
     ralph_mcp_cleanup_config "$OPENCODE_PLAN_MCP_CONFIG_PATH"
@@ -397,58 +485,11 @@ run_plan_invoke_opencode_mcp_config_cleanup() {
 }
 
 _run_plan_invoke_opencode_load_ambient_config_json() {
-  local ambient_config="${OPENCODE_CONFIG:-}"
-  local ambient_config_json="$ambient_config"
-  local ambient_config_json_temp=""
-  local config_source_desc=""
-
-  if [[ -z "$ambient_config" ]]; then
-    ambient_config="$(_run_plan_invoke_opencode_default_config_path || true)"
-    ambient_config_json="$ambient_config"
-  fi
-
-  if [[ -n "$ambient_config" ]]; then
-    config_source_desc="$ambient_config"
-  else
-    config_source_desc="generated empty config"
-  fi
-
-  if [[ -z "$ambient_config" ]]; then
-    ambient_config_json="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-base-XXXXXX")"
-    printf '{}\n' >"$ambient_config_json"
-    ralph_mcp_overlay_record_temp_file "$ambient_config_json"
-    RALPH_OPENCODE_CONFIG_SOURCE_DESC="$config_source_desc"
-    export RALPH_OPENCODE_CONFIG_SOURCE_DESC
-    printf '%s' "$ambient_config_json"
-    return 0
-  fi
-
-  if [[ ! -f "$ambient_config" ]]; then
-    echo "Error: OPENCODE_CONFIG is set but the file was not found: $ambient_config" >&2
+  local merged_json
+  if ! merged_json="$(_run_plan_invoke_opencode_merge_config_layers)"; then
     return 1
   fi
-  if ! command -v jq &>/dev/null; then
-    echo "Error: jq is required to merge OpenCode config." >&2
-    return 1
-  fi
-  if ! jq empty "$ambient_config" >/dev/null 2>&1; then
-    ambient_config_json_temp="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-jsonc-XXXXXX")"
-    if ! ralph_run_plan_opencode_jsonc_to_json "$ambient_config" "$ambient_config_json_temp"; then
-      ralph_mcp_cleanup_config "$ambient_config_json_temp"
-      echo "Error: existing OpenCode config is invalid JSON: $ambient_config" >&2
-      return 1
-    fi
-    if ! jq empty "$ambient_config_json_temp" >/dev/null 2>&1; then
-      ralph_mcp_cleanup_config "$ambient_config_json_temp"
-      echo "Error: converted OpenCode config is invalid JSON: $ambient_config" >&2
-      return 1
-    fi
-    ralph_mcp_overlay_record_temp_file "$ambient_config_json_temp"
-    ambient_config_json="$ambient_config_json_temp"
-  fi
-  RALPH_OPENCODE_CONFIG_SOURCE_DESC="$config_source_desc"
-  export RALPH_OPENCODE_CONFIG_SOURCE_DESC
-  printf '%s' "$ambient_config_json"
+  printf '%s' "$merged_json"
 }
 
 run_plan_invoke_opencode_config_prepare() {
@@ -508,6 +549,23 @@ run_plan_invoke_opencode_config_prepare() {
   working_config="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-config-XXXXXX")"
   cp "$ambient_config_json" "$working_config"
   ralph_mcp_overlay_record_temp_file "$working_config"
+
+  if [[ -n "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]] && [[ -f "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]]; then
+    local permission_overlay
+    permission_overlay="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-permission-merged-XXXXXX")"
+    if ! jq -c --slurpfile perm "$OPENCODE_PLAN_PERMISSION_CONFIG_PATH" \
+      '.permission = ((.permission // {}) + ($perm[0].permission // {}))' \
+      "$working_config" > "$permission_overlay" 2>/dev/null; then
+      ralph_mcp_cleanup_config "$permission_overlay"
+      ralph_mcp_cleanup_config "$working_config"
+      echo "Error: failed to merge OpenCode permission overlay into OPENCODE_CONFIG." >&2
+      return 1
+    fi
+    ralph_mcp_cleanup_config "$working_config"
+    working_config="$permission_overlay"
+    ralph_mcp_overlay_record_temp_file "$working_config"
+    config_modified=1
+  fi
 
   if [[ "$want_cache_key" -eq 1 ]]; then
     local provider_field_type jq_err
@@ -576,27 +634,36 @@ run_plan_invoke_opencode_config_prepare() {
   fi
 
   if [[ "$need_mcp" -eq 1 ]]; then
-    local ralph_config
-    ralph_config="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-mcp-XXXXXX")"
-    if ! ralph_mcp_generate_config opencode "$ralph_config" "$workspace"; then
-      ralph_mcp_cleanup_config "$ralph_config"
-      ralph_mcp_cleanup_config "$working_config"
-      echo "Error: failed to generate OpenCode MCP config." >&2
-      return 1
+    local mcp_overlay_json
+    mcp_overlay_json="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-mcp-XXXXXX")"
+    if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
+      # Shared resolver already produced the effective catalog (ambient user/project
+      # servers + selected-agent overrides + Ralph's protected server). Preserve its
+      # native OpenCode shape.
+      jq -c '.mcp // {}' "$RALPH_RUNTIME_MCP_RESOLVE_PATH" > "$mcp_overlay_json"
+    else
+      # Fallback when the resolver is not available (e.g. direct helper tests): use the
+      # Ralph-only generator.
+      if ! ralph_mcp_generate_config opencode "$mcp_overlay_json" "$workspace"; then
+        ralph_mcp_cleanup_config "$mcp_overlay_json"
+        ralph_mcp_cleanup_config "$working_config"
+        echo "Error: failed to generate OpenCode MCP config." >&2
+        return 1
+      fi
     fi
-    ralph_mcp_overlay_record_temp_file "$ralph_config"
+    ralph_mcp_overlay_record_temp_file "$mcp_overlay_json"
     local merged_mcp
     merged_mcp="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-mcp-merged-XXXXXX")"
-    if ! jq -c --slurpfile ralph "$ralph_config" \
-      '.mcp = ((.mcp // {}) + {ralph: $ralph[0].mcp.ralph})' \
+    if ! jq -c --slurpfile mcp "$mcp_overlay_json" \
+      '.mcp = ((.mcp // {}) * ($mcp[0].mcp // {}))' \
       "$working_config" > "$merged_mcp" 2>/dev/null; then
-      ralph_mcp_cleanup_config "$ralph_config"
+      ralph_mcp_cleanup_config "$mcp_overlay_json"
       ralph_mcp_cleanup_config "$working_config"
       ralph_mcp_cleanup_config "$merged_mcp"
       echo "Error: failed to merge Ralph MCP config into OPENCODE_CONFIG." >&2
       return 1
     fi
-    ralph_mcp_cleanup_config "$ralph_config"
+    ralph_mcp_cleanup_config "$mcp_overlay_json"
     ralph_mcp_cleanup_config "$working_config"
     working_config="$merged_mcp"
     ralph_mcp_overlay_record_temp_file "$working_config"

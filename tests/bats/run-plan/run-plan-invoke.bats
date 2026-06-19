@@ -662,6 +662,7 @@ EOF
   [[ "$tools_use" == *"mcp__ralph__ralph_proxy_shell_read"* ]]
   [[ "$tools_use" == *"mcp__ralph__ralph_proxy_shell_cancel"* ]]
   [[ "$tools_use" == *"mcp__ralph__ralph_proxy_batch"* ]]
+  [[ "$tools_use" == *"mcp__ralph__ralph_complete_todo"* ]]
 
   if printf '%s\n' "$tools_use" | grep -Eq '(^|,)Read($|,)'; then
     fail "Read should be stripped from the tool list"
@@ -696,7 +697,7 @@ EOF
   [ "${args[2]}" = "--mcp-config" ]
   [ "${args[3]}" = '{"mcpServers":{}}' ]
   [ "${args[4]}" = "--setting-sources" ]
-  [ "${args[5]}" = "project,local" ]
+  [ "${args[5]}" = "user,project,local" ]
   [ "${args[6]}" = "--tools" ]
   [ "${args[7]}" = "Bash,Read,Edit,Write" ]
 
@@ -710,7 +711,7 @@ EOF
   [ "${override_args[2]}" = "--mcp-config" ]
   [ "${override_args[3]}" = '{"mcpServers":{}}' ]
   [ "${override_args[4]}" = "--setting-sources" ]
-  [ "${override_args[5]}" = "project,local" ]
+  [ "${override_args[5]}" = "user,project,local" ]
   [ "${override_args[6]}" = "--tools" ]
   [ "${override_args[7]}" = "Bash,Read" ]
 
@@ -725,7 +726,7 @@ EOF
   [ "${reset_args[1]}" = "--mcp-config" ]
   [ "${reset_args[2]}" = '{"mcpServers":{}}' ]
   [ "${reset_args[3]}" = "--setting-sources" ]
-  [ "${reset_args[4]}" = "project,local" ]
+  [ "${reset_args[4]}" = "user,project,local" ]
   [ "${reset_args[5]}" = "--tools" ]
   [ "${reset_args[6]}" = "Bash,Read,Edit,Write" ]
 }
@@ -791,7 +792,7 @@ EOF
   [[ "$captured" == *"--mcp-config"* ]]
   [[ "$captured" == *'{"mcpServers":{}}'* ]]
   [[ "$captured" == *"--setting-sources"* ]]
-  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"user,project,local"* ]]
   [[ "$captured" == *"--tools"* ]]
   [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
   [[ "$captured" != *"--bare"* ]]
@@ -824,7 +825,7 @@ EOF
   [[ "$captured" != *"--strict-mcp-config"* ]]
   [[ "$captured" != *"--mcp-config"* ]]
   [[ "$captured" == *"--setting-sources"* ]]
-  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"user,project,local"* ]]
   [[ "$captured" == *"--tools"* ]]
   [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
   [ "$(cat "$stdin_cap")" = "claude-minimal-allow-mcp-prompt" ]
@@ -896,6 +897,7 @@ EOF
   [[ "$captured" == *"mcp__ralph__ralph_proxy_result_search"* ]]
   [[ "$captured" == *"mcp__ralph__ralph_proxy_result_summary"* ]]
   [[ "$captured" == *"mcp__ralph__ralph_proxy_batch"* ]]
+  [[ "$captured" == *"mcp__ralph__ralph_complete_todo"* ]]
   [[ "$captured" == *"Read"* ]]
   [ "$(cat "$stdin_cap")" = "claude-proxy-prompt" ]
 }
@@ -942,6 +944,7 @@ EOF
   [[ "$allowed" == *"Read"* ]]
   [[ "$allowed" == *"Edit"* ]]
   [[ "$allowed" == *"mcp__ralph__ralph_proxy_read"* ]]
+  [[ "$allowed" == *"mcp__ralph__ralph_complete_todo"* ]]
 }
 
 @test "claude invoke helper also strips native Read when RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1" {
@@ -987,6 +990,7 @@ EOF
   fi
   [[ "$allowed" == *"Edit"* ]]
   [[ "$allowed" == *"mcp__ralph__ralph_proxy_read"* ]]
+  [[ "$allowed" == *"mcp__ralph__ralph_complete_todo"* ]]
 }
 
 @test "claude invoke helper keeps native Read and Bash when MCP preflight was skipped" {
@@ -1026,6 +1030,7 @@ EOF
   [[ "$captured" == *"Bash"* ]]
   [[ "$captured" == *"Read"* ]]
   [[ "$captured" == *"mcp__ralph__ralph_proxy_read"* ]]
+  [[ "$captured" == *"mcp__ralph__ralph_complete_todo"* ]]
 }
 
 @test "claude invoke helper auto-enables MCP when RALPH_MODE is ralph" {
@@ -1106,7 +1111,7 @@ claude-minimal-reset-prompt"
   [[ "$captured" == *"--mcp-config"* ]]
   [[ "$captured" == *'{"mcpServers":{}}'* ]]
   [[ "$captured" == *"--setting-sources"* ]]
-  [[ "$captured" == *"project,local"* ]]
+  [[ "$captured" == *"user,project,local"* ]]
   [[ "$captured" == *"--tools"* ]]
   [[ "$captured" == *"Bash,Read,Edit,Write"* ]]
   [ "$(cat "$stdin_cap")" = "$PROMPT" ]
@@ -1264,7 +1269,7 @@ EOF
   [[ "$second_captured" == *"--mcp-config"* ]]
   [[ "$second_captured" == *'{"mcpServers":{}}'* ]]
   [[ "$second_captured" == *"--setting-sources"* ]]
-  [[ "$second_captured" == *"project,local"* ]]
+  [[ "$second_captured" == *"user,project,local"* ]]
   [[ "$second_captured" == *"--tools"* ]]
   [[ "$second_captured" == *"Bash,Read,Edit,Write"* ]]
   [[ "$output" == *"Retrying once with CLAUDE_PLAN_MINIMAL=1"* ]]
@@ -1812,6 +1817,135 @@ EOF
 
   run_plan_invoke_opencode_config_cleanup
   unset OPENCODE_CONFIG
+}
+
+@test "opencode permission response allow writes a session-local overlay" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+  local session_dir="$TEST_TMPDIR/session"
+  mkdir -p "$session_dir"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    OPENCODE_PLAN_PERMISSION_CONFIG_PATH=""
+    ralph_apply_permission_operator_response "$2" opencode external_directory "/tmp/*" "" "" "allow" >/dev/null
+    printf "%s\n" "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}"
+  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" "$session_dir"
+
+  [ "$status" -eq 0 ]
+  local overlay_path
+  overlay_path="$output"
+  [ -f "$overlay_path" ]
+  jq -e '.permission.external_directory["/tmp/*"] == "allow"' "$overlay_path"
+}
+
+@test "permission response allow writes a session-local killswitch overlay" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+  local session_dir="$TEST_TMPDIR/session"
+  mkdir -p "$session_dir"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    RALPH_HOME="$2"
+    WORKSPACE="$3"
+    OPENCODE_PLAN_PERMISSION_CONFIG_PATH=""
+    ralph_apply_permission_operator_response "$4" claude allowlist_command "git push --force origin main" "" "" "allow" >/dev/null
+    printf "%s\n" "${RALPH_KILLSWITCH_OVERRIDE_FILE:-}"
+  ' _ \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" \
+    "$REPO_ROOT" \
+    "$TEST_TMPDIR/workspace" \
+    "$session_dir"
+
+  [ "$status" -eq 0 ]
+  local overlay_path
+  overlay_path="$output"
+  [ -f "$overlay_path" ]
+  jq -e '.allowed_commands[] == "git push --force origin main"' "$overlay_path"
+}
+
+@test "claude permission response allow writes a session-local tool overlay" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+  local session_dir="$TEST_TMPDIR/session"
+  mkdir -p "$session_dir"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    CLAUDE_PLAN_ALLOWED_TOOLS="Bash,Read,Edit"
+    CLAUDE_TOOLS_FROM_AGENT="Bash,Read,Edit"
+    ralph_apply_permission_operator_response "$2" claude restricted_tool "" "" "Write" "allow" >/dev/null
+    printf "%s\n" "${RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE:-}"
+  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" "$session_dir"
+
+  [ "$status" -eq 0 ]
+  local overlay_path
+  overlay_path="$output"
+  [ -f "$overlay_path" ]
+  grep -Fq 'export CLAUDE_PLAN_ALLOWED_TOOLS=' "$overlay_path"
+  grep -Fq 'Write' "$overlay_path"
+}
+
+@test "codex permission response allow writes a session-local add-dir overlay" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+  local session_dir="$TEST_TMPDIR/session"
+  mkdir -p "$session_dir"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    CODEX_PLAN_EXTRA_ADD_DIRS=""
+    ralph_apply_permission_operator_response "$2" codex external_directory "" "/tmp/*" "" "allow" >/dev/null
+    printf "%s\n" "${RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE:-}"
+  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" "$session_dir"
+
+  [ "$status" -eq 0 ]
+  local overlay_path
+  overlay_path="$output"
+  [ -f "$overlay_path" ]
+  grep -Fq 'export CODEX_PLAN_EXTRA_ADD_DIRS=' "$overlay_path"
+  grep -Fq '/tmp' "$overlay_path"
+}
+
+@test "opencode config prepare merges a session-local permission overlay" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+  local ambient_config="$TEST_TMPDIR/ambient-opencode-config.json"
+  local permission_overlay="$TEST_TMPDIR/opencode-permission-override.json"
+
+  mkdir -p "$WORKSPACE/.ralph"
+  cat <<'EOF' >"$WORKSPACE/.ralph/mcp-server.sh"
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$WORKSPACE/.ralph/mcp-server.sh"
+
+  printf '{"provider":"ollama","options":{"source":"ambient"}}' >"$ambient_config"
+  cat <<'EOF' >"$permission_overlay"
+{
+  "permission": {
+    "external_directory": {
+      "/tmp/*": "allow"
+    }
+  }
+}
+EOF
+
+  export RALPH_MODE="ralph"
+  export OPENCODE_CONFIG="$ambient_config"
+  export OPENCODE_PLAN_PERMISSION_CONFIG_PATH="$permission_overlay"
+
+  run_plan_invoke_opencode_config_prepare
+  [ "$?" -eq 0 ]
+  jq -e '
+    .options.source == "ambient" and
+    .permission.external_directory["/tmp/*"] == "allow" and
+    .mcp.ralph.enabled == true
+  ' "$OPENCODE_PLAN_MCP_CONFIG_PATH"
+
+  run_plan_invoke_opencode_config_cleanup
+  unset OPENCODE_CONFIG OPENCODE_PLAN_PERMISSION_CONFIG_PATH
 }
 
 @test "opencode provider id derives from model with slash" {
@@ -2710,4 +2844,3 @@ HELPER
 
   rm -rf "$tmpdir"
 }
-

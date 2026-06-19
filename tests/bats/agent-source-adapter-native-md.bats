@@ -175,6 +175,53 @@ MDEOF
   [ "$status" -eq 2 ]
 }
 
+@test "native-md adapter: to_config_json carries mcp_servers from frontmatter" {
+  _load_libs
+  mkdir -p "$WORKSPACE/.claude/agents"
+  cat >"$WORKSPACE/.claude/agents/mcp-native.md" <<'EOF'
+---
+name: mcp-native
+description: Native agent with MCP
+model: claude-test
+mcp_servers:
+  - ambient-server
+  - name: portable-stdio
+    transport: stdio
+    command: node
+    args:
+      - /path/to/server.js
+---
+Native body
+EOF
+
+  local result cache_dir
+  cache_dir="$WORKSPACE/cache"
+  mkdir -p "$cache_dir"
+  result="$(agent_adapter_native_md_to_config_json mcp-native claude "$WORKSPACE" "$cache_dir")"
+  [[ -f "$result" ]]
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    c = json.load(f)
+m = c.get('mcp_servers', [])
+assert len(m) == 2, m
+assert m[0] == {'name': 'ambient-server', 'reference': True}
+assert m[1]['name'] == 'portable-stdio'
+assert m[1]['transport'] == 'stdio'
+" "$result"
+}
+
+@test "native-md adapter: to_config_json omits mcp_servers when absent" {
+  _load_libs
+  _create_native_agent "no-mcp-native" "claude"
+  local result cache_dir
+  cache_dir="$WORKSPACE/cache"
+  mkdir -p "$cache_dir"
+  result="$(agent_adapter_native_md_to_config_json no-mcp-native claude "$WORKSPACE" "$cache_dir")"
+  [[ -f "$result" ]]
+  ! python3 -c "import json,sys; print('mcp_servers' in json.load(open(sys.argv[1])))" "$result" | grep -q True
+}
+
 @test "native-md adapter: to_native_passthrough returns error for missing file" {
   _load_libs
   run agent_adapter_native_md_to_native_passthrough "missing-agent" "claude" "$WORKSPACE"

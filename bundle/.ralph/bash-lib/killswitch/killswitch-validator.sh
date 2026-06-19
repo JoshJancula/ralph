@@ -22,6 +22,12 @@ _killswitch_expand_tilde() {
 killswitch_tool_is_banned() {
   local tool="$1"
   local pattern
+  for pattern in "${_KILLSWITCH_ALLOWED_TOOLS[@]+"${_KILLSWITCH_ALLOWED_TOOLS[@]}"}"; do
+    # shellcheck disable=SC2254
+    if [[ "$tool" == $pattern ]]; then
+      return 1
+    fi
+  done
   for pattern in "${_KILLSWITCH_BANNED_TOOLS[@]+"${_KILLSWITCH_BANNED_TOOLS[@]}"}"; do
     # shellcheck disable=SC2254
     if [[ "$tool" == $pattern ]]; then
@@ -36,6 +42,13 @@ killswitch_tool_is_banned() {
 killswitch_path_is_banned() {
   local path="$1"
   local pattern expanded
+  for pattern in "${_KILLSWITCH_ALLOWED_PATHS[@]+"${_KILLSWITCH_ALLOWED_PATHS[@]}"}"; do
+    expanded="$(_killswitch_expand_tilde "$pattern")"
+    # shellcheck disable=SC2254
+    if [[ "$path" == $expanded ]]; then
+      return 1
+    fi
+  done
   for pattern in "${_KILLSWITCH_BANNED_PATHS[@]+"${_KILLSWITCH_BANNED_PATHS[@]}"}"; do
     expanded="$(_killswitch_expand_tilde "$pattern")"
     # shellcheck disable=SC2254
@@ -54,8 +67,21 @@ killswitch_command_matches_rule() {
   local command_str="$1"
   KILLSWITCH_VIOLATION_RULE=""
 
-  # Check env-supplied extra patterns with bash ERE.
+  local command_allow
+  for command_allow in "${_KILLSWITCH_ALLOWED_COMMANDS[@]+"${_KILLSWITCH_ALLOWED_COMMANDS[@]}"}"; do
+    if [[ "$command_str" == *"$command_allow"* ]]; then
+      return 1
+    fi
+  done
+
   local pat
+  for pat in "${_KILLSWITCH_ALLOWED_PATTERNS[@]+"${_KILLSWITCH_ALLOWED_PATTERNS[@]}"}"; do
+    if [[ "$command_str" =~ $pat ]]; then
+      return 1
+    fi
+  done
+
+  # Check env-supplied extra patterns with bash ERE.
   for pat in "${_KILLSWITCH_BANNED_PATTERNS[@]+"${_KILLSWITCH_BANNED_PATTERNS[@]}"}"; do
     if [[ "$command_str" =~ $pat ]]; then
       KILLSWITCH_VIOLATION_RULE="custom_pattern"

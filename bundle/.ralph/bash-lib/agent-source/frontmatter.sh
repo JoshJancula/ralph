@@ -154,7 +154,21 @@ agent_source_json_string() {
     local s="$value"
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
+    s="${s//$'\n'/\n}"
     printf '"%s"' "$s"
+  fi
+}
+
+# Read the raw mcp_servers YAML frontmatter and emit one compact JSON object per
+# entry using the canonical parser. Returns empty output when the key is absent.
+agent_source_fm_mcp_servers() {
+  local file="$1"
+  local mcp_script
+  mcp_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/python/agent-config-mcp.py"
+  if [[ ! -r "$file" ]] || [[ ! -f "$mcp_script" ]]; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$mcp_script" --frontmatter "$file" 2>/dev/null || true
   fi
 }

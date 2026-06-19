@@ -29,6 +29,8 @@ load_server_libs() {
   source "$SCRIPT_DIR/bash-lib/mcp/mcp-protocol.sh"
   # shellcheck source=bash-lib/mcp/mcp-resources.sh
   source "$SCRIPT_DIR/bash-lib/mcp/mcp-resources.sh"
+  # shellcheck source=bash-lib/plan-todo.sh
+  source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
   # shellcheck source=bash-lib/mcp/mcp-tools.sh
   source "$SCRIPT_DIR/bash-lib/mcp/mcp-tools.sh"
   # shellcheck source=bash-lib/mcp/mcp-prompts.sh
@@ -361,6 +363,45 @@ _BASE_TOOL_LIST_JSON=$(
         },
         "required": ["workspace", "orchestration_path"]
       }
+    },
+    {
+      "name": "ralph_complete_todo",
+      "description": "Report completion or retry for the current active TODO using the runner-provided identity.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": { "type": "string", "description": "Workspace root path." },
+          "plan_path": { "type": "string", "description": "Plan file path." },
+          "todo_ref": {
+            "type": "object",
+            "properties": {
+              "line": { "type": "string", "description": "Current runner todo line or ordinal token." },
+              "ordinal": { "type": "string", "description": "1-based todo ordinal." },
+              "id": { "type": "string", "description": "TODO id when present." },
+              "hash": { "type": "string", "description": "Stable todo hash." }
+            },
+            "required": ["line", "ordinal", "hash"]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": ["complete", "needs_retry"],
+            "description": "Whether the active TODO is done or should be retried."
+          },
+          "verification_status": {
+            "type": "string",
+            "enum": ["pass", "fail", "not_run"],
+            "description": "Verification verdict to emit."
+          },
+          "summary": { "type": "string", "description": "Short completion or retry summary." },
+          "verification_note": { "type": "string", "description": "Optional verification detail." },
+          "tool_result_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional Ralph tool-result ids used for verification."
+          }
+        },
+        "required": ["workspace", "plan_path", "todo_ref", "outcome", "verification_status", "summary"]
+      }
     }
   ]
 }
@@ -371,7 +412,7 @@ TOOL_LIST_RESULT=""
 
 get_tool_list_result() {
   if [[ -z "$TOOL_LIST_RESULT" ]]; then
-    local mode proxy_json
+  local mode proxy_json
     mode="$(tr '[:upper:]' '[:lower:]' <<<"${RALPH_MODE:-no}" | tr -d '\r\n')"
     case "$mode" in
       ralph|hybrid)
@@ -385,11 +426,177 @@ get_tool_list_result() {
       jq -c \
         --argjson proxy "$proxy_json" \
         --argjson result "$(ralph_mcp_proxy_result_tools_json)" \
-        '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
+      '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
         <<< "$_BASE_TOOL_LIST_JSON"
     )
   fi
   printf '%s' "$TOOL_LIST_RESULT"
+}
+
+handle_complete_todo() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local workspace_arg plan_arg outcome_arg verification_status_arg summary_arg verification_note_arg
+  local todo_line_arg todo_ordinal_arg todo_id_arg todo_hash_arg
+
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  outcome_arg="$(echo "$args_json" | jq -r '.outcome // empty')"
+  verification_status_arg="$(echo "$args_json" | jq -r '.verification_status // empty')"
+  summary_arg="$(echo "$args_json" | jq -r '.summary // empty')"
+  verification_note_arg="$(echo "$args_json" | jq -r '.verification_note // empty')"
+  todo_line_arg="$(echo "$args_json" | jq -r '.todo_ref.line // empty')"
+  todo_ordinal_arg="$(echo "$args_json" | jq -r '.todo_ref.ordinal // empty')"
+  todo_id_arg="$(echo "$args_json" | jq -r '.todo_ref.id // empty')"
+  todo_hash_arg="$(echo "$args_json" | jq -r '.todo_ref.hash // empty')"
+
+  if [[ -z "$workspace_arg" || -z "$plan_arg" || -z "$outcome_arg" || -z "$verification_status_arg" || -z "$summary_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace, plan_path, outcome, verification_status, and summary are required"
+    return
+  fi
+
+  local workspace_path plan_path
+  if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+    return
+  fi
+  if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid, outside workspace, or not allowlisted: $plan_arg"
+    return
+  fi
+  if [[ "$workspace_path" != "$WORKSPACE_ROOT" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace does not match current MCP workspace: $workspace_arg"
+    return
+  fi
+  if [[ -z "${RALPH_CURRENT_PLAN_PATH:-}" || -z "${RALPH_CURRENT_TODO_LINE:-}" || -z "${RALPH_CURRENT_TODO_ORDINAL:-}" || -z "${RALPH_CURRENT_TODO_HASH:-}" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "active TODO context is unavailable; the runner must export current todo identity before calling ralph_complete_todo"
+    return
+  fi
+  if [[ "$plan_path" != "$RALPH_CURRENT_PLAN_PATH" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path does not match current TODO context: $plan_arg"
+    return
+  fi
+  if [[ "$todo_line_arg" != "${RALPH_CURRENT_TODO_LINE:-}" || "$todo_ordinal_arg" != "${RALPH_CURRENT_TODO_ORDINAL:-}" || "$todo_id_arg" != "${RALPH_CURRENT_TODO_ID:-}" || "$todo_hash_arg" != "${RALPH_CURRENT_TODO_HASH:-}" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "todo_ref does not match the current TODO context"
+    return
+  fi
+
+  local plan_format
+  if ! plan_format="$(plan_detect_format "$plan_path")"; then
+    send_error "$id_present" "$id_raw" "-32000" "unable to detect plan format: $plan_path"
+    return
+  fi
+  local todo_target=""
+  if plan_format_is_yaml "$plan_format"; then
+    todo_target="${RALPH_CURRENT_TODO_ID:-}"
+    if [[ -z "$todo_target" || "$todo_target" == "null" ]]; then
+      todo_target="${RALPH_CURRENT_TODO_ORDINAL:-}"
+    fi
+    if [[ -z "$todo_target" || "$todo_target" == "null" ]]; then
+      todo_target="$todo_ordinal_arg"
+    fi
+  else
+    todo_target="${RALPH_CURRENT_TODO_LINE:-}"
+    if [[ -z "$todo_target" || "$todo_target" == "null" ]]; then
+      todo_target="$todo_line_arg"
+    fi
+  fi
+
+  local complete_text verification_text verification_verdict verification_reason
+  case "$verification_status_arg" in
+    pass)
+      verification_verdict="PASS"
+      verification_reason=""
+      ;;
+    fail)
+      verification_verdict="FAIL"
+      verification_reason="${verification_note_arg:-$summary_arg}"
+      ;;
+    not_run)
+      verification_verdict="FAIL"
+      verification_reason="${verification_note_arg:-verification not run}"
+      ;;
+    *)
+      send_error "$id_present" "$id_raw" "-32602" "unsupported verification_status: $verification_status_arg"
+      return
+      ;;
+  esac
+
+  case "$outcome_arg" in
+    complete)
+      if [[ "$verification_status_arg" != "pass" ]]; then
+        send_error "$id_present" "$id_raw" "-32602" "completion requires verification_status=pass"
+        return
+      fi
+      if [[ "$verification_verdict" != "PASS" ]]; then
+        send_error "$id_present" "$id_raw" "-32602" "completion requires verification_status=pass"
+        return
+      fi
+      if ! plan_mark_todo_done_by_format "$plan_path" "$plan_format" "$todo_target"; then
+        send_error "$id_present" "$id_raw" "-32000" "failed to mark active TODO complete"
+        return
+      fi
+      complete_text="$(printf '%s\nVERIFICATION_RESULT: PASS\nAGENT_INVOCATION_COMPLETE\n' "$summary_arg")"
+      ;;
+    needs_retry)
+      if [[ "$verification_status_arg" == "pass" ]]; then
+        send_error "$id_present" "$id_raw" "-32602" "needs_retry cannot be paired with verification_status=pass"
+        return
+      fi
+      if ! plan_reopen_todo_by_format "$plan_path" "$plan_format" "$todo_target"; then
+        send_error "$id_present" "$id_raw" "-32000" "failed to reopen active TODO"
+        return
+      fi
+      complete_text="$(printf '%s\nVERIFICATION_RESULT: FAIL: %s\n' "$summary_arg" "$verification_reason")"
+      ;;
+    *)
+      send_error "$id_present" "$id_raw" "-32602" "unsupported outcome: $outcome_arg"
+      return
+      ;;
+  esac
+
+  local tool_result_ids_json
+  tool_result_ids_json="$(echo "$args_json" | jq -c '.tool_result_ids // []')"
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$complete_text" \
+      --arg workspace "$workspace_path" \
+      --arg plan_path "$plan_path" \
+      --arg outcome "$outcome_arg" \
+      --arg verification_status "$verification_status_arg" \
+      --arg summary "$summary_arg" \
+      --arg verification_note "$verification_note_arg" \
+      --arg todo_line "${RALPH_CURRENT_TODO_LINE:-}" \
+      --arg todo_ordinal "${RALPH_CURRENT_TODO_ORDINAL:-}" \
+      --arg todo_id "${RALPH_CURRENT_TODO_ID:-}" \
+      --arg todo_hash "${RALPH_CURRENT_TODO_HASH:-}" \
+      --argjson tool_result_ids "$tool_result_ids_json" \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{
+          workspace:$workspace,
+          plan_path:$plan_path,
+          outcome:$outcome,
+          verification_status:$verification_status,
+          summary:$summary,
+          verification_note:$verification_note,
+          tool_result_ids:$tool_result_ids,
+          matched:true,
+          current_todo:{
+            line:$todo_line,
+            ordinal:$todo_ordinal,
+            id:$todo_id,
+            hash:$todo_hash
+          },
+          completion_marker_emitted: ($outcome == "complete"),
+          verification_verdict: (if $outcome == "complete" then "PASS" else "FAIL" end)
+        },
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
 }
 
 handle_plan_status() {
@@ -935,6 +1142,9 @@ handle_call_tool() {
       ;;
     ralph_orchestrator_run)
       handle_orchestrator_run "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_complete_todo)
+      handle_complete_todo "$args_json" "$id_present" "$id_raw"
       ;;
     ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_shell|ralph_proxy_shell_start|ralph_proxy_shell_status|ralph_proxy_shell_wait|ralph_proxy_shell_read|ralph_proxy_shell_cancel|ralph_proxy_search|ralph_proxy_repomap|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_batch)
       handle_proxy_owned_tool "$tool_name" "$args_json" "$id_present" "$id_raw"

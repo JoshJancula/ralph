@@ -238,7 +238,73 @@ EOF
   printf '%s\n' "$output" | jq -s -e '.[0].result.capabilities.tools.listChanged == false'
   printf '%s\n' "$output" | jq -s -e '.[1].result.structuredContent.total >= 1'
   printf '%s\n' "$output" | jq -s -e '[.[2].result.tools[]?.name] | index("ralph_proxy_read") != null'
+  printf '%s\n' "$output" | jq -s -e '[.[2].result.tools[]?.name] | index("ralph_complete_todo") != null'
   printf '%s\n' "$output" | jq -s -e '.[3].result.status == "exiting"'
+}
+
+@test "ralph_complete_todo validates current todo identity and emits completion markers" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq > /dev/null || skip "jq required"
+
+  local ws payload
+  ws="$TEST_TMPDIR/ws_complete"
+  mkdir -p "$ws"
+  printf '%s\n' '- [ ] todo one' > "$ws/PLAN.md"
+
+  payload='{"jsonrpc":"2.0","id":1,"method":"initialize"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ralph_complete_todo","arguments":{"workspace":"'"$ws"'","plan_path":"PLAN.md","todo_ref":{"line":"1","ordinal":"1","hash":"abc123"},"outcome":"complete","verification_status":"pass","summary":"Implemented the requested change"}}}
+{"jsonrpc":"2.0","id":3,"method":"exit"}'
+
+  run bash -c '
+    source "$1"
+    server_script="$(ralph_mcp_proxy_server_script_path "$2")" || exit 1
+    env \
+      RALPH_MODE=ralph \
+      RALPH_MCP_WORKSPACE="$4" \
+      RALPH_CURRENT_PLAN_PATH="$4/PLAN.md" \
+      RALPH_CURRENT_TODO_LINE=1 \
+      RALPH_CURRENT_TODO_ORDINAL=1 \
+      RALPH_CURRENT_TODO_HASH=abc123 \
+      bash "$server_script" 2>/dev/null <<< "$3"
+  ' _ "$SETUP_FILE" "$REPO_ROOT" "$payload" "$ws"
+  [ "$status" -eq 0 ]
+  grep -Fq -- '- [x] todo one' "$ws/PLAN.md"
+  printf '%s\n' "$output" | jq -s -e '.[1].result.structuredContent.completion_marker_emitted == true'
+  printf '%s\n' "$output" | jq -s -e '.[1].result.structuredContent.matched == true'
+  printf '%s\n' "$output" | jq -s -e '.[1].result.structuredContent.current_todo.line == "1"'
+  printf '%s\n' "$output" | jq -s -e '.[1].result.content[0].text | contains("AGENT_INVOCATION_COMPLETE")'
+  printf '%s\n' "$output" | jq -s -e '.[1].result.content[0].text | contains("VERIFICATION_RESULT: PASS")'
+}
+
+@test "ralph_complete_todo rejects stale todo identity" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq > /dev/null || skip "jq required"
+
+  local ws payload
+  ws="$TEST_TMPDIR/ws_complete_reject"
+  mkdir -p "$ws"
+  printf '%s\n' '- [ ] todo one' > "$ws/PLAN.md"
+
+  payload='{"jsonrpc":"2.0","id":1,"method":"initialize"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ralph_complete_todo","arguments":{"workspace":"'"$ws"'","plan_path":"PLAN.md","todo_ref":{"line":"1","ordinal":"1","hash":"wrong"},"outcome":"complete","verification_status":"pass","summary":"Should fail"}}}
+{"jsonrpc":"2.0","id":3,"method":"exit"}'
+
+  run bash -c '
+    source "$1"
+    server_script="$(ralph_mcp_proxy_server_script_path "$2")" || exit 1
+    env \
+      RALPH_MODE=ralph \
+      RALPH_MCP_WORKSPACE="$4" \
+      RALPH_CURRENT_PLAN_PATH="$4/PLAN.md" \
+      RALPH_CURRENT_TODO_LINE=1 \
+      RALPH_CURRENT_TODO_ORDINAL=1 \
+      RALPH_CURRENT_TODO_HASH=abc123 \
+      bash "$server_script" 2>/dev/null <<< "$3"
+  ' _ "$SETUP_FILE" "$REPO_ROOT" "$payload" "$ws"
+  [ "$status" -eq 0 ]
+  grep -Fq -- '- [ ] todo one' "$ws/PLAN.md"
+  printf '%s\n' "$output" | jq -s -e '.[1].error.code == -32602'
+  printf '%s\n' "$output" | jq -s -e '.[1].error.message | contains("todo_ref does not match")'
 }
 
 @test "ralph_mcp_proxy_preflight fails when server script is missing" {

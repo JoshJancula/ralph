@@ -10,10 +10,14 @@ runnable command can be machine-extracted, and to end with a line of the form:
     VERIFICATION_RESULT: FAIL: <reason>
     VERIFICATION_RESULT: PASS tool_result_ids=<id1>,<id2>
     VERIFICATION STATUS: PASS tool_result_ids=<id1>,<id2>
+    TODO_VERIFICATION: PASS
+    TODO_VERIFICATION: FAIL: <reason>
+    TODO_VERIFICATION: SKIPPED
 
 This module reports the agent's final verdict (the last such line wins) as one of
-"pass", "fail", or "none". It mirrors completion_sentinel.py: assistant-authored
-text only, tolerant of a leading bullet and surrounding whitespace.
+"pass", "fail", "skip", or "none". It mirrors completion_sentinel.py:
+assistant-authored text only, tolerant of a leading bullet and surrounding
+whitespace.
 """
 
 from __future__ import annotations
@@ -22,11 +26,11 @@ import re
 import sys
 from typing import Optional, Tuple
 
-VERIFICATION_MARKERS = ("VERIFICATION_RESULT", "VERIFICATION STATUS")
+VERIFICATION_MARKERS = ("VERIFICATION_RESULT", "VERIFICATION STATUS", "TODO_VERIFICATION")
 _RESULT_RE = re.compile(
     r"^[\*●\-]?\s*"
     + r"(?:" + "|".join(re.escape(marker) for marker in VERIFICATION_MARKERS) + r")"
-    + r"\s*:\s*(PASS|FAIL)\b\s*:?\s*(.*)$",
+    + r"\s*:\s*(PASS|FAIL|SKIPPED)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
 )
 
@@ -36,12 +40,14 @@ def line_verification_result(line: str) -> Optional[Tuple[str, str]]:
     if not match:
         return None
     status = match.group(1).strip().lower()
+    if status == "skipped":
+        return "skip", ""
     reason = match.group(2).strip()
     return status, reason
 
 
 def text_verification_result(text: str) -> Tuple[str, str]:
-    """Return (status, reason); status is "pass", "fail", or "none".
+    """Return (status, reason); status is "pass", "fail", "skip", or "none".
 
     The last verification-result line in the text wins, so an agent that retries
     within one invocation and ends on PASS is reported as a pass.

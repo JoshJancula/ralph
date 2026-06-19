@@ -1573,6 +1573,11 @@ ralph_mcp_proxy_enumerate_eligible_files() {
       abs_path="$git_top/$repo_rel"
       [[ -f "$abs_path" ]] || continue
       case "$abs_path" in
+        "$search_root_abs/.ralph-workspace"|"$search_root_abs/.ralph-workspace"/*)
+          continue
+          ;;
+      esac
+      case "$abs_path" in
         "$search_root_abs"|"$search_root_abs"/*)
           if [[ "$abs_path" == "$search_root_abs" ]]; then
             rel="${repo_rel##*/}"
@@ -1599,6 +1604,7 @@ ralph_mcp_proxy_enumerate_eligible_files() {
     find "$search_root_abs" \
       \( \
         -name .git -o \
+        -name .ralph-workspace -o \
         -name node_modules -o \
         -name dist -o \
         -name build -o \
@@ -1663,9 +1669,28 @@ ralph_mcp_proxy_owned_tool_glob_search() {
   local search_root="${2:-}"
   local output_file="${3:-}"
   local tmp_files relpath
+  local -a rg_args=()
 
   [[ -n "$glob_pattern" && -n "$search_root" && -n "$output_file" ]] || return 1
   : >"$output_file"
+
+  if command -v rg >/dev/null 2>&1; then
+    rg_args=(--files --hidden --no-messages)
+    rg_args+=(--glob '!**/.git/**')
+    rg_args+=(--glob '!**/.ralph-workspace/**')
+    rg_args+=(--glob '!**/node_modules/**')
+    rg_args+=(--glob '!**/dist/**')
+    rg_args+=(--glob '!**/build/**')
+    rg_args+=(--glob '!**/target/**')
+    rg_args+=(--glob '!**/.next/**')
+    rg_args+=(--glob '!**/.cache/**')
+    rg_args+=(--glob '!**/vendor/**')
+    rg_args+=(--glob '!**/plan-output-raw.log')
+    rg_args+=(--glob "$glob_pattern")
+    if rg "${rg_args[@]}" "$search_root" 2>/dev/null | LC_ALL=C sort >>"$output_file"; then
+      return 0
+    fi
+  fi
 
   tmp_files="$(mktemp)"
   ralph_mcp_proxy_enumerate_eligible_files "$search_root" "$tmp_files" || {
@@ -3513,6 +3538,7 @@ ralph_mcp_proxy_owned_tool_batch() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
   local max_ops op_count i=0 report_lines=() report preview op_json op_tool op_args op_result op_text op_is_error op_status
+  local op_result_tmp
 
   max_ops="$(ralph_mcp_proxy_batch_max_operations)"
 
@@ -3555,7 +3581,6 @@ ralph_mcp_proxy_owned_tool_batch() {
     RALPH_MCP_PROXY_FATAL_VIOLATION=0
     RALPH_MCP_PROXY_FATAL_TOOL=""
     RALPH_MCP_PROXY_FATAL_REASON=""
-    local op_result_tmp
     op_result_tmp="$(mktemp)"
     ralph_mcp_proxy_call_owned_tool "$workspace" "$op_tool" "$op_args" >"$op_result_tmp"
     op_result="$(<"$op_result_tmp")"

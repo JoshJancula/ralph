@@ -334,6 +334,7 @@ skills:
   - repo-context
 output_artifacts:
   - ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$name.md|required"
+mcp_servers: []
 ---
 
 ## Role
@@ -388,6 +389,7 @@ skills:
   - repo-context
 output_artifacts:
   - ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$name.md|required"
+mcp_servers: []
 ---
 
 ## Role

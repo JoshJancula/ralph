@@ -228,7 +228,36 @@ skills:
   - repo-context
 output_artifacts:
   - $(yaml_double_quote ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/${agent_id}.md|required|notes")
+mcp_servers: []
 ---
 $(write_agent_scaffold_body "$agent_id" "$description" "${agent_id}.md")
+
+## Agent MCP Servers (Optional)
+
+The mcp_servers field declares optional MCP servers for this agent. It accepts:
+
+# String references to ambient servers:
+#   - playwright
+#   - github
+#
+# Portable definitions with inline configuration:
+#   - name: my-api
+#     transport: http
+#     url: https://api.example.com/v1/mcp
+#     headers:
+#       Authorization: \${API_TOKEN}
+#   - name: local-tool
+#     transport: stdio
+#     command: node
+#     args:
+#       - /path/to/server.js
+#     env:
+#       API_KEY: \${LOCAL_API_KEY}
+#
+# Precedence: Native ambient > Agent definitions > Ralph's protected 'ralph' server
+# Reserved name: 'ralph' cannot be redefined by agents.
+# Secret policy: Use \${ENV_VAR} references; literal secrets are rejected.
+#
+# See bundle/.claude/agents/README.md for full schema and validation rules.
 EOF
 }

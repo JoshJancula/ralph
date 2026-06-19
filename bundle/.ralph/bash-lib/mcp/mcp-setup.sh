@@ -57,6 +57,7 @@ ralph_mcp_proxy_required_tool_names() {
         ralph_run_plan \
         ralph_plan_status \
         ralph_orchestrator_run \
+        ralph_complete_todo \
         ralph_proxy_result_read \
         ralph_proxy_result_search \
         ralph_proxy_result_summary
@@ -66,6 +67,7 @@ ralph_mcp_proxy_required_tool_names() {
         ralph_run_plan \
         ralph_plan_status \
         ralph_orchestrator_run \
+        ralph_complete_todo \
         ralph_proxy_read \
         ralph_proxy_grep \
         ralph_proxy_glob \
@@ -293,6 +295,11 @@ ralph_mcp_proxy_build_server_env_json() {
     --arg ralph_mode "${RALPH_MODE:-no}" \
     --arg agent_tool_access "${RALPH_AGENT_TOOL_ACCESS:-}" \
     --arg run_plan_active "${RALPH_RUN_PLAN_ACTIVE:-}" \
+    --arg current_plan_path "${RALPH_CURRENT_PLAN_PATH:-}" \
+    --arg current_todo_line "${RALPH_CURRENT_TODO_LINE:-}" \
+    --arg current_todo_ordinal "${RALPH_CURRENT_TODO_ORDINAL:-}" \
+    --arg current_todo_id "${RALPH_CURRENT_TODO_ID:-}" \
+    --arg current_todo_hash "${RALPH_CURRENT_TODO_HASH:-}" \
     --arg approval_timeout "${RALPH_APPROVAL_TIMEOUT:-}" \
     --arg approval_poll_interval "${RALPH_APPROVAL_POLL_INTERVAL:-}" \
     --arg approval_progress_interval "${RALPH_APPROVAL_PROGRESS_INTERVAL:-}" \
@@ -307,6 +314,11 @@ ralph_mcp_proxy_build_server_env_json() {
     + (if $ws_root != "" then {RALPH_PLAN_WORKSPACE_ROOT: $ws_root} else {} end)
     + (if $agent_tool_access != "" then {RALPH_AGENT_TOOL_ACCESS: $agent_tool_access} else {} end)
     + (if $run_plan_active != "" then {RALPH_RUN_PLAN_ACTIVE: $run_plan_active} else {} end)
+    + (if $current_plan_path != "" then {RALPH_CURRENT_PLAN_PATH: $current_plan_path} else {} end)
+    + (if $current_todo_line != "" then {RALPH_CURRENT_TODO_LINE: $current_todo_line} else {} end)
+    + (if $current_todo_ordinal != "" then {RALPH_CURRENT_TODO_ORDINAL: $current_todo_ordinal} else {} end)
+    + (if $current_todo_id != "" then {RALPH_CURRENT_TODO_ID: $current_todo_id} else {} end)
+    + (if $current_todo_hash != "" then {RALPH_CURRENT_TODO_HASH: $current_todo_hash} else {} end)
     + (if $allowlist != "" then {RALPH_MCP_ALLOWLIST: $allowlist} else {} end)
     + (if $policy != "" then {RALPH_MCP_PROXY_POLICY: $policy} else {} end)
     + (if $policy_file != "" then {RALPH_MCP_PROXY_POLICY_FILE: $policy_file} else {} end)

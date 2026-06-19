@@ -43,6 +43,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-approvals.sh"
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-loopback.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/runtime-normalize.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/permission-classify.sh"
 
 # The main runner sources run-plan-args.sh before this file. Some tests source
 # run-plan-core.sh directly, so tolerate that load order and skip argument
@@ -115,7 +117,7 @@ EOF
 
 ralph_mode_prompt_guidance_ralph_failure_footer() {
   cat <<'EOF'
-Do not loop on WaitForMcpServers. If Ralph tooling fails mid-run, write one structured request to pending-human.txt and stop without retrying the same blocked call.
+Do not loop on WaitForMcpServers. If Ralph tooling fails mid-run, write one structured human-request record to pending-human.txt and stop without retrying the same blocked call.
 EOF
 }
 
@@ -439,25 +441,39 @@ ralph_run_plan_agent_completion_prompt_block() {
   local request_verify_verdict="${4:-0}"
   if [[ "${RALPH_PLAN_AGENT_MARKS_TODOS:-0}" == "1" ]]; then
     cat <<EOF
-Open \`${plan_path}\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, print \`AGENT_INVOCATION_COMPLETE\` on its own line, and stop. Do not start the next item.
+Open \`${plan_path}\`, complete this TODO, change \`- [ ]\` to \`- [x]\` on that line, save, and stop. Prefer a structured completion footer on its own lines:
+
+\`\`\`
+TODO_COMPLETION: COMPLETE
+TODO_VERIFICATION: PASS
+\`\`\`
+
+If verification was not needed, use \`TODO_VERIFICATION: SKIPPED\`. \`AGENT_INVOCATION_COMPLETE\` is still accepted for compatibility, but the runner reads the structured footer directly. Do not start the next item.
 
 If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
 
-If you need operator input before finishing, write your question to \`${pending_abs}\` and stop without marking [x]. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO.
+If you need operator input before finishing, write your question to \`${pending_abs}\` and stop without marking [x]. The runner will capture it as a structured human-request record. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO.
 EOF
   else
     cat <<EOF
-After finishing and verifying the TODO, print \`AGENT_INVOCATION_COMPLETE\` on its own line and stop. Do not start the next item or edit the plan file to mark this TODO complete; the runner marks it when the sentinel is observed.
+After finishing the TODO, emit a structured completion footer on its own lines:
 
-If no code or file change is needed because the TODO is already satisfied, say that explicitly before printing the sentinel. Include the files or commands you checked and the reason no edit was necessary.
+\`\`\`
+TODO_COMPLETION: COMPLETE
+TODO_VERIFICATION: PASS
+\`\`\`
 
-If you need operator input before finishing, write your question to \`${pending_abs}\` and stop without printing \`AGENT_INVOCATION_COMPLETE\`.
+If verification was not needed, use \`TODO_VERIFICATION: SKIPPED\`. \`AGENT_INVOCATION_COMPLETE\` remains accepted for compatibility. If the runtime also supports \`mcp__ralph__ralph_complete_todo\`, you may call it as a compatibility fallback, but the runner does not depend on MCP for normal completion. Do not read or edit the plan file; the runner will mark this TODO complete from the completion signal.
+
+If no code or file change is needed because the TODO is already satisfied, say that explicitly before calling the helper. Include the files or commands you checked and the reason no edit was necessary.
+
+If verification fails, emit \`TODO_VERIFICATION: FAIL: <reason>\` so the runner reopens the TODO, or call the helper with \`outcome=needs_retry\` and \`verification_status=fail\` plus a short reason. If you need operator input before finishing, write your question to \`${pending_abs}\` and stop; the runner will write a structured human-request record and wait for the next invocation.
 EOF
   fi
   if [[ "$request_verify_verdict" == "1" ]]; then
     cat <<EOF
 
-Run each verification step listed for this TODO yourself now. End with a line \`VERIFICATION STATUS: PASS\` or \`VERIFICATION_RESULT: PASS\` if every step passes (also print the same pass line if there were no steps or nothing required checking), or \`VERIFICATION STATUS: FAIL: <reason>\` or \`VERIFICATION_RESULT: FAIL: <reason>\` if any fail, followed by \`AGENT_INVOCATION_COMPLETE\`. If you can reference Ralph tool-result ids for the verification work, optionally append them after the verdict as \`tool_result_ids=<id1>,<id2>\`. Always print one verification verdict line; omitting it reopens this TODO.
+Run each verification step listed for this TODO yourself now. When you report the result through the completion footer, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. The legacy \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` paths remain accepted for compatibility. Omitting a verification verdict or helper call reopens this TODO.
 EOF
   fi
 }
@@ -472,18 +488,26 @@ ralph_run_plan_fresh_completion_rules_block() {
     cat <<EOF
 - When done, mark \`- [ ]\` on line ${line_num} as \`- [x]\` and stop.
 - If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
-- After completing and checking off the TODO, print \`AGENT_INVOCATION_COMPLETE\` on its own line.
-- If operator input is needed first, write your question to \`${pending_human}\` and stop without marking [x]. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO.
+- After completing and checking off the TODO, print \`TODO_COMPLETION: COMPLETE\` on its own line. \`AGENT_INVOCATION_COMPLETE\` is still accepted for compatibility.
+- If operator input is needed first, write your question to \`${pending_human}\` and stop without marking [x]. The runner will capture it as a structured human-request record. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO.
 EOF
   else
     cat <<EOF
-- After finishing and verifying the TODO, print \`AGENT_INVOCATION_COMPLETE\` on its own line and stop. Do not edit the plan file to mark this TODO complete; the runner marks it when the sentinel is observed.
-- If no code or file change is needed because the TODO is already satisfied, say that explicitly before printing the sentinel. Include the files or commands you checked and the reason no edit was necessary.
-- If operator input is needed first, write your question to \`${pending_human}\` and stop without printing \`AGENT_INVOCATION_COMPLETE\`.
+- After finishing the TODO, emit a structured completion footer on its own lines:
+
+  \`\`\`
+  TODO_COMPLETION: COMPLETE
+  TODO_VERIFICATION: PASS
+  \`\`\`
+
+  If verification was not needed, use \`TODO_VERIFICATION: SKIPPED\`. \`AGENT_INVOCATION_COMPLETE\` and \`mcp__ralph__ralph_complete_todo\` remain accepted for compatibility, but the runner reads the structured footer directly.
+- If no code or file change is needed because the TODO is already satisfied, say that explicitly before calling the helper. Include the files or commands you checked and the reason no edit was necessary.
+- If verification fails, emit \`TODO_VERIFICATION: FAIL: <reason>\` so the runner reopens the TODO, or call the helper with \`outcome=needs_retry\` and \`verification_status=fail\` plus a short reason. The legacy helper path remains accepted for compatibility.
+- If operator input is needed first, write your question to \`${pending_human}\` and stop without calling the helper. The runner will capture it as a structured human-request record.
 EOF
   fi
   if [[ "$request_verify_verdict" == "1" ]]; then
-    printf '%s\n' "- Run each verification step listed for this TODO yourself now. End with a line \`VERIFICATION STATUS: PASS\` or \`VERIFICATION_RESULT: PASS\` if every step passes (also print the same pass line if there were no steps or nothing required checking), or \`VERIFICATION STATUS: FAIL: <reason>\` or \`VERIFICATION_RESULT: FAIL: <reason>\` if any fail, then print \`AGENT_INVOCATION_COMPLETE\`. If you can reference Ralph tool-result ids for the verification work, optionally append them after the verdict as \`tool_result_ids=<id1>,<id2>\`. Always print one verification verdict line; omitting it reopens this TODO."
+    printf '%s\n' "- Run each verification step listed for this TODO yourself now. When you report the result, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. The legacy \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` paths remain accepted for compatibility. Omitting a verification verdict reopens this TODO."
   fi
 }
 
@@ -1243,6 +1267,21 @@ ralph_run_plan_record_workspace_registry "$WORKSPACE" "$RUNTIME" "$RALPH_PLAN_KE
 
 ralph_session_init "$WORKSPACE" "$PLAN_LOG_NAME"
 
+if [[ -f "$RALPH_SESSION_DIR/killswitch-override.json" ]]; then
+  RALPH_KILLSWITCH_OVERRIDE_FILE="$RALPH_SESSION_DIR/killswitch-override.json"
+  export RALPH_KILLSWITCH_OVERRIDE_FILE
+fi
+if [[ -f "$RALPH_SESSION_DIR/opencode-permission-override.json" ]]; then
+  OPENCODE_PLAN_PERMISSION_CONFIG_PATH="$RALPH_SESSION_DIR/opencode-permission-override.json"
+  export OPENCODE_PLAN_PERMISSION_CONFIG_PATH
+fi
+if [[ -f "$RALPH_SESSION_DIR/runtime-permission-overrides.sh" ]]; then
+  RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE="$RALPH_SESSION_DIR/runtime-permission-overrides.sh"
+  export RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE
+  # shellcheck source=/dev/null
+  source "$RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE"
+fi
+
 if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
 else
@@ -1433,6 +1472,94 @@ ralph_restart_command_hint() {
   fi
 }
 
+ralph_json_field() {
+  local file="${1:-}"
+  local field="${2:-}"
+  [[ -f "$file" ]] || return 1
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg field "$field" '.[$field] // empty' "$file" 2>/dev/null || return 1
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+field = sys.argv[2]
+try:
+    doc = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+value = doc.get(field, "")
+if value is None:
+    value = ""
+if isinstance(value, bool):
+    print("true" if value else "false")
+elif isinstance(value, (dict, list)):
+    print(json.dumps(value, ensure_ascii=False))
+else:
+    print(value)
+PY
+    return $?
+  fi
+  return 1
+}
+
+ralph_read_human_request_metadata() {
+  local file="${1:-${HUMAN_REQUEST_FILE:-}}"
+  [[ -n "$file" ]] || return 1
+  [[ -f "$file" ]] || return 1
+  local kind runtime classification blocked_cmd blocked_path blocked_tool question resume
+  kind="$(ralph_json_field "$file" kind 2>/dev/null || printf 'guidance')"
+  runtime="$(ralph_json_field "$file" runtime 2>/dev/null || true)"
+  classification="$(ralph_json_field "$file" classification 2>/dev/null || true)"
+  blocked_cmd="$(ralph_json_field "$file" blocked_command_or_tool 2>/dev/null || true)"
+  blocked_path="$(ralph_json_field "$file" blocked_path 2>/dev/null || true)"
+  blocked_tool="$(ralph_json_field "$file" blocked_tool 2>/dev/null || true)"
+  question="$(ralph_json_field "$file" question 2>/dev/null || true)"
+  resume="$(ralph_json_field "$file" resume_command 2>/dev/null || true)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$kind" "$runtime" "$classification" "$blocked_cmd" "$blocked_path" "$blocked_tool" "$question" "$resume"
+}
+
+ralph_write_operator_response_template() {
+  local request_file="${1:-${HUMAN_REQUEST_FILE:-}}"
+  local response_file="${2:-${OPERATOR_RESPONSE_FILE:-}}"
+  [[ -n "$response_file" ]] || return 1
+  local kind="guidance"
+  local runtime=""
+  local classification=""
+  local blocked_command_or_tool=""
+  local blocked_path=""
+  local blocked_tool=""
+  local question=""
+  if [[ -n "$request_file" ]] && [[ -f "$request_file" ]]; then
+    kind="$(ralph_json_field "$request_file" kind 2>/dev/null || printf 'guidance')"
+    runtime="$(ralph_json_field "$request_file" runtime 2>/dev/null || true)"
+    classification="$(ralph_json_field "$request_file" classification 2>/dev/null || true)"
+    blocked_command_or_tool="$(ralph_json_field "$request_file" blocked_command_or_tool 2>/dev/null || true)"
+    blocked_path="$(ralph_json_field "$request_file" blocked_path 2>/dev/null || true)"
+    blocked_tool="$(ralph_json_field "$request_file" blocked_tool 2>/dev/null || true)"
+    question="$(ralph_json_field "$request_file" question 2>/dev/null || true)"
+  fi
+  cat >"$response_file" <<EOF
+{
+  "placeholder": true,
+  "kind": "$kind",
+  "decision": "$( [[ "$kind" == "permission" ]] && printf 'allow' || printf 'answer' )",
+  "runtime": "$runtime",
+  "classification": "$classification",
+  "blocked_command_or_tool": "$blocked_command_or_tool",
+  "blocked_path": "$blocked_path",
+  "blocked_tool": "$blocked_tool",
+  "reason": "",
+  "answer": ""
+}
+EOF
+}
+
 ralph_operator_has_real_answer() {
   [[ -s "$OPERATOR_RESPONSE_FILE" ]] || return 1
   local _p _ph
@@ -1440,6 +1567,33 @@ ralph_operator_has_real_answer() {
   _ph="$(printf '%s' '(Replace this line with your answer to the question above, then save.)' | tr -d '[:space:]')"
   [[ "$_p" == "$_ph" ]] && return 1
   [[ -z "$_p" ]] && return 1
+  if [[ "$_p" =~ ^\{ ]]; then
+    local _kind _decision _answer
+    local _placeholder
+    _placeholder="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" placeholder 2>/dev/null || true)"
+    [[ "$_placeholder" == "true" ]] && return 1
+    _kind="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" kind 2>/dev/null || true)"
+    _decision="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" decision 2>/dev/null || true)"
+    _answer="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" answer 2>/dev/null || true)"
+    case "$_kind" in
+      permission)
+        case "$(printf '%s' "$_decision" | tr '[:upper:]' '[:lower:]')" in
+          allow|deny)
+            return 0
+            ;;
+        esac
+        return 1
+        ;;
+      guidance)
+        [[ -n "$_answer" ]] && return 0
+        return 1
+        ;;
+      *)
+        [[ -n "$_decision" || -n "$_answer" ]] && return 0
+        return 1
+        ;;
+    esac
+  fi
   return 0
 }
 
@@ -1497,12 +1651,83 @@ ralph_write_human_action_file() {
     printf '3. If the plan runner is still running, it continues when you save. Otherwise restart: %s\n\n' "$restart_hint"
     printf '## Session\n'
     printf -- '- Pending question: %s\n' "$PENDING_HUMAN"
+    if [[ -n "${HUMAN_REQUEST_FILE:-}" ]]; then
+      printf -- '- Human request record: %s\n' "$HUMAN_REQUEST_FILE"
+    fi
     printf -- '- Session directory: %s\n' "$RALPH_SESSION_DIR"
     printf -- '- Plan log: %s\n' "$LOG_FILE"
     printf -- '- Output log: %s\n\n' "$OUTPUT_LOG"
     printf '## Previous operator replies\n\n%s\n' "$history"
   } >"$HUMAN_ACTION_FILE"
   ralph_run_plan_log "Wrote human action file: $HUMAN_ACTION_FILE"
+}
+
+ralph_prepare_permission_pause() {
+  local line_num="${1:?}"
+  local todo_text="${2:?}"
+  local plan_path="${3:?}"
+  local runtime="${4:?}"
+  local classification="${5:?}"
+  local denial_excerpt="${6:-}"
+  local blocked_cmd="${7:-}"
+  local blocked_path="${8:-}"
+  local blocked_tool="${9:-}"
+  local hint=""
+  local resume_cmd=""
+  local prompt_text=""
+
+  if declare -F ralph_permission_hint >/dev/null 2>&1; then
+    hint="$(ralph_permission_hint "$classification" "$runtime" "$blocked_cmd" "$denial_excerpt" 2>/dev/null || true)"
+  fi
+  if declare -F ralph_restart_command_hint >/dev/null 2>&1; then
+    resume_cmd="$(ralph_restart_command_hint)"
+  fi
+  if declare -F ralph_build_permission_operator_brief >/dev/null 2>&1; then
+    prompt_text="$(ralph_build_permission_operator_brief \
+      "$line_num" \
+      "$todo_text" \
+      "$plan_path" \
+      "$runtime" \
+      "$classification" \
+      "$hint" \
+      "$resume_cmd" \
+      "$denial_excerpt" \
+      "$blocked_cmd" \
+      "$blocked_path")"
+  else
+    prompt_text="Permission block (${classification}) on line ${line_num}: ${todo_text}"
+  fi
+
+  printf '%s\n' "$prompt_text" >"$PENDING_HUMAN"
+  if declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
+    ralph_write_human_request_artifact \
+      "$RALPH_SESSION_DIR" \
+      "permission" \
+      "$runtime" \
+      "$line_num" \
+      "$todo_text" \
+      "$todo_text" \
+      "$classification" \
+      "$blocked_cmd" \
+      "$blocked_path" \
+      "$blocked_tool" \
+      "$prompt_text" \
+      "$denial_excerpt" \
+      "$hint" \
+      "$resume_cmd" \
+      "$prompt_text" >/dev/null 2>&1 || true
+  fi
+  if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
+    ralph_write_operator_response_template "${HUMAN_REQUEST_FILE:-$RALPH_SESSION_DIR/human-request.json}" "$OPERATOR_RESPONSE_FILE"
+  fi
+  if declare -F ralph_should_persist_human_files >/dev/null 2>&1; then
+    if ralph_should_persist_human_files; then
+      ralph_write_human_action_file "$prompt_text"
+    else
+      ralph_remove_human_action_file
+    fi
+  fi
+  ralph_run_plan_log "permission block classified as $classification; wrote pending-human and waiting for operator response"
 }
 
 ralph_sync_human_action_file_state() {
@@ -1534,6 +1759,105 @@ ralph_try_consume_human_response() {
       echo "**Operator answered:**"
       echo "$_pa"
     } >>"$HUMAN_CONTEXT"
+
+    local _request_file="${HUMAN_REQUEST_FILE:-$RALPH_SESSION_DIR/human-request.json}"
+    local _request_kind="guidance"
+    local _request_runtime=""
+    local _request_classification=""
+    local _request_blocked_cmd=""
+    local _request_blocked_tool=""
+    local _request_blocked_path=""
+    local _request_question=""
+    if [[ -f "$_request_file" ]]; then
+      _request_kind="$(ralph_json_field "$_request_file" kind 2>/dev/null || printf 'guidance')"
+      _request_runtime="$(ralph_json_field "$_request_file" runtime 2>/dev/null || true)"
+      _request_classification="$(ralph_json_field "$_request_file" classification 2>/dev/null || true)"
+      _request_blocked_cmd="$(ralph_json_field "$_request_file" blocked_command_or_tool 2>/dev/null || true)"
+      _request_blocked_tool="$(ralph_json_field "$_request_file" blocked_tool 2>/dev/null || true)"
+      _request_blocked_path="$(ralph_json_field "$_request_file" blocked_path 2>/dev/null || true)"
+      _request_question="$(ralph_json_field "$_request_file" question 2>/dev/null || true)"
+    elif [[ -f "$RALPH_SESSION_DIR/permission-remediation.json" ]]; then
+      _request_kind="permission"
+      _request_runtime="$(ralph_json_field "$RALPH_SESSION_DIR/permission-remediation.json" runtime 2>/dev/null || true)"
+      _request_classification="$(ralph_json_field "$RALPH_SESSION_DIR/permission-remediation.json" classification 2>/dev/null || true)"
+      _request_blocked_cmd="$(ralph_json_field "$RALPH_SESSION_DIR/permission-remediation.json" blocked_command_or_tool 2>/dev/null || true)"
+      _request_blocked_tool="$(ralph_json_field "$RALPH_SESSION_DIR/permission-remediation.json" blocked_tool 2>/dev/null || true)"
+      _request_blocked_path="$(ralph_json_field "$RALPH_SESSION_DIR/permission-remediation.json" blocked_path 2>/dev/null || true)"
+    fi
+
+    local _response_decision="unknown"
+    local _response_runtime="$_request_runtime"
+    local _response_classification="$_request_classification"
+    local _response_blocked_cmd="$_request_blocked_cmd"
+    local _response_blocked_path="$_request_blocked_path"
+    local _response_blocked_tool="$_request_blocked_tool"
+    local _response_reason=""
+    if [[ "$_pa" =~ ^\{ ]]; then
+      _response_decision="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" decision 2>/dev/null || true)"
+      _response_runtime="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" runtime 2>/dev/null || true)"
+      _response_classification="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" classification 2>/dev/null || true)"
+      _response_blocked_cmd="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" blocked_command_or_tool 2>/dev/null || true)"
+      _response_blocked_path="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" blocked_path 2>/dev/null || true)"
+      _response_blocked_tool="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" blocked_tool 2>/dev/null || true)"
+      _response_reason="$(ralph_json_field "$OPERATOR_RESPONSE_FILE" reason 2>/dev/null || true)"
+      if [[ -z "$_response_decision" ]]; then
+        _response_decision="$(ralph_permission_operator_response_decision "$_pa")"
+      fi
+    else
+      _response_decision="$(ralph_permission_operator_response_decision "$_pa")"
+    fi
+
+    if [[ "$_request_kind" == "permission" ]] || [[ -n "$_response_classification" ]] || [[ -n "$_response_blocked_cmd" ]] || [[ -n "$_response_blocked_path" ]] || [[ -n "$_response_blocked_tool" ]]; then
+      if [[ "$_response_decision" == "allow" ]] && declare -F ralph_apply_permission_operator_response >/dev/null 2>&1; then
+        _response_decision="$(ralph_apply_permission_operator_response \
+          "$RALPH_SESSION_DIR" \
+          "$_response_runtime" \
+          "$_response_classification" \
+          "$_response_blocked_cmd" \
+          "$_response_blocked_path" \
+          "$_response_blocked_tool" \
+          "$_pa" 2>/dev/null || printf 'unknown')"
+      fi
+      case "$_response_decision" in
+        allow)
+          ralph_run_plan_log "Operator allowed human request; prepared ${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-OpenCode permission overlay}"
+          RALPH_PERMISSION_RESPONSE_DECISION="allow"
+          export RALPH_PERMISSION_RESPONSE_DECISION
+          RALPH_PLAN_CLI_RESUME=1
+          export RALPH_PLAN_CLI_RESUME
+          RALPH_PLAN_SESSION_STRATEGY="resume"
+          export RALPH_PLAN_SESSION_STRATEGY
+          rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+          ralph_run_plan_log "Applied structured human response; continuing plan run"
+          return 0
+          ;;
+        deny)
+          ralph_run_plan_log "Operator denied human request; TODO will remain open"
+          RALPH_PERMISSION_RESPONSE_DECISION="deny"
+          export RALPH_PERMISSION_RESPONSE_DECISION
+          RALPH_PLAN_SESSION_STRATEGY="${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
+          export RALPH_PLAN_SESSION_STRATEGY
+          RALPH_PLAN_CLI_RESUME="${RALPH_PLAN_CLI_RESUME:-0}"
+          export RALPH_PLAN_CLI_RESUME
+          return 0
+          ;;
+        *)
+          ralph_run_plan_log "Structured permission response did not include allow/deny; leaving request in place"
+          return 1
+          ;;
+      esac
+    fi
+
+    if [[ "$_request_kind" != "permission" ]] && [[ -n "$_request_question" ]]; then
+      RALPH_PLAN_CLI_RESUME=1
+      export RALPH_PLAN_CLI_RESUME
+      RALPH_PLAN_SESSION_STRATEGY="resume"
+      export RALPH_PLAN_SESSION_STRATEGY
+      rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+      ralph_run_plan_log "Applied guidance answer from operator-response.txt; continuing plan run"
+      return 0
+    fi
+
     rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
     ralph_run_plan_log "Applied answer from operator-response.txt; continuing plan run"
     return 0
@@ -1543,13 +1867,42 @@ ralph_try_consume_human_response() {
 
 ralph_human_input_write_offline_instructions() {
   local _iu _ir _cmd_hint
+  local _request_file="${HUMAN_REQUEST_FILE:-$RALPH_SESSION_DIR/human-request.json}"
+  local _request_kind="guidance"
   _iu="$(ralph_path_to_file_uri "$HUMAN_INPUT_MD")"
   _ir="$(ralph_path_to_file_uri "$OPERATOR_RESPONSE_FILE")"
   _cmd_hint="$(ralph_restart_command_hint)"
+  if [[ -f "$_request_file" ]]; then
+    _request_kind="$(ralph_json_field "$_request_file" kind 2>/dev/null || printf 'guidance')"
+  elif [[ -f "$RALPH_SESSION_DIR/permission-remediation.json" ]]; then
+    _request_file="$RALPH_SESSION_DIR/permission-remediation.json"
+    _request_kind="permission"
+  fi
+  if [[ "$_request_kind" != "permission" ]] && declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
+    ralph_write_human_request_artifact \
+      "$RALPH_SESSION_DIR" \
+      "guidance" \
+      "${RUNTIME:-}" \
+      "0" \
+      "$(<"$PENDING_HUMAN")" \
+      "$(<"$PENDING_HUMAN")" \
+      "" \
+      "" \
+      "" \
+      "" \
+      "$(<"$PENDING_HUMAN")" \
+      "" \
+      "" \
+      "$_cmd_hint" \
+      "$(<"$PENDING_HUMAN")" >/dev/null 2>&1 || true
+  fi
+  if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
+    ralph_write_operator_response_template "$_request_file" "$OPERATOR_RESPONSE_FILE"
+  fi
   {
     echo "# Paused for human input"
     echo ""
-    echo "The plan runner is waiting in this same process until you answer (same behavior as an interactive TTY prompt)."
+    echo "The plan runner wrote a structured human-request record and will resume on the next invocation after you answer."
   echo ""
   echo "## Question from the agent"
   echo ""
@@ -1557,8 +1910,8 @@ ralph_human_input_write_offline_instructions() {
   echo ""
     echo "## What to do"
     echo ""
-    echo "1. Open **operator-response.txt** in this folder, write your full answer, and save."
-    echo "2. The runner detects the save and continues automatically. Do not delete pending-human.txt; it clears after your answer is applied."
+    echo "1. Open **operator-response.txt** in this folder and replace the JSON template with your answer. Remove the \`placeholder\` field or set it to \`false\`."
+    echo "2. Save the file. The next run will consume the structured response and continue."
     echo "3. If this process is no longer running, restart with: ${_cmd_hint}"
     echo ""
     echo "## Clickable links (terminal or browser address bar)"
@@ -1570,10 +1923,13 @@ ralph_human_input_write_offline_instructions() {
     echo ""
     echo "- Session directory: $RALPH_SESSION_DIR"
     echo "- Plan file: $PLAN_PATH"
+    if [[ -n "${HUMAN_REQUEST_FILE:-}" ]]; then
+      echo "- Human request record: $HUMAN_REQUEST_FILE"
+    fi
   } >"$HUMAN_INPUT_MD"
 
   if [[ ! -f "$OPERATOR_RESPONSE_FILE" ]] || [[ ! -s "$OPERATOR_RESPONSE_FILE" ]]; then
-    printf '%s\n' '(Replace this line with your answer to the question above, then save.)' >"$OPERATOR_RESPONSE_FILE"
+    ralph_write_operator_response_template "${HUMAN_REQUEST_FILE:-$RALPH_SESSION_DIR/human-request.json}" "$OPERATOR_RESPONSE_FILE"
   fi
   ralph_write_human_action_file
   ralph_run_plan_log "Wrote offline human instructions: $HUMAN_INPUT_MD"
@@ -1590,65 +1946,36 @@ ralph_human_input_write_offline_instructions() {
   fi
 }
 
-# When stdin is not a TTY, block until operator-response.txt has a real answer (orchestrator and CI can wait in-process).
+# When stdin is not a TTY, write the request artifacts once and stop.
 ralph_human_pause_for_operator_offline() {
-  if [[ "${RALPH_HUMAN_OFFLINE_EXIT:-0}" == "1" ]]; then
-    ralph_human_input_write_offline_instructions
-    ralph_run_plan_log "EXIT 4: human input required (RALPH_HUMAN_OFFLINE_EXIT=1)"
-    read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
-    _ralph_write_plan_usage_summary "$done_count" "$total_count"
-    exit 4
-  fi
-
   ralph_human_input_write_offline_instructions
-
-  local interval="${RALPH_HUMAN_POLL_INTERVAL:-2}"
-  local n=0
-  ralph_run_plan_log "Paused (no TTY): polling every ${interval}s for answer in $OPERATOR_RESPONSE_FILE"
-  echo -e "${C_DIM}Waiting for a saved answer in operator-response.txt (poll every ${interval}s)...${C_RST}" >&2
-
-  while ! ralph_operator_has_real_answer; do
-    sleep "$interval"
-    n=$((n + 1))
-    if (( n % 15 == 0 )); then
-      echo -e "${C_DIM}Still paused; edit and save ${OPERATOR_RESPONSE_FILE}${C_RST}" >&2
-      ralph_run_plan_log "still waiting for operator-response (elapsed ~$((n * interval))s)"
-    fi
-  done
-
-  if ralph_try_consume_human_response; then
-    ralph_sync_human_action_file_state
-    ralph_run_plan_log "Operator response applied; resuming plan run"
-    echo -e "${C_G}Answer received. Continuing.${C_RST}" >&2
-  fi
+  ralph_run_plan_log "EXIT 4: human input required (one-shot request written)"
+  read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+  _ralph_write_plan_usage_summary "$done_count" "$total_count"
+  exit 4
 }
 
+RALPH_PERMISSION_RESPONSE_DECISION=""
 if ralph_try_consume_human_response; then
+  if [[ "${RALPH_PERMISSION_RESPONSE_DECISION:-}" == "deny" ]]; then
+    read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+    echo "" >&2
+    echo -e "${C_R}${C_BOLD}Permission request was denied by the operator; stopping plan run.${C_RST}" >&2
+    echo -e "${C_DIM}Plan: $PLAN_PATH${C_RST}" >&2
+    _ralph_write_plan_usage_summary "$done_count" "$total_count"
+    ralph_runtime_overlay_cleanup_if_needed
+    exit 1
+  fi
   :
 elif [[ ! -f "$PENDING_HUMAN" ]]; then
   : >"$HUMAN_CONTEXT"
-  rm -f "$OPERATOR_RESPONSE_FILE" "$HUMAN_INPUT_MD"
+  rm -f "$OPERATOR_RESPONSE_FILE" "$HUMAN_INPUT_MD" "$HUMAN_REQUEST_FILE" "$RALPH_SESSION_DIR/permission-remediation.json"
 fi
 
 ralph_sync_human_action_file_state
 
 if [[ -f "$PENDING_HUMAN" ]] && ! ralph_operator_has_real_answer; then
-  if [[ -t 0 ]] && [[ -t 1 ]]; then
-    echo "" >&2
-    echo -e "${C_Y}A previous run left a question. Answer below (end with line containing only .):${C_RST}" >&2
-    printf '%s\n' "$(<"$PENDING_HUMAN")" >&2
-    echo "" >&2
-    _hb=""
-    while IFS= read -r _hl </dev/tty; do
-      [[ "$_hl" == "." ]] && break
-      _hb+="${_hl}"$'\n'
-    done
-    printf '%s\n' "${_hb:-(empty reply)}" >"$OPERATOR_RESPONSE_FILE"
-    ralph_try_consume_human_response || true
-    ralph_sync_human_action_file_state
-  else
-    ralph_human_pause_for_operator_offline
-  fi
+  ralph_human_pause_for_operator_offline
 fi
 
 ralph_run_plan_log "session dir=$RALPH_SESSION_DIR"
@@ -2051,6 +2378,7 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
     fi
   fi
   ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
+  ralph_run_plan_export_agent_mcp_overlay "$WORKSPACE" "$PREBUILT_AGENT"
   if [[ "$RUNTIME" == "claude" ]]; then
     _agents_root_for_tools="$(prebuilt_agents_root "$WORKSPACE")"
     CLAUDE_TOOLS_FROM_AGENT="$(bash "$AGENT_CONFIG_TOOL" allowed-tools "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
@@ -3031,6 +3359,12 @@ while true; do
     todo_prompt_body="$todo_prompt_text$todo_multiline_note"
     todo_class="$(plan_todo_risk_classify "$todo_text_for_verification" 2>/dev/null || printf 'normal')"
     todo_hash="$(plan_todo_hash "$todo_text" 2>/dev/null || printf '%s' "$todo_text")"
+    _todo_retry_limit="$GUTTER_ITERATIONS"
+    if [[ "$todo_class" == "verification_gate" ]] && plan_format_is_yaml "$plan_format"; then
+      # Verification-gated TODOs already depend on the agent proving completion
+      # via a check or command; do not blind-retry them after a failed pass.
+      _todo_retry_limit=0
+    fi
     # Determine whether this TODO will route to prose-agent verification so the
     # first-pass prompt can request a verification verdict, avoiding a second
     # agent invocation solely to obtain the result.
@@ -3054,6 +3388,17 @@ while true; do
       ralph_run_plan_log "ERROR: TODO routing failed for line=$line_num"
       exit 1
     fi
+
+    RALPH_CURRENT_PLAN_PATH="$PLAN_PATH"
+    RALPH_CURRENT_TODO_LINE="$line_num"
+    RALPH_CURRENT_TODO_ORDINAL="$task_ordinal"
+    RALPH_CURRENT_TODO_ID="$todo_id"
+    RALPH_CURRENT_TODO_HASH="$todo_hash"
+    export RALPH_CURRENT_PLAN_PATH
+    export RALPH_CURRENT_TODO_LINE
+    export RALPH_CURRENT_TODO_ORDINAL
+    export RALPH_CURRENT_TODO_ID
+    export RALPH_CURRENT_TODO_HASH
 
     if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
       if ! ralph_run_plan_pipeline_input_artifacts_prepare "$PLAN_PATH" "$todo_target" "$line_num"; then
@@ -3632,11 +3977,15 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       esac
     fi
     export RALPH_APPROVAL_TIMEOUT="$approval_timeout"
-    # Run each agent invocation in its own process group. With job control
-    # enabled, the backgrounded subshell becomes a process-group leader, so a
-    # single negative-PID kill reaches all descendants (cursor-agent, demux.py,
-    # etc.) and prevents stray orphan processes when the invocation is timed out
-    # or the runner exits.
+
+    if declare -F ralph_runtime_config_mcp_resolve >/dev/null 2>&1; then
+      if ! ralph_runtime_config_mcp_resolve "$RUNTIME" "${RALPH_PROJECT_ROOT:-$WORKSPACE}" "${PREBUILT_AGENT:-}" "$WORKSPACE"; then
+        ralph_run_plan_log "ERROR: runtime MCP overlay preflight failed before CLI invocation"
+        exit 1
+      fi
+    fi
+
+    # Run each agent invocation in its own process group.
     set -m
     case "$RUNTIME" in
       cursor)
@@ -3784,6 +4133,40 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     _rate_limit_status=""
     if declare -F ralph_detect_rate_limit_status >/dev/null 2>&1; then
       _rate_limit_status="$(ralph_detect_rate_limit_status "$_inv_output_segment" 2>/dev/null || true)"
+    fi
+    _permission_pause_pending=0
+    _permission_block_type="none"
+    # Permission denials can surface as explicit runtime output even when the
+    # CLI exits 0, so classify the output segment independently of exit code.
+    if declare -F ralph_permission_block_type >/dev/null 2>&1; then
+      _permission_block_type="$(ralph_permission_block_type "$_inv_output_segment" "$exit_code" "$_inv_effective_runtime" 2>/dev/null || printf 'none')"
+      if [[ "$_permission_block_type" != "none" ]] && declare -F ralph_prepare_permission_pause >/dev/null 2>&1; then
+        ralph_prepare_permission_pause \
+          "$line_num" \
+          "$todo_text" \
+          "$PLAN_PATH" \
+          "$_inv_effective_runtime" \
+          "$_permission_block_type" \
+          "$_inv_output_segment" \
+          "$(ralph_permission_blocked_command_generic "$_inv_output_segment" 2>/dev/null || true)" \
+        "$(ralph_permission_blocked_path "$_inv_output_segment" 2>/dev/null || true)" \
+        "$(ralph_permission_blocked_tool "$_inv_output_segment" 2>/dev/null || true)" || true
+      _permission_pause_pending=1
+      if declare -F ralph_human_pause_for_operator_offline >/dev/null 2>&1; then
+        RALPH_PERMISSION_RESPONSE_DECISION=""
+        export RALPH_PERMISSION_RESPONSE_DECISION
+        ralph_human_pause_for_operator_offline || true
+        if [[ "${RALPH_PERMISSION_RESPONSE_DECISION:-}" == "deny" ]]; then
+          read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+          echo "" >&2
+          echo -e "${C_R}${C_BOLD}Permission request was denied by the operator; stopping plan run.${C_RST}" >&2
+          echo -e "${C_DIM}Plan: $PLAN_PATH  Line $line_num${C_RST}" >&2
+          _ralph_write_plan_usage_summary "$done_count" "$total_count"
+          ralph_runtime_overlay_cleanup_if_needed
+          exit 1
+        fi
+      fi
+    fi
     fi
     _has_verification_metadata=0
     _has_strict_verify_metadata=0
@@ -3997,9 +4380,9 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     _validation_failed=0
     if [[ "$_inv_todo_completed" == "1" ]]; then
       if [[ "$_inv_completion_sentinel_seen" == "1" ]]; then
-        ralph_run_plan_log "completion sentinel observed for line $line_num"
+        ralph_run_plan_log "completion marker observed for line $line_num"
       else
-        ralph_run_plan_log "completion sentinel missing for line $line_num (non-blocking)"
+        ralph_run_plan_log "completion marker missing for line $line_num (non-blocking)"
       fi
     fi
     : "${_prompt_bytes:=0}"
@@ -4153,7 +4536,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
 
     # Check for strict proxy violations before completion reporting
-    if [[ "$exit_code" -ne 0 ]]; then
+    if [[ "$exit_code" -ne 0 ]] && [[ "${_permission_pause_pending:-0}" != "1" ]]; then
       read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
       echo "" >&2
       echo -e "${C_R}${C_BOLD}Strict proxy policy violation detected; stopping plan run.${C_RST}" >&2
@@ -4194,6 +4577,8 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       #  - Agent VERIFICATION STATUS / VERIFICATION_RESULT: FAIL reopens
       #    immediately with the failure
       #    context; the runner does not re-run verification first.
+      #  - Agent VERIFICATION STATUS / VERIFICATION_RESULT: SKIPPED means the
+      #    TODO does not need a verification rerun and should continue.
       #  - Only when the agent omitted a verdict does the runner fall back to a
       #    strict verify command (plan-level verify, RALPH_VERIFY_AFTER_TODO, or
       #    TODO Verify: metadata). Verification: prose is never executed as shell.
@@ -4231,6 +4616,12 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
             echo -e "${C_DIM}TODO reopened; retry budget preserved (attempt $attempts_on_line/$GUTTER_ITERATIONS)${C_RST}" >&2
             continue
           fi
+        elif [[ "$_has_verification_metadata" == "1" && "$_agent_verdict" == "skip" ]]; then
+          ralph_run_plan_log "agent verification SKIPPED for line $line_num; continuing without runner fallback"
+          POST_VERIFICATION_FAILURE_SUMMARY=""
+          POST_VERIFICATION_FAILURE_REASON=""
+          POST_VERIFICATION_FAILURE_ARTIFACT=""
+          _skip_runner_post_verify=1
         elif [[ "$_has_verification_metadata" == "1" && "$_agent_verdict" == "pass" ]]; then
           ralph_run_plan_log "agent verification PASS for line $line_num but RALPH_VERIFY_TRUST_AGENT_PASS=0; evaluating strict runner fallback"
         fi
@@ -4258,7 +4649,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
               # equals GUTTER_ITERATIONS the limit is reached and the runner must stop.
               if [[ $attempts_on_line -ge $GUTTER_ITERATIONS ]]; then
                 ralph_run_plan_log "GUTTER: line $line_num reopened by post-verification but retry budget exhausted (attempts_on_line=$attempts_on_line >= limit=$GUTTER_ITERATIONS); stopping"
-                _gutter_help_msg="Plan runner stopped (gutter): post-verification reopened this TODO but the retry budget was exhausted after $attempts_on_line attempts (limit is $GUTTER_ITERATIONS). Unblock by fixing the task, editing the plan line, or raising the limit (CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER or --max-iterations). Verification failure: ${POST_VERIFICATION_FAILURE_SUMMARY:-(no summary)}. To ask you a question, the agent should write to: $PENDING_ABS"
+                _gutter_help_msg="Plan runner stopped (gutter): post-verification reopened this TODO but the retry budget was exhausted after $attempts_on_line attempts (limit is $GUTTER_ITERATIONS). Unblock by fixing the task, editing the plan line, or raising the limit (CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER or --max-iterations). Verification failure: ${POST_VERIFICATION_FAILURE_SUMMARY:-(no summary)}. To ask you a question, the agent should write a structured human-request record to: $PENDING_ABS"
                 if ralph_should_persist_human_files; then
                   ralph_write_human_action_file "$_gutter_help_msg"
                 fi
@@ -4509,24 +4900,24 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     fi
 
     attempts_on_line=$((attempts_on_line + 1))
-    if [[ $attempts_on_line -gt $GUTTER_ITERATIONS ]]; then
-      ralph_run_plan_log "GUTTER: line $line_num unchanged after $attempts_on_line attempts (per-TODO limit=$GUTTER_ITERATIONS)"
-      _gutter_help_msg="Plan runner stopped (gutter): this TODO stayed open after $attempts_on_line attempts (per-TODO limit is $GUTTER_ITERATIONS). Unblock by fixing the task, editing the plan line, or raising the limit (CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER or --max-iterations). To ask you a question, the agent should write to: $PENDING_ABS"
+    if [[ $attempts_on_line -gt $_todo_retry_limit ]]; then
+      ralph_run_plan_log "GUTTER: line $line_num unchanged after $attempts_on_line attempts (per-TODO limit=$_todo_retry_limit)"
+      _gutter_help_msg="Plan runner stopped (gutter): this TODO stayed open after $attempts_on_line attempts (per-TODO limit is $_todo_retry_limit). Unblock by fixing the task, editing the plan line, or raising the limit (CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER or --max-iterations). To ask you a question, the agent should write a structured human-request record to: $PENDING_ABS"
       if ralph_should_persist_human_files; then
         ralph_write_human_action_file "$_gutter_help_msg"
       fi
       echo "" >&2
-      echo -e "${C_R}${C_BOLD}Agent did not complete this TODO after $attempts_on_line tries (gutter limit $GUTTER_ITERATIONS).${C_RST}" >&2
+      echo -e "${C_R}${C_BOLD}Agent did not complete this TODO after $attempts_on_line tries (gutter limit $_todo_retry_limit).${C_RST}" >&2
       echo -e "  Plan: $PLAN_PATH  Line $line_num: $todo_text" >&2
       echo -e "${C_DIM}Human help needed: adjust the plan or complete the work, then re-run.${C_RST}" >&2
-      echo -e "${C_DIM}To ask you a question instead of retrying blindly, the agent should write to:${C_RST}" >&2
+      echo -e "${C_DIM}To ask you a question instead of retrying blindly, the agent should write a structured human-request record to:${C_RST}" >&2
       echo "  $PENDING_ABS" >&2
       read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
       _ralph_write_plan_usage_summary "$done_count" "$total_count"
       ralph_runtime_overlay_cleanup_if_needed
       exit 1
     fi
-    ralph_run_plan_log "TODO line $line_num still open (attempt $attempts_on_line/$GUTTER_ITERATIONS); retrying"
+    ralph_run_plan_log "TODO line $line_num still open (attempt $attempts_on_line/$_todo_retry_limit); retrying"
     sleep 2
   done
 done

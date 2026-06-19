@@ -589,6 +589,14 @@ _LANG_SPECS: Dict[str, Dict[str, Any]] = {
 _NUMBER_PATTERN = r"\b0[xX][0-9a-fA-F]+\b|\b\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?\b"
 _IDENT_PATTERN = r"[A-Za-z_][A-Za-z0-9_]*"
 _LANG_REGEX_CACHE: Dict[str, "re.Pattern[str]"] = {}
+_SHELL_TOOL_NAMES = frozenset(
+    {
+        "bash",
+        "shell",
+        "command_execution",
+        "ralph_proxy_shell",
+    }
+)
 
 
 def _lang_regex(lang: str, spec: Mapping[str, Any]) -> "re.Pattern[str]":
@@ -1919,9 +1927,7 @@ class PrettyRenderer:
     def _tool_line(self, name: str, arg: str) -> str:
         rendered_name = f"{self.bold}{self.toolname}{name}{self.reset}"
         if arg:
-            # Path-like args read in teal; everything else in amber.
-            arg_color = self.path if self._looks_like_path(arg) else self.arg
-            rendered_arg = f"{arg_color}{arg}{self.reset}"
+            rendered_arg = self._render_tool_arg(name, arg)
             return f"{self.green}{self.bullet}{self.reset} {rendered_name}({rendered_arg})"
         return f"{self.green}{self.bullet}{self.reset} {rendered_name}"
 
@@ -1930,6 +1936,19 @@ class PrettyRenderer:
         if not arg or " " in arg.strip():
             return False
         return "/" in arg or "." in os.path.basename(arg)
+
+    def _render_tool_arg(self, name: str, arg: str) -> str:
+        if self._looks_like_shell_command(name):
+            highlighted = highlight_code_line(arg, "shell", self._syntax_palette)
+            if highlighted != arg:
+                return highlighted
+        # Path-like args read in teal; everything else in amber.
+        arg_color = self.path if self._looks_like_path(arg) else self.arg
+        return f"{arg_color}{arg}{self.reset}"
+
+    @staticmethod
+    def _looks_like_shell_command(name: str) -> bool:
+        return name.split(".")[-1].lower() in _SHELL_TOOL_NAMES
 
     def _format_tool_line(self, name: str, arg: str, count: int = 1) -> str:
         line = self._tool_line(name, arg)

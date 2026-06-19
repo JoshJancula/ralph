@@ -62,6 +62,7 @@ source "$RALPH_LIB_ROOT/new-agent/new-agent.sh"
   [ ! -e "$bundle_root/bundle/.cursor/agents/test-agent/rules" ]
   [ ! -e "$bundle_root/bundle/.cursor/agents/test-agent/skills" ]
   [ -f "$bundle_root/bundle/.ralph/agents/test-agent.md" ]
+  grep -q '^mcp_servers: \[\]$' "$bundle_root/bundle/.ralph/agents/test-agent.md"
 
   rm -rf "$repo"
 }

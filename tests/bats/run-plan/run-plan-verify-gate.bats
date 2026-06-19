@@ -258,6 +258,39 @@ AGENT
   rm -rf "$workspace"
 }
 
+@test "verification gate accepts structured TODO footer without AGENT_INVOCATION_COMPLETE" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat > "$plan_file" <<'PLAN'
+# Structured completion test
+- [ ] task with structured completion footer. Verification: confirm the footer is honored
+PLAN
+
+  cat > "$bin_dir/cursor-agent" <<'AGENT'
+#!/usr/bin/env bash
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: PASS"
+exit 0
+AGENT
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] task with structured completion footer" "$plan_file"
+
+  rm -rf "$workspace"
+}
+
 @test "verification gate reopens immediately on agent VERIFICATION_RESULT: FAIL without runner re-run" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
@@ -289,6 +322,40 @@ AGENT
   [[ "$output" != *"Running verification checks now"* ]]
   grep -Fq -- "- [ ] task that must not self-certify" "$plan_file"
   ! grep -Fq -- "- [x] task that must not self-certify" "$plan_file"
+
+  rm -rf "$workspace"
+}
+
+@test "verification gate reopens on structured TODO_VERIFICATION: FAIL" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat > "$plan_file" <<'PLAN'
+# Structured fail test
+- [ ] task with structured verification failure. Verification: confirm the footer is honored
+PLAN
+
+  cat > "$bin_dir/cursor-agent" <<'AGENT'
+#!/usr/bin/env bash
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: FAIL: still broken"
+exit 0
+AGENT
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -ne 0 ]
+  grep -Fq -- "- [ ] task with structured verification failure" "$plan_file"
+  ! grep -Fq -- "- [x] task with structured verification failure" "$plan_file"
 
   rm -rf "$workspace"
 }

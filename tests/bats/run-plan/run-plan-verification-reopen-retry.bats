@@ -111,6 +111,51 @@ AGENT
   rm -rf "$workspace"
 }
 
+@test "verification_gate TODO stops after one failed invocation without blind retries" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home invocation_count
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  invocation_count="$workspace/invocations.txt"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat > "$plan_file" <<'PLAN'
+---
+todos:
+  - id: gate
+    content: verify the bounded retry limit
+    verification: printf done
+    status: pending
+---
+# Verification gate retry cap
+PLAN
+
+  cat > "$bin_dir/cursor-agent" <<AGENT
+#!/usr/bin/env bash
+count_path="$invocation_count"
+n=0
+[[ -f "\$count_path" ]] && n=\$(cat "\$count_path")
+n=\$((n+1))
+printf '%s' "\$n" > "\$count_path"
+printf '%s\n' "finished work without completion sentinel"
+exit 0
+AGENT
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    CURSOR_PLAN_MAX_ITER=10 \
+    CURSOR_PLAN_GUTTER_ITER=3
+
+  [ "$status" -ne 0 ]
+  [ "$(cat "$invocation_count")" = "1" ]
+  grep -Fq 'verification: printf done' "$plan_file"
+  rm -rf "$workspace"
+}
+
 @test "post-verification reopen retry uses compact resume when available" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"

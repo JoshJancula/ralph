@@ -158,6 +158,32 @@ class TestWindowingNetting(unittest.TestCase):
         bucket = self._windowing_bucket()
         self.assertEqual(bucket["saved_bytes"], 750)
 
+    def test_merge_overlay_fields_includes_compaction_telemetry(self) -> None:
+        compact_path = self.tmp_dir / "bash-compact.jsonl"
+        compact_path.write_text(
+            json.dumps(
+                {
+                    "plan_key": "plan-1",
+                    "originalBytes": 1200,
+                    "compactedBytes": 300,
+                    "originalTokens": 240,
+                    "compactedTokens": 60,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        summary_path = self.tmp_dir / "summary.json"
+        summary_path.write_text(json.dumps({"plan_key": "plan-1"}), encoding="utf-8")
+
+        record: dict[str, Any] = {}
+        OVERLAY.merge_overlay_fields(record, str(summary_path))
+
+        telemetry = record["compaction_telemetry"]
+        self.assertEqual(telemetry[0]["original_tokens"], 240)
+        self.assertEqual(telemetry[0]["compacted_tokens"], 60)
+        self.assertEqual(telemetry[0]["saved_tokens"], 180)
+
 
 if __name__ == "__main__":
     unittest.main()

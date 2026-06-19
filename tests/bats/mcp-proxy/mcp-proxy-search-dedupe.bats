@@ -229,6 +229,28 @@ teardown() {
   [[ "$second" != *"glob-fixture-20.txt"* ]]
 }
 
+@test "glob search skips ralph workspace state files" {
+  command -v jq >/dev/null || skip "jq required"
+
+  mkdir -p "$WS/.ralph-workspace/tool-results/plan-a/results"
+  mkdir -p "$WS/visible"
+  printf 'hidden workspace file\n' >"$WS/.ralph-workspace/tool-results/plan-a/results/hidden-workspace-file.txt"
+  printf 'visible workspace file\n' >"$WS/visible/hidden-workspace-file.txt"
+
+  local policy glob_args response text
+  policy="$(glob_trunc_policy_json)"
+  glob_args='{"glob_pattern":"**/hidden-workspace-file.txt","target_directory":"."}'
+  response="$(invoke_search_dedupe_glob_pair "$policy" "$glob_args")"
+  split_search_dedupe_response "$response"
+  text="$SEARCH_DEDUPE_FIRST"
+
+  printf '%s\n' "$text" | jq -e '
+    .isError == false
+    and (.content[0].text | test("visible/hidden-workspace-file.txt"))
+    and (.content[0].text | test("\\.ralph-workspace") | not)
+  '
+}
+
 @test "different grep pattern path or flags not deduped" {
   command -v jq >/dev/null || skip "jq required"
 

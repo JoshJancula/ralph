@@ -146,9 +146,14 @@ This smoke test demonstrates that the end-to-end Ralph MCP wiring for Codex is s
 
 ### Ralph mode (plan runs)
 
-Plan runs default to **Ralph mode: no** (no Ralph MCP injection). When you pass `--ralph-mode ralph` on [`.ralph/run-plan.sh`](../bundle/.ralph/run-plan.sh), Ralph injects an ephemeral MCP config for [`.ralph/mcp-server.sh`](../bundle/.ralph/mcp-server.sh) (orchestration tools plus `ralph_proxy_*` read helpers). Policy-based filtering and truncation run inside that single server; Ralph does not replace every runtime-native built-in tool.
+Plan runs default to **Ralph mode: no** (no Ralph MCP injection). When you pass `--ralph-mode ralph` on [`.ralph/run-plan.sh`](../bundle/.ralph/run-plan.sh), Ralph injects an ephemeral MCP config for [`.ralph/mcp-server.sh`](../bundle/.ralph/mcp-server.sh) (orchestration tools plus `ralph_proxy_*` read helpers). Agent `mcp_servers` are merged over ambient configuration before Ralph's protected `ralph` server is added. Policy-based filtering and truncation run inside that single server; Ralph does not replace every runtime-native built-in tool.
 
-See **[TOOLING.md](TOOLING.md)** for `--ralph-mode`, `RALPH_MODE`, the interactive prompt, workspace preferences, the runtime matrix, and available tools.
+**Precedence in `ralph`/`hybrid` mode:**
+1. Native ambient MCP servers (from runtime's own config)
+2. Agent `mcp_servers` declarations (override ambient with same name)
+3. Ralph's protected `ralph` MCP server
+
+See **[AGENTS.md](../AGENTS.md#agent-mcp-servers)** for the full `mcp_servers` syntax and **[TOOLING.md](TOOLING.md)** for `--ralph-mode`, `RALPH_MODE`, the interactive prompt, workspace preferences, the runtime matrix, and available tools.
 
 ### Environment guard rails
 
@@ -261,13 +266,86 @@ The `stdio` flag tells Cursor to speak the MCP protocol over the server's standa
 
 Ralph's bash MCP server (`mcp-server.sh`) exposes **plan and orchestration** tools to an external MCP client. It does **not** provide a browser, Playwright, or other product-specific integrations. When `.ralph/run-plan.sh` runs the **qa** agent (or any agent) via Cursor, Claude Code, Codex, OpenCode, or Antigravity, only the **tools that runtime has configured** are available. To let QA open a browser, call external APIs through MCP, or use other skills, add those MCP servers to **that** runtime's configuration and approve tool use according to your policy.
 
+Ralph preserves each runtime's native MCP configuration chain and merges agent-specific `mcp_servers` on top. See [AGENTS.md](AGENTS.md) for the native configuration preservation table.
+
 Official references:
 
 - Codex: [Model Context Protocol (Codex)](https://developers.openai.com/codex/mcp)
 - Cursor: [Model Context Protocol (MCP)](https://cursor.com/docs/mcp) and [MCP in the Cursor CLI](https://cursor.com/docs/cli/mcp)
 - Claude Code: [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)
 
+### Agent-specific MCP servers
+
+Agents can declare optional `mcp_servers` in their canonical frontmatter or `config.json`. This allows agents to reference ambient MCP servers or define portable inline servers.
+
+**Precedence (highest to lowest)**:
+1. Native ambient MCP servers (runtime's own configuration)
+2. Agent `mcp_servers` declarations (override ambient servers with the same name)
+3. Ralph's protected `ralph` MCP server (in `ralph`/`hybrid` mode)
+
+**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
+
+### mcp_servers syntax
+
+The `mcp_servers` field accepts an array of:
+
+**String references** (ambient server names):
+```yaml
+mcp_servers:
+  - playwright
+  - github
+```
+
+**Portable definitions** (inline server configuration):
+```yaml
+mcp_servers:
+  - name: my-api
+    transport: http
+    url: https://api.example.com/v1/mcp
+    headers:
+      Authorization: ${API_TOKEN}
+  - name: local-tool
+    transport: stdio
+    command: node
+    args:
+      - /path/to/server.js
+    env:
+      API_KEY: ${LOCAL_API_KEY}
+```
+
+**Supported transports**:
+
+| Transport | Required fields | Optional fields |
+|-----------|-----------------|-----------------|
+| `stdio` | `name`, `transport`, `command` | `args` (array), `env` (map with `${ENV_VAR}` refs) |
+| `http` | `name`, `transport`, `url` | `headers` (map with `${ENV_VAR}` refs) |
+
+**Secret policy**: All credential values must use `${ENV_VAR}` references. Literal secrets matching credential patterns are rejected at validation. Secrets are resolved at invocation time and never persisted to disk.
+
+**Failure behavior**: Unresolved `${ENV_VAR}` references, invalid server definitions, missing environment variables, or use of the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, and searched source paths.
+
 ### Example: Playwright MCP
+
+[Playwright's MCP server](https://www.npmjs.com/package/@playwright/mcp) is a common choice for browser automation and visual checks during QA work.
+
+**Adding via agent definition**:
+```yaml
+mcp_servers:
+  - playwright
+```
+
+Or with explicit configuration:
+```yaml
+mcp_servers:
+  - name: playwright
+    transport: stdio
+    command: npx
+    args:
+      - -y
+      - '@playwright/mcp@latest'
+```
+
+**Codex**
 
 [Playwright's MCP server](https://www.npmjs.com/package/@playwright/mcp) is a common choice for browser automation and visual checks during QA work.
 
@@ -311,6 +389,20 @@ Use `claude mcp list`, `claude mcp get playwright`, and `/mcp` inside Claude Cod
 ### Other MCP servers and safety
 
 The same pattern applies to documentation indexes, issue trackers, observability, and other MCP packages: register them on the **runtime that executes the plan**, not inside `mcp-server.sh`. Review each server's tools and data access, use restricted credentials where possible, and align auto-approval settings with your threat model (see [SECURITY.md](SECURITY.md)).
+
+---
+
+### Troubleshooting agent MCP servers
+
+**Agent MCP server not found.** If an agent references an ambient MCP server by name (e.g., `mcp_servers: ["playwright"]`), verify the server is configured in the runtime's native MCP configuration. Error messages include the runtime, agent, and searched source paths.
+
+**Missing environment variable.** Secrets in portable definitions must use `${ENV_VAR}` references. If the referenced environment variable is unset at invocation time, the run fails before launching the CLI with the missing variable name.
+
+**Reserved name collision.** The server name `ralph` is reserved for Ralph's protected MCP server. Agents cannot reference, redefine, or replace it. Attempting to use `ralph` in `mcp_servers` causes a validation error.
+
+**Literal secret rejected.** Values matching credential patterns (API keys, tokens, passwords) must use `${ENV_VAR}` references. Literal secrets are rejected at validation to prevent credential leakage.
+
+**Orchestration stage MCP servers.** Each orchestration stage receives only its selected agent's MCP additions. Stages with different agents have isolated MCP catalogs. See [AGENTS.md](../AGENTS.md#agent-mcp-servers).
 
 ---
 

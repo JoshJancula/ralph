@@ -30,7 +30,8 @@ setup() {
   RUN_PLAN_PREBUILT_FUNCS_FILE="$(mktemp)"
   cat "$run_plan_agent_lib" > "$RUN_PLAN_PREBUILT_FUNCS_FILE"
   RUN_PLAN_HUMAN_FUNCS_FILE="$(mktemp)"
-  sed -n '/^ralph_path_to_file_uri()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_FUNCS_FILE"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_FUNCS_FILE"
+  sed -n '/^ralph_path_to_file_uri()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   sed -n '/^ralph_should_persist_human_files()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   sed -n '/^ralph_restart_command_hint()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   sed -n '/^ralph_operator_has_real_answer()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
@@ -39,16 +40,21 @@ setup() {
   sed -n '/^ralph_write_human_action_file()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   sed -n '/^ralph_sync_human_action_file_state()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   sed -n '/^ralph_try_consume_human_response()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$RUN_PLAN_HUMAN_FUNCS_FILE"
   RUN_PLAN_HUMAN_ACTION_FUNCS_FILE="$(mktemp)"
-  sed -n '/^ralph_remove_human_action_file()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
+  sed -n '/^ralph_remove_human_action_file()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
   sed -n '/^ralph_write_human_action_file()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
   sed -n '/^ralph_sync_human_action_file_state()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
   sed -n '/^ralph_should_persist_human_files()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
   sed -n '/^ralph_restart_command_hint()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
   RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE="$(mktemp)"
-  sed -n '/^ralph_operator_has_real_answer()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" > "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
+  sed -n '/^ralph_operator_has_real_answer()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   sed -n '/^ralph_try_consume_human_response()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   sed -n '/^ralph_operator_response_file_owned_by_current_user()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
 }
 
 teardown() {
@@ -231,18 +237,46 @@ create_shared_layout() {
   rm -rf "$tmp_dir"
 }
 
-@test "ralph_try_consume_human_response applies answers and clears pending files" {
+@test "ralph_try_consume_human_response applies guidance answers and clears request files" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
 
-  local tmp_dir pending human_context operator_response log_file
+  local tmp_dir pending human_context operator_response human_request log_file
   tmp_dir="$(mktemp -d)"
   pending="$tmp_dir/pending-human.txt"
   printf 'how should we proceed?\n' >"$pending"
+  human_request="$tmp_dir/human-request.json"
+  cat <<'EOF' >"$human_request"
+{
+  "placeholder": false,
+  "kind": "guidance",
+  "decision": "answer",
+  "runtime": "cursor",
+  "classification": "",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "",
+  "question": "how should we proceed?"
+}
+EOF
   human_context="$tmp_dir/HUMAN-CONTEXT.md"
   printf '### history entry\n' >"$human_context"
   operator_response="$tmp_dir/operator-response.txt"
-  printf 'yes, please continue\n' >"$operator_response"
+  cat <<'EOF' >"$operator_response"
+{
+  "placeholder": false,
+  "kind": "guidance",
+  "decision": "answer",
+  "runtime": "cursor",
+  "classification": "",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "",
+  "answer": "yes, please continue"
+}
+EOF
   log_file="$tmp_dir/log.txt"
 
   run bash -c '
@@ -251,21 +285,177 @@ create_shared_layout() {
     source "$1"
     HUMAN_CONTEXT="$2"
     PENDING_HUMAN="$3"
-    OPERATOR_RESPONSE_FILE="$4"
-    LOG_FILE="$5"
+    HUMAN_REQUEST_FILE="$4"
+    OPERATOR_RESPONSE_FILE="$5"
+    LOG_FILE="$6"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
     ralph_run_plan_log(){ log "$@"; }
     ralph_try_consume_human_response
-  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$operator_response" "$log_file"
+    printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
+    printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$log_file"
+
+  [ "$status" -eq 0 ]
+  run_output="$output"
+  [ ! -f "$pending" ]
+  [ ! -f "$operator_response" ]
+  [ -f "$human_request" ]
+  content="$(<"$human_context")"
+  [[ "$content" == *"how should we proceed?"* ]]
+  [[ "$content" == *"yes, please continue"* ]]
+  [[ "$run_output" == *"RESUME=1"* ]]
+  [[ "$run_output" == *"STRATEGY=resume"* ]]
+  grep -q "Applied guidance answer from operator-response.txt; continuing plan run" "$log_file"
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_try_consume_human_response allow updates overlays and resumes the session" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
+
+  local tmp_dir pending human_request human_context operator_response log_file
+  local session_dir
+  tmp_dir="$(mktemp -d)"
+  session_dir="$tmp_dir/session"
+  mkdir -p "$session_dir"
+  pending="$tmp_dir/pending-human.txt"
+  printf 'permission required\n' >"$pending"
+  human_request="$tmp_dir/human-request.json"
+  cat <<'EOF' >"$human_request"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "allow",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "/tmp/*",
+  "blocked_tool": "",
+  "reason": "approved",
+  "question": "permission required"
+}
+EOF
+  cp "$human_request" "$session_dir/permission-remediation.json"
+  human_context="$tmp_dir/HUMAN-CONTEXT.md"
+  printf '### history entry\n' >"$human_context"
+  operator_response="$tmp_dir/operator-response.txt"
+  cat <<'EOF' >"$operator_response"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "allow",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "/tmp/*",
+  "blocked_tool": "",
+  "reason": "approved",
+  "answer": ""
+}
+EOF
+  log_file="$tmp_dir/log.txt"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    HUMAN_CONTEXT="$2"
+    PENDING_HUMAN="$3"
+    HUMAN_REQUEST_FILE="$4"
+    OPERATOR_RESPONSE_FILE="$5"
+    RALPH_SESSION_DIR="$6"
+    LOG_FILE="$7"
+    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
+    ralph_run_plan_log(){ log "$@"; }
+    ralph_try_consume_human_response
+    printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
+    printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+    printf "OVERLAY=%s\n" "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-unset}"
+  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$session_dir" "$log_file"
 
   [ "$status" -eq 0 ]
   [ ! -f "$pending" ]
   [ ! -f "$operator_response" ]
-  output="$(<"$human_context")"
-  [[ "$output" == *"how should we proceed?"* ]]
-  [[ "$output" == *"yes, please continue"* ]]
-  grep -q "Applied answer from operator-response.txt; continuing plan run" "$log_file"
+  [ -f "$human_request" ]
+  [[ "$output" == *"RESUME=1"* ]]
+  [[ "$output" == *"STRATEGY=resume"* ]]
+  [ -f "$session_dir/permission-remediation.json" ]
+  jq -e '.kind == "permission"' "$session_dir/permission-remediation.json"
+  jq -e '.blocked_path == "/tmp/*"' "$session_dir/permission-remediation.json"
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_try_consume_human_response deny leaves the request open and does not apply overlays" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
+
+  local tmp_dir pending human_request human_context operator_response log_file
+  tmp_dir="$(mktemp -d)"
+  pending="$tmp_dir/pending-human.txt"
+  printf 'permission required\n' >"$pending"
+  human_request="$tmp_dir/human-request.json"
+  cat <<'EOF' >"$human_request"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "deny",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "/tmp/*",
+  "blocked_tool": "",
+  "reason": "do not allow",
+  "question": "permission required"
+}
+EOF
+  human_context="$tmp_dir/HUMAN-CONTEXT.md"
+  printf '### history entry\n' >"$human_context"
+  operator_response="$tmp_dir/operator-response.txt"
+  cat <<'EOF' >"$operator_response"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "deny",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "/tmp/*",
+  "blocked_tool": "",
+  "reason": "do not allow",
+  "answer": ""
+}
+EOF
+  log_file="$tmp_dir/log.txt"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    HUMAN_CONTEXT="$2"
+    PENDING_HUMAN="$3"
+    HUMAN_REQUEST_FILE="$4"
+    OPERATOR_RESPONSE_FILE="$5"
+    RALPH_SESSION_DIR="$6"
+    LOG_FILE="$7"
+    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
+    ralph_run_plan_log(){ log "$@"; }
+    ralph_try_consume_human_response
+    printf "DECISION=%s\n" "${RALPH_PERMISSION_RESPONSE_DECISION:-unset}"
+    printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
+    printf "OVERLAY=%s\n" "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-unset}"
+  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$tmp_dir/session" "$log_file"
+
+  [ "$status" -eq 0 ]
+  [ -f "$pending" ]
+  [ -f "$operator_response" ]
+  [ -f "$human_request" ]
+  [[ "$output" == *"DECISION=deny"* ]]
+  [[ "$output" == *"RESUME=unset"* || "$output" == *"RESUME=0"* ]]
+  [[ "$output" == *"OVERLAY=unset"* ]]
+  [ ! -f "$tmp_dir/session/permission-remediation.json" ]
 
   rm -rf "$tmp_dir"
 }
@@ -289,6 +479,8 @@ ralph_path_to_file_uri() {
 }
 EOF
   sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$helper"
 
   tmp_dir="$(mktemp -d)"
   human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
@@ -298,6 +490,7 @@ EOF
   plan_file="$tmp_dir/PLAN.md"
   log_file="$tmp_dir/log.txt"
   output_log="$tmp_dir/output.log"
+  human_request="$tmp_dir/human-request.json"
   session_dir="$tmp_dir/session"
   mkdir -p "$session_dir"
   printf 'plan instructions\n' >"$plan_file"
@@ -310,17 +503,18 @@ EOF
     PENDING_HUMAN="$3"
     OPERATOR_RESPONSE_FILE="$4"
     HUMAN_ACTION_FILE="$5"
-    RALPH_SESSION_DIR="$6"
-    PLAN_PATH="$7"
-    LOG_FILE="$8"
-    OUTPUT_LOG="$9"
+    HUMAN_REQUEST_FILE="$6"
+    RALPH_SESSION_DIR="$7"
+    PLAN_PATH="$8"
+    LOG_FILE="$9"
+    OUTPUT_LOG="${10}"
     HUMAN_PROMPT_NO_OPEN_FLAG=1
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
     ralph_run_plan_log(){ log "$@"; }
     ralph_write_human_action_file(){ :; }
     ralph_human_input_write_offline_instructions
-  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$session_dir" "$plan_file" "$log_file" "$output_log"
+  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$human_request" "$session_dir" "$plan_file" "$log_file" "$output_log"
 
   [ "$status" -eq 0 ]
   [ -f "$human_input" ]
@@ -331,93 +525,13 @@ EOF
   [[ "$content" == *"## What to do"* ]]
   [[ "$content" == *"This instruction page:"* ]]
   [[ "$content" == *"file://"*"HUMAN-INPUT-REQUIRED.md"* ]]
+  [[ "$content" == *"structured human-request record"* ]]
   [[ "$content" == *"- Plan file:"*"$plan_file"* ]]
   [ -f "$operator_response" ]
-  [[ "$( <"$operator_response")" == *"Replace this line"* ]]
+  [ -f "$human_request" ]
+  jq -e '.kind == "guidance"' "$human_request"
+  jq -e '.placeholder == true and .kind == "guidance"' "$operator_response"
 
-  rm -f "$helper"
-  rm -rf "$tmp_dir"
-}
-
-@test "ralph_human_pause_for_operator_offline polls for answers with stubbed sleep" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local helper tmp_dir human_input pending operator_response human_action plan_file
-  local log_file output_log session_dir sleep_log workspace
-  helper="$(mktemp)"
-  local run_plan_core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
-  cat <<'EOF' > "$helper"
-C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-log(){ :; }
-ralph_run_plan_log(){ log "$@"; }
-ralph_path_to_file_uri(){ printf "%s" "$1"; }
-ralph_restart_command_hint(){ printf "%s" "restart hint"; }
-ralph_write_human_action_file(){ :; }
-EOF
-  sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$run_plan_core_lib" >> "$helper"
-  sed -n '/^ralph_human_pause_for_operator_offline()/,/^}/p' "$run_plan_core_lib" >> "$helper"
-
-  tmp_dir="$(mktemp -d)"
-  human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
-  pending="$tmp_dir/pending-human.txt"
-  operator_response="$tmp_dir/operator-response.txt"
-  human_action="$tmp_dir/HUMAN-ACTION.md"
-  plan_file="$tmp_dir/PLAN.md"
-  log_file="$tmp_dir/log.txt"
-  output_log="$tmp_dir/output.log"
-  session_dir="$tmp_dir/session"
-  sleep_log="$tmp_dir/sleep.log"
-  workspace="$tmp_dir/workspace"
-  mkdir -p "$session_dir" "$workspace"
-  printf 'plan instructions\n' >"$plan_file"
-  printf 'operator question\n' >"$pending"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    HUMAN_INPUT_MD="$2"
-    PENDING_HUMAN="$3"
-    OPERATOR_RESPONSE_FILE="$4"
-    HUMAN_ACTION_FILE="$5"
-    RALPH_SESSION_DIR="$6"
-    PLAN_PATH="$7"
-    LOG_FILE="$8"
-    OUTPUT_LOG="$9"
-    SLEEP_LOG="${10}"
-    WORKSPACE="${11}"
-    HUMAN_PROMPT_NO_OPEN_FLAG=1
-    RALPH_HUMAN_POLL_INTERVAL=0
-    PREBUILT_AGENT="agent"
-    RALPH_RUN_PLAN_REL="run-plan.sh"
-    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-    _call_count=0
-    log(){ printf "%s\n" "$*" >> "$LOG_FILE"; }
-    sleep(){ printf "%s\n" "$1" >> "$SLEEP_LOG"; }
-    ralph_run_plan_log(){ log "$@"; }
-    ralph_operator_has_real_answer(){
-      _call_count=$((_call_count + 1))
-      if (( _call_count >= 2 )); then
-        return 0
-      fi
-      return 1
-    }
-    ralph_try_consume_human_response(){
-      printf "%s\n" "consuming answer" >> "$LOG_FILE"
-      return 0
-    }
-    ralph_sync_human_action_file_state(){ :; }
-    ralph_write_human_action_file(){ :; }
-    ralph_human_pause_for_operator_offline
-    printf "%s" "done"
-  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$session_dir" "$plan_file" "$log_file" "$output_log" "$sleep_log" "$workspace"
-
-  [ "$status" -eq 0 ]
-  [ -f "$sleep_log" ]
-  grep -q "consuming answer" "$log_file"
-  [[ "$output" == *"Waiting for a saved answer"* ]]
-  [[ "$output" == *"Answer received. Continuing."* ]]
-  grep -q "0" "$sleep_log"
-  [ -f "$human_input" ]
   rm -f "$helper"
   rm -rf "$tmp_dir"
 }

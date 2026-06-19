@@ -14,6 +14,10 @@ _KILLSWITCH_DRY_RUN="false"
 _KILLSWITCH_BANNED_TOOLS=()
 _KILLSWITCH_BANNED_PATHS=()
 _KILLSWITCH_BANNED_PATTERNS=()
+_KILLSWITCH_ALLOWED_TOOLS=()
+_KILLSWITCH_ALLOWED_PATHS=()
+_KILLSWITCH_ALLOWED_COMMANDS=()
+_KILLSWITCH_ALLOWED_PATTERNS=()
 _KILLSWITCH_CUSTOM_RULES_JSON="[]"
 
 # Load killswitch config from the first found location:
@@ -21,7 +25,9 @@ _KILLSWITCH_CUSTOM_RULES_JSON="[]"
 killswitch_load_config() {
   local config_file=""
 
-  if [[ -n "${WORKSPACE:-}" && -f "$WORKSPACE/.ralph-workspace/killswitch.json" ]]; then
+  if [[ -n "${RALPH_KILLSWITCH_OVERRIDE_FILE:-}" && -f "${RALPH_KILLSWITCH_OVERRIDE_FILE}" ]]; then
+    config_file="${RALPH_KILLSWITCH_OVERRIDE_FILE}"
+  elif [[ -n "${WORKSPACE:-}" && -f "$WORKSPACE/.ralph-workspace/killswitch.json" ]]; then
     config_file="$WORKSPACE/.ralph-workspace/killswitch.json"
   elif [[ -n "${RALPH_HOME:-}" && -f "${RALPH_HOME}/killswitch.json" ]]; then
     config_file="${RALPH_HOME}/killswitch.json"
@@ -53,6 +59,18 @@ for item in cfg.get("banned_tools", []):
 print("SECTION:banned_paths")
 for item in cfg.get("banned_paths", []):
     print(item)
+print("SECTION:allowed_tools")
+for item in cfg.get("allowed_tools", []):
+    print(item)
+print("SECTION:allowed_paths")
+for item in cfg.get("allowed_paths", []):
+    print(item)
+print("SECTION:allowed_commands")
+for item in cfg.get("allowed_commands", []):
+    print(item)
+print("SECTION:allowed_patterns")
+for item in cfg.get("allowed_patterns", []):
+    print(item)
 print("SECTION:custom_rules_json")
 print(json.dumps(cfg.get("custom_rules", [])))
 PY
@@ -60,6 +78,10 @@ PY
 
   _KILLSWITCH_BANNED_TOOLS=()
   _KILLSWITCH_BANNED_PATHS=()
+  _KILLSWITCH_ALLOWED_TOOLS=()
+  _KILLSWITCH_ALLOWED_PATHS=()
+  _KILLSWITCH_ALLOWED_COMMANDS=()
+  _KILLSWITCH_ALLOWED_PATTERNS=()
 
   local section=""
   while IFS= read -r line; do
@@ -72,6 +94,10 @@ PY
       dry_run)           _KILLSWITCH_DRY_RUN="$line" ;;
       banned_tools)      _KILLSWITCH_BANNED_TOOLS+=("$line") ;;
       banned_paths)      _KILLSWITCH_BANNED_PATHS+=("$line") ;;
+      allowed_tools)     _KILLSWITCH_ALLOWED_TOOLS+=("$line") ;;
+      allowed_paths)     _KILLSWITCH_ALLOWED_PATHS+=("$line") ;;
+      allowed_commands)  _KILLSWITCH_ALLOWED_COMMANDS+=("$line") ;;
+      allowed_patterns)  _KILLSWITCH_ALLOWED_PATTERNS+=("$line") ;;
       custom_rules_json) _KILLSWITCH_CUSTOM_RULES_JSON="$line" ;;
     esac
   done <<< "$raw_output"
@@ -94,6 +120,26 @@ killswitch_merge_env_overrides() {
   if [[ -n "${RALPH_BANNED_PATTERNS:-}" ]]; then
     IFS=',' read -ra extra <<< "$RALPH_BANNED_PATTERNS"
     _KILLSWITCH_BANNED_PATTERNS+=("${extra[@]}")
+  fi
+
+  if [[ -n "${RALPH_ALLOWED_TOOLS:-}" ]]; then
+    IFS=',' read -ra extra <<< "$RALPH_ALLOWED_TOOLS"
+    _KILLSWITCH_ALLOWED_TOOLS+=("${extra[@]}")
+  fi
+
+  if [[ -n "${RALPH_ALLOWED_PATHS:-}" ]]; then
+    IFS=',' read -ra extra <<< "$RALPH_ALLOWED_PATHS"
+    _KILLSWITCH_ALLOWED_PATHS+=("${extra[@]}")
+  fi
+
+  if [[ -n "${RALPH_ALLOWED_COMMANDS:-}" ]]; then
+    IFS=',' read -ra extra <<< "$RALPH_ALLOWED_COMMANDS"
+    _KILLSWITCH_ALLOWED_COMMANDS+=("${extra[@]}")
+  fi
+
+  if [[ -n "${RALPH_ALLOWED_PATTERNS:-}" ]]; then
+    IFS=',' read -ra extra <<< "$RALPH_ALLOWED_PATTERNS"
+    _KILLSWITCH_ALLOWED_PATTERNS+=("${extra[@]}")
   fi
 }
 
@@ -121,13 +167,25 @@ killswitch_export_config_env() {
   local banned_tools
   local banned_paths
   local banned_patterns
+  local allowed_tools
+  local allowed_paths
+  local allowed_commands
+  local allowed_patterns
   banned_tools="$(IFS=','; printf '%s' "${_KILLSWITCH_BANNED_TOOLS[*]:-}")"
   banned_paths="$(IFS=','; printf '%s' "${_KILLSWITCH_BANNED_PATHS[*]:-}")"
   banned_patterns="$(IFS=','; printf '%s' "${_KILLSWITCH_BANNED_PATTERNS[*]:-}")"
+  allowed_tools="$(IFS=','; printf '%s' "${_KILLSWITCH_ALLOWED_TOOLS[*]:-}")"
+  allowed_paths="$(IFS=','; printf '%s' "${_KILLSWITCH_ALLOWED_PATHS[*]:-}")"
+  allowed_commands="$(IFS=','; printf '%s' "${_KILLSWITCH_ALLOWED_COMMANDS[*]:-}")"
+  allowed_patterns="$(IFS=','; printf '%s' "${_KILLSWITCH_ALLOWED_PATTERNS[*]:-}")"
 
   export RALPH_KILLSWITCH_BANNED_TOOLS="$banned_tools"
   export RALPH_KILLSWITCH_BANNED_PATHS="$banned_paths"
   export RALPH_KILLSWITCH_BANNED_PATTERNS="$banned_patterns"
+  export RALPH_KILLSWITCH_ALLOWED_TOOLS="$allowed_tools"
+  export RALPH_KILLSWITCH_ALLOWED_PATHS="$allowed_paths"
+  export RALPH_KILLSWITCH_ALLOWED_COMMANDS="$allowed_commands"
+  export RALPH_KILLSWITCH_ALLOWED_PATTERNS="$allowed_patterns"
   export RALPH_KILLSWITCH_CUSTOM_RULES_JSON="$_KILLSWITCH_CUSTOM_RULES_JSON"
   export RALPH_KILLSWITCH_RUNNER_PID="${RALPH_KILLSWITCH_RUNNER_PID:-$$}"
 }

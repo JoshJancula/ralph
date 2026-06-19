@@ -437,6 +437,18 @@ class TestToolLineDedup(unittest.TestCase):
         self.assertIn("ralph_proxy_grep", joined)
         self.assertNotIn("(x", joined)
 
+    def test_shell_tool_line_uses_shell_syntax_highlighting(self) -> None:
+        renderer = self.module.PrettyRenderer(
+            "claude",
+            color=True,
+            ascii_only=True,
+            log_path="/tmp/tool-line-shell.log",
+        )
+        line = renderer._tool_line("bash", 'echo "hi" # note')
+        self.assertIn("\033[32m", line)  # shell string token
+        self.assertIn("\033[90m", line)  # shell comment token
+        self.assertNotIn("\033[38;5;179m", line)  # not the generic amber arg color
+
 
 class TestCodexShellFailureRendering(unittest.TestCase):
     def setUp(self) -> None:

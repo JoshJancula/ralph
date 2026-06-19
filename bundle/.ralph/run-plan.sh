@@ -147,6 +147,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-args.sh"
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-session.sh"
 # shellcheck source=bash-lib/runtime-overlay/runtime-overlay.sh
 source "$SCRIPT_DIR/bash-lib/runtime-overlay/runtime-overlay.sh"
+# shellcheck source=bash-lib/runtime-config/runtime-config-mcp.sh
+source "$SCRIPT_DIR/bash-lib/runtime-config/runtime-config-mcp.sh"
 # shellcheck source=bash-lib/ralph-named-shell.sh
 source "$SCRIPT_DIR/bash-lib/ralph-named-shell.sh"
 

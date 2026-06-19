@@ -70,12 +70,20 @@ In `ralph` and `hybrid` modes, the prompt also tells agents to prefer the proxy 
 
 In `ralph` or `hybrid` mode, each runtime gets an ephemeral MCP config pointing at the active install's `mcp-server.sh` (workspace-local `.ralph/mcp-server.sh`, or `$RALPH_HOME/bundle/.ralph/mcp-server.sh` for `ralph run-plan`; override with `RALPH_MCP_PROXY_SERVER_SCRIPT`). Whatever the mechanism, Ralph backs up any file it touches and restores it when the run ends.
 
+**MCP precedence in Ralph mode (highest to lowest):**
+1. Native ambient MCP servers (runtime's own configuration chain)
+2. Agent `mcp_servers` declarations (string references or portable definitions)
+3. Ralph's protected `ralph` MCP server (always last)
+
+Agent definitions with the same name as ambient servers override the ambient definition. The reserved `ralph` name cannot be redefined by agents.
+
 | Runtime | Mechanism | Notes |
 |---------|-----------|-------|
 | Claude | Temp config via `--strict-mcp-config --mcp-config <temp>` | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available -- Claude requires a native `Read` before `Edit`/`Write`, so stripping `Read` would deadlock edits. `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` also strips `Read` for read-only plans. |
-| Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. |
-| Codex | Per-run `--config mcp_servers.ralph.*` overrides | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. |
-| OpenCode | Temp config via `OPENCODE_CONFIG` | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. |
+| Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. Agent `mcp_servers` are merged before Ralph's entry. |
+| Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. Agent `mcp_servers` are translated to `--config mcp_servers.<agent-server>.*` overrides. |
+| OpenCode | Temp config via `OPENCODE_CONFIG` merging with native config | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. Agent `mcp_servers` are merged into the effective config. |
+| Antigravity | Temp config via `ANTIGRAVITY_CONFIG` when needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. Agent `mcp_servers` merged into temporary config only when needed. |
 
 **Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses Ralph proxy tools with native reads or searches, instead of just logging a warning. Codex strict runs add a live preflight that proves a real `ralph_proxy_read` works before the plan starts.
 
@@ -182,6 +190,20 @@ Native adapters are merged for one run and restored afterward (see [Overlay stat
 | OpenCode | Unproven | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). `hybrid` keeps MCP compaction authoritative and records native hook effectiveness as unproven until that changes. |
 
 "Wrapper-based" means the hook rewrites the command to run through a Ralph wrapper that captures, compacts, and stores the output -- same storage and retrieval as everything else.
+
+### Native configuration preservation
+
+Ralph preserves each runtime's native user, project, and local/private configuration chain. Configurations are discovered from the Ralph project root, not the state root or agent workspace.
+
+| Runtime | Native config sources (precedence order) | Ralph additions |
+|---------|------------------------------------------|-----------------|
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
+| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
+| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+
+All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
 
 ### Claude
 

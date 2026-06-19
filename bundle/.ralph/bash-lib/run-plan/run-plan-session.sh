@@ -85,10 +85,12 @@ ralph_session_init() {
   export SESSION_ID_FILE
   export SESSION_ID_FILE_LEGACY
   PENDING_HUMAN="$RALPH_SESSION_DIR/pending-human.txt"
+  HUMAN_REQUEST_FILE="$RALPH_SESSION_DIR/human-request.json"
   HUMAN_CONTEXT="$RALPH_SESSION_DIR/human-replies.md"
   OPERATOR_RESPONSE_FILE="$RALPH_SESSION_DIR/operator-response.txt"
   HUMAN_INPUT_MD="$RALPH_SESSION_DIR/HUMAN-INPUT-REQUIRED.md"
   PENDING_ABS="$PENDING_HUMAN"
+  export HUMAN_REQUEST_FILE
 
   ralph_session_migrate_legacy "$workspace"
 
@@ -110,7 +112,7 @@ ralph_session_migrate_legacy() {
     ralph_run_plan_log "Ignoring legacy shared session-id.txt in $_legacy_plan_sess; session ids are now runtime-specific"
   fi
   local _mig_f
-  for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md; do
+  for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md human-request.json; do
     if [[ ! -e "$RALPH_SESSION_DIR/$_mig_f" && -e "$_legacy_plan_sess/$_mig_f" ]]; then
       cp -a "$_legacy_plan_sess/$_mig_f" "$RALPH_SESSION_DIR/$_mig_f"
       ralph_run_plan_log "Migrated $_mig_f from legacy .ralph-workspace session dir"

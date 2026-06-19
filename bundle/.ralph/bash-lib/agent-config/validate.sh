@@ -113,5 +113,24 @@ sys.exit(1)
     fi
   fi
 
+  if grep -q '"mcp_servers"' "$cfg" 2>/dev/null; then
+    if command -v python3 &>/dev/null; then
+      local mcp_script=""
+      if [[ -n "${script_dir:-}" && -f "${script_dir}/python/agent-config-mcp.py" ]]; then
+        mcp_script="${script_dir}/python/agent-config-mcp.py"
+      else
+        mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)/python/agent-config-mcp.py"
+        [[ -f "$mcp_script" ]] || mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../../.." && pwd)/python/agent-config-mcp.py"
+      fi
+      [[ -f "$mcp_script" ]] || { echo "mcp_servers validation requires agent-config-mcp.py" >&2; ok=0; }
+      if [[ -f "$mcp_script" ]]; then
+        python3 "$mcp_script" --validate-config "$cfg" 2>/dev/null || { echo "mcp_servers validation failed" >&2; ok=0; }
+      fi
+    else
+      echo "mcp_servers in config requires python3 for validation" >&2
+      ok=0
+    fi
+  fi
+
   [[ "$ok" == "1" ]]
 }

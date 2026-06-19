@@ -96,6 +96,10 @@ case "$cmd" in
     [[ $# -ge 3 && $# -le 4 ]] || usage
     downstream_stages "$2" "$3" "${4:-}"
     ;;
+  mcp-servers)
+    [[ $# -eq 3 ]] || usage
+    read_mcp_servers "$2" "$3"
+    ;;
   *)
     usage
     ;;

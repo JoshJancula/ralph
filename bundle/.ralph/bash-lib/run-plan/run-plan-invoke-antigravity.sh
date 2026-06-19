@@ -36,6 +36,15 @@ source "$_run_plan_invoke_antigravity_dir/run-plan-cli-helpers.sh"
 source "$_run_plan_invoke_antigravity_dir/run-plan-invoke-common.sh"
 unset _run_plan_invoke_antigravity_dir
 
+# Antigravity is a native runtime (`agy`) which reads MCP server catalogs from
+# a config file. In Ralph mode we must pass a merged, temporary per-run
+# config via ANTIGRAVITY_CONFIG without persisting overlays.
+if ! declare -F ralph_runtime_config_mcp_resolve >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  # runtime-config-mcp.sh lives alongside other bash-lib runtime helpers.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../runtime-config" && pwd)/runtime-config-mcp.sh"
+fi
+
 run_plan_invoke_antigravity_session_resume_args() {
   local args_name="$1"
   eval "$args_name+=(--conversation \"\${RALPH_RUN_PLAN_RESUME_SESSION_ID}\")"
@@ -130,6 +139,32 @@ run_plan_invoke_antigravity_capture_conversation() {
 
 ralph_run_plan_invoke_antigravity() {
   ralph_run_plan_sync_mode_knobs
+  local project_root="${RALPH_PROJECT_ROOT:-${WORKSPACE:-$PWD}}"
+
+  # Create and export ANTIGRAVITY_CONFIG only when the effective MCP catalog
+  # requires ambient+agent+Ralph merging. Always restore/remove temp artifacts.
+  local antigravity_config_path=""
+  cleanup_antigravity_config() {
+    if [[ -n "${antigravity_config_path:-}" ]]; then
+      # ralph_runtime_config_mcp_cleanup removes RALPH_RUNTIME_MCP_RESOLVE_PATH;
+      # keep this unlink as a defensive fallback for any partial failures.
+      rm -f "$antigravity_config_path" 2>/dev/null || true
+    fi
+    antigravity_config_path=""
+    unset ANTIGRAVITY_CONFIG
+    ralph_runtime_config_mcp_cleanup >/dev/null 2>&1 || true
+  }
+  trap cleanup_antigravity_config EXIT
+
+  ralph_runtime_config_mcp_resolve "antigravity" "$project_root" "${PREBUILT_AGENT:-}" "${WORKSPACE:-$project_root}" || {
+    # Ensure cleanup runs via trap.
+    return 1
+  }
+  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "${RALPH_RUNTIME_MCP_RESOLVE_PATH}" ]]; then
+    antigravity_config_path="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+    export ANTIGRAVITY_CONFIG="$antigravity_config_path"
+  fi
+
   # Log path, exit-code sidecar, and session-id file for resume capture.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 

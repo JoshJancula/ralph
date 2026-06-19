@@ -27,6 +27,29 @@ fi
 
 unset _run_plan_routing_dir
 
+# Resolve the selected agent's normalized mcp_servers and export only the
+# per-invocation overlay entries for runtime-config resolution. Clears any
+# stale preset when the agent has no MCP additions.
+ralph_run_plan_export_agent_mcp_overlay() {
+  local workspace="${1:-${WORKSPACE:-}}"
+  local agent="${2:-${PREBUILT_AGENT:-}}"
+
+  unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
+  [[ -n "$agent" ]] || return 0
+  if [[ ! -f "${AGENT_CONFIG_TOOL:-}" ]]; then
+    return 0
+  fi
+
+  local agents_root _entries
+  agents_root="$(prebuilt_agents_root "$workspace")"
+  _entries="$(bash "$AGENT_CONFIG_TOOL" mcp-servers "$agents_root" "$agent" 2>/dev/null || printf '[]')"
+  if [[ -n "$_entries" && "$_entries" != "[]" ]]; then
+    RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="$_entries"
+    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
+  fi
+  return 0
+}
+
 ralph_run_plan_routing_set_runtime_context() {
   local runtime="${1:-${RUNTIME:-}}"
   local workspace="${2:-${WORKSPACE:-}}"
@@ -191,6 +214,7 @@ ralph_run_plan_routing_resolve_current_context() {
       CLAUDE_TOOLS_FROM_AGENT=""
     fi
     ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
+    ralph_run_plan_export_agent_mcp_overlay "$workspace" "$PREBUILT_AGENT"
   elif [[ "$runtime" == "claude" || "$runtime" == "codex" ]]; then
     if [[ "${INTERACTIVE_SELECT_MODEL_FLAG:-0}" == "1" ]]; then
       case "$runtime" in
@@ -239,6 +263,12 @@ ralph_run_plan_routing_capture_baseline() {
   _RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET="${RALPH_PLAN_CONTEXT_BUDGET:-}"
   _RALPH_RP_BASE_RALPH_PLAN_FILE_PATH="${RALPH_PLAN_FILE_PATH:-}"
   _RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME="${RALPH_PLAN_CLI_RESUME:-}"
+  _RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH="${RALPH_CURRENT_PLAN_PATH:-}"
+  _RALPH_RP_BASE_RALPH_CURRENT_TODO_LINE="${RALPH_CURRENT_TODO_LINE:-}"
+  _RALPH_RP_BASE_RALPH_CURRENT_TODO_ORDINAL="${RALPH_CURRENT_TODO_ORDINAL:-}"
+  _RALPH_RP_BASE_RALPH_CURRENT_TODO_ID="${RALPH_CURRENT_TODO_ID:-}"
+  _RALPH_RP_BASE_RALPH_CURRENT_TODO_HASH="${RALPH_CURRENT_TODO_HASH:-}"
+  _RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}"
   _RALPH_RP_BASE_RALPH_INVOKED_CLI="${RALPH_INVOKED_CLI:-}"
   _RALPH_RP_BASE_CLAUDE_CLI="${CLAUDE_CLI:-}"
   _RALPH_RP_BASE_CURSOR_CLI="${CURSOR_CLI:-}"
@@ -275,6 +305,17 @@ ralph_run_plan_routing_restore_baseline() {
   RALPH_PLAN_CONTEXT_BUDGET="${_RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET:-}"
   RALPH_PLAN_FILE_PATH="${_RALPH_RP_BASE_RALPH_PLAN_FILE_PATH:-}"
   RALPH_PLAN_CLI_RESUME="${_RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME:-}"
+  RALPH_CURRENT_PLAN_PATH="${_RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH:-}"
+  RALPH_CURRENT_TODO_LINE="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_LINE:-}"
+  RALPH_CURRENT_TODO_ORDINAL="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_ORDINAL:-}"
+  RALPH_CURRENT_TODO_ID="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_ID:-}"
+  RALPH_CURRENT_TODO_HASH="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_HASH:-}"
+  if [[ -n "${_RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" ]]; then
+    RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="${_RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}"
+    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
+  else
+    unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
+  fi
   RALPH_INVOKED_CLI="${_RALPH_RP_BASE_RALPH_INVOKED_CLI:-}"
   CLAUDE_CLI="${_RALPH_RP_BASE_CLAUDE_CLI:-}"
   CURSOR_CLI="${_RALPH_RP_BASE_CURSOR_CLI:-}"
@@ -287,6 +328,8 @@ ralph_run_plan_routing_restore_baseline() {
   RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY="${_RALPH_RP_BASE_RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY:-}"
   export RALPH_RUNTIME_ROOT SESSION_ID_FILE SESSION_ID_FILE_LEGACY RALPH_PLAN_SESSION_STRATEGY
   export RALPH_PLAN_CONTEXT_BUDGET RALPH_PLAN_CLI_RESUME RALPH_INVOKED_CLI
+  export RALPH_CURRENT_PLAN_PATH RALPH_CURRENT_TODO_LINE RALPH_CURRENT_TODO_ORDINAL
+  export RALPH_CURRENT_TODO_ID RALPH_CURRENT_TODO_HASH
   export CLAUDE_CLI CURSOR_CLI CODEX_CLI OPENCODE_CLI ANTIGRAVITY_CLI
   export ANTIGRAVITY_PLAN_MODEL ANTIGRAVITY_PLAN_MAX_ITER ANTIGRAVITY_PLAN_GUTTER_ITER RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY
 }

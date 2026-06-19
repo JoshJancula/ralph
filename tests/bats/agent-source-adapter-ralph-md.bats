@@ -139,6 +139,47 @@ _golden_compare() {
   [[ "$status" -eq 2 ]]
 }
 
+@test "classic-config adapter: preserves mcp_servers from config.json" {
+  _load_libs
+  mkdir -p "$_tmp/.claude/agents/classic-mcp"
+  cat >"$_tmp/.claude/agents/classic-mcp/config.json" <<'EOF'
+{
+  "name": "classic-mcp",
+  "model": "gpt-test",
+  "description": "Classic config with MCP",
+  "rules": ["rule-ok"],
+  "skills": ["skill-ok"],
+  "output_artifacts": [
+    {
+      "path": "artifacts/classic-mcp.txt",
+      "required": true
+    }
+  ],
+  "mcp_servers": [
+    {"name": "ambient-server", "reference": true},
+    {
+      "name": "portable-http",
+      "transport": "http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "${MCP_TOKEN}"}
+    }
+  ]
+}
+EOF
+
+  local result
+  result="$(agent_adapter_classic_config_to_config_json classic-mcp claude "$_tmp" "$_cache")"
+  [[ -f "$result" ]]
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f).get('mcp_servers', [])
+assert len(m) == 2, m
+assert m[0]['name'] == 'ambient-server'
+assert m[1]['transport'] == 'http'
+" "$result"
+}
+
 @test "ralph-md adapter: resolve finds bundle canonical .md" {
   _load_libs
   run agent_adapter_ralph_md_resolve research claude "$REPO_ROOT"
@@ -164,4 +205,92 @@ _golden_compare() {
 
 @test "ralph-md adapter: qa agent at claude runtime matches golden config" {
   _golden_compare qa claude
+}
+
+@test "ralph-md adapter: carries mcp_servers from canonical frontmatter to config.json" {
+  _load_libs
+  mkdir -p "$REPO_ROOT/.ralph-workspace/agents"
+  cat >"$REPO_ROOT/.ralph-workspace/agents/mcp-test.md" <<'EOF'
+---
+description: Agent with MCP
+models:
+  claude: claude-test
+rules:
+  - no-emoji
+skills:
+  - repo-context
+mcp_servers:
+  - ambient-server
+  - name: portable-stdio
+    transport: stdio
+    command: node
+    args:
+      - /path/to/server.js
+    env:
+      API_KEY: "${MY_API_KEY}"
+---
+Body
+EOF
+  local result
+  result="$(agent_adapter_ralph_md_to_config_json mcp-test claude "$REPO_ROOT" "$_cache" bundle)"
+  [[ -f "$result" ]]
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    c = json.load(f)
+m = c.get('mcp_servers', [])
+assert len(m) == 2, m
+assert m[0] == {'name': 'ambient-server', 'reference': True}
+assert m[1]['name'] == 'portable-stdio'
+assert m[1]['transport'] == 'stdio'
+assert m[1]['command'] == 'node'
+assert m[1]['args'] == ['/path/to/server.js']
+assert m[1]['env'] == {'API_KEY': '\${MY_API_KEY}'}, m[1]['env']
+" "$result"
+  rm -f "$REPO_ROOT/.ralph-workspace/agents/mcp-test.md"
+}
+
+@test "ralph-md adapter: omits mcp_servers field when frontmatter absent" {
+  _load_libs
+  mkdir -p "$REPO_ROOT/.ralph-workspace/agents"
+  cat >"$REPO_ROOT/.ralph-workspace/agents/no-mcp.md" <<'EOF'
+---
+description: No MCP
+models:
+  claude: claude-test
+rules:
+  - no-emoji
+skills:
+  - repo-context
+---
+Body
+EOF
+  local result
+  result="$(agent_adapter_ralph_md_to_config_json no-mcp claude "$REPO_ROOT" "$_cache" bundle)"
+  [[ -f "$result" ]]
+  ! python3 -c "import json,sys; print('mcp_servers' in json.load(open(sys.argv[1])))" "$result" | grep -q True
+  rm -f "$REPO_ROOT/.ralph-workspace/agents/no-mcp.md"
+}
+
+@test "ralph-md adapter: empty mcp_servers array omits field for backward compatibility" {
+  _load_libs
+  mkdir -p "$REPO_ROOT/.ralph-workspace/agents"
+  cat >"$REPO_ROOT/.ralph-workspace/agents/empty-mcp.md" <<'EOF'
+---
+description: Empty MCP
+models:
+  claude: claude-test
+rules:
+  - no-emoji
+skills:
+  - repo-context
+mcp_servers: []
+---
+Body
+EOF
+  local result
+  result="$(agent_adapter_ralph_md_to_config_json empty-mcp claude "$REPO_ROOT" "$_cache" bundle)"
+  [[ -f "$result" ]]
+  ! python3 -c "import json,sys; print('mcp_servers' in json.load(open(sys.argv[1])))" "$result" | grep -q True
+  rm -f "$REPO_ROOT/.ralph-workspace/agents/empty-mcp.md"
 }

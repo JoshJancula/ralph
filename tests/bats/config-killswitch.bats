@@ -2,6 +2,8 @@
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 
+KILLSWITCH_CORE="$REPO_ROOT/bundle/.ralph/bash-lib/killswitch/killswitch-core.sh"
+
 setup() {
   RH="$(mktemp -d)"
   WS="$(mktemp -d)"
@@ -76,6 +78,53 @@ run_killswitch_cli() {
   run run_ralph config killswitch
   [ "$status" -eq 0 ]
   [[ "$output" == *"Active source: workspace"* ]]
+}
+
+@test "session override allows a blocked command in killswitch checks" {
+  mkdir -p "$WS/.ralph-workspace"
+  cat >"$WS/.ralph-workspace/killswitch.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
+  "custom_rules": [
+    {"name": "no_force_push", "match": "git push --force", "target": "command"}
+  ]
+}
+EOF
+  cat >"$WS/.ralph-workspace/killswitch-override.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": ["git push --force origin main"],
+  "allowed_patterns": [],
+  "custom_rules": [
+    {"name": "no_force_push", "match": "git push --force", "target": "command"}
+  ]
+}
+EOF
+
+  run bash -c '
+    set -euo pipefail
+    export WORKSPACE="$1"
+    export RALPH_HOME="$2"
+    export RALPH_KILLSWITCH_OVERRIDE_FILE="$3"
+    source "$4"
+    killswitch_command_matches_rule "git push --force origin main"
+  ' _ "$WS" "$RH" "$WS/.ralph-workspace/killswitch-override.json" "$KILLSWITCH_CORE"
+
+  [ "$status" -eq 1 ]
 }
 
 @test "ralph config killswitch init refuses overwrite without --force" {

@@ -19,6 +19,11 @@ class VerificationResultTests(unittest.TestCase):
         self.assertEqual(status, "pass")
         self.assertEqual(reason, "")
 
+    def test_todo_verdict_pass(self) -> None:
+        status, reason = text_verification_result("TODO_VERIFICATION: PASS")
+        self.assertEqual(status, "pass")
+        self.assertEqual(reason, "")
+
     def test_status_verdict_allows_optional_tool_result_ids(self) -> None:
         status, reason = text_verification_result(
             "VERIFICATION STATUS: PASS tool_result_ids=res-123,res-456"
@@ -32,6 +37,16 @@ class VerificationResultTests(unittest.TestCase):
         )
         self.assertEqual(status, "fail")
         self.assertEqual(reason, "tsc errored on line 12")
+
+    def test_todo_verdict_fail_with_reason(self) -> None:
+        status, reason = text_verification_result("TODO_VERIFICATION: FAIL: flaky test")
+        self.assertEqual(status, "fail")
+        self.assertEqual(reason, "flaky test")
+
+    def test_todo_verdict_skipped(self) -> None:
+        status, reason = text_verification_result("TODO_VERIFICATION: SKIPPED")
+        self.assertEqual(status, "skip")
+        self.assertEqual(reason, "")
 
     def test_no_verdict_is_none(self) -> None:
         status, reason = text_verification_result("did some work, all good")

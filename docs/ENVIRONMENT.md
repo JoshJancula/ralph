@@ -305,6 +305,28 @@ Operator guide (per-runtime setup, troubleshooting): [TOOLING.md](TOOLING.md#nat
 
 Native adapters activate automatically only after you explicitly select `native` or `hybrid`. When Ralph mode is **`ralph`** or **`hybrid`**, Ralph auto-enables `RALPH_PROXY_SHELL_COMPACT=1` unless you already set the variable (opt out with `RALPH_PROXY_SHELL_COMPACT=0`). When Ralph mode is **`native`** or **`hybrid`**, Ralph auto-enables `RALPH_BASH_COMPACT=1` unless you already set the variable (opt out with `RALPH_BASH_COMPACT=0`; Claude PostToolUse:Bash path only). See [TOOLING.md](TOOLING.md#enabling-and-disabling).
 
+### Native runtime configuration preservation
+
+Ralph preserves each runtime's native user, project, and local/private configuration chain. Configurations are discovered from the Ralph project root, not the state root or agent workspace. All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup.
+
+| Runtime | Native config sources (precedence order) | Ralph additions |
+|---------|------------------------------------------|-----------------|
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server in `ralph`/`hybrid` mode |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
+| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` (if project trusted) | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
+| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+
+**Precedence** (highest to lowest): Native ambient > Agent definitions > Ralph's protected `ralph` server. Agent definitions with the same name as ambient servers override the ambient definition.
+
+**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
+
+**Secret policy**: Credential values in portable definitions must use `${ENV_VAR}` references. Literal secrets are rejected at validation.
+
+**Failure behavior**: Unresolved references, invalid definitions, missing environment variables, or attempts to use the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, missing server/env name, and searched source paths.
+
+See [AGENTS.md](../AGENTS.md) and [TOOLING.md](../docs/TOOLING.md) for full details.
+
 ### Runtime overlay cleanup
 
 Every runtime overlay mutation is journaled under `.ralph-workspace/runtime-config/<plan-key>/journals`. Each journal entry records the runtime, PID, start time, generated temp files, and the workspace files mutated in place (with backup locations) so the runner can restore them later.

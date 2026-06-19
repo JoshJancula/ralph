@@ -60,12 +60,15 @@ killswitch_cli_global_config() {
 
 killswitch_cli_resolve_active() {
   local workspace="$1"
-  local ws_cfg global_cfg bundle_cfg
+  local ws_cfg global_cfg bundle_cfg override_cfg
+  override_cfg="${RALPH_KILLSWITCH_OVERRIDE_FILE:-}"
   ws_cfg="$(killswitch_cli_workspace_config "$workspace")"
   global_cfg="$(killswitch_cli_global_config)"
   bundle_cfg="$(killswitch_cli_bundle_default)"
 
-  if [[ -f "$ws_cfg" ]]; then
+  if [[ -n "$override_cfg" && -f "$override_cfg" ]]; then
+    printf 'override\t%s\n' "$override_cfg"
+  elif [[ -f "$ws_cfg" ]]; then
     printf 'workspace\t%s\n' "$ws_cfg"
   elif [[ -f "$global_cfg" ]]; then
     printf 'global\t%s\n' "$global_cfg"
@@ -100,6 +103,9 @@ print(f"  enabled: {str(cfg.get('enabled', True)).lower()}")
 print(f"  dry_run: {str(cfg.get('dry_run', False)).lower()}")
 print(f"  banned_tools: {len(cfg.get('banned_tools', []))}")
 print(f"  banned_paths: {len(cfg.get('banned_paths', []))}")
+print(f"  allowed_tools: {len(cfg.get('allowed_tools', []))}")
+print(f"  allowed_paths: {len(cfg.get('allowed_paths', []))}")
+print(f"  allowed_patterns: {len(cfg.get('allowed_patterns', []))}")
 print(f"  custom_rules: {len(cfg.get('custom_rules', []))}")
 PY
 }
@@ -125,6 +131,9 @@ killswitch_cli_status() {
   fi
   echo
   echo "Config paths (first match wins):"
+  if [[ -n "${RALPH_KILLSWITCH_OVERRIDE_FILE:-}" ]]; then
+    echo "  override:  ${RALPH_KILLSWITCH_OVERRIDE_FILE}"
+  fi
   if [[ -f "$ws_cfg" ]]; then
     echo "  workspace: $ws_cfg"
   else

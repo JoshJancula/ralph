@@ -28,6 +28,7 @@ from tool_call_classification import (
     accumulate_savings_event,
     empty_savings_bucket,
     finalize_savings_bucket,
+    token_fields_from_record,
 )
 
 try:
@@ -305,6 +306,10 @@ def fields_from_summary(summary: Any) -> dict[str, Any]:
     out["native_hooks_effective"] = coerce_bool(summary.get("native_hooks_effective"))
     out["native_hooks_configured"] = coerce_bool(summary.get("native_hooks_configured"))
     out["mcp_effective"] = coerce_bool(summary.get("mcp_effective"))
+    out["mcp_config_sources"] = coerce_warnings(summary.get("mcp_config_sources"))
+    out["mcp_effective_names"] = coerce_warnings(summary.get("mcp_effective_names"))
+    out["mcp_override_decisions"] = coerce_warnings(summary.get("mcp_override_decisions"))
+    out["mcp_failure_reason"] = str(summary.get("mcp_failure_reason") or "")
     out["native_hook_events"] = coerce_int(summary.get("native_hook_events"))
     out["native_hooks_observed_effect"] = str(summary.get("native_hooks_observed_effect") or "")
     out["native_hooks_observed_reason"] = str(summary.get("native_hooks_observed_reason") or "")

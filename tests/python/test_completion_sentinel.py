@@ -17,6 +17,8 @@ class CompletionSentinelTests(unittest.TestCase):
     def test_exact_line_matches(self) -> None:
         self.assertTrue(line_has_completion_sentinel("AGENT_INVOCATION_COMPLETE"))
         self.assertTrue(line_has_completion_sentinel("* AGENT_INVOCATION_COMPLETE"))
+        self.assertTrue(line_has_completion_sentinel("TODO_COMPLETION: COMPLETE"))
+        self.assertTrue(line_has_completion_sentinel("  - TODO_COMPLETION: COMPLETE"))
 
     def test_glued_suffix_does_not_match(self) -> None:
         self.assertFalse(
@@ -25,6 +27,7 @@ class CompletionSentinelTests(unittest.TestCase):
         self.assertFalse(
             line_has_completion_sentinel("* AGENT_INVOCATION_COMPLETEEarlier note")
         )
+        self.assertFalse(line_has_completion_sentinel("TODO_COMPLETION: COMPLETEEarlier note"))
 
     def test_substring_in_prose_does_not_match(self) -> None:
         text = "Docs mention AGENT_INVOCATION_COMPLETE in passing."
@@ -59,7 +62,7 @@ class CompletionSentinelTests(unittest.TestCase):
     def test_result_payload_matches(self) -> None:
         payload = {
             "type": "result",
-            "result": "done\nAGENT_INVOCATION_COMPLETE\n",
+            "result": "done\nTODO_COMPLETION: COMPLETE\n",
         }
         self.assertTrue(object_has_assistant_completion_sentinel(payload, "cursor"))
 

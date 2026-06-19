@@ -41,9 +41,17 @@ Session files are created with owner-only permissions: `.ralph-workspace/session
 
 `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` makes the runner reuse session state without a stored session ID. Only set it in isolated environments you control; on shared hosts leave it unset so each invocation creates fresh, owner-restricted session data.
 
+When the operator approves a permission block, Ralph can write a session-local override alongside the plan session files:
+
+- `killswitch-override.json` for killswitch-backed command, tool, and path approvals
+- `opencode-permission-override.json` for OpenCode `external_directory` approvals
+- `runtime-permission-overrides.sh` for session-local Claude tool allowlists and Codex extra `--add-dir` paths
+
+These overrides are reloaded on the next retry for the same plan session.
+
 ## Kill switch
 
-The killswitch blocks dangerous commands or file access before they execute. When a violation is detected, Ralph logs the event, kills the runner process tree, and writes a sentinel so downstream orchestration stages do not proceed.
+The killswitch blocks dangerous commands or file access before they execute. When a violation is detected, Ralph logs the event, pauses for operator input when the run is waiting on a human, and writes a sentinel so downstream orchestration stages do not proceed.
 
 In Ralph mode, a fatal proxy or policy violation (denied tool, denied argument pattern, path traversal) writes a sentinel to `.ralph-workspace/security/kill-switch.<plan-key>.json` recording the tool, category, reason, and a redacted argument summary. The MCP server exits non-zero, and the plan runner checks for a current-run sentinel before and after each runtime invocation, so a tripped run fails instead of advancing to the next orchestrator stage. Stale sentinels from earlier runs are logged and ignored.
 
@@ -84,7 +92,11 @@ The bundle default path (for scripts) is `$(ralph --bundle-path)/killswitch.json
   "enabled": true,
   "dry_run": false,
   "banned_tools": [],
+  "allowed_tools": [],
   "banned_paths": [".env*", "**/.env*", "**/secrets/**"],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
   "custom_rules": [
     {"name": "no_sudo", "pattern": "^sudo\\s", "target": "command"},
     {"name": "no_rm_rf_root", "match": "rm -rf /", "target": "command"}
@@ -99,6 +111,10 @@ The bundle default path (for scripts) is `$(ralph --bundle-path)/killswitch.json
 | `dry_run` | boolean | Yes | When `true`, log violations but do not kill the runner |
 | `banned_tools` | array | Yes | Tool names or glob patterns to block |
 | `banned_paths` | array | Yes | File path glob patterns to block (supports `~` expansion) |
+| `allowed_tools` | array | No | Tool names or glob patterns to allow through a ban |
+| `allowed_paths` | array | No | File path glob patterns to allow through a ban |
+| `allowed_commands` | array | No | Command substrings to allow through a ban |
+| `allowed_patterns` | array | No | Regex patterns to allow through a ban |
 | `custom_rules` | array | Yes | Command matching rules (see below) |
 
 ### Custom rules

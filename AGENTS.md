@@ -163,6 +163,40 @@ cd /path/to/monorepo/packages/api
 - **Don't** normalize, remap, or sort Antigravity model ids — Ralph preserves the CLI output verbatim.
 - **Do** set `ANTIGRAVITY_PLAN_MODEL` or pass `--model` for non-interactive runs; saved `ralph models` entries apply only to Claude and Codex.
 
+### Native runtime configuration preservation
+
+Ralph preserves each runtime's native user, project, and local/private configuration chain. Runtime configurations are discovered from the Ralph project root, not the state root or agent workspace.
+
+| Runtime | Native config sources (precedence order) | Ralph additions |
+|---------|------------------------------------------|-----------------|
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server in `ralph`/`hybrid` mode |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
+| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` (if project trusted) | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
+| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+
+All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
+
+### Agent MCP servers
+
+Agents may declare optional `mcp_servers` in canonical frontmatter. The field accepts:
+- **String references**: Names of ambient MCP servers to include (e.g., `playwright`, `github`)
+- **Portable definitions**: Inline server definitions with `name`, `transport` (`stdio` or `http`), and transport-specific fields
+
+**Precedence**: Native ambient > Agent definitions > Ralph's protected `ralph` server. Agent definitions with the same name as ambient servers override the ambient definition.
+
+**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
+
+**Supported transports**:
+- `stdio`: `command` (required), `args` (optional array), `env` (optional map with `${ENV_VAR}` references)
+- `http`: `url` (required), `headers` (optional map with `${ENV_VAR}` references)
+
+**Secret policy**: Credential values must use `${ENV_VAR}` references. Literal secrets (values matching credential patterns) are rejected at validation. Secrets are resolved at invocation time and never written to disk longer than necessary.
+
+**Failure behavior**: Unresolved references, invalid definitions, missing environment variables, or attempts to use the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, missing server/env name, and searched source paths.
+
+See [docs/MCP.md](docs/MCP.md) for full syntax, portable examples, and troubleshooting. See [bundle/.claude/agents/README.md](bundle/.claude/agents/README.md) for the agent `config.json` schema including `mcp_servers`.
+
 ## Reference map (progressive disclosure)
 
 Open these only when the task requires detail beyond this file.

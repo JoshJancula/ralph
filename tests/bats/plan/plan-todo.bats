@@ -77,8 +77,21 @@ EOF
 - [ ] next todo
 EOF
   result="$(get_next_todo "$plan_file")"
-  expected=$'4|- [ ] In `ui/src/app/components/admin-panel/admin-panel.component.html`, find the tab navigation section.\n  1. Change the label of the `automation` tab button from `Hub` to `Automation`.\n  2. Remove the entire `<button>` element for `agents`.'
+  expected=$'2|- [ ] In `ui/src/app/components/admin-panel/admin-panel.component.html`, find the tab navigation section.\n  1. Change the label of the `automation` tab button from `Hub` to `Automation`.\n  2. Remove the entire `<button>` element for `agents`.'
   [ "$result" = "$expected" ]
+  rm "$plan_file"
+}
+
+@test "get_next_todo returns the checkbox line even when a blank separator follows" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+# intro
+- [ ] first todo
+
+- [ ] second todo
+EOF
+  result="$(get_next_todo "$plan_file")"
+  [ "$result" = "2|- [ ] first todo" ]
   rm "$plan_file"
 }
 

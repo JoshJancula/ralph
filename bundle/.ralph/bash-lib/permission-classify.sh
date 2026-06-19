@@ -68,15 +68,19 @@ ralph_classify_permission_block() {
   local exit_code="${2:-0}"
   local runtime="${3:-}"
 
-  # Successful exits are never permission blocks.
-  [[ "$exit_code" -eq 0 ]] && return 1
-
   if ralph_permission_block_is_host_registry_noise "$text"; then
     return 1
   fi
 
   local lower
   lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+
+  # Some runtimes surface permission denials as explicit output while still
+  # exiting 0. Only continue classifying zero-exit output when the text itself
+  # contains a denial signal.
+  if [[ "$exit_code" -eq 0 ]] && ! printf '%s\n' "$lower" | grep -qE 'permission[[:space:]]+requested|auto[-[:space:]]*reject|external([[:space:]_-]+)?directory|permission.*(rejected|denied|declined)|approval.*(rejected|denied|declined)|explicit.*(user )?(reject|denied|declined)'; then
+    return 1
+  fi
 
   # ---- Cursor-specific patterns ----
   # "Not in allowlist", "Add Shell(...) to allowlist", "Run this command?"
@@ -130,7 +134,7 @@ ralph_classify_permission_block() {
     printf 'sandbox_path\n'
     return 0
   fi
-  if printf '%s\n' "$lower" | grep -qE 'external\s+(directory|folder|path)'; then
+  if printf '%s\n' "$lower" | grep -qE 'external([[:space:]_-]+)?(directory|folder|path)'; then
     printf 'external_directory\n'
     return 0
   fi
@@ -157,7 +161,7 @@ ralph_classify_permission_block() {
 
   # ---- OpenCode-specific patterns (require OpenCode signal in text) ----
   if printf '%s\n' "$lower" | grep -qF 'opencode'; then
-    if printf '%s\n' "$lower" | grep -qE 'opencode.*(external_directory|external directory).*(denied|blocked|reject|not allowed)'; then
+    if printf '%s\n' "$lower" | grep -qE 'opencode.*(external[_[:space:]-]directory|external directory).*(denied|blocked|reject|not allowed)'; then
       printf 'external_directory\n'
       return 0
     fi
@@ -217,14 +221,16 @@ ralph_classify_permission_block_fallback() {
   local exit_code="${2:-0}"
   local runtime="${3:-}"
 
-  [[ "$exit_code" -eq 0 ]] && return 1
-
   if ralph_permission_block_is_host_registry_noise "$text"; then
     return 1
   fi
 
   local lower
   lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$exit_code" -eq 0 ]] && ! printf '%s\n' "$lower" | grep -qE 'permission[[:space:]]+requested|auto[-[:space:]]*reject|external([[:space:]_-]+)?directory|permission.*(rejected|denied|declined)|approval.*(rejected|denied|declined)|explicit.*(user )?(reject|denied|declined)'; then
+    return 1
+  fi
 
   if printf '%s\n' "$lower" | grep -qE 'rate[[:space:]]+limit|five_hour|out of credits'; then
     return 1
@@ -293,7 +299,13 @@ ralph_cursor_blocked_command() {
 ralph_permission_blocked_path() {
   local text="${1:-}"
   local p=""
-  p="$(printf '%s' "$text" | sed -E -n 's/.*[Ss]andbox[[:space:]]+[Pp]ath[[:space:]]+[Dd]enied[[:space:]]*:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
+  p="$(printf '%s' "$text" | sed -E -n 's/.*[Pp]ermission[[:space:]]+[Rr]equested:[[:space:]]*(external[_[:space:]-]directory|external[[:space:]]+directory)[[:space:]]*\(([^)]*)\).*/\2/p' | head -1)"
+  if [[ -z "$p" ]]; then
+    p="$(printf '%s' "$text" | sed -E -n 's/.*[Pp]ermission[[:space:]]+[Rr]equested:[[:space:]]*[^[:space:]]+[[:space:]]*\(([^)]*)\).*/\1/p' | head -1)"
+  fi
+  if [[ -z "$p" ]]; then
+    p="$(printf '%s' "$text" | sed -E -n 's/.*[Ss]andbox[[:space:]]+[Pp]ath[[:space:]]+[Dd]enied[[:space:]]*:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
+  fi
   if [[ -z "$p" ]]; then
     p="$(printf '%s' "$text" | sed -E -n 's/.*[Ee]xternal[[:space:]]+[Dd]irectory[^:]*:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
   fi
@@ -400,6 +412,454 @@ ralph_build_permission_resume_command() {
   printf '%s' "$parts" | sed 's/[[:space:]]*$//'
 }
 
+# Parse a human operator answer into a simple allow/deny decision.
+ralph_permission_operator_response_decision() {
+  local text="${1:-}"
+  local lower
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$text" =~ ^[[:space:]]*\{ ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      local json_decision=""
+      json_decision="$(printf '%s' "$text" | jq -r '.decision // empty' 2>/dev/null || true)"
+      case "$(printf '%s' "$json_decision" | tr '[:upper:]' '[:lower:]')" in
+        allow|approve|approved|yes|y)
+          printf 'allow\n'
+          return 0
+          ;;
+        deny|decline|declined|reject|rejected|no|n)
+          printf 'deny\n'
+          return 0
+          ;;
+      esac
+    fi
+  fi
+
+  if printf '%s\n' "$lower" | grep -qE '(^|[^[:alnum:]])(allow|approve|approved|yes|y)([^[:alnum:]]|$)'; then
+    printf 'allow\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$lower" | grep -qE '(^|[^[:alnum:]])(deny|decline|declined|reject|rejected|no|n)([^[:alnum:]]|$)'; then
+    printf 'deny\n'
+    return 0
+  fi
+
+  printf 'unknown\n'
+}
+
+ralph_write_human_request_artifact() {
+  local session_dir="${1:-}"
+  local kind="${2:-guidance}"
+  local runtime="${3:-}"
+  local todo_line="${4:-0}"
+  local todo_text="${5:-}"
+  local full_line="${6:-}"
+  local classification="${7:-}"
+  local blocked_cmd_or_tool="${8:-}"
+  local blocked_path="${9:-}"
+  local blocked_tool="${10:-}"
+  local request_text="${11:-}"
+  local denial_excerpt="${12:-}"
+  local hint="${13:-}"
+  local resume_cmd="${14:-}"
+  local question_text="${15:-}"
+  local py="${SCRIPT_DIR:-}/python/permission-remediation-artifact.py"
+  if [[ ! -f "$py" ]] || ! command -v python3 >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local tmp out legacy_out
+  tmp="$(mktemp -d "${session_dir%/}/.ralph-human-request.XXXXXX")" || return 1
+  out="${session_dir%/}/human-request.json"
+  legacy_out="${session_dir%/}/permission-remediation.json"
+  printf '%s' "$kind" >"$tmp/kind.one"
+  printf '%s' "$runtime" >"$tmp/runtime.one"
+  printf '%s' "$todo_line" >"$tmp/todo_line.one"
+  printf '%s' "$todo_text" >"$tmp/todo.txt"
+  printf '%s' "$full_line" >"$tmp/full_line.txt"
+  printf '%s' "$classification" >"$tmp/classification.one"
+  printf '%s' "$blocked_cmd_or_tool" >"$tmp/blocked_cmd_or_tool.one"
+  printf '%s' "$blocked_path" >"$tmp/blocked_path.one"
+  printf '%s' "$blocked_tool" >"$tmp/blocked_tool.one"
+  printf '%s' "$request_text" >"$tmp/question.txt"
+  printf '%s' "$denial_excerpt" >"$tmp/denial.txt"
+  printf '%s' "$hint" >"$tmp/hint.txt"
+  printf '%s' "$resume_cmd" >"$tmp/resume.txt"
+  python3 -c '
+import json
+import pathlib
+import sys
+
+indir = pathlib.Path(sys.argv[1])
+meta = {
+    "kind": (indir / "kind.one").read_text(encoding="utf-8", errors="replace").strip() or "guidance",
+    "runtime": (indir / "runtime.one").read_text(encoding="utf-8", errors="replace").strip(),
+    "todo_line": int((indir / "todo_line.one").read_text(encoding="utf-8", errors="replace").strip() or "0"),
+    "classification": (indir / "classification.one").read_text(encoding="utf-8", errors="replace"),
+    "blocked_command_or_tool": (indir / "blocked_cmd_or_tool.one").read_text(encoding="utf-8", errors="replace"),
+    "blocked_path": (indir / "blocked_path.one").read_text(encoding="utf-8", errors="replace"),
+    "blocked_tool": (indir / "blocked_tool.one").read_text(encoding="utf-8", errors="replace"),
+    "session_strategy": "fresh",
+    "denial_excerpt_max_bytes": 8192,
+}
+(indir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+' "$tmp" || {
+    rm -rf "$tmp"
+    return 1
+  }
+  if ! python3 "$py" "$tmp" "$out"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [[ "${kind:-guidance}" == "permission" ]]; then
+    cp -f "$out" "$legacy_out"
+  fi
+  rm -rf "$tmp"
+  printf '%s\n' "$out"
+}
+
+# Best-effort path pattern for OpenCode permission approval.
+ralph_permission_opencode_external_directory_pattern() {
+  local blocked_path="${1:-}"
+  if [[ -n "$blocked_path" ]]; then
+    printf '%s\n' "$blocked_path"
+    return 0
+  fi
+  printf '%s\n' '/tmp/*'
+}
+
+# Determine the active killswitch configuration path without considering any
+# session-local override file.
+ralph_killswitch_active_config_path() {
+  if [[ -n "${WORKSPACE:-}" && -f "$WORKSPACE/.ralph-workspace/killswitch.json" ]]; then
+    printf '%s\n' "$WORKSPACE/.ralph-workspace/killswitch.json"
+    return 0
+  fi
+  if [[ -n "${RALPH_HOME:-}" && -f "${RALPH_HOME}/killswitch.json" ]]; then
+    printf '%s\n' "${RALPH_HOME}/killswitch.json"
+    return 0
+  fi
+  local script_dir="${SCRIPT_DIR:-}"
+  if [[ -z "$script_dir" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  fi
+  if [[ -f "$script_dir/killswitch.json" ]]; then
+    printf '%s\n' "$script_dir/killswitch.json"
+    return 0
+  fi
+  return 1
+}
+
+# Write a session-local killswitch overlay that allows one previously blocked
+# command, path, or tool pattern.
+ralph_write_killswitch_permission_overlay() {
+  local session_dir="${1:-}"
+  local blocked_cmd="${2:-}"
+  local blocked_path="${3:-}"
+  local blocked_tool="${4:-}"
+  local overlay_path
+  local base_path
+  local tmp_path
+  [[ -n "$session_dir" ]] || return 1
+  if ! command -v jq >/dev/null 2>&1; then
+    return 1
+  fi
+
+  overlay_path="${session_dir%/}/killswitch-override.json"
+  base_path="$(ralph_killswitch_active_config_path 2>/dev/null || true)"
+  tmp_path="$(mktemp "${session_dir%/}/.ralph-killswitch-override-XXXXXX")" || return 1
+
+  if [[ -n "$base_path" && -f "$base_path" ]]; then
+    cp "$base_path" "$tmp_path" || {
+      rm -f "$tmp_path"
+      return 1
+    }
+  else
+    jq -n '{
+      schema_version: 2,
+      enabled: true,
+      dry_run: false,
+      banned_tools: [],
+      allowed_tools: [],
+      banned_paths: [],
+      allowed_paths: [],
+      allowed_commands: [],
+      allowed_patterns: [],
+      custom_rules: []
+    }' >"$tmp_path" || {
+      rm -f "$tmp_path"
+      return 1
+    }
+  fi
+
+  local jq_filter='.'
+  if [[ -n "$blocked_tool" ]]; then
+    jq_filter+=" | .allowed_tools = ((.allowed_tools // []) + [\$blocked_tool] | unique)"
+  fi
+  if [[ -n "$blocked_path" ]]; then
+    jq_filter+=" | .allowed_paths = ((.allowed_paths // []) + [\$blocked_path] | unique)"
+  fi
+  if [[ -n "$blocked_cmd" ]]; then
+    jq_filter+=" | .allowed_commands = ((.allowed_commands // []) + [\$blocked_cmd] | unique)"
+  fi
+  if [[ "$jq_filter" == "." ]]; then
+    rm -f "$tmp_path"
+    return 1
+  fi
+
+  if ! jq -c \
+    --arg blocked_tool "$blocked_tool" \
+    --arg blocked_path "$blocked_path" \
+    --arg blocked_cmd "$blocked_cmd" \
+    "$jq_filter" \
+    "$tmp_path" >"$overlay_path"; then
+    rm -f "$tmp_path" "$overlay_path"
+    return 1
+  fi
+
+  rm -f "$tmp_path"
+  printf '%s\n' "$overlay_path"
+}
+
+# Write or update a session-local OpenCode permission overlay that allows one
+# previously blocked external_directory path pattern.
+ralph_write_opencode_permission_overlay() {
+  local session_dir="${1:-}"
+  local blocked_path="${2:-}"
+  local overlay_path
+  local tmp_path
+  local pattern
+
+  [[ -n "$session_dir" ]] || return 1
+  pattern="$(ralph_permission_opencode_external_directory_pattern "$blocked_path")"
+  overlay_path="${session_dir%/}/opencode-permission-override.json"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    return 1
+  fi
+
+  tmp_path="$(mktemp "${session_dir%/}/.ralph-opencode-permission-XXXXXX")" || return 1
+  if [[ -f "$overlay_path" ]]; then
+    if ! jq -c \
+      --arg pattern "$pattern" \
+      '
+      .permission = (
+        (.permission // {}) + {
+          external_directory: ((.permission.external_directory // {}) + {($pattern): "allow"})
+        }
+      )
+      ' "$overlay_path" >"$tmp_path"; then
+      rm -f "$tmp_path"
+      return 1
+    fi
+  else
+    if ! jq -n \
+      --arg pattern "$pattern" \
+      '{permission: {external_directory: {($pattern): "allow"}}}' >"$tmp_path"; then
+      rm -f "$tmp_path"
+      return 1
+    fi
+  fi
+  mv "$tmp_path" "$overlay_path"
+  printf '%s\n' "$overlay_path"
+}
+
+# Join two comma-separated permission lists while preserving order and removing
+# duplicates. Empty items are ignored.
+ralph_permission_union_csv() {
+  local left="${1:-}"
+  local right="${2:-}"
+  local -a items=()
+  local -A seen=()
+  local -a merged=()
+  local source item trimmed
+
+  for source in "$left" "$right"; do
+    [[ -n "$source" ]] || continue
+    IFS=',' read -ra items <<< "$source"
+    for item in "${items[@]}"; do
+      trimmed="${item#"${item%%[![:space:]]*}"}"
+      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+      [[ -z "$trimmed" ]] && continue
+      if [[ -z "${seen[$trimmed]:-}" ]]; then
+        seen["$trimmed"]=1
+        merged+=("$trimmed")
+      fi
+    done
+  done
+
+  if [[ ${#merged[@]} -gt 0 ]]; then
+    local old_ifs="$IFS"
+    IFS=','
+    printf '%s' "${merged[*]}"
+    IFS="$old_ifs"
+  fi
+}
+
+# Best-effort conversion from a denied path or glob pattern to a Codex add-dir
+# root. Returns nothing when the value cannot be turned into a usable directory.
+ralph_codex_permission_add_dir_root() {
+  local blocked_path="${1:-}"
+  if [[ -z "$blocked_path" ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 - "$blocked_path" <<'PY'
+import os
+import re
+import sys
+
+path = sys.argv[1].strip()
+if not path:
+    sys.exit(0)
+
+wildcard = re.search(r'[*?\[]', path)
+if wildcard:
+    path = path[:wildcard.start()]
+    path = path.rstrip("/ ")
+
+if not path:
+    sys.exit(0)
+
+if os.path.isdir(path):
+    print(os.path.abspath(path))
+else:
+    parent = os.path.dirname(path) or "."
+    print(os.path.abspath(parent))
+PY
+}
+
+# Write a session-local shell overlay containing runtime-specific permission
+# exceptions that should be reloaded on the next retry.
+ralph_write_runtime_permission_overlay() {
+  local session_dir="${1:-}"
+  local runtime="${2:-}"
+  local classification="${3:-}"
+  local blocked_cmd="${4:-}"
+  local blocked_path="${5:-}"
+  local blocked_tool="${6:-}"
+  local overlay_path
+  local tmp_path
+  local wrote=0
+
+  [[ -n "$session_dir" ]] || return 1
+  overlay_path="${session_dir%/}/runtime-permission-overrides.sh"
+  tmp_path="$(mktemp "${session_dir%/}/.ralph-runtime-perm-XXXXXX")" || return 1
+
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '# Session-local runtime permission overrides generated by Ralph.'
+
+    case "$runtime" in
+      claude)
+        local base_tools merged_tools
+        base_tools="${CLAUDE_PLAN_ALLOWED_TOOLS:-${CLAUDE_TOOLS_FROM_AGENT:-Bash,Read,Edit,Write}}"
+        case "$classification" in
+          restricted_tool|approval_rejected|permission_unknown)
+            merged_tools="$(ralph_permission_union_csv "$base_tools" "$blocked_tool")"
+            ;;
+          *)
+            merged_tools="$(ralph_permission_union_csv "$base_tools" "$blocked_tool")"
+            ;;
+        esac
+        if [[ -n "$merged_tools" ]]; then
+          printf 'export CLAUDE_PLAN_ALLOWED_TOOLS=%q\n' "$merged_tools"
+          CLAUDE_PLAN_ALLOWED_TOOLS="$merged_tools"
+          export CLAUDE_PLAN_ALLOWED_TOOLS
+          wrote=1
+        fi
+        if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
+          printf 'export CLAUDE_PLAN_PERMISSION_MODE=%q\n' "$CLAUDE_PLAN_PERMISSION_MODE"
+          export CLAUDE_PLAN_PERMISSION_MODE
+          wrote=1
+        fi
+        ;;
+      codex)
+        local add_dir base_dirs merged_dirs
+        add_dir=""
+        case "$classification" in
+          sandbox_path|external_directory|permission_unknown)
+            add_dir="$(ralph_codex_permission_add_dir_root "$blocked_path" 2>/dev/null || true)"
+            ;;
+        esac
+        if [[ -n "$add_dir" ]]; then
+          base_dirs="${CODEX_PLAN_EXTRA_ADD_DIRS:-}"
+          merged_dirs="$(ralph_permission_union_csv "$base_dirs" "$add_dir")"
+          printf 'export CODEX_PLAN_EXTRA_ADD_DIRS=%q\n' "$merged_dirs"
+          CODEX_PLAN_EXTRA_ADD_DIRS="$merged_dirs"
+          export CODEX_PLAN_EXTRA_ADD_DIRS
+          wrote=1
+        fi
+        ;;
+      *)
+        :
+        ;;
+    esac
+  } >"$tmp_path"
+
+  if [[ "$wrote" -eq 0 ]]; then
+    rm -f "$tmp_path"
+    return 1
+  fi
+
+  mv "$tmp_path" "$overlay_path"
+  printf '%s\n' "$overlay_path"
+}
+
+# Consume a permission remediation response and persist approvals when allowed.
+ralph_apply_permission_operator_response() {
+  local session_dir="${1:-}"
+  local runtime="${2:-}"
+  local classification="${3:-}"
+  local blocked_cmd="${4:-}"
+  local blocked_path="${5:-}"
+  local blocked_tool="${6:-}"
+  local response_text="${7:-}"
+  local decision
+  local runtime_overlay_path=""
+
+  decision="$(ralph_permission_operator_response_decision "$response_text")"
+  case "$decision" in
+    allow)
+      if [[ -n "$blocked_cmd" || -n "$blocked_path" || -n "$blocked_tool" ]]; then
+        local ks_overlay=""
+        if ks_overlay="$(ralph_write_killswitch_permission_overlay \
+          "$session_dir" \
+          "$blocked_cmd" \
+          "$blocked_path" \
+          "$blocked_tool" 2>/dev/null)"; then
+          RALPH_KILLSWITCH_OVERRIDE_FILE="$ks_overlay"
+          export RALPH_KILLSWITCH_OVERRIDE_FILE
+        fi
+      fi
+      if runtime_overlay_path="$(ralph_write_runtime_permission_overlay \
+        "$session_dir" \
+        "$runtime" \
+        "$classification" \
+        "$blocked_cmd" \
+        "$blocked_path" \
+        "$blocked_tool" 2>/dev/null)"; then
+        RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE="$runtime_overlay_path"
+        export RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE
+      fi
+      if [[ "$classification" == "external_directory" ]]; then
+        local overlay_path=""
+        if overlay_path="$(ralph_write_opencode_permission_overlay "$session_dir" "$blocked_path" 2>/dev/null)"; then
+          OPENCODE_PLAN_PERMISSION_CONFIG_PATH="$overlay_path"
+          export OPENCODE_PLAN_PERMISSION_CONFIG_PATH
+        else
+          decision="deny"
+        fi
+      fi
+      ;;
+  esac
+
+  printf '%s\n' "$decision"
+}
+
 # Write structured permission remediation JSON under the plan session directory.
 ralph_write_permission_remediation_artifact() {
   local session_dir="$1"
@@ -410,9 +870,10 @@ ralph_write_permission_remediation_artifact() {
   local classification="$6"
   local blocked_cmd_or_tool="$7"
   local blocked_path="$8"
-  local denial_excerpt="$9"
-  local hint="${10:-}"
-  local resume_cmd="${11:-}"
+  local blocked_tool="${9:-}"
+  local denial_excerpt="${10:-}"
+  local hint="${11:-}"
+  local resume_cmd="${12:-}"
   local py="${SCRIPT_DIR:-}/python/permission-remediation-artifact.py"
   if [[ ! -f "$py" ]]; then
     return 1
@@ -421,10 +882,12 @@ ralph_write_permission_remediation_artifact() {
     return 1
   fi
   local tmp out
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ralph-perm-rem.XXXXXX")" || return 1
+  tmp="$(mktemp -d "${session_dir%/}/.ralph-perm-rem.XXXXXX")" || return 1
   out="${session_dir%/}/permission-remediation.json"
+  printf '%s' "permission" >"$tmp/kind.one"
   printf '%s' "$todo_text" >"$tmp/todo.txt"
   printf '%s' "$full_line" >"$tmp/full_line.txt"
+  printf '%s' "$todo_text" >"$tmp/question.txt"
   printf '%s' "$denial_excerpt" >"$tmp/denial.txt"
   printf '%s' "$hint" >"$tmp/hint.txt"
   printf '%s' "$resume_cmd" >"$tmp/resume.txt"
@@ -434,6 +897,7 @@ ralph_write_permission_remediation_artifact() {
   printf '%s' "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" >"$tmp/session_strategy.one"
   printf '%s' "$blocked_cmd_or_tool" >"$tmp/blocked_cmd_or_tool.one"
   printf '%s' "$blocked_path" >"$tmp/blocked_path.one"
+  printf '%s' "$blocked_tool" >"$tmp/blocked_tool.one"
   python3 -c '
 import json
 import pathlib
@@ -444,6 +908,7 @@ def one(p):
 
 indir = pathlib.Path(sys.argv[1])
 meta = {
+    "kind": one(indir / "kind.one") if (indir / "kind.one").is_file() else "permission",
     "runtime": one(indir / "runtime.one"),
     "session_strategy": one(indir / "session_strategy.one") if (indir / "session_strategy.one").is_file() else "fresh",
     "todo_line": int(one(indir / "todo_line.one")),
@@ -452,6 +917,9 @@ meta = {
         encoding="utf-8", errors="replace"
     ),
     "blocked_path": pathlib.Path(indir / "blocked_path.one").read_text(
+        encoding="utf-8", errors="replace"
+    ),
+    "blocked_tool": pathlib.Path(indir / "blocked_tool.one").read_text(
         encoding="utf-8", errors="replace"
     ),
     "denial_excerpt_max_bytes": 8192,
@@ -957,9 +1425,13 @@ ralph_build_permission_operator_brief() {
   printf '\n'
   ralph_permission_vendor_prompt_hint "$runtime" "$classification"
   printf '\n'
+  if [[ "$runtime" == "opencode" ]]; then
+    printf '%s\n' "Update the structured JSON response in \`operator-response.txt\` with a real decision, remove or flip \`placeholder\` to \`false\`, and set \`decision\":\"allow\"\` to write a session-local OpenCode permission override and retry this TODO, or set \`decision\":\"deny\"\` to stop here."
+    printf '\n'
+  fi
   printf '%s\n' "### If no prompt is visible on screen"
   printf '%s\n' "- Apply the configuration or allowlist changes described under **Operator guidance** above (agent JSON, environment variables, Cursor allowlist, Codex sandbox flags, or OpenCode permission rules)."
-  printf '%s\n' "- Inspect the structured record in your session directory: \`permission-remediation.json\` (same folder as \`pending-human.txt\`)."
+  printf '%s\n' "- Inspect the structured record in your session directory: \`human-request.json\` (and \`permission-remediation.json\` for permission pauses) in the same folder as \`pending-human.txt\`."
   printf '\n'
   printf '%s\n' "### Rerun this TODO"
   if [[ -n "${resume_cmd//[$' \t\n']/}" ]]; then

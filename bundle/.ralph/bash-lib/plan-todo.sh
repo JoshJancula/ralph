@@ -11,7 +11,7 @@ RALPH_PLAN_TODO_LIB_LOADED=1
 #   plan_format_display -- canonical plan-format label for logs and user-facing output.
 #   plan_detect_format -- detect 'default' (markdown) or 'yaml' (YAML frontmatter) format.
 #   plan_open_todo_body -- strip markdown checkbox prefix from an open task line.
-#   get_next_todo -- default markdown: "file_line|full line" for first open "- [ ]" task; yaml frontmatter: "ordinal|id|content" (id empty when absent).
+#   get_next_todo -- default markdown: "file_line|full block" for first open "- [ ]" task, where file_line is the checkbox line; yaml frontmatter: "ordinal|id|content" (id empty when absent).
 #   count_todos -- prints "done total" counts; yaml frontmatter plans treat completed/complete/done (case-insensitive) as done.
 #   plan_todo_ordinal_at_line -- 1-based checklist index at a given file line (default markdown only).
 #   plan_todo_ordinal_for_next -- 1-based task index for status UI: same as ordinal-at-line for default plans;
@@ -1374,31 +1374,33 @@ get_next_todo() {
     local line_num=0
     local block=""
     local capturing=0
+    local start_line=0
     local line next_line
     while IFS= read -r line || [[ -n "$line" ]]; do
       line_num=$((line_num + 1))
       if [[ "$capturing" == "0" ]]; then
         if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]* ]]; then
           block="$line"
+          start_line="$line_num"
           capturing=1
         fi
         continue
       fi
 
       if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[[[:space:]]\][[:space:]]* ]] || [[ "$line" =~ ^[[:space:]]*-[[:space:]]+\[x\][[:space:]]* ]] || [[ "$line" =~ ^#{1,6}[[:space:]] ]] || [[ "$line" =~ ^---[[:space:]]*$ ]]; then
-        printf '%s|%s\n' "$((line_num - 1))" "$block"
+        printf '%s|%s\n' "$start_line" "$block"
         return 0
       fi
 
       if [[ -n "${line//[[:space:]]/}" ]] && [[ ! "$line" =~ ^[[:space:]] ]]; then
-        printf '%s|%s\n' "$((line_num - 1))" "$block"
+        printf '%s|%s\n' "$start_line" "$block"
         return 0
       fi
 
       block+=$'\n'"$line"
     done < "$plan_path"
     if [[ "$capturing" == "1" ]]; then
-      printf '%s|%s\n' "$line_num" "$block"
+      printf '%s|%s\n' "$start_line" "$block"
       return 0
     fi
   fi
