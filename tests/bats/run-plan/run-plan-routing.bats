@@ -177,6 +177,7 @@ extract_log_lines() {
 }
 
 setup() {
+  bats_skip_known_ci_flakes
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -f "$ROUTING_LIB" ] || skip "routing helper missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"

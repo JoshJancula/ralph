@@ -64,6 +64,22 @@ assert_compactor_fixture() {
   assert_compactor_fixture npm-test-passing
 }
 
+@test "npm install family: successful run compacts dependency output" {
+  assert_compactor_fixture npm-install-success
+}
+
+@test "pip install family: failure preserves error details" {
+  assert_compactor_fixture pip-install-failure
+}
+
+@test "cargo build family: successful run compacts build output" {
+  assert_compactor_fixture cargo-build-success
+}
+
+@test "cargo build family: failure preserves compiler errors" {
+  assert_compactor_fixture cargo-build-failure
+}
+
 @test "no-match passthrough: unknown command" {
   assert_compactor_fixture no-match-unknown
   jq -e '.status == "not compacted" and .compacted == false and .family == null' \

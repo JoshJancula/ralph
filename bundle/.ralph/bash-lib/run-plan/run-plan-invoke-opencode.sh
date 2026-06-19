@@ -526,6 +526,10 @@ run_plan_invoke_opencode_config_prepare() {
     want_cache_key=1
   fi
 
+  if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+    ralph_run_plan_log "OpenCode config prepare: selected_model=${selected_model:-none} provider_id=${provider_id:-none} want_cache_key=${want_cache_key} need_mcp=${need_mcp} need_hooks=${need_hooks}"
+  fi
+
   if [[ "$need_mcp" -eq 0 && "$need_hooks" -eq 0 && "$want_cache_key" -eq 0 ]]; then
     return 0
   fi
@@ -544,6 +548,9 @@ run_plan_invoke_opencode_config_prepare() {
   ambient_cache_settings="$(ralph_opencode_detect_cache_settings_in_config "$ambient_config_json" 2>/dev/null || true)"
   RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS="${ambient_cache_settings:-0}"
   export RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS
+  if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+    ralph_run_plan_log "OpenCode ambient config detected: cache_settings=${RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS} config_source=${RALPH_OPENCODE_CONFIG_SOURCE_DESC:-unknown}"
+  fi
 
   local working_config
   working_config="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-config-XXXXXX")"
@@ -551,25 +558,38 @@ run_plan_invoke_opencode_config_prepare() {
   ralph_mcp_overlay_record_temp_file "$working_config"
 
   if [[ -n "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]] && [[ -f "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]]; then
-    local permission_overlay
+    local permission_overlay perm_merge_err
     permission_overlay="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-permission-merged-XXXXXX")"
-    if ! jq -c --slurpfile perm "$OPENCODE_PLAN_PERMISSION_CONFIG_PATH" \
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode permission overlay: merging from ${OPENCODE_PLAN_PERMISSION_CONFIG_PATH}"
+    fi
+    perm_merge_err="$(jq -c --slurpfile perm "$OPENCODE_PLAN_PERMISSION_CONFIG_PATH" \
       '.permission = ((.permission // {}) + ($perm[0].permission // {}))' \
-      "$working_config" > "$permission_overlay" 2>/dev/null; then
+      "$working_config" > "$permission_overlay" 2>&1)"
+    if [[ "$?" -ne 0 ]]; then
       ralph_mcp_cleanup_config "$permission_overlay"
       ralph_mcp_cleanup_config "$working_config"
       echo "Error: failed to merge OpenCode permission overlay into OPENCODE_CONFIG." >&2
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode permission merge failed: stderr=${perm_merge_err}"
+      fi
       return 1
     fi
     ralph_mcp_cleanup_config "$working_config"
     working_config="$permission_overlay"
     ralph_mcp_overlay_record_temp_file "$working_config"
     config_modified=1
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode permission overlay merged successfully"
+    fi
   fi
 
   if [[ "$want_cache_key" -eq 1 ]]; then
     local provider_field_type jq_err
     provider_field_type="$(jq -r '.provider | type' "$working_config" 2>/dev/null || true)"
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode setCacheKey check: provider_field_type=${provider_field_type:-unknown} provider_id=${provider_id}"
+    fi
     if [[ "$provider_field_type" != "null" && "$provider_field_type" != "object" ]]; then
       if declare -F ralph_run_plan_log >/dev/null 2>&1; then
         ralph_run_plan_log "OpenCode setCacheKey: skipping injection (ambient provider field type is ${provider_field_type}, expected null or object)"
@@ -577,6 +597,9 @@ run_plan_invoke_opencode_config_prepare() {
     else
       local provider_has_set_cache_key="0"
       provider_has_set_cache_key="$(ralph_opencode_provider_set_cache_key_present "$working_config" "$provider_id" 2>/dev/null || true)"
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode setCacheKey detection: provider_has_set_cache_key=${provider_has_set_cache_key}"
+      fi
       if [[ "$provider_has_set_cache_key" == "0" ]]; then
         local cache_key_config
         cache_key_config="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-cache-key-XXXXXX")"
@@ -589,8 +612,14 @@ run_plan_invoke_opencode_config_prepare() {
           RALPH_OPENCODE_CACHE_KEY_PROVIDER_ID="$provider_id"
           export RALPH_OPENCODE_CACHE_KEY_INJECTED RALPH_OPENCODE_CACHE_KEY_PROVIDER_ID
           config_modified=1
+          if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+            ralph_run_plan_log "OpenCode setCacheKey injected successfully for provider=${provider_id}"
+          fi
         else
           echo "Warning: OpenCode setCacheKey jq merge failed: $jq_err" >&2
+          if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+            ralph_run_plan_log "OpenCode setCacheKey jq merge failed: exit_code=$? stderr=${jq_err}"
+          fi
           ralph_mcp_cleanup_config "$cache_key_config"
         fi
       fi
@@ -599,9 +628,15 @@ run_plan_invoke_opencode_config_prepare() {
       if [[ -n "$selected_model_model_id" && " $prompt_cache_passthrough_providers " == *" $provider_id "* ]]; then
         should_inject_prompt_cache_key=1
       fi
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode prompt_cache_key check: should_inject=${should_inject_prompt_cache_key} model_id=${selected_model_model_id:-none} provider_id=${provider_id}"
+      fi
       if [[ "$should_inject_prompt_cache_key" -eq 1 ]]; then
         local prompt_cache_present="0"
         prompt_cache_present="$(ralph_opencode_model_prompt_cache_key_present "$working_config" "$provider_id" "$selected_model_model_id" 2>/dev/null || true)"
+        if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+          ralph_run_plan_log "OpenCode prompt_cache_key detection: prompt_cache_present=${prompt_cache_present}"
+        fi
         if [[ "$prompt_cache_present" == "0" ]]; then
           local prompt_cache_config prompt_cache_plan_slug prompt_cache_key_value
           prompt_cache_plan_slug="${RALPH_PLAN_KEY:-}"
@@ -612,6 +647,9 @@ run_plan_invoke_opencode_config_prepare() {
           fi
           prompt_cache_key_value="ralph-${prompt_cache_plan_slug}"
           prompt_cache_config="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-prompt-cache-key-XXXXXX")"
+          if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+            ralph_run_plan_log "OpenCode prompt_cache_key injecting: key_value=${prompt_cache_key_value} model_id=${selected_model_model_id} provider_id=${provider_id}"
+          fi
           jq_err="$(
             jq -c --arg provider_id "$provider_id" --arg model_id "$selected_model_model_id" --arg prompt_cache_key "$prompt_cache_key_value" '
               .provider = ((.provider // {}) * {($provider_id): ((.provider[$provider_id] // {}) * {models: ((.provider[$provider_id].models // {}) * {($model_id): ((.provider[$provider_id].models[$model_id] // {}) * {options: ((.provider[$provider_id].models[$model_id].options // {}) * {prompt_cache_key: $prompt_cache_key})})})})})
@@ -624,8 +662,14 @@ run_plan_invoke_opencode_config_prepare() {
             RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED="1"
             export RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED
             config_modified=1
+            if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+              ralph_run_plan_log "OpenCode prompt_cache_key injected successfully"
+            fi
           else
             echo "Warning: OpenCode prompt_cache_key jq merge failed: $jq_err" >&2
+            if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+              ralph_run_plan_log "OpenCode prompt_cache_key jq merge failed: exit_code=$? stderr=${jq_err}"
+            fi
             ralph_mcp_cleanup_config "$prompt_cache_config"
           fi
         fi
@@ -640,27 +684,41 @@ run_plan_invoke_opencode_config_prepare() {
       # Shared resolver already produced the effective catalog (ambient user/project
       # servers + selected-agent overrides + Ralph's protected server). Preserve its
       # native OpenCode shape.
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode MCP config: using resolver path=${RALPH_RUNTIME_MCP_RESOLVE_PATH}"
+      fi
       jq -c '.mcp // {}' "$RALPH_RUNTIME_MCP_RESOLVE_PATH" > "$mcp_overlay_json"
     else
       # Fallback when the resolver is not available (e.g. direct helper tests): use the
       # Ralph-only generator.
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode MCP config: using fallback generator"
+      fi
       if ! ralph_mcp_generate_config opencode "$mcp_overlay_json" "$workspace"; then
         ralph_mcp_cleanup_config "$mcp_overlay_json"
         ralph_mcp_cleanup_config "$working_config"
         echo "Error: failed to generate OpenCode MCP config." >&2
+        if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+          ralph_run_plan_log "OpenCode MCP config generation failed"
+        fi
         return 1
       fi
     fi
     ralph_mcp_overlay_record_temp_file "$mcp_overlay_json"
     local merged_mcp
     merged_mcp="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-mcp-merged-XXXXXX")"
-    if ! jq -c --slurpfile mcp "$mcp_overlay_json" \
+    local mcp_merge_err
+    mcp_merge_err="$(jq -c --slurpfile mcp "$mcp_overlay_json" \
       '.mcp = ((.mcp // {}) * ($mcp[0].mcp // {}))' \
-      "$working_config" > "$merged_mcp" 2>/dev/null; then
+      "$working_config" > "$merged_mcp" 2>&1)"
+    if [[ "$?" -ne 0 ]]; then
       ralph_mcp_cleanup_config "$mcp_overlay_json"
       ralph_mcp_cleanup_config "$working_config"
       ralph_mcp_cleanup_config "$merged_mcp"
       echo "Error: failed to merge Ralph MCP config into OPENCODE_CONFIG." >&2
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode MCP merge failed: stderr=${mcp_merge_err}"
+      fi
       return 1
     fi
     ralph_mcp_cleanup_config "$mcp_overlay_json"
@@ -668,6 +726,9 @@ run_plan_invoke_opencode_config_prepare() {
     working_config="$merged_mcp"
     ralph_mcp_overlay_record_temp_file "$working_config"
     config_modified=1
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode MCP config merged successfully"
+    fi
   fi
 
   local final_cache_settings
@@ -677,6 +738,9 @@ run_plan_invoke_opencode_config_prepare() {
   fi
   RALPH_OPENCODE_FINAL_CACHE_SETTINGS="${final_cache_settings:-0}"
   export RALPH_OPENCODE_FINAL_CACHE_SETTINGS
+  if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+    ralph_run_plan_log "OpenCode config final state: cache_key_injected=${RALPH_OPENCODE_CACHE_KEY_INJECTED} prompt_cache_injected=${RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED} final_cache_settings=${RALPH_OPENCODE_FINAL_CACHE_SETTINGS}"
+  fi
   if declare -F run_plan_invoke_opencode_cache_key_injection_record >/dev/null 2>&1; then
     run_plan_invoke_opencode_cache_key_injection_record
   fi

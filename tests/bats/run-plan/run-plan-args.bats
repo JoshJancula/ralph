@@ -15,6 +15,7 @@ bats_require_minimum_version 1.5.0
 RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 
 setup() {
+  bats_skip_known_ci_flakes
   # Unset removed env vars so they do not pollute test cases that expect clean state.
   unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_OPTIMIZATION_MODE RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET
 }

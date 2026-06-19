@@ -192,7 +192,7 @@ Examples:
 
 ### Ralph proxy batching (ralph/hybrid mode)
 
-When Ralph MCP owned tools are active, batch two or more independent read/search/glob/result operations with `ralph_proxy_batch` instead of serial proxy calls. The tool accepts up to **8 read-only operations per call** (override with `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS`). Allowed operations: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`. Shell, async shell, edit, write, and repomap calls must stay outside the batch. After an invocation with consecutive native reads or grep-then-read sequences, the runner may feed forward a telemetry hint recommending batching on the next prompt.
+When Ralph MCP owned tools are active, batch two or more independent read/search/glob/result operations with `ralph_proxy_batch` instead of serial proxy calls. The tool accepts up to **4 read-only operations per call** (default; override with `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS`). Each batch call has a default timeout of **20 seconds** (override with `RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC`); if the timeout is exceeded, the batch returns a partial-failure result with the operations completed so far and reports which operations were not attempted. Allowed operations: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`. Shell, async shell, edit, write, and repomap calls must stay outside the batch. After an invocation with consecutive native reads or grep-then-read sequences, the runner may feed forward a telemetry hint recommending batching on the next prompt.
 
 ### MCP server
 

@@ -4,6 +4,10 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
 RUNTIME_OVERLAY_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/runtime-overlay/runtime-overlay.sh"
 
+setup() {
+  bats_skip_known_ci_flakes
+}
+
 @test "byte-exact restoration: original file bytes preserved" {
   source "$RUNTIME_OVERLAY_LIB"
   

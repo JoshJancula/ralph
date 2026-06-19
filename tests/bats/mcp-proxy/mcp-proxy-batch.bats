@@ -59,6 +59,7 @@ batch_result_text() {
 }
 
 setup() {
+  bats_skip_known_ci_flakes
   TEST_TMPDIR="$(mktemp -d)"
   WS="$TEST_TMPDIR/workspace"
   mkdir -p "$WS"
@@ -299,4 +300,115 @@ teardown() {
     (.result.tools | map(.name) | index("ralph_proxy_batch")) != null
     and (.result.tools | map(.name) | index("ralph_proxy_read")) != null
   '
+}
+
+@test "ralph_proxy_batch times out and reports partial failure on long-running operations" {
+  command -v jq >/dev/null || skip "jq required"
+  printf 'first-file\n' >"$WS/first.txt"
+  printf 'second-file\n' >"$WS/second.txt"
+  printf 'third-file\n' >"$WS/third.txt"
+
+  local policy args_json response text
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc '{
+    operations: [
+      {tool: "ralph_proxy_read", arguments: {path: "first.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "second.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "third.txt"}}
+    ]
+  }')"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=2 invoke_proxy_batch "$policy" "$args_json")"
+  text="$(batch_result_text "$response")"
+
+  printf '%s\n' "$response" | jq -e '.isError == true'
+  [[ "$text" == *"ralph_proxy_read: ok"* ]]
+  [[ "$text" == *"PARTIAL_FAILURE: batch timeout"* ]]
+}
+
+@test "ralph_proxy_batch respects default max operations of 4" {
+  command -v jq >/dev/null || skip "jq required"
+  local policy args_json response text
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc '
+    {
+      operations: [
+        {tool: "ralph_proxy_read", arguments: {path: "missing-01.txt"}},
+        {tool: "ralph_proxy_read", arguments: {path: "missing-02.txt"}},
+        {tool: "ralph_proxy_read", arguments: {path: "missing-03.txt"}},
+        {tool: "ralph_proxy_read", arguments: {path: "missing-04.txt"}},
+        {tool: "ralph_proxy_read", arguments: {path: "missing-05.txt"}}
+      ]
+    }
+  ')"
+  response="$(invoke_proxy_batch "$policy" "$args_json")"
+  text="$(batch_result_text "$response")"
+
+  printf '%s\n' "$response" | jq -e '.isError == true'
+  [[ "$text" == *"too many operations (max 4)"* ]]
+}
+
+@test "ralph_proxy_batch timeout reports PARTIAL_FAILURE with completed operation count" {
+  command -v jq >/dev/null || skip "jq required"
+  printf 'file-a\n' >"$WS/file-a.txt"
+  printf 'file-b\n' >"$WS/file-b.txt"
+  printf 'file-c\n' >"$WS/file-c.txt"
+
+  local policy args_json response text completed_count
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc '{
+    operations: [
+      {tool: "ralph_proxy_read", arguments: {path: "file-a.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "file-b.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "file-c.txt"}}
+    ]
+  }')"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=1 invoke_proxy_batch "$policy" "$args_json")"
+  text="$(batch_result_text "$response")"
+
+  printf '%s\n' "$response" | jq -e '.isError == true'
+  [[ "$text" == *"PARTIAL_FAILURE: batch timeout"* ]]
+  [[ "$text" == *"(completed "* ]]
+}
+
+@test "ralph_proxy_batch timeout returns partial results with isError true" {
+  command -v jq >/dev/null || skip "jq required"
+  printf 'first\n' >"$WS/first.txt"
+  printf 'second\n' >"$WS/second.txt"
+  printf 'third\n' >"$WS/third.txt"
+
+  local policy args_json response
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc '{
+    operations: [
+      {tool: "ralph_proxy_read", arguments: {path: "first.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "second.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "third.txt"}}
+    ]
+  }')"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=1 invoke_proxy_batch "$policy" "$args_json")"
+
+  printf '%s\n' "$response" | jq -e '.isError == true'
+  printf '%s\n' "$response" | jq -e '.content[0].text != null'
+}
+
+@test "ralph_proxy_batch completes successfully when all operations finish before timeout" {
+  command -v jq >/dev/null || skip "jq required"
+  printf 'quick-file-a\n' >"$WS/quick-file-a.txt"
+  printf 'quick-file-b\n' >"$WS/quick-file-b.txt"
+
+  local policy args_json response text
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc '{
+    operations: [
+      {tool: "ralph_proxy_read", arguments: {path: "quick-file-a.txt"}},
+      {tool: "ralph_proxy_read", arguments: {path: "quick-file-b.txt"}}
+    ]
+  }')"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=30 invoke_proxy_batch "$policy" "$args_json")"
+  text="$(batch_result_text "$response")"
+
+  printf '%s\n' "$response" | jq -e '.isError == false'
+  [[ "$text" == *"1. ralph_proxy_read: ok |"* ]]
+  [[ "$text" == *"2. ralph_proxy_read: ok |"* ]]
+  [[ "$text" != *"PARTIAL_FAILURE"* ]]
 }

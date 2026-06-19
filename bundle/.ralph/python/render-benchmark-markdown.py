@@ -420,13 +420,21 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.append("## How to read this")
     lines.append("")
     lines.append(
-        "- **Session usage** shows actual billed tokens (input/output/cache) from the plan run; "
-        "it is independent of the estimated tool-output counterfactuals."
+        "- **Session usage** shows cumulative billed tokens (input/output/cache) from the plan run "
+        "(these are the actual API call totals across all invocations). This is independent of the "
+        "estimated tool-output counterfactuals below."
     )
     lines.append(
-        "- **Tool output: with vs without Ralph** estimates the bytes/tokens that reached the "
-        "model from tool output. 'Actual with Ralph' includes follow-up stored-result readbacks, "
-        "so heavy rereads can drive net savings toward zero even when previews were compact."
+        "- **Tool output: with vs without Ralph** estimates the bytes/tokens that would have reached "
+        "the model from tool output if Ralph had not trimmed it. These are counterfactual estimates "
+        "of what the model would have ingested, not a discount off the billed session input tokens above. "
+        "'Actual with Ralph' includes follow-up stored-result readbacks, so heavy rereads can drive "
+        "net savings toward zero even when previews were compact."
+    )
+    lines.append(
+        "- **Net savings** (in the Tool output table) is the estimated reduction in bytes/tokens sent "
+        "to the model after Ralph's optimizations. This is measured from tool-output differences only, "
+        "not from the billed session usage totals."
     )
     lines.append(
         "- **Stored result follow-ups** distinguishes gross re-read bytes (diagnostic) from "

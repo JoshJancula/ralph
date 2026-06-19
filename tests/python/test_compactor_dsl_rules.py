@@ -832,6 +832,134 @@ class TestPrivateFunctions(unittest.TestCase):
         self.assertFalse(cdr._match_command_string("", ""))
 
 
+class TestExitStatusAwareFields(unittest.TestCase):
+    """Tests for exit-status-aware fields (backward compatible)."""
+
+    def test_only_on_exit_code_matches(self) -> None:
+        """Rule with only_on_exit_code should apply when exit code matches."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            keep_lines=["ERROR"],
+            only_on_exit_code=1,
+        )
+        text = "INFO: starting\nERROR: failed\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(rule, text, exit_status=1)
+        self.assertEqual(result, "ERROR: failed")
+
+    def test_only_on_exit_code_no_match(self) -> None:
+        """Rule with only_on_exit_code should not apply when exit code differs."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            keep_lines=["ERROR"],
+            only_on_exit_code=1,
+        )
+        text = "INFO: starting\nERROR: failed\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(rule, text, exit_status=0)
+        self.assertEqual(result, text)
+
+    def test_skip_on_exit_code_matches_zero(self) -> None:
+        """Rule with skip_on_exit_code should apply when exit code differs."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            keep_lines=["ERROR"],
+            skip_on_exit_code=0,
+        )
+        text = "INFO: starting\nERROR: failed\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(rule, text, exit_status=1)
+        self.assertEqual(result, "ERROR: failed")
+
+    def test_skip_on_exit_code_no_match(self) -> None:
+        """Rule with skip_on_exit_code should not apply when exit code matches."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            keep_lines=["ERROR"],
+            skip_on_exit_code=0,
+        )
+        text = "INFO: starting\nERROR: failed\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(rule, text, exit_status=0)
+        self.assertEqual(result, text)
+
+    def test_backward_compatible_no_exit_conditions(self) -> None:
+        """Rule without exit-status conditions should always apply (backward compatible)."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            keep_lines=["ERROR"],
+        )
+        text = "INFO: starting\nERROR: failed\nDEBUG: details"
+        result_exit_0 = cdr.apply_line_filter_rule(rule, text, exit_status=0)
+        result_exit_1 = cdr.apply_line_filter_rule(rule, text, exit_status=1)
+        self.assertEqual(result_exit_0, "ERROR: failed")
+        self.assertEqual(result_exit_1, "ERROR: failed")
+
+    def test_only_on_exit_code_validation_error(self) -> None:
+        """Invalid only_on_exit_code type should produce validation error."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            only_on_exit_code="not an int",  # type: ignore[arg-type]
+        )
+        errors = rule.validate()
+        self.assertTrue(any("only_on_exit_code must be int or null" in e for e in errors))
+
+    def test_skip_on_exit_code_validation_error(self) -> None:
+        """Invalid skip_on_exit_code type should produce validation error."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            skip_on_exit_code=[1],  # type: ignore[arg-type]
+        )
+        errors = rule.validate()
+        self.assertTrue(any("skip_on_exit_code must be int or null" in e for e in errors))
+
+    def test_conflicting_exit_code_fields_validation_error(self) -> None:
+        """Setting both only_on_exit_code and skip_on_exit_code should error."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            only_on_exit_code=0,
+            skip_on_exit_code=1,
+        )
+        errors = rule.validate()
+        self.assertIn("only_on_exit_code and skip_on_exit_code cannot both be set", errors)
+
+    def test_should_apply_only_on_exit_code(self) -> None:
+        """should_apply should return True only when exit code matches."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            only_on_exit_code=2,
+        )
+        self.assertFalse(rule.should_apply(0))
+        self.assertFalse(rule.should_apply(1))
+        self.assertTrue(rule.should_apply(2))
+
+    def test_should_apply_skip_on_exit_code(self) -> None:
+        """should_apply should return True when exit code does NOT match skip_on_exit_code."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+            skip_on_exit_code=0,
+        )
+        self.assertFalse(rule.should_apply(0))
+        self.assertTrue(rule.should_apply(1))
+        self.assertTrue(rule.should_apply(2))
+
+    def test_should_apply_no_conditions(self) -> None:
+        """should_apply should always return True when no exit-status conditions set."""
+        rule = cdr.DslLineFilterRule(
+            rule_id="test-rule",
+            command_matcher="ls",
+        )
+        self.assertTrue(rule.should_apply(0))
+        self.assertTrue(rule.should_apply(1))
+        self.assertTrue(rule.should_apply(127))
+
+
 class TestComplexScenarios(unittest.TestCase):
     """Complex integration scenarios."""
 
@@ -897,6 +1025,56 @@ Changes ready"""
         result = cdr.apply_line_filter_rule(rule, text)
         expected = "On branch main\nChanges ready"
         self.assertEqual(result, expected)
+
+    def test_json_loading_with_exit_status_fields(self) -> None:
+        """Load and apply rules with new exit-status-aware fields from JSON."""
+        import json
+        data = {
+            "rules": [
+                {
+                    "rule_id": "failure-handler",
+                    "command_matcher": "test ",
+                    "keep_lines": ["ERROR", "FAIL"],
+                    "only_on_exit_code": 1
+                },
+                {
+                    "rule_id": "success-handler",
+                    "command_matcher": "test ",
+                    "keep_lines": ["PASS"],
+                    "skip_on_exit_code": 0
+                }
+            ]
+        }
+        json_text = json.dumps(data)
+        rules, errors = cdr.load_dsl_rules(json_text)
+        self.assertEqual(len(rules), 2, f"Expected 2 rules, got {len(rules)}, errors: {errors}")
+        self.assertEqual(errors, [])
+
+        failure_rule = rules[0]
+        self.assertEqual(failure_rule.rule_id, "failure-handler")
+        self.assertEqual(failure_rule.only_on_exit_code, 1)
+
+        success_rule = rules[1]
+        self.assertEqual(success_rule.rule_id, "success-handler")
+        self.assertEqual(success_rule.skip_on_exit_code, 0)
+
+        # Test failure rule with exit_status=1
+        text = "INFO: starting\nERROR: process failed\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(failure_rule, text, exit_status=1)
+        self.assertEqual(result, "ERROR: process failed")
+
+        # Test failure rule with exit_status=0 (should not apply)
+        result = cdr.apply_line_filter_rule(failure_rule, text, exit_status=0)
+        self.assertEqual(result, text)
+
+        # Test success rule with exit_status=0 (should not apply due to skip_on_exit_code=0)
+        text_success = "INFO: starting\nPASS: all tests\nDEBUG: details"
+        result = cdr.apply_line_filter_rule(success_rule, text_success, exit_status=0)
+        self.assertEqual(result, text_success)
+
+        # Test success rule with exit_status=1 (should apply due to skip_on_exit_code=0)
+        result = cdr.apply_line_filter_rule(success_rule, text_success, exit_status=1)
+        self.assertEqual(result, "PASS: all tests")
 
 
 if __name__ == "__main__":

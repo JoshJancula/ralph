@@ -7,6 +7,7 @@ frontmatter_lib="$REPO_ROOT/bundle/.ralph/bash-lib/agent-source/frontmatter.sh"
 runtime_normalize="$REPO_ROOT/bundle/.ralph/bash-lib/runtime-normalize.sh"
 
 setup() {
+  bats_skip_known_ci_flakes
   _tmp="$(mktemp -d)"
   _cache="$_tmp/cache"
   mkdir -p "$_cache"

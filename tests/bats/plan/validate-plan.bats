@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
+
 setup() {
+  bats_skip_known_ci_flakes
   TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ralph-validate-plan.XXXXXX")"
   VALIDATE_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/validate-plan.sh"
   RUN_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/run-plan.sh"

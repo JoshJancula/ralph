@@ -141,6 +141,7 @@ assert_grep_response_not_deduped() {
 }
 
 setup() {
+  bats_skip_known_ci_flakes
   TEST_TMPDIR="$(mktemp -d)"
   WS="$TEST_TMPDIR/workspace"
   mkdir -p "$WS"

@@ -55,6 +55,12 @@
       ],
       "max_lines": 80,
       "on_empty": "passthrough"
+    },
+    {
+      "rule_id": "exit-status-aware-test",
+      "command_matcher": "test-failure ",
+      "keep_lines": ["ERROR", "FAIL"],
+      "only_on_exit_code": 1
     }
   ]
 }

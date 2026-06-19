@@ -1,0 +1,19 @@
+   Compiling mylib v0.1.0 (/Users/dev/mylib)
+warning: unused variable: `x`
+  --> src/lib.rs:5:9
+   |
+5  |     let x = 5;
+   |         ^ help: if this is intentional, consider using `_x`
+   |
+   = note: `#[warn(unused_variables)]` is on by default
+
+warning: `mylib` (lib) generated 1 warning
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s
+error[E0425]: cannot find function `undefined_function` in this scope
+  --> src/lib.rs:10:5
+   |
+10 | undefined_function();
+   |     ^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error: could not compile `mylib` (lib target for profile `dev`)

@@ -24,6 +24,22 @@ class DslLineFilterRule:
     max_lines: int | None = None
     output_header: str | None = None
     on_empty: str = "passthrough"
+    only_on_exit_code: int | None = None
+    skip_on_exit_code: int | None = None
+
+    def should_apply(self, exit_status: int) -> bool:
+        """Check if this rule should apply based on exit status conditions.
+
+        Returns True if:
+        - No exit-status conditions are set (backward compatible), OR
+        - only_on_exit_code is set and exit_status matches, OR
+        - skip_on_exit_code is set and exit_status does NOT match
+        """
+        if self.only_on_exit_code is not None:
+            return exit_status == self.only_on_exit_code
+        if self.skip_on_exit_code is not None:
+            return exit_status != self.skip_on_exit_code
+        return True
 
     def validate(self) -> list[str]:
         """Return list of validation errors, or empty list if valid."""
@@ -90,6 +106,15 @@ class DslLineFilterRule:
 
         if self.on_empty not in ("passthrough", "empty", "header"):
             errors.append(f"on_empty must be one of 'passthrough', 'empty', 'header', got '{self.on_empty}'")
+
+        if self.only_on_exit_code is not None and not isinstance(self.only_on_exit_code, int):
+            errors.append(f"only_on_exit_code must be int or null, got {type(self.only_on_exit_code).__name__}")
+
+        if self.skip_on_exit_code is not None and not isinstance(self.skip_on_exit_code, int):
+            errors.append(f"skip_on_exit_code must be int or null, got {type(self.skip_on_exit_code).__name__}")
+
+        if self.only_on_exit_code is not None and self.skip_on_exit_code is not None:
+            errors.append("only_on_exit_code and skip_on_exit_code cannot both be set")
 
         return errors
 
@@ -199,6 +224,14 @@ def _parse_rule_dict(data: dict[str, Any]) -> DslLineFilterRule:
     if not isinstance(on_empty, str):
         raise ValueError(f"'on_empty' must be string, got {type(on_empty).__name__}")
 
+    only_on_exit_code = data.get("only_on_exit_code")
+    if only_on_exit_code is not None and not isinstance(only_on_exit_code, int):
+        raise ValueError(f"'only_on_exit_code' must be int or null, got {type(only_on_exit_code).__name__}")
+
+    skip_on_exit_code = data.get("skip_on_exit_code")
+    if skip_on_exit_code is not None and not isinstance(skip_on_exit_code, int):
+        raise ValueError(f"'skip_on_exit_code' must be int or null, got {type(skip_on_exit_code).__name__}")
+
     unknown_fields = set(data.keys()) - {
         "rule_id",
         "command_matcher",
@@ -211,6 +244,8 @@ def _parse_rule_dict(data: dict[str, Any]) -> DslLineFilterRule:
         "max_lines",
         "output_header",
         "on_empty",
+        "only_on_exit_code",
+        "skip_on_exit_code",
     }
     if unknown_fields:
         raise ValueError(f"Unknown fields: {sorted(unknown_fields)}")
@@ -227,6 +262,8 @@ def _parse_rule_dict(data: dict[str, Any]) -> DslLineFilterRule:
         max_lines=max_lines,
         output_header=output_header,
         on_empty=on_empty,
+        only_on_exit_code=only_on_exit_code,
+        skip_on_exit_code=skip_on_exit_code,
     )
 
 
@@ -287,8 +324,21 @@ def _match_command_string(command: str, matcher: str) -> bool:
     return cmd_name == matcher or cmd_name == matcher.split("/")[-1]
 
 
-def apply_line_filter_rule(rule: DslLineFilterRule, text: str) -> str:
-    """Apply a single line-filter rule to text and return result."""
+def apply_line_filter_rule(rule: DslLineFilterRule, text: str, exit_status: int = 0) -> str:
+    """Apply a single line-filter rule to text and return result.
+
+    Args:
+        rule: The line-filter rule to apply.
+        text: The text to filter.
+        exit_status: The exit status of the command (default 0). Used for exit-status-aware
+                     filtering via only_on_exit_code and skip_on_exit_code fields.
+
+    Returns:
+        Filtered text, or original text if rule does not apply or result is empty per on_empty.
+    """
+    if not rule.should_apply(exit_status):
+        return text
+
     lines = text.split("\n") if text else []
 
     if rule.strip_ansi:

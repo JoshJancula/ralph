@@ -140,11 +140,19 @@ ralph_mcp_proxy_is_owned_tool() {
 }
 
 ralph_mcp_proxy_batch_max_operations() {
-  local max="${RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS:-8}"
+  local max="${RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS:-4}"
   if [[ ! "$max" =~ ^[0-9]+$ ]] || [[ "$max" -lt 1 ]]; then
-    max=8
+    max=4
   fi
   printf '%s\n' "$max"
+}
+
+ralph_mcp_proxy_batch_timeout_sec() {
+  local timeout="${RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC:-20}"
+  if [[ ! "$timeout" =~ ^[0-9]+$ ]] || [[ "$timeout" -lt 1 ]]; then
+    timeout=20
+  fi
+  printf '%s\n' "$timeout"
 }
 
 ralph_mcp_proxy_batch_operation_tool_allowed() {
@@ -3538,9 +3546,12 @@ ralph_mcp_proxy_owned_tool_batch() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
   local max_ops op_count i=0 report_lines=() report preview op_json op_tool op_args op_result op_text op_is_error op_status
-  local op_result_tmp
+  local op_result_tmp batch_timeout_sec start_epoch current_epoch elapsed_sec
+  local has_timeout_error=0
 
   max_ops="$(ralph_mcp_proxy_batch_max_operations)"
+  batch_timeout_sec="$(ralph_mcp_proxy_batch_timeout_sec)"
+  start_epoch="$(date +%s)"
 
   if ! jq -e '.operations | type == "array"' <<< "$args_json" >/dev/null 2>&1; then
     ralph_mcp_proxy_tool_error_json "ralph_proxy_batch requires operations array"
@@ -3558,6 +3569,14 @@ ralph_mcp_proxy_owned_tool_batch() {
   fi
 
   while [[ "$i" -lt "$op_count" ]]; do
+    current_epoch="$(date +%s)"
+    elapsed_sec=$((current_epoch - start_epoch))
+    if [[ "$elapsed_sec" -ge "$batch_timeout_sec" ]]; then
+      has_timeout_error=1
+      report_lines+=("$((i + 1)). (remaining operations): timeout | batch exceeded ${batch_timeout_sec}s limit")
+      break
+    fi
+
     op_json="$(jq -c ".operations[$i]" <<< "$args_json")"
     op_tool="$(jq -r '.tool // empty' <<< "$op_json")"
     op_args="$(jq -c '.arguments // {}' <<< "$op_json")"
@@ -3612,7 +3631,12 @@ ralph_mcp_proxy_owned_tool_batch() {
   done
 
   report="$(printf '%s\n' "${report_lines[@]}")"
-  ralph_mcp_proxy_tool_success_json "$report"
+  if [[ "$has_timeout_error" == "1" ]]; then
+    report+=$'\n'"PARTIAL_FAILURE: batch timeout (completed $((i - 1))/$op_count operations)"
+    ralph_mcp_proxy_tool_error_json "$report"
+  else
+    ralph_mcp_proxy_tool_success_json "$report"
+  fi
 }
 
 ralph_mcp_proxy_call_owned_tool() {

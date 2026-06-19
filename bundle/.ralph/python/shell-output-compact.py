@@ -47,6 +47,12 @@ from shell_command_registry import (
 # Compactor-only families (not in the shared rewrite registry).
 FAMILY_CARGO_TEST = "cargo_test"
 FAMILY_GO_TEST = "go_test"
+FAMILY_NPM_INSTALL = "npm_install"
+FAMILY_YARN_INSTALL = "yarn_install"
+FAMILY_PIP_INSTALL = "pip_install"
+FAMILY_CARGO_BUILD = "cargo_build"
+FAMILY_MAVEN_BUILD = "maven_build"
+FAMILY_GRADLE_BUILD = "gradle_build"
 FAMILY_GENERIC_LARGE = "generic_large"
 
 _GENERIC_LARGE_MIN_BYTES = 4096
@@ -291,6 +297,62 @@ def _classifier_cargo_test(command: str) -> bool:
 def _classifier_go_test(command: str) -> bool:
     tokens = (command or "").strip().lower().split()
     return len(tokens) >= 2 and tokens[0] == "go" and tokens[1] == "test"
+
+
+def _classifier_npm_install(command: str) -> bool:
+    tokens = (command or "").strip().lower().split()
+    if len(tokens) < 2:
+        return False
+    first = tokens[0]
+    second = tokens[1]
+    return first in ("npm", "pnpm") and second in ("install", "ci")
+
+
+def _classifier_yarn_install(command: str) -> bool:
+    tokens = (command or "").strip().lower().split()
+    if len(tokens) < 1:
+        return False
+    first = tokens[0]
+    if first != "yarn":
+        return False
+    if len(tokens) == 1:
+        return True
+    second = tokens[1]
+    return second == "install"
+
+
+def _classifier_pip_install(command: str) -> bool:
+    tokens = (command or "").strip().lower().split()
+    if len(tokens) < 2:
+        return False
+    first = tokens[0]
+    second = tokens[1]
+    return first in ("pip", "pip3") and second == "install"
+
+
+def _classifier_cargo_build(command: str) -> bool:
+    tokens = (command or "").strip().lower().split()
+    if len(tokens) < 2:
+        return False
+    first = tokens[0]
+    second = tokens[1]
+    return first == "cargo" and second == "build"
+
+
+def _classifier_maven_build(command: str) -> bool:
+    cmd = (command or "").strip().lower()
+    if not cmd:
+        return False
+    return cmd.startswith("mvn ") or cmd == "mvn"
+
+
+def _classifier_gradle_build(command: str) -> bool:
+    cmd = (command or "").strip().lower()
+    if not cmd:
+        return False
+    tokens = cmd.split()
+    first = tokens[0] if tokens else ""
+    return first in ("gradle", "./gradlew", "gradlew.bat", "gradlew")
 
 
 def _unwrap_native_shell_wrapper_command(command: str) -> str:
@@ -1453,6 +1515,248 @@ def _compact_go_test(
     return stdout, stderr, False
 
 
+def _compact_npm_install(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    warning_lines = []
+    summary_lines = []
+    package_count = 0
+
+    for line in lines:
+        lower = line.lower()
+        if re.search(r"(?:error|err!)", lower):
+            error_lines.append(line)
+        elif re.search(r"warn", lower):
+            warning_lines.append(line)
+        elif re.search(r"(?:added|audited|removed|changed|found \d+).*packages?", lower):
+            summary_lines.append(line)
+            if "added" in lower:
+                try:
+                    count = int(re.search(r"(\d+)\s+(?:added|packages?)", lower).group(1))
+                    package_count += count
+                except (AttributeError, ValueError):
+                    pass
+        elif re.search(r"(?:up to date|already satisfied|done in)", lower):
+            summary_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"npm install errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        if len(error_lines) > 10:
+            parts.append(f"... and {len(error_lines) - 10} more error line(s)")
+        if warning_lines:
+            parts.append(f"({len(warning_lines)} warning(s) omitted)")
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and (summary_lines or package_count > 0):
+        parts = [f"npm install complete (exit {exit_status})"]
+        if summary_lines:
+            parts.extend(summary_lines[:5])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
+def _compact_yarn_install(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    summary_lines = []
+
+    for line in lines:
+        lower = line.lower()
+        if re.search(r"(?:error|fail)", lower):
+            error_lines.append(line)
+        elif re.search(r"(?:added|installed|upgraded|removed|done)", lower):
+            summary_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"yarn install errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and summary_lines:
+        parts = [f"yarn install complete (exit {exit_status})"]
+        parts.extend(summary_lines[:3])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
+def _compact_pip_install(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    summary_lines = []
+    package_lines = []
+
+    for line in lines:
+        lower = line.lower()
+        if re.search(r"(?:error|failed)", lower):
+            error_lines.append(line)
+        elif re.search(r"(?:successfully installed|requirement already satisfied)", lower):
+            summary_lines.append(line)
+        elif re.search(r"^collecting|^installing collected", lower):
+            package_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"pip install errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and (summary_lines or package_lines):
+        parts = [f"pip install complete (exit {exit_status})"]
+        if summary_lines:
+            parts.extend(summary_lines[:3])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
+def _compact_cargo_build(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    warning_lines = []
+    summary_lines = []
+
+    for line in lines:
+        lower = line.lower()
+        if re.search(r"(?:error|failed)", lower) and "error:" in line:
+            error_lines.append(line)
+        elif re.search(r"^\s*warning", lower):
+            warning_lines.append(line)
+        elif re.search(r"(?:finished|compiling|completed)", lower):
+            summary_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"cargo build errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        if warning_lines:
+            parts.append(f"({len(warning_lines)} warning(s) omitted)")
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and summary_lines:
+        parts = [f"cargo build complete (exit {exit_status})"]
+        parts.extend(summary_lines[:3])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
+def _compact_maven_build(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    summary_lines = []
+
+    for line in lines:
+        lower = line.lower()
+        if "[error]" in lower:
+            error_lines.append(line)
+        elif re.search(r"(?:build success|build failure|tests run:)", lower):
+            summary_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"maven build errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and summary_lines:
+        parts = [f"maven build complete (exit {exit_status})"]
+        parts.extend(summary_lines[:3])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
+def _compact_gradle_build(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    text = stdout if stdout.strip() else stderr
+    if not text.strip():
+        return stdout, stderr, False
+    lines = text.splitlines()
+
+    error_lines = []
+    summary_lines = []
+
+    for line in lines:
+        lower = line.lower()
+        if re.search(r"(?:error|failed|exception)", lower):
+            error_lines.append(line)
+        elif re.search(r"(?:build successful|build failed|task.*completed)", lower):
+            summary_lines.append(line)
+
+    if exit_status != 0 and error_lines:
+        parts = [f"gradle build errors (exit {exit_status}) for: {command.strip()}"]
+        parts.extend(error_lines[:10])
+        output = "\n".join(parts)
+        return output, "", True
+
+    if exit_status == 0 and summary_lines:
+        parts = [f"gradle build complete (exit {exit_status})"]
+        parts.extend(summary_lines[:3])
+        output = "\n".join(parts)
+        return output, "", True
+
+    return stdout, stderr, False
+
+
 def _compact_ls(
     command: str,
     stdout: str,
@@ -2034,7 +2338,7 @@ def _dsl_compactor_for_rule(rule: Any) -> CompactorFn:
         text = stdout if stdout.strip() else stderr
         if not text.strip():
             return stdout, stderr, False
-        filtered = dsl.apply_line_filter_rule(rule, text)
+        filtered = dsl.apply_line_filter_rule(rule, text, exit_status)
         if filtered == text:
             return stdout, stderr, False
         if stdout.strip():
@@ -2174,6 +2478,42 @@ _CORE_FAMILY_REGISTRY: list[CompactorFamily] = [
         family_id=FAMILY_GO_TEST,
         classifier=_classifier_go_test,
         compactor=_compact_go_test,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_NPM_INSTALL,
+        classifier=_classifier_npm_install,
+        compactor=_compact_npm_install,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_YARN_INSTALL,
+        classifier=_classifier_yarn_install,
+        compactor=_compact_yarn_install,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_PIP_INSTALL,
+        classifier=_classifier_pip_install,
+        compactor=_compact_pip_install,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_CARGO_BUILD,
+        classifier=_classifier_cargo_build,
+        compactor=_compact_cargo_build,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_MAVEN_BUILD,
+        classifier=_classifier_maven_build,
+        compactor=_compact_maven_build,
+        safety_metadata={"safe": True, "phase": "phase3"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_GRADLE_BUILD,
+        classifier=_classifier_gradle_build,
+        compactor=_compact_gradle_build,
         safety_metadata={"safe": True, "phase": "phase3"},
     ),
     CompactorFamily(
