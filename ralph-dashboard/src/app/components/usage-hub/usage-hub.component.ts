@@ -232,12 +232,14 @@ interface UsageRunRecord {
         <section class="savings-panel" aria-label="Benchmark overview">
           <div class="savings-panel-header">
             <h3>Benchmark</h3>
-            <span class="savings-panel-meta" *ngIf="savingsReport?.run_count">
-              Measured across {{ savingsReport.run_count }} runs
-              <span *ngIf="formatSavingsDateRange(savingsReport.date_range)">
-                • {{ formatSavingsDateRange(savingsReport.date_range) }}
+            @if (savingsReport?.run_count; as runCount) {
+              <span class="savings-panel-meta">
+                Measured across {{ runCount }} runs
+                @if (formatSavingsDateRange(savingsReport?.date_range); as savingsDateRange) {
+                  <span> • {{ savingsDateRange }}</span>
+                }
               </span>
-            </span>
+            }
           </div>
           @if (savingsLoading) {
             <div class="loading">Loading benchmark data...</div>
@@ -1411,7 +1413,10 @@ export class UsageHubComponent implements OnInit {
     return `${(ratio * 100).toFixed(1)}%`;
   }
 
-  formatSavingsDateRange(range: { started_at: string | null; ended_at: string | null }): string {
+  formatSavingsDateRange(range: { started_at: string | null; ended_at: string | null } | null | undefined): string {
+    if (!range) {
+      return '';
+    }
     const started = range.started_at ? range.started_at.split('T')[0] : '';
     const ended = range.ended_at ? range.ended_at.split('T')[0] : '';
     if (started && ended) {

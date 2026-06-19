@@ -23,7 +23,7 @@ jobs:
         uses: bats-core/bats-action@4.0.0
 
       - name: Install GNU parallel
-        run: apt-get update && apt-get install -y parallel
+        run: sudo apt-get update && sudo apt-get install -y parallel
 
       - name: Generate test fixtures for .ralph-workspace/
         run: bash scripts/setup-test-fixtures.sh

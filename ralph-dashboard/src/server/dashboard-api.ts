@@ -466,20 +466,29 @@ function estimateTokensFromBytes(bytes: number): number {
 }
 
 function mergeSavingsBucket(target: SavingsBucket, source: Record<string, unknown>): void {
-  const numericKeys: (keyof SavingsBucket)[] = [
-    'pre_optimization_bytes',
-    'post_optimization_bytes',
-    'saved_bytes',
-    'count',
-    'pre_optimization_tokens',
-    'post_optimization_tokens',
-    'saved_tokens',
-    'token_cap_triggers',
-  ];
-  for (const key of numericKeys) {
-    if (key in source) {
-      target[key] += toInt(source[key]);
-    }
+  if ('pre_optimization_bytes' in source) {
+    target.pre_optimization_bytes += toInt(source['pre_optimization_bytes']);
+  }
+  if ('post_optimization_bytes' in source) {
+    target.post_optimization_bytes += toInt(source['post_optimization_bytes']);
+  }
+  if ('saved_bytes' in source) {
+    target.saved_bytes += toInt(source['saved_bytes']);
+  }
+  if ('count' in source) {
+    target.count += toInt(source['count']);
+  }
+  if ('pre_optimization_tokens' in source) {
+    target.pre_optimization_tokens += toInt(source['pre_optimization_tokens']);
+  }
+  if ('post_optimization_tokens' in source) {
+    target.post_optimization_tokens += toInt(source['post_optimization_tokens']);
+  }
+  if ('saved_tokens' in source) {
+    target.saved_tokens += toInt(source['saved_tokens']);
+  }
+  if ('token_cap_triggers' in source) {
+    target.token_cap_triggers += toInt(source['token_cap_triggers']);
   }
   if ('hidden_from_context' in source && target.hidden_from_context !== undefined) {
     target.hidden_from_context! += toInt(source['hidden_from_context']);
@@ -863,13 +872,13 @@ function analyzeResultWindowingLog(path: string): ReadbackSummary {
     }
     try {
       const record = JSON.parse(trimmed) as Record<string, unknown>;
-      const event = String(record.event ?? '');
-      const resultId = String(record.resultId ?? '');
+      const event = String(record['event'] ?? '');
+      const resultId = String(record['resultId'] ?? '');
       if (event === 'envelope' && resultId) {
-        const originalBytes = toInt(record.originalBytes);
-        const returnedBytes = toInt(record.returnedBytes);
-        let originalTokens = toInt(record.originalTokens);
-        let returnedTokens = toInt(record.returnedTokens);
+        const originalBytes = toInt(record['originalBytes']);
+        const returnedBytes = toInt(record['returnedBytes']);
+        let originalTokens = toInt(record['originalTokens']);
+        let returnedTokens = toInt(record['returnedTokens']);
         if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
           originalTokens = estimateTokensFromBytes(originalBytes);
           returnedTokens = estimateTokensFromBytes(returnedBytes);
@@ -881,14 +890,14 @@ function analyzeResultWindowingLog(path: string): ReadbackSummary {
           returned_tokens: returnedTokens,
         });
       } else if (event === 'readback' && resultId) {
-        const returnedBytes = toInt(record.returnedBytes);
-        let returnedTokens = toInt(record.returnedTokens);
+        const returnedBytes = toInt(record['returnedBytes']);
+        let returnedTokens = toInt(record['returnedTokens']);
         if (returnedTokens <= 0 && returnedBytes > 0) {
           returnedTokens = estimateTokensFromBytes(returnedBytes);
         }
         readbacks.push({
           resultId,
-          view: String(record.view ?? 'compacted'),
+          view: String(record['view'] ?? 'compacted'),
           returnedBytes,
           returnedTokens,
         });
@@ -1832,9 +1841,19 @@ function mergeToolCallCounts(
   target: ToolCallClassificationMetrics,
   source: ToolCallClassificationMetrics,
 ): void {
-  for (const key of TOOL_CALL_ACCOUNTING_KEYS) {
-    target[key] += source[key];
-  }
+  target.ralph_proxy_calls += source.ralph_proxy_calls;
+  target.ralph_knowledge_calls += source.ralph_knowledge_calls;
+  target.other_mcp_calls += source.other_mcp_calls;
+  target.native_read_like_calls += source.native_read_like_calls;
+  target.native_write_like_calls += source.native_write_like_calls;
+  target.native_file_read_calls += source.native_file_read_calls;
+  target.native_read_compatibility_calls += source.native_read_compatibility_calls;
+  target.native_search_calls += source.native_search_calls;
+  target.native_shell_calls += source.native_shell_calls;
+  target.ralph_mcp_calls += source.ralph_mcp_calls;
+  target.runtime_hook_rewrite_calls += source.runtime_hook_rewrite_calls;
+  target.runtime_hook_compaction_calls += source.runtime_hook_compaction_calls;
+  target.unknown_tool_calls += source.unknown_tool_calls;
 }
 
 function accumulateToolCallsFromRecord(

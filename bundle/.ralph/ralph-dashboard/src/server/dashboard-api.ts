@@ -894,9 +894,19 @@ function mergeToolCallCounts(
   target: ToolCallClassificationMetrics,
   source: ToolCallClassificationMetrics,
 ): void {
-  for (const key of TOOL_CALL_ACCOUNTING_KEYS) {
-    target[key] += source[key];
-  }
+  target.ralph_proxy_calls += source.ralph_proxy_calls;
+  target.ralph_knowledge_calls += source.ralph_knowledge_calls;
+  target.other_mcp_calls += source.other_mcp_calls;
+  target.native_read_like_calls += source.native_read_like_calls;
+  target.native_write_like_calls += source.native_write_like_calls;
+  target.native_file_read_calls += source.native_file_read_calls;
+  target.native_read_compatibility_calls += source.native_read_compatibility_calls;
+  target.native_search_calls += source.native_search_calls;
+  target.native_shell_calls += source.native_shell_calls;
+  target.ralph_mcp_calls += source.ralph_mcp_calls;
+  target.runtime_hook_rewrite_calls += source.runtime_hook_rewrite_calls;
+  target.runtime_hook_compaction_calls += source.runtime_hook_compaction_calls;
+  target.unknown_tool_calls += source.unknown_tool_calls;
 }
 
 function accumulateToolCallsFromRecord(

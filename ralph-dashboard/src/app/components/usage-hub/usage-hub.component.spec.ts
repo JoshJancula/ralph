@@ -491,6 +491,197 @@ describe('UsageHubComponent', () => {
     expect(fixture.componentInstance.summary).toBeNull();
   });
 
+  it('normalizes helper inputs and workspace scoping fallbacks', () => {
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    const component = fixture.componentInstance as any;
+    const workspaceSelector = TestBed.inject(WorkspaceSelectorService);
+
+    workspaceSelector.workspaces.set([
+      { path: '/work/a', label: 'Workspace A', exists: true, root: '', projectRoot: '', workspaceRoot: '/work/a' },
+      { path: '/work/b', label: undefined as unknown as string, exists: true, root: '', projectRoot: '', workspaceRoot: '/work/b' },
+    ] as WorkspaceRegistry[]);
+    workspaceSelector.selectedWorkspacePath.set(null);
+
+    expect(component.normalizeKindFilter('plan')).toBe('plan');
+    expect(component.normalizeKindFilter('bogus')).toBe('all');
+    expect(component.normalizeSelection('  codex  ')).toBe('codex');
+    expect(component.normalizeSelection('')).toBe('all');
+    expect(component.normalizeRuntime('')).toBe('unknown');
+    expect(component.normalizeRuntime('claude')).toBe('claude');
+    expect(component.normalizeModel('')).toBe('(unspecified)');
+    expect(component.normalizeModel('sonnet')).toBe('sonnet');
+    expect(component.normalizeInvocations(0)).toBe(1);
+    expect(component.normalizeInvocations(2.4)).toBe(2);
+    expect(component.formatSavingsDateRange(null)).toBe('');
+    expect(component.getWorkspaceDisplayName('/missing/path')).toBe('(unknown)');
+    expect(component.getWorkspaceDisplayName('/work/a/logs/plan-1')).toBe('Workspace A');
+    expect(component.getWorkspaceDisplayName('/work/b/logs/plan-2')).toBe('b');
+    expect(component.isShowingAllWorkspaces()).toBe(true);
+
+    workspaceSelector.selectedWorkspacePath.set('/work/a');
+    expect(component.isShowingAllWorkspaces()).toBe(false);
+
+    const selectedRecord = {
+      item: { workspace_root: '/work/a' },
+    } as { item: { workspace_root: string } };
+    const otherRecord = {
+      item: { workspace_root: '/work/b' },
+    } as { item: { workspace_root: string } };
+    expect(component.passesWorkspaceScopeFilter(selectedRecord)).toBe(true);
+    expect(component.passesWorkspaceScopeFilter(otherRecord)).toBe(false);
+    workspaceSelector.selectedWorkspacePath.set('/work/b');
+    expect(component.getWorkspaceDisplayName('/work/b/logs/plan-2')).toBe('b');
+    workspaceSelector.selectedWorkspacePath.set(null);
+
+    expect(component.passesDateFilter(null, null, null)).toBe(true);
+    expect(component.passesDateFilter(null, 10, null)).toBe(false);
+    expect(component.passesDateFilter(5, 10, null)).toBe(false);
+    expect(component.passesDateFilter(25, null, 20)).toBe(false);
+    expect(component.passesDateFilter(15, 10, 20)).toBe(true);
+
+    component.filterModel = 'missing';
+    component.recomputeModelOptions({
+      overall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 0,
+        count: 1,
+      },
+      plans: [
+        {
+          path: '/logs/plan-1/plan-usage-summary.json',
+          plan_key: 'plan-1',
+          artifact_ns: 'plan-1',
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 1,
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          model_breakdown: [
+            {
+              runtime: 'codex',
+              model: 'sonnet',
+              invocations: 1,
+              elapsed_seconds: 1,
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              max_turn_total_tokens: 0,
+              cache_hit_ratio: 0,
+            },
+          ],
+        },
+      ],
+      orchestrations: [],
+      projects: [],
+    });
+    expect(component.modelOptions).toContain('sonnet');
+    expect(component.filterModel).toBe('all');
+
+    workspaceSelector.workspaces.set([
+      { path: '/work/c', label: 'Workspace C', exists: true, root: '', projectRoot: '', workspaceRoot: undefined as unknown as string },
+    ] as WorkspaceRegistry[]);
+    workspaceSelector.selectedWorkspacePath.set('/work/c');
+    expect(component.passesWorkspaceScopeFilter({ item: { workspace_root: '/anywhere' } } as any)).toBe(true);
+
+    component.recomputeModelOptions(null);
+    expect(component.modelOptions).toEqual([]);
+    expect(component.filterModel).toBe('all');
+
+    component.filterRuntime = 'codex';
+    component.recomputeRuntimeOptions(null);
+    expect(component.runtimeOptions).toEqual([]);
+    expect(component.filterRuntime).toBe('all');
+
+    component.applyFilters({
+      overall: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        max_turn_total_tokens: 0,
+        cache_hit_ratio: 0,
+        elapsed_seconds: 0,
+        count: 2,
+      },
+      plans: [
+        {
+          path: '/logs/plan-a/plan-usage-summary.json',
+          plan_key: 'plan-a',
+          artifact_ns: 'plan-a',
+          started_at: '2026-04-16T09:00:00.000Z',
+          elapsed_seconds: 1,
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          tool_calls_total: 1,
+          tool_calls: { ralph_proxy_calls: 1 } as any,
+          overlay: {
+            native_hooks_effective: true,
+            mcp_effective: false,
+            native_hook_events: 1,
+            hook_compactions: 0,
+            hook_rewrites: 0,
+            hook_original_bytes: 100,
+            hook_compacted_bytes: 50,
+            hook_bytes_saved: 50,
+            runtime_overlay_mode: 'native',
+            runtime_overlay_warnings: [],
+          },
+        },
+      ],
+      orchestrations: [
+        {
+          path: '/logs/orch-b/orchestration-usage-summary.json',
+          plan_key: 'orch-b',
+          artifact_ns: 'orch-b',
+          stage_id: 'beta',
+          started_at: '2026-04-17T09:00:00.000Z',
+          runtime: 'claude',
+          model: 'sonnet',
+          elapsed_seconds: 2,
+          input_tokens: 2,
+          output_tokens: 2,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          max_turn_total_tokens: 0,
+          cache_hit_ratio: 0,
+          tool_calls_total: 1,
+          tool_calls: { ralph_proxy_calls: 1 } as any,
+          overlay: {
+            native_hooks_effective: false,
+            mcp_effective: true,
+            native_hook_events: 1,
+            hook_compactions: 0,
+            hook_rewrites: 0,
+            hook_original_bytes: 100,
+            hook_compacted_bytes: 100,
+            hook_bytes_saved: 0,
+            runtime_overlay_mode: 'mcp',
+            runtime_overlay_warnings: ['warn'],
+          },
+        },
+      ],
+      projects: [],
+    });
+    expect(component.toolCallRunRows).toHaveLength(2);
+
+    component.applyFilters(null);
+    expect(component.runtimeRows).toEqual([]);
+    expect(component.modelRows).toEqual([]);
+  });
+
   it('setFilterKind plan keeps only plan runs', () => {
     const fixture = TestBed.createComponent(UsageHubComponent);
     fixture.detectChanges();

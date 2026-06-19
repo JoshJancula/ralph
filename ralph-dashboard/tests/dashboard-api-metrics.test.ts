@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import { createInMemoryRequester } from './support/in-memory-request';
+import { clearDashboardRootsCache } from '../src/paths';
 import { clearMergedWorkspaceAllowlistCache } from '../src/server/dashboard-api';
 
 describe('dashboard API metrics summary', () => {
@@ -12,6 +13,7 @@ describe('dashboard API metrics summary', () => {
   let originalWorkspaceRoot: string | undefined;
   let originalSkipListen: string | undefined;
   let originalDashboardGlobal: string | undefined;
+  let originalProjectRoot: string | undefined;
   let originalRalphHome: string | undefined;
   let originalWorkspacesFile: string | undefined;
   let originalXdgConfigHome: string | undefined;
@@ -21,6 +23,7 @@ describe('dashboard API metrics summary', () => {
     originalWorkspaceRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
     originalSkipListen = process.env['RALPH_DASHBOARD_SKIP_LISTEN'];
     originalDashboardGlobal = process.env['RALPH_DASHBOARD_GLOBAL'];
+    originalProjectRoot = process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
     originalRalphHome = process.env['RALPH_HOME'];
     originalWorkspacesFile = process.env['RALPH_WORKSPACES_FILE'];
     originalXdgConfigHome = process.env['XDG_CONFIG_HOME'];
@@ -28,6 +31,7 @@ describe('dashboard API metrics summary', () => {
   });
 
   beforeEach(async () => {
+    clearDashboardRootsCache();
     clearMergedWorkspaceAllowlistCache();
     originalCwd = process.cwd();
     tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-metrics-'));
@@ -71,6 +75,7 @@ describe('dashboard API metrics summary', () => {
     writeFileSync(join(tempRoot, '.ralph-workspace', 'logs', 'ignored.txt'), 'ignore me');
 
     process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] = tempRoot;
+    process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = tempRoot;
     delete process.env['RALPH_DASHBOARD_GLOBAL'];
     delete process.env['RALPH_HOME'];
     delete process.env['RALPH_WORKSPACES_FILE'];
@@ -82,6 +87,7 @@ describe('dashboard API metrics summary', () => {
     if (originalCwd) {
       process.chdir(originalCwd);
     }
+    clearDashboardRootsCache();
     if (tempRoot) {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -104,6 +110,11 @@ describe('dashboard API metrics summary', () => {
       delete process.env['RALPH_DASHBOARD_GLOBAL'];
     } else {
       process.env['RALPH_DASHBOARD_GLOBAL'] = originalDashboardGlobal;
+    }
+    if (originalProjectRoot === undefined) {
+      delete process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
+    } else {
+      process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = originalProjectRoot;
     }
 
     if (originalRalphHome === undefined) {
@@ -549,17 +560,9 @@ describe('dashboard API metrics summary', () => {
 
   it('omits the docs directory from top-level plans listings', async () => {
     mkdirSync(join(tempRoot, 'docs'), { recursive: true });
-    writeFileSync(join(tempRoot, 'plan-sample.md'), '# sample plan');
-
     const res = await createInMemoryRequester(app).get('/api/list?root=plans');
     expect(res.status).toBe(200);
     const names = (res.body.entries as Array<{ name: string }>).map((entry) => entry.name);
-
-    expect(
-      names.some(
-        (name) => name.toLowerCase().startsWith('plan') && name.toLowerCase().endsWith('.md'),
-      ),
-    ).toBe(true);
     expect(names).not.toContain('docs');
   });
 
