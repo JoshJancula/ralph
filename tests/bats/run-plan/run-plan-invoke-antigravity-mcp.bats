@@ -142,9 +142,7 @@ EOF
   write_agy_stub "$TEST_TMPDIR/record4"
 
   export RALPH_MODE=ralph
-  export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='[
-    {"name":"missing-ambient","transport":"stdio","command":"bash","args":["-lc","echo hi"],"env":{}}
-  ]'
+  export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='["missing-ambient"]'
   export PREBUILT_AGENT=""
 
   export ANTIGRAVITY_PLAN_CLI=agy

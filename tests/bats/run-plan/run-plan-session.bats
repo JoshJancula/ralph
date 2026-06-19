@@ -474,6 +474,22 @@ log(){ :; }
 ralph_run_plan_log(){ log "$@"; }
 ralph_restart_command_hint(){ printf "%s" "restart hint"; }
 ralph_write_human_action_file(){ :; }
+ralph_write_operator_response_template() {
+  cat >"$2" <<'TEMPLATE_EOF'
+{
+  "placeholder": true,
+  "kind": "guidance",
+  "decision": "answer",
+  "runtime": "",
+  "classification": "",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "",
+  "answer": ""
+}
+TEMPLATE_EOF
+}
 ralph_path_to_file_uri() {
   printf 'file://%s' "$1"
 }
@@ -493,12 +509,14 @@ EOF
   human_request="$tmp_dir/human-request.json"
   session_dir="$tmp_dir/session"
   mkdir -p "$session_dir"
+  human_request="$session_dir/human-request.json"
   printf 'plan instructions\n' >"$plan_file"
   printf 'agent question\n' >"$pending"
 
   run bash -c '
     set -euo pipefail
     source "$1"
+    export SCRIPT_DIR="'"$REPO_ROOT"'/bundle/.ralph"
     HUMAN_INPUT_MD="$2"
     PENDING_HUMAN="$3"
     OPERATOR_RESPONSE_FILE="$4"

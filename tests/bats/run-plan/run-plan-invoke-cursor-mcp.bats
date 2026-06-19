@@ -108,21 +108,20 @@ run_cursor_with_resolver() {
     source "$2"
     source "$3"
     source "$4"
-    export RALPH_MODE='"'"'$5'"'"'
-    export WORKSPACE="$6"
-    export RALPH_PROJECT_ROOT="$6"
-    export HOME="$7"
-    export RALPH_RUNTIME_MCP_HOME="$7"
-    ralph_runtime_config_mcp_resolve cursor "$6" "" "$6"
+    export WORKSPACE="$5"
+    export RALPH_PROJECT_ROOT="$5"
+    export HOME="$6"
+    export RALPH_RUNTIME_MCP_HOME="$6"
+    ralph_runtime_config_mcp_resolve cursor "$5" "" "$5"
     export PROMPT=cursor-test-prompt
-    export OUTPUT_LOG="$8/output.log"
-    export EXIT_CODE_FILE="$8/exit-code"
+    export OUTPUT_LOG="$7/output.log"
+    export EXIT_CODE_FILE="$7/exit-code"
     ralph_run_plan_invoke_cursor
   ' _ "$TEST_TMPDIR" \
     "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
     "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" \
     "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh" \
-    "$mode" "$WORKSPACE" "$ISOLATED_HOME" "$TEST_TMPDIR"
+    "$WORKSPACE" "$ISOLATED_HOME" "$TEST_TMPDIR"
 }
 
 @test "cursor ralph mode merges ambient user/project servers and ralph into project overlay" {

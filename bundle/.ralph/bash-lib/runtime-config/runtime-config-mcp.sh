@@ -85,8 +85,8 @@ ralph_runtime_config_mcp_needs_resolve() {
   local runtime="${1:-${RUNTIME:-}}"
   local project_root="${2:-${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}}"
   local _ralph_mode="${RALPH_MODE:-no}"
-  # For most runtimes, Ralph mode/hybrid skips MCP overlay resolution because
-  # the native invocation already consumes the merged, durable overlay.
+  # For most runtimes, ralph/hybrid mode requires MCP overlay resolution so the
+  # effective catalog (ambient + agent + Ralph) is applied to the invocation.
   #
   # Antigravity is different: it runs natively via `agy` and must receive the
   # merged effective MCP catalog through a temporary per-run config file
@@ -106,15 +106,17 @@ ralph_runtime_config_mcp_needs_resolve() {
       ralph|hybrid)
         # In Ralph mode, per-run overlay is needed only when agent/Ralph MCP
         # additions exist. Otherwise, keep pure native behavior.
-        [[ "$has_agent_additions" == "1" ]] && return 1 || return 0
+        [[ "$has_agent_additions" == "1" ]] && return 0 || return 1
         ;;
       *)
         # Outside Ralph mode: only resolve when explicit agent additions exist.
-        [[ "$has_agent_additions" == "1" ]] && return 1 || return 0
+        [[ "$has_agent_additions" == "1" ]] && return 0 || return 1
         ;;
     esac
   fi
   case "$_ralph_mode" in
+    # In ralph/hybrid mode we must resolve and apply the effective MCP catalog
+    # to the runtime invocation (tests assert the merged overlay inputs).
     ralph|hybrid) return 0 ;;
   esac
   case "${RALPH_AGENT_TOOL_ACCESS:-}" in
