@@ -32,4 +32,4 @@ jobs:
         run: bash scripts/run-python-unit-tests.sh
 
       - name: Run Bats suite
-        run: bash scripts/run-bats.sh -j 4
+        run: CI=1 bash scripts/run-bats.sh -j 4
