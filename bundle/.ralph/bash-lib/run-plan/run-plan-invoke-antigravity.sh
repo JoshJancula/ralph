@@ -162,7 +162,12 @@ ralph_run_plan_invoke_antigravity() {
   }
   if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "${RALPH_RUNTIME_MCP_RESOLVE_PATH}" ]]; then
     antigravity_config_path="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
-    export ANTIGRAVITY_CONFIG="$antigravity_config_path"
+    # Only export ANTIGRAVITY_CONFIG when the run is in Ralph-mode
+    # (ralph/hybrid). Native-only runs may still resolve MCP overlays,
+    # but they must not be forced to use Ralph's merged catalog.
+    if [[ "${RALPH_MODE:-no}" != "no" ]]; then
+      export ANTIGRAVITY_CONFIG="$antigravity_config_path"
+    fi
   fi
 
   # Log path, exit-code sidecar, and session-id file for resume capture.
