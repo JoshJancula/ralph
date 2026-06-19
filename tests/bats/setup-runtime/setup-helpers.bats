@@ -25,6 +25,17 @@ teardown() {
   fi
 }
 
+checksum_file() {
+  local path="$1"
+  if command -v md5 >/dev/null 2>&1; then
+    md5 "$path" | awk '{print $NF}'
+  elif command -v md5sum >/dev/null 2>&1; then
+    md5sum "$path" | awk '{print $1}'
+  else
+    shasum "$path" | awk '{print $1}'
+  fi
+}
+
 # ============================================================================
 # Atomic Write Tests
 # ============================================================================
@@ -64,7 +75,7 @@ teardown() {
   local target="$TEST_TEMP_DIR/important.txt"
   echo "precious data" > "$target"
   local original_checksum
-  original_checksum="$(cat "$target" | md5)"
+  original_checksum="$(checksum_file "$target")"
 
   # Make directory read-only to cause failure
   chmod 555 "$TEST_TEMP_DIR"
@@ -81,7 +92,7 @@ teardown() {
   # Verify original is unchanged
   [ -f "$target" ]
   local final_checksum
-  final_checksum="$(cat "$target" | md5)"
+  final_checksum="$(checksum_file "$target")"
   [ "$original_checksum" = "$final_checksum" ]
   [ "$(cat "$target")" = "precious data" ]
 }

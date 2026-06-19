@@ -3587,6 +3587,9 @@ ralph_mcp_proxy_owned_tool_batch() {
     rm -f "$op_result_tmp"
     op_is_error="$(jq -r '.isError // false' <<< "$op_result")"
     op_text="$(jq -r '.content[0].text // empty' <<< "$op_result")"
+    if jq -e 'type == "object" and has("preview")' <<<"$op_text" >/dev/null 2>&1; then
+      op_text="$(jq -r '.preview // empty' <<< "$op_text")"
+    fi
     preview="$(ralph_mcp_proxy_batch_preview_line "$op_text")"
 
     if [[ "${RALPH_MCP_PROXY_FATAL_VIOLATION:-0}" == "1" ]]; then

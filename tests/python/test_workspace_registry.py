@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add the tests/python directory to the path for importing ralph_script_loader
 sys.path.insert(0, str(Path(__file__).parent))
@@ -208,7 +209,7 @@ class TestUpdateRegistry(unittest.TestCase):
         home_dir = Path(self.temp_dir) / "home"
         test_path = home_dir / "test_workspace"
         test_path.mkdir(parents=True, exist_ok=True)
-        with unittest.mock.patch.dict(os.environ, {"HOME": str(home_dir)}, clear=False):
+        with mock.patch.dict(os.environ, {"HOME": str(home_dir)}, clear=False):
             wr.update_registry(
                 str(self.registry_path),
                 "~/test_workspace",

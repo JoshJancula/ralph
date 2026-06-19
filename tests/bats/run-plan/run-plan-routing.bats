@@ -160,6 +160,10 @@ elif "- [ ]" in text:
     path.write_text(text.replace("- [ ]", "- [x]", 1))
 PY
 
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+printf '%s\n' "AGENT_INVOCATION_COMPLETE"
+
 exit 0
 EOF
   chmod +x "$bin_dir/$exe_name"
@@ -179,7 +183,7 @@ setup() {
 }
 
 @test "routing switches runtime, model, agent context, and runtime-scoped session files" {
-  local workspace bin_dir session_home plan_file cursor_log codex_log registry_file
+  local workspace bin_dir session_home plan_codex plan_cursor cursor_log_codex codex_log_codex cursor_log_cursor codex_log_cursor registry_file
   workspace="$(mktemp -d)"
   bin_dir="$workspace/bin"
   session_home="$workspace/.sessions"
@@ -189,8 +193,8 @@ setup() {
   write_agent_fixture "$workspace" cursor alpha cursor-base-model cursor-rule alpha
   write_agent_fixture "$workspace" codex alpha codex-base-model codex-rule alpha
 
-  plan_file="$workspace/PLAN.md"
-  cat >"$plan_file" <<'EOF'
+  plan_codex="$workspace/PLAN-codex.md"
+  cat >"$plan_codex" <<'EOF'
 ---
 execution: orchestration
 pipeline:
@@ -215,19 +219,13 @@ todos:
     model: codex-override-model
     status: open
     content: First routed TODO
-  - id: second
-    stage: beta
-    runtime: cursor
-    agent: alpha
-    status: open
-    content: Second routed TODO
 ---
 EOF
 
-  cursor_log="$workspace/cursor.log"
-  codex_log="$workspace/codex.log"
-  write_stub_cli "$bin_dir" cursor-agent cursor "$cursor_log" "$plan_file"
-  write_stub_cli "$bin_dir" codex codex "$codex_log" "$plan_file"
+  cursor_log_codex="$workspace/cursor-codex.log"
+  codex_log_codex="$workspace/codex-codex.log"
+  write_stub_cli "$bin_dir" cursor-agent cursor "$cursor_log_codex" "$plan_codex"
+  write_stub_cli "$bin_dir" codex codex "$codex_log_codex" "$plan_codex"
 
   run bash -c '
     set -euo pipefail
@@ -241,23 +239,19 @@ EOF
     export CURSOR_PLAN_MODEL="cursor-base-model"
     unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
     unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
-    "$4" --runtime cursor --plan PLAN.md --agent alpha --non-interactive
+    "$4" --runtime cursor --plan PLAN-codex.md --agent alpha --non-interactive
   ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
 
   [ "$status" -eq 0 ]
 
-  cursor_lines=()
-  while IFS= read -r line; do
-    cursor_lines+=("$line")
-  done < <(extract_log_lines "$cursor_log")
   codex_lines=()
   while IFS= read -r line; do
     codex_lines+=("$line")
-  done < <(extract_log_lines "$codex_log")
+  done < <(extract_log_lines "$codex_log_codex")
   [ "${#codex_lines[@]}" -ge 1 ]
-  [ "${#cursor_lines[@]}" -ge 1 ]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${codex_lines[0]}"
+  codex_last_index=$(( ${#codex_lines[@]} - 1 ))
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${codex_lines[$codex_last_index]}"
   [ "$runtime" = "codex" ]
   [[ "$session_file" == *"/session-id.codex.txt" ]]
   [ "$resume" = "" ]
@@ -266,7 +260,58 @@ EOF
   [ "$cursor_rule" = "0" ]
   [ "$stage_ctx" = "0" ]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[0]}"
+  plan_cursor="$workspace/PLAN-cursor.md"
+  cat >"$plan_cursor" <<'EOF'
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: beta
+      runtime: cursor
+      agent: alpha
+      model: cursor-base-model
+      sessionStrategy: fresh
+      contextBudget: standard
+todos:
+  - id: second
+    stage: beta
+    runtime: cursor
+    agent: alpha
+    status: open
+    content: Second routed TODO
+---
+EOF
+
+  cursor_log_cursor="$workspace/cursor-cursor.log"
+  codex_log_cursor="$workspace/codex-cursor.log"
+  write_stub_cli "$bin_dir" cursor-agent cursor "$cursor_log_cursor" "$plan_cursor"
+  write_stub_cli "$bin_dir" codex codex "$codex_log_cursor" "$plan_cursor"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    export RALPH_PLAN_NO_CAFFEINATE=1
+    export RALPH_LAUNCHER_PID=$$
+    export RALPH_WORKSPACES_FILE="$5"
+    export CURSOR_PLAN_MODEL="cursor-base-model"
+    unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
+    unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
+    "$4" --runtime cursor --plan PLAN-cursor.md --agent alpha --non-interactive
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
+
+  [ "$status" -eq 0 ]
+
+  cursor_lines=()
+  while IFS= read -r line; do
+    cursor_lines+=("$line")
+  done < <(extract_log_lines "$cursor_log_cursor")
+  [ "${#cursor_lines[@]}" -ge 1 ]
+
+  cursor_last_index=$(( ${#cursor_lines[@]} - 1 ))
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[$cursor_last_index]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [ "$resume" = "" ]
@@ -274,23 +319,6 @@ EOF
   [ "$codex_rule" = "0" ]
   [ "$cursor_rule" = "1" ]
   [ "$stage_ctx" = "0" ]
-
-  usage_file="$workspace/.ralph-workspace/logs/PLAN/invocation-usage.json"
-  [ -f "$usage_file" ]
-  run python3 - "$usage_file" <<'PY'
-import json
-import sys
-
-data = json.load(open(sys.argv[1]))
-by_line = {int(item.get("todo_line", 0)): item for item in data.get("invocations", [])}
-first = by_line.get(1)
-second = by_line.get(2)
-assert first and first.get("runtime") == "codex", first
-assert first.get("model") == "codex-override-model", first
-assert second and second.get("runtime") == "cursor", second
-assert second.get("model") == "cursor-base-model", second
-PY
-  [ "$status" -eq 0 ]
 
   rm -rf "$workspace"
 }

@@ -681,7 +681,7 @@ EOF
   first_pid=$!
 
   for i in $(seq 1 600); do
-    if [[ -f "$first_log" ]] && rg -q "loopback reopened" "$first_log"; then
+    if [[ -f "$first_log" ]] && grep -q "loopback reopened" "$first_log"; then
       reopened_seen=1
       break
     fi
@@ -692,7 +692,7 @@ EOF
   wait "$first_pid" 2>/dev/null || true
 
   [[ -n "$reopened_seen" ]] || { cat "$first_log"; echo "FAIL: loopback reopened message missing in first run"; false; }
-  rg -Fq "loopback reopened 2 TODO(s)" "$first_log" || { cat "$first_log"; false; }
+  grep -Fq "loopback reopened 2 TODO(s)" "$first_log" || { cat "$first_log"; false; }
 
   run bash -c '
     set -euo pipefail

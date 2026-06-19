@@ -29,7 +29,8 @@ teardown_file() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"# Ralph Savings Report"* ]]
   [[ "$output" == *"ralph benchmark --write-doc"* ]]
-  [[ "$output" == *"Trimmed long command output"* ]]
+  [[ "$output" == *"## How to read this"* ]]
+  [[ "$output" == *"savings-report"* ]]
 }
 
 @test "benchmark-report: json output uses the benchmark report kind" {
@@ -59,4 +60,3 @@ PY
   [ -s "$doc_file" ]
   grep -q "# Ralph Savings Report" "$doc_file"
 }
-

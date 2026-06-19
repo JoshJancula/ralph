@@ -114,7 +114,7 @@ path_without_python3() {
       RALPH_COMPACT_STDOUT="$stdout" \
       RALPH_COMPACT_STDERR="" \
       RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=200 \
-      bash -c '
+      "${BASH:-/bin/bash}" -c '
         # shellcheck source=/dev/null
         source "$1"
         ralph_compact_shell_output "custom-build-tool --verbose" 1
