@@ -465,7 +465,7 @@ class TestSavingsReport(unittest.TestCase):
         """Gross readback can exceed 100%; the report reports net savings as primary."""
         from tool_call_target_telemetry import analyze_result_windowing_log
 
-        run_dir = self.tmp_dir / "multi_readback"
+        run_dir = self.tmp_dir / "logs" / "multi_readback"
         summary = {
             "invocations": 3,
             "input_tokens": 100,
@@ -514,12 +514,10 @@ class TestSavingsReport(unittest.TestCase):
         }
         self._write_invocation(summary_path, [invocation])
 
-        # Write a result-windowing log adjacent to the summary.
-        # _windowing_log_for_summary looks at ../runtime-config/<plan>/result-windowing.jsonl
-        # relative to the summary's parent. Build that directory tree.
+        # Write a result-windowing log where _windowing_log_for_summary expects it.
+        # For a summary at logs/<run>/plan-usage-summary.json, the resolver looks
+        # for runtime-config/<run>/result-windowing.jsonl two levels above the run.
         plan_key = run_dir.name
-        # _windowing_log_for_summary calls .resolve() on the summary path, so on
-        # macOS the runtime-config tree must be built under the resolved tmp_dir.
         runtime_config_dir = self.tmp_dir.resolve() / "runtime-config" / plan_key
         runtime_config_dir.mkdir(parents=True, exist_ok=True)
         log_path = runtime_config_dir / "result-windowing.jsonl"

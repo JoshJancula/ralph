@@ -203,11 +203,12 @@ class TestUpdateRegistry(unittest.TestCase):
 
     def test_tilde_expansion_in_path(self) -> None:
         """Tilde in workspace path should be expanded."""
-        # Create a mock home-based path scenario
-        home = os.path.expanduser("~")
-        test_path = os.path.join(home, "test_workspace")
-        os.makedirs(test_path, exist_ok=True)
-        try:
+        # Use a temporary HOME so the test does not depend on the runner's
+        # actual user directory being writable.
+        home_dir = Path(self.temp_dir) / "home"
+        test_path = home_dir / "test_workspace"
+        test_path.mkdir(parents=True, exist_ok=True)
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(home_dir)}, clear=False):
             wr.update_registry(
                 str(self.registry_path),
                 "~/test_workspace",
@@ -217,9 +218,6 @@ class TestUpdateRegistry(unittest.TestCase):
             data = json.loads(self.registry_path.read_text(encoding="utf-8"))
             self.assertFalse(data[0]["path"].startswith("~"))
             self.assertTrue(os.path.isabs(data[0]["path"]))
-        finally:
-            if os.path.exists(test_path):
-                os.rmdir(test_path)
 
     def test_dedupe_same_path_different_format(self) -> None:
         """Same path in different formats should be de-duped."""

@@ -6,8 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "bundle/.ralph/python/ralph-usage-record.py"
 PYTHONPATH_DIR = REPO_ROOT / "bundle/.ralph/python"
