@@ -122,6 +122,30 @@ teardown() {
   [[ "$text" == *"1. ralph_proxy_result_read: ok | beta-gamma"* ]]
 }
 
+@test "ralph_proxy_batch result_reduce operation returns grep matches" {
+  command -v jq >/dev/null || skip "jq required"
+  command -v grep >/dev/null || skip "grep required"
+  local content result_id policy args_json response text
+  content=$'INFO: ok\nERROR: boom\nWARN: maybe\nERROR: again'
+  result_id="$(ralph_mcp_proxy_result_store_write "$WS" "$RALPH_PLAN_KEY" "$content" "ralph_proxy_shell")"
+  policy="$(batch_policy_json 0)"
+  args_json="$(jq -nc --arg id "$result_id" '{
+    operations: [
+      {
+        tool: "ralph_proxy_result_reduce",
+        arguments: {resultId: $id, reducer: "grep", expression: "ERROR", lineNumber: true}
+      }
+    ]
+  }')"
+  response="$(invoke_proxy_batch "$policy" "$args_json" RALPH_MODE hybrid)"
+  text="$(batch_result_text "$response")"
+
+  printf '%s\n' "$response" | jq -e '.isError == false'
+  [[ "$text" == *"1. ralph_proxy_result_reduce: ok |"* ]]
+  [[ "$text" == *"ERROR: boom"* ]]
+  [[ "$text" != *"INFO: ok"* ]]
+}
+
 @test "ralph_proxy_batch reports per-operation error when search is disabled" {
   command -v jq >/dev/null || skip "jq required"
   cp -R "$REPO_ROOT/tests/fixtures/mcp-proxy/search-ranking/." "$WS/search-fixture/"
@@ -317,12 +341,13 @@ teardown() {
       {tool: "ralph_proxy_read", arguments: {path: "third.txt"}}
     ]
   }')"
-  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=2 invoke_proxy_batch "$policy" "$args_json")"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=1 invoke_proxy_batch "$policy" "$args_json")"
   text="$(batch_result_text "$response")"
 
   printf '%s\n' "$response" | jq -e '.isError == true'
   [[ "$text" == *"ralph_proxy_read: ok"* ]]
   [[ "$text" == *"PARTIAL_FAILURE: batch timeout"* ]]
+  [[ "$text" != *"(completed -"* ]]
 }
 
 @test "ralph_proxy_batch respects default max operations of 4" {

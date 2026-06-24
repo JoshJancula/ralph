@@ -91,6 +91,23 @@ validate_config() {
     [[ -n "$proxy_policy" ]] || { echo "mcp_proxy_policy must be a non-empty string" >&2; ok=0; }
   fi
 
+  if grep -Eq '^[[:space:]]*"reasoning_effort"[[:space:]]*:' "$cfg"; then
+    local reasoning_effort
+    reasoning_effort="$(json_string_value "$cfg" "reasoning_effort")"
+    if [[ -n "$reasoning_effort" ]]; then
+      case "$reasoning_effort" in
+        low|medium|high|xhigh|max|inherit) ;;
+        *)
+          echo "reasoning_effort must be one of: low, medium, high, xhigh, max, inherit" >&2
+          ok=0
+          ;;
+      esac
+    else
+      echo "reasoning_effort must be a non-empty string when present" >&2
+      ok=0
+    fi
+  fi
+
   if grep -q '"allowed_tools"' "$cfg" 2>/dev/null; then
     if command -v python3 &>/dev/null; then
       python3 -c "
@@ -128,6 +145,38 @@ sys.exit(1)
       fi
     else
       echo "mcp_servers in config requires python3 for validation" >&2
+      ok=0
+    fi
+  fi
+
+  if grep -Eq '^[[:space:]]*"version"[[:space:]]*:' "$cfg"; then
+    if command -v python3 &>/dev/null; then
+      local skill_py=""
+      if [[ -n "${script_dir:-}" && -f "${script_dir}/python/skill_package.py" ]]; then
+        skill_py="${script_dir}/python/skill_package.py"
+      else
+        skill_py="$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)/python/skill_package.py"
+        [[ -f "$skill_py" ]] || skill_py="$(cd "$(dirname "${BASH_SOURCE[1]}")/../../.." && pwd)/python/skill_package.py"
+      fi
+      if [[ -f "$skill_py" ]]; then
+        python3 -c "
+import json, re, sys
+semver = re.compile(
+    r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    r'(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
+    r'(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+)
+with open(sys.argv[1]) as handle:
+    cfg = json.load(handle)
+version = cfg.get('version')
+if version is None:
+    sys.exit(0)
+if not isinstance(version, str) or not semver.fullmatch(version.strip()):
+    sys.exit(1)
+" "$cfg" 2>/dev/null || { echo "version must use semantic-version syntax" >&2; ok=0; }
+      fi
+    else
+      echo "version in config requires python3 for validation" >&2
       ok=0
     fi
   fi

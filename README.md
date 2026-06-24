@@ -88,6 +88,8 @@ See **[docs/INSTALL.md](docs/INSTALL.md)** (command reference) and **[docs/MCP.m
 | [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup, agent profile management |
 | [MCP](docs/MCP.md) | Bash MCP server, host config, third-party MCP |
 | [Tooling (optional)](docs/TOOLING.md) | Ralph mode (`--ralph-mode`: `no`, `native`, `ralph`, `hybrid`; default `no`), shell output compaction, native adapters |
+| [Cookbook review backlog](docs/cookbook-review/BACKLOG.md) | Tier 1 through Tier 3 optimization status, gates, and tests |
+| [Cookbook migration](docs/cookbook-review/MIGRATION.md) | Compatibility for schemas, compact MCP catalog, usage readers, and promotion criteria |
 | [Security](docs/SECURITY.md) | Sandboxing, `.cursorignore`, practical caution, killswitch configuration |
 | [AGENTS.md](AGENTS.md) | Agent contract for AI assistants: architecture, source resolution, configuration paths |
 

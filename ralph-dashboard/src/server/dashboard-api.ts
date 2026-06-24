@@ -150,6 +150,10 @@ interface UsageSummaryRecord {
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
+  uncached_input_tokens?: number;
+  total_input_tokens?: number;
+  cache_efficiency_ratio?: number;
+  measurement_source?: Record<string, string>;
   max_turn_total_tokens?: number;
   cache_hit_ratio?: number;
   prompt_bytes?: number;
@@ -220,6 +224,10 @@ interface ModelBreakdownItem {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  uncached_input_tokens?: number;
+  total_input_tokens?: number;
+  cache_efficiency_ratio?: number;
+  measurement_source?: Record<string, string>;
   max_turn_total_tokens: number;
   cache_hit_ratio: number;
   prompt_bytes?: number;
@@ -1134,11 +1142,7 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
 
   const savingsPercent =
     preOptimizationBytes > 0 ? roundOneDecimal((savedBytes / preOptimizationBytes) * 100) : 0;
-  const cacheDenominator = inputTokens + cacheCreationTokens + cacheReadTokens;
-  const cacheHitRatio =
-    cacheDenominator > 0
-      ? Math.round((cacheReadTokens / cacheDenominator) * 10000) / 10000
-      : 0;
+  const cacheHitRatio = cacheEfficiencyRatio(inputTokens, cacheCreationTokens, cacheReadTokens);
 
   // Add diagnostic fields to per-path buckets to mirror Python schema v2.
   for (const pathName of SAVINGS_PATH_NAMES) {
@@ -1684,6 +1688,48 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function cacheEfficiencyRatio(
+  uncached: number,
+  cacheCreate: number,
+  cacheRead: number,
+): number {
+  const totalInput = uncached + cacheCreate + cacheRead;
+  return totalInput > 0 ? Math.round((cacheRead / totalInput) * 10000) / 10000 : 0;
+}
+
+function canonicalUsageFromRecord(record: Record<string, unknown>): {
+  uncached_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  output_tokens: number;
+  total_input_tokens: number;
+  cache_efficiency_ratio: number;
+  cache_hit_ratio: number;
+  input_tokens: number;
+} {
+  const uncached = toNumber(record['uncached_input_tokens'] ?? record['input_tokens']);
+  const cacheCreate = toNumber(record['cache_creation_input_tokens']);
+  const cacheRead = toNumber(record['cache_read_input_tokens']);
+  const output = toNumber(record['output_tokens']);
+  const totalInput = toNumber(record['total_input_tokens']) || uncached + cacheCreate + cacheRead;
+  const ratio =
+    record['cache_efficiency_ratio'] !== undefined
+      ? toNumber(record['cache_efficiency_ratio'])
+      : record['cache_hit_ratio'] !== undefined
+        ? toNumber(record['cache_hit_ratio'])
+        : cacheEfficiencyRatio(uncached, cacheCreate, cacheRead);
+  return {
+    uncached_input_tokens: uncached,
+    cache_creation_input_tokens: cacheCreate,
+    cache_read_input_tokens: cacheRead,
+    output_tokens: output,
+    total_input_tokens: totalInput,
+    cache_efficiency_ratio: ratio,
+    cache_hit_ratio: ratio,
+    input_tokens: uncached,
+  };
+}
+
 function coerceBool(value: unknown): boolean {
   if (typeof value === 'boolean') {
     return value;
@@ -1893,25 +1939,21 @@ function sumToolCallsFromBreakdownRows(rows: ModelBreakdownItem[]): ToolCallClas
 }
 
 function normalizeModelBreakdownRow(item: Record<string, unknown>): ModelBreakdownItem {
-  const totalInput =
-    toNumber(item['input_tokens']) +
-    toNumber(item['cache_creation_input_tokens']) +
-    toNumber(item['cache_read_input_tokens']);
-  const cache_hit_ratio =
-    totalInput > 0
-      ? Math.round((toNumber(item['cache_read_input_tokens']) / totalInput) * 10000) / 10000
-      : 0;
+  const canonical = canonicalUsageFromRecord(item);
   const row: ModelBreakdownItem = {
     runtime: String(item['runtime'] ?? ''),
     model: String(item['model'] ?? ''),
     invocations: toNumber(item['invocations']),
     elapsed_seconds: toNumber(item['elapsed_seconds']),
-    input_tokens: toNumber(item['input_tokens']),
-    output_tokens: toNumber(item['output_tokens']),
-    cache_creation_input_tokens: toNumber(item['cache_creation_input_tokens']),
-    cache_read_input_tokens: toNumber(item['cache_read_input_tokens']),
+    input_tokens: canonical.input_tokens,
+    output_tokens: canonical.output_tokens,
+    cache_creation_input_tokens: canonical.cache_creation_input_tokens,
+    cache_read_input_tokens: canonical.cache_read_input_tokens,
+    uncached_input_tokens: canonical.uncached_input_tokens,
+    total_input_tokens: canonical.total_input_tokens,
+    cache_efficiency_ratio: canonical.cache_efficiency_ratio,
     max_turn_total_tokens: toNumber(item['max_turn_total_tokens']),
-    cache_hit_ratio,
+    cache_hit_ratio: canonical.cache_hit_ratio,
     prompt_bytes: toNumber(item['prompt_bytes']),
     todo_bytes: toNumber(item['todo_bytes']),
     todo_continuation_lines: toNumber(item['todo_continuation_lines']),
@@ -1990,12 +2032,12 @@ function rollupOverallFromItems(items: MetricsSummaryItem[]): MetricsSummaryOver
     }
     overall.count += 1;
   }
-  const overallTotalInput =
-    overall.input_tokens + overall.cache_read_input_tokens + overall.cache_creation_input_tokens;
-  overall.cache_hit_ratio =
-    overallTotalInput > 0
-      ? Math.round((overall.cache_read_input_tokens / overallTotalInput) * 10000) / 10000
-      : 0;
+  const overallCanonical = canonicalUsageFromRecord({
+    input_tokens: overall.input_tokens,
+    cache_creation_input_tokens: overall.cache_creation_input_tokens,
+    cache_read_input_tokens: overall.cache_read_input_tokens,
+  });
+  overall.cache_hit_ratio = overallCanonical.cache_hit_ratio;
   return overall;
 }
 
@@ -2203,23 +2245,26 @@ async function applyModelBreakdownFallback(
     const breakdown = Array.from(grouped.values())
       .sort((a, b) => `${a.runtime}\u0000${a.model}`.localeCompare(`${b.runtime}\u0000${b.model}`))
       .map((bucket) => {
-        const totalInput =
-          bucket.input_tokens + bucket.cache_creation_input_tokens + bucket.cache_read_input_tokens;
-        const cache_hit_ratio =
-          totalInput > 0
-            ? Math.round((bucket.cache_read_input_tokens / totalInput) * 10000) / 10000
-            : 0;
+        const canonical = canonicalUsageFromRecord({
+          input_tokens: bucket.input_tokens,
+          output_tokens: bucket.output_tokens,
+          cache_creation_input_tokens: bucket.cache_creation_input_tokens,
+          cache_read_input_tokens: bucket.cache_read_input_tokens,
+        });
         const row: ModelBreakdownItem = {
           runtime: bucket.runtime,
           model: bucket.model,
           invocations: bucket.invocations,
           elapsed_seconds: bucket.elapsed_seconds,
-          input_tokens: bucket.input_tokens,
-          output_tokens: bucket.output_tokens,
-          cache_creation_input_tokens: bucket.cache_creation_input_tokens,
-          cache_read_input_tokens: bucket.cache_read_input_tokens,
+          input_tokens: canonical.input_tokens,
+          output_tokens: canonical.output_tokens,
+          cache_creation_input_tokens: canonical.cache_creation_input_tokens,
+          cache_read_input_tokens: canonical.cache_read_input_tokens,
+          uncached_input_tokens: canonical.uncached_input_tokens,
+          total_input_tokens: canonical.total_input_tokens,
+          cache_efficiency_ratio: canonical.cache_efficiency_ratio,
           max_turn_total_tokens: bucket.max_turn_total_tokens,
-          cache_hit_ratio,
+          cache_hit_ratio: canonical.cache_hit_ratio,
           prompt_bytes: bucket.prompt_bytes,
           todo_bytes: bucket.todo_bytes,
           todo_continuation_lines: bucket.todo_continuation_lines,
@@ -2511,12 +2556,12 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
   orchestrations.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
 
   // Compute overall cache_hit_ratio from accumulated token totals.
-  const overallTotalInput =
-    overall.input_tokens + overall.cache_read_input_tokens + overall.cache_creation_input_tokens;
-  overall.cache_hit_ratio =
-    overallTotalInput > 0
-      ? Math.round((overall.cache_read_input_tokens / overallTotalInput) * 10000) / 10000
-      : 0;
+  const overallCanonical = canonicalUsageFromRecord({
+    input_tokens: overall.input_tokens,
+    cache_creation_input_tokens: overall.cache_creation_input_tokens,
+    cache_read_input_tokens: overall.cache_read_input_tokens,
+  });
+  overall.cache_hit_ratio = overallCanonical.cache_hit_ratio;
 
   const projects = buildProjectsRollup(plans, orchestrations);
 

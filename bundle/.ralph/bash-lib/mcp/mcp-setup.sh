@@ -43,38 +43,90 @@ ralph_mcp_proxy_resolve_mode() {
   esac
 }
 
+# True when the compact MCP tool catalog is active.
+# Rollout gate: ralph/hybrid unless RALPH_MCP_COMPACT_TOOL_CATALOG=0;
+# native/no unless RALPH_MCP_COMPACT_TOOL_CATALOG=1.
+ralph_mcp_proxy_compact_tool_catalog_enabled() {
+  local gate="${RALPH_MCP_COMPACT_TOOL_CATALOG:-}"
+  if [[ -n "$gate" ]]; then
+    case "$gate" in
+      1 | true | yes | on) return 0 ;;
+      0 | false | no | off) return 1 ;;
+      *)
+        echo "RALPH_MCP_COMPACT_TOOL_CATALOG: invalid value '$gate' (use 0 or 1)" >&2
+        return 2
+        ;;
+    esac
+  fi
+  case "${RALPH_MODE:-no}" in
+    ralph | hybrid) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Required tools for tools/list preflight, keyed by RALPH_MODE. Kept in sync with
 # get_tool_list_result() in bundle/.ralph/mcp-server.sh and the allowedTools
 # surface built in run-plan-invoke-claude.sh.
 ralph_mcp_proxy_required_tool_names() {
-  local mode
+  local mode compact=0 compact_rc=0
   if ! mode="$(ralph_mcp_proxy_resolve_mode)"; then
     mode="no"
   fi
+  ralph_mcp_proxy_compact_tool_catalog_enabled
+  compact_rc=$?
+  case "$compact_rc" in
+    0) compact=1 ;;
+    1) compact=0 ;;
+    *) return "$compact_rc" ;;
+  esac
   case "$mode" in
     native)
-      printf '%s\n' \
-        ralph_run_plan \
-        ralph_plan_status \
-        ralph_orchestrator_run \
-        ralph_complete_todo \
-        ralph_proxy_result_read \
-        ralph_proxy_result_search \
-        ralph_proxy_result_summary
+      if [[ "$compact" == "1" ]]; then
+        printf '%s\n' \
+          ralph_run_plan \
+          ralph_plan_status \
+          ralph_orchestrator_run \
+          ralph_complete_todo \
+          ralph_proxy_result_read \
+          ralph_proxy_tool_search
+      else
+        printf '%s\n' \
+          ralph_run_plan \
+          ralph_plan_status \
+          ralph_orchestrator_run \
+          ralph_complete_todo \
+          ralph_proxy_result_read \
+          ralph_proxy_result_search \
+          ralph_proxy_result_summary
+      fi
       ;;
     ralph|hybrid)
-      printf '%s\n' \
-        ralph_run_plan \
-        ralph_plan_status \
-        ralph_orchestrator_run \
-        ralph_complete_todo \
-        ralph_proxy_read \
-        ralph_proxy_grep \
-        ralph_proxy_glob \
-        ralph_proxy_shell \
-        ralph_proxy_result_read \
-        ralph_proxy_result_search \
-        ralph_proxy_result_summary
+      if [[ "$compact" == "1" ]]; then
+        printf '%s\n' \
+          ralph_run_plan \
+          ralph_plan_status \
+          ralph_orchestrator_run \
+          ralph_complete_todo \
+          ralph_proxy_read \
+          ralph_proxy_grep \
+          ralph_proxy_shell \
+          ralph_proxy_result_read \
+          ralph_proxy_batch \
+          ralph_proxy_tool_search
+      else
+        printf '%s\n' \
+          ralph_run_plan \
+          ralph_plan_status \
+          ralph_orchestrator_run \
+          ralph_complete_todo \
+          ralph_proxy_read \
+          ralph_proxy_grep \
+          ralph_proxy_glob \
+          ralph_proxy_shell \
+          ralph_proxy_result_read \
+          ralph_proxy_result_search \
+          ralph_proxy_result_summary
+      fi
       ;;
     no)
       ;;
@@ -277,6 +329,14 @@ ralph_mcp_proxy_build_server_env_json() {
     echo "Error: workspace is required for Ralph MCP server environment." >&2
     return 1
   fi
+  local interactivity
+  # Drive MCP-side wording for operator-facing proxy denials.
+  # NON_INTERACTIVE_FLAG=1 means the runner should not block for operator input.
+  if [[ "${NON_INTERACTIVE_FLAG:-0}" == "1" ]]; then
+    interactivity="non-interactive"
+  else
+    interactivity="interactive"
+  fi
   jq -n \
     --arg ws "$workspace" \
     --arg project_root "${RALPH_PROJECT_ROOT:-}" \
@@ -293,6 +353,7 @@ ralph_mcp_proxy_build_server_env_json() {
     --arg proxy_compact_log "${RALPH_PROXY_SHELL_COMPACT_LOG:-}" \
     --arg result_windowing_log "${RALPH_RESULT_WINDOWING_LOG:-}" \
     --arg ralph_mode "${RALPH_MODE:-no}" \
+    --arg interactivity "$interactivity" \
     --arg agent_tool_access "${RALPH_AGENT_TOOL_ACCESS:-}" \
     --arg run_plan_active "${RALPH_RUN_PLAN_ACTIVE:-}" \
     --arg current_plan_path "${RALPH_CURRENT_PLAN_PATH:-}" \
@@ -305,7 +366,8 @@ ralph_mcp_proxy_build_server_env_json() {
     --arg approval_progress_interval "${RALPH_APPROVAL_PROGRESS_INTERVAL:-}" \
     '{
       RALPH_MCP_WORKSPACE: $ws,
-      RALPH_MODE: $ralph_mode
+      RALPH_MODE: $ralph_mode,
+      RALPH_MCP_PROXY_INTERACTIVITY: $interactivity
     }
     + (if $project_root != "" then {RALPH_PROJECT_ROOT: $project_root} else {} end)
     + (if $agent_workspace != "" then {RALPH_AGENT_WORKSPACE: $agent_workspace} else {} end)

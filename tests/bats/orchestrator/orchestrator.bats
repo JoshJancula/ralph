@@ -16,8 +16,11 @@ setup_orchestrator_workspace() {
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-format-elapsed.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-verify.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh" "$workspace/.ralph/bash-lib/orchestrator/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-router.sh" "$workspace/.ralph/bash-lib/orchestrator/"
+  cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-planner.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/review-status.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-teardown.sh" "$workspace/.ralph/bash-lib/"
   cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -718,6 +721,39 @@ BAD
     && [[ "$output_lc" == *"fresh"* ]] \
     && [[ "$output_lc" == *"resume"* ]] \
     && [[ "$output_lc" == *"reset"* ]] \
+    || return 1
+  rm -rf "$workspace"
+}
+
+@test "orchestrator rejects grader stage with resume sessionStrategy" {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  local orch_file
+  orch_file="$workspace/grader-resume.orch.json"
+  cat <<'BAD' > "$orch_file"
+{
+  "name": "bats grader resume",
+  "namespace": "bats-grader-resume",
+  "stages": [
+    {
+      "id": "grade",
+      "agent": "qa",
+      "runtime": "cursor",
+      "plan": "stages/grade.plan.md",
+      "sessionStrategy": "resume",
+      "grader": true,
+      "rubric": "rubrics/grade.json"
+    }
+  ]
+}
+BAD
+  write_plan_file "$workspace" "stages/grade.plan.md"
+  run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  local output_lc
+  output_lc="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+  [ "$status" -ne 0 ] \
+    && [[ "$output_lc" == *"grader"* ]] \
+    && [[ "$output_lc" == *"fresh"* ]] \
     || return 1
   rm -rf "$workspace"
 }
@@ -1472,5 +1508,682 @@ ORCH
   : >"$ack_file"
   run env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || return 1
+  rm -rf "$workspace"
+}
+
+# Generate a stub run-plan that ignores SIGINT and spawns descendants.# Generate a stub run-plan that ignores SIGINT/SIGTERM/SIGHUP and spawns descendants.
+# Usage: build_ctrlc_stub > "$workspace/.ralph/run-plan.sh"
+build_ctrlc_stub() {
+  cat <<'CTRLC_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path=""
+while (($# > 0)); do
+  case "$1" in
+    --plan) plan_path="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+plan_tag="${plan_path##*/}"
+plan_tag="${plan_tag%.*}"
+plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
+output_log="${CTRLC_OUTPUT_DIR:-$(pwd)}/ctrlc-${plan_tag}.log"
+mkdir -p "$(dirname "$output_log")"
+# Ignore SIGINT/SIGTERM/SIGHUP so the orchestrator must force-kill us.
+trap '' INT TERM HUP
+# Spawn a descendant that keeps writing so we can detect orphan output.
+(
+  set +e
+  while true; do
+    printf 'descendant-alive %s\n' "$plan_tag" >> "$output_log"
+    sleep 0.05
+  done
+) &
+descendant_pid=$!
+printf 'descendant-pid=%s\n' "$descendant_pid" >> "$output_log"
+printf 'runner-pid=%s\n' "$$" >> "$output_log"
+# Keep the runner alive until killed.
+while true; do
+  printf 'runner-alive %s\n' "$plan_tag" >> "$output_log"
+  sleep 0.05
+done
+CTRLC_STUB
+}
+
+setup_ctrlc_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  build_ctrlc_stub > "$workspace/.ralph/run-plan.sh"
+  chmod +x "$workspace/.ralph/run-plan.sh"
+  printf '%s' "$workspace"
+}
+
+create_ctrlc_sequential_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/ctrlc-sequential.orch.json"
+  cat <<ORCH > "$orch_path"
+{
+  "name": "bats ctrlc sequential",
+  "namespace": "ctrlc-sequential",
+  "stages": [
+    {
+      "id": "ignore-ctrlc",
+      "agent": "ctrlc-agent",
+      "runtime": "cursor",
+      "plan": "stages/ctrlc.plan.md"
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/ctrlc.plan.md"
+  printf '%s' "$orch_path"
+}
+
+create_ctrlc_parallel_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/ctrlc-parallel.orch.json"
+  cat <<ORCH > "$orch_path"
+{
+  "name": "bats ctrlc parallel",
+  "namespace": "ctrlc-parallel",
+  "parallelStages": [
+    "alpha,beta"
+  ],
+  "stages": [
+    {
+      "id": "alpha",
+      "agent": "ctrlc-agent-alpha",
+      "runtime": "cursor",
+      "plan": "stages/ctrlc-alpha.plan.md"
+    },
+    {
+      "id": "beta",
+      "agent": "ctrlc-agent-beta",
+      "runtime": "cursor",
+      "plan": "stages/ctrlc-beta.plan.md"
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/ctrlc-alpha.plan.md"
+  write_plan_file "$workspace" "stages/ctrlc-beta.plan.md"
+  printf '%s' "$orch_path"
+}
+
+wait_for_log_line() {
+  local log_file="$1"
+  local pattern="$2"
+  local timeout_secs="${3:-5}"
+  local deadline=$(( $(date +%s) + timeout_secs ))
+  while (( $(date +%s) < deadline )); do
+    if [[ -f "$log_file" ]] && grep -q "$pattern" "$log_file" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
+ctrlc_expected_log() {
+  local output_dir="$1"
+  local plan_rel="$2"
+  local plan_tag
+  plan_tag="$(basename "$plan_rel")"
+  plan_tag="${plan_tag%.*}"
+  printf '%s/ctrlc-%s.log' "$output_dir" "$plan_tag"
+}
+
+@test "orchestrator teardown stops sequential run-plan and descendant processes on SIGINT" {
+  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
+  local workspace output_dir orch_file log_file
+  workspace="$(setup_ctrlc_workspace)"
+  output_dir="$workspace/ctrlc-logs"
+  mkdir -p "$output_dir"
+  orch_file="$(create_ctrlc_sequential_orchestration "$workspace")"
+  log_file="$(ctrlc_expected_log "$output_dir" "stages/ctrlc.plan.md")"
+
+  env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
+  local orch_pid=$!
+
+  wait_for_log_line "$log_file" "descendant-pid=" 8
+  sleep 0.2
+
+  kill -INT "$orch_pid"
+  wait "$orch_pid" 2>/dev/null || true
+  local rc=$?
+
+  # Allow a brief window for any survivors to write more output.
+  sleep 0.5
+
+  [ "$rc" -eq 130 ] || { echo "FAIL: expected exit 130, got $rc"; cat "$log_file" "$output_dir/orch.out" 2>/dev/null || true; rm -rf "$workspace"; return 1; }
+
+  local initial_line_count final_line_count
+  initial_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  sleep 0.5
+  final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
+@test "orchestrator teardown stops sequential run-plan and descendant processes on SIGTERM" {
+  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
+  local workspace output_dir orch_file log_file
+  workspace="$(setup_ctrlc_workspace)"
+  output_dir="$workspace/ctrlc-logs"
+  mkdir -p "$output_dir"
+  orch_file="$(create_ctrlc_sequential_orchestration "$workspace")"
+  log_file="$(ctrlc_expected_log "$output_dir" "stages/ctrlc.plan.md")"
+
+  env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
+  local orch_pid=$!
+
+  wait_for_log_line "$log_file" "descendant-pid=" 8
+  sleep 0.2
+
+  kill -TERM "$orch_pid"
+  wait "$orch_pid" 2>/dev/null || true
+  local rc=$?
+
+  sleep 0.5
+
+  [ "$rc" -eq 143 ] || { echo "FAIL: expected exit 143, got $rc"; cat "$log_file" "$output_dir/orch.out" 2>/dev/null || true; rm -rf "$workspace"; return 1; }
+
+  local initial_line_count final_line_count
+  initial_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  sleep 0.5
+  final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
+@test "orchestrator teardown stops sequential run-plan and descendant processes on SIGHUP" {
+  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
+  command -v script >/dev/null 2>&1 || skip "script is required for SIGHUP test"
+  local workspace output_dir orch_file log_file
+  workspace="$(setup_ctrlc_workspace)"
+  output_dir="$workspace/ctrlc-logs"
+  mkdir -p "$output_dir"
+  orch_file="$(create_ctrlc_sequential_orchestration "$workspace")"
+  log_file="$(ctrlc_expected_log "$output_dir" "stages/ctrlc.plan.md")"
+
+  local pty_output="$output_dir/script.log"
+  env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    script -q "$pty_output" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1 &
+  local script_pid=$!
+  wait_for_log_line "$log_file" "descendant-pid=" 8
+  sleep 0.2
+  kill -HUP "$script_pid"
+  wait "$script_pid" 2>/dev/null || true
+  local rc=$?
+
+  sleep 0.5
+
+  [ "$rc" -eq 129 ] || { echo "FAIL: expected exit 129, got $rc"; cat "$log_file" 2>/dev/null || true; rm -rf "$workspace"; return 1; }
+
+  local initial_line_count final_line_count
+  initial_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  sleep 0.5
+  final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
+  [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
+@test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGINT" {
+  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
+  local workspace output_dir orch_file log_a log_b
+  workspace="$(setup_ctrlc_workspace)"
+  output_dir="$workspace/ctrlc-logs"
+  mkdir -p "$output_dir"
+  orch_file="$(create_ctrlc_parallel_orchestration "$workspace")"
+  log_a="$(ctrlc_expected_log "$output_dir" "stages/ctrlc-alpha.plan.md")"
+  log_b="$(ctrlc_expected_log "$output_dir" "stages/ctrlc-beta.plan.md")"
+
+  env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
+  local orch_pid=$!
+
+  wait_for_log_line "$log_a" "descendant-pid=" 8
+  wait_for_log_line "$log_b" "descendant-pid=" 8
+  sleep 0.2
+
+  kill -INT "$orch_pid"
+  wait "$orch_pid" 2>/dev/null || true
+  local rc=$?
+
+  sleep 0.5
+
+  [ "$rc" -eq 130 ] || { echo "FAIL: expected exit 130, got $rc"; cat "$log_a" "$log_b" "$output_dir/orch.out" 2>/dev/null || true; rm -rf "$workspace"; return 1; }
+
+  local count_a_initial count_a_final count_b_initial count_b_final
+  count_a_initial="$(wc -l < "$log_a" 2>/dev/null || echo 0)"
+  count_b_initial="$(wc -l < "$log_b" 2>/dev/null || echo 0)"
+  sleep 0.5
+  count_a_final="$(wc -l < "$log_a" 2>/dev/null || echo 0)"
+  count_b_final="$(wc -l < "$log_b" 2>/dev/null || echo 0)"
+  [ "$count_a_initial" -eq "$count_a_final" ] || { echo "FAIL: log A still growing ($count_a_initial -> $count_a_final)"; rm -rf "$workspace"; return 1; }
+  [ "$count_b_initial" -eq "$count_b_final" ] || { echo "FAIL: log B still growing ($count_b_initial -> $count_b_final)"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
+@test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGTERM" {
+  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
+  local workspace output_dir orch_file log_a log_b
+  workspace="$(setup_ctrlc_workspace)"
+  output_dir="$workspace/ctrlc-logs"
+  mkdir -p "$output_dir"
+  orch_file="$(create_ctrlc_parallel_orchestration "$workspace")"
+  log_a="$(ctrlc_expected_log "$output_dir" "stages/ctrlc-alpha.plan.md")"
+  log_b="$(ctrlc_expected_log "$output_dir" "stages/ctrlc-beta.plan.md")"
+
+  env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
+  local orch_pid=$!
+
+  wait_for_log_line "$log_a" "descendant-pid=" 8
+  wait_for_log_line "$log_b" "descendant-pid=" 8
+  sleep 0.2
+
+  kill -TERM "$orch_pid"
+  wait "$orch_pid" 2>/dev/null || true
+  local rc=$?
+
+  sleep 0.5
+
+  [ "$rc" -eq 143 ] || { echo "FAIL: expected exit 143, got $rc"; cat "$log_a" "$log_b" "$output_dir/orch.out" 2>/dev/null || true; rm -rf "$workspace"; return 1; }
+
+  local count_a_initial count_a_final count_b_initial count_b_final
+  count_a_initial="$(wc -l < "$log_a" 2>/dev/null || echo 0)"
+  count_b_initial="$(wc -l < "$log_b" 2>/dev/null || echo 0)"
+  sleep 0.5
+  count_a_final="$(wc -l < "$log_a" 2>/dev/null || echo 0)"
+  count_b_final="$(wc -l < "$log_b" 2>/dev/null || echo 0)"
+  [ "$count_a_initial" -eq "$count_a_final" ] || { echo "FAIL: log A still growing ($count_a_initial -> $count_a_final)"; rm -rf "$workspace"; return 1; }
+  [ "$count_b_initial" -eq "$count_b_final" ] || { echo "FAIL: log B still growing ($count_b_initial -> $count_b_final)"; rm -rf "$workspace"; return 1; }
+
+  rm -rf "$workspace"
+}
+
+@test "orchestrator validates produced artifact JSON when schema validation is enabled" {
+  local workspace orch_file
+  workspace="$(setup_orchestrator_workspace)"
+  orch_file="$workspace/schema-contract.orch.json"
+  mkdir -p "$workspace/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json" "$workspace/schemas/"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats schema contract",
+  "namespace": "bats-schema",
+  "stages": [
+    {
+      "id": "review",
+      "agent": "schema-agent",
+      "runtime": "cursor",
+      "plan": "stages/schema.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-schema/review.json",
+          "required": true,
+          "schema": "schemas/evaluator-verdict.schema.json"
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/schema.plan.md"
+  mkdir -p "$workspace/.ralph-workspace/artifacts/bats-schema"
+  printf '%s\n' '{"status":"approved","feedback":[]}' > "$workspace/.ralph-workspace/artifacts/bats-schema/review.json"
+  run env RALPH_ARTIFACT_SCHEMA_VALIDATION=1 RALPH_MODE=no bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ]
+  rm -rf "$workspace"
+}
+
+@test "orchestrator rejects invalid produced artifact JSON before advancing" {
+  local workspace orch_file
+  workspace="$(setup_orchestrator_workspace)"
+  orch_file="$workspace/schema-contract-fail.orch.json"
+  mkdir -p "$workspace/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json" "$workspace/schemas/"
+  cat <<'ORCH' > "$orch_file"
+{
+  "name": "bats schema contract fail",
+  "namespace": "bats-schema-fail",
+  "stages": [
+    {
+      "id": "review",
+      "agent": "schema-agent",
+      "runtime": "cursor",
+      "plan": "stages/schema-fail.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-schema-fail/review.json",
+          "required": true,
+          "schema": "schemas/evaluator-verdict.schema.json"
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/schema-fail.plan.md"
+  mkdir -p "$workspace/.ralph-workspace/artifacts/bats-schema-fail"
+  printf '%s\n' '{"status":"approved"}' > "$workspace/.ralph-workspace/artifacts/bats-schema-fail/review.json"
+  run env RALPH_ARTIFACT_SCHEMA_VALIDATION=1 RALPH_MODE=no bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"artifact schema validation failed"* ]]
+  [[ "$output" == *"stage=review"* ]]
+  rm -rf "$workspace"
+}
+
+setup_router_capture_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path=""
+ws_root=""
+while (($# > 0)); do
+  case "$1" in
+    --plan)
+      plan_path="${2:-}"
+      shift 2
+      ;;
+    --workspace)
+      ws_root="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$ws_root" ]] || ws_root="$(pwd)"
+log="${ROUTER_STAGE_LOG:-/dev/null}"
+if [[ "${RALPH_ROUTER_STAGE:-0}" == "1" ]]; then
+  mkdir -p "$ws_root/.ralph-workspace/artifacts/bats-router"
+  printf '%s\n' '{"target":"branch-b","reason":"test route","confidence":0.9}' \
+    > "$ws_root/.ralph-workspace/artifacts/bats-router/route.json"
+  printf 'router\n' >> "$log"
+else
+  stage_id="$(basename "${plan_path:-unknown}" .plan.md)"
+  printf '%s\n' "$stage_id" >> "$log"
+fi
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
+  printf '%s' "$workspace"
+}
+
+create_router_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/router.orch.json"
+  mkdir -p "$workspace/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/router-decision.schema.json" "$workspace/schemas/"
+  cat <<'ORCH' > "$orch_path"
+{
+  "name": "bats router",
+  "namespace": "bats-router",
+  "stages": [
+    {
+      "id": "router",
+      "agent": "router-agent",
+      "runtime": "cursor",
+      "plan": "stages/router.plan.md",
+      "router": {
+        "allowedTargets": ["branch-a", "branch-b"],
+        "defaultTarget": "branch-a",
+        "onInvalid": "fail"
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-router/route.json",
+          "required": true,
+          "schema": "schemas/router-decision.schema.json"
+        }
+      ]
+    },
+    {
+      "id": "branch-a",
+      "agent": "branch-a-agent",
+      "runtime": "cursor",
+      "plan": "stages/branch-a.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-router/branch-a.md",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "branch-b",
+      "agent": "branch-b-agent",
+      "runtime": "cursor",
+      "plan": "stages/branch-b.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-router/branch-b.md",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "tail",
+      "agent": "tail-agent",
+      "runtime": "cursor",
+      "plan": "stages/tail.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-router/tail.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/router.plan.md"
+  write_plan_file "$workspace" "stages/branch-a.plan.md"
+  write_plan_file "$workspace" "stages/branch-b.plan.md"
+  write_plan_file "$workspace" "stages/tail.plan.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-router/branch-a.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-router/branch-b.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-router/tail.md"
+  printf '%s' "$orch_path"
+}
+
+@test "orchestrator dispatches router target once and skips other branches" {
+  local workspace orch_file stage_log summary_file
+  workspace="$(setup_router_capture_workspace)"
+  stage_log="$(mktemp)"
+  orch_file="$(create_router_orchestration "$workspace")"
+  run env RALPH_ROUTER_STAGE=1 RALPH_ARTIFACT_SCHEMA_VALIDATION=1 RALPH_MODE=no \
+    ROUTER_STAGE_LOG="$stage_log" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Router selected stage: branch-b"* ]] || { echo "FAIL missing router dispatch: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"skipped by router: branch-a"* ]] || { echo "FAIL missing skipped branch-a: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq router "$stage_log" || { echo "FAIL router stage not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq branch-b "$stage_log" || { echo "FAIL branch-b not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq branch-a "$stage_log" && { echo "FAIL branch-a should be skipped"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  summary_file="$workspace/.ralph-workspace/logs/bats-router/orchestration-usage-summary.json"
+  [ -f "$summary_file" ]
+  grep -Fq '"status":"skipped"' "$summary_file" || { echo "FAIL missing skipped usage record: $(cat "$summary_file")"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  rm -f "$stage_log"
+  rm -rf "$workspace"
+}
+
+setup_planner_capture_workspace() {
+  local workspace
+  workspace="$(setup_orchestrator_workspace)"
+  mkdir -p "$workspace/.ralph/python"
+  cp "$REPO_ROOT/bundle/.ralph/python/planner_contract.py" "$workspace/.ralph/python/"
+  cp "$REPO_ROOT/bundle/.ralph/python/artifact_json_schema.py" "$workspace/.ralph/python/"
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+plan_path=""
+ws_root=""
+while (($# > 0)); do
+  case "$1" in
+    --plan)
+      plan_path="${2:-}"
+      shift 2
+      ;;
+    --workspace)
+      ws_root="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$ws_root" ]] || ws_root="$(pwd)"
+log="${PLANNER_STAGE_LOG:-/dev/null}"
+if [[ "${RALPH_PLANNER_STAGE:-0}" == "1" ]]; then
+  mkdir -p "$ws_root/.ralph-workspace/artifacts/bats-planner"
+  cat > "$ws_root/.ralph-workspace/artifacts/bats-planner/planner-output.json" <<'JSON'
+{
+  "rationale": "Split into two worker slices.",
+  "items": [
+    {
+      "id": "worker-1",
+      "content": "First generated worker slice",
+      "runtime": "cursor",
+      "agent": "implementation"
+    },
+    {
+      "id": "worker-2",
+      "content": "Second generated worker slice",
+      "runtime": "cursor",
+      "agent": "implementation"
+    }
+  ],
+  "artifactRelationships": [],
+  "verification": "bash scripts/run-bats.sh tests/bats/plan/validate-plan.bats"
+}
+JSON
+  printf 'planner\n' >> "$log"
+else
+  stage_id="$(basename "${plan_path:-unknown}" .plan.md)"
+  printf '%s\n' "$stage_id" >> "$log"
+  if [[ "$stage_id" == worker-* ]]; then
+    mkdir -p "$ws_root/.ralph-workspace/artifacts/bats-planner"
+    printf '# worker artifact\n' > "$ws_root/.ralph-workspace/artifacts/bats-planner/${stage_id}.md"
+  fi
+fi
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
+  create_agent_config_workspace "$workspace" "architect" ".ralph-workspace/artifacts/bats-planner/planner-output.json"
+  create_agent_config_workspace "$workspace" "implementation" ".ralph-workspace/artifacts/bats-planner/worker.md"
+  printf '%s' "$workspace"
+}
+
+create_planner_orchestration() {
+  local workspace="$1"
+  local orch_path="$workspace/planner.orch.json"
+  mkdir -p "$workspace/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/planner-output.schema.json" "$workspace/schemas/"
+  cat <<'ORCH' > "$orch_path"
+{
+  "name": "bats planner",
+  "namespace": "bats-planner",
+  "stages": [
+    {
+      "id": "planner",
+      "agent": "architect",
+      "runtime": "cursor",
+      "plan": "stages/planner.plan.md",
+      "planner": {
+        "outputMode": "stages",
+        "maxTodos": 8,
+        "maxStages": 3,
+        "allowedRuntimes": ["cursor"],
+        "allowedAgents": ["implementation"],
+        "allowedModels": ["auto"]
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-planner/planner-output.json",
+          "required": true,
+          "schema": "schemas/planner-output.schema.json"
+        }
+      ]
+    },
+    {
+      "id": "tail",
+      "agent": "tail-agent",
+      "runtime": "cursor",
+      "plan": "stages/tail.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-planner/tail.md",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/planner.plan.md"
+  write_plan_file "$workspace" "stages/tail.plan.md"
+  create_agent_config_workspace "$workspace" "tail-agent" ".ralph-workspace/artifacts/bats-planner/tail.md"
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-planner/tail.md"
+  printf '%s' "$orch_path"
+}
+
+@test "orchestrator queues generated planner stages before tail" {
+  local workspace orch_file stage_log
+  workspace="$(setup_planner_capture_workspace)"
+  stage_log="$(mktemp)"
+  orch_file="$(create_planner_orchestration "$workspace")"
+  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no RALPH_ARTIFACT_SCHEMA_VALIDATION=1 \
+    PLANNER_STAGE_LOG="$stage_log" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Planner decomposition:"* ]] || { echo "FAIL missing planner summary: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq planner "$stage_log" || { echo "FAIL planner stage not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq worker-1 "$stage_log" || { echo "FAIL worker-1 not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq worker-2 "$stage_log" || { echo "FAIL worker-2 not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  grep -Fxq tail "$stage_log" || { echo "FAIL tail not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  [ -f "$workspace/.ralph-workspace/orchestration-plans/bats-planner/generated/worker-1.plan.md" ]
+  rm -f "$stage_log"
+  rm -rf "$workspace"
+}
+
+@test "orchestrator dry-run shows planner decomposition when artifact exists" {
+  local workspace orch_file
+  workspace="$(setup_planner_capture_workspace)"
+  orch_file="$(create_planner_orchestration "$workspace")"
+  mkdir -p "$workspace/.ralph-workspace/artifacts/bats-planner"
+  cat > "$workspace/.ralph-workspace/artifacts/bats-planner/planner-output.json" <<'JSON'
+{
+  "rationale": "Dry-run preview.",
+  "items": [
+    {
+      "id": "worker-1",
+      "content": "Preview worker",
+      "runtime": "cursor",
+      "agent": "implementation"
+    }
+  ],
+  "artifactRelationships": [],
+  "verification": "bash scripts/run-bats.sh tests/bats/plan/validate-plan.bats"
+}
+JSON
+  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no ORCHESTRATOR_DRY_RUN=1 \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Planner decomposition:"* ]] || { echo "FAIL missing dry-run planner summary: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"worker-1"* ]] || { echo "FAIL missing worker preview: $output"; rm -rf "$workspace"; return 1; }
   rm -rf "$workspace"
 }

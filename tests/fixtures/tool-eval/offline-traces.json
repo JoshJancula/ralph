@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "kind": "tool_eval_offline_traces",
+  "traces": {
+    "read-basic": {
+      "completed": true,
+      "output": "VERSION = 1.0.0",
+      "duration_ms": 850,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_read"],
+      "tool_calls_by_tool": {"ralph_proxy_read": 1},
+      "tool_durations_ms": {"ralph_proxy_read": 850},
+      "tool_call_targets": [{"tool": "ralph_proxy_read", "target": "config.py"}]
+    },
+    "grep-symbol": {
+      "completed": true,
+      "output": "config.py:3:VERSION = \"1.0.0\"",
+      "duration_ms": 620,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_grep"],
+      "tool_calls_by_tool": {"ralph_proxy_grep": 1},
+      "tool_durations_ms": {"ralph_proxy_grep": 620},
+      "tool_call_targets": [{"tool": "ralph_proxy_grep", "target": "VERSION"}]
+    },
+    "glob-py": {
+      "completed": true,
+      "output": "config.py\nlib/utils.py",
+      "duration_ms": 540,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_glob"],
+      "tool_calls_by_tool": {"ralph_proxy_glob": 1},
+      "tool_durations_ms": {"ralph_proxy_glob": 540},
+      "tool_call_targets": [{"tool": "ralph_proxy_glob", "target": "**/*.py"}]
+    },
+    "lexical-search": {
+      "completed": true,
+      "output": "lib/utils.py:4:def helper_sum",
+      "duration_ms": 1100,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_search"],
+      "tool_calls_by_tool": {"ralph_proxy_search": 1},
+      "tool_durations_ms": {"ralph_proxy_search": 1100},
+      "tool_call_targets": [{"tool": "ralph_proxy_search", "target": "helper_sum"}]
+    },
+    "repomap": {
+      "completed": true,
+      "output": "lib/utils.py helper_sum",
+      "duration_ms": 900,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_repomap"],
+      "tool_calls_by_tool": {"ralph_proxy_repomap": 1},
+      "tool_durations_ms": {"ralph_proxy_repomap": 900},
+      "tool_call_targets": [{"tool": "ralph_proxy_repomap", "target": "helper_sum"}]
+    },
+    "result-page": {
+      "completed": true,
+      "output": "compacted tail preview",
+      "duration_ms": 780,
+      "tool_calls_total": 2,
+      "tool_calls_sequence": ["ralph_proxy_shell", "ralph_proxy_result_read"],
+      "tool_calls_by_tool": {"ralph_proxy_shell": 1, "ralph_proxy_result_read": 1},
+      "tool_durations_ms": {"ralph_proxy_shell": 400, "ralph_proxy_result_read": 380},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_shell", "target": "sha256:abc"},
+        {"tool": "ralph_proxy_result_read", "target": "resultId=r1:view=compacted:byteEnd=4096"}
+      ],
+      "stored_result_readbacks": {
+        "envelope_count": 1,
+        "readback_count": 1,
+        "compacted_readback_count": 1,
+        "raw_readback_count": 0
+      }
+    },
+    "batch-read-grep": {
+      "completed": true,
+      "output": "config.py VERSION = 1.0.0",
+      "duration_ms": 700,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_batch"],
+      "tool_calls_by_tool": {"ralph_proxy_batch": 1},
+      "tool_durations_ms": {"ralph_proxy_batch": 700},
+      "tool_call_targets": [{"tool": "ralph_proxy_batch", "target": "read+grep"}]
+    },
+    "shell-compact": {
+      "completed": true,
+      "output": "config.py\nlib",
+      "duration_ms": 1200,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_shell"],
+      "tool_calls_by_tool": {"ralph_proxy_shell": 1},
+      "tool_durations_ms": {"ralph_proxy_shell": 1200},
+      "tool_call_targets": [{"tool": "ralph_proxy_shell", "target": "sha256:ls"}],
+      "compaction_telemetry": [
+        {
+          "family": "proxy_shell",
+          "original_bytes": 12000,
+          "compacted_bytes": 1200,
+          "compaction_skipped": false
+        }
+      ]
+    },
+    "tool-search-discover": {
+      "completed": true,
+      "output": "ralph_proxy_grep",
+      "duration_ms": 500,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_tool_search"],
+      "tool_calls_by_tool": {"ralph_proxy_tool_search": 1},
+      "tool_durations_ms": {"ralph_proxy_tool_search": 500},
+      "tool_call_targets": [{"tool": "ralph_proxy_tool_search", "target": "grep pattern"}],
+      "discovery_events": [
+        {"event": "tool_search", "query": "grep pattern", "ranked_tool": "ralph_proxy_grep"}
+      ]
+    },
+    "tool-search-invoke": {
+      "completed": true,
+      "output": "config.py:3:VERSION",
+      "duration_ms": 950,
+      "tool_calls_total": 2,
+      "tool_calls_sequence": ["ralph_proxy_tool_search", "ralph_proxy_grep"],
+      "tool_calls_by_tool": {"ralph_proxy_tool_search": 1, "ralph_proxy_grep": 1},
+      "tool_durations_ms": {"ralph_proxy_tool_search": 450, "ralph_proxy_grep": 500},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_tool_search", "target": "grep VERSION"},
+        {"tool": "ralph_proxy_grep", "target": "VERSION"}
+      ],
+      "discovery_events": [
+        {"event": "tool_search_invoke", "query": "grep VERSION", "dispatched_tool": "ralph_proxy_grep"}
+      ]
+    },
+    "permission-deny-fallback": {
+      "completed": true,
+      "output": "VERSION = 1.0.0",
+      "duration_ms": 880,
+      "tool_calls_total": 2,
+      "tool_calls_sequence": ["Read", "ralph_proxy_read"],
+      "tool_calls_by_tool": {"Read": 1, "ralph_proxy_read": 1},
+      "tool_durations_ms": {"Read": 120, "ralph_proxy_read": 760},
+      "tool_call_targets": [
+        {"tool": "Read", "target": "config.py"},
+        {"tool": "ralph_proxy_read", "target": "config.py"}
+      ],
+      "permission_denials": [{"tool": "Read", "reason": "strict proxy policy"}]
+    },
+    "artifact-lookup": {
+      "completed": true,
+      "output": "artifact lookup success",
+      "duration_ms": 640,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_read"],
+      "tool_calls_by_tool": {"ralph_proxy_read": 1},
+      "tool_durations_ms": {"ralph_proxy_read": 640},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_read", "target": ".ralph-workspace/artifacts/demo/result.txt"}
+      ]
+    },
+    "result-search-first": {
+      "completed": true,
+      "output": "matched error line",
+      "duration_ms": 820,
+      "tool_calls_total": 2,
+      "tool_calls_sequence": ["ralph_proxy_result_search", "ralph_proxy_result_read"],
+      "tool_calls_by_tool": {"ralph_proxy_result_search": 1, "ralph_proxy_result_read": 1},
+      "tool_durations_ms": {"ralph_proxy_result_search": 300, "ralph_proxy_result_read": 520},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_result_search", "target": "error"},
+        {"tool": "ralph_proxy_result_read", "target": "resultId=r2:view=compacted"}
+      ]
+    },
+    "duplicate-read-penalty": {
+      "completed": true,
+      "output": "VERSION = 1.0.0",
+      "duration_ms": 1500,
+      "tool_calls_total": 3,
+      "tool_calls_sequence": ["ralph_proxy_read", "ralph_proxy_read", "ralph_proxy_read"],
+      "tool_calls_by_tool": {"ralph_proxy_read": 3},
+      "tool_durations_ms": {"ralph_proxy_read": 1500},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_read", "target": "config.py"},
+        {"tool": "ralph_proxy_read", "target": "config.py"},
+        {"tool": "ralph_proxy_read", "target": "config.py"}
+      ]
+    },
+    "serial-batch-opportunity": {
+      "completed": true,
+      "output": "read both files",
+      "duration_ms": 1300,
+      "tool_calls_total": 2,
+      "tool_calls_sequence": ["ralph_proxy_read", "ralph_proxy_read"],
+      "tool_calls_by_tool": {"ralph_proxy_read": 2},
+      "tool_durations_ms": {"ralph_proxy_read": 1300},
+      "tool_call_targets": [
+        {"tool": "ralph_proxy_read", "target": "config.py"},
+        {"tool": "ralph_proxy_read", "target": "lib/utils.py"}
+      ]
+    },
+    "catalog-missing": {
+      "completed": false,
+      "output": "",
+      "duration_ms": 50,
+      "tool_calls_total": 0,
+      "tool_calls_sequence": [],
+      "tool_calls_by_tool": {},
+      "tool_durations_ms": {},
+      "catalog_probe": {
+        "tools": []
+      }
+    },
+    "next-cursor-null": {
+      "completed": false,
+      "output": "",
+      "duration_ms": 40,
+      "tool_calls_total": 0,
+      "tool_calls_sequence": [],
+      "tool_calls_by_tool": {},
+      "tool_durations_ms": {},
+      "catalog_probe": {
+        "tools": [{"name": "ralph_proxy_read"}],
+        "nextCursor": null
+      }
+    },
+    "shell-status-polling": {
+      "completed": false,
+      "output": "",
+      "duration_ms": 5000,
+      "tool_calls_total": 8,
+      "tool_calls_sequence": [
+        "ralph_proxy_shell_start",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status",
+        "ralph_proxy_shell_status"
+      ],
+      "tool_calls_by_tool": {
+        "ralph_proxy_shell_start": 1,
+        "ralph_proxy_shell_status": 7
+      },
+      "tool_durations_ms": {
+        "ralph_proxy_shell_start": 200,
+        "ralph_proxy_shell_status": 4800
+      }
+    },
+    "discovery-dispatch-fail": {
+      "completed": false,
+      "output": "",
+      "duration_ms": 300,
+      "tool_calls_total": 1,
+      "tool_calls_sequence": ["ralph_proxy_tool_search"],
+      "tool_calls_by_tool": {"ralph_proxy_tool_search": 1},
+      "tool_durations_ms": {"ralph_proxy_tool_search": 300},
+      "discovery_events": [
+        {
+          "event": "tool_search_invoke",
+          "query": "missing capability",
+          "dispatched_tool": null,
+          "error": "tool not in catalog"
+        }
+      ]
+    }
+  }
+}

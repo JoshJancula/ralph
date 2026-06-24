@@ -30,6 +30,105 @@ TODOs route by `runtime`, `agent`, and optional `model`. Stage routing follows t
 
 Pipeline orchestration shares context with explicit artifact declarations. Use `produces` and `requires` artifact declarations, plus explicit artifact paths in TODO content, so required inputs are surfaced in the prompt automatically.
 
+### Artifact JSON schemas (optional)
+
+Stages may attach an optional `schema` field to entries in `artifacts`, `inputArtifacts`, and `outputArtifacts`. The value is a **project-root-relative** path to a JSON Schema document. Schema paths support the same namespace placeholders as artifact paths: `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}`.
+
+```json
+{
+  "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.json",
+  "required": true,
+  "schema": "bundle/.ralph/schemas/evaluator-verdict.schema.json"
+}
+```
+
+YAML pipeline plans accept the same field on `requires` / `produces` entries; `plan-todo.sh` preserves `schema` when converting to `.orch.json`.
+
+**Plan validation:** `bash scripts/validate-orchestration-schema.sh <file.orch.json> <workspace>` checks orchestration shape with `jq`, then validates every declared schema path (reject absolute paths, `..` traversal, `.env*` paths, missing files, empty files, and paths outside the project root). When no artifact declares `schema`, the optional workspace argument is not required.
+
+**Runtime validation timing:** After a stage finishes, the orchestrator verifies required artifacts exist and are non-empty, then validates produced artifacts that declare `schema` **before** advancing to the next stage or injecting downstream handoffs. Validation uses Ralph's stdlib JSON Schema subset validator (`bundle/.ralph/python/artifact_json_schema.py`); no third-party Python packages are required.
+
+Failures identify **stage id**, **artifact path**, **schema path**, and the **JSON location** (for example `$` or `/feedback`).
+
+Bundled contract schemas live under `bundle/.ralph/schemas/` (`evaluator-verdict`, `router-decision`, `planner-output`, `rubric-result`). They are reference contracts for later evaluator, router, planner, and rubric stages; declaring `schema` on a stage artifact is optional and backward compatible when omitted.
+
+**Feature gate:** `RALPH_ARTIFACT_SCHEMA_VALIDATION` follows the cookbook rollout convention. In `RALPH_MODE=ralph` or `hybrid`, validation is on unless the variable is set to `0`. In native/no mode, validation is off unless the variable is set to `1`.
+
+### Artifact provenance citations (optional)
+
+Stages and agent `output_artifacts` may declare `provenance: required|optional|none` (default `optional`). When enabled, Ralph validates citations **after** JSON schema validation and **before** downstream handoff injection.
+
+**File citations** use a project-relative path, 1-based line number, and an optional bounded quoted excerpt:
+
+```markdown
+- cite: bundle/.ralph/orchestrator.sh:829
+- cite: bundle/.ralph/orchestrator.sh:829 "verify_stage_artifact_schemas"
+```
+
+**Generated artifact citations** use an artifact path plus a Markdown heading or JSON pointer:
+
+```markdown
+- cite: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md#Module-boundaries
+- cite: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.json#/feedback/0
+```
+
+JSON artifacts may include an optional top-level `citations` array (see `bundle/.ralph/schemas/citation.schema.json`):
+
+```json
+{
+  "citations": [
+    {"ref": "bundle/.ralph/run-plan.sh:120", "excerpt": "optional excerpt"}
+  ]
+}
+```
+
+When `provenance` is `required`, at least one valid citation must be present. When `optional` (the default), existing artifacts without citations remain valid; any supplied citations are checked for path safety, line range, traversal rejection, and excerpt match. External URL validation is out of scope for the dependency-free core.
+
+Research, architect, code-review, QA, and security agent profiles include provenance guidance for material repository claims.
+
+**Feature gate:** `RALPH_ARTIFACT_PROVENANCE` follows the same rollout convention as artifact schema validation.
+
+### Evaluator verdict contract and loopback feedback
+
+A review/QA/security stage that drives a loop can declare an evaluator schema for its loop-check artifact. Two equivalent surfaces exist:
+
+- YAML pipeline stage: `loopCheck.schema: <project-root-relative schema path>` (alongside `loopCheck.path`), plus an optional `onExhausted: proceed|fail`.
+- Generated `.orch.json`: `loopControl.evaluatorSchema` and `loopControl.onExhausted` (produced automatically from the YAML form).
+
+The canonical evaluator artifact is:
+
+```json
+{"status": "approved|changes-required", "feedback": ["string", ...]}
+```
+
+`feedback` is required; it may be empty only when `status` is `approved`, and `changes-required` must include at least one non-empty entry. The bundled schema is `bundle/.ralph/schemas/evaluator-verdict.schema.json`.
+
+When a loop-check artifact declares an evaluator schema and the JSON-contract gate is enabled, Ralph parses **only** the validated JSON contract for that artifact (no free-form status fallback). When no schema is declared, the legacy `<!-- REVIEW_STATUS: START -->` / `status: ...` markdown parser remains in effect, so existing plans are unchanged.
+
+On `changes-required`, the reviewer feedback is injected verbatim and in order into the looped-back plan inside a delimited block (`<!-- RALPH_EVALUATOR_FEEDBACK: START -->` ... `END`) that records the source stage, iteration, and artifact path. Feedback bytes are preserved; a Markdown fence longer than any backtick run in the feedback is used to prevent fence breakouts, and the rendered block is only ever written to a file (never evaluated by a shell).
+
+When the loop reaches `maxIterations` while the review still requires changes, the run stops with a non-zero exit unless the stage declares `onExhausted: proceed`.
+
+**Feature gate:** `RALPH_EVALUATOR_JSON_CONTRACT` follows the same rollout convention as artifact schema validation (`RALPH_MODE=ralph`/`hybrid` on unless `0`; native/no off unless `1`; invalid values fail early).
+
+### Router stage (optional)
+
+Orchestration JSON may include a stage with a `router` block. When `RALPH_ROUTER_STAGE=1` (or Ralph/hybrid default), Ralph validates router output against `bundle/.ralph/schemas/router-decision.schema.json` and dispatches forward to a named stage. Routers cannot loop backward; use `loopControl` for review loops.
+
+**Feature gate:** `RALPH_ROUTER_STAGE` follows the cookbook rollout convention.
+
+### Rubric grader (optional)
+
+Stages with `sessionStrategy: fresh` and a rubric artifact may use `bundle/.ralph/python/rubric_grader.py` for deterministic checks (`file_exists`, `json_pointer`, `regex`, `command`, `citation`) before optional model judgment criteria. Results validate against `bundle/.ralph/schemas/rubric-result.schema.json`.
+
+**Feature gate:** `RALPH_RUBRIC_GRADER` follows the cookbook rollout convention.
+
+### Dynamic planner stage (optional)
+
+A stage may declare a `planner` block with caps on generated todos/stages and allowed runtimes/agents/models. Output validates against `bundle/.ralph/schemas/planner-output.schema.json` and materializes under the state root without overwriting operator plans.
+
+**Feature gate:** `RALPH_DYNAMIC_PLANNER` follows the cookbook rollout convention.
+
 ## Visual flow
 
 ```mermaid

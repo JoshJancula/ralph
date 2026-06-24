@@ -89,10 +89,13 @@ ralph_session_init() {
   HUMAN_CONTEXT="$RALPH_SESSION_DIR/human-replies.md"
   OPERATOR_RESPONSE_FILE="$RALPH_SESSION_DIR/operator-response.txt"
   HUMAN_INPUT_MD="$RALPH_SESSION_DIR/HUMAN-INPUT-REQUIRED.md"
+  RALPH_MCP_ALLOWLIST_FILE="$RALPH_SESSION_DIR/mcp-allowlist.txt"
   PENDING_ABS="$PENDING_HUMAN"
   export HUMAN_REQUEST_FILE
+  export RALPH_MCP_ALLOWLIST_FILE
 
   ralph_session_migrate_legacy "$workspace"
+  ralph_session_load_mcp_allowlist
 
   if [[ -n "${RESUME_SESSION_ID_OVERRIDE:-}" ]]; then
     ralph_session_write_manual_resume "$RESUME_SESSION_ID_OVERRIDE"
@@ -112,7 +115,7 @@ ralph_session_migrate_legacy() {
     ralph_run_plan_log "Ignoring legacy shared session-id.txt in $_legacy_plan_sess; session ids are now runtime-specific"
   fi
   local _mig_f
-  for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md human-request.json; do
+  for _mig_f in human-replies.md pending-human.txt operator-response.txt HUMAN-INPUT-REQUIRED.md human-request.json mcp-allowlist.txt; do
     if [[ ! -e "$RALPH_SESSION_DIR/$_mig_f" && -e "$_legacy_plan_sess/$_mig_f" ]]; then
       cp -a "$_legacy_plan_sess/$_mig_f" "$RALPH_SESSION_DIR/$_mig_f"
       ralph_run_plan_log "Migrated $_mig_f from legacy .ralph-workspace session dir"
@@ -132,6 +135,53 @@ ralph_session_write_manual_resume() {
     chmod 600 "$SESSION_ID_FILE_LEGACY"
   fi
   ralph_run_plan_log "Manual resume session id provided via --resume; recorded in $SESSION_ID_FILE"
+}
+
+ralph_session_load_mcp_allowlist() {
+  local file="${RALPH_MCP_ALLOWLIST_FILE:-}"
+  local merged="${RALPH_MCP_ALLOWLIST:-}"
+  local entry trimmed
+
+  if [[ -n "$file" && -f "$file" ]]; then
+    while IFS= read -r entry; do
+      trimmed="${entry#"${entry%%[![:space:]]*}"}"
+      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+      [[ -n "$trimmed" ]] || continue
+      case ",$merged," in
+        *,"$trimmed",*) ;;
+        *)
+          if [[ -n "$merged" ]]; then
+            merged+=","
+          fi
+          merged+="$trimmed"
+          ;;
+      esac
+    done < "$file"
+  fi
+
+  RALPH_MCP_ALLOWLIST="$merged"
+  export RALPH_MCP_ALLOWLIST
+}
+
+ralph_session_append_mcp_allowlist_entries() {
+  local file="${RALPH_MCP_ALLOWLIST_FILE:-}"
+  local entry trimmed
+
+  [[ -n "$file" ]] || return 1
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+
+  for entry in "$@"; do
+    trimmed="${entry#"${entry%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ -n "$trimmed" ]] || continue
+    if ! grep -Fxq -- "$trimmed" "$file" 2>/dev/null; then
+      printf '%s\n' "$trimmed" >> "$file"
+      chmod 600 "$file" 2>/dev/null || true
+    fi
+  done
+
+  ralph_session_load_mcp_allowlist
 }
 
 # Generate a UUID from /proc when available.

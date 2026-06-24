@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["naming", "parameters", "error_messages", "missing_tools"],
+  "properties": {
+    "naming": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "string"
+    },
+    "error_messages": {
+      "type": "string"
+    },
+    "missing_tools": {
+      "type": "string"
+    }
+  }
+}

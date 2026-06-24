@@ -14,6 +14,158 @@ fi
 #   collect_incoming_handoffs -- scan orchestration JSON and return handoffs targeting a stage.
 #   extract_handoff_tasks -- parse ## Tasks section of handoff markdown, emit unchecked items.
 #   inject_handoffs_into_plan -- append/replace handoff blocks into plan file with idempotent guards.
+#   ralph_artifact_schema_validation_enabled -- rollout gate for post-stage JSON schema checks.
+#   verify_stage_artifact_schemas -- validate produced artifacts against declared schemas.
+#   ralph_artifact_provenance_enabled -- rollout gate for post-stage provenance checks.
+#   verify_stage_artifact_provenance -- validate produced artifact citations when declared.
+
+ralph_artifact_schema_validation_enabled() {
+  local gate="${RALPH_ARTIFACT_SCHEMA_VALIDATION:-}"
+  if [[ -n "$gate" ]]; then
+    case "$gate" in
+      0)
+        return 1
+        ;;
+      1)
+        return 0
+        ;;
+      *)
+        ralph_warn "RALPH_ARTIFACT_SCHEMA_VALIDATION: invalid value '$gate' (use 0 or 1)"
+        return 2
+        ;;
+    esac
+  fi
+  case "${RALPH_MODE:-no}" in
+    ralph|hybrid)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+orch_resolve_artifact_schema_py() {
+  local candidate=""
+  if [[ -n "${RALPH_ACTIVE_DIR:-}" && -f "${RALPH_ACTIVE_DIR}/python/artifact_json_schema.py" ]]; then
+    candidate="${RALPH_ACTIVE_DIR}/python/artifact_json_schema.py"
+  elif [[ -n "${RALPH_DIR:-}" && -f "${RALPH_DIR}/python/artifact_json_schema.py" ]]; then
+    candidate="${RALPH_DIR}/python/artifact_json_schema.py"
+  fi
+  if [[ -z "$candidate" ]]; then
+    ralph_warn "artifact schema validator not found under Ralph python helpers"
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+# verify_stage_artifact_schemas <workspace> <stage_json> <stage_id> <step_n>
+#
+# Validates produced artifacts for a completed stage when schema validation is enabled.
+# Returns 0 when validation is disabled or all schema-bearing produced artifacts pass.
+verify_stage_artifact_schemas() {
+  local workspace="$1"
+  local stage_json="$2"
+  local stage_id="$3"
+  local step_n="${4:-}"
+
+  if ! ralph_artifact_schema_validation_enabled; then
+    return 0
+  fi
+
+  local schema_py
+  schema_py="$(orch_resolve_artifact_schema_py)" || return 1
+  if ! command -v python3 >/dev/null 2>&1; then
+    ralph_warn "verify_stage_artifact_schemas: python3 is required when artifact schema validation is enabled"
+    return 1
+  fi
+
+  local artifact_ns="${RALPH_ARTIFACT_NS:-${ORCH_ARTIFACT_NS:-}}"
+  local plan_key="${RALPH_PLAN_KEY:-$artifact_ns}"
+  if ! python3 "$schema_py" verify-stage \
+    --workspace "$workspace" \
+    --stage-json "$stage_json" \
+    --stage-id "$stage_id" \
+    --artifact-ns "$artifact_ns" \
+    --plan-key "$plan_key"; then
+    return 1
+  fi
+  return 0
+}
+
+ralph_artifact_provenance_enabled() {
+  local gate="${RALPH_ARTIFACT_PROVENANCE:-}"
+  if [[ -n "$gate" ]]; then
+    case "$gate" in
+      0)
+        return 1
+        ;;
+      1)
+        return 0
+        ;;
+      *)
+        ralph_warn "RALPH_ARTIFACT_PROVENANCE: invalid value '$gate' (use 0 or 1)"
+        return 2
+        ;;
+    esac
+  fi
+  case "${RALPH_MODE:-no}" in
+    ralph|hybrid)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+orch_resolve_artifact_provenance_py() {
+  local candidate=""
+  if [[ -n "${RALPH_ACTIVE_DIR:-}" && -f "${RALPH_ACTIVE_DIR}/python/artifact_provenance.py" ]]; then
+    candidate="${RALPH_ACTIVE_DIR}/python/artifact_provenance.py"
+  elif [[ -n "${RALPH_DIR:-}" && -f "${RALPH_DIR}/python/artifact_provenance.py" ]]; then
+    candidate="${RALPH_DIR}/python/artifact_provenance.py"
+  fi
+  if [[ -z "$candidate" ]]; then
+    ralph_warn "artifact provenance validator not found under Ralph python helpers"
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+# verify_stage_artifact_provenance <workspace> <stage_json> <stage_id> <step_n>
+#
+# Validates provenance for produced artifacts when provenance checking is enabled.
+# Returns 0 when validation is disabled or all provenance-bearing artifacts pass.
+verify_stage_artifact_provenance() {
+  local workspace="$1"
+  local stage_json="$2"
+  local stage_id="$3"
+  local step_n="${4:-}"
+
+  if ! ralph_artifact_provenance_enabled; then
+    return 0
+  fi
+
+  local provenance_py
+  provenance_py="$(orch_resolve_artifact_provenance_py)" || return 1
+  if ! command -v python3 >/dev/null 2>&1; then
+    ralph_warn "verify_stage_artifact_provenance: python3 is required when artifact provenance checking is enabled"
+    return 1
+  fi
+
+  local artifact_ns="${RALPH_ARTIFACT_NS:-${ORCH_ARTIFACT_NS:-}}"
+  local plan_key="${RALPH_PLAN_KEY:-$artifact_ns}"
+  if ! python3 "$provenance_py" verify-stage \
+    --workspace "$workspace" \
+    --stage-json "$stage_json" \
+    --stage-id "$stage_id" \
+    --artifact-ns "$artifact_ns" \
+    --plan-key "$plan_key"; then
+    return 1
+  fi
+  return 0
+}
 
 # collect_incoming_handoffs <orch_file> <target_stage_id> [artifact_ns] [plan_key] [iteration]
 #

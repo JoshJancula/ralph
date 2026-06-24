@@ -1058,6 +1058,17 @@ def main() -> None:
     usage_acc["cache_read_per_tool_call"] = cache_read_per_call
     finalize_tool_target_telemetry(usage_acc)
     usage_acc["completion_sentinel_seen"] = completion_sentinel_seen
+    try:
+        from usage_accounting import attach_auxiliary_metrics, enrich_record
+
+        attach_auxiliary_metrics(
+            usage_acc,
+            plan_key=os.environ.get("RALPH_PLAN_KEY", "").strip()
+            or os.environ.get("RALPH_ARTIFACT_NS", "").strip(),
+        )
+        enrich_record(usage_acc)
+    except ImportError:
+        pass
     if usage_path:
         try:
             os.makedirs(os.path.dirname(usage_path) or ".", exist_ok=True)

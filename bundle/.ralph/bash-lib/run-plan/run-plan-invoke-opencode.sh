@@ -841,6 +841,7 @@ ralph_run_plan_invoke_opencode() {
   # `opencode` with no subcommand starts the TUI; headless automation uses `opencode run` (see https://opencode.ai/docs/cli).
   local -a args=(run --agent build)
   run_plan_invoke_common_add_model_flag args --model
+  run_plan_invoke_common_add_reasoning_effort_flag args opencode "${OPENCODE_PLAN_CLI:-opencode}"
 
   run_plan_invoke_common_add_resume_args \
     args \
@@ -865,10 +866,23 @@ ralph_run_plan_invoke_opencode() {
 
   run_plan_invoke_opencode_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
+    local cli_pid
     if [[ -n "$opencode_config_path" ]]; then
-      (cd "$agent_ws" && OPENCODE_CONFIG="$opencode_config_path" "$cli" "${args[@]}")
+      (
+        cd "$agent_ws" || exit 1
+        OPENCODE_CONFIG="$opencode_config_path" "$cli" "${args[@]}" &
+        cli_pid=$!
+        run_plan_invoke_common_record_cli_pid "$cli_pid"
+        wait "$cli_pid"
+      )
     else
-      (cd "$agent_ws" && "$cli" "${args[@]}")
+      (
+        cd "$agent_ws" || exit 1
+        "$cli" "${args[@]}" &
+        cli_pid=$!
+        run_plan_invoke_common_record_cli_pid "$cli_pid"
+        wait "$cli_pid"
+      )
     fi
   }
 

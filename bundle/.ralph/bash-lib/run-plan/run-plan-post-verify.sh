@@ -245,7 +245,11 @@ _ralph_run_post_verification() {
     return 0
   fi
 
-  ralph_run_plan_log "post-verification scheduled for line=$todo_line command=$_verify_command"
+  ralph_run_plan_log "post-verification (runner-owned) scheduled for line=$todo_line command=$_verify_command"
+
+  if declare -F ralph_claude_speculative_cache_warm_maybe_start >/dev/null 2>&1; then
+    ralph_claude_speculative_cache_warm_maybe_start "$todo_line"
+  fi
 
   local _inv_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local _start_time="$(date +%s)"
@@ -253,7 +257,7 @@ _ralph_run_post_verification() {
   {
     echo ""
     echo "================================================================================"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Post-verification for TODO (line $todo_line)"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Post-verification (runner-owned) for TODO (line $todo_line)"
     echo "Command: $_verify_command"
     echo "================================================================================"
     echo ""
@@ -276,7 +280,7 @@ _ralph_run_post_verification() {
 
   if [[ "$_verify_exit" -eq 0 ]]; then
     _verify_status="passed"
-    ralph_run_plan_log "post-verification passed line=$todo_line elapsed=${_inv_elapsed}s"
+    ralph_run_plan_log "post-verification (runner-owned) passed line=$todo_line elapsed=${_inv_elapsed}s"
     echo -e "${C_DIM:-}Verification passed (line ${todo_line})${C_RST:-}" >&2
     {
       echo "Post-verification result: PASSED"
@@ -289,10 +293,10 @@ _ralph_run_post_verification() {
       _timeout_secs="$(_ralph_verify_timeout_secs)"
       _verify_output="verification command timed out after ${_timeout_secs}s"$'\n'"$_verify_output"
       _verification_bytes_suppressed=${#_verify_output}
-      ralph_run_plan_log "post-verification timed out line=$todo_line after=${_timeout_secs}s elapsed=${_inv_elapsed}s"
+      ralph_run_plan_log "post-verification (runner-owned) timed out line=$todo_line after=${_timeout_secs}s elapsed=${_inv_elapsed}s"
       echo -e "${C_Y:-}Verification timed out (line ${todo_line}) after ${_timeout_secs}s${C_RST:-}" >&2
     else
-      ralph_run_plan_log "post-verification failed line=$todo_line exit=$_verify_exit elapsed=${_inv_elapsed}s"
+      ralph_run_plan_log "post-verification (runner-owned) failed line=$todo_line exit=$_verify_exit elapsed=${_inv_elapsed}s"
       echo -e "${C_Y:-}Verification failed (line ${todo_line}); reopening TODO${C_RST:-}" >&2
     fi
 
@@ -312,11 +316,11 @@ _ralph_run_post_verification() {
 
     {
       echo "Post-verification result: FAILED (exit=$_verify_exit)"
-      echo "Full output stored: $(basename "$_artifact_file")"
+      echo "Compact artifact stored: $(basename "$_artifact_file")"
       echo ""
     } >> "$OUTPUT_LOG"
 
-    ralph_run_plan_log "post-verification artifact stored at $(basename "$_artifact_file")"
+    ralph_run_plan_log "post-verification (runner-owned) compact artifact stored at $(basename "$_artifact_file")"
   fi
 
   local _failure_summary=""
@@ -337,6 +341,10 @@ _ralph_run_post_verification() {
 
   if [[ -n "$verification_tracking_file" ]]; then
     printf '%s\n' "line=$todo_line status=$_verify_status bytes_suppressed=$_verification_bytes_suppressed elapsed=$_inv_elapsed" >> "$verification_tracking_file"
+  fi
+
+  if declare -F ralph_claude_speculative_cache_warm_finalize >/dev/null 2>&1; then
+    ralph_claude_speculative_cache_warm_finalize
   fi
 
   printf '%s\n%s\n%s\n' "$_verify_status" "$_failure_summary" "$_failure_artifact_path"

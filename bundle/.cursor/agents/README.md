@@ -39,6 +39,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 | Field | Type | Purpose |
 |-------|------|---------|
 | `allowed_tools` | string or array of strings | **Claude headless only** (same as `.claude/agents` README). Cursor/Codex ignore this key. |
+| `reasoning_effort` | string | Portable reasoning budget: `low`, `medium`, `high`, `xhigh`, `max`, or `inherit`. Orchestration stage `reasoning_effort` and runtime env overrides take precedence over agent config. Mapped to Claude `--effort` when capability-detected; other runtimes use `inherit` unless their adapter exposes a supported control. |
 
 ## Field details and validation rules
 
@@ -93,7 +94,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 - **Rules:**
   - Each entry must be either:
     - a non-empty string (file path or glob relative to repo root), or
-    - an object with at least `path` (string) and optionally `required` (boolean, default true).
+    - an object with at least `path` (string) and optionally `required` (boolean, default true), `schema` (project-root-relative JSON Schema path), and `provenance` (`required`, `optional`, or `none`; default `optional`).
   - Path templates may include `{{ARTIFACT_NS}}` and `{{PLAN_KEY}}`.
     - `{{ARTIFACT_NS}}` resolves from `RALPH_ARTIFACT_NS` (or plan key fallback).
     - `{{PLAN_KEY}}` resolves from `RALPH_PLAN_KEY`.

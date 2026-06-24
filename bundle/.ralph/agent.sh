@@ -106,9 +106,13 @@ agent_cli_list() {
         continue
       fi
 
-      local model
+      local model version
       model="$(agent_source_fm_scalar "$md_file" "models.${runtime}" 2>/dev/null || true)"
-      printf '%s\t%s\t%s\n' "$name" "$kind" "${model:-}"
+      if [[ -z "$model" ]]; then
+        model="$(agent_source_fm_scalar "$md_file" "model" 2>/dev/null || true)"
+      fi
+      version="$(agent_source_fm_scalar "$md_file" "version" 2>/dev/null || true)"
+      printf '%s\t%s\t%s\t%s\n' "$name" "$kind" "${model:-}" "${version:-}"
       seen_agents[$name]=1
     done
   done
@@ -133,9 +137,10 @@ agent_cli_list() {
           continue
         fi
 
-        local model
+        local model version
         model="$(agent_source_fm_scalar "$md_file" "model" 2>/dev/null || true)"
-        printf '%s\t%s\t%s\n' "$name" "native-md" "${model:-}"
+        version="$(agent_source_fm_scalar "$md_file" "version" 2>/dev/null || true)"
+        printf '%s\t%s\t%s\t%s\n' "$name" "native-md" "${model:-}" "${version:-}"
         seen_agents[$name]=1
       done
     fi
@@ -153,9 +158,20 @@ agent_cli_list() {
           continue
         fi
 
-        local model
+        local model version
         model="$(agent_adapter_classic_config_read_model "$config_file" 2>/dev/null || true)"
-        printf '%s\t%s\t%s\n' "$name" "classic-config" "${model:-}"
+        version="$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as handle:
+        cfg = json.load(handle)
+except Exception:
+    sys.exit(0)
+value = cfg.get('version')
+if isinstance(value, str):
+    print(value)
+" "$config_file" 2>/dev/null || true)"
+        printf '%s\t%s\t%s\t%s\n' "$name" "classic-config" "${model:-}" "${version:-}"
         seen_agents[$name]=1
       done
     fi

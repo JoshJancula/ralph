@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Shared frontmatter metadata parser for Ralph rules and SKILL.md files (stdlib only)."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+_BOOL_TRUE = frozenset({"true", "yes", "1", "on"})
+_BOOL_FALSE = frozenset({"false", "no", "0", "off"})
+
+
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1]
+        value = value.replace('\\"', '"').replace("\\\\", "\\")
+    elif len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        value = value[1:-1]
+    return value
+
+
+def _parse_inline_array(value: str) -> list[str]:
+    value = value.strip()
+    if not (value.startswith("[") and value.endswith("]")):
+        raise ValueError(f"invalid inline array: {value}")
+    inner = value[1:-1]
+    if not inner.strip():
+        return []
+    items: list[str] = []
+    current: list[str] = []
+    in_quote: str | None = None
+    for ch in inner:
+        if ch in ('"', "'"):
+            if in_quote is None:
+                in_quote = ch
+            elif in_quote == ch:
+                in_quote = None
+            current.append(ch)
+        elif ch == "," and in_quote is None:
+            items.append(_unquote("".join(current)))
+            current = []
+        else:
+            current.append(ch)
+    if current or inner.strip().endswith(","):
+        items.append(_unquote("".join(current)))
+    return items
+
+
+def _parse_key_value(content: str) -> tuple[str, str | None] | None:
+    content = content.rstrip()
+    match = re.match(r"^([A-Za-z0-9_\-]+):\s*(.*)$", content)
+    if not match:
+        return None
+    key = match.group(1)
+    value = match.group(2).strip()
+    if not value:
+        return key, None
+    return key, _unquote(value)
+
+
+def extract_frontmatter(text: str) -> list[str]:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return []
+    end = None
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            end = idx
+            break
+    if end is None:
+        return []
+    return lines[1:end]
+
+
+def parse_frontmatter_dict(fm_lines: list[str]) -> dict[str, object]:
+    data: dict[str, object] = {}
+    for line in fm_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        kv = _parse_key_value(stripped)
+        if not kv:
+            continue
+        key, value = kv
+        if value is None:
+            continue
+        if key == "globs" and isinstance(value, str) and value.startswith("["):
+            try:
+                data[key] = _parse_inline_array(value)
+            except ValueError:
+                data[key] = value
+        elif key == "alwaysApply" and isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in _BOOL_TRUE:
+                data[key] = True
+            elif lowered in _BOOL_FALSE:
+                data[key] = False
+            else:
+                data[key] = value
+        else:
+            data[key] = value
+    return data
+
+
+def body_without_frontmatter(text: str) -> str:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            remainder = lines[idx + 1 :]
+            while remainder and not remainder[0].strip():
+                remainder = remainder[1:]
+            return "\n".join(remainder)
+    return text
+
+
+def parse_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _BOOL_TRUE:
+            return True
+        if lowered in _BOOL_FALSE:
+            return False
+    return None
+
+
+@dataclass
+class RuleSkillMetadata:
+    kind: str
+    path: str
+    name: str
+    description: str
+    globs: list[str] = field(default_factory=list)
+    always_apply: bool | None = None
+    body: str = ""
+    body_without_frontmatter: str = ""
+    metadata_complete: bool = True
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def tier1_text(self) -> str:
+        lines = [
+            f"- **{self.kind}:** `{self.path}`",
+            f"  - name: {self.name or '(missing)'}",
+            f"  - description: {self.description or '(missing)'}",
+        ]
+        if self.kind == "rule" and self.globs:
+            globs_text = ", ".join(f"`{g}`" for g in self.globs)
+            lines.append(f"  - globs: {globs_text}")
+        if self.kind == "rule" and self.always_apply is not None:
+            lines.append(f"  - alwaysApply: {str(self.always_apply).lower()}")
+        return "\n".join(lines)
+
+
+def _derive_name(path: str, fm: dict[str, object]) -> str:
+    raw = fm.get("name")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    stem = Path(path).stem
+    if stem.upper() == "SKILL":
+        return Path(path).parent.name
+    return stem
+
+
+def _derive_description(path: str, fm: dict[str, object]) -> str:
+    raw = fm.get("description")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return ""
+
+
+def _derive_globs(fm: dict[str, object]) -> list[str]:
+    raw = fm.get("globs")
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw.strip():
+        if raw.strip().startswith("["):
+            try:
+                return _parse_inline_array(raw.strip())
+            except ValueError:
+                return [raw.strip()]
+        return [raw.strip()]
+    return []
+
+
+def parse_rule_or_skill_file(path: Path, *, kind: str, rel_path: str) -> RuleSkillMetadata:
+    warnings: list[str] = []
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return RuleSkillMetadata(
+            kind=kind,
+            path=rel_path,
+            name=Path(rel_path).stem,
+            description="",
+            metadata_complete=False,
+            warnings=[f"could not read {rel_path}: {exc}"],
+        )
+
+    fm_lines = extract_frontmatter(text)
+    body = body_without_frontmatter(text)
+    if not fm_lines:
+        warnings.append(f"missing or malformed frontmatter in {rel_path}; loading full body")
+        return RuleSkillMetadata(
+            kind=kind,
+            path=rel_path,
+            name=_derive_name(rel_path, {}),
+            description="",
+            body=text,
+            body_without_frontmatter=body or text,
+            metadata_complete=False,
+            warnings=warnings,
+        )
+
+    fm = parse_frontmatter_dict(fm_lines)
+    name = _derive_name(rel_path, fm)
+    description = _derive_description(rel_path, fm)
+    always_apply = parse_bool(fm.get("alwaysApply")) if kind == "rule" else None
+    globs = _derive_globs(fm) if kind == "rule" else []
+
+    metadata_complete = True
+    if not description:
+        metadata_complete = False
+        warnings.append(f"missing description in {rel_path}; loading full body")
+    if kind == "rule" and always_apply is None and "alwaysApply" not in fm:
+        metadata_complete = False
+        warnings.append(f"missing alwaysApply in {rel_path}; loading full body")
+    if kind == "skill" and not name:
+        metadata_complete = False
+        warnings.append(f"missing name in {rel_path}; loading full body")
+
+    return RuleSkillMetadata(
+        kind=kind,
+        path=rel_path,
+        name=name,
+        description=description,
+        globs=globs,
+        always_apply=always_apply,
+        body=text,
+        body_without_frontmatter=body,
+        metadata_complete=metadata_complete,
+        warnings=warnings,
+    )

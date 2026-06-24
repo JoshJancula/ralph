@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "mcp_tools_list_baseline",
+  "conditions": {
+    "ralph_mode": "hybrid",
+    "proxy_owned_tools_enabled": "1",
+    "proxy_owned_tools_force": "1",
+    "search_enabled": "1",
+    "repomap_enabled": "1",
+    "shell_async": "1"
+  },
+  "tool_count": 19,
+  "serialized_bytes": 9213,
+  "tool_names": [
+    "ralph_complete_todo",
+    "ralph_orchestrator_run",
+    "ralph_plan_status",
+    "ralph_proxy_batch",
+    "ralph_proxy_glob",
+    "ralph_proxy_grep",
+    "ralph_proxy_read",
+    "ralph_proxy_repomap",
+    "ralph_proxy_result_read",
+    "ralph_proxy_result_search",
+    "ralph_proxy_result_summary",
+    "ralph_proxy_search",
+    "ralph_proxy_shell",
+    "ralph_proxy_shell_cancel",
+    "ralph_proxy_shell_read",
+    "ralph_proxy_shell_start",
+    "ralph_proxy_shell_status",
+    "ralph_proxy_shell_wait",
+    "ralph_run_plan"
+  ]
+}

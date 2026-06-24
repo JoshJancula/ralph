@@ -148,42 +148,20 @@ handle_proxy_tool_violation_approve() {
   local reason="$5"
   local category="$6"
   local args_json="$7"
-  local request_id decision_line deny_reason retry_json
+  local request_id deny_reason retry_json
 
   request_id="$(ralph_mcp_approvals_write_request "$tool_name" "$category" "$reason" "$args_json")" || {
     send_error "$id_present" "$id_raw" "-32603" "failed to create approval request"
     return
   }
 
-  if decision_line="$(ralph_mcp_approvals_wait_for_decision "$request_id")"; then
-    if [[ "$decision_line" == "approve" ]]; then
-      ralph_mcp_approvals_finalize "$request_id" "approved" "" "server"
-      ralph_mcp_proxy_set_scoped_approval "$request_id" "$tool_name" "$category" "$reason" "$args_json"
-      RALPH_MCP_PROXY_APPROVAL_RETRY=1
-      export RALPH_MCP_PROXY_APPROVAL_RETRY
-      invoke_proxy_owned_tool_once "$tool_name" "$args_json" retry_json
-      unset RALPH_MCP_PROXY_APPROVAL_RETRY
-      ralph_mcp_proxy_clear_scoped_approval
-
-      if [[ "${RALPH_MCP_PROXY_FATAL_VIOLATION:-0}" == "1" ]]; then
-        send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" \
-          "$(ralph_mcp_proxy_tool_error_json "policy blocked after operator approval: ${RALPH_MCP_PROXY_FATAL_REASON:-denied}")"
-        return
-      fi
-      send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" "$retry_json"
-      return
-    fi
-
-    deny_reason="${decision_line#*$'\t'}"
-    ralph_mcp_approvals_finalize "$request_id" "denied" "$deny_reason" "operator"
-    send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" \
-      "$(ralph_mcp_proxy_tool_error_json "operator denied: ${deny_reason:-$reason}")"
-    return
-  fi
-
-  ralph_mcp_approvals_finalize "$request_id" "timeout" "approval wait exceeded ${RALPH_APPROVAL_TIMEOUT:-120}s" "server"
+  # Approve-mode boundary violations are escalated and denied immediately.
+  # We still write the request JSON + audit log entry, but we do not wait
+  # for operator decision.
+  deny_reason='approval escalated'
+  ralph_mcp_approvals_finalize "$request_id" "escalated" "$deny_reason" "server"
   send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" \
-    "$(ralph_mcp_proxy_tool_error_json "operator approval timed out after ${RALPH_APPROVAL_TIMEOUT:-120}s; adapt and continue")"
+    "$(ralph_mcp_proxy_tool_error_json "operator approval escalated: $deny_reason")"
 }
 
 dispatch_proxy_tool_violation() {
@@ -201,6 +179,19 @@ dispatch_proxy_tool_violation() {
 
   local mode
   mode="$(ralph_mcp_policy_violation_mode_effective)"
+
+  # Thread runner interactivity into MCP denial wording.
+  # This only affects the operator-facing message prefix; classification/extraction
+  # still relies on the remainder of "$message".
+  local interactivity_prefix=""
+  case "${RALPH_MCP_PROXY_INTERACTIVITY:-interactive}" in
+    non-interactive)
+      interactivity_prefix="permission denied; find a workaround within the workspace and continue"
+      ;;
+    interactive|*)
+      interactivity_prefix="permission denied; stop and let the operator decide"
+      ;;
+  esac
 
   if [[ "${RALPH_MCP_PROXY_APPROVAL_RETRY:-0}" == "1" ]]; then
     send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" \
@@ -220,6 +211,11 @@ dispatch_proxy_tool_violation() {
       return 0
       ;;
     fatal|*)
+      # For boundary violations, attach an operator-action hint that differs
+      # between interactive and non-interactive runs.
+      if [[ "$category" == "boundary" ]]; then
+        message="$interactivity_prefix; $message"
+      fi
       send_error "$id_present" "$id_raw" "-32001" "$message"
       ralph_mcp_proxy_log_action "fatal violation" "tool=$tool_name reason=$reason"
       ralph_mcp_policy_violation_fatal "$tool_name" "proxy" "$reason" "$arguments"
@@ -412,23 +408,50 @@ TOOL_LIST_RESULT=""
 
 get_tool_list_result() {
   if [[ -z "$TOOL_LIST_RESULT" ]]; then
-  local mode proxy_json
+    local mode proxy_json result_tools_json tools_array
     mode="$(tr '[:upper:]' '[:lower:]' <<<"${RALPH_MODE:-no}" | tr -d '\r\n')"
     case "$mode" in
       ralph|hybrid)
         proxy_json="$(ralph_mcp_proxy_owned_tools_json)"
         ;;
+      native)
+        if ralph_mcp_proxy_compact_tool_catalog_active; then
+          proxy_json="$(ralph_mcp_proxy_compact_meta_tools_json)"
+        else
+          proxy_json='[]'
+        fi
+        ;;
       *)
         proxy_json='[]'
         ;;
     esac
+    result_tools_json="$(ralph_mcp_proxy_result_tools_json)"
     TOOL_LIST_RESULT=$(
       jq -c \
         --argjson proxy "$proxy_json" \
-        --argjson result "$(ralph_mcp_proxy_result_tools_json)" \
-      '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
+        --argjson result "$result_tools_json" \
+        '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
         <<< "$_BASE_TOOL_LIST_JSON"
     )
+    if ralph_mcp_proxy_compact_tool_catalog_active; then
+      local core_names
+      core_names="$(ralph_mcp_proxy_core_tool_names_json)"
+      TOOL_LIST_RESULT=$(
+        jq -c --argjson core "$core_names" '
+          .tools |= map(
+            . as $tool
+            | ($tool.name // "") as $n
+            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run") then .
+              elif ($core | index($n)) != null then .
+              else empty
+              end
+          )
+          | .tools |= sort_by(.name)
+        ' <<< "$TOOL_LIST_RESULT"
+      )
+    fi
+    tools_array="$(jq -c '.tools' <<<"$TOOL_LIST_RESULT")"
+    ralph_mcp_proxy_record_tools_list_telemetry "$tools_array"
   fi
   printf '%s' "$TOOL_LIST_RESULT"
 }
@@ -1146,7 +1169,7 @@ handle_call_tool() {
     ralph_complete_todo)
       handle_complete_todo "$args_json" "$id_present" "$id_raw"
       ;;
-    ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_shell|ralph_proxy_shell_start|ralph_proxy_shell_status|ralph_proxy_shell_wait|ralph_proxy_shell_read|ralph_proxy_shell_cancel|ralph_proxy_search|ralph_proxy_repomap|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_batch)
+    ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_shell|ralph_proxy_shell_start|ralph_proxy_shell_status|ralph_proxy_shell_wait|ralph_proxy_shell_read|ralph_proxy_shell_cancel|ralph_proxy_search|ralph_proxy_repomap|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_result_reduce|ralph_proxy_batch|ralph_proxy_tool_search)
       handle_proxy_owned_tool "$tool_name" "$args_json" "$id_present" "$id_raw"
       ;;
     *)

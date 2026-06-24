@@ -30,3 +30,17 @@ Explore relevant docs and code paths, then summarize findings for downstream age
 
 ## Deliverable
 `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md` -- structured findings organized by topic, identified risks, and suggested follow-up steps for the architect or implementation stage.
+
+## Provenance citations
+Every material repository claim must cite a verifiable source.
+
+**Markdown citations** (list item or inline):
+- `- cite: path/to/file.py:42`
+- `- cite: path/to/file.py:42 "bounded excerpt from that line"`
+- Inline: `cite:path/to/file.py:42`
+
+**Generated artifact citations**:
+- `- cite: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md#Section-Heading`
+- `- cite: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/data.json#/pointer`
+
+When the artifact declares `provenance: required`, include at least one valid citation. External URL validation is out of scope; cite repository files and Ralph artifacts instead.

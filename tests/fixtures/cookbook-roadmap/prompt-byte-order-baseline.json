@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "prompt_byte_order_baseline",
+  "fixture_inputs": {
+    "namespace_block": "Artifact namespace: RALPH_ARTIFACT_NS=fixture-ns  RALPH_PLAN_KEY=fixture-plan\nUse namespace-aware artifact paths when writing handoff files.",
+    "agent_context": "AGENT-CONTEXT-BLOCK",
+    "todo_text": "Complete exactly this TODO and nothing else:\n\n**TODO (line 1):** Example task"
+  },
+  "runtimes": {
+    "claude": {
+      "prompt_static_bytes": 161,
+      "prompt_volatile_bytes": 77,
+      "merge": "PROMPT_STATIC passed via --system-prompt; PROMPT carries volatile todo text only",
+      "stable_precedes_volatile_in_model_context": true
+    },
+    "opencode": {
+      "merged_prompt_bytes": 240,
+      "block_order": ["PROMPT_STATIC", "PROMPT"],
+      "stable_precedes_volatile_in_model_context": true
+    },
+    "cursor": {
+      "merged_prompt_bytes": 239,
+      "block_order": ["PROMPT", "PROMPT_STATIC"],
+      "stable_precedes_volatile_in_model_context": false
+    },
+    "codex": {
+      "merged_prompt_bytes": 239,
+      "block_order": ["PROMPT", "PROMPT_STATIC"],
+      "stable_precedes_volatile_in_model_context": false
+    },
+    "antigravity": {
+      "merged_prompt_bytes": 239,
+      "block_order": ["PROMPT", "PROMPT_STATIC"],
+      "stable_precedes_volatile_in_model_context": false
+    }
+  }
+}

@@ -21,6 +21,8 @@ Pick what matches what you are doing. You can read them in any order.
 | [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
 | [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
 | [TOOLING.md](TOOLING.md) | Optional Ralph mode (`--ralph-mode` / `RALPH_MODE`): MCP proxy tools, shell output compaction, native adapters per runtime, overlay cleanup |
+| [cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md) | Tier 1 through Tier 3 cookbook optimization status and feature gates |
+| [cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md) | Migration and compatibility for cookbook features |
 | [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, what it changes on disk, `.cursorignore`, hooks, Codex caveats, killswitch configuration |
 | [BENCHMARKS.md](BENCHMARKS.md) | Token and compaction benchmark report across Ralph optimization paths (run `ralph benchmark`) |
 

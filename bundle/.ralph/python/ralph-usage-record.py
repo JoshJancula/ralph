@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from typing import Mapping, Optional
 
 from tool_call_classification import ACCOUNTING_KEYS
+from usage_accounting import (
+    USAGE_INVOCATION_SCHEMA_VERSION,
+    attach_auxiliary_metrics,
+    enrich_record,
+)
 
 _overlay_fields_module = None
 
@@ -216,6 +221,39 @@ for key, value in (
     except ValueError:
         record[key] = 0
 
+# Stable-prefix telemetry (cache-friendly prompt ordering). Sourced from env exported by
+# run-plan-core.sh; never carries prompt contents, only a byte count and a short fingerprint.
+_stable_prefix_bytes = os.environ.get("RALPH_PROMPT_STABLE_PREFIX_BYTES", "").strip()
+if _stable_prefix_bytes:
+    try:
+        record["stable_prefix_bytes"] = int(_stable_prefix_bytes or 0)
+    except ValueError:
+        record["stable_prefix_bytes"] = 0
+_stable_prefix_fp = os.environ.get("RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT", "").strip()
+if _stable_prefix_fp:
+    record["stable_prefix_fingerprint"] = _stable_prefix_fp
+
+_resolved_effort = os.environ.get("RALPH_PLAN_REASONING_EFFORT_RESOLVED", "").strip()
+if _resolved_effort:
+    record["reasoning_effort_resolved"] = _resolved_effort
+_applied_effort = os.environ.get("RALPH_PLAN_REASONING_EFFORT_APPLIED", "").strip()
+if _applied_effort:
+    record["reasoning_effort_applied"] = _applied_effort
+
+# Continuation summary telemetry (between-TODO deterministic block). Sourced from env
+# exported by run-plan-core.sh; never carries summary contents, only byte/count metrics.
+for env_key, record_key in (
+    ("RALPH_CONTINUATION_SUMMARY_BYTES", "continuation_summary_bytes"),
+    ("RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT", "continuation_summary_entry_count"),
+    ("RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT", "continuation_summary_truncation_count"),
+):
+    raw = os.environ.get(env_key, "").strip()
+    if raw:
+        try:
+            record[record_key] = int(raw or 0)
+        except ValueError:
+            record[record_key] = 0
+
 if merge_path.strip():
     try:
         mp = merge_path.strip()
@@ -257,6 +295,10 @@ if direct_verification:
 if rate_limit_status:
     record["rate_limit_status"] = rate_limit_status
 
+_invocation_kind = os.environ.get("RALPH_USAGE_INVOCATION_KIND", "").strip()
+if _invocation_kind:
+    record["invocation_kind"] = _invocation_kind
+
 overlay_module = _load_overlay_fields_module()
 if overlay_module is not None:
     overlay_module.merge_overlay_fields(record, overlay_summary_path.strip())
@@ -279,8 +321,16 @@ proxy_bytes = _collect_proxy_read_bytes(plan_key, started_at, ended_at)
 if proxy_bytes is not None:
     record["proxy_read_bytes"] = proxy_bytes
 
+attach_auxiliary_metrics(
+    record,
+    plan_key=_resolve_plan_key(plan_key),
+    started_at=started_at,
+    ended_at=ended_at,
+)
+enrich_record(record)
+
 doc = {
-    "schema_version": 1,
+    "schema_version": USAGE_INVOCATION_SCHEMA_VERSION,
     "kind": "plan_invocation_usage_history",
     "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "invocations": [],

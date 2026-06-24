@@ -253,3 +253,22 @@ EOF
   rm -f "$registry_file"
   rm -rf "$workspace"
 }
+
+@test "native mode does not advertise plan memory tools in compact catalog" {
+  local tools_lib="$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
+  local policy_lib="$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh"
+
+  run env \
+    RALPH_MODE=native \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    bash -c '
+    source "$1"
+    source "$2"
+    tools="$(ralph_mcp_proxy_owned_tools_json)"
+    printf "%s\n" "$tools" | jq -e "map(.name) | index(\"ralph_proxy_memory_list\") == null"
+  ' _ "$policy_lib" "$tools_lib"
+
+  [ "$status" -eq 0 ]
+}

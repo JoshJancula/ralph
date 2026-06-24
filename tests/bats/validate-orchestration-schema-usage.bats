@@ -10,4 +10,5 @@ setup() {
   run "$VALIDATOR"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Usage: validate-orchestration-schema.sh <orchestration-file>"* ]]
+  [[ "$output" == *"[workspace]"* ]]
 }

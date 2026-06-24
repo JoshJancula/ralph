@@ -115,3 +115,45 @@ CONFIG
   [ "$trimmed" = $'artifacts/string-entry.txt\nartifacts/explicit-required.txt\nartifacts/implicit-required.txt' ]
   rm -rf "$agents_root"
 }
+
+@test "output_artifacts preserves provenance declaration in config" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="artifacts-provenance"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "artifacts-provenance",
+  "model": "gpt-test",
+  "description": "Agent for provenance flag",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ],
+  "output_artifacts": [
+    {
+      "path": "artifacts/{{ARTIFACT_NS}}/review.md",
+      "required": true,
+      "provenance": "required"
+    }
+  ]
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  run python3 - "$cfg" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+entry = data["output_artifacts"][0]
+assert entry.get("provenance") == "required", entry
+PY
+  [ "$status" -eq 0 ]
+  rm -rf "$agents_root"
+}

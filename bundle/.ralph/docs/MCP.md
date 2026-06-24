@@ -146,16 +146,21 @@ This smoke test demonstrates that the end-to-end Ralph MCP wiring for Codex is s
 
 ### Ralph mode (plan runs)
 
-Plan runs default to **Ralph mode: no** (no Ralph MCP injection). When you pass `--ralph-mode ralph` on [`.ralph/run-plan.sh`](../bundle/.ralph/run-plan.sh), Ralph injects an ephemeral MCP config for [`.ralph/mcp-server.sh`](../bundle/.ralph/mcp-server.sh) (orchestration tools plus `ralph_proxy_*` read helpers). Policy-based filtering and truncation run inside that single server; Ralph does not replace every runtime-native built-in tool.
+Plan runs default to **Ralph mode: no** (no Ralph MCP injection). When you pass `--ralph-mode ralph` on [`.ralph/run-plan.sh`](../bundle/.ralph/run-plan.sh), Ralph injects an ephemeral MCP config for [`.ralph/mcp-server.sh`](../bundle/.ralph/mcp-server.sh) (orchestration tools plus `ralph_proxy_*` read helpers). Agent `mcp_servers` are merged over ambient configuration before Ralph's protected `ralph` server is added. Policy-based filtering and truncation run inside that single server; Ralph does not replace every runtime-native built-in tool.
 
-See **[TOOLING.md](TOOLING.md)** for `--ralph-mode`, `RALPH_MODE`, the interactive prompt, workspace preferences, the runtime matrix, and available tools.
+**Precedence in `ralph`/`hybrid` mode:**
+1. Native ambient MCP servers (from runtime's own config)
+2. Agent `mcp_servers` declarations (override ambient with same name)
+3. Ralph's protected `ralph` MCP server
+
+See **[AGENTS.md](../AGENTS.md#agent-mcp-servers)** for the full `mcp_servers` syntax and **[TOOLING.md](TOOLING.md)** for `--ralph-mode`, `RALPH_MODE`, the interactive prompt, workspace preferences, the runtime matrix, and available tools.
 
 ### Environment guard rails
 
 Ralph uses a **three-root model** (project root, state root, agent workspace). See [AGENTS.md](../AGENTS.md#three-root-model) for flags, defaults, and examples.
 
 - `RALPH_MCP_WORKSPACE` is the **project root** the server was started with. When `RALPH_PROJECT_ROOT`, `RALPH_AGENT_WORKSPACE`, and `RALPH_PLAN_WORKSPACE_ROOT` are unset, `RALPH_MCP_WORKSPACE` alone defines backward-compatible behavior.
-- Plan-run injection forwards all four roots to the ephemeral MCP server. Proxy read/search tools allow paths under `RALPH_MCP_WORKSPACE` (project root), `RALPH_AGENT_WORKSPACE`, `RALPH_PLAN_WORKSPACE_ROOT`, and `RALPH_MCP_ALLOWLIST` entries. Missing files inside an allowed root return a non-fatal "path does not exist" tool error; traversal or paths outside allowed roots trigger a fatal kill-switch sentinel under `RALPH_PLAN_WORKSPACE_ROOT/security/`.
+- Plan-run injection forwards all four roots to the ephemeral MCP server. Proxy read/search tools allow paths under `RALPH_MCP_WORKSPACE` (project root), `RALPH_AGENT_WORKSPACE`, `RALPH_PLAN_WORKSPACE_ROOT`, `/tmp`, and `RALPH_MCP_ALLOWLIST` entries. Missing files inside an allowed root return a non-fatal "path does not exist" tool error; traversal or paths outside allowed roots trigger a fatal kill-switch sentinel under `RALPH_PLAN_WORKSPACE_ROOT/security/`.
 - `$HOME/.cursor/plans` and `$HOME/.claude/plans` are always readable (read-only) so agents can reference original plan files from Cursor and Claude Code. Read-style proxy tools (`ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, `ralph_proxy_repomap`) accept paths under these directories; write/edit tools reject them.
 - `RALPH_MCP_ALLOWLIST` lets you whitelist additional directories beyond the three roots. Supply colon/comma/semicolon-separated entries (relative entries are resolved under `RALPH_MCP_WORKSPACE`, and `~` expands to the user home). The server canonicalizes each path, ensures it exists, logs the configured roots, and rejects tool calls that try to operate outside the allowed set with a JSON-RPC error.
 - The server spawns `cursor`, `claude`, `codex`, `opencode`, and `antigravity` (`agy`) runners, so the `PATH` that Cursor inherits must include their installers (`/opt/homebrew/bin`, `~/.local/bin`, etc.). Explicitly set `PATH` inside your MCP server `env` block (see the example below) so it can launch all runtimes regardless of how you installed them.
@@ -169,13 +174,13 @@ Legacy resource tail reads also use a 32 KiB ceiling in `mcp-tools.sh` (`MAX_TOO
 
 If you need full raw streams for auditing or debugging, capture them yourself (for example, redirect `run-plan.sh` output to a workspace file or artifact path) instead of relying on truncated MCP responses.
 
-The default policy is permissive out of the box: `proxyOwnedTools.allowAllCommands` and `proxyOwnedTools.allowShellOperators` are `true` and `shellTimeoutSeconds` is generous, so `ralph_proxy_shell` can run arbitrary commands, operators (`&&`, `|`, redirects), and longer builds or pipelines in a trusted local dev loop. This reflects the proxy's actual promise: it bounds output (policy caps + stored-result envelopes), it does not sandbox. For commands that may outlive a host MCP request timeout, use `ralph_proxy_shell_start` to get a `jobId`, then prefer `ralph_proxy_shell_wait` (optionally tuning `waitSeconds` to control how long the server waits before reporting the current status) so you wait for completion without hammering the proxy. Runner-first verification remains the default path for any command that proves TODO completion, so treat `ralph_proxy_shell_status` as a manual follow-up for occasional progress checks, avoid short-interval polling loops, and inspect output with `ralph_proxy_shell_read` / cancel with `ralph_proxy_shell_cancel` if needed. Set `RALPH_PROXY_SHELL_ASYNC=0` to hide those tools. The kill-switch and blocking machinery stay fully intact and still fire on real tripwires (tool denylists, `deniedArgumentPatterns`, path traversal).
+The default policy is permissive out of the box: `proxyOwnedTools.allowAllCommands` and `proxyOwnedTools.allowShellOperators` are `true` and `shellTimeoutSeconds` is generous, so `ralph_proxy_shell` can run arbitrary commands, operators (`&&`, `|`, redirects), and longer builds or pipelines in a trusted local dev loop. This reflects the proxy's actual promise: it bounds output (policy caps + stored-result envelopes), it does not sandbox. For commands that may outlive a host MCP request timeout, use `ralph_proxy_shell_start` to get a `jobId`, then use `ralph_proxy_shell_wait` (optionally tuning `waitSeconds`) as the blocking call when a human is directly monitoring the job. The async shell tools are a manual fallback surface, not the primary automation path. Runner-first verification remains the default path for any command that proves TODO completion, so treat `ralph_proxy_shell_status` as an occasional manual spot check—never a polling loop—and inspect output with `ralph_proxy_shell_read` / cancel with `ralph_proxy_shell_cancel` if needed. Set `RALPH_PROXY_SHELL_ASYNC=0` to hide those tools. The kill-switch and blocking machinery stay fully intact and still fire on real tripwires (tool denylists, `deniedArgumentPatterns`, path traversal).
 
 Runner-first policy:
 
 - Declare verification commands via plan/TODO `verification:` / `verify:` metadata so the runner executes them out-of-process rather than relying on agent-side `ralph_proxy_shell_start` + `ralph_proxy_shell_status` loops. The runner captures the full transcripts under `.ralph-workspace/artifacts/<PLAN_KEY>/verification/`, keeps the next prompt compact, and reopens the TODO with artifacts when verification fails.
-- When you rerun a declared verification command interactively, start it with `ralph_proxy_shell_start` and block on completion using `ralph_proxy_shell_wait` (pass `waitSeconds` to limit how long the server waits). Prefer `shell_wait` so the wait happens server-side instead of hammering the proxy with repeated `shell_status` polls.
-- Treat `ralph_proxy_shell_status` as an occasional manual progress check and avoid short-interval polling loops; inspect output via `ralph_proxy_shell_read` and cancel with `ralph_proxy_shell_cancel` if needed. For exploratory jobs, rely on `shell_wait` as the primary blocker so `shell_status` remains a manual spot check rather than the default loop.
+- When you rerun a declared verification command interactively, start it with `ralph_proxy_shell_start` and block on completion using `ralph_proxy_shell_wait` (pass `waitSeconds` to limit how long the server waits). The async shell tools are a manual fallback surface—`shell_wait` is the blocking call only when a human is directly monitoring a job.
+- Treat `ralph_proxy_shell_status` as an occasional manual spot check and never use it as a polling loop; inspect output via `ralph_proxy_shell_read` and cancel with `ralph_proxy_shell_cancel` if needed.
 
 To tighten shell access, supply your own policy via `RALPH_MCP_PROXY_POLICY_FILE` or `RALPH_MCP_PROXY_POLICY_INLINE` (for example set `proxyOwnedTools.allowAllCommands` to `false` with an explicit `shellAllowlist`); see `bundle/.ralph/mcp-proxy-policy.example.json`.
 
@@ -261,13 +266,86 @@ The `stdio` flag tells Cursor to speak the MCP protocol over the server's standa
 
 Ralph's bash MCP server (`mcp-server.sh`) exposes **plan and orchestration** tools to an external MCP client. It does **not** provide a browser, Playwright, or other product-specific integrations. When `.ralph/run-plan.sh` runs the **qa** agent (or any agent) via Cursor, Claude Code, Codex, OpenCode, or Antigravity, only the **tools that runtime has configured** are available. To let QA open a browser, call external APIs through MCP, or use other skills, add those MCP servers to **that** runtime's configuration and approve tool use according to your policy.
 
+Ralph preserves each runtime's native MCP configuration chain and merges agent-specific `mcp_servers` on top. See [AGENTS.md](AGENTS.md) for the native configuration preservation table.
+
 Official references:
 
 - Codex: [Model Context Protocol (Codex)](https://developers.openai.com/codex/mcp)
 - Cursor: [Model Context Protocol (MCP)](https://cursor.com/docs/mcp) and [MCP in the Cursor CLI](https://cursor.com/docs/cli/mcp)
 - Claude Code: [Connect Claude Code to tools via MCP](https://code.claude.com/docs/en/mcp)
 
+### Agent-specific MCP servers
+
+Agents can declare optional `mcp_servers` in their canonical frontmatter or `config.json`. This allows agents to reference ambient MCP servers or define portable inline servers.
+
+**Precedence (highest to lowest)**:
+1. Native ambient MCP servers (runtime's own configuration)
+2. Agent `mcp_servers` declarations (override ambient servers with the same name)
+3. Ralph's protected `ralph` MCP server (in `ralph`/`hybrid` mode)
+
+**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
+
+### mcp_servers syntax
+
+The `mcp_servers` field accepts an array of:
+
+**String references** (ambient server names):
+```yaml
+mcp_servers:
+  - playwright
+  - github
+```
+
+**Portable definitions** (inline server configuration):
+```yaml
+mcp_servers:
+  - name: my-api
+    transport: http
+    url: https://api.example.com/v1/mcp
+    headers:
+      Authorization: ${API_TOKEN}
+  - name: local-tool
+    transport: stdio
+    command: node
+    args:
+      - /path/to/server.js
+    env:
+      API_KEY: ${LOCAL_API_KEY}
+```
+
+**Supported transports**:
+
+| Transport | Required fields | Optional fields |
+|-----------|-----------------|-----------------|
+| `stdio` | `name`, `transport`, `command` | `args` (array), `env` (map with `${ENV_VAR}` refs) |
+| `http` | `name`, `transport`, `url` | `headers` (map with `${ENV_VAR}` refs) |
+
+**Secret policy**: All credential values must use `${ENV_VAR}` references. Literal secrets matching credential patterns are rejected at validation. Secrets are resolved at invocation time and never persisted to disk.
+
+**Failure behavior**: Unresolved `${ENV_VAR}` references, invalid server definitions, missing environment variables, or use of the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, and searched source paths.
+
 ### Example: Playwright MCP
+
+[Playwright's MCP server](https://www.npmjs.com/package/@playwright/mcp) is a common choice for browser automation and visual checks during QA work.
+
+**Adding via agent definition**:
+```yaml
+mcp_servers:
+  - playwright
+```
+
+Or with explicit configuration:
+```yaml
+mcp_servers:
+  - name: playwright
+    transport: stdio
+    command: npx
+    args:
+      - -y
+      - '@playwright/mcp@latest'
+```
+
+**Codex**
 
 [Playwright's MCP server](https://www.npmjs.com/package/@playwright/mcp) is a common choice for browser automation and visual checks during QA work.
 
@@ -314,6 +392,20 @@ The same pattern applies to documentation indexes, issue trackers, observability
 
 ---
 
+### Troubleshooting agent MCP servers
+
+**Agent MCP server not found.** If an agent references an ambient MCP server by name (e.g., `mcp_servers: ["playwright"]`), verify the server is configured in the runtime's native MCP configuration. Error messages include the runtime, agent, and searched source paths.
+
+**Missing environment variable.** Secrets in portable definitions must use `${ENV_VAR}` references. If the referenced environment variable is unset at invocation time, the run fails before launching the CLI with the missing variable name.
+
+**Reserved name collision.** The server name `ralph` is reserved for Ralph's protected MCP server. Agents cannot reference, redefine, or replace it. Attempting to use `ralph` in `mcp_servers` causes a validation error.
+
+**Literal secret rejected.** Values matching credential patterns (API keys, tokens, passwords) must use `${ENV_VAR}` references. Literal secrets are rejected at validation to prevent credential leakage.
+
+**Orchestration stage MCP servers.** Each orchestration stage receives only its selected agent's MCP additions. Stages with different agents have isolated MCP catalogs. See [AGENTS.md](../AGENTS.md#agent-mcp-servers).
+
+---
+
 ## Connecting from OpenClaw
 
 [OpenClaw](https://openclaw.ai/) is a personal AI assistant that runs on your machine and can use MCP servers as skills. With the Ralph MCP server configured, OpenClaw can run Ralph plans, check plan status, and use the agent catalog from chat (e.g. WhatsApp, Telegram, Discord).
@@ -352,3 +444,16 @@ openclaw mcp list
 ```
 
 You should see the Ralph server. Your OpenClaw assistant can then use Ralph tools (e.g. plan status, run plan, agent catalog) in conversation. The same guard rails apply: proxy tools allow the project root (`RALPH_MCP_WORKSPACE`), agent workspace, state root, `RALPH_MCP_ALLOWLIST` entries, and read-only `$HOME/.cursor/plans` / `$HOME/.claude/plans`.
+
+## Compact tool catalog and `ralph_proxy_tool_search`
+
+In `ralph` or `hybrid` mode, Ralph defaults to a **compact** MCP catalog (`RALPH_MCP_COMPACT_TOOL_CATALOG=1` when unset). `tools/list` advertises a small core set plus `ralph_proxy_tool_search`; agents discover additional proxy tools lexically without loading full schemas into every prompt.
+
+| Mode | `tools/list` surface | Discovery |
+|------|---------------------|-----------|
+| Compact (Ralph/hybrid default) | Core tools from `ralph_mcp_proxy_default_core_tool_names` (override with `RALPH_MCP_CORE_TOOLS`) + `ralph_proxy_tool_search` | `ralph_proxy_tool_search` returns ranked tool metadata |
+| Full (`RALPH_MCP_COMPACT_TOOL_CATALOG=0`) | Every Ralph proxy tool (legacy) | Direct `tools/call` without search |
+
+Implementation: `bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh`, `bundle/.ralph/python/mcp-proxy-tool-search-rank.py`. Baseline byte counts: `tests/fixtures/cookbook-roadmap/mcp-tools-list-baseline.json`. Never emit `nextCursor: null` on `tools/list`.
+
+Set `RALPH_MCP_COMPACT_TOOL_CATALOG=0` in Ralph/hybrid to restore the full catalog for debugging. Native/no mode keeps the historical full catalog unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#cookbook-feature-gates-tier-1-through-tier-3) and [cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md).

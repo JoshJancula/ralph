@@ -392,6 +392,58 @@ read_prebuilt_agent_model() {
   esac
 }
 
+# Read reasoning_effort for a resolved agent (classic or non-classic source).
+read_prebuilt_agent_reasoning_effort() {
+  local ws="$1"
+  local id="$2"
+  local runtime="${RUNTIME:-}"
+
+  if [[ -z "$runtime" ]]; then
+    local root
+    root="$(prebuilt_agents_root "$ws")"
+    if [[ ! -f "$AGENT_CONFIG_TOOL" ]]; then
+      echo "Error: shared agent tool missing: $AGENT_CONFIG_TOOL" >&2
+      return 1
+    fi
+    bash "$AGENT_CONFIG_TOOL" reasoning-effort "$root" "$id" 2>/dev/null || true
+    return 0
+  fi
+
+  local resolve_out resolve_rc
+  resolve_out="$(ralph_agent_resolve_source "$id" "$runtime" "$ws")" || resolve_rc=$?
+  if [[ "${resolve_rc:-0}" -ne 0 ]]; then
+    return 0
+  fi
+  local resolved_kind="${resolve_out%%	*}"
+  local resolved_path="${resolve_out#*	}"
+
+  case "$resolved_kind" in
+    classic-config)
+      local root
+      root="$(prebuilt_agents_root "$ws")"
+      if [[ ! -f "$AGENT_CONFIG_TOOL" ]]; then
+        return 0
+      fi
+      bash "$AGENT_CONFIG_TOOL" reasoning-effort "$root" "$id" 2>/dev/null || true
+      ;;
+    ralph-md|ralph-install|ralph-workspace|native-md|explicit)
+      local ext="${resolved_path##*.}"
+      if [[ "$ext" == "json" ]]; then
+        if command -v jq &>/dev/null; then
+          jq -r '.reasoning_effort // ""' "$resolved_path" 2>/dev/null || true
+        else
+          grep -o '"reasoning_effort"[[:space:]]*:[[:space:]]*"[^"]*"' "$resolved_path" 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"\(.*\)"/\1/' || true
+        fi
+      else
+        agent_source_fm_scalar "$resolved_path" "reasoning_effort"
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 # Format the agent context block for CLI invocation (rules + skills).
 # Resolves the agent source and routes through the matching adapter.
 # Args: $1 - workspace root path, $2 - agent id

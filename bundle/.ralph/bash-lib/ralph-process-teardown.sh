@@ -102,3 +102,82 @@ ralph_launcher_death_watchdog() {
   ralph_kill_tree "$$"
   kill -KILL "$$"
 }
+
+# Read a numeric runtime CLI PID from the per-invocation sidecar when present.
+# Args: none (uses RALPH_PLAN_INVOCATION_CLI_PID_FILE)
+# Prints the PID on success; returns non-zero when missing or malformed.
+ralph_run_plan_read_cli_pid_from_sidecar() {
+  local sidecar="${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}"
+  local cli_pid=""
+  [[ -n "$sidecar" && -f "$sidecar" ]] || return 1
+  cli_pid="$(tr -d '[:space:]' <"$sidecar" 2>/dev/null || true)"
+  [[ "$cli_pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$cli_pid"
+}
+
+# Remove per-invocation CLI tracking sidecars for the current runner process.
+ralph_run_plan_remove_invocation_sidecars() {
+  rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
+  rm -f "${RALPH_PLAN_INVOCATION_CLI_START_FILE:-}" 2>/dev/null || true
+}
+
+# Cancel runner-owned async shell jobs recorded under the plan tool-results tree.
+ralph_run_plan_async_shell_jobs_teardown() {
+  local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
+  local root state_file pid status
+  [[ -n "$plan_key" && -n "${WORKSPACE:-}" ]] || return 0
+  [[ "$plan_key" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
+  root="$WORKSPACE/.ralph-workspace/tool-results/$plan_key/shell-jobs"
+  [[ -d "$root" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  while IFS= read -r state_file; do
+    [[ -f "$state_file" ]] || continue
+    status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
+    [[ "$status" == "running" ]] || continue
+    pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    ralph_kill_tree_and_reap "$pid"
+    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
+  done < <(find "$root" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
+}
+
+# Idempotent run-plan agent teardown: process group, escaped CLI, watchdog, async jobs.
+# Args: none
+# Returns: 0
+ralph_run_plan_agent_teardown() {
+  local agent_pid="${AGENT_PID:-}"
+  local cli_pid=""
+  local watchdog_pid="${RALPH_LAUNCHER_WATCHDOG_PID:-}"
+
+  if [[ "${RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE:-}" == "1" ]]; then
+    return 0
+  fi
+  RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE=1
+
+  if [[ "$watchdog_pid" =~ ^[0-9]+$ ]]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    unset RALPH_LAUNCHER_WATCHDOG_PID
+  fi
+
+  if [[ "$agent_pid" =~ ^[0-9]+$ ]]; then
+    ralph_kill_process_group "$agent_pid" 2
+    ralph_kill_tree_and_reap "$agent_pid"
+    kill -0 -"$agent_pid" 2>/dev/null && kill -KILL -"$agent_pid" 2>/dev/null || true
+  fi
+
+  if cli_pid="$(ralph_run_plan_read_cli_pid_from_sidecar 2>/dev/null)"; then
+    ralph_kill_tree_and_reap "$cli_pid"
+  fi
+
+  ralph_run_plan_async_shell_jobs_teardown
+  if declare -F ralph_claude_speculative_cache_warm_teardown >/dev/null 2>&1; then
+    ralph_claude_speculative_cache_warm_teardown
+  fi
+  ralph_run_plan_remove_invocation_sidecars
+}
+
+# Public alias used by run-plan exit and interrupt handlers.
+ralph_run_plan_process_teardown_on_exit() {
+  ralph_run_plan_agent_teardown
+}

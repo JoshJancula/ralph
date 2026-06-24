@@ -9,7 +9,8 @@
 # ralph_proxy_glob, ralph_proxy_shell. Optional BM25 search: ralph_proxy_search
 # (gated by proxyOwnedTools.searchEnabled). Optional repo-map digest:
 # ralph_proxy_repomap (gated by proxyOwnedTools.repoMapEnabled). Stored-result follow-up tools:
-# ralph_proxy_result_read, ralph_proxy_result_search, ralph_proxy_result_summary.
+# ralph_proxy_result_read, ralph_proxy_result_search, ralph_proxy_result_summary,
+# ralph_proxy_result_reduce (gated by RALPH_RESULT_REDUCE).
 # ralph_proxy_batch runs a bounded list of read-only proxy tools in one call.
 # ralph_proxy_edit and ralph_proxy_write are intentionally deferred; use
 # runtime-native Edit/Write or upstream Ralph MCP write tools when policy allows.
@@ -48,6 +49,14 @@ fi
 if [[ -z "${RALPH_MCP_PROXY_APPROVALS_LOADED:-}" ]]; then
   # shellcheck source=/dev/null
   source "$_MCP_PROXY_TOOLS_LIB_DIR/mcp-proxy-approvals.sh"
+fi
+if [[ -z "${RALPH_MCP_PROXY_PLAN_MEMORY_LOADED:-}" ]]; then
+  # shellcheck source=/dev/null
+  source "$_MCP_PROXY_TOOLS_LIB_DIR/mcp-proxy-plan-memory.sh"
+fi
+if [[ -z "${RALPH_MCP_PROXY_RESULT_REDUCE_LOADED:-}" ]]; then
+  # shellcheck source=/dev/null
+  source "$_MCP_PROXY_TOOLS_LIB_DIR/mcp-proxy-result-reduce.sh"
 fi
 
 if [[ -z "${RALPH_MCP_PROXY_CAPABILITY_LOADED:-}" ]]; then
@@ -104,7 +113,7 @@ ralph_mcp_proxy_owned_tool_basename() {
     "${RALPH_PROXY_TOOL_PREFIX}"grep) printf '%s\n' "grep" ;;
     "${RALPH_PROXY_TOOL_PREFIX}"glob) printf '%s\n' "glob" ;;
     "${RALPH_PROXY_TOOL_PREFIX}"shell) printf '%s\n' "shell" ;;
-    "${RALPH_PROXY_TOOL_PREFIX}"shell_start|"${RALPH_PROXY_TOOL_PREFIX}"shell_status|"${RALPH_PROXY_TOOL_PREFIX}"shell_wait|"${RALPH_PROXY_TOOL_PREFIX}"shell_read|"${RALPH_PROXY_TOOL_PREFIX}"shell_cancel)
+    "${RALPH_PROXY_TOOL_PREFIX}"shell_start|"${RALPH_PROXY_TOOL_PREFIX}"shell_wait|"${RALPH_PROXY_TOOL_PREFIX}"shell_status|"${RALPH_PROXY_TOOL_PREFIX}"shell_read|"${RALPH_PROXY_TOOL_PREFIX}"shell_cancel)
       if ralph_mcp_proxy_shell_async_enabled; then
         printf '%s\n' "${1#${RALPH_PROXY_TOOL_PREFIX}}"
       else
@@ -125,6 +134,20 @@ ralph_mcp_proxy_owned_tool_basename() {
         return 1
       fi
       ;;
+    "${RALPH_PROXY_TOOL_PREFIX}"tool_search)
+      if ralph_mcp_proxy_compact_tool_catalog_active; then
+        printf '%s\n' "tool_search"
+      else
+        return 1
+      fi
+      ;;
+    "${RALPH_PROXY_TOOL_PREFIX}"memory_list|"${RALPH_PROXY_TOOL_PREFIX}"memory_read|"${RALPH_PROXY_TOOL_PREFIX}"memory_write|"${RALPH_PROXY_TOOL_PREFIX}"memory_delete)
+      if ralph_mcp_proxy_plan_memory_active; then
+        printf '%s\n' "${1#${RALPH_PROXY_TOOL_PREFIX}}"
+      else
+        return 1
+      fi
+      ;;
     *) return 1 ;;
   esac
 }
@@ -134,6 +157,12 @@ ralph_mcp_proxy_is_owned_tool() {
     ralph_proxy_batch)
       ralph_mcp_proxy_owned_tools_active
       return $?
+      ;;
+    ralph_proxy_tool_search)
+      if ralph_mcp_proxy_compact_tool_catalog_active; then
+        return 0
+      fi
+      return 1
       ;;
   esac
   ralph_mcp_proxy_owned_tool_basename "${1:-}" >/dev/null 2>&1
@@ -157,7 +186,7 @@ ralph_mcp_proxy_batch_timeout_sec() {
 
 ralph_mcp_proxy_batch_operation_tool_allowed() {
   case "${1:-}" in
-    ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_search|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary)
+    ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_search|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_result_reduce)
       return 0
       ;;
     *)
@@ -222,9 +251,204 @@ ralph_mcp_proxy_owned_tools_active() {
   return 1
 }
 
+ralph_mcp_proxy_compact_tool_catalog_active() {
+  local gate="${RALPH_MCP_COMPACT_TOOL_CATALOG:-}"
+  if [[ -n "$gate" ]]; then
+    case "$gate" in
+      1 | true | yes | on) return 0 ;;
+      0 | false | no | off) return 1 ;;
+      *)
+        echo "RALPH_MCP_COMPACT_TOOL_CATALOG: invalid value '$gate' (use 0 or 1)" >&2
+        return 2
+        ;;
+    esac
+  fi
+  case "${RALPH_MODE:-no}" in
+    ralph | hybrid) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ralph_mcp_proxy_default_core_tool_names() {
+  printf '%s\n' \
+    ralph_complete_todo \
+    ralph_proxy_read \
+    ralph_proxy_grep \
+    ralph_proxy_shell \
+    ralph_proxy_result_read \
+    ralph_proxy_batch \
+    ralph_proxy_tool_search
+}
+
+ralph_mcp_proxy_core_tool_names_json() {
+  local names=() raw name
+  if [[ -n "${RALPH_MCP_CORE_TOOLS:-}" ]]; then
+    raw="${RALPH_MCP_CORE_TOOLS//,/ }"
+    raw="${raw//;/ }"
+    for name in $raw; do
+      [[ -n "$name" ]] || continue
+      names+=("$name")
+    done
+  else
+    while IFS= read -r name || [[ -n "$name" ]]; do
+      [[ -n "$name" ]] || continue
+      names+=("$name")
+    done < <(ralph_mcp_proxy_default_core_tool_names)
+  fi
+  if [[ "${#names[@]}" -eq 0 ]]; then
+    jq -nc '[]'
+    return 0
+  fi
+  printf '%s\n' "${names[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
+}
+
+ralph_mcp_proxy_owned_tool_meta_tool_search_schema_json() {
+  jq -n -c '
+    {
+      name: "ralph_proxy_tool_search",
+      description: "Discover hidden Ralph proxy tools and invoke them server-side with full policy enforcement.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["search", "invoke"],
+            description: "search ranks hidden tools; invoke dispatches one by exact name."
+          },
+          query: { type: "string", description: "Lexical search query (action=search)." },
+          maxResults: { type: "integer", description: "Maximum ranked results (default 10)." },
+          tool: { type: "string", description: "Exact discovered tool name (action=invoke)." },
+          arguments: { type: "object", description: "Arguments object for the target tool (action=invoke)." }
+        },
+        required: ["action"]
+      }
+    }
+  '
+}
+
+ralph_mcp_proxy_tool_search_rank_script() {
+  printf '%s/../python/mcp-proxy-tool-search-rank.py\n' "${RALPH_COMPACTORS_LIB_DIR:-$_MCP_PROXY_TOOLS_LIB_DIR}"
+}
+
+ralph_mcp_proxy_tool_catalog_telemetry_log_path() {
+  local plan_key="${RALPH_PLAN_KEY:-}"
+  local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
+  [[ -n "$state_root" ]] || return 1
+  if [[ -z "$plan_key" ]]; then
+    plan_key="mcp"
+  fi
+  printf '%s/logs/%s/tool-catalog-telemetry.jsonl\n' "$state_root" "$plan_key"
+}
+
+ralph_mcp_proxy_tool_catalog_telemetry_append() {
+  local record_json="${1:-}"
+  local log_path
+  [[ -n "$record_json" ]] || return 0
+  ralph_hook_telemetry_enabled || return 0
+  log_path="$(ralph_mcp_proxy_tool_catalog_telemetry_log_path 2>/dev/null || true)"
+  [[ -n "$log_path" ]] || return 0
+  ralph_hook_telemetry_append_jsonl "$log_path" "$record_json"
+}
+
+ralph_mcp_proxy_tool_catalog_telemetry_record_json() {
+  local event="${1:-}" query="${2:-}" tool_name="${3:-}" rank="${4:-}" outcome="${5:-}"
+  local tools_list_count="${6:-}" schema_bytes="${7:-}" args_shape_json="${8:-{}}"
+  local timestamp query_hash
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  query_hash=""
+  if [[ -n "$query" ]]; then
+    query_hash="$(ralph_hook_telemetry_sha256 "$query")"
+  fi
+  jq -nc \
+    --arg timestamp "$timestamp" \
+    --arg event "$event" \
+    --arg queryHash "$query_hash" \
+    --arg toolName "$tool_name" \
+    --arg outcome "$outcome" \
+    --argjson rank "${rank:-null}" \
+    --argjson toolsListCount "${tools_list_count:-null}" \
+    --argjson schemaBytes "${schema_bytes:-null}" \
+    --argjson argumentShape "${args_shape_json:-{}}" \
+    '{
+      timestamp: $timestamp,
+      event: $event,
+      queryHash: (if $queryHash == "" then null else $queryHash end),
+      toolName: (if $toolName == "" then null else $toolName end),
+      rank: $rank,
+      outcome: (if $outcome == "" then null else $outcome end),
+      toolsListCount: $toolsListCount,
+      schemaBytes: $schemaBytes,
+      argumentShape: $argumentShape
+    }'
+}
+
+ralph_mcp_proxy_tool_search_sanitize_args_json() {
+  local args_json="${1:-{}}"
+  jq -c 'if type == "object" then with_entries(.value = (.value | type)) else {} end' <<<"$args_json" 2>/dev/null || printf '{}'
+}
+
+ralph_mcp_proxy_filter_tools_json_by_names() {
+  local tools_json="${1:-[]}" names_json="${2:-[]}"
+  jq -c --argjson names "$names_json" '
+    map(select(.name as $n | ($names | index($n)) != null))
+    | sort_by(.name)
+  ' <<<"$tools_json"
+}
+
+ralph_mcp_proxy_hidden_tools_catalog_json() {
+  local tmp_dir
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    jq -nc '[]'
+    return 0
+  fi
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ralph-hidden-tools-XXXXXX")"
+  ralph_mcp_proxy_owned_tools_full_json >"$tmp_dir/full_proxy.json"
+  ralph_mcp_proxy_result_tools_full_json_with_reduce >"$tmp_dir/full_result.json"
+  ralph_mcp_proxy_owned_tools_json >"$tmp_dir/adv_proxy.json"
+  ralph_mcp_proxy_result_tools_json >"$tmp_dir/adv_result.json"
+  jq -nc \
+    --slurpfile full_proxy "$tmp_dir/full_proxy.json" \
+    --slurpfile full_result "$tmp_dir/full_result.json" \
+    --slurpfile advertised_proxy "$tmp_dir/adv_proxy.json" \
+    --slurpfile advertised_result "$tmp_dir/adv_result.json" \
+    '
+      ($full_proxy[0] + $full_result[0]) as $all
+      | (($advertised_proxy[0] + $advertised_result[0]) | map(.name)) as $advertised
+      | $all | map(select(.name as $n | ($advertised | index($n) | not)))
+      | sort_by(.name)
+    '
+  rm -rf "$tmp_dir"
+}
+
+ralph_mcp_proxy_hidden_tool_catalog_entry() {
+  local tool_name="${1:-}"
+  local catalog_json
+  [[ -n "$tool_name" ]] || return 1
+  catalog_json="$(ralph_mcp_proxy_hidden_tools_catalog_json)"
+  jq -e --arg name "$tool_name" '.[] | select(.name == $name)' <<<"$catalog_json" >/dev/null 2>&1
+}
+
+ralph_mcp_proxy_compact_meta_tools_json() {
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    jq -nc '[]'
+    return 0
+  fi
+  ralph_mcp_proxy_owned_tool_meta_tool_search_schema_json | jq -c '[.]'
+}
+
+ralph_mcp_proxy_record_tools_list_telemetry() {
+  local tools_json="${1:-[]}"
+  local count schema_bytes record
+  count="$(jq -r 'length' <<<"$tools_json")"
+  schema_bytes="$(jq -c '.' <<<"$tools_json" | ralph_hook_telemetry_utf8_byte_count)"
+  record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+    "tools_list" "" "" "" "" "$count" "$schema_bytes" '{}')"
+  ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+}
+
 ralph_mcp_proxy_is_result_tool() {
   case "${1:-}" in
-    ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary)
+    ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_result_reduce)
       return 0
       ;;
     *)
@@ -233,7 +457,7 @@ ralph_mcp_proxy_is_result_tool() {
   esac
 }
 
-ralph_mcp_proxy_result_tools_json() {
+ralph_mcp_proxy_result_tools_full_json() {
   jq -n -c '
     [
       {
@@ -284,6 +508,28 @@ ralph_mcp_proxy_result_tools_json() {
   '
 }
 
+ralph_mcp_proxy_result_tools_full_json_with_reduce() {
+  local base_json reduce_json
+  base_json="$(ralph_mcp_proxy_result_tools_full_json)"
+  if ! ralph_mcp_proxy_result_reduce_active; then
+    printf '%s\n' "$base_json"
+    return 0
+  fi
+  reduce_json="$(ralph_mcp_proxy_result_reduce_tool_schema_json)"
+  jq -c --argjson reduce "$reduce_json" '. + [$reduce]' <<<"$base_json"
+}
+
+ralph_mcp_proxy_result_tools_json() {
+  local full_json core_names
+  full_json="$(ralph_mcp_proxy_result_tools_full_json_with_reduce)"
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    printf '%s\n' "$full_json"
+    return 0
+  fi
+  core_names="$(ralph_mcp_proxy_core_tool_names_json)"
+  ralph_mcp_proxy_filter_tools_json_by_names "$full_json" "$core_names"
+}
+
 ralph_mcp_proxy_owned_tool_search_schema_json() {
   jq -n -c '
     {
@@ -319,19 +565,22 @@ ralph_mcp_proxy_owned_tool_repomap_schema_json() {
   '
 }
 
-ralph_mcp_proxy_owned_tools_json() {
-  local search_entry="" repomap_entry="" async_entries="[]"
+ralph_mcp_proxy_owned_tools_full_json() {
+  local search_entry="" repomap_entry="" memory_entries="[]" async_entries="[]"
   if ralph_mcp_proxy_search_tools_active; then
     search_entry="$(ralph_mcp_proxy_owned_tool_search_schema_json)"
   fi
   if ralph_mcp_proxy_repomap_tools_active; then
     repomap_entry="$(ralph_mcp_proxy_owned_tool_repomap_schema_json)"
   fi
+  if ralph_mcp_proxy_plan_memory_active; then
+    memory_entries="$(ralph_mcp_proxy_owned_tool_memory_schema_json)"
+  fi
   if ralph_mcp_proxy_shell_async_enabled; then
     async_entries='[
       {
         "name": "ralph_proxy_shell_start",
-        "description": "Start a long-running allowlisted shell command and return a job id immediately.",
+        "description": "Manual fallback: start a long-running allowlisted shell command and return a job id immediately. For verification commands, prefer runner-first verify: metadata instead of async shell loops.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -342,20 +591,8 @@ ralph_mcp_proxy_owned_tools_json() {
         }
       },
       {
-        "name": "ralph_proxy_shell_status",
-        "description": "Get status and compact tail preview for an async shell job.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "jobId": { "type": "string", "description": "Async shell job id." },
-            "tailBytes": { "type": "integer", "description": "Preview tail bytes." }
-          },
-          "required": ["jobId"]
-        }
-      },
-      {
         "name": "ralph_proxy_shell_wait",
-        "description": "Wait for an async shell job to finish or until the wait window expires.",
+        "description": "Manual blocking wait: wait for an async shell job to finish or until the wait window expires. Use this instead of polling ralph_proxy_shell_status when a human is monitoring a job.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -367,8 +604,20 @@ ralph_mcp_proxy_owned_tools_json() {
         }
       },
       {
+        "name": "ralph_proxy_shell_status",
+        "description": "Manual spot check: get status and compact tail preview for an async shell job. Not a polling loop—prefer ralph_proxy_shell_wait to block until completion.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "jobId": { "type": "string", "description": "Async shell job id." },
+            "tailBytes": { "type": "integer", "description": "Preview tail bytes." }
+          },
+          "required": ["jobId"]
+        }
+      },
+      {
         "name": "ralph_proxy_shell_read",
-        "description": "Read bounded output from an async shell job.",
+        "description": "Manual follow-up: read bounded output from a completed or running async shell job. Use after ralph_proxy_shell_wait or an occasional ralph_proxy_shell_status check.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -383,7 +632,7 @@ ralph_mcp_proxy_owned_tools_json() {
       },
       {
         "name": "ralph_proxy_shell_cancel",
-        "description": "Cancel an async shell job.",
+        "description": "Cancel an async shell job that is no longer needed.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -397,6 +646,7 @@ ralph_mcp_proxy_owned_tools_json() {
   jq -n -c \
     --argjson search "$([[ -n "$search_entry" ]] && printf '%s' "$search_entry" || printf 'null')" \
     --argjson repomap "$([[ -n "$repomap_entry" ]] && printf '%s' "$repomap_entry" || printf 'null')" \
+    --argjson memory "$memory_entries" \
     --argjson async "$async_entries" \
     --argjson batch "$(ralph_mcp_proxy_owned_tool_batch_schema_json)" '
     [
@@ -454,8 +704,25 @@ ralph_mcp_proxy_owned_tools_json() {
     ]
     + (if $search == null then [] else [$search] end)
     + (if $repomap == null then [] else [$repomap] end)
+    + $memory
     + $async
     + [$batch]
+  '
+}
+
+ralph_mcp_proxy_owned_tools_json() {
+  local full_json core_names filtered meta_json
+  full_json="$(ralph_mcp_proxy_owned_tools_full_json)"
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    printf '%s\n' "$full_json"
+    return 0
+  fi
+  core_names="$(ralph_mcp_proxy_core_tool_names_json)"
+  filtered="$(ralph_mcp_proxy_filter_tools_json_by_names "$full_json" "$core_names")"
+  meta_json="$(ralph_mcp_proxy_compact_meta_tools_json)"
+  jq -nc --argjson meta "$meta_json" <<<"$filtered" '
+    input as $filtered
+    | ($filtered + $meta) | unique_by(.name) | sort_by(.name)
   '
 }
 
@@ -538,6 +805,10 @@ ralph_mcp_proxy_builtin_read_only_roots() {
   printf '%s\n' "$HOME/.cursor/plans" "$HOME/.claude/plans"
 }
 
+ralph_mcp_proxy_builtin_writable_roots() {
+  printf '%s\n' '/tmp'
+}
+
 ralph_mcp_proxy_expand_home_path() {
   local path="${1:-}"
   if [[ "$path" == "~" ]]; then
@@ -547,6 +818,20 @@ ralph_mcp_proxy_expand_home_path() {
   else
     printf '%s\n' "$path"
   fi
+}
+
+ralph_mcp_proxy_resolve_allowed_root() {
+  local root="${1:-}"
+  root="$(ralph_mcp_proxy_expand_home_path "$root")"
+  root="${root%/}"
+  if [[ -z "$root" ]]; then
+    return 1
+  fi
+  if [[ -d "$root" ]]; then
+    (cd "$root" 2>/dev/null && pwd -P)
+    return
+  fi
+  ralph_mcp_proxy_canonicalize_path "$root"
 }
 
 ralph_mcp_proxy_resolve_read_only_root() {
@@ -578,6 +863,18 @@ ralph_mcp_proxy_path_is_allowed() {
   local canonical_ok=0
   local -a allowed_roots=()
 
+  ralph_mcp_proxy_add_allowed_root() {
+    local resolved_root="${1:-}"
+    local existing
+    [[ -n "$resolved_root" ]] || return 0
+    for existing in "${allowed_roots[@]}"; do
+      if [[ "$existing" == "$resolved_root" ]]; then
+        return 0
+      fi
+    done
+    allowed_roots+=("$resolved_root")
+  }
+
   if [[ -z "$user_path" ]]; then
     return 3
   fi
@@ -591,14 +888,21 @@ ralph_mcp_proxy_path_is_allowed() {
   local plan_workspace_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
 
   if [[ -n "$mcp_workspace" ]]; then
-    allowed_roots+=("$mcp_workspace")
+    ralph_mcp_proxy_add_allowed_root "$mcp_workspace"
   fi
   if [[ -n "$agent_workspace" && "$agent_workspace" != "$mcp_workspace" ]]; then
-    allowed_roots+=("$agent_workspace")
+    ralph_mcp_proxy_add_allowed_root "$agent_workspace"
   fi
   if [[ -n "$plan_workspace_root" && "$plan_workspace_root" != "$mcp_workspace" && "$plan_workspace_root" != "$agent_workspace" ]]; then
-    allowed_roots+=("$plan_workspace_root")
+    ralph_mcp_proxy_add_allowed_root "$plan_workspace_root"
   fi
+
+  local tmp_root tmp_root_resolved
+  while IFS= read -r tmp_root; do
+    if tmp_root_resolved="$(ralph_mcp_proxy_resolve_allowed_root "$tmp_root" 2>/dev/null)"; then
+      ralph_mcp_proxy_add_allowed_root "$tmp_root_resolved"
+    fi
+  done < <(ralph_mcp_proxy_builtin_writable_roots)
 
   local raw_allowlist="${RALPH_MCP_ALLOWLIST:-}"
   if [[ -n "$raw_allowlist" ]]; then
@@ -616,17 +920,8 @@ ralph_mcp_proxy_path_is_allowed() {
       elif [[ "$resolved" != /* && -n "$mcp_workspace" ]]; then
         resolved="$mcp_workspace/$resolved"
       fi
-      if resolved="$(ralph_mcp_proxy_canonicalize_path "$resolved" 2>/dev/null)"; then
-        local already_added=0
-        for existing in "${allowed_roots[@]}"; do
-          if [[ "$existing" == "$resolved" ]]; then
-            already_added=1
-            break
-          fi
-        done
-        if [[ "$already_added" -eq 0 ]]; then
-          allowed_roots+=("$resolved")
-        fi
+      if resolved="$(ralph_mcp_proxy_resolve_allowed_root "$resolved" 2>/dev/null)"; then
+        ralph_mcp_proxy_add_allowed_root "$resolved"
       fi
     done <<< "$normalized"
   fi
@@ -661,7 +956,7 @@ ralph_mcp_proxy_path_is_allowed() {
   if [[ "$canonical_ok" -eq 1 ]]; then
     for root in "${allowed_roots[@]}"; do
       local root_real
-      root_real="$(cd "$root" 2>/dev/null && pwd -P)" || continue
+      root_real="$(ralph_mcp_proxy_resolve_allowed_root "$root" 2>/dev/null)" || continue
       root_real="${root_real%/}"
       if [[ "$canonical" == "$root_real" || "$canonical" == "$root_real/"* ]]; then
         is_under_allowed=1
@@ -957,6 +1252,12 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
       next_actions_json="$(ralph_mcp_proxy_result_envelope_grep_next_actions_json "$result_id" "$grep_pattern" "$read_window")"
     elif [[ "$tool_name" == "ralph_proxy_glob" ]]; then
       next_actions_json="$(ralph_mcp_proxy_result_envelope_glob_next_actions_json "$result_id" "$grep_pattern" "$read_window")"
+    elif [[ "$tool_name" == "ralph_proxy_result_reduce" ]]; then
+      local reduce_source_id reduce_reducer reduce_expression
+      reduce_source_id="$(jq -r '.sourceResultId // empty' <<< "${metadata_json:-{}}")"
+      reduce_reducer="$(jq -r '.reducer // empty' <<< "${metadata_json:-{}}")"
+      reduce_expression="$(jq -r '.expression // empty' <<< "${metadata_json:-{}}")"
+      next_actions_json="$(ralph_mcp_proxy_result_envelope_reduce_next_actions_json "$reduce_source_id" "$result_id" "$read_window" "$reduce_reducer" "$reduce_expression")"
     else
       next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
     fi
@@ -1394,11 +1695,18 @@ ralph_mcp_proxy_owned_tool_read() {
   fi
 
   if [[ "$path_check_result" -eq 1 ]]; then
+    local candidate resolved_display
+    candidate="$rel_path"
+    if [[ "$candidate" != /* && -n "${RALPH_MCP_WORKSPACE:-}" ]]; then
+      candidate="$RALPH_MCP_WORKSPACE/$candidate"
+    fi
+    resolved_display="$(ralph_mcp_proxy_canonicalize_path "$candidate" 2>/dev/null || printf '%s' "$candidate")"
     ralph_mcp_proxy_signal_fatal_violation \
       "ralph_proxy_read" \
       "ralph_proxy_read: path is outside the workspace" \
       "path=$rel_path"
-    ralph_mcp_proxy_tool_error_json "${RALPH_MCP_PROXY_FATAL_REASON:-ralph_proxy_read path denied}"
+    ralph_mcp_proxy_tool_error_json \
+      "Plan ${RALPH_CURRENT_PLAN_PATH:-} Todo line ${RALPH_CURRENT_TODO_LINE:-}; Permission requested: external_directory (${resolved_display})"
     return 0
   fi
 
@@ -1408,7 +1716,14 @@ ralph_mcp_proxy_owned_tool_read() {
   fi
 
   if [[ -z "$resolved" ]]; then
-    ralph_mcp_proxy_tool_error_json "ralph_proxy_read: path is outside the workspace"
+    local resolved_display
+    resolved_display="$rel_path"
+    if [[ "$resolved_display" != /* && -n "${RALPH_MCP_WORKSPACE:-}" ]]; then
+      resolved_display="$RALPH_MCP_WORKSPACE/$resolved_display"
+    fi
+    resolved_display="$(ralph_mcp_proxy_canonicalize_path "$resolved_display" 2>/dev/null || printf '%s' "$resolved_display")"
+    ralph_mcp_proxy_tool_error_json \
+      "Plan ${RALPH_CURRENT_PLAN_PATH:-} Todo line ${RALPH_CURRENT_TODO_LINE:-}; Permission requested: external_directory (${resolved_display})"
     return 0
   fi
 
@@ -1966,6 +2281,19 @@ ralph_mcp_proxy_owned_tool_search_build_or_pattern() {
   printf '%s\n' "$joined"
 }
 
+ralph_mcp_proxy_contextual_search_enabled() {
+  case "${RALPH_MCP_CONTEXTUAL_SEARCH:-}" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off) return 1 ;;
+    *)
+      case "${RALPH_MODE:-no}" in
+        ralph|hybrid) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
 ralph_mcp_proxy_owned_tool_search_rank_script() {
   printf '%s/../python/mcp-proxy-search-rank.py\n' "${RALPH_COMPACTORS_LIB_DIR:-$_MCP_PROXY_TOOLS_LIB_DIR}"
 }
@@ -1980,6 +2308,7 @@ ralph_mcp_proxy_owned_tool_search_rank_candidates() {
   local max_results="${3:-50}"
   local output_file="${4:-}"
   local rank_py rank_awk
+  local -a rank_args=()
 
   [[ -n "$query" && -f "$candidates_file" && -n "$output_file" ]] || return 1
   : >"$output_file"
@@ -1988,7 +2317,24 @@ ralph_mcp_proxy_owned_tool_search_rank_candidates() {
   rank_awk="$(ralph_mcp_proxy_owned_tool_search_rank_awk)"
 
   if command -v python3 >/dev/null 2>&1 && [[ -f "$rank_py" ]]; then
-    python3 "$rank_py" --query "$query" --max-results "$max_results" <"$candidates_file" >"$output_file"
+    rank_args=(--query "$query" --max-results "$max_results")
+    if ralph_mcp_proxy_contextual_search_enabled; then
+      local project_root="${RALPH_MCP_WORKSPACE:-${RALPH_PROJECT_ROOT:-}}"
+      local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
+      if [[ -z "$state_root" && -n "$project_root" ]]; then
+        state_root="${project_root%/}/.ralph-workspace"
+      fi
+      rank_args+=(--contextual 1)
+      if [[ -n "$project_root" ]]; then
+        rank_args+=(--project-root "$project_root")
+      fi
+      if [[ -n "$state_root" ]]; then
+        rank_args+=(--state-root "$state_root")
+      fi
+    else
+      rank_args+=(--contextual 0)
+    fi
+    python3 "$rank_py" "${rank_args[@]}" <"$candidates_file" >"$output_file"
     return $?
   fi
   if [[ -f "$rank_awk" ]] && command -v awk >/dev/null 2>&1; then
@@ -3093,6 +3439,167 @@ ralph_mcp_proxy_owned_tool_result_summary() {
   ralph_mcp_proxy_tool_success_json "$(jq -c . <<< "$summary_json")"
 }
 
+ralph_mcp_proxy_owned_tool_result_reduce() {
+  local workspace="${1:-}"
+  local args_json="${2:-}"
+  local result_id view reducer expression plan_key input_path reduce_request reduce_json
+  local output truncated_flag byte_cap read_window next_actions_json metadata_json
+  local ignore_case invert_match line_number word_match fixed_strings max_count
+  local max_output_bytes max_output_lines timeout_seconds grep_json
+
+  if ! ralph_mcp_proxy_result_reduce_active; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce is not enabled"
+    return 0
+  fi
+
+  result_id="$(jq -r '.resultId // empty' <<< "$args_json")"
+  view="$(jq -r '.view // "compacted"' <<< "$args_json")"
+  reducer="$(jq -r '.reducer // empty' <<< "$args_json" | tr '[:upper:]' '[:lower:]')"
+  expression="$(jq -r '.expression // empty' <<< "$args_json")"
+
+  if [[ -z "$result_id" ]]; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce requires resultId"
+    return 0
+  fi
+  if [[ -z "$reducer" ]]; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce requires reducer"
+    return 0
+  fi
+  case "$view" in
+    compacted|raw) ;;
+    *)
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: view must be compacted or raw"
+      return 0
+      ;;
+  esac
+  case "$reducer" in
+    jq|grep|awk) ;;
+    *)
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: reducer must be jq, grep, or awk"
+      return 0
+      ;;
+  esac
+  if ! ralph_mcp_proxy_result_store_validate_result_id "$result_id"; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: invalid resultId"
+    return 0
+  fi
+  plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
+  if ! ralph_mcp_proxy_result_store_validate_plan_key "$plan_key"; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: invalid plan key for stored results"
+    return 0
+  fi
+  if ! input_path="$(ralph_mcp_proxy_result_store_resolve_result_path "$workspace" "$plan_key" "$result_id" "$view")"; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: result not found or path escape blocked"
+    return 0
+  fi
+  if [[ ! -f "$input_path" && "$view" == "compacted" ]]; then
+    input_path="$(ralph_mcp_proxy_result_store_resolve_result_path "$workspace" "$plan_key" "$result_id" "raw" 2>/dev/null || true)"
+  fi
+  if [[ ! -f "$input_path" ]]; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: stored result file missing"
+    return 0
+  fi
+
+  byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "ralph_proxy_result_reduce")"
+  read_window=4096
+  if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]]; then
+    read_window="$byte_cap"
+  fi
+  max_output_bytes="$(jq -r '.maxOutputBytes // empty' <<< "$args_json")"
+  max_output_lines="$(jq -r '.maxOutputLines // empty' <<< "$args_json")"
+  timeout_seconds="$(jq -r '.timeoutSeconds // empty' <<< "$args_json")"
+  if [[ -z "$max_output_bytes" || ! "$max_output_bytes" =~ ^[0-9]+$ ]]; then
+    max_output_bytes="$byte_cap"
+  fi
+  if [[ -z "$max_output_lines" || ! "$max_output_lines" =~ ^[0-9]+$ ]]; then
+    max_output_lines=500
+  fi
+  if [[ -z "$timeout_seconds" || ! "$timeout_seconds" =~ ^[0-9]+$ ]]; then
+    timeout_seconds=5
+  fi
+
+  ignore_case="$(jq -r '.ignoreCase // false' <<< "$args_json")"
+  invert_match="$(jq -r '.invertMatch // false' <<< "$args_json")"
+  line_number="$(jq -r '.lineNumber // false' <<< "$args_json")"
+  word_match="$(jq -r '.wordMatch // false' <<< "$args_json")"
+  fixed_strings="$(jq -r '.fixedStrings // false' <<< "$args_json")"
+  max_count="$(jq -r '.maxCount // empty' <<< "$args_json")"
+  grep_json="$(
+    jq -nc \
+      --argjson ignoreCase "$([[ "$ignore_case" == "true" ]] && echo true || echo false)" \
+      --argjson invertMatch "$([[ "$invert_match" == "true" ]] && echo true || echo false)" \
+      --argjson lineNumber "$([[ "$line_number" == "true" ]] && echo true || echo false)" \
+      --argjson wordMatch "$([[ "$word_match" == "true" ]] && echo true || echo false)" \
+      --argjson fixedStrings "$([[ "$fixed_strings" == "true" ]] && echo true || echo false)" \
+      --argjson maxCount "${max_count:-null}" \
+      '{
+        ignoreCase: $ignoreCase,
+        invertMatch: $invertMatch,
+        lineNumber: $lineNumber,
+        wordMatch: $wordMatch,
+        fixedStrings: $fixedStrings,
+        maxCount: (if ($maxCount | type) == "number" then $maxCount else null end)
+      }'
+  )"
+
+  reduce_request="$(
+    jq -nc \
+      --arg inputPath "$input_path" \
+      --arg reducer "$reducer" \
+      --arg expression "$expression" \
+      --argjson grep "$grep_json" \
+      --argjson limits "$(jq -nc \
+        --argjson maxOutputBytes "$max_output_bytes" \
+        --argjson maxOutputLines "$max_output_lines" \
+        --argjson timeoutSeconds "$timeout_seconds" \
+        '{maxOutputBytes: $maxOutputBytes, maxOutputLines: $maxOutputLines, timeoutSeconds: $timeoutSeconds}')" \
+      '{inputPath: $inputPath, reducer: $reducer, expression: $expression, grep: $grep, limits: $limits}'
+  )"
+
+  if ! reduce_json="$(ralph_mcp_proxy_result_reduce_invoke_python "$reduce_request")"; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_result_reduce: ${RALPH_MCP_PROXY_RESULT_REDUCE_ERROR:-reduction failed}"
+    return 0
+  fi
+
+  output="$(jq -r '.output // ""' <<<"$reduce_json")"
+  truncated_flag="$(jq -r '.truncated // false' <<<"$reduce_json")"
+  metadata_json="$(
+    jq -nc \
+      --arg sourceResultId "$result_id" \
+      --arg reducer "$reducer" \
+      --arg expression "$expression" \
+      --arg view "$view" \
+      '{sourceResultId: $sourceResultId, reducer: $reducer, expression: $expression, sourceView: $view}'
+  )"
+
+  ralph_mcp_proxy_append_readback_telemetry "$workspace" "ralph_proxy_result_reduce" "$result_id" "$view" "$output" "reduce_followup"
+
+  local needs_envelope=0
+  if [[ "$truncated_flag" == "true" ]]; then
+    needs_envelope=1
+  fi
+  byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "ralph_proxy_result_reduce")"
+  if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#output}" -gt "$byte_cap" ]]; then
+    needs_envelope=1
+  fi
+
+  if [[ "$needs_envelope" -eq 0 ]]; then
+    ralph_mcp_proxy_tool_success_json "$output"
+    return 0
+  fi
+
+  ralph_mcp_proxy_owned_tool_maybe_envelope_text_result \
+    "$workspace" \
+    "ralph_proxy_result_reduce" \
+    "$output" \
+    "1" \
+    "$output" \
+    "[]" \
+    "" \
+    "" \
+    "$metadata_json"
+}
+
 ralph_mcp_proxy_shell_job_plan_key() {
   ralph_mcp_proxy_result_tool_plan_key
 }
@@ -3295,9 +3802,9 @@ ralph_mcp_proxy_owned_tool_shell_start() {
 
   ralph_mcp_proxy_tool_success_json "$(
     jq -c \
-      --arg nextStatus "ralph_proxy_shell_status" \
+      --arg nextWait "ralph_proxy_shell_wait" \
       --arg nextRead "ralph_proxy_shell_read" \
-      '. + {nextActions:[{tool:$nextStatus,args:{jobId:.jobId}},{tool:$nextRead,args:{jobId:.jobId,stream:"combined",tailBytes:8192}}]}' \
+      '. + {nextActions:[{tool:$nextWait,args:{jobId:.jobId}},{tool:$nextRead,args:{jobId:.jobId,stream:"combined",tailBytes:8192}}]}' \
       "$job_dir/state.json"
   )"
 }
@@ -3632,11 +4139,107 @@ ralph_mcp_proxy_owned_tool_batch() {
 
   report="$(printf '%s\n' "${report_lines[@]}")"
   if [[ "$has_timeout_error" == "1" ]]; then
-    report+=$'\n'"PARTIAL_FAILURE: batch timeout (completed $((i - 1))/$op_count operations)"
+    report+=$'\n'"PARTIAL_FAILURE: batch timeout (completed $i/$op_count operations)"
     ralph_mcp_proxy_tool_error_json "$report"
   else
     ralph_mcp_proxy_tool_success_json "$report"
   fi
+}
+
+ralph_mcp_proxy_owned_tool_tool_search() {
+  local workspace="${1:-}"
+  local args_json="${2:-{}}"
+  local action query max_results target_tool target_args rank_script catalog_json
+  local ranked_json record args_shape outcome rank_value
+
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search requires RALPH_MCP_COMPACT_TOOL_CATALOG"
+    return 0
+  fi
+
+  action="$(jq -r '.action // empty' <<<"$args_json")"
+  case "$action" in
+    search)
+      query="$(jq -r '.query // empty' <<<"$args_json")"
+      if [[ -z "$query" ]]; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search action=search requires query"
+        record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json "tool_search_search" "" "" "" "invalid_args" "" "" '{}')"
+        ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+        return 0
+      fi
+      max_results="$(jq -r '.maxResults // 10' <<<"$args_json")"
+      if [[ ! "$max_results" =~ ^[0-9]+$ ]] || [[ "$max_results" -lt 1 ]]; then
+        max_results=10
+      fi
+      if [[ "$max_results" -gt 50 ]]; then
+        max_results=50
+      fi
+      catalog_json="$(ralph_mcp_proxy_hidden_tools_catalog_json)"
+      rank_script="$(ralph_mcp_proxy_tool_search_rank_script)"
+      if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$rank_script" ]]; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search ranker unavailable"
+        return 0
+      fi
+      ranked_json="$(jq -c '.' <<<"$catalog_json" | python3 "$rank_script" --query "$query" --max-results "$max_results")"
+      record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+        "tool_search_search" "$query" "" "" "ok" "" "" '{}')"
+      ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+      ralph_mcp_proxy_tool_success_json "$ranked_json"
+      ;;
+    invoke)
+      target_tool="$(jq -r '.tool // empty' <<<"$args_json")"
+      target_args="$(jq -c '.arguments // {}' <<<"$args_json")"
+      args_shape="$(ralph_mcp_proxy_tool_search_sanitize_args_json "$target_args")"
+      if [[ -z "$target_tool" ]]; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search action=invoke requires tool"
+        record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+          "tool_search_invoke" "" "" "" "invalid_args" "" "" "$args_shape")"
+        ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+        return 0
+      fi
+      if [[ "$target_tool" == "ralph_proxy_tool_search" ]]; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search cannot invoke itself"
+        record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+          "tool_search_invoke" "" "$target_tool" "" "recursive_rejected" "" "" "$args_shape")"
+        ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+        return 0
+      fi
+      if ! ralph_mcp_proxy_hidden_tool_catalog_entry "$target_tool"; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search: unknown or advertised tool: $target_tool"
+        record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+          "tool_search_invoke" "" "$target_tool" "" "unknown_tool" "" "" "$args_shape")"
+        ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+        return 0
+      fi
+      if ! ralph_mcp_proxy_tool_allowed "$target_tool"; then
+        ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search: tool denied by policy: $target_tool"
+        record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+          "tool_search_invoke" "" "$target_tool" "" "policy_denied" "" "" "$args_shape")"
+        ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+        return 0
+      fi
+      rank_value="$(jq -r '.rank // empty' <<<"$args_json")"
+      if [[ -n "$rank_value" && "$rank_value" =~ ^[0-9]+$ ]]; then
+        :
+      else
+        rank_value=""
+      fi
+      ralph_mcp_proxy_call_owned_tool "$workspace" "$target_tool" "$target_args"
+      outcome="dispatched"
+      if [[ "${RALPH_MCP_PROXY_FATAL_VIOLATION:-0}" == "1" ]]; then
+        outcome="fatal_violation"
+      fi
+      record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+        "tool_search_invoke" "" "$target_tool" "$rank_value" "$outcome" "" "" "$args_shape")"
+      ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+      ;;
+    *)
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_tool_search requires action=search or action=invoke"
+      record="$(ralph_mcp_proxy_tool_catalog_telemetry_record_json \
+        "tool_search" "" "" "" "invalid_action" "" "" '{}')"
+      ralph_mcp_proxy_tool_catalog_telemetry_append "$record"
+      ;;
+  esac
 }
 
 ralph_mcp_proxy_call_owned_tool() {
@@ -3696,11 +4299,11 @@ ralph_mcp_proxy_call_owned_tool() {
     ralph_proxy_shell_start)
       ralph_mcp_proxy_owned_tool_shell_start "$workspace" "$args_json"
       ;;
-    ralph_proxy_shell_status)
-      ralph_mcp_proxy_owned_tool_shell_status "$workspace" "$args_json"
-      ;;
     ralph_proxy_shell_wait)
       ralph_mcp_proxy_owned_tool_shell_wait "$workspace" "$args_json"
+      ;;
+    ralph_proxy_shell_status)
+      ralph_mcp_proxy_owned_tool_shell_status "$workspace" "$args_json"
       ;;
     ralph_proxy_shell_read)
       ralph_mcp_proxy_owned_tool_shell_read "$workspace" "$args_json"
@@ -3717,8 +4320,26 @@ ralph_mcp_proxy_call_owned_tool() {
     ralph_proxy_result_summary)
       ralph_mcp_proxy_owned_tool_result_summary "$workspace" "$args_json"
       ;;
+    ralph_proxy_result_reduce)
+      ralph_mcp_proxy_owned_tool_result_reduce "$workspace" "$args_json"
+      ;;
     ralph_proxy_batch)
       ralph_mcp_proxy_owned_tool_batch "$workspace" "$args_json"
+      ;;
+    ralph_proxy_tool_search)
+      ralph_mcp_proxy_owned_tool_tool_search "$workspace" "$args_json"
+      ;;
+    ralph_proxy_memory_list)
+      ralph_mcp_proxy_owned_tool_memory_list "$workspace" "$args_json"
+      ;;
+    ralph_proxy_memory_read)
+      ralph_mcp_proxy_owned_tool_memory_read "$workspace" "$args_json"
+      ;;
+    ralph_proxy_memory_write)
+      ralph_mcp_proxy_owned_tool_memory_write "$workspace" "$args_json"
+      ;;
+    ralph_proxy_memory_delete)
+      ralph_mcp_proxy_owned_tool_memory_delete "$workspace" "$args_json"
       ;;
     *)
       ralph_mcp_proxy_tool_error_json "unknown Ralph proxy tool: $tool_name"

@@ -29,6 +29,7 @@ def _load_savings_report_module() -> Any | None:
 _SAVINGS_REPORT_MODULE = _load_savings_report_module()
 
 from tool_call_classification import SAVINGS_PATH_NAMES
+from usage_accounting import aggregate_records, normalize_usage
 
 
 def emit(line: str = "") -> None:
@@ -319,12 +320,11 @@ def summary_value(summary: Dict[str, Any], key: str, records: Sequence[Dict[str,
         return summary.get(key)
     if key == "max_turn_total_tokens":
         return max((as_int(r.get("max_turn_total_tokens")) for r in records), default=0)
-    if key == "cache_hit_ratio":
-        input_tokens = as_int(summary_value(summary, "input_tokens", records))
-        cache_create = as_int(summary_value(summary, "cache_creation_input_tokens", records))
-        cache_read = as_int(summary_value(summary, "cache_read_input_tokens", records))
-        denom = input_tokens + cache_create + cache_read
-        return round(cache_read / denom, 4) if denom > 0 else 0
+    if key == "cache_hit_ratio" or key == "cache_efficiency_ratio":
+        if key in summary and summary.get(key) is not None:
+            return summary.get(key)
+        canonical = normalize_usage(summary) if not records else aggregate_records(records)
+        return canonical.get("cache_efficiency_ratio", canonical.get("cache_hit_ratio", 0))
     if key in {"cache_read_per_tool_turn", "cache_read_per_tool_call"}:
         cache_read = as_int(summary_value(summary, "cache_read_input_tokens", records))
         tool_turns = as_int(summary_value(summary, "tool_turns", records, 0))
@@ -362,11 +362,17 @@ def latest_byte_savings_by_path(
 
 
 def aggregate(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    canonical = aggregate_records(records)
     totals = {
-        "input_tokens": sum(as_int(r.get("input_tokens")) for r in records),
-        "output_tokens": sum(as_int(r.get("output_tokens")) for r in records),
-        "cache_creation_input_tokens": sum(as_int(r.get("cache_creation_input_tokens")) for r in records),
-        "cache_read_input_tokens": sum(as_int(r.get("cache_read_input_tokens")) for r in records),
+        "input_tokens": canonical["input_tokens"],
+        "output_tokens": canonical["output_tokens"],
+        "cache_creation_input_tokens": canonical["cache_creation_input_tokens"],
+        "cache_read_input_tokens": canonical["cache_read_input_tokens"],
+        "uncached_input_tokens": canonical["uncached_input_tokens"],
+        "total_input_tokens": canonical["total_input_tokens"],
+        "cache_efficiency_ratio": canonical["cache_efficiency_ratio"],
+        "cache_hit_ratio": canonical["cache_hit_ratio"],
+        "measurement_source": canonical["measurement_source"],
         "max_turn_total_tokens": max((as_int(r.get("max_turn_total_tokens")) for r in records), default=0),
         "elapsed_seconds": sum(as_int(r.get("elapsed_seconds")) for r in records),
         "tool_calls_total": sum(as_int(r.get("tool_calls_total")) for r in records),
@@ -405,16 +411,20 @@ def plan_summary_with_invocation_fallback(summary: Dict[str, Any], invocations: 
         return effective
 
     totals = aggregate(invocations)
-    total_input = totals["input_tokens"] + totals["cache_creation_input_tokens"] + totals["cache_read_input_tokens"]
+    canonical = normalize_usage(summary) if not invocations else totals
     effective["invocations"] = len(invocations)
     effective["elapsed_seconds"] = totals["elapsed_seconds"]
     effective["input_tokens"] = totals["input_tokens"]
     effective["output_tokens"] = totals["output_tokens"]
     effective["cache_creation_input_tokens"] = totals["cache_creation_input_tokens"]
     effective["cache_read_input_tokens"] = totals["cache_read_input_tokens"]
+    effective["uncached_input_tokens"] = totals.get("uncached_input_tokens", totals["input_tokens"])
+    effective["total_input_tokens"] = totals.get("total_input_tokens", 0)
+    effective["cache_efficiency_ratio"] = totals.get("cache_efficiency_ratio", totals.get("cache_hit_ratio", 0))
+    effective["measurement_source"] = totals.get("measurement_source", canonical.get("measurement_source", {}))
     effective["max_turn_total_tokens"] = totals["max_turn_total_tokens"]
     effective["tool_calls_total"] = totals["tool_calls_total"]
-    effective["cache_hit_ratio"] = round(totals["cache_read_input_tokens"] / total_input, 4) if total_input > 0 else 0
+    effective["cache_hit_ratio"] = totals.get("cache_hit_ratio", effective["cache_efficiency_ratio"])
     effective["runtimes"] = unique_record_values(invocations, "runtime")
     effective["models"] = unique_record_values(invocations, "model")
     return effective
@@ -500,8 +510,6 @@ def aggregate_by_model(invocations: Sequence[Dict[str, Any]]) -> List[Tuple[str,
     for key in order:
         recs = buckets[key]
         agg = aggregate(recs)
-        denom = agg["input_tokens"] + agg["cache_creation_input_tokens"] + agg["cache_read_input_tokens"]
-        agg["cache_hit_ratio"] = round(agg["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
         agg["invocation_count"] = len(recs)
         out.append((key, agg, recs))
     return out
@@ -525,8 +533,6 @@ def aggregate_by_runtime_model(invocations: Sequence[Dict[str, Any]]) -> List[Tu
     for runtime, model in order:
         recs = buckets[(runtime, model)]
         agg = aggregate(recs)
-        denom = agg["input_tokens"] + agg["cache_creation_input_tokens"] + agg["cache_read_input_tokens"]
-        agg["cache_hit_ratio"] = round(agg["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
         agg["invocation_count"] = len(recs)
         has_todo_completion = any("todo_completed" in record for record in recs)
         if has_todo_completion:
@@ -941,8 +947,6 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
         )
 
     overall_totals = aggregate(all_invocations)
-    denom = overall_totals["input_tokens"] + overall_totals["cache_creation_input_tokens"] + overall_totals["cache_read_input_tokens"]
-    overall_totals["cache_hit_ratio"] = round(overall_totals["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
     overall_totals["elapsed_seconds"] = sum(
         float(s.get("elapsed_seconds", 0)) for s in plan_summaries.values() if s.get("elapsed_seconds")
     ) + sum(
@@ -954,8 +958,17 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
 
     for runtime in runtime_buckets:
         bucket = runtime_buckets[runtime]
-        denom = bucket["input_tokens"] + bucket["cache_creation_input_tokens"] + bucket["cache_read_input_tokens"]
-        bucket["cache_hit_ratio"] = round(bucket["cache_read_input_tokens"] / denom, 4) if denom > 0 else 0
+        canonical = aggregate_records(
+            [
+                {
+                    "input_tokens": bucket["input_tokens"],
+                    "cache_creation_input_tokens": bucket["cache_creation_input_tokens"],
+                    "cache_read_input_tokens": bucket["cache_read_input_tokens"],
+                }
+            ]
+        )
+        bucket["cache_hit_ratio"] = canonical["cache_hit_ratio"]
+        bucket["cache_efficiency_ratio"] = canonical["cache_efficiency_ratio"]
 
     by_model = aggregate_by_model(all_invocations)
 

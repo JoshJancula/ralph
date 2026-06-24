@@ -58,10 +58,16 @@ ralph_run_plan_sync_mode_knobs() {
   ralph_apply_mode_compaction_defaults "$mode"
 }
 
+# shellcheck source=run-plan-reasoning-effort.sh
+source "$_ralph_invoke_common_dir/run-plan-reasoning-effort.sh"
+# shellcheck source=run-plan-structured-output.sh
+source "$_ralph_invoke_common_dir/run-plan-structured-output.sh"
+
 # Public interface:
 #   run_plan_invoke_common_add_model_flag -- append --model (or custom flag) from SELECTED_MODEL.
 #   run_plan_invoke_common_add_resume_args -- dispatch session vs bare resume argv builders.
 #   run_plan_invoke_common_add_cli_resume_flags -- append runtime-specific JSON/resume flags when python3 exists.
+#   run_plan_invoke_common_record_cli_pid -- record live runtime CLI PID to sidecar file.
 #   run_plan_invoke_common_execute -- pipe CLI through demux+tee or plain tee; writes EXIT_CODE_FILE.
 
 run_plan_invoke_common_add_model_flag() {
@@ -106,6 +112,13 @@ run_plan_invoke_common_add_cli_resume_flags() {
   fi
 }
 
+run_plan_invoke_common_record_cli_pid() {
+  local cli_pid="$1"
+  if [[ -n "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" ]]; then
+    printf '%s\n' "$cli_pid" > "$RALPH_PLAN_INVOCATION_CLI_PID_FILE" 2>/dev/null || true
+  fi
+}
+
 run_plan_invoke_common_execute() {
   local runner_fn="$1"
   local runtime="$2"
@@ -135,9 +148,19 @@ run_plan_invoke_common_execute() {
   fi
 
   local exit_code
+  local _had_errexit=0
+  local _had_pipefail=0
+  if [[ $- == *e* ]]; then
+    _had_errexit=1
+  fi
+  if shopt -qo pipefail; then
+    _had_pipefail=1
+  fi
   if [[ -n "${RALPH_PLAN_INVOCATION_CLI_START_FILE:-}" ]]; then
     date +%s >"$RALPH_PLAN_INVOCATION_CLI_START_FILE" 2>/dev/null || true
   fi
+  set +e
+  set +o pipefail
   if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
     if [[ -n "${OUTPUT_LOG:-}" ]]; then
       "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" "$OUTPUT_LOG" "$_pretty"
@@ -151,6 +174,16 @@ run_plan_invoke_common_execute() {
     fi
     "$runner_fn" 2>&1 | tee -a "$OUTPUT_LOG"
     exit_code="${PIPESTATUS[0]}"
+  fi
+  if [[ "$_had_pipefail" == "1" ]]; then
+    set -o pipefail
+  else
+    set +o pipefail
+  fi
+  if [[ "$_had_errexit" == "1" ]]; then
+    set -e
+  else
+    set +e
   fi
   echo "$exit_code" >"$EXIT_CODE_FILE"
 }

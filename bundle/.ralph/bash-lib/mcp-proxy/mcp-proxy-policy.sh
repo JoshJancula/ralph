@@ -413,6 +413,7 @@ ralph_mcp_proxy_default_policy_json() {
         ralph_proxy_result_read: 16384,
         ralph_proxy_result_search: 16384,
         ralph_proxy_result_summary: 4096,
+        ralph_proxy_result_reduce: 16384,
         ralph_proxy_search: 16384,
         ralph_proxy_repomap: 16384,
         "resources/read": 16384

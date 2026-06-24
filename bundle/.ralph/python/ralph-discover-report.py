@@ -29,7 +29,9 @@ from result_windowing_metrics import (
     analyze_result_windowing_log,
     stored_result_readback_guidance,
 )
+from usage_accounting import normalize_usage
 from tool_call_target_telemetry import (
+    result_windowing_log_path,
     scan_sequence_antipatterns,
     sequence_antipattern_recommendation,
 )
@@ -151,10 +153,11 @@ def _high_token_low_cache_invocations(
 ) -> List[Dict[str, Any]]:
     flagged: List[Dict[str, Any]] = []
     for idx, record in enumerate(invocations):
-        input_tokens = _as_int(record.get("input_tokens"))
+        canonical = normalize_usage(record)
+        input_tokens = canonical["uncached_input_tokens"]
         if input_tokens < _HIGH_TOKEN_INPUT_THRESHOLD:
             continue
-        ratio = _as_float(record.get("cache_hit_ratio"))
+        ratio = float(canonical.get("cache_efficiency_ratio") or canonical.get("cache_hit_ratio") or 0)
         if ratio >= _LOW_CACHE_HIT_RATIO:
             continue
         flagged.append(
@@ -163,11 +166,13 @@ def _high_token_low_cache_invocations(
                 "runtime": str(record.get("runtime") or ""),
                 "model": str(record.get("model") or ""),
                 "input_tokens": input_tokens,
+                "uncached_input_tokens": canonical["uncached_input_tokens"],
+                "total_input_tokens": canonical["total_input_tokens"],
+                "cache_efficiency_ratio": ratio,
                 "cache_hit_ratio": ratio,
-                "cache_read_input_tokens": _as_int(record.get("cache_read_input_tokens")),
-                "cache_creation_input_tokens": _as_int(
-                    record.get("cache_creation_input_tokens")
-                ),
+                "measurement_source": canonical.get("measurement_source", {}),
+                "cache_read_input_tokens": canonical["cache_read_input_tokens"],
+                "cache_creation_input_tokens": canonical["cache_creation_input_tokens"],
             }
         )
     return flagged
@@ -183,6 +188,7 @@ def _summarize_patterns(findings: Sequence[Mapping[str, Any]]) -> List[Dict[str,
     descriptions = {
         "repeated_native_read_like": "Consecutive native read/search tool calls in tool_calls_sequence",
         "native_read_after_grep": "Native read immediately after grep in tool_calls_sequence",
+        "repeated_shell_status_polling": "Excessive ralph_proxy_shell_status calls without matching shell_wait or verification delegation",
     }
     for pid in sorted(counts):
         summaries.append(
@@ -368,7 +374,7 @@ def _async_shell_polling_findings(
                 "ralph_proxy_shell_status_calls": status_calls,
                 "ralph_proxy_shell_wait_calls": wait_calls,
                 "ralph_proxy_shell_start_calls": start_calls,
-                "note": "Repeated ralph_proxy_shell_status polling; prefer ralph_proxy_shell_wait to block server-side",
+                "note": "Repeated ralph_proxy_shell_status polling; prefer ralph_proxy_shell_wait to block server-side, or declare verification commands in TODO metadata so the runner executes them out-of-process",
             }
         )
     return findings

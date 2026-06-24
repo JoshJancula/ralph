@@ -122,7 +122,7 @@ teardown() {
   command -v jq >/dev/null || skip "jq required"
   local policy tools_json
   policy="$(repomap_policy_json 1)"
-  tools_json="$(env RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
+  tools_json="$(env RALPH_MCP_COMPACT_TOOL_CATALOG=0 RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
     RALPH_MCP_PROXY_RUNTIME=claude \
     bash -c '
@@ -146,7 +146,7 @@ teardown() {
       repoMapEnabled: true
     }
   }')"
-  tools_json="$(env RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
+  tools_json="$(env RALPH_MCP_COMPACT_TOOL_CATALOG=0 RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
     RALPH_MCP_PROXY_RUNTIME=claude \
     bash -c '

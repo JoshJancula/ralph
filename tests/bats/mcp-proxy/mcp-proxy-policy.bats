@@ -494,6 +494,72 @@ assert_policy_validate_status() {
   [ ! -f "$sentinel_path" ]
 }
 
+@test "tmp path is allowed outside workspace without sentinel" {
+  local workspace="$TEST_TMPDIR/workspace-tmp-allowed"
+  local tmp_dir tmp_file resolved
+  mkdir -p "$workspace"
+  tmp_dir="$(mktemp -d /tmp/ralph-mcp-tmp-allowed.XXXXXX)"
+  tmp_file="$tmp_dir/note.txt"
+  printf 'tmp allowed\n' >"$tmp_file"
+
+  run env \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PROJECT_ROOT="$workspace" \
+    RALPH_AGENT_WORKSPACE="$workspace" \
+    RALPH_MCP_WORKSPACE="$workspace" \
+    RALPH_PLAN_KEY="plan-tmp-allowed" \
+    bash -c '
+    source "$1"
+    source "$2"
+    ralph_mcp_proxy_path_is_allowed "$3" 1
+    echo "exit_code=$?"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB" "$tmp_file"
+
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep '^exit_code=' | tail -n1)" = "exit_code=0" ]
+  resolved="$(printf '%s\n' "$output" | sed -n '1p')"
+  [ -n "$resolved" ]
+
+  local sentinel_path="$workspace/.ralph-workspace/security/kill-switch.plan-tmp-allowed.json"
+  [ ! -f "$sentinel_path" ]
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_proxy_read can read tmp path outside workspace" {
+  command -v jq >/dev/null || skip "jq required"
+  local workspace="$TEST_TMPDIR/workspace-tmp-read"
+  local tmp_dir tmp_file args_json response
+  mkdir -p "$workspace"
+  tmp_dir="$(mktemp -d /tmp/ralph-mcp-tmp-read.XXXXXX)"
+  tmp_file="$tmp_dir/note.txt"
+  printf 'tmp read allowed\n' >"$tmp_file"
+  args_json="$(jq -nc --arg path "$tmp_file" '{path: $path}')"
+
+  run env \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PROJECT_ROOT="$workspace" \
+    RALPH_AGENT_WORKSPACE="$workspace" \
+    RALPH_MCP_WORKSPACE="$workspace" \
+    RALPH_PLAN_KEY="plan-tmp-read" \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    bash -c '
+    source "$1"
+    source "$2"
+    source "$3"
+    ralph_mcp_proxy_load_policy "$4" "$5" || exit 1
+    ralph_mcp_proxy_call_owned_tool "$4" ralph_proxy_read "$6"
+  ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$workspace" "$UPSTREAM_SCRIPT" "$args_json"
+
+  [ "$status" -eq 0 ]
+  response="$(printf '%s\n' "$output" | sed -n 's/^.*\({"content":.*\)$/\1/p' | tail -n1)"
+  printf '%s\n' "$response" | jq -e '.isError == false'
+  printf '%s\n' "$response" | jq -e '.content[0].text | contains("tmp read allowed")'
+
+  local sentinel_path="$workspace/.ralph-workspace/security/kill-switch.plan-tmp-read.json"
+  [ ! -f "$sentinel_path" ]
+  rm -rf "$tmp_dir"
+}
+
 @test "outside-root path creates fatal sentinel" {
   local workspace="$TEST_TMPDIR/workspace-outside"
   mkdir -p "$workspace"
@@ -578,5 +644,165 @@ assert_policy_validate_status() {
     mode="$(ralph_mcp_policy_violation_mode_effective)"
     [[ "$mode" == "fatal" ]]
   ' _ "$POLICY_LIB"
+  [ "$status" -eq 0 ]
+}
+
+@test "plan memory tools absent when RALPH_PLAN_MEMORY=0" {
+  local workspace="$TEST_TMPDIR/memory-disabled"
+  mkdir -p "$workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_PLAN_MEMORY=0 \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    bash -c '
+    source "$1"
+    source "$2"
+    tools="$(ralph_mcp_proxy_owned_tools_full_json)"
+    printf "%s\n" "$tools" | jq -e "map(.name) | index(\"ralph_proxy_memory_list\") == null"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "plan memory tools present in full catalog when enabled" {
+  local workspace="$TEST_TMPDIR/memory-enabled"
+  mkdir -p "$workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    bash -c '
+    source "$1"
+    source "$2"
+    tools="$(ralph_mcp_proxy_owned_tools_full_json)"
+    printf "%s\n" "$tools" | jq -e "map(.name) | index(\"ralph_proxy_memory_write\") != null"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "plan memory CRUD is isolated to active plan key" {
+  local workspace="$TEST_TMPDIR/memory-crud"
+  mkdir -p "$workspace/.ralph-workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    RALPH_MCP_WORKSPACE="$workspace" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PLAN_KEY="plan-a" \
+    bash -c '
+    source "$1"
+    source "$2"
+    write_args=$(jq -nc --arg key note --arg content hello "{key: \$key, content: \$content}")
+    read_args=$(jq -nc --arg key note "{key: \$key}")
+    write_json="$(ralph_mcp_proxy_call_owned_tool "$3" ralph_proxy_memory_write "$write_args")"
+    printf "%s\n" "$write_json" | jq -e ".isError != true"
+    read_json="$(ralph_mcp_proxy_call_owned_tool "$3" ralph_proxy_memory_read "$read_args")"
+    printf "%s\n" "$read_json" | jq -e ".content[0].text | contains(\"hello\")"
+    export RALPH_PLAN_KEY=plan-b
+    cross_json="$(ralph_mcp_proxy_call_owned_tool "$3" ralph_proxy_memory_read "$read_args")"
+    printf "%s\n" "$cross_json" | jq -e ".isError == true"
+    [ ! -d "$3/.ralph-workspace/memory/plan-b" ]
+  ' _ "$POLICY_LIB" "$TOOLS_LIB" "$workspace"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "plan memory rejects traversal keys" {
+  local workspace="$TEST_TMPDIR/memory-traversal"
+  mkdir -p "$workspace/.ralph-workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    RALPH_MCP_WORKSPACE="$workspace" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PLAN_KEY="plan-a" \
+    bash -c '
+    source "$1"
+    source "$2"
+    bad_args=$(jq -nc --arg key "../evil" --arg content x "{key: \$key, content: \$content}")
+    result="$(ralph_mcp_proxy_call_owned_tool "$3" ralph_proxy_memory_write "$bad_args")"
+    printf "%s\n" "$result" | jq -e ".isError == true"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB" "$workspace"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "result reduce tool absent when RALPH_RESULT_REDUCE=0" {
+  local workspace="$TEST_TMPDIR/result-reduce-disabled"
+  mkdir -p "$workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_RESULT_REDUCE=0 \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    bash -c '
+    source "$1"
+    source "$2"
+    tools="$(ralph_mcp_proxy_result_tools_full_json_with_reduce)"
+    printf "%s\n" "$tools" | jq -e "map(.name) | index(\"ralph_proxy_result_reduce\") == null"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "result reduce tool present when enabled in hybrid mode" {
+  local workspace="$TEST_TMPDIR/result-reduce-enabled"
+  mkdir -p "$workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_MCP_PROXY_POLICY_OWNED_TOOLS_ENABLED=1 \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    bash -c '
+    source "$1"
+    source "$2"
+    tools="$(ralph_mcp_proxy_result_tools_full_json_with_reduce)"
+    printf "%s\n" "$tools" | jq -e "map(.name) | index(\"ralph_proxy_result_reduce\") != null"
+  ' _ "$POLICY_LIB" "$TOOLS_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "result reduce rejects jq injection and leaves source result unchanged" {
+  command -v jq >/dev/null || skip "jq required"
+  local workspace="$TEST_TMPDIR/result-reduce-safety"
+  mkdir -p "$workspace/.ralph-workspace"
+
+  run env \
+    RALPH_MODE=hybrid \
+    RALPH_MCP_PROXY_POLICY_INLINE="$(jq -nc '{name:"reduce-policy", proxyOwnedTools:{enabled:true}}')" \
+    RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
+    RALPH_MCP_PROXY_RUNTIME=claude \
+    RALPH_MCP_WORKSPACE="$workspace" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PLAN_KEY="plan-reduce" \
+    bash -c '
+    source "$1"
+    source "$2"
+    source "$3"
+    ralph_mcp_proxy_load_policy "$4" "$5" || exit 1
+    content="keep-this-source-intact"
+    id="$(ralph_mcp_proxy_result_store_write "$6" "$7" "$content" "ralph_proxy_shell")"
+    bad=$(ralph_mcp_proxy_call_owned_tool "$6" ralph_proxy_result_reduce "$(jq -nc --arg id "$id" "{resultId:\$id, reducer:\"jq\", expression:\"system(\\\"id\\\")\"}")")
+    printf "%s\n" "$bad" | jq -e ".isError == true"
+    after="$(ralph_mcp_proxy_result_store_read_bytes "$6" "$7" "$id" 0 0 raw)"
+    [[ "$after" == "$content" ]]
+  ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$REPO_ROOT" "$UPSTREAM_SCRIPT" "$workspace" "plan-reduce"
+
   [ "$status" -eq 0 ]
 }

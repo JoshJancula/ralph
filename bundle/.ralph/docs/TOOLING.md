@@ -58,24 +58,32 @@ When Ralph MCP is active, `tools/list` always includes the orchestration and res
 | `ralph_proxy_result_read` / `_search` / `_summary` | Read, search, or summarize stored full outputs by `resultId` | `native`, `ralph`, `hybrid` |
 | `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob` | Bounded file read, search, and glob | `ralph`, `hybrid` |
 | `ralph_proxy_shell` | Run a shell command with policy checks and bounded output | `ralph`, `hybrid` |
-| `ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel` | Async job lifecycle for long-running commands (avoids MCP timeouts); prefer `_wait` for blocking waits, treat `_status` as a manual follow-up, and hide with `RALPH_PROXY_SHELL_ASYNC=0` | `ralph`, `hybrid` |
+| `ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel` | Async job lifecycle for long-running commands (avoids MCP timeouts); runner-first verification remains the default path for completion commands so these helpers are reserved for exploratory or manual monitoring. Prefer `_wait` for blocking waits, treat `_status` as a manual follow-up, avoid short-interval polling loops, and hide them with `RALPH_PROXY_SHELL_ASYNC=0`. | `ralph`, `hybrid` |
 
 There are no `ralph_proxy_edit` or `ralph_proxy_write` tools; agents keep using runtime-native edit tools for modifications. The standalone MCP server refuses to start with `RALPH_MODE=no`.
 
 MCP hosts namespace these names, so Claude and Codex advertise them as `mcp__ralph__ralph_proxy_read` and so on. Script against the names the runtime exposes.
 
-In `ralph` and `hybrid` modes, the prompt also tells agents to prefer the proxy tools for exploration, to use the result tools whenever a response is truncated or contains a `resultId`, and to keep native edit/write tools for file changes. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path.
+In `ralph` and `hybrid` modes, the prompt also tells agents to prefer the proxy tools for exploration, to use the result tools whenever a response is truncated or contains a `resultId` (preview-first, then `view=compacted`, then `view=raw` only when needed), and to keep native edit/write tools for file changes. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path.
 
 ## How injection works per runtime
 
 In `ralph` or `hybrid` mode, each runtime gets an ephemeral MCP config pointing at the active install's `mcp-server.sh` (workspace-local `.ralph/mcp-server.sh`, or `$RALPH_HOME/bundle/.ralph/mcp-server.sh` for `ralph run-plan`; override with `RALPH_MCP_PROXY_SERVER_SCRIPT`). Whatever the mechanism, Ralph backs up any file it touches and restores it when the run ends.
 
+**MCP precedence in Ralph mode (highest to lowest):**
+1. Native ambient MCP servers (runtime's own configuration chain)
+2. Agent `mcp_servers` declarations (string references or portable definitions)
+3. Ralph's protected `ralph` MCP server (always last)
+
+Agent definitions with the same name as ambient servers override the ambient definition. The reserved `ralph` name cannot be redefined by agents.
+
 | Runtime | Mechanism | Notes |
 |---------|-----------|-------|
 | Claude | Temp config via `--strict-mcp-config --mcp-config <temp>` | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available -- Claude requires a native `Read` before `Edit`/`Write`, so stripping `Read` would deadlock edits. `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` also strips `Read` for read-only plans. |
-| Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. |
-| Codex | Per-run `--config mcp_servers.ralph.*` overrides | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. |
-| OpenCode | Temp config via `OPENCODE_CONFIG` | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. |
+| Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. Agent `mcp_servers` are merged before Ralph's entry. |
+| Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. Agent `mcp_servers` are translated to `--config mcp_servers.<agent-server>.*` overrides. |
+| OpenCode | Temp config via `OPENCODE_CONFIG` merging with native config | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. Agent `mcp_servers` are merged into the effective config. |
+| Antigravity | Temp config via `ANTIGRAVITY_CONFIG` when needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. Agent `mcp_servers` merged into temporary config only when needed. |
 
 **Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses Ralph proxy tools with native reads or searches, instead of just logging a warning. Codex strict runs add a live preflight that proves a real `ralph_proxy_read` works before the plan starts.
 
@@ -146,6 +154,30 @@ Rewrite skips any command that already passes flags, and bails unchanged on anyt
 
 The rules live in one shared registry (`bundle/.ralph/python/shell_command_registry.py`); the MCP path and the Claude hook both call it. Without `python3`, rewrite quietly does nothing.
 
+## Durable hooks and MCP (`ralph setup`)
+
+Plan runs can inject hooks and MCP for one session and restore afterward (see [Overlay state and cleanup](#overlay-state-and-cleanup)). **`ralph setup`** writes the same Ralph-owned entries durably so normal IDE sessions also get hooks and MCP without `--ralph-mode`.
+
+```bash
+ralph setup --runtime <claude|cursor|codex|opencode> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
+```
+
+| Example | Effect |
+|---------|--------|
+| `ralph setup --runtime claude --hooks --mcp` | Claude hooks under `.claude/`; MCP at project-root `.mcp.json`. |
+| `ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all` | Cursor hooks and `.cursor/mcp.json` at the given path. |
+| `ralph setup --runtime codex --all` | Codex hooks under `.codex/` plus `[mcp_servers.ralph]` in `.codex/config.toml`. |
+
+Default `--runtime-dir` is `$PWD/.$runtime`. At least one of `--hooks`, `--mcp`, or `--all` is required. `--all` is equivalent to `--hooks --mcp`. Use `--dry-run` to preview targets; use `--yes` when the runtime-dir basename does not match the runtime name.
+
+**Claude:** durable MCP is written to **project-root `.mcp.json`**, not inside `.claude/`, matching Claude Code's project-scoped MCP file.
+
+**Codex trusted-project caveat:** project-scoped `.codex/config.toml` and `.codex/hooks.json` load only when Codex trusts the project. If hooks or MCP do not apply after `ralph setup`, add a trusted entry under `~/.codex/config.toml` (for example `[projects."/absolute/path/to/project"]` with `trust_level = "trusted"`) or trust the project in the Codex UI. User-level `~/.codex/config.toml` still loads when the project is untrusted, but project-local Ralph entries are skipped.
+
+**OpenCode MCP-first recommendation:** `ralph setup --hooks` copies the Ralph runtime plugin into `.opencode/plugins/`, but headless hook invocation is unproven. Prefer `ralph setup --mcp` (project-root `opencode.json`) or plan runs with `--ralph-mode hybrid` so Ralph MCP tools and compaction are authoritative. The setup command prints a note when installing OpenCode hooks.
+
+Durable MCP details and per-runtime file paths: [MCP.md](MCP.md#durable-mcp-setup-ralph-setup---mcp). Per-run overlay behavior below still applies when you use `--ralph-mode native` or `hybrid` on `ralph run-plan`.
+
 ## Native adapters per runtime
 
 Native adapters are merged for one run and restored afterward (see [Overlay state and cleanup](#overlay-state-and-cleanup)). What is actually proven differs by runtime; version-pinned results from 2026-06-04:
@@ -158,6 +190,20 @@ Native adapters are merged for one run and restored afterward (see [Overlay stat
 | OpenCode | Unproven | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). `hybrid` keeps MCP compaction authoritative and records native hook effectiveness as unproven until that changes. |
 
 "Wrapper-based" means the hook rewrites the command to run through a Ralph wrapper that captures, compacts, and stores the output -- same storage and retrieval as everything else.
+
+### Native configuration preservation
+
+Ralph preserves each runtime's native user, project, and local/private configuration chain. Configurations are discovered from the Ralph project root, not the state root or agent workspace.
+
+| Runtime | Native config sources (precedence order) | Ralph additions |
+|---------|------------------------------------------|-----------------|
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
+| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
+| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+
+All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
 
 ### Claude
 
@@ -172,6 +218,19 @@ Ralph merges Ralph-owned entries into `<workspace>/.cursor/hooks.json` per run (
 ### Codex
 
 Ralph appends ephemeral `--config` overrides enabling hooks that point at `bundle/.codex/hooks/`. Requires Codex CLI 0.136.0+ with `exec --config` and `--dangerously-bypass-hook-trust`. The wrapper gate is the same `RALPH_NATIVE_SHELL_WRAPPER=1`.
+
+Per-run hooks match both `Bash` and `command_execution` tool names. Codex `exec --json` surfaces shell calls as `command_execution` in turn telemetry; hook matchers must include that name or native wrapper compaction never fires (zero `hook_compactions` / `native_hook_events` despite injected config).
+
+PostToolUse output mutation is unproven on Codex headless runs (`native_output_mutation_proven=false`). Hook telemetry may therefore show savings under `hook_compaction` while `compaction_saved_bytes` stays zero and `compaction_measured_not_applied_bytes` is non-zero. That split is expected: only MCP `ralph_proxy_shell` compaction counts as applied savings until post-tool mutation is proven.
+
+**Compaction preconditions for Codex plan runs:**
+
+| Path | Requires | Applied savings field |
+|------|----------|----------------------|
+| Native wrapper (PreToolUse) | `--ralph-mode native` or `hybrid` (not `no` or bare `ralph`) | Counts as measured-not-applied until post-tool mutation is proven |
+| MCP proxy shell | `--ralph-mode ralph` or `hybrid`, Ralph MCP injected (`mcp_effective=true`), agent uses `ralph_proxy_shell` | `proxy_shell_compaction_events` / `compaction_saved_bytes` |
+
+Use **`--ralph-mode hybrid`** when you want wrapper hooks plus MCP fallback (`fallback_path_active=true` when `RALPH_PROXY_SHELL_COMPACT=1`). Default `RALPH_MODE=no` disables both native hooks and MCP injection.
 
 ### OpenCode
 
@@ -215,12 +274,13 @@ If `native_hooks_effective` is `false` when you expected hooks: on Claude check 
 
 ## Stored tool results
 
-Any Ralph MCP response that exceeds policy caps -- not just shell output -- is stored in full and returned as a compact envelope (`truncated: true`, `preview`, `originalBytes`, `resultId`, plus paging anchors and suggested follow-up calls). Storage layout:
+Any Ralph MCP response that exceeds policy caps -- not just shell output -- is stored in full and returned as a compact envelope (`truncated: true`, compacted `preview`, `originalBytes`, `resultId`, dual-view refs, plus paging anchors and suggested follow-up calls). Treat the inline `preview` as the first-pass answer; use `ralph_proxy_result_read` with `view=compacted` (default) for normal follow-up and `view=raw` only when you need exact or full inspection. Storage layout:
 
 ```text
 .ralph-workspace/tool-results/<plan-key>/
   index.jsonl          # one line of metadata per stored result
-  results/<resultId>.txt
+  results/<resultId>.txt          # raw full output
+  results/<resultId>.compact.txt  # intelligent compacted view (same result id)
 ```
 
 Stored results are local run artifacts. They can contain workspace content (file reads, grep matches, shell output), are not encrypted, and must not be committed. See [SECURITY.md](SECURITY.md).
@@ -271,8 +331,6 @@ Proxy path policy distinguishes the **project root** (`--workspace`; where `.ral
 
 Compaction and hook activity land in `.ralph-workspace/logs/<plan-key>/discover-report.json` (per-event savings, families, skip reasons) and in the per-run `summary.json` and `invocation-usage.json`. All local files, nothing uploaded. When reading the numbers, keep the layers apart: `ralph_proxy_calls` counts actual proxy tool adoption from the transcript; `hook_*` fields come from overlay journals; `native_hooks_effective` is a build capability flag, not proof anything fired this run (that is `native_hooks_used_on_run`).
 
-`result_windowing` savings are reported **net of raw-view escalations**. The proxy returns a compacted preview, but if the agent later escalates to the full payload via `ralph_proxy_result_read` (`view: "raw"`) or pulls more bytes via `ralph_proxy_result_search`, those re-consumed bytes are logged as `event:"readback"` records (keyed by `resultId`) in `result-windowing.jsonl` and subtracted from that result's savings. A full raw escalation collapses the result's reported savings to roughly zero, so the figure reflects what the agent actually consumed rather than the preview alone.
-
 Inspect savings after a run:
 
 ```bash
@@ -281,14 +339,13 @@ cat ".ralph-workspace/logs/<plan-key>/discover-report.json" | jq '.compaction_ev
 
 ## Post-TODO verification
 
-Declared verification commands (plan frontmatter `verify:`, a TODO `Verify:` line, or `RALPH_VERIFY_AFTER_TODO`) run out-of-process after the model marks a TODO complete, keeping big test output out of the next prompt. Failures reopen the TODO with a compact summary and an artifact path. On by default when declared; `RALPH_POST_VERIFY=0` opts out. Variables: [ENVIRONMENT.md](ENVIRONMENT.md#post-todo-verification).
+Declared verification commands (plan frontmatter `verify:`, a TODO `Verify:` line, or `RALPH_VERIFY_AFTER_TODO`) run out-of-process after the model marks a TODO complete, keeping big test output out of the next prompt. Failures reopen the TODO with a compact summary and an artifact path, and the runner already stores the full transcript under `.ralph-workspace/artifacts/<PLAN_KEY>/verification/`. On by default when declared; `RALPH_POST_VERIFY=0` opts out. Variables: [ENVIRONMENT.md](ENVIRONMENT.md#post-todo-verification).
 
-Runner-first policy: whenever a TODO needs commands to prove completion, declare them via the plan/TODO `verification:` / `verify:` metadata so the runner runs them out-of-process and keeps heavy output out of the next prompt. Agent invocations must no longer assume TODO verification requires agent-side `ralph_proxy_shell_start` + `ralph_proxy_shell_status` loops; those async tools stay available only for exploratory or manual monitoring workflows.
+Runner-first policy: long-running verification commands belong in the plan/TODO metadata so the runner executes them out-of-process and keeps their large output out of the next prompt. Resist rerunning those commands through agent-side async loops; `ralph_proxy_shell_start`, `_wait`, and `_status` are a manual fallback surface for when a human is directly monitoring a job—they are not the primary verification or automation path.
 
-- Prefer plan/TODO verification for all task-completion commands so the runner can keep large outputs off the next prompt.
-- When you rerun a declared verification command manually, start it with `ralph_proxy_shell_start` and block on it with `ralph_proxy_shell_wait` (optionally passing `waitSeconds`), which waits on the server instead of looping locally.
-- Use `ralph_proxy_shell_status` only for occasional manual progress checks and never in tight polling loops—inspect the output via `ralph_proxy_shell_read` instead. Short interval polling is the costly pattern the runner-first policy hardens against.
-- Prefer `ralph_proxy_shell_wait` whenever you need to monitor a long-running exploratory job outside the runner-first path; `shell_status` remains for spot checks and manual follow-up rather than the primary loop.
+- Prefer plan/TODO verification for every task-completion command so the runner handles the heavy work out-of-process and the next prompt stays focused on remaining TODOs.
+- When rerunning a declared verification command manually, start it with `ralph_proxy_shell_start` and block on completion with `ralph_proxy_shell_wait` (optionally passing `waitSeconds`). The async shell tools are a manual fallback—`shell_wait` is the blocking call only when a human is directly monitoring a job.
+- Treat `ralph_proxy_shell_status` as an occasional manual spot check and never use it as a polling loop. Inspect output with `ralph_proxy_shell_read` and cancel via `ralph_proxy_shell_cancel` if you must intervene.
 
 ## Knowledge tools
 
@@ -299,6 +356,12 @@ The experimental knowledge-graph tools (`ralph_knowledge_*`) are hidden unless t
 **MCP preflight failed / Claude: "Failed to connect: ralph".** Ralph runs an MCP handshake before each `ralph`-mode invocation and exits before the CLI starts if it fails. Check that `jq` is installed, the workspace path is valid, and `.ralph/mcp-server.sh` exists. Manual check: `RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh`. The preflight also rejects a `tools/list` response with a present-but-null `nextCursor`, because Claude Code 2.1.x silently drops every tool from such a server while still reporting it connected. For a true end-to-end check on Claude, `RALPH_MCP_CLI_PREFLIGHT=1` spawns the real CLI and aborts if it never calls a proxy tool.
 
 **Claude says it cannot Edit/Write files.** Claude's `Edit`/`Write` require a prior native `Read` of the file; `ralph_proxy_read` does not satisfy that gate. Ralph keeps native `Read` precisely so edits work. If edits fail, confirm you have not set `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` (read-only plans only).
+
+## Cookbook optimizations (Ralph/hybrid)
+
+Tier 1 through Tier 3 cookbook features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, progressive context, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#cookbook-feature-gates-tier-1-through-tier-3), [docs/cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md), and [docs/cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md).
+
+Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval (`bundle/.ralph/python/retrieval_eval.py`), and tool eval (`bundle/.ralph/python/tool_eval.py`).
 
 **Claude: "incompatible with bare mode".** Unset `CLAUDE_PLAN_BARE` or use `--ralph-mode native`.
 

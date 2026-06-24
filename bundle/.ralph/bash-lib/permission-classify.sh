@@ -665,6 +665,57 @@ ralph_write_opencode_permission_overlay() {
   printf '%s\n' "$overlay_path"
 }
 
+ralph_write_session_mcp_allowlist() {
+  local session_dir="${1:-}"
+  local blocked_path="${2:-}"
+  local allow_entries=()
+  local parent_dir=""
+  local resolved_path=""
+
+  [[ -n "$session_dir" ]] || return 1
+  [[ -n "$blocked_path" ]] || return 1
+
+  if [[ "$blocked_path" == /* ]]; then
+    resolved_path="$blocked_path"
+  else
+    resolved_path="$(cd "$session_dir" 2>/dev/null && pwd -P)/$blocked_path"
+  fi
+
+  if [[ -n "$resolved_path" ]]; then
+    allow_entries+=("$resolved_path")
+    parent_dir="$(dirname "$resolved_path")"
+    if [[ -n "$parent_dir" && "$parent_dir" != "." ]]; then
+      allow_entries+=("$parent_dir")
+    fi
+  fi
+
+  if [[ "${#allow_entries[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
+  if declare -F ralph_session_append_mcp_allowlist_entries >/dev/null 2>&1; then
+    ralph_session_append_mcp_allowlist_entries "${allow_entries[@]}"
+    return $?
+  fi
+
+  local file="${RALPH_MCP_ALLOWLIST_FILE:-${session_dir%/}/mcp-allowlist.txt}"
+  mkdir -p "$(dirname "$file")" || return 1
+  touch "$file" || return 1
+  local entry
+  for entry in "${allow_entries[@]}"; do
+    if ! grep -Fxq -- "$entry" "$file" 2>/dev/null; then
+      printf '%s\n' "$entry" >> "$file" || return 1
+    fi
+  done
+  local merged="${RALPH_MCP_ALLOWLIST:-}"
+  for entry in "${allow_entries[@]}"; do
+    merged="$(ralph_permission_union_csv "$merged" "$entry")"
+  done
+  RALPH_MCP_ALLOWLIST="$merged"
+  export RALPH_MCP_ALLOWLIST
+  return 0
+}
+
 # Join two comma-separated permission lists while preserving order and removing
 # duplicates. Empty items are ignored.
 ralph_permission_union_csv() {
@@ -850,6 +901,9 @@ ralph_apply_permission_operator_response() {
         if overlay_path="$(ralph_write_opencode_permission_overlay "$session_dir" "$blocked_path" 2>/dev/null)"; then
           OPENCODE_PLAN_PERMISSION_CONFIG_PATH="$overlay_path"
           export OPENCODE_PLAN_PERMISSION_CONFIG_PATH
+          if ! ralph_write_session_mcp_allowlist "$session_dir" "$blocked_path"; then
+            decision="deny"
+          fi
         else
           decision="deny"
         fi

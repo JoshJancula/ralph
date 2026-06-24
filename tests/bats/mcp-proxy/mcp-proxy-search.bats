@@ -95,11 +95,48 @@ teardown() {
   fi
 }
 
+@test "compact tool catalog gate follows Ralph rollout defaults" {
+  run env RALPH_MODE=no bash -c '
+    source "$1"
+    unset RALPH_MCP_COMPACT_TOOL_CATALOG
+    ralph_mcp_proxy_compact_tool_catalog_active
+  ' _ "$TOOLS_LIB"
+  [ "$status" -ne 0 ]
+
+  run env RALPH_MODE=ralph bash -c '
+    source "$1"
+    unset RALPH_MCP_COMPACT_TOOL_CATALOG
+    ralph_mcp_proxy_compact_tool_catalog_active
+  ' _ "$TOOLS_LIB"
+  [ "$status" -eq 0 ]
+
+  run env RALPH_MODE=no RALPH_MCP_COMPACT_TOOL_CATALOG=1 bash -c '
+    source "$1"
+    ralph_mcp_proxy_compact_tool_catalog_active
+  ' _ "$TOOLS_LIB"
+  [ "$status" -eq 0 ]
+
+  run env RALPH_MODE=ralph RALPH_MCP_COMPACT_TOOL_CATALOG=0 bash -c '
+    source "$1"
+    ralph_mcp_proxy_compact_tool_catalog_active
+  ' _ "$TOOLS_LIB"
+  [ "$status" -ne 0 ]
+}
+
+@test "compact tool catalog rejects invalid boolean values" {
+  run env RALPH_MODE=ralph RALPH_MCP_COMPACT_TOOL_CATALOG=maybe bash -c '
+    source "$1"
+    ralph_mcp_proxy_compact_tool_catalog_active
+  ' _ "$TOOLS_LIB"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"RALPH_MCP_COMPACT_TOOL_CATALOG: invalid value"* ]]
+}
+
 @test "ralph_proxy_search is absent from owned tools when searchEnabled is false" {
   command -v jq >/dev/null || skip "jq required"
   local policy tools_json
   policy="$(search_policy_json 0)"
-  env RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
+  env RALPH_MCP_COMPACT_TOOL_CATALOG=0 RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
     RALPH_MCP_PROXY_RUNTIME=claude \
     bash -c '
@@ -109,7 +146,7 @@ teardown() {
       ralph_mcp_proxy_load_policy "$4" "$5" || exit 1
       ralph_mcp_proxy_owned_tools_json
     ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$REPO_ROOT" "$UPSTREAM_SCRIPT"
-  tools_json="$(env RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
+  tools_json="$(env RALPH_MCP_COMPACT_TOOL_CATALOG=0 RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
     RALPH_MCP_PROXY_RUNTIME=claude \
     bash -c '
@@ -126,7 +163,7 @@ teardown() {
   command -v jq >/dev/null || skip "jq required"
   local policy tools_json
   policy="$(search_policy_json 1)"
-  tools_json="$(env RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
+  tools_json="$(env RALPH_MCP_COMPACT_TOOL_CATALOG=0 RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_MCP_PROXY_OWNED_TOOLS_FORCE=1 \
     RALPH_MCP_PROXY_RUNTIME=claude \
     bash -c '

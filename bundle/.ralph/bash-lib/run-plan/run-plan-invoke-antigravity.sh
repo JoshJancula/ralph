@@ -191,6 +191,7 @@ ralph_run_plan_invoke_antigravity() {
 
   local -a args=()
   run_plan_invoke_common_add_model_flag args --model
+  run_plan_invoke_common_add_reasoning_effort_flag args antigravity "${ANTIGRAVITY_PLAN_CLI:-agy}"
   run_plan_invoke_common_add_resume_args \
     args \
     run_plan_invoke_antigravity_session_resume_args \
@@ -216,7 +217,11 @@ ralph_run_plan_invoke_antigravity() {
   args+=(--print "$PROMPT")
 
   run_plan_invoke_antigravity_cli() {
-    "$cli" "${args[@]}"
+    local cli_pid
+    "$cli" "${args[@]}" &
+    cli_pid=$!
+    run_plan_invoke_common_record_cli_pid "$cli_pid"
+    wait "$cli_pid"
   }
 
   run_plan_invoke_common_execute \

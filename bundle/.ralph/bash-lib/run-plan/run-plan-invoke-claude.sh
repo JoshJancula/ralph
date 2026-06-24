@@ -170,16 +170,54 @@ run_plan_invoke_claude_mcp_config_prepare() {
 
 ralph_run_plan_invoke_claude_proxy_tool_names() {
   local _old_ifs="$IFS"
-  local -a tools_list=(
-    mcp__ralph__ralph_proxy_read
-    mcp__ralph__ralph_proxy_grep
-    mcp__ralph__ralph_proxy_glob
-    mcp__ralph__ralph_proxy_shell
-    mcp__ralph__ralph_proxy_result_read
-    mcp__ralph__ralph_proxy_result_search
-    mcp__ralph__ralph_proxy_result_summary
-    mcp__ralph__ralph_proxy_batch
-  )
+  local -a tools_list=()
+  local compact_catalog=1
+
+  if declare -F ralph_mcp_proxy_compact_tool_catalog_enabled >/dev/null 2>&1; then
+    ralph_mcp_proxy_compact_tool_catalog_enabled
+    compact_catalog=$?
+  else
+    case "${RALPH_MCP_COMPACT_TOOL_CATALOG:-}" in
+      1 | true | yes | on) compact_catalog=0 ;;
+      0 | false | no | off) compact_catalog=1 ;;
+      "")
+        case "${RALPH_MODE:-no}" in
+          ralph | hybrid) compact_catalog=0 ;;
+          *) compact_catalog=1 ;;
+        esac
+        ;;
+      *) compact_catalog=2 ;;
+    esac
+  fi
+
+  case "$compact_catalog" in
+    1)
+      tools_list=(
+        mcp__ralph__ralph_proxy_read
+        mcp__ralph__ralph_proxy_grep
+        mcp__ralph__ralph_proxy_glob
+        mcp__ralph__ralph_proxy_shell
+        mcp__ralph__ralph_proxy_result_read
+        mcp__ralph__ralph_proxy_result_search
+        mcp__ralph__ralph_proxy_result_summary
+        mcp__ralph__ralph_proxy_batch
+      )
+      ;;
+    0)
+      tools_list=(
+        mcp__ralph__ralph_proxy_read
+        mcp__ralph__ralph_proxy_grep
+        mcp__ralph__ralph_proxy_shell
+        mcp__ralph__ralph_proxy_result_read
+        mcp__ralph__ralph_proxy_batch
+        mcp__ralph__ralph_proxy_tool_search
+      )
+      ;;
+    *)
+      echo "RALPH_MCP_COMPACT_TOOL_CATALOG: invalid value '${RALPH_MCP_COMPACT_TOOL_CATALOG:-}' (use 0 or 1)" >&2
+      return 1
+      ;;
+  esac
 
   if [[ "${RALPH_MCP_PROXY_POLICY_OWNED_SEARCH_ENABLED:-0}" == "1" ]]; then
     tools_list+=("mcp__ralph__ralph_proxy_search")
@@ -190,8 +228,8 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   if [[ "${RALPH_PROXY_SHELL_ASYNC:-1}" != "0" ]]; then
     tools_list+=(
       mcp__ralph__ralph_proxy_shell_start
+      mcp__ralph__ralph_proxy_shell_wait
       mcp__ralph__ralph_proxy_shell_status
-        mcp__ralph__ralph_proxy_shell_wait
       mcp__ralph__ralph_proxy_shell_read
       mcp__ralph__ralph_proxy_shell_cancel
     )
@@ -315,6 +353,10 @@ ralph_run_plan_invoke_claude() {
 
   local -a args=(-p)
   run_plan_invoke_common_add_model_flag args --model
+  if ! run_plan_invoke_common_add_reasoning_effort_flag args claude "$cli"; then
+    return 1
+  fi
+  run_plan_invoke_common_add_structured_output_flag args claude "$cli"
 
   local budget=""
   if [[ -n "${RALPH_CLAUDE_MAX_BUDGET_USD:-}" ]]; then
@@ -499,7 +541,14 @@ ralph_run_plan_invoke_claude() {
 
   run_plan_invoke_claude_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
-    printf '%s' "$PROMPT" | (cd "$agent_ws" && "$cli" "${args[@]}")
+    local cli_pid
+    printf '%s' "$PROMPT" | (
+      cd "$agent_ws" || exit 1
+      "$cli" "${args[@]}" &
+      cli_pid=$!
+      run_plan_invoke_common_record_cli_pid "$cli_pid"
+      wait "$cli_pid"
+    )
   }
 
   run_plan_invoke_common_execute \
@@ -515,6 +564,7 @@ ralph_run_plan_invoke_claude() {
     export CLAUDE_PLAN_MINIMAL
     run_plan_invoke_claude_apply_minimal_flags args
     echo "Note: claude reported 'Not logged in' with --bare (which skips keychain reads). Retrying once with CLAUDE_PLAN_MINIMAL=1 instead and persisting that for the rest of this process. Set ANTHROPIC_API_KEY (or unset CLAUDE_PLAN_BARE to use the safe default) to silence." >&2
+    rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
     run_plan_invoke_common_execute \
       run_plan_invoke_claude_cli \
       claude \
@@ -534,6 +584,7 @@ ralph_run_plan_invoke_claude() {
       fi
     fi
     echo "Note: claude reported unknown agent with --agent '$RALPH_AGENT_NATIVE_NAME'. Retrying once without --agent flag and with inlined context. Register the agent in Claude app config or set RALPH_AGENT_NATIVE_PASSTHROUGH=off to use the full inlined mode." >&2
+    rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
     run_plan_invoke_common_execute \
       run_plan_invoke_claude_cli \
       claude \

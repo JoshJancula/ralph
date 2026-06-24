@@ -7,7 +7,16 @@ import json
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
+
+
+@dataclass(frozen=True)
+class SymbolLocation:
+    path: str
+    line: int
+    label: str
+    kind: str = "symbol"
 
 _SYMBOL_KINDS = {
     "c": "class",
@@ -47,8 +56,20 @@ def _kind_label(kind: str) -> str:
     return _SYMBOL_KINDS.get(primary, "symbol")
 
 
-def parse_ctags_json(raw: str) -> Dict[str, List[str]]:
-    by_file: Dict[str, List[str]] = defaultdict(list)
+def _ctags_entry_line(entry: dict) -> int:
+    for key in ("line", "lineno", "lineNumber"):
+        value = entry.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def parse_ctags_json_locations(raw: str) -> List[SymbolLocation]:
+    locations: List[SymbolLocation] = []
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -63,23 +84,47 @@ def parse_ctags_json(raw: str) -> Dict[str, List[str]]:
             continue
         kind = _kind_label(str(entry.get("kind", "")))
         label = f"{kind} {name}"
-        if label not in by_file[path]:
-            by_file[path].append(label)
+        locations.append(
+            SymbolLocation(path=str(path), line=_ctags_entry_line(entry), label=label, kind=kind)
+        )
+    locations.sort(key=lambda item: (item.path, item.line, item.label))
+    return locations
+
+
+def parse_ctags_json(raw: str) -> Dict[str, List[str]]:
+    by_file: Dict[str, List[str]] = defaultdict(list)
+    for loc in parse_ctags_json_locations(raw):
+        if loc.label not in by_file[loc.path]:
+            by_file[loc.path].append(loc.label)
     return dict(by_file)
 
 
-def parse_rg_lines(raw: str) -> Dict[str, List[str]]:
-    by_file: Dict[str, List[str]] = defaultdict(list)
+def parse_rg_line_locations(raw: str) -> List[SymbolLocation]:
+    locations: List[SymbolLocation] = []
     for line in raw.splitlines():
         if not line.strip():
             continue
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
-        path, _lineno, text = parts[0], parts[1], parts[2]
+        path, lineno, text = parts[0], parts[1], parts[2]
         symbol = _symbol_from_line(text)
-        if symbol and symbol not in by_file[path]:
-            by_file[path].append(symbol)
+        if not symbol:
+            continue
+        try:
+            line_no = int(lineno)
+        except ValueError:
+            line_no = 0
+        locations.append(SymbolLocation(path=path, line=line_no, label=symbol, kind="symbol"))
+    locations.sort(key=lambda item: (item.path, item.line, item.label))
+    return locations
+
+
+def parse_rg_lines(raw: str) -> Dict[str, List[str]]:
+    by_file: Dict[str, List[str]] = defaultdict(list)
+    for loc in parse_rg_line_locations(raw):
+        if loc.label not in by_file[loc.path]:
+            by_file[loc.path].append(loc.label)
     return dict(by_file)
 
 
@@ -97,17 +142,38 @@ def _symbol_from_line(text: str) -> str:
     return ""
 
 
+def extract_regex_file_locations(relpath: str, content: str) -> List[SymbolLocation]:
+    locations: List[SymbolLocation] = []
+    for idx, line in enumerate(content.splitlines(), start=1):
+        symbol = _symbol_from_line(line)
+        if symbol:
+            locations.append(SymbolLocation(path=relpath, line=idx, label=symbol, kind="symbol"))
+    return locations
+
+
 def extract_regex_files(files: Iterable[Tuple[str, str]]) -> Dict[str, List[str]]:
     by_file: Dict[str, List[str]] = {}
     for relpath, content in files:
         symbols: List[str] = []
-        for line in content.splitlines():
-            symbol = _symbol_from_line(line)
-            if symbol and symbol not in symbols:
-                symbols.append(symbol)
+        for loc in extract_regex_file_locations(relpath, content):
+            if loc.label not in symbols:
+                symbols.append(loc.label)
         if symbols:
             by_file[relpath] = symbols
     return by_file
+
+
+def locations_to_json(locations: Iterable[SymbolLocation]) -> str:
+    payload = [
+        {
+            "path": loc.path,
+            "line": loc.line,
+            "label": loc.label,
+            "kind": loc.kind,
+        }
+        for loc in locations
+    ]
+    return json.dumps(payload, sort_keys=True) + "\n"
 
 
 def format_digest(by_file: Dict[str, List[str]]) -> str:
@@ -146,7 +212,33 @@ def main() -> int:
             files.append((current_path, "\n".join(current_lines)))
         print(format_digest(extract_regex_files(files)), end="")
         return 0
-    print("usage: repo_map.py {ctags|rg|regex}", file=sys.stderr)
+    if mode == "locations-ctags":
+        print(locations_to_json(parse_ctags_json_locations(sys.stdin.read())), end="")
+        return 0
+    if mode == "locations-rg":
+        print(locations_to_json(parse_rg_line_locations(sys.stdin.read())), end="")
+        return 0
+    if mode == "locations-regex":
+        files = []
+        payload = sys.stdin.read()
+        current_path = ""
+        current_lines: List[str] = []
+        for line in payload.splitlines():
+            if line.startswith("@@FILE@@"):
+                if current_path:
+                    files.append((current_path, "\n".join(current_lines)))
+                current_path = line[len("@@FILE@@") :]
+                current_lines = []
+                continue
+            current_lines.append(line)
+        if current_path:
+            files.append((current_path, "\n".join(current_lines)))
+        all_locations: List[SymbolLocation] = []
+        for relpath, content in files:
+            all_locations.extend(extract_regex_file_locations(relpath, content))
+        print(locations_to_json(all_locations), end="")
+        return 0
+    print("usage: repo_map.py {ctags|rg|regex|locations-ctags|locations-rg|locations-regex}", file=sys.stderr)
     return 2
 
 

@@ -977,3 +977,572 @@ EOF
   run "$VALIDATOR" "$orch"
   [ "$status" -eq 0 ]
 }
+
+@test "validator accepts artifact schema field on outputArtifacts" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "outputArtifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/verdict.json",
+          "schema": "bundle/.ralph/schemas/evaluator-verdict.schema.json"
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.md"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator rejects empty schema field" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.json",
+          "schema": ""
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator rejects absolute artifact schema paths" {
+  local orch schema_file
+  orch="$(mktemp)"
+  schema_file="$(mktemp)"
+  temp_files+=("$orch" "$schema_file")
+  printf '{"type":"object"}' > "$schema_file"
+  cat <<EOF > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.json",
+          "schema": "$schema_file"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator requires workspace when schema paths are declared" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.json",
+          "schema": "bundle/.ralph/schemas/evaluator-verdict.schema.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"workspace is required"* ]]
+}
+
+@test "validator accepts valid reasoning_effort on stage" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "claude",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "reasoning_effort": "high",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.md"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator rejects invalid reasoning_effort on stage" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "schema validation test",
+  "stages": [
+    {
+      "id": "stage-one",
+      "runtime": "claude",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-01-stage-one.plan.md",
+      "reasoning_effort": "turbo",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/stage-one.md"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator accepts grader stage with fresh sessionStrategy and rubric" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "grader schema validation test",
+  "stages": [
+    {
+      "id": "grade",
+      "runtime": "cursor",
+      "agent": "qa",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-grade.plan.md",
+      "sessionStrategy": "fresh",
+      "grader": true,
+      "rubric": "bundle/.ralph/schemas/rubric.schema.json",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/grade-result.json",
+          "schema": "bundle/.ralph/schemas/rubric-result.schema.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator accepts explicit finalOutputSchema on stage" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "finalOutputSchema validation test",
+  "stages": [
+    {
+      "id": "review",
+      "runtime": "cursor",
+      "agent": "code-review",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-review.plan.md",
+      "finalOutputSchema": "bundle/.ralph/schemas/evaluator-verdict.schema.json",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/review.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator rejects invalid finalOutputSchema on stage" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "finalOutputSchema validation test",
+  "stages": [
+    {
+      "id": "review",
+      "runtime": "cursor",
+      "agent": "code-review",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-review.plan.md",
+      "finalOutputSchema": "",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/review.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator rejects grader stage with resume sessionStrategy" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "grader schema validation test",
+  "stages": [
+    {
+      "id": "grade",
+      "runtime": "cursor",
+      "agent": "qa",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-grade.plan.md",
+      "sessionStrategy": "resume",
+      "grader": true,
+      "rubric": "bundle/.ralph/schemas/rubric.schema.json",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/grade-result.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator rejects grader stage without rubric path" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "grader schema validation test",
+  "stages": [
+    {
+      "id": "grade",
+      "runtime": "cursor",
+      "agent": "qa",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-grade.plan.md",
+      "sessionStrategy": "fresh",
+      "grader": true,
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/grade-result.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator accepts router stage with forward targets" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "router schema validation test",
+  "stages": [
+    {
+      "id": "router",
+      "runtime": "cursor",
+      "agent": "research",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-router.plan.md",
+      "router": {
+        "allowedTargets": ["branch-a", "branch-b"],
+        "terminalOutcomes": ["done"],
+        "defaultTarget": "branch-a",
+        "onInvalid": "fail"
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/route.json",
+          "schema": "bundle/.ralph/schemas/router-decision.schema.json"
+        }
+      ]
+    },
+    {
+      "id": "branch-a",
+      "runtime": "cursor",
+      "agent": "implementation",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-branch-a.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/branch-a.md"
+        }
+      ]
+    },
+    {
+      "id": "branch-b",
+      "runtime": "cursor",
+      "agent": "implementation",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-branch-b.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/branch-b.md"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator rejects router stage with backward target" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "router schema validation test",
+  "stages": [
+    {
+      "id": "branch-a",
+      "runtime": "cursor",
+      "agent": "implementation",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-branch-a.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/branch-a.md"
+        }
+      ]
+    },
+    {
+      "id": "router",
+      "runtime": "cursor",
+      "agent": "research",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-router.plan.md",
+      "router": {
+        "allowedTargets": ["branch-a"],
+        "defaultTarget": "branch-a",
+        "onInvalid": "fail"
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/route.json",
+          "schema": "bundle/.ralph/schemas/router-decision.schema.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator rejects router target inside parallel wave middle" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "router schema validation test",
+  "stages": [
+    {
+      "id": "router",
+      "runtime": "cursor",
+      "agent": "research",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-router.plan.md",
+      "router": {
+        "allowedTargets": ["wave-b"],
+        "defaultTarget": "wave-b",
+        "onInvalid": "fail"
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/route.json"
+        }
+      ]
+    },
+    {
+      "id": "wave-a",
+      "runtime": "cursor",
+      "agent": "implementation",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-wave-a.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/wave-a.md"
+        }
+      ]
+    },
+    {
+      "id": "wave-b",
+      "runtime": "cursor",
+      "agent": "implementation",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-wave-b.plan.md",
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/wave-b.md"
+        }
+      ]
+    }
+  ],
+  "parallelStages": [
+    "wave-a, wave-b"
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}
+
+@test "validator accepts planner stage with full config" {
+  command -v python3 >/dev/null || skip "python3 required"
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "description": "planner schema validation test",
+  "stages": [
+    {
+      "id": "planner",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-planner.plan.md",
+      "planner": {
+        "outputMode": "stages",
+        "maxTodos": 8,
+        "maxStages": 3,
+        "allowedRuntimes": ["cursor"],
+        "allowedAgents": ["implementation"],
+        "allowedModels": ["auto"]
+      },
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/schema-test/planner-output.json",
+          "schema": "bundle/.ralph/schemas/planner-output.schema.json"
+        }
+      ]
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+}
+
+@test "validator rejects planner stage missing allowedModels" {
+  local orch
+  orch="$(mktemp)"
+  temp_files+=("$orch")
+  cat <<'EOF' > "$orch"
+{
+  "name": "schema-test",
+  "namespace": "schema-test",
+  "stages": [
+    {
+      "id": "planner",
+      "runtime": "cursor",
+      "agent": "architect",
+      "plan": ".ralph-workspace/orchestration-plans/schema-test/schema-test-planner.plan.md",
+      "planner": {
+        "outputMode": "plan-file",
+        "maxTodos": 8,
+        "maxStages": 3,
+        "allowedRuntimes": ["cursor"],
+        "allowedAgents": ["implementation"]
+      }
+    }
+  ]
+}
+EOF
+  run "$VALIDATOR" "$orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"schema validation failed"* ]]
+}

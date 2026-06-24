@@ -590,13 +590,18 @@ def parse_artifact_item(lines: list[str], start_idx: int, item_indent: int) -> t
             item["__shorthand"] = fragment
             return item, consumed_idx
         key, raw = split_key_value(fragment)
-        if key not in {"path", "required"}:
+        if key not in {"path", "required", "schema"}:
             fail(f"unsupported artifact field {key!r}")
         if key == "path":
             value = parse_scalar_text(raw)
             if not value:
                 fail("artifact path must not be empty")
             item["path"] = value
+        elif key == "schema":
+            value = parse_scalar_text(raw)
+            if not value:
+                fail("artifact schema must not be empty")
+            item["schema"] = value
         else:
             item["required"] = parse_bool_text(raw)
 
@@ -610,13 +615,18 @@ def parse_artifact_item(lines: list[str], start_idx: int, item_indent: int) -> t
         if current_indent <= item_indent:
             break
         key, raw = split_key_value(line.strip())
-        if key not in {"path", "required"}:
+        if key not in {"path", "required", "schema"}:
             fail(f"unsupported artifact field {key!r}")
         if key == "path":
             value = parse_scalar_text(raw)
             if not value:
                 fail("artifact path must not be empty")
             item["path"] = value
+        elif key == "schema":
+            value = parse_scalar_text(raw)
+            if not value:
+                fail("artifact schema must not be empty")
+            item["schema"] = value
         else:
             item["required"] = parse_bool_text(raw)
         idx += 1
@@ -657,10 +667,10 @@ def parse_loop_check(lines: list[str], start_idx: int, parent_indent: int) -> tu
         if current_indent <= parent_indent:
             break
         key, raw = split_key_value(line.strip())
-        if key == "path":
+        if key in ("path", "schema"):
             value = parse_scalar_text(raw)
             if value:
-                obj["path"] = value
+                obj[key] = value
         idx += 1
     return obj, idx
 
@@ -764,7 +774,7 @@ def parse_list_item(lines: list[str], start_idx: int, item_indent: int, kind: st
     idx = start_idx + 1
 
     def consume_field(key: str, raw: str, line_idx: int, line_indent: int) -> tuple[int, object]:
-        if key in {"content", "verification", "status", "id", "stage", "runtime", "agent", "model", "sessionStrategy", "contextBudget", "loopBackTo", "planFile"}:
+        if key in {"content", "verification", "status", "id", "stage", "runtime", "agent", "model", "sessionStrategy", "contextBudget", "loopBackTo", "onExhausted", "planFile"}:
             return parse_scalar_field(lines, line_idx, line_indent, raw, key)
         if key == "maxIterations":
             return parse_scalar_field(lines, line_idx, line_indent, raw, key)
@@ -910,14 +920,25 @@ def normalize_artifacts(items: list[dict]) -> list[dict]:
 
 
 def raw_artifacts(items: list[dict]) -> list[dict]:
-    return [{"path": item["path"], "required": bool(item.get("required", True))} for item in items]
+    result = []
+    for item in items:
+        entry = {"path": item["path"], "required": bool(item.get("required", True))}
+        schema = as_text(item.get("schema", ""))
+        if schema:
+            entry["schema"] = schema
+        result.append(entry)
+    return result
 
 
 def normalize_loop_check(obj: dict) -> dict:
     path = parse_scalar_text(str(obj.get("path", ""))) if obj.get("path") is not None else ""
+    schema = parse_scalar_text(str(obj.get("schema", ""))) if obj.get("schema") is not None else ""
+    result = {}
     if path:
-        return {"path": path}
-    return {}
+        result["path"] = path
+    if schema:
+        result["schema"] = schema
+    return result
 
 
 def as_text(value) -> str:
@@ -974,6 +995,11 @@ def validate_artifact_list(owner_prefix: str, owner: dict, field_name: str, item
         if not path:
             fail(f"{item_prefix}.path: missing path")
         validate_artifact_path(f"{item_prefix}.path", path)
+        if "schema" in item:
+            schema = as_text(item.get("schema", ""))
+            if not schema:
+                fail(f"{item_prefix}.schema: must be a non-empty string")
+            validate_artifact_path(f"{item_prefix}.schema", schema)
 
 
 def validate_stage(stage: dict, ordinal: int) -> None:
@@ -1002,6 +1028,47 @@ def validate_stage(stage: dict, ordinal: int) -> None:
     session_strategy = as_text(stage.get("sessionStrategy", ""))
     if session_strategy and session_strategy not in ALLOWED_SESSION_STRATEGIES:
         fail(f"{prefix} sessionStrategy: invalid sessionStrategy {session_strategy!r}")
+    grader = stage.get("grader", False)
+    rubric = as_text(stage.get("rubric", ""))
+    if grader not in (True, False, "", None):
+        fail(f"{prefix} grader: must be a boolean")
+    if grader is True:
+        if not rubric:
+            fail(f"{prefix} rubric: required when grader is true")
+        validate_artifact_path(f"{prefix} rubric", rubric)
+        if session_strategy and session_strategy != "fresh":
+            fail(f"{prefix} sessionStrategy: grader stages require fresh")
+        if stage.get("sessionResume") is True:
+            fail(f"{prefix} sessionResume: grader stages cannot resume writer session")
+    elif rubric:
+        fail(f"{prefix} rubric: requires grader: true")
+    router = stage.get("router")
+    if router not in (None, "", {}):
+        if not isinstance(router, dict):
+            fail(f"{prefix} router: must be an object")
+        allowed = router.get("allowedTargets")
+        if not isinstance(allowed, list) or not allowed:
+            fail(f"{prefix} router.allowedTargets: must be a non-empty array")
+        if any(not as_text(item) for item in allowed):
+            fail(f"{prefix} router.allowedTargets: entries must be non-empty strings")
+        default_target = as_text(router.get("defaultTarget", ""))
+        if not default_target:
+            fail(f"{prefix} router.defaultTarget: required")
+        terminal = router.get("terminalOutcomes") or []
+        if terminal not in (None, []):
+            if not isinstance(terminal, list):
+                fail(f"{prefix} router.terminalOutcomes: must be an array")
+            if any(not as_text(item) for item in terminal):
+                fail(f"{prefix} router.terminalOutcomes: entries must be non-empty strings")
+        on_invalid = as_text(router.get("onInvalid", "fail")) or "fail"
+        if on_invalid not in {"fail", "default"}:
+            fail(f"{prefix} router.onInvalid: must be fail or default")
+        valid_targets = {as_text(item) for item in allowed} | {as_text(item) for item in terminal}
+        if default_target not in valid_targets:
+            fail(f"{prefix} router.defaultTarget: must appear in allowedTargets or terminalOutcomes")
+        overlap = {as_text(item) for item in allowed} & {as_text(item) for item in terminal}
+        if overlap:
+            fail(f"{prefix} router: allowedTargets and terminalOutcomes must not overlap")
     context_budget = as_text(stage.get("contextBudget", ""))
     if context_budget and context_budget not in ALLOWED_CONTEXT_BUDGETS:
         fail(f"{prefix} contextBudget: invalid contextBudget {context_budget!r}")
@@ -1108,8 +1175,12 @@ def validate_loop_rules(stage: dict, ordinal: int, stages_by_id: dict, stage_eff
     max_iterations = stage.get("maxIterations", "")
     loop_check = normalize_loop_check(stage.get("loopCheck", {}))
 
+    on_exhausted = as_text(stage.get("onExhausted", ""))
+
     if loop_check.get("path"):
         validate_artifact_path(f"{prefix} loopCheck.path", loop_check["path"])
+    if loop_check.get("schema"):
+        validate_artifact_path(f"{prefix} loopCheck.schema", loop_check["schema"])
 
     if loop_back:
         if loop_back not in stages_by_id:
@@ -1118,11 +1189,17 @@ def validate_loop_rules(stage: dict, ordinal: int, stages_by_id: dict, stage_eff
             fail(f"{prefix} loopCheck.path: required when loopBackTo is set")
         if not isinstance(max_iterations, int) or max_iterations <= 0:
             fail(f"{prefix} maxIterations: must be a positive integer")
+        if on_exhausted and on_exhausted not in ("proceed", "fail"):
+            fail(f"{prefix} onExhausted: must be 'proceed' or 'fail'")
     else:
         if max_iterations != "":
             fail(f"{prefix} maxIterations: requires loopBackTo")
         if loop_check.get("path"):
             fail(f"{prefix} loopCheck.path: requires loopBackTo")
+        if loop_check.get("schema"):
+            fail(f"{prefix} loopCheck.schema: requires loopBackTo")
+        if on_exhausted:
+            fail(f"{prefix} onExhausted: requires loopBackTo")
 
     if loop_check.get("path"):
         required_paths = {
@@ -1223,6 +1300,7 @@ def build_effective_metadata(todo: dict, stage: dict) -> dict:
         "loopBackTo": as_text((stage or {}).get("loopBackTo", "")),
         "maxIterations": (stage or {}).get("maxIterations", ""),
         "loopCheck": normalize_loop_check((stage or {}).get("loopCheck", {})),
+        "onExhausted": as_text((stage or {}).get("onExhausted", "")),
         "planFile": plan_file,
     }
 
@@ -1236,19 +1314,50 @@ def build_orch_stage(stage: dict, stage_todos: list) -> dict:
         value = as_text(stage.get(key, ""))
         if value:
             out[key] = value
+    if stage.get("grader") is True:
+        out["grader"] = True
+        rubric = as_text(stage.get("rubric", ""))
+        if rubric:
+            out["rubric"] = rubric
+    router = stage.get("router")
+    if isinstance(router, dict) and router:
+        out_router = {}
+        allowed = [as_text(item) for item in router.get("allowedTargets", []) if as_text(item)]
+        if allowed:
+            out_router["allowedTargets"] = allowed
+        terminal = [as_text(item) for item in router.get("terminalOutcomes", []) if as_text(item)]
+        if terminal:
+            out_router["terminalOutcomes"] = terminal
+        default_target = as_text(router.get("defaultTarget", ""))
+        if default_target:
+            out_router["defaultTarget"] = default_target
+        on_invalid = as_text(router.get("onInvalid", ""))
+        if on_invalid:
+            out_router["onInvalid"] = on_invalid
+        if out_router:
+            out["router"] = out_router
     produces = raw_artifacts(stage.get("produces", []))
     if produces:
-        out["outputArtifacts"] = [{"path": item["path"], "required": item["required"]} for item in produces]
-        out["artifacts"] = [{"path": item["path"], "required": item["required"]} for item in produces]
+        out["outputArtifacts"] = produces
+        out["artifacts"] = produces
     requires = raw_artifacts(stage.get("requires", []))
     if requires:
-        out["inputArtifacts"] = [{"path": item["path"]} for item in requires]
+        out["inputArtifacts"] = [
+            {key: value for key, value in item.items() if key in {"path", "schema", "required"}}
+            for item in requires
+        ]
     loop_back = as_text(stage.get("loopBackTo", ""))
     if loop_back:
         loop_control = {"loopBackTo": loop_back}
         max_iterations = stage.get("maxIterations", "")
         if isinstance(max_iterations, int):
             loop_control["maxIterations"] = max_iterations
+        loop_check = normalize_loop_check(stage.get("loopCheck", {}))
+        if loop_check.get("schema"):
+            loop_control["evaluatorSchema"] = loop_check["schema"]
+        on_exhausted = as_text(stage.get("onExhausted", ""))
+        if on_exhausted:
+            loop_control["onExhausted"] = on_exhausted
         out["loopControl"] = loop_control
     plan_file = as_text(stage.get("planFile", ""))
     if plan_file:

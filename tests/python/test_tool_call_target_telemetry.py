@@ -15,6 +15,7 @@ from tool_call_target_telemetry import (  # noqa: E402
     analyze_result_windowing_log,
     optimization_hint_line,
     stored_result_readback_guidance,
+    _shell_status_poll_count,
 )
 
 
@@ -197,6 +198,79 @@ class TestToolCallTargetTelemetry(unittest.TestCase):
         self.assertGreater(stats["gross_readback_bytes"] / stats["envelope_original_bytes"], 1.0)
         self.assertEqual(stats["net_consumed_bytes"], 1000)
         self.assertEqual(stats["effective_windowing_savings_rate"], 0.0)
+
+    def test_shell_status_poll_count_zero_when_no_tool_calls_by_tool(self) -> None:
+        self.assertEqual(_shell_status_poll_count({}), 0)
+        self.assertEqual(_shell_status_poll_count({"tool_calls_by_tool": None}), 0)
+
+    def test_shell_status_poll_count_zero_below_threshold(self) -> None:
+        usage = {
+            "tool_calls_by_tool": {
+                "ralph_proxy_shell_status": 2,
+                "ralph_proxy_shell_wait": 0,
+                "ralph_proxy_shell_start": 0,
+            }
+        }
+        self.assertEqual(_shell_status_poll_count(usage), 0)
+
+    def test_shell_status_poll_count_zero_when_proportional(self) -> None:
+        usage = {
+            "tool_calls_by_tool": {
+                "ralph_proxy_shell_status": 6,
+                "ralph_proxy_shell_wait": 3,
+                "ralph_proxy_shell_start": 0,
+            }
+        }
+        self.assertEqual(_shell_status_poll_count(usage), 0)
+
+    def test_shell_status_poll_count_positive_when_excessive(self) -> None:
+        usage = {
+            "tool_calls_by_tool": {
+                "ralph_proxy_shell_status": 10,
+                "ralph_proxy_shell_wait": 1,
+                "ralph_proxy_shell_start": 0,
+            }
+        }
+        self.assertEqual(_shell_status_poll_count(usage), 8)
+
+    def test_shell_status_poll_count_ignores_mcp_prefixed_names(self) -> None:
+        usage = {
+            "tool_calls_by_tool": {
+                "mcp__ralph__ralph_proxy_shell_status": 10,
+                "mcp__ralph__ralph_proxy_shell_wait": 1,
+            }
+        }
+        self.assertEqual(_shell_status_poll_count(usage), 8)
+
+    def test_optimization_hint_line_includes_shell_status_poll_guidance(self) -> None:
+        usage = {
+            "adjacent_duplicate_tool_calls": 0,
+            "repeated_read_extra_calls": 0,
+            "plan_file_read_calls": 0,
+            "cache_read_per_tool_turn": 0,
+            "tool_calls_by_tool": {
+                "ralph_proxy_shell_status": 10,
+                "ralph_proxy_shell_wait": 1,
+            },
+        }
+        hint = optimization_hint_line(usage)
+        self.assertIn("shell_status poll", hint)
+        self.assertIn("shell_wait", hint)
+        self.assertIn("runner-owned verification", hint)
+
+    def test_optimization_hint_line_no_shell_status_when_proportional(self) -> None:
+        usage = {
+            "adjacent_duplicate_tool_calls": 0,
+            "repeated_read_extra_calls": 0,
+            "plan_file_read_calls": 0,
+            "cache_read_per_tool_turn": 0,
+            "tool_calls_by_tool": {
+                "ralph_proxy_shell_status": 4,
+                "ralph_proxy_shell_wait": 2,
+            },
+        }
+        hint = optimization_hint_line(usage)
+        self.assertNotIn("shell_status poll", hint)
 
 
 if __name__ == "__main__":

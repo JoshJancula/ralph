@@ -143,6 +143,25 @@ def test_opencode_cache_key_injected_env_var_true(tmp_path: Path):
     assert invocation["opencode_cache_key_injected"] is True
 
 
+def test_usage_record_writes_canonical_fields(tmp_path: Path):
+    plan_key = "canonical-fields-fixture"
+    workspace_root = tmp_path / "workspace"
+    doc = _run_usage_record(
+        tmp_path,
+        plan_key,
+        start="2026-01-01T00:01:00Z",
+        end="2026-01-01T00:03:00Z",
+        workspace_root=workspace_root,
+    )
+    assert doc["schema_version"] == 2
+    invocation = doc["invocations"][0]
+    assert invocation["uncached_input_tokens"] == 100
+    assert invocation["total_input_tokens"] == 120
+    assert invocation["cache_efficiency_ratio"] == round(0 / 120, 4)
+    assert invocation["measurement_source"]["uncached_input_tokens"] == "measured"
+    assert invocation["measurement_source"]["cache_read_input_tokens"] == "measured"
+
+
 def test_opencode_cache_key_injected_env_var_absent(tmp_path: Path):
     plan_key = "opencode-cache-key-injected-absent"
     workspace_root = tmp_path / "workspace"

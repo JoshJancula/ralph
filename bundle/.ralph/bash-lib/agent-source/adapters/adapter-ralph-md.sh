@@ -170,10 +170,12 @@ agent_adapter_ralph_md_to_config_json() {
     fi
   fi
 
-  local description model max_budget rules skills artifacts allowed_tools mcp_servers
+  local description model max_budget reasoning_effort version rules skills artifacts allowed_tools mcp_servers
   description="$(agent_source_fm_scalar "$canonical_abs" "description")"
   model="$(agent_source_fm_model "$canonical_abs" "$runtime")"
   max_budget="$(agent_source_fm_scalar "$canonical_abs" "max_budget_usd")"
+  reasoning_effort="$(agent_source_fm_scalar "$canonical_abs" "reasoning_effort")"
+  version="$(agent_source_fm_scalar "$canonical_abs" "version")"
 
   local list_key="rules"
   if [[ "$runtime" == "antigravity" ]]; then
@@ -198,6 +200,12 @@ agent_adapter_ralph_md_to_config_json() {
     printf '  "model": %s,\n' "$(agent_source_json_string "$model")"
     if [[ -n "$max_budget" ]]; then
       printf '  "max_budget_usd": %s,\n' "$(agent_source_json_string "$max_budget")"
+    fi
+    if [[ -n "$reasoning_effort" ]]; then
+      printf '  "reasoning_effort": %s,\n' "$(agent_source_json_string "$reasoning_effort")"
+    fi
+    if [[ -n "$version" ]]; then
+      printf '  "version": %s,\n' "$(agent_source_json_string "$version")"
     fi
     printf '  "description": %s,\n' "$(agent_source_json_string "$description")"
     printf '  "rules": [\n'

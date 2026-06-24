@@ -124,9 +124,23 @@ agent_source_fm_body() {
 
 agent_source_fm_artifact() {
   local entry="$1"
-  local path required kind to
-  IFS='|' read -r path required kind to <<< "$entry"
-  required="${required:-required}"
+  local path required kind="" to="" provenance=""
+  local -a parts
+  IFS='|' read -ra parts <<< "$entry"
+  path="${parts[0]}"
+  required="${parts[1]:-required}"
+  local i seg
+  for ((i=2; i<${#parts[@]}; i++)); do
+    seg="${parts[i]}"
+    [[ -z "$seg" ]] && continue
+    if [[ "$seg" == provenance=* ]]; then
+      provenance="${seg#provenance=}"
+    elif [[ -z "$kind" ]]; then
+      kind="$seg"
+    elif [[ -z "$to" ]]; then
+      to="$seg"
+    fi
+  done
   kind="${kind:-}"
   to="${to:-}"
 
@@ -142,6 +156,9 @@ agent_source_fm_artifact() {
   fi
   if [[ -n "$to" ]]; then
     printf ', "to": %s' "$(agent_source_json_string "$to")"
+  fi
+  if [[ -n "$provenance" ]]; then
+    printf ', "provenance": %s' "$(agent_source_json_string "$provenance")"
   fi
   printf '}'
 }

@@ -17,6 +17,7 @@ describe('dashboard API metrics summary', () => {
   let originalRalphHome: string | undefined;
   let originalWorkspacesFile: string | undefined;
   let originalXdgConfigHome: string | undefined;
+  let originalPlanWorkspaceRoot: string | undefined;
   let originalCwd: string | undefined;
 
   beforeAll(async () => {
@@ -27,6 +28,7 @@ describe('dashboard API metrics summary', () => {
     originalRalphHome = process.env['RALPH_HOME'];
     originalWorkspacesFile = process.env['RALPH_WORKSPACES_FILE'];
     originalXdgConfigHome = process.env['XDG_CONFIG_HOME'];
+    originalPlanWorkspaceRoot = process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     process.env['RALPH_DASHBOARD_SKIP_LISTEN'] = '1';
   });
 
@@ -36,6 +38,7 @@ describe('dashboard API metrics summary', () => {
     originalCwd = process.cwd();
     tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-metrics-'));
     process.chdir(tempRoot);
+    mkdirSync(join(tempRoot, '.ralph'), { recursive: true });
     mkdirSync(join(tempRoot, '.ralph-workspace', 'logs', 'plan-1'), { recursive: true });
     mkdirSync(join(tempRoot, '.ralph-workspace', 'logs', 'orch-1'), { recursive: true });
     const extraWorkspace = join(tempRoot, 'extra', '.ralph-workspace');
@@ -80,6 +83,7 @@ describe('dashboard API metrics summary', () => {
     delete process.env['RALPH_HOME'];
     delete process.env['RALPH_WORKSPACES_FILE'];
     delete process.env['XDG_CONFIG_HOME'];
+    delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     ({ app } = await import('../src/server'));
   });
 
@@ -133,6 +137,11 @@ describe('dashboard API metrics summary', () => {
       delete process.env['XDG_CONFIG_HOME'];
     } else {
       process.env['XDG_CONFIG_HOME'] = originalXdgConfigHome;
+    }
+    if (originalPlanWorkspaceRoot === undefined) {
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
+    } else {
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = originalPlanWorkspaceRoot;
     }
   });
 

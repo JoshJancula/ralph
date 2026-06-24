@@ -20,6 +20,7 @@ from tool_call_classification import (
     finalize_savings_bucket,
 )
 from tool_call_target_telemetry import analyze_result_windowing_log
+from usage_accounting import aggregate_records
 
 
 def _as_int(value: Any) -> int:
@@ -692,8 +693,24 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
     )
 
     savings_percent = round((saved_bytes / pre_optimization_bytes) * 100, 1) if pre_optimization_bytes > 0 else 0
-    cache_denom = input_tokens + cache_create_tokens + cache_read_tokens
-    cache_hit_ratio = round(cache_read_tokens / cache_denom, 4) if cache_denom > 0 else 0
+    cache_aggregate = aggregate_records(
+        [
+            {
+                "input_tokens": input_tokens,
+                "cache_creation_input_tokens": cache_create_tokens,
+                "cache_read_input_tokens": cache_read_tokens,
+                "output_tokens": session_usage["output_tokens"],
+            }
+        ]
+    )
+    cache_hit_ratio = cache_aggregate["cache_efficiency_ratio"]
+    session_usage.update(
+        {
+            "uncached_input_tokens": cache_aggregate["uncached_input_tokens"],
+            "total_input_tokens": cache_aggregate["total_input_tokens"],
+            "cache_efficiency_ratio": cache_aggregate["cache_efficiency_ratio"],
+        }
+    )
 
     raw_share = (
         round(readback_totals["raw_readback_count"] / readback_totals["readback_count"], 4)

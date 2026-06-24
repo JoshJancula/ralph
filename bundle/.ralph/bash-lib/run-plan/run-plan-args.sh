@@ -173,6 +173,14 @@ ralph_apply_ralph_mode_to_knobs() {
       ;;
   esac
   ralph_apply_mode_compaction_defaults "$mode"
+  if [[ -z "${RALPH_MCP_CONTEXTUAL_SEARCH:-}" ]]; then
+    case "$mode" in
+      ralph|hybrid)
+        RALPH_MCP_CONTEXTUAL_SEARCH=1
+        export RALPH_MCP_CONTEXTUAL_SEARCH
+        ;;
+    esac
+  fi
 }
 
 # Print the run-plan CLI usage summary.
@@ -198,6 +206,8 @@ Common options:
   --select-agent                       Pick a prebuilt agent interactively.
   --non-interactive / --no-interactive  Skip interactive prompts.
   --model <id>                         CLI model id (overrides agent default).
+  --reasoning-effort <low|medium|high|xhigh|max|inherit>
+                                       Portable reasoning effort (overrides agent and stage defaults).
   --claude-bare                        Enable Claude --bare / CLAUDE_PLAN_BARE (default: on; --no-claude-bare or CLAUDE_PLAN_BARE=0 restores CLAUDE.md auto-discovery, auto-memory, and plugin sync).
   --claude-allow-mcp                   In Claude minimal mode, omit empty MCP lockdown so project MCP servers load (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0).
   --no-claude-allow-mcp                Restore default minimal MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1).
@@ -290,6 +300,13 @@ ralph_run_plan_parse_args() {
           ralph_die "Error: --model requires a model id string."
         fi
         PLAN_MODEL_CLI="$2"
+        shift 2
+        ;;
+      --reasoning-effort)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --reasoning-effort requires a value (low, medium, high, xhigh, max, or inherit)."
+        fi
+        PLAN_REASONING_EFFORT_CLI="$2"
         shift 2
         ;;
       --claude-bare)
@@ -641,6 +658,15 @@ ralph_run_plan_parse_args() {
     *) RALPH_PLAN_CLI_RESUME=0 ;;
   esac
   export RALPH_PLAN_SESSION_STRATEGY
+
+  if [[ "${RALPH_GRADER_STAGE:-0}" == "1" ]]; then
+    case "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" in
+      fresh) ;;
+      *)
+        ralph_die "Error: grader stages require sessionStrategy fresh (not resume, reset, or compact)."
+        ;;
+    esac
+  fi
 
   if [[ "$_ralph_session_strategy_env_was_set" == "1" ]]; then
     RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=1

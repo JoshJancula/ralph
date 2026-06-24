@@ -740,6 +740,9 @@ class TestSavingsReport(unittest.TestCase):
                 "cache_read_input_tokens": 150,
                 "prompt_bytes": 960,
                 "tool_calls_total": 24,
+                "uncached_input_tokens": 800,
+                "total_input_tokens": 1000,
+                "cache_efficiency_ratio": 0.15,
             },
             "tool_output_counterfactual": {
                 "hypothetical_without_ralph_bytes": 1900,
@@ -811,3 +814,67 @@ class TestSavingsReport(unittest.TestCase):
             self.assertIn("pre_optimization_bytes", bucket)
             self.assertIn("post_optimization_bytes", bucket)
         self.assertEqual(readback["envelope_original_bytes"], 1000)
+
+    def test_async_shell_polling_findings_detects_excessive_status_calls(self) -> None:
+        invocations = [
+            {
+                "iteration": 1,
+                "runtime": "claude",
+                "tool_calls_by_tool": {
+                    "ralph_proxy_shell_status": 10,
+                    "ralph_proxy_shell_wait": 1,
+                    "ralph_proxy_shell_start": 0,
+                },
+            },
+        ]
+        findings = DISCOVER_REPORT._async_shell_polling_findings(invocations)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["pattern_id"], "repeated_shell_status_polling")
+        self.assertEqual(findings[0]["ralph_proxy_shell_status_calls"], 10)
+        self.assertIn("shell_wait", findings[0]["note"])
+        self.assertIn("runner", findings[0]["note"].lower())
+
+    def test_async_shell_polling_findings_skips_when_proportional(self) -> None:
+        invocations = [
+            {
+                "iteration": 1,
+                "runtime": "claude",
+                "tool_calls_by_tool": {
+                    "ralph_proxy_shell_status": 4,
+                    "ralph_proxy_shell_wait": 2,
+                    "ralph_proxy_shell_start": 0,
+                },
+            },
+        ]
+        findings = DISCOVER_REPORT._async_shell_polling_findings(invocations)
+        self.assertEqual(len(findings), 0)
+
+    def test_async_shell_polling_findings_skips_below_threshold(self) -> None:
+        invocations = [
+            {
+                "iteration": 1,
+                "runtime": "claude",
+                "tool_calls_by_tool": {
+                    "ralph_proxy_shell_status": 2,
+                    "ralph_proxy_shell_wait": 0,
+                },
+            },
+        ]
+        findings = DISCOVER_REPORT._async_shell_polling_findings(invocations)
+        self.assertEqual(len(findings), 0)
+
+    def test_async_shell_polling_findings_in_discover_report_output(self) -> None:
+        invocations = [
+            {
+                "plan_key": "polling_report",
+                "iteration": 1,
+                "runtime": "opencode",
+                "tool_calls_by_tool": {
+                    "ralph_proxy_shell_status": 10,
+                    "ralph_proxy_shell_wait": 1,
+                },
+            },
+        ]
+        findings = DISCOVER_REPORT._async_shell_polling_findings(invocations)
+        self.assertTrue(len(findings) >= 1)
+        self.assertEqual(findings[0]["pattern_id"], "repeated_shell_status_polling")

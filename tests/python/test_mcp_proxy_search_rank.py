@@ -653,6 +653,111 @@ class TestIntegrationEdgeCases(unittest.TestCase):
         self.assertEqual(result, 0)
 
 
+class TestContextualScoring(unittest.TestCase):
+    """Tests for contextual BM25 field boosts."""
+
+    def setUp(self) -> None:
+        self.term_idf = {"normalize": 1.0, "terms": 0.8, "retrieval": 1.2, "eval": 1.0}
+        self.avg_dl = 10.0
+
+    def test_symbol_context_boosts_matching_candidate(self) -> None:
+        from search_context import LineContext
+
+        terms = ["normalize", "terms"]
+        without = search_rank.score_candidate(
+            "bundle/.ralph/python/mcp-proxy-search-rank.py",
+            "    return terms",
+            terms,
+            self.term_idf,
+            self.avg_dl,
+            context=None,
+        )
+        with_ctx = search_rank.score_candidate(
+            "bundle/.ralph/python/mcp-proxy-search-rank.py",
+            "    return terms",
+            terms,
+            self.term_idf,
+            self.avg_dl,
+            context=LineContext(
+                relpath="bundle/.ralph/python/mcp-proxy-search-rank.py",
+                symbol="normalize_terms",
+            ),
+        )
+        self.assertGreater(with_ctx, without)
+
+    def test_heading_context_boosts_doc_candidate(self) -> None:
+        from search_context import LineContext
+
+        terms = ["retrieval", "eval"]
+        without = search_rank.score_candidate(
+            "docs/cookbook-review/04-retrieval-rag.md",
+            "Opportunity: Build a small, checked-in retrieval eval set",
+            terms,
+            self.term_idf,
+            self.avg_dl,
+            context=None,
+        )
+        with_ctx = search_rank.score_candidate(
+            "docs/cookbook-review/04-retrieval-rag.md",
+            "Opportunity: Build a small, checked-in retrieval eval set",
+            terms,
+            self.term_idf,
+            self.avg_dl,
+            context=LineContext(
+                relpath="docs/cookbook-review/04-retrieval-rag.md",
+                heading="Retrieval augmented generation (optimization + evaluation)",
+            ),
+        )
+        self.assertGreater(with_ctx, without)
+
+    def test_output_lines_unchanged_with_contextual_rank(self) -> None:
+        self.old_stdin = sys.stdin
+        self.old_stdout = sys.stdout
+        self.old_argv = sys.argv
+        input_lines = [
+            "file.py:10:def normalize_terms():",
+            "file.py:20:other content",
+        ]
+        sys.stdin = io.StringIO("\n".join(input_lines))
+        sys.stdout = io.StringIO()
+        sys.argv = [
+            "mcp-proxy-search-rank",
+            "--query",
+            "normalize_terms",
+            "--max-results",
+            "2",
+            "--contextual",
+            "0",
+        ]
+        search_rank.main()
+        output = sys.stdout.getvalue().strip().split("\n")
+        sys.stdin = self.old_stdin
+        sys.stdout = self.old_stdout
+        sys.argv = self.old_argv
+        for line in output:
+            self.assertRegex(line, r"^[^:]+:\d+:.+")
+
+
+class TestSearchContext(unittest.TestCase):
+    """Tests for search_context line resolution."""
+
+    def test_nearest_symbol_at_or_before_line(self) -> None:
+        from search_context import nearest_at_or_before
+
+        entries = [(10, "alpha"), (32, "normalize_terms"), (80, "main")]
+        self.assertEqual(nearest_at_or_before(entries, 40), "normalize_terms")
+        self.assertEqual(nearest_at_or_before(entries, 32), "normalize_terms")
+        self.assertEqual(nearest_at_or_before(entries, 5), "")
+
+    def test_contextual_search_enabled_respects_env(self) -> None:
+        from search_context import contextual_search_enabled
+
+        self.assertTrue(contextual_search_enabled("1"))
+        self.assertFalse(contextual_search_enabled("0"))
+        self.assertTrue(contextual_search_enabled(None, ralph_mode="hybrid"))
+        self.assertFalse(contextual_search_enabled(None, ralph_mode="no"))
+
+
 # Import math for IDF tests
 import math
 

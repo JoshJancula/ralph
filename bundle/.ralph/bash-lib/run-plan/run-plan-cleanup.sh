@@ -3,65 +3,8 @@
 # Public interface:
 #   ralph_run_plan_process_teardown_on_exit -- kill agent tree and launcher watchdog
 #   ralph_run_plan_exit_trap_handler -- EXIT trap: finalize usage, teardown, prompt_cleanup_on_exit
-#   ralph_run_plan_interrupt_trap_handler -- INT/TERM trap: finalize usage, teardown, overlay cleanup
+#   ralph_run_plan_interrupt_trap_handler -- INT/TERM/HUP trap: finalize usage, teardown, overlay cleanup
 #   prompt_cleanup_on_exit -- may run cleanup-plan.sh or print the command
-
-# Reap the background agent process tree and stop the launcher-death watchdog.
-# Args: none
-# Returns: 0
-ralph_run_plan_process_teardown_on_exit() {
-  if [[ "${RALPH_LAUNCHER_WATCHDOG_PID:-}" =~ ^[0-9]+$ ]]; then
-    kill "$RALPH_LAUNCHER_WATCHDOG_PID" 2>/dev/null || true
-    wait "$RALPH_LAUNCHER_WATCHDOG_PID" 2>/dev/null || true
-  fi
-  if [[ "${AGENT_PID:-}" =~ ^[0-9]+$ ]]; then
-    # AGENT_PID is a process-group leader; kill the whole group first.
-    if declare -F ralph_kill_process_group >/dev/null 2>&1; then
-      ralph_kill_process_group "$AGENT_PID" 2
-    else
-      kill -TERM -"$AGENT_PID" 2>/dev/null || true
-      sleep 0.5
-      kill -KILL -"$AGENT_PID" 2>/dev/null || true
-    fi
-    sleep 0.2
-    # Fall back to per-PID tree walk if any member escaped the group signal.
-    if kill -0 "$AGENT_PID" 2>/dev/null; then
-      if declare -F ralph_kill_tree_and_reap >/dev/null 2>&1; then
-        ralph_kill_tree_and_reap "$AGENT_PID"
-      elif declare -F ralph_kill_tree >/dev/null 2>&1; then
-        ralph_kill_tree "$AGENT_PID"
-        wait "$AGENT_PID" 2>/dev/null || true
-      fi
-    fi
-  fi
-  ralph_run_plan_async_shell_jobs_teardown
-}
-
-ralph_run_plan_async_shell_jobs_teardown() {
-  local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
-  local root state_file pid status
-  [[ -n "$plan_key" && -n "${WORKSPACE:-}" ]] || return 0
-  [[ "$plan_key" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
-  root="$WORKSPACE/.ralph-workspace/tool-results/$plan_key/shell-jobs"
-  [[ -d "$root" ]] || return 0
-  while IFS= read -r state_file; do
-    [[ -f "$state_file" ]] || continue
-    status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
-    [[ "$status" == "running" ]] || continue
-    pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    if declare -F ralph_kill_tree_and_reap >/dev/null 2>&1; then
-      ralph_kill_tree_and_reap "$pid"
-    elif declare -F ralph_kill_tree >/dev/null 2>&1; then
-      ralph_kill_tree "$pid"
-    else
-      kill -TERM "$pid" 2>/dev/null || true
-      sleep 1
-      kill -KILL "$pid" 2>/dev/null || true
-    fi
-    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
-  done < <(find "$root" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
-}
 
 # Prompt the user for optional cleanup output when the runner exits.
 # Args: none
@@ -125,7 +68,3 @@ ralph_run_plan_interrupt_trap_handler() {
   fi
   exit "$exit_code"
 }
-
-trap ralph_run_plan_exit_trap_handler EXIT
-trap 'ralph_run_plan_interrupt_trap_handler INT' INT
-trap 'ralph_run_plan_interrupt_trap_handler TERM' TERM

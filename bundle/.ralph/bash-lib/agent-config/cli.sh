@@ -86,6 +86,7 @@ Usage: agent-config-tool.sh list <agents_root>
        agent-config-tool.sh context <agents_root> <agent_id> <workspace>
        agent-config-tool.sh required-artifacts <agents_root> <agent_id>
        agent-config-tool.sh allowed-tools <agents_root> <agent_id>   # Claude --allowedTools line or empty
+       agent-config-tool.sh validate-skill <skills_root> <skill_id>
        agent-config-tool.sh downstream-stages <orch_file> <current_stage_id> [artifact_ns]
 EOF
   exit 2

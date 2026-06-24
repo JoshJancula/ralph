@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ref"],
+  "properties": {
+    "ref": {
+      "type": "string",
+      "pattern": ".+"
+    },
+    "excerpt": {
+      "type": "string"
+    }
+  }
+}

@@ -89,6 +89,62 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+write_loop_contract_plan() {
+  local plan_file="$1"
+  local on_exhausted="$2"
+  local schema="$3"
+  cat >"$plan_file" <<EOF
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+      agent: research
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
+          required: true
+    - id: review
+      runtime: codex
+      agent: code-review
+      loopBackTo: research
+      maxIterations: 2
+      onExhausted: $on_exhausted
+      loopCheck:
+        path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.json
+        schema: $schema
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.md
+          required: true
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.json
+          required: true
+---
+EOF
+}
+
+@test "validate-plan accepts loopCheck.schema and onExhausted" {
+  plan_file="$TEST_TMPDIR/loop-contract.plan.md"
+  write_loop_contract_plan "$plan_file" "proceed" "bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan rejects an invalid onExhausted value" {
+  plan_file="$TEST_TMPDIR/loop-contract-bad.plan.md"
+  write_loop_contract_plan "$plan_file" "maybe" "bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"onExhausted"* ]]
+}
+
+@test "validate-plan rejects an absolute loopCheck.schema path" {
+  plan_file="$TEST_TMPDIR/loop-contract-abs.plan.md"
+  write_loop_contract_plan "$plan_file" "proceed" "/etc/passwd"
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"loopCheck.schema"* ]]
+}
+
 @test "validate-plan rejects a TODO referencing an unknown stage" {
   plan_file="$TEST_TMPDIR/unknown-stage.plan.md"
   cat <<'EOF' >"$plan_file"

@@ -952,6 +952,9 @@ ralph_run_plan_invoke_codex() {
 
   run_plan_invoke_codex_native_hooks_prepare
 
+  local -a _codex_structured_output_args=()
+  run_plan_invoke_common_add_structured_output_flag _codex_structured_output_args codex "${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}"
+
   run_plan_invoke_codex_cli() {
     local cli="${CODEX_PLAN_CLI:-${CURSOR_PLAN_CLI:-codex}}"
     local sandbox="${CODEX_PLAN_SANDBOX:-workspace-write}"
@@ -985,6 +988,13 @@ ralph_run_plan_invoke_codex() {
     local model="${CODEX_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}"
     if [[ -n "$model" && "$model" != "auto" ]]; then
       args+=(--model "$model")
+    fi
+
+    if ! run_plan_invoke_common_add_reasoning_effort_flag args codex "$cli"; then
+      return 1
+    fi
+    if ((${#_codex_structured_output_args[@]} > 0)); then
+      args+=("${_codex_structured_output_args[@]}")
     fi
 
     local global_runtime_root=""
@@ -1063,7 +1073,11 @@ ralph_run_plan_invoke_codex() {
     cd "$WORKSPACE" || {
       return 1
     }
-    exec "$cli" "${args[@]}"
+    local cli_pid
+    "$cli" "${args[@]}" &
+    cli_pid=$!
+    run_plan_invoke_common_record_cli_pid "$cli_pid"
+    wait "$cli_pid"
   }
 
   run_plan_invoke_common_execute \

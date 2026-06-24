@@ -63,6 +63,89 @@ EOF
   chmod +x "$BIN_DIR/$name"
 }
 
+run_plan_invoke_test_setup_pid_sidecar() {
+  export RALPH_PLAN_INVOCATION_CLI_PID_FILE="$TEST_TMPDIR/cli-pid.sidecar"
+  rm -f "$RALPH_PLAN_INVOCATION_CLI_PID_FILE"
+}
+
+run_plan_invoke_test_write_live_pid_stub() {
+  local name="$1"
+  local record="$2"
+  local pid_marker="$3"
+  local exit_code="${4:-0}"
+  local stdin_capture="${5:-}"
+  local extra_lines="${6:-}"
+
+  cat >"$BIN_DIR/$name" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >>"$record"
+if [[ -n "\${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" ]]; then
+  recorded="\$(cat "\$RALPH_PLAN_INVOCATION_CLI_PID_FILE" 2>/dev/null || true)"
+  if [[ "\$recorded" == "\$\$" ]] && kill -0 "\$\$" 2>/dev/null; then
+    echo live_pid_ok >"$pid_marker"
+  fi
+fi
+EOF
+  if [[ -n "$stdin_capture" ]]; then
+    echo "cat >\"$stdin_capture\"" >>"$BIN_DIR/$name"
+  fi
+  if [[ -n "$extra_lines" ]]; then
+    echo "$extra_lines" >>"$BIN_DIR/$name"
+  fi
+  printf '\nexit %s\n' "$exit_code" >>"$BIN_DIR/$name"
+  chmod +x "$BIN_DIR/$name"
+}
+
+run_plan_invoke_test_write_live_pid_codex_stub() {
+  local record="$1"
+  local pid_marker="$2"
+  local exit_code="${3:-0}"
+
+  cat >"$BIN_DIR/codex" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "mcp" && "\${2:-}" == "--help" ]]; then
+  cat <<'MCP_HELP'
+Manage external MCP servers for Codex
+
+Usage: codex mcp [OPTIONS] <COMMAND>
+
+Commands:
+  list
+  get
+  add
+  remove
+  login
+  logout
+  help
+MCP_HELP
+  exit 0
+fi
+
+if [[ "\$1" == "exec" && "\${2:-}" == "--help" ]]; then
+  cat <<'EXEC_HELP'
+Run Codex non-interactively
+
+Options:
+  -c, --config <key=value>
+      Override a configuration value that would otherwise be loaded from ~/.codex/config.toml.
+      --strict-config
+EXEC_HELP
+  exit 0
+fi
+
+printf '%s\n' "\$@" >>"$record"
+printf 'cwd=%s\n' "\$(pwd)" >>"$record"
+if [[ -n "\${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" ]]; then
+  recorded="\$(cat "\$RALPH_PLAN_INVOCATION_CLI_PID_FILE" 2>/dev/null || true)"
+  if [[ "\$recorded" == "\$\$" ]] && kill -0 "\$\$" 2>/dev/null; then
+    echo live_pid_ok >"$pid_marker"
+  fi
+fi
+exit $exit_code
+EOF
+  chmod +x "$BIN_DIR/codex"
+}
+
 run_plan_invoke_test_write_codex_stub() {
   local record="$1"
 

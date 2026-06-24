@@ -249,7 +249,7 @@ def tool_family(tool_name: str) -> str:
     if lower.startswith("ralph_proxy_") or "ralph_proxy" in lower:
         if "read" in lower or "result_read" in lower:
             return "read"
-        if any(token in lower for token in ("grep", "glob", "search", "result_search", "result_summary")):
+        if any(token in lower for token in ("grep", "glob", "search", "result_search", "result_summary", "result_reduce")):
             return "search"
         if "shell" in lower:
             return "shell"
@@ -494,6 +494,10 @@ SEQUENCE_ANTIPATTERN_RECOMMENDATIONS = {
         "Prefer ralph_proxy_grep then ralph_proxy_read in one ralph_proxy_batch call "
         "(max {max_ops} operations per call)"
     ),
+    "repeated_shell_status_polling": (
+        "Prefer ralph_proxy_shell_wait to block server-side, or declare verification "
+        "commands in TODO metadata so the runner executes them out-of-process"
+    ),
 }
 
 
@@ -502,6 +506,37 @@ def sequence_antipattern_recommendation(pattern_id: str) -> str:
     if not template:
         return ""
     return template.format(max_ops=_batch_max_operations())
+
+
+_SHELL_STATUS_POLL_MIN_CALLS = 3
+_SHELL_STATUS_POLL_RATIO = 2
+
+
+def _shell_status_poll_count(usage: Mapping[str, Any]) -> int:
+    """Return excess shell_status poll count above the expected wait+start baseline.
+
+    Returns 0 when polling is proportional to shell_wait/start usage or below
+    the minimum threshold, matching the discover-report detection logic.
+    """
+    by_tool = usage.get("tool_calls_by_tool")
+    if not isinstance(by_tool, Mapping):
+        return 0
+    status_calls = 0
+    wait_calls = 0
+    start_calls = 0
+    for name, count in by_tool.items():
+        lower = (str(name or "")).strip().lower()
+        if "ralph_proxy_shell_status" in lower:
+            status_calls += int(count or 0)
+        elif "ralph_proxy_shell_wait" in lower:
+            wait_calls += int(count or 0)
+        elif "ralph_proxy_shell_start" in lower:
+            start_calls += int(count or 0)
+    if status_calls < _SHELL_STATUS_POLL_MIN_CALLS:
+        return 0
+    if status_calls <= (wait_calls + start_calls) * _SHELL_STATUS_POLL_RATIO:
+        return 0
+    return status_calls - (wait_calls + start_calls) * _SHELL_STATUS_POLL_RATIO
 
 
 def optimization_hint_line(usage: Mapping[str, Any]) -> str:
@@ -558,10 +593,13 @@ def optimization_hint_line(usage: Mapping[str, Any]) -> str:
             f"{sequence_counts['repeated_result_read']} repeated result_read call(s)"
         )
     readback_guidance = stored_result_readback_guidance(readback_stats)
+    shell_status_poll_count = _shell_status_poll_count(usage)
     if plan_reads > 0:
         parts.append(f"{plan_reads} plan file read(s)")
     if cache_read_per_turn > threshold:
         parts.append(f"{int(round(cache_read_per_turn))} cache-read tokens/turn")
+    if shell_status_poll_count > 0:
+        parts.append(f"{shell_status_poll_count} excess shell_status poll(s)")
 
     guidance: List[str] = []
     if (
@@ -577,6 +615,10 @@ def optimization_hint_line(usage: Mapping[str, Any]) -> str:
         guidance.append(f"context bloat exceeds {threshold} tokens/turn; trim context or reduce tool turns")
     if readback_guidance:
         guidance.append(readback_guidance)
+    if shell_status_poll_count > 0:
+        guidance.append(
+            "prefer ralph_proxy_shell_wait or runner-owned verification over repeated shell_status polls"
+        )
 
     if not parts:
         return ""

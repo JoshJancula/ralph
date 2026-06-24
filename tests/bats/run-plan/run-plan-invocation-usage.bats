@@ -25,11 +25,14 @@ import json
 with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
     doc = json.load(fh)
 assert doc["kind"] == "plan_invocation_usage_history"
+assert doc["schema_version"] == 2
 assert len(doc["invocations"]) == 2
 assert doc["invocations"][0]["iteration"] == 1
 assert doc["invocations"][1]["iteration"] == 2
 assert doc["invocations"][1]["max_turn_total_tokens"] == 500
-assert doc["invocations"][1]["cache_hit_ratio"] == 0.75
+assert doc["invocations"][1]["cache_hit_ratio"] == round(2 / 13, 4)
+assert doc["invocations"][0]["cache_efficiency_ratio"] == round(1 / 11, 4)
+assert "measurement_source" in doc["invocations"][0]
 assert doc["invocations"][0]["prompt_bytes"] == 0
 assert doc["invocations"][0]["todo_bytes"] == 0
 assert doc["invocations"][0]["todo_continuation_lines"] == 0
@@ -53,7 +56,6 @@ PY
 
   rm -rf "$tmpdir"
 }
-
 @test "invocation usage history records token reduction diagnostics" {
   [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
 
@@ -320,7 +322,7 @@ assert proc.returncode == 0, proc.stderr.decode()
 with open(usage_file) as fh:
     d = json.load(fh)
 
-assert d == {
+expected = {
     "input_tokens": 76268,
     "output_tokens": 1040,
     "cache_creation_input_tokens": 600,
@@ -351,7 +353,13 @@ assert d == {
     "repeated_read_extra_calls": 0,
     "plan_file_read_calls": 0,
     "completion_sentinel_seen": False,
-}, d
+}
+for key, value in expected.items():
+    assert d.get(key) == value, f"{key}: {d.get(key)!r} != {value!r}"
+assert d.get("uncached_input_tokens") == 76268
+assert d.get("total_input_tokens") == 92868
+assert d.get("cache_efficiency_ratio") == round(16000 / 92868, 4)
+assert isinstance(d.get("measurement_source"), dict)
 print("opencode demux assertions passed")
 PY
 
@@ -893,7 +901,7 @@ assert proc.returncode == 0, proc.stderr.decode()
 with open(usage_file) as fh:
     d = json.load(fh)
 
-assert d == {
+expected = {
     "input_tokens": 100,
     "output_tokens": 40,
     "cache_creation_input_tokens": 9,
@@ -930,7 +938,13 @@ assert d == {
     "repeated_read_extra_calls": 0,
     "plan_file_read_calls": 0,
     "completion_sentinel_seen": False,
-}, d
+}
+for key, value in expected.items():
+    assert d.get(key) == value, f"{key}: {d.get(key)!r} != {value!r}"
+assert d.get("uncached_input_tokens") == 100
+assert d.get("total_input_tokens") == 124
+assert d.get("cache_efficiency_ratio") == round(15 / 124, 4)
+assert isinstance(d.get("measurement_source"), dict)
 print("cursor demux assertions passed")
 PY
 
@@ -1049,5 +1063,113 @@ PY
 
   [ "$status" -eq 0 ]
   [[ "$output" == "detected:rate_limited" ]]
+  rm -rf "$tmpdir"
+}
+
+@test "fresh prompt Rules block in source file contains escaped backticks" {
+  # Locate the fresh Rules verification-ownership line by content (robust to line
+  # shifts). Escaped backticks here prevent command substitution when the
+  # double-quoted PROMPT string is assembled.
+  local start_line next_line
+  start_line="$(grep -nF 'do not rerun those commands through agent-side \`ralph_proxy_shell_start\`' "$CORE_FILE" | head -1 | cut -d: -f1)"
+  [ -n "$start_line" ]
+  next_line=$(( start_line + 1 ))
+
+  sed -n "${start_line}p" "$CORE_FILE" | grep -c 'verify:' | grep -qv '^0$'
+  sed -n "${start_line}p" "$CORE_FILE" | grep -qF '\`verify:\'
+  sed -n "${start_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_'
+  sed -n "${next_line}p" "$CORE_FILE" | grep -qF '\`verification:\'
+  sed -n "${next_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_'
+}
+
+@test "fresh completion rules block executes without command substitution errors" {
+  local tmpdir funcs output
+  tmpdir="$(mktemp -d)"
+  funcs="$tmpdir/funcs.sh"
+  sed -n '/^ralph_run_plan_fresh_completion_rules_block() {/,/^}$/p' "$CORE_FILE" >"$funcs"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    ralph_run_plan_fresh_completion_rules_block 42 /tmp/pending.txt 1
+  ' _ "$funcs"
+
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  [[ "$output" == *"completion footer"* ]] || [[ "$output" == *"TODO"* ]]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history records continuation summary telemetry from env" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
+
+  local tmpdir core_lib funcs usage_file
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+
+  run bash -c '
+    set -euo pipefail
+    sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
+    SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$1")")")"
+    source "$2"
+    export RALPH_CONTINUATION_SUMMARY_BYTES=1200
+    export RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT=2
+    export RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT=1
+    _ralph_append_invocation_usage_history "$3" 1 "m1" "cursor" 3 10 20 0 1 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:03Z" "plan-1" "" "fresh" "12" "2" "0"
+    python3 - <<PY
+import json
+with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+record = doc["invocations"][0]
+assert record["continuation_summary_bytes"] == 1200
+assert record["continuation_summary_entry_count"] == 2
+assert record["continuation_summary_truncation_count"] == 1
+PY
+  ' _ "$core_lib" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history records speculative cache warm separately" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
+
+  local tmpdir core_lib funcs usage_file
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+
+  run bash -c '
+    set -euo pipefail
+    sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
+    SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$1")")")"
+    source "$2"
+    export RALPH_USAGE_INVOCATION_KIND=speculative_cache_warm
+    _ralph_append_invocation_usage_history "$3" 2 "m1" "claude" 1 1000 1 900 0 0 0 "2026-04-17T00:00:10Z" "2026-04-17T00:00:11Z" "plan-1" "" "speculative_cache_warm" "20" "2" "0"
+    unset RALPH_USAGE_INVOCATION_KIND
+    _ralph_append_invocation_usage_history "$3" 2 "m1" "claude" 30 500 200 0 100 0 0.2 "2026-04-17T00:00:12Z" "2026-04-17T00:00:42Z" "plan-1" "" "fresh" "21" "3" "1"
+    python3 - <<PY
+import json
+with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+assert len(doc["invocations"]) == 2
+warm = doc["invocations"][0]
+productive = doc["invocations"][1]
+assert warm["invocation_kind"] == "speculative_cache_warm"
+assert productive.get("invocation_kind") is None
+assert warm["output_tokens"] == 1
+assert productive["output_tokens"] == 200
+assert warm["session_strategy"] == "speculative_cache_warm"
+assert productive["session_strategy"] == "fresh"
+PY
+  ' _ "$core_lib" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
   rm -rf "$tmpdir"
 }

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "cookbook_offline_e2e_fixture",
+  "description": "Integrated offline scenario for Tier 1 through Tier 3 cookbook features without a live model.",
+  "workspace_root": "tests/fixtures/cookbook-roadmap/offline-e2e/workspace",
+  "search_fixture_root": "tests/fixtures/mcp-proxy/search-ranking",
+  "prompt_order": {
+    "runtime": "cursor",
+    "stable_block": "STABLE agent context block for offline e2e",
+    "volatile_todo": "Complete exactly this TODO and nothing else:\n\n**TODO (line 3):** Wire the handler",
+    "expect_stable_first": true
+  },
+  "continuation": {
+    "plan_key": "offline-e2e",
+    "plan_path": "PLAN.md",
+    "seed_state_path": "continuation-seed.json",
+    "expect_markdown_contains": [
+      "Continuation summary",
+      "Wire the handler",
+      "TODO_COMPLETION: COMPLETE"
+    ]
+  },
+  "compact_tool_search": {
+    "query": "glob files pattern",
+    "expect_top_tool": "ralph_proxy_glob"
+  },
+  "contextual_retrieval": {
+    "workspace_handler": "tests/fixtures/cookbook-roadmap/offline-e2e/workspace/lib/handler.py",
+    "query": "handle_request validates input"
+  },
+  "evaluator_loopback": {
+    "artifact_path": "evaluator-changes-required.json",
+    "schema_path": "bundle/.ralph/schemas/evaluator-verdict.schema.json",
+    "source_stage": "code-review",
+    "iteration": "1",
+    "expect_feedback_order": [
+      "Add unit test for handler",
+      "Document env gate in ENVIRONMENT.md"
+    ]
+  }
+}

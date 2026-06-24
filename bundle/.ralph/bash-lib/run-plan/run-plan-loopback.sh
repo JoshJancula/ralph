@@ -257,6 +257,10 @@ ralph_run_plan_loopback_check_and_handle() {
   loop_check_path=$(printf '%s' "$metadata_json" | python3 -c "import json, sys; d=json.load(sys.stdin); print(d.get('loopCheck', {}).get('path', ''))" 2>/dev/null || true)
   max_iterations=$(printf '%s' "$metadata_json" | python3 -c "import json, sys; d=json.load(sys.stdin); print(d.get('maxIterations', ''))" 2>/dev/null || true)
 
+  local loop_check_schema on_exhausted
+  loop_check_schema=$(printf '%s' "$metadata_json" | python3 -c "import json, sys; d=json.load(sys.stdin); print(d.get('loopCheck', {}).get('schema', ''))" 2>/dev/null || true)
+  on_exhausted=$(printf '%s' "$metadata_json" | python3 -c "import json, sys; d=json.load(sys.stdin); print(d.get('onExhausted', ''))" 2>/dev/null || true)
+
   if [[ -z "$loop_back_to" || -z "$loop_check_path" || -z "$max_iterations" ]]; then
     return 0
   fi
@@ -271,8 +275,16 @@ ralph_run_plan_loopback_check_and_handle() {
     return 1
   fi
 
+  # Resolve an evaluator schema (project-root-relative) when declared. When present
+  # and the JSON-contract gate is enabled, the artifact is parsed only as validated
+  # JSON; otherwise the legacy REVIEW_STATUS markdown parser is used.
+  local loop_check_schema_abs=""
+  if [[ -n "$loop_check_schema" ]]; then
+    loop_check_schema_abs="$(ralph_run_plan_artifact_abs_path "$(expand_artifact_tokens "$loop_check_schema")")"
+  fi
+
   local status
-  if ! status="$(ralph_extract_review_status "$loop_check_abs_path" 2>/dev/null)"; then
+  if ! status="$(ralph_extract_review_status_with_schema "$loop_check_abs_path" "$loop_check_schema_abs" 2>/dev/null)"; then
     status="${status:-missing_status}"
     ralph_run_plan_log "ERROR: invalid loop-check artifact for stage=$source_stage path=$resolved_loop_check_path status=$status"
     echo "Error: loop-check artifact invalid for stage '$source_stage' at path '$resolved_loop_check_path' (status: $status)" >&2
@@ -291,8 +303,13 @@ ralph_run_plan_loopback_check_and_handle() {
       fi
 
       if (( current_iterations >= max_iterations )); then
-        ralph_run_plan_log "loopback max iterations reached for stage=$source_stage target=$loop_back_to iterations=$current_iterations max=$max_iterations"
-        return 0
+        ralph_run_plan_log "loopback max iterations reached for stage=$source_stage target=$loop_back_to iterations=$current_iterations max=$max_iterations onExhausted=${on_exhausted:-fail}"
+        if [[ "$on_exhausted" == "proceed" ]]; then
+          echo "loopback exhausted after $current_iterations iteration(s) for stage '$source_stage'; proceeding per onExhausted: proceed" >&2
+          return 0
+        fi
+        echo "Error: loopback exhausted after $current_iterations iteration(s) for stage '$source_stage' (maxIterations=$max_iterations); review still requires changes" >&2
+        return 1
       fi
 
       local incremented_count
@@ -300,6 +317,29 @@ ralph_run_plan_loopback_check_and_handle() {
         return 1
       fi
       ralph_run_plan_log "loopback changes-required for stage=$source_stage target=$loop_back_to iterations=$incremented_count"
+
+      # Inject reviewer feedback verbatim into the looped-back plan when the
+      # evaluator declared a JSON schema. Failure to inject is non-fatal: the
+      # loop still reopens todos so the work resumes.
+      if [[ -n "$loop_check_schema_abs" ]]; then
+        if ralph_schema_is_rubric_result "$loop_check_schema_abs" && ralph_rubric_grader_enabled 2>/dev/null; then
+          if ralph_rubric_inject_feedback_into_plan \
+            "$plan_path" "$loop_check_abs_path" "$source_stage" "$incremented_count" \
+            "$resolved_loop_check_path" "$loop_check_schema_abs"; then
+            ralph_run_plan_log "loopback injected rubric grader feedback for stage=$source_stage iteration=$incremented_count"
+          else
+            ralph_run_plan_log "WARN: failed to inject rubric grader feedback for stage=$source_stage iteration=$incremented_count"
+          fi
+        elif ralph_evaluator_json_contract_enabled 2>/dev/null; then
+          if ralph_evaluator_inject_feedback_into_plan \
+            "$plan_path" "$loop_check_abs_path" "$source_stage" "$incremented_count" \
+            "$resolved_loop_check_path" "$loop_check_schema_abs"; then
+            ralph_run_plan_log "loopback injected evaluator feedback for stage=$source_stage iteration=$incremented_count"
+          else
+            ralph_run_plan_log "WARN: failed to inject evaluator feedback for stage=$source_stage iteration=$incremented_count"
+          fi
+        fi
+      fi
 
       local reopened
       reopened=$(ralph_run_plan_loopback_reopen_todos_in_range "$plan_path" "$plan_format" "$source_stage" "$loop_back_to" 2>/dev/null || true)

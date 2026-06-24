@@ -309,7 +309,11 @@ ralph_mcp_approvals_finalize() {
 
   request_path="$(ralph_mcp_approvals_request_path "$request_id" 2>/dev/null || true)"
   decision_path="$(ralph_mcp_approvals_decision_path "$request_id" 2>/dev/null || true)"
-  [[ -n "$request_path" && -f "$request_path" ]] && rm -f "$request_path"
+  # Preserve request artifact for escalations so operators (and tests) can
+  # inspect the denied request payload post-finalize.
+  if [[ "$outcome" != "escalated" ]]; then
+    [[ -n "$request_path" && -f "$request_path" ]] && rm -f "$request_path"
+  fi
   [[ -n "$decision_path" && -f "$decision_path" ]] && rm -f "$decision_path"
   return 0
 }

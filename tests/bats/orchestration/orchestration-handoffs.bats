@@ -3,6 +3,7 @@
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$RALPH_LIB_ROOT/error-handling.sh"
 source "$RALPH_LIB_ROOT/orchestrator/orchestrator-handoffs.sh"
+source "$RALPH_LIB_ROOT/review-status.sh"
 
 setup() {
   export RALPH_ARTIFACT_NS="test-ns"
@@ -769,4 +770,217 @@ EOF
 
   # Handoff content should be appended
   grep -q "## Handoff from stage-a" "$plan_file"
+}
+
+@test "ralph_artifact_schema_validation_enabled follows rollout defaults" {
+  unset RALPH_ARTIFACT_SCHEMA_VALIDATION
+  unset RALPH_MODE
+  run ralph_artifact_schema_validation_enabled
+  [ "$status" -eq 1 ]
+
+  export RALPH_MODE=ralph
+  run ralph_artifact_schema_validation_enabled
+  [ "$status" -eq 0 ]
+
+  export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
+  run ralph_artifact_schema_validation_enabled
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_stage_artifact_schemas accepts valid produced JSON" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_ARTIFACT_SCHEMA_VALIDATION=1
+  export RALPH_MODE=no
+  mkdir -p "$WORKSPACE/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json" "$WORKSPACE/schemas/"
+  local artifact_rel=".ralph-workspace/artifacts/test-ns/review.json"
+  mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
+  cat > "$WORKSPACE/$artifact_rel" <<'EOF'
+{"status":"approved","feedback":[]}
+EOF
+  local stage_json
+  stage_json="$(cat <<'EOF'
+{"id":"review","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/review.json","schema":"schemas/evaluator-verdict.schema.json"}]}
+EOF
+)"
+  run verify_stage_artifact_schemas "$WORKSPACE" "$stage_json" "review" "1"
+  [ "$status" -eq 0 ]
+}
+
+@test "verify_stage_artifact_schemas rejects invalid produced JSON" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_ARTIFACT_SCHEMA_VALIDATION=1
+  export RALPH_MODE=no
+  mkdir -p "$WORKSPACE/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json" "$WORKSPACE/schemas/"
+  local artifact_rel=".ralph-workspace/artifacts/test-ns/review.json"
+  mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
+  printf '{"status":"approved"}' > "$WORKSPACE/$artifact_rel"
+  local stage_json
+  stage_json="$(cat <<'EOF'
+{"id":"review","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/review.json","schema":"schemas/evaluator-verdict.schema.json"}]}
+EOF
+)"
+  run verify_stage_artifact_schemas "$WORKSPACE" "$stage_json" "review" "1"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"stage=review"* ]]
+  [[ "$output" == *"artifact=.ralph-workspace/artifacts/test-ns/review.json"* ]]
+  [[ "$output" == *"schema=schemas/evaluator-verdict.schema.json"* ]]
+  [[ "$output" == *"location="* ]]
+}
+
+@test "ralph_artifact_provenance_enabled follows rollout defaults" {
+  unset RALPH_ARTIFACT_PROVENANCE
+  unset RALPH_MODE
+  run ralph_artifact_provenance_enabled
+  [ "$status" -eq 1 ]
+
+  export RALPH_MODE=ralph
+  run ralph_artifact_provenance_enabled
+  [ "$status" -eq 0 ]
+
+  export RALPH_ARTIFACT_PROVENANCE=0
+  run ralph_artifact_provenance_enabled
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_stage_artifact_provenance accepts valid markdown citations" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_ARTIFACT_PROVENANCE=1
+  export RALPH_MODE=no
+  local source_rel="src/provenance-fixture.py"
+  mkdir -p "$WORKSPACE/$(dirname "$source_rel")"
+  printf 'alpha\n' > "$WORKSPACE/$source_rel"
+  local artifact_rel=".ralph-workspace/artifacts/test-ns/research.md"
+  mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
+  printf -- '- cite: %s:1\n' "$source_rel" > "$WORKSPACE/$artifact_rel"
+  local stage_json
+  stage_json="$(cat <<'EOF'
+{"id":"research","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/research.md","provenance":"required"}]}
+EOF
+)"
+  run verify_stage_artifact_provenance "$WORKSPACE" "$stage_json" "research" "1"
+  [ "$status" -eq 0 ]
+}
+
+@test "verify_stage_artifact_provenance rejects missing required citations" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_ARTIFACT_PROVENANCE=1
+  export RALPH_MODE=no
+  local artifact_rel=".ralph-workspace/artifacts/test-ns/research.md"
+  mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
+  printf 'No citations here.\n' > "$WORKSPACE/$artifact_rel"
+  local stage_json
+  stage_json="$(cat <<'EOF'
+{"id":"research","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/research.md","provenance":"required"}]}
+EOF
+)"
+  run verify_stage_artifact_provenance "$WORKSPACE" "$stage_json" "research" "1"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"provenance required"* ]]
+}
+
+@test "verify_stage_artifact_provenance allows optional artifacts without citations" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_ARTIFACT_PROVENANCE=1
+  export RALPH_MODE=no
+  local artifact_rel=".ralph-workspace/artifacts/test-ns/research.md"
+  mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
+  printf 'Legacy artifact without citations.\n' > "$WORKSPACE/$artifact_rel"
+  local stage_json
+  stage_json="$(cat <<'EOF'
+{"id":"research","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/research.md","provenance":"optional"}]}
+EOF
+)"
+  run verify_stage_artifact_provenance "$WORKSPACE" "$stage_json" "research" "1"
+  [ "$status" -eq 0 ]
+}
+
+@test "ralph_evaluator_json_contract_enabled follows rollout defaults" {
+  RALPH_MODE=ralph RALPH_EVALUATOR_JSON_CONTRACT="" run ralph_evaluator_json_contract_enabled
+  [ "$status" -eq 0 ]
+  RALPH_MODE=no RALPH_EVALUATOR_JSON_CONTRACT="" run ralph_evaluator_json_contract_enabled
+  [ "$status" -eq 1 ]
+  RALPH_MODE=no RALPH_EVALUATOR_JSON_CONTRACT=1 run ralph_evaluator_json_contract_enabled
+  [ "$status" -eq 0 ]
+  RALPH_MODE=ralph RALPH_EVALUATOR_JSON_CONTRACT=0 run ralph_evaluator_json_contract_enabled
+  [ "$status" -eq 1 ]
+  RALPH_MODE=ralph RALPH_EVALUATOR_JSON_CONTRACT=bogus run ralph_evaluator_json_contract_enabled
+  [ "$status" -eq 2 ]
+}
+
+@test "ralph_extract_review_status_with_schema parses JSON contract when schema declared" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  printf '%s' '{"status":"changes-required","feedback":["do the thing"]}' > "$WORKSPACE/review.json"
+  run ralph_extract_review_status_with_schema "$WORKSPACE/review.json" "$schema"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "changes-required" ]]
+}
+
+@test "ralph_extract_review_status_with_schema rejects invalid JSON contract" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  printf '%s' '{"status":"changes-required","feedback":[]}' > "$WORKSPACE/review.json"
+  run ralph_extract_review_status_with_schema "$WORKSPACE/review.json" "$schema"
+  [ "$status" -ne 0 ]
+}
+
+@test "ralph_extract_review_status_with_schema falls back to legacy markdown without schema" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  cat > "$WORKSPACE/review.md" <<'EOF'
+<!-- REVIEW_STATUS: START -->
+status: approved
+<!-- REVIEW_STATUS: END -->
+EOF
+  run ralph_extract_review_status_with_schema "$WORKSPACE/review.md" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == "approved" ]]
+}
+
+@test "ralph_evaluator_inject_feedback_into_plan injects verbatim delimited feedback" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  printf '%s' '{"status":"changes-required","feedback":["Fix null deref in foo()","Add regression test"]}' > "$WORKSPACE/review.json"
+  cat > "$WORKSPACE/PLAN.md" <<'EOF'
+# Plan
+
+- [ ] Original task
+EOF
+  run ralph_evaluator_inject_feedback_into_plan "$WORKSPACE/PLAN.md" "$WORKSPACE/review.json" "code-review" "2" "artifacts/review.json" "$schema"
+  [ "$status" -eq 0 ]
+  local content
+  content="$(cat "$WORKSPACE/PLAN.md")"
+  [[ "$content" == *"Original task"* ]]
+  [[ "$content" == *"RALPH_EVALUATOR_FEEDBACK: START"* ]]
+  [[ "$content" == *"Source stage: \`code-review\`"* ]]
+  [[ "$content" == *"Iteration: \`2\`"* ]]
+  [[ "$content" == *"Fix null deref in foo()"* ]]
+  [[ "$content" == *"Add regression test"* ]]
+}
+
+@test "ralph_evaluator_inject_feedback_into_plan replaces a prior feedback block" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  cat > "$WORKSPACE/PLAN.md" <<'EOF'
+# Plan
+
+- [ ] Original task
+EOF
+  printf '%s' '{"status":"changes-required","feedback":["First round item"]}' > "$WORKSPACE/review.json"
+  ralph_evaluator_inject_feedback_into_plan "$WORKSPACE/PLAN.md" "$WORKSPACE/review.json" "code-review" "2" "artifacts/review.json" "$schema"
+  printf '%s' '{"status":"changes-required","feedback":["Second round item"]}' > "$WORKSPACE/review.json"
+  run ralph_evaluator_inject_feedback_into_plan "$WORKSPACE/PLAN.md" "$WORKSPACE/review.json" "code-review" "3" "artifacts/review.json" "$schema"
+  [ "$status" -eq 0 ]
+  local content
+  content="$(cat "$WORKSPACE/PLAN.md")"
+  [[ "$content" == *"Second round item"* ]]
+  [[ "$content" != *"First round item"* ]]
+  # Exactly one feedback block remains.
+  [ "$(grep -c 'RALPH_EVALUATOR_FEEDBACK: START' "$WORKSPACE/PLAN.md")" -eq 1 ]
 }

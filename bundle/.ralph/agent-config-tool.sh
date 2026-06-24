@@ -11,6 +11,9 @@ source "$script_dir/bash-lib/agent-config/parse-json.sh"
 # shellcheck source=bash-lib/agent-config/validate.sh
 source "$script_dir/bash-lib/agent-config/validate.sh"
 
+# shellcheck source=bash-lib/agent-config/skill-package.sh
+source "$script_dir/bash-lib/agent-config/skill-package.sh"
+
 # shellcheck source=bash-lib/agent-config/inline-rules.sh
 source "$script_dir/bash-lib/agent-config/inline-rules.sh"
 
@@ -56,6 +59,16 @@ read_model() {
   echo "$model"
 }
 
+read_reasoning_effort() {
+  local agents_root="$1" agent_id="$2"
+  local cfg
+  cfg="$(load_cfg_path "$agents_root" "$agent_id")"
+  validate_config "$agents_root" "$agent_id" >/dev/null
+  local effort
+  effort="$(agent_config_json_query "$cfg" "reasoning_effort" -r '.reasoning_effort // ""' 2>/dev/null || echo "")"
+  echo "$effort"
+}
+
 
 cmd="${1:-}"
 case "$cmd" in
@@ -70,6 +83,10 @@ case "$cmd" in
   model)
     [[ $# -eq 3 ]] || usage
     read_model "$2" "$3"
+    ;;
+  reasoning-effort)
+    [[ $# -eq 3 ]] || usage
+    read_reasoning_effort "$2" "$3"
     ;;
   context)
     [[ $# -eq 4 ]] || usage
@@ -99,6 +116,10 @@ case "$cmd" in
   mcp-servers)
     [[ $# -eq 3 ]] || usage
     read_mcp_servers "$2" "$3"
+    ;;
+  validate-skill)
+    [[ $# -eq 3 ]] || usage
+    ralph_validate_skill_package "$2/$3" "$3"
     ;;
   *)
     usage

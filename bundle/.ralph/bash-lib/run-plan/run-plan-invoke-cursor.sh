@@ -171,6 +171,7 @@ ralph_run_plan_invoke_cursor() {
 
   local -a args=(-p --force)
   run_plan_invoke_common_add_model_flag args --model
+  run_plan_invoke_common_add_reasoning_effort_flag args cursor "${CURSOR_PLAN_CLI:-cursor-agent}"
   run_plan_invoke_common_add_resume_args \
     args \
     run_plan_invoke_cursor_session_resume_args \
@@ -244,7 +245,11 @@ ralph_run_plan_invoke_cursor() {
   args+=("$PROMPT")
 
   run_plan_invoke_cursor_cli() {
-    "$cli" "${args[@]}"
+    local cli_pid
+    "$cli" "${args[@]}" &
+    cli_pid=$!
+    run_plan_invoke_common_record_cli_pid "$cli_pid"
+    wait "$cli_pid"
   }
 
   local invoke_status=0

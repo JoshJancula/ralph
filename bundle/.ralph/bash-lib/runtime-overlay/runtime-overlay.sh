@@ -357,7 +357,7 @@ for plan_dir in sorted(os.listdir(runtime_config_root)):
                     pid_alive = True
                 except ProcessLookupError:
                     pid_alive = False
-        need_restore = (not pid_alive) or (threshold_seconds >= 0 and start_time and (start_time + threshold_seconds) < now)
+        need_restore = (not pid_alive) or (threshold_seconds >= 0 and start_time and (start_time + threshold_seconds) <= now)
         if not need_restore:
             continue
         success = True

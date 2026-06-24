@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "bm25_rankings_baseline",
+  "fixture_root": "tests/fixtures/mcp-proxy/search-ranking",
+  "queries": {
+    "uniqueZebraHandler": {
+      "ranked_paths": [
+        "handlers/uniqueZebraHandler.ts:1",
+        "common-trap.ts:11"
+      ]
+    },
+    "noop10": {
+      "ranked_paths": [
+        "common-trap.ts:10"
+      ]
+    }
+  }
+}

@@ -341,11 +341,11 @@ cat ".ralph-workspace/logs/<plan-key>/discover-report.json" | jq '.compaction_ev
 
 Declared verification commands (plan frontmatter `verify:`, a TODO `Verify:` line, or `RALPH_VERIFY_AFTER_TODO`) run out-of-process after the model marks a TODO complete, keeping big test output out of the next prompt. Failures reopen the TODO with a compact summary and an artifact path, and the runner already stores the full transcript under `.ralph-workspace/artifacts/<PLAN_KEY>/verification/`. On by default when declared; `RALPH_POST_VERIFY=0` opts out. Variables: [ENVIRONMENT.md](ENVIRONMENT.md#post-todo-verification).
 
-Runner-first policy: long-running verification commands belong in the plan/TODO metadata so the runner executes them out-of-process and keeps their large output out of the next prompt. Resist rerunning those commands through agent-side async loops; `ralph_proxy_shell_start`, `_wait`, and `_status` remain available for exploratory or manual monitoring, but they are not the primary verification loop.
+Runner-first policy: long-running verification commands belong in the plan/TODO metadata so the runner executes them out-of-process and keeps their large output out of the next prompt. Resist rerunning those commands through agent-side async loops; `ralph_proxy_shell_start`, `_wait`, and `_status` are a manual fallback surface for when a human is directly monitoring a job—they are not the primary verification or automation path.
 
 - Prefer plan/TODO verification for every task-completion command so the runner handles the heavy work out-of-process and the next prompt stays focused on remaining TODOs.
-- When rerunning a declared verification command manually, start it with `ralph_proxy_shell_start` and block on completion with `ralph_proxy_shell_wait` (optionally passing `waitSeconds`). Keeping the wait on the proxy server prevents repeated `ralph_proxy_shell_status` polls from flooding the cache.
-- Use `ralph_proxy_shell_start` plus `ralph_proxy_shell_wait` whenever you need to monitor a long exploratory shell job; leave `ralph_proxy_shell_status` as an occasional manual progress check and avoid short-interval polling loops. Inspect output with `ralph_proxy_shell_read` and cancel via `ralph_proxy_shell_cancel` if you must intervene. Treat `shell_wait` as the preferred helper for blocking follow-up work outside verification so `shell_status` can stay a human-initiated spot check rather than the default loop.
+- When rerunning a declared verification command manually, start it with `ralph_proxy_shell_start` and block on completion with `ralph_proxy_shell_wait` (optionally passing `waitSeconds`). The async shell tools are a manual fallback—`shell_wait` is the blocking call only when a human is directly monitoring a job.
+- Treat `ralph_proxy_shell_status` as an occasional manual spot check and never use it as a polling loop. Inspect output with `ralph_proxy_shell_read` and cancel via `ralph_proxy_shell_cancel` if you must intervene.
 
 ## Knowledge tools
 
@@ -356,6 +356,12 @@ The experimental knowledge-graph tools (`ralph_knowledge_*`) are hidden unless t
 **MCP preflight failed / Claude: "Failed to connect: ralph".** Ralph runs an MCP handshake before each `ralph`-mode invocation and exits before the CLI starts if it fails. Check that `jq` is installed, the workspace path is valid, and `.ralph/mcp-server.sh` exists. Manual check: `RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh`. The preflight also rejects a `tools/list` response with a present-but-null `nextCursor`, because Claude Code 2.1.x silently drops every tool from such a server while still reporting it connected. For a true end-to-end check on Claude, `RALPH_MCP_CLI_PREFLIGHT=1` spawns the real CLI and aborts if it never calls a proxy tool.
 
 **Claude says it cannot Edit/Write files.** Claude's `Edit`/`Write` require a prior native `Read` of the file; `ralph_proxy_read` does not satisfy that gate. Ralph keeps native `Read` precisely so edits work. If edits fail, confirm you have not set `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` (read-only plans only).
+
+## Cookbook optimizations (Ralph/hybrid)
+
+Tier 1 through Tier 3 cookbook features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, progressive context, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#cookbook-feature-gates-tier-1-through-tier-3), [docs/cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md), and [docs/cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md).
+
+Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval (`bundle/.ralph/python/retrieval_eval.py`), and tool eval (`bundle/.ralph/python/tool_eval.py`).
 
 **Claude: "incompatible with bare mode".** Unset `CLAUDE_PLAN_BARE` or use `--ralph-mode native`.
 

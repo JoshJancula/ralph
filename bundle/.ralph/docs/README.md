@@ -1,99 +1,119 @@
-# Ralph
+# Ralph documentation
 
-Ralph helps you work with AI coding assistants in an organized way. It supports Cursor, Claude, Codex, OpenCode, and Antigravity. The main entry point is `ralph create plan`: it can scaffold a zero-dependency `classic` markdown checklist or a `yaml` plan with YAML frontmatter. For staged, multi-agent workflows, use `ralph create orc`. When a job is too big for one pass, the orchestration path hands artifacts from one step to the next.
+**Audience:** These pages are human-facing documentation for operators. **AI agents** (Claude Code, Cursor, Codex, OpenCode, and others) should rely on [AGENTS.md](../AGENTS.md) and open a docs page only when AGENTS.md directs them to it.
 
-## In short
+These pages assume you have **installed Ralph into a project** using **`install.sh`** (see **[INSTALL.md](INSTALL.md)** for submodule, subtree, flags, and removal, or the quick start in the main **README**). Unless we say otherwise, paths are from **your project root**: the directory that contains **`.ralph/`**, **`.cursor/`**, and the rest.
 
-| Idea | What it means |
-|------|----------------|
-| **Plan** | `ralph create plan --format classic` creates the zero-dependency markdown checklist path. `ralph create plan --format yaml` creates the YAML-frontmatter TODO queue path. `ralph create orc` creates the staged multi-agent path. |
-| **Runner** | Picks the next open task, runs your assistant, updates the plan, repeats. |
-| **Orchestrator** | Optional multi-stage pipelines with artifact checks between steps across Cursor, Claude, Codex, OpenCode, and Antigravity. |
+Ralph keeps runtime state (logs, artifacts, sessions) under a **state root** that contains **`.ralph-workspace/`** (default: `<project-root>/.ralph-workspace`, overridable via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`). The **agent workspace** (`--agent-workspace` / `RALPH_AGENT_WORKSPACE`) is the sandboxed work tree where assistants read and write project files; it defaults to the directory that invoked `run-plan.sh`. References to `.ralph-workspace` point at the state root, not the project or agent workspace. See [AGENTS.md](../AGENTS.md#three-root-model).
 
-Logs and generated files land under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. Optional dashboard: **`.ralph/ralph-dashboard/`**.
+The installer copies this documentation into **`.ralph/docs/`** in that project. Read it from either place; the content is the same.
 
-## What gets installed
+## Guides
 
-| Folder | Role |
-|--------|------|
-| [.ralph](bundle/.ralph) | Shared scripts (`run-plan.sh`, orchestrator, templates, MCP server, docs copy, optional dashboard) |
-| [.cursor](bundle/.cursor), [.claude](bundle/.claude), [.codex](bundle/.codex), [.opencode](bundle/.opencode), [.agents](bundle/.agents) | Rules, skills, and six **agents** per runtime you install |
+Pick what matches what you are doing. You can read them in any order.
 
-After install, edit **`skills/repo-context/SKILL.md`** under each runtime so assistants know your layout and commands.
-
-## Install
-
-**Primary path — global install** (once per machine, shared configs):
-
-```bash
-git clone https://github.com/JoshJancula/ralph.git /tmp/ralph && /tmp/ralph/install.sh --global && rm -rf /tmp/ralph
-```
-
-Installs Ralph to **`~/.ralph/`**, puts the **`ralph`** command on **`PATH`** (typically `~/.local/bin/ralph`), and shares runtime configs and agents across projects. Projects reference the global install instead of carrying their own `.ralph/` copy. Full details and commands: **[docs/INSTALL.md](docs/INSTALL.md)**.
-
-### Local / in-repo install (alternative)
-
-Use when you want Ralph **committed inside a project** (reviewable `.ralph/`, `.cursor/`, etc.):
-
-```bash
-git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash && ./vendor/ralph/install.sh
-```
-
-Or clone Ralph once and run **`install.sh /path/to/your-repo`**. Submodule and subtree layouts, **`install.sh`** flags, partial installs, uninstall, and a global-vs-local comparison: **[docs/INSTALL.md](docs/INSTALL.md)**.
-
-After install, configure a runtime directory with hooks and MCP for normal IDE sessions (not only plan runs):
-
-```bash
-cd /path/to/your-project
-ralph setup --runtime claude --hooks --mcp          # Claude hooks + project-root .mcp.json
-ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all
-ralph setup --runtime codex --all                   # hooks + .codex/config.toml MCP entry
-ralph setup --runtime opencode --all                # hooks + opencode.json MCP entry
-ralph setup --runtime antigravity --all             # hooks + .agents/mcp_config.json MCP entry
-```
-
-See **[docs/INSTALL.md](docs/INSTALL.md)** (command reference) and **[docs/MCP.md](docs/MCP.md)** / **[docs/TOOLING.md](docs/TOOLING.md)** (runtime-specific paths and caveats).
-
-## Quickstart
-
-1. `ralph create plan --format classic` — use this for the markdown checklist flow.
-2. `.ralph/run-plan.sh --workspace . --plan PLAN.md --runtime cursor` — **`--plan` is required**; use `cursor`, `claude`, `codex`, `opencode`, or `antigravity`.
-3. `ralph create plan --format yaml` — use this for the YAML-frontmatter TODO queue flow.
-4. `ralph create orc` — use this for staged work that routes TODOs and artifacts across multiple agents.
-5. Logs and artifacts appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`** as the runner completes each task. YAML-format runs use the normal plan-runner logs.
-6. Optional dashboard: `cd .ralph/ralph-dashboard && npm ci && npm run build && npm start` (default **http://127.0.0.1:8123**).
-
-**Orchestration:** Multi-stage pipelines run with **`ralph run --plan path/to/pipeline.plan.md`**. Walkthrough: **[docs/orchestrated-ralph-example.md](docs/orchestrated-ralph-example.md)**. Plan loop, human input, and advanced flags: **[docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)**.
-
-**Human input:** The runner uses an **interactive-first flow** -- TTY-attached sessions prompt inline; headless sessions pause and write files under **`.ralph-workspace/sessions/<plan-key>/`** until you provide an answer. Optional `RALPH_HUMAN_ACK_TOOL` lets external bridges intercept questions before the file-poll fallback kicks in.
-
-## Documentation
-
-| Guide | What you get |
+| Guide | What it is for |
 |-------|----------------|
-| [Index](docs/README.md) | Map of all topics and quick reference |
-| [Installation](docs/INSTALL.md) | Global install (recommended), in-repo install, flags, uninstall |
-| [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup |
-| [MCP](docs/MCP.md) | Bash MCP server, host config, third-party MCP |
-| [Tooling (optional)](docs/TOOLING.md) | Ralph mode (`--ralph-mode`: `no`, `native`, `ralph`, `hybrid`; default `no`), shell output compaction, native adapters |
-| [Security](docs/SECURITY.md) | Sandboxing, `.cursorignore`, practical caution, killswitch configuration |
+| [INSTALL.md](INSTALL.md) | Installing Ralph: global install (recommended), in-repo install, `install.sh` flags, uninstall |
+| [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | How `ralph create plan` works across `classic` and `yaml`, how human input behaves (terminal vs offline files), orchestration stages, `loopControl`, cleanup, and copy-paste prompts |
+| [worker-ralph-example.md](worker-ralph-example.md) | One plan, one runtime, end to end: where logs and artifacts go |
+| [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipelines: stage plans, pipeline plan format, running the orchestrator, checking artifacts |
+| [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
+| [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
+| [TOOLING.md](TOOLING.md) | Optional Ralph mode (`--ralph-mode` / `RALPH_MODE`): MCP proxy tools, shell output compaction, native adapters per runtime, overlay cleanup |
+| [cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md) | Tier 1 through Tier 3 cookbook optimization status and feature gates |
+| [cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md) | Migration and compatibility for cookbook features |
+| [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, what it changes on disk, `.cursorignore`, hooks, Codex caveats, killswitch configuration |
+| [BENCHMARKS.md](BENCHMARKS.md) | Token and compaction benchmark report across Ralph optimization paths (run `ralph benchmark`) |
 
-**Further reading:** [Ralph Cursor Guide](https://forum.cursor.com/t/ralph-cursor-guide/149998) | [Ralph Wiggum technique](https://ghuntley.com/ralph/) | [Awesome Claude](https://awesomeclaude.ai/ralph-wiggum)
+## Quick reference
 
-## Be Safe
+- **Open tasks:** `- [ ]` (space inside the brackets). **Done:** `- [x]`. **Not a task:** `- []`.
+- **Plan entry point:** `ralph create plan` scaffolds a single plan. `--format classic` creates the zero-dependency markdown checklist; `--format yaml` creates the flat YAML-frontmatter TODO queue. For a multi-stage pipeline, use `ralph create orc`. Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) are still accepted as aliases for `yaml`.
+- **Run any plan:** `ralph run --plan <path>` auto-detects the format. Classic checklists and flat yaml plans run via `run-plan.sh`; orchestration plans (yaml frontmatter with a `pipeline:` block) run via `orchestrator.sh`.
+- **Saved models:** `ralph models add|list|remove <claude|codex> [id]` (or `.ralph/models.sh`); store at `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json`. See [ENVIRONMENT.md](ENVIRONMENT.md#models).
+- **Orchestration plans:** `ralph create orc` launches the interactive wizard and outputs a yaml `.plan.md` with a `pipeline:` block. Each stage carries inline content or delegates to a separate plan via `planFile:`; both run through `run-plan.sh`.
 
-Ralph can run **many** agent turns without stopping. That is powerful and risky: bad prompts or bugs can change files, run shell commands, or expose disk contents. **[Security](docs/SECURITY.md)** explains what is sandboxed, what is not, and how to harden your workspace.
+## CLI session resume
 
-## Monitor your token usage
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude prebuilt agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
 
-Cost comes from prompt size and growing runtime context. Keep TODOs concrete, prefer partial reads over huge logs, and watch provider billing. Metrics and dashboard details: **[docs/README.md](docs/README.md)**.
+**Enable CLI session resume (pick one):**
 
-## License
+- Set `RALPH_PLAN_SESSION_STRATEGY=resume` (or `reset` or `compact`) before running `.ralph/run-plan.sh`, or pass `--session-strategy resume|reset|compact`.
+- Set `RALPH_PLAN_CLI_RESUME=1` before running `.ralph/run-plan.sh`.
+- Pass `--cli-resume` to the runner command.
+- Answer `yes` when the interactive prompt appears (TTY-attached runs ask unless `RALPH_PLAN_CLI_RESUME`, `--cli-resume`, or `--no-cli-resume` is already provided). Interactive TTY runs also prompt for session strategy choice (fresh/resume/reset/compact) unless already set.
 
-MIT -- see [LICENSE](LICENSE).
+**Session strategy modes:**
 
-## Support Ralph
+- `reset` mode reuses the session ID but prefixes each TODO prompt with a reset command when configured (Claude defaults to `/clear`). Override with `RALPH_PLAN_RESET_COMMAND` globally or `RALPH_PLAN_RESET_COMMAND_<RUNTIME>` per runtime.
+- `compact` mode is similar to `reset` but prefixes a compact-optimized command instead: `/compress` for Cursor (overridable with `RALPH_PLAN_COMPACT_COMMAND_CURSOR`), `/compact` for Codex (`RALPH_PLAN_COMPACT_COMMAND_CODEX`), or `/clear` for Claude (`RALPH_PLAN_RESET_COMMAND_CLAUDE`). OpenCode does not support compact mode; use fresh/resume/reset instead. Override all runtimes with `RALPH_PLAN_COMPACT_COMMAND`.
 
-Please take a moment to [leave a star](https://github.com/JoshJancula/ralph/stargazers) if you found this repository useful.
+**Storage and prerequisites:**
 
-<img src="./public/ralph-coding.jpeg" alt="" />
+- `session-id.<runtime>.txt` lives under `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`, so restarts always read the newest ID for that runtime when they resume.
+- Python 3 is required for `.ralph/python/run-plan-cli-json-demux.py`, the helper that extracts the session ID from the CLI’s JSON demux output. If Python 3 is unavailable, CLI resume is skipped and the plan starts from a fresh session.
+
+**Optional unsafe bare resume:**
+
+In CI or isolated workflows where you trust there will be no session mix-up, you can resume without a stored ID:
+
+- Set `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` or pass `--allow-unsafe-resume` when running `.ralph/run-plan.sh`.
+- The runner attempts to resume without consulting `.ralph-workspace/sessions/.../session-id.<runtime>.txt` (e.g., Codex `--last` semantics).
+- **Warning:** Bare resume without a session ID may attach to the wrong session on a shared box; prefer stored session files when possible.
+
+## Shell output compaction
+
+Ralph summarizes high-volume command output (test runs, git status, build logs, listing commands) to save tokens and context. Compaction is **reversible**: the full original output is stored and retrievable via `ralph_proxy_result_*` tools, so agents can drill down when needed.
+
+**Enable shell output compaction (MCP mode, all runtimes):**
+
+```bash
+# hybrid mode auto-enables RALPH_PROXY_SHELL_COMPACT (Cursor recommended path)
+.ralph/run-plan.sh --runtime cursor --plan PLAN.md --workspace . \
+  --ralph-mode hybrid
+```
+
+With `--ralph-mode ralph` or `--ralph-mode no`, set `RALPH_PROXY_SHELL_COMPACT=1` explicitly before running to enable MCP compaction.
+
+**Enable native Bash output compaction (Claude only):**
+
+```bash
+RALPH_BASH_COMPACT=1 \
+.ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace .
+```
+
+**Supported command families:** `git status`, `git diff`, `bats`, `grep`, `find`, `npm test`, `pytest`, `vitest`, `tsc`, `eslint`, `cargo test`, `go test`, `ls`, `tree`, `docker ps`, `docker logs`, `kubectl`, `gh pr view`, `gh pr list`, and more.
+
+**Supported command families, defaults by mode, and the retrieval workflow:** [TOOLING.md#shell-output-compaction](TOOLING.md#shell-output-compaction).
+
+## Telemetry and usage tracking
+
+Ralph logs token usage, compaction savings, hook telemetry, and other metrics per plan invocation. Usage data lands in:
+
+```
+.ralph-workspace/logs/<plan-key>/invocation-usage.json
+```
+
+Per-run summary: `.ralph-workspace/runtime-config/<plan-key>/summary.json` (includes `native_hooks_effective`, overlay fields, mutation counts).
+
+Plan-aggregate telemetry (discover report): `.ralph-workspace/logs/<plan-key>/discover-report.json` (includes compaction events, missed savings, low-value filters, and optimization opportunities).
+
+These are local run artifacts, not uploaded. Dashboard visualization is optional; metrics are human-readable JSON. More on telemetry: [TOOLING.md#telemetry](TOOLING.md#telemetry).
+
+## Benchmark report
+
+After you have run at least one plan, build the benchmark report from the usage logs:
+
+```
+ralph benchmark                 # print the Markdown report for the current workspace
+ralph benchmark --full          # aggregate across all registered workspaces
+ralph benchmark --format json   # machine-readable report JSON
+ralph benchmark --write-doc     # also regenerate docs/BENCHMARKS.md
+```
+
+It aggregates every `.ralph-workspace/logs/<plan-key>/plan-usage-summary.json` into one report
+(token and compaction figures per optimization path) and is the source for [BENCHMARKS.md](BENCHMARKS.md).
+Under the hood `ralph benchmark` runs `ralph-benchmark-report.py` (aggregate) then
+`render-benchmark-markdown.py` (render) for you; unreadable summaries are skipped with a warning.

@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "criteria", "feedback"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["approved", "changes-required"]
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "satisfied"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "feedback": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

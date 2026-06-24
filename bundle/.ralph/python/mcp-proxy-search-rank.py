@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import math
+import os
 import re
 import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from search_context import LineContext
 
 K1 = 1.2
 B = 0.75
+
+# Context field boosts (applied separately from content; do not mutate returned lines).
+WEIGHT_CONTEXT_PATH = 1.5
+WEIGHT_CONTEXT_SYMBOL = 4.0
+WEIGHT_CONTEXT_HEADING = 3.0
 
 COMMON_TOKENS = frozenset(
     {
@@ -27,6 +39,18 @@ DEF_PATTERNS = [
 ]
 
 IDENT_RE = re.compile(r"[A-Za-z_][\w]*")
+
+
+def _load_search_context_module():
+    script_dir = Path(__file__).resolve().parent
+    module_path = script_dir / "search_context.py"
+    spec = importlib.util.spec_from_file_location("search_context", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def normalize_terms(query: str) -> list[str]:
@@ -73,12 +97,51 @@ def term_frequency(term_lower: str, content_lower: str, tokens: list[str]) -> in
     return 0
 
 
+def _term_match_boost(term: str, text: str, idf: float, *, exact_mult: float, case_mult: float) -> float:
+    boost = 0.0
+    ident_pat = r"(?<![\w])" + re.escape(term) + r"(?![\w])"
+    if re.search(ident_pat, text, re.IGNORECASE):
+        boost += idf * exact_mult
+    if re.search(ident_pat, text):
+        boost += idf * case_mult
+    return boost
+
+
+def score_context_fields(
+    filepath: str,
+    context: LineContext | None,
+    terms: list[str],
+    term_idf: dict[str, float],
+) -> float:
+    score = 0.0
+    path_lower = filepath.lower()
+    basename = filepath.rsplit("/", 1)[-1].lower()
+    fields: list[tuple[str, float]] = [(path_lower, WEIGHT_CONTEXT_PATH), (basename, WEIGHT_CONTEXT_PATH)]
+    if context is not None:
+        if context.symbol:
+            fields.append((context.symbol.lower(), WEIGHT_CONTEXT_SYMBOL))
+        if context.heading:
+            fields.append((context.heading.lower(), WEIGHT_CONTEXT_HEADING))
+
+    for field_text, weight in fields:
+        if not field_text:
+            continue
+        for term in terms:
+            term_lower = term.lower()
+            idf = term_idf.get(term_lower, 0.0)
+            if term_lower in field_text:
+                score += idf * weight
+            score += _term_match_boost(term, field_text, idf, exact_mult=weight, case_mult=weight * 0.5)
+    return score
+
+
 def score_candidate(
     filepath: str,
     content: str,
     terms: list[str],
     term_idf: dict[str, float],
     avg_dl: float,
+    context: LineContext | None = None,
 ) -> float:
     content_lower = content.lower()
     tokens = tokenize(content)
@@ -97,11 +160,7 @@ def score_candidate(
             bm25 = idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * dl / avg_dl))
             score += bm25
 
-        ident_pat = r"(?<![\w])" + re.escape(term) + r"(?![\w])"
-        if re.search(ident_pat, content, re.IGNORECASE):
-            score += idf * 2.0
-        if re.search(ident_pat, content):
-            score += idf * 3.0
+        score += _term_match_boost(term, content, idf, exact_mult=2.0, case_mult=3.0)
 
         if term_lower in basename.lower():
             score += idf * 2.5
@@ -129,30 +188,41 @@ def score_candidate(
             elif span <= 80:
                 score += 2.0
 
+    score += score_context_fields(filepath, context, terms, term_idf)
     return score
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--query", required=True)
-    parser.add_argument("--max-results", type=int, default=50)
-    args = parser.parse_args()
+def resolve_state_root(project_root: Path, explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit).resolve()
+    env_root = os.environ.get("RALPH_PLAN_WORKSPACE_ROOT")
+    if env_root:
+        return Path(env_root).resolve()
+    return (project_root / ".ralph-workspace").resolve()
 
-    terms = normalize_terms(args.query)
-    if not terms:
-        return 0
 
-    candidates: list[tuple[tuple[str, int, str], str]] = []
-    for raw_line in sys.stdin:
-        raw_line = raw_line.rstrip("\n")
-        if not raw_line:
-            continue
-        parsed = parse_candidate(raw_line)
-        if parsed:
-            candidates.append((parsed, raw_line))
+def contextual_enabled_flag(explicit: str | None) -> bool:
+    if explicit is not None:
+        return explicit.lower() in {"1", "true", "yes", "on"}
+    try:
+        search_context = _load_search_context_module()
+    except ImportError:
+        return False
+    return search_context.contextual_search_enabled()
 
-    if not candidates:
-        return 0
+
+def rank_candidates(
+    query: str,
+    candidates: list[tuple[tuple[str, int, str], str]],
+    max_results: int,
+    *,
+    project_root: Path | None = None,
+    state_root: Path | None = None,
+    contextual: bool = False,
+) -> list[str]:
+    terms = normalize_terms(query)
+    if not terms or not candidates:
+        return []
 
     num_docs = len(candidates)
     term_doc_freq: dict[str, int] = {}
@@ -183,15 +253,70 @@ def main() -> int:
         tl = term.lower()
         term_idf[tl] = compute_idf(term_doc_freq.get(tl, 0), num_docs)
 
+    context_map: dict[tuple[str, int], LineContext] = {}
+    if contextual and project_root is not None and state_root is not None:
+        try:
+            search_context = _load_search_context_module()
+            parsed = [item[0] for item in candidates]
+            context_map = search_context.build_context_map(project_root, state_root, parsed)
+        except (ImportError, OSError):
+            context_map = {}
+
     scored: list[tuple[float, str, str, int]] = []
     for (filepath, line_no, content), raw_line in candidates:
-        s = score_candidate(filepath, content, terms, term_idf, avg_dl)
+        ctx = context_map.get((filepath.replace("\\", "/"), line_no))
+        s = score_candidate(filepath, content, terms, term_idf, avg_dl, context=ctx)
         scored.append((s, raw_line, filepath, line_no))
 
     scored.sort(key=lambda item: (-item[0], item[2], item[3], item[1]))
+    return [raw_line for _score, raw_line, _filepath, _line_no in scored[:max_results]]
 
-    for _score, raw_line, _filepath, _line_no in scored[: args.max_results]:
-        print(raw_line)
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--max-results", type=int, default=50)
+    parser.add_argument("--project-root", default="")
+    parser.add_argument("--state-root", default="")
+    parser.add_argument("--contextual", choices=("0", "1", "auto"), default="auto")
+    args = parser.parse_args()
+
+    terms = normalize_terms(args.query)
+    if not terms:
+        return 0
+
+    candidates: list[tuple[tuple[str, int, str], str]] = []
+    for raw_line in sys.stdin:
+        raw_line = raw_line.rstrip("\n")
+        if not raw_line:
+            continue
+        parsed = parse_candidate(raw_line)
+        if parsed:
+            candidates.append((parsed, raw_line))
+
+    if not candidates:
+        return 0
+
+    project_root = Path(args.project_root).resolve() if args.project_root else None
+    state_root = (
+        resolve_state_root(project_root, args.state_root)
+        if project_root is not None
+        else None
+    )
+    if args.contextual == "auto":
+        contextual = contextual_enabled_flag(None)
+    else:
+        contextual = args.contextual == "1"
+
+    for line in rank_candidates(
+        args.query,
+        candidates,
+        args.max_results,
+        project_root=project_root,
+        state_root=state_root,
+        contextual=contextual,
+    ):
+        print(line)
 
     return 0
 
