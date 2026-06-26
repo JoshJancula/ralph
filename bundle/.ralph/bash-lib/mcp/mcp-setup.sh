@@ -576,20 +576,28 @@ ralph_mcp_claude_cli_preflight() {
   local -a model_args=()
   [[ -n "$model" ]] && model_args=(--model "$model")
 
-  local prompt='You MUST call the tool mcp__ralph__ralph_proxy_read with {"path":"AGENTS.md"} right now and nothing else.'
+  # Use the tool namespace detected during the deterministic preflight when available.
+  # The server config registers as "ralph", so the Claude-side prefix is "mcp__ralph__".
+  # Fall back to that known value if RALPH_MCP_TOOL_NAMESPACE is unset.
+  local probe_tool_prefix="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
+  local probe_tool="${probe_tool_prefix}ralph_proxy_read"
+  local prompt="You MUST call the tool ${probe_tool} with {\"path\":\"AGENTS.md\"} right now and nothing else."
   local out cli_status
   out="$(printf '%s' "$prompt" | "$cli" -p --output-format stream-json --verbose \
     "${model_args[@]}" --permission-mode bypassPermissions \
     --strict-mcp-config --mcp-config "$cfg" \
-    --allowedTools "mcp__ralph__ralph_proxy_read" 2>&1)"
+    --allowedTools "$probe_tool" 2>&1)"
   cli_status=$?
   ralph_mcp_proxy_cleanup_config "$cfg"
 
   # The only reliable end-to-end signal is the model actually emitting a tool_use
   # for a ralph proxy tool -- MCP tools never appear in the init `tools` snapshot
   # even when they work.
+  local tool_prefix_pattern="${probe_tool_prefix}"
+  [[ -z "$tool_prefix_pattern" ]] && tool_prefix_pattern="ralph_proxy_"
   if printf '%s\n' "$out" \
-    | jq -e 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use" and ((.name // "") | startswith("mcp__ralph__")))' \
+    | jq -e --arg prefix "$tool_prefix_pattern" \
+      'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use" and ((.name // "") | startswith($prefix)))' \
       >/dev/null 2>&1; then
     return 0
   fi
@@ -600,7 +608,7 @@ ralph_mcp_claude_cli_preflight() {
   if printf '%s\n' "$out" \
     | jq -e 'select(.type=="result" and ((.is_error // false) | not) and (.subtype == "success"))' \
       >/dev/null 2>&1; then
-    echo "Error: claude ran but never invoked mcp__ralph__ralph_proxy_read; the ralph MCP tools are not registering in this claude build (likely a tools/list response shape it rejects)." >&2
+    echo "Error: claude ran but never invoked ${probe_tool}; the ralph MCP tools are not registering in this claude build (likely a tools/list response shape it rejects)." >&2
     return 1
   fi
 

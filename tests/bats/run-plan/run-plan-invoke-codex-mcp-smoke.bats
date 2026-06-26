@@ -25,6 +25,9 @@ setup() {
   export CODEX_STUB_RECORD="$TEST_TMPDIR/codex.record"
   export MCP_SERVER_RECORD="$TEST_TMPDIR/mcp-server.record"
 
+  # Plan-runner resolver state must not override the workspace-local MCP stub.
+  unset RALPH_RUNTIME_MCP_RESOLVE_PATH RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
+
   cat <<'EOF' >"$WORKSPACE/.ralph/mcp-server.sh"
 #!/usr/bin/env bash
 printf 'SERVER_WORKSPACE:%s\n' "${RALPH_MCP_WORKSPACE:-}" >>"$MCP_SERVER_RECORD"

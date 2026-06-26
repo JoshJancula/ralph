@@ -600,11 +600,15 @@ def format_failure_report(
         safety = entry.get("safety_top10") or []
         if not safety:
             continue
-        top_set = set(result.top_results)
+        # Safety anchors are project-relative paths, not path:line, so they
+        # survive edits that shift line numbers within a ranked file. Legacy
+        # path:line baselines are tolerated by comparing on the path component.
+        top_paths = {_normalize_path(h.split(":", 1)[0]) for h in result.top_results}
         for required in safety:
-            if required not in top_set:
+            required_path = _normalize_path(required.split(":", 1)[0])
+            if required_path not in top_paths:
                 lines.append(
-                    f"- SAFETY GATE {result.query_id}: missing required top-10 hit {required!r}"
+                    f"- SAFETY GATE {result.query_id}: missing required top-10 path {required_path!r}"
                 )
 
     no_hit_queries = [r.query_id for r in results if not r.has_relevant_top10]

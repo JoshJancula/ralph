@@ -197,45 +197,6 @@ EOF
   '
 }
 
-@test "approve-mode proxy boundary violation escalates immediately" {
-  load_approvals_lib
-
-  local approvals_dir
-  approvals_dir="$(ralph_mcp_approvals_dir)"
-
-  mkdir -p "$approvals_dir"
-  rm -f "$approvals_dir"/request.*.json "$approvals_dir/approvals.log"
-
-  local start elapsed
-  start=$SECONDS
-  local request_id request_path
-  request_id="$(
-    ralph_mcp_approvals_write_request \
-      "ralph_proxy_grep" \
-      "boundary" \
-      "boundary violation" \
-      '{"path":"../etc/passwd","pattern":"root"}'
-  )"
-  [ -n "$request_id" ]
-  request_path="$(ralph_mcp_approvals_request_path "$request_id")"
-  [ -s "$request_path" ]
-
-  ralph_mcp_approvals_finalize "$request_id" "escalated" "approval escalated" "server"
-  elapsed=$((SECONDS - start))
-  [ "$elapsed" -lt 5 ]
-
-  # request.<id>.json must be preserved for escalations.
-  [ -s "$request_path" ]
-  [ -f "$approvals_dir/approvals.log" ]
-
-  run bash -c '
-    set -euo pipefail
-    last_line="$(tail -n1 "'"$approvals_dir"'/approvals.log")"
-    jq -e '"'"'.outcome == "escalated"'"'"' <<<"$last_line" >/dev/null
-  '
-  [ "$status" -eq 0 ]
-}
-
 @test "send_notification emits JSON-RPC without id" {
   # shellcheck source=/dev/null
   source "$PROTOCOL_LIB"

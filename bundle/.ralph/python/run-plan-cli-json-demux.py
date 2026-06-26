@@ -856,6 +856,8 @@ def main() -> None:
         "tool_calls_by_tool": {},
         "tool_calls_sequence": [],
         "opencode_cache_fields_seen": 0,
+        "cache_read_input_tokens_estimated": 0,
+        "cache_read_estimate_method": "none",
         "_opencode_cache_invocations": [],
         "completion_sentinel_seen": False,
     }

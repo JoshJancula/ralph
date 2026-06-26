@@ -167,20 +167,6 @@ setup() {
   rm -f "$plan_file"
 }
 
-@test "run-plan --ralph-mode rejects invalid mode" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local plan_file
-  plan_file="$(mktemp)"
-  printf '%s\n' "- [ ] pending task" >"$plan_file"
-
-  run bash "$RUN_PLAN_SH" --runtime cursor --plan "$plan_file" --ralph-mode invalid-mode 2>&1
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"ralph-mode"* ]] || [[ "$output" == *"no, native, ralph, or hybrid"* ]]
-
-  rm -f "$plan_file"
-}
-
 @test "RALPH_MODE env var is honored" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

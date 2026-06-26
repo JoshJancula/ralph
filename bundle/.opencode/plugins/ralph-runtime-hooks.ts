@@ -112,7 +112,37 @@ function nativeResultCompactEnabled(): boolean {
   return truthy(process.env.RALPH_BASH_COMPACT) || truthy(process.env.RALPH_PROXY_SHELL_COMPACT);
 }
 
-const EXPLORATION_TOOLS = new Set(["read", "grep", "glob", "search"]);
+const EXPLORATION_TOOLS = new Set(["read", "grep", "glob", "search", "bash"]);
+
+function envelopePreview(compactedText: string): string {
+  try {
+    const envelope = JSON.parse(compactedText);
+    if (typeof envelope.preview === "string" && envelope.preview) {
+      return envelope.preview;
+    }
+  } catch {
+    /* not JSON envelope */
+  }
+  return compactedText;
+}
+
+function applyCompactedCarriers(
+  output: { title: string; output: string; metadata: any },
+  compactedText: string,
+  tool: string,
+): void {
+  output.output = compactedText;
+  const preview = envelopePreview(compactedText);
+  const titleSeed = typeof output.title === "string" && output.title ? output.title : tool;
+  output.title = preview.length > 120 ? `${preview.slice(0, 120)}...` : preview || titleSeed;
+  const baseMeta =
+    output.metadata != null && typeof output.metadata === "object" && !Array.isArray(output.metadata)
+      ? { ...output.metadata }
+      : {};
+  baseMeta.output = compactedText;
+  baseMeta.ralph_compacted = true;
+  output.metadata = baseMeta;
+}
 
 async function runBashJson(script: string, payload: any): Promise<any> {
   const proc = Bun.spawn(["bash", script], {
@@ -138,6 +168,9 @@ async function compactExplorationOutput(
   text: string,
   workspace: string,
   planKey: string,
+  toolArgs: Record<string, unknown> | undefined,
+  title: string,
+  path: string,
 ): Promise<string | null> {
   const script = `${libDir}/native-hook/native-result-compact-cli.sh`;
   const compacted = await runBashJson(script, {
@@ -145,6 +178,9 @@ async function compactExplorationOutput(
     text,
     workspace,
     plan_key: planKey,
+    tool_args: toolArgs ?? {},
+    title,
+    path,
   });
   if (compacted?.applied && typeof compacted.compacted === "string") {
     return compacted.compacted;
@@ -177,7 +213,25 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
         let compactedText = originalText;
         let compactionSkipped = true;
 
-        if (truthy(process.env.RALPH_BASH_COMPACT) && libDir) {
+        if (nativeResultCompactEnabled() && libDir && originalText) {
+          const nativeCompacted = await compactExplorationOutput(
+            libDir,
+            "bash",
+            originalText,
+            workspace,
+            planKey,
+            input.args,
+            typeof output.title === "string" ? output.title : "",
+            "",
+          );
+          if (nativeCompacted) {
+            applyCompactedCarriers(output, nativeCompacted, input.tool);
+            compactedText = nativeCompacted;
+            compactionSkipped = false;
+          }
+        }
+
+        if (compactionSkipped && truthy(process.env.RALPH_BASH_COMPACT) && libDir) {
           const compactScript = `${libDir}/shell-output-compact.py`;
           const compacted = await runPythonJson(compactScript, {
             command,
@@ -193,7 +247,7 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
               compactedText += "\n";
             }
             compactedText += footer;
-            output.output = compactedText;
+            applyCompactedCarriers(output, compactedText, input.tool);
             compactionSkipped = false;
           }
         }
@@ -219,9 +273,12 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
         originalText,
         workspace,
         planKey,
+        input.args,
+        typeof output.title === "string" ? output.title : "",
+        typeof input.args?.path === "string" ? input.args.path : "",
       );
       if (compactedText) {
-        output.output = compactedText;
+        applyCompactedCarriers(output, compactedText, input.tool);
       }
     },
   };

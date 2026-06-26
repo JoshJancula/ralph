@@ -71,7 +71,7 @@ setup() {
 }
 
 teardown() {
-  if [[ -e "$TEST_TMPDIR" ]]; then
+  if [[ -e "${TEST_TMPDIR:-}" ]]; then
     rm -rf "$TEST_TMPDIR"
   fi
 }

@@ -173,6 +173,11 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   local -a tools_list=()
   local compact_catalog=1
 
+  # Use the tool namespace detected by ralph_mcp_proxy_preflight during the
+  # deterministic handshake. Fall back to "mcp__ralph__" (server is always
+  # registered as "ralph" in the generated MCP config).
+  local _ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
+
   if declare -F ralph_mcp_proxy_compact_tool_catalog_enabled >/dev/null 2>&1; then
     ralph_mcp_proxy_compact_tool_catalog_enabled
     compact_catalog=$?
@@ -193,24 +198,24 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   case "$compact_catalog" in
     1)
       tools_list=(
-        mcp__ralph__ralph_proxy_read
-        mcp__ralph__ralph_proxy_grep
-        mcp__ralph__ralph_proxy_glob
-        mcp__ralph__ralph_proxy_shell
-        mcp__ralph__ralph_proxy_result_read
-        mcp__ralph__ralph_proxy_result_search
-        mcp__ralph__ralph_proxy_result_summary
-        mcp__ralph__ralph_proxy_batch
+        "${_ns}ralph_proxy_read"
+        "${_ns}ralph_proxy_grep"
+        "${_ns}ralph_proxy_glob"
+        "${_ns}ralph_proxy_shell"
+        "${_ns}ralph_proxy_result_read"
+        "${_ns}ralph_proxy_result_search"
+        "${_ns}ralph_proxy_result_summary"
+        "${_ns}ralph_proxy_batch"
       )
       ;;
     0)
       tools_list=(
-        mcp__ralph__ralph_proxy_read
-        mcp__ralph__ralph_proxy_grep
-        mcp__ralph__ralph_proxy_shell
-        mcp__ralph__ralph_proxy_result_read
-        mcp__ralph__ralph_proxy_batch
-        mcp__ralph__ralph_proxy_tool_search
+        "${_ns}ralph_proxy_read"
+        "${_ns}ralph_proxy_grep"
+        "${_ns}ralph_proxy_shell"
+        "${_ns}ralph_proxy_result_read"
+        "${_ns}ralph_proxy_batch"
+        "${_ns}ralph_proxy_tool_search"
       )
       ;;
     *)
@@ -220,18 +225,18 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   esac
 
   if [[ "${RALPH_MCP_PROXY_POLICY_OWNED_SEARCH_ENABLED:-0}" == "1" ]]; then
-    tools_list+=("mcp__ralph__ralph_proxy_search")
+    tools_list+=("${_ns}ralph_proxy_search")
   fi
   if [[ "${RALPH_MCP_PROXY_POLICY_OWNED_REPOMAP_ENABLED:-0}" == "1" ]]; then
-    tools_list+=("mcp__ralph__ralph_proxy_repomap")
+    tools_list+=("${_ns}ralph_proxy_repomap")
   fi
   if [[ "${RALPH_PROXY_SHELL_ASYNC:-1}" != "0" ]]; then
     tools_list+=(
-      mcp__ralph__ralph_proxy_shell_start
-      mcp__ralph__ralph_proxy_shell_wait
-      mcp__ralph__ralph_proxy_shell_status
-      mcp__ralph__ralph_proxy_shell_read
-      mcp__ralph__ralph_proxy_shell_cancel
+      "${_ns}ralph_proxy_shell_start"
+      "${_ns}ralph_proxy_shell_wait"
+      "${_ns}ralph_proxy_shell_status"
+      "${_ns}ralph_proxy_shell_read"
+      "${_ns}ralph_proxy_shell_cancel"
     )
   fi
 
@@ -241,8 +246,8 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
 }
 
 ralph_run_plan_invoke_claude_completion_tool_names() {
-  printf '%s\n' \
-    mcp__ralph__ralph_complete_todo
+  local _ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
+  printf '%s\n' "${_ns}ralph_complete_todo"
 }
 
 ralph_run_plan_invoke_claude_allowed_tools_list() {

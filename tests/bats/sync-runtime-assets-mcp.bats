@@ -14,7 +14,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$_tmp"
+  rm -rf "${_tmp:-}"
 }
 
 _source_sync_lib() {

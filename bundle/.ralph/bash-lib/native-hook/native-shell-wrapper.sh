@@ -191,6 +191,31 @@ ralph_native_shell_execute_command_json() {
   set +e
   if command -v timeout >/dev/null 2>&1; then
     timeout "$timeout_sec" "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_sec" "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
+  elif command -v perl >/dev/null 2>&1; then
+    # Portable fallback (macOS without GNU coreutils). perl alarm kills the
+    # child shell after timeout_sec; returns 124 on timeout to match `timeout(1)`.
+    perl -e '
+      my $timeout = shift;
+      my $workspace = shift;
+      my $command = shift;
+      my $shell = shift;
+      my $out = shift;
+      my $err = shift;
+      my $pid = fork();
+      if ($pid == 0) {
+        open(STDOUT, ">", $out) or die $!;
+        open(STDERR, ">", $err) or die $!;
+        chdir($workspace) or die $!;
+        exec($shell, "-c", $command) or die $!;
+      }
+      local $SIG{ALRM} = sub { kill "TERM", $pid; sleep 1; kill "KILL", $pid; waitpid($pid, 0); exit 124; };
+      alarm($timeout);
+      waitpid($pid, 0);
+      my $code = $? >> 8;
+      exit($code);
+    ' "$timeout_sec" "$workspace" "$command" "$shell_exe" "$tmp_out" "$tmp_err"
   else
     "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
   fi

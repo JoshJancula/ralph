@@ -20,7 +20,7 @@ from typing import Any
 from ralph_script_loader import load_ralph_script
 
 
-OVERLAY = load_ralph_script("ralph-overlay-usage-fields")
+OVERLAY = load_ralph_script("ralph_overlay_usage_fields")
 
 
 class TestWindowingNetting(unittest.TestCase):

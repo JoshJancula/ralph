@@ -7,7 +7,7 @@
     "recall_at_10": 0.766667,
     "recall_at_5": 0.758333
   },
-  "description": "Baseline metrics for contextual BM25 ranker with deterministic path/symbol/heading context fields. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions.",
+  "description": "Baseline metrics for contextual BM25 ranker with deterministic path/symbol/heading context fields. safety_top10 entries are project-relative paths (not path:line) so the gate survives edits that shift line numbers within a ranked file. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions.",
   "kind": "retrieval_eval_baseline",
   "per_query": {
     "agent-code-review-md": {
@@ -16,9 +16,9 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/agents/code-review.md:50",
-        "bundle/.ralph/agents/qa.md:49",
-        "bundle/.ralph/agents/security.md:48"
+        "bundle/.ralph/agents/code-review.md",
+        "bundle/.ralph/agents/qa.md",
+        "bundle/.ralph/agents/security.md"
       ]
     },
     "agent-config-tool": {
@@ -27,9 +27,7 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/agent-config-tool.sh:79",
-        "bundle/.ralph/agent-config-tool.sh:120",
-        "bundle/.ralph/agent-config-tool.sh:11"
+        "bundle/.ralph/agent-config-tool.sh"
       ]
     },
     "agent-schema-readme": {
@@ -38,9 +36,7 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md:188",
-        "AGENTS.md:196",
-        "AGENTS.md:172"
+        "AGENTS.md"
       ]
     },
     "concept-evaluator-feedback-loop": {
@@ -49,9 +45,8 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/AGENT-WORKFLOW.md:108",
-        "docs/AGENT-WORKFLOW.md:101",
-        "tests/fixtures/cookbook-roadmap/offline-e2e/evaluator-changes-required.json:2"
+        "docs/AGENT-WORKFLOW.md",
+        "tests/fixtures/cookbook-roadmap/offline-e2e/evaluator-changes-required.json"
       ]
     },
     "concept-session-resume": {
@@ -60,9 +55,8 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/ENVIRONMENT.md:53",
-        "docs/README.md:63",
-        "docs/README.md:55"
+        "docs/ENVIRONMENT.md",
+        "docs/README.md"
       ]
     },
     "concept-stable-prefix": {
@@ -71,9 +65,9 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 0.5,
       "safety_top10": [
-        "docs/cookbook-review/BACKLOG.md:50",
-        "docs/ENVIRONMENT.md:293",
-        "tests/bats/run-plan/run-plan-prompt-order.bats:33"
+        "docs/ENVIRONMENT.md",
+        "docs/cookbook-review/BACKLOG.md",
+        "tests/bats/run-plan/run-plan-prompt-order.bats"
       ]
     },
     "concept-three-root-model": {
@@ -82,9 +76,7 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md:101",
-        "AGENTS.md:108",
-        "AGENTS.md:111"
+        "AGENTS.md"
       ]
     },
     "difficult-heading-cookbook-backlog": {
@@ -93,9 +85,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/cookbook-review/04-retrieval-rag.md:47",
-        "docs/cookbook-review/04-retrieval-rag.md:55",
-        "docs/cookbook-review/04-retrieval-rag.md:113"
+        "docs/cookbook-review/04-retrieval-rag.md"
       ]
     },
     "difficult-path-handoffs-file": {
@@ -104,9 +94,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh:294",
-        "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh:277",
-        "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh:282"
+        "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh"
       ]
     },
     "difficult-path-run-plan-invoke": {
@@ -115,9 +103,7 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh:230",
-        "bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh:34",
-        "bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh:22"
+        "bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh"
       ]
     },
     "difficult-symbol-nearby-normalize": {
@@ -126,9 +112,9 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/python/mcp-proxy-search-rank.py:56",
-        "bundle/.ralph/python/mcp-proxy-search-normalize-terms.py:2",
-        "bundle/.ralph/python/retrieval_eval.py:81"
+        "bundle/.ralph/python/mcp-proxy-search-normalize-terms.py",
+        "bundle/.ralph/python/mcp-proxy-search-rank.py",
+        "bundle/.ralph/python/retrieval_eval.py"
       ]
     },
     "doc-agent-workflow-handoff": {
@@ -137,9 +123,8 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/AGENT-WORKFLOW.md:31",
-        "AGENTS.md:10",
-        "docs/AGENT-WORKFLOW.md:45"
+        "AGENTS.md",
+        "docs/AGENT-WORKFLOW.md"
       ]
     },
     "doc-install-three-roots": {
@@ -148,9 +133,7 @@
       "recall_at_5": 0.666667,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/INSTALL.md:138",
-        "docs/INSTALL.md:22",
-        "docs/INSTALL.md:140"
+        "docs/INSTALL.md"
       ]
     },
     "doc-mcp-proxy-tools": {
@@ -159,9 +142,8 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/ENVIRONMENT.md:397",
-        "AGENTS.md:238",
-        "docs/ENVIRONMENT.md:376"
+        "AGENTS.md",
+        "docs/ENVIRONMENT.md"
       ]
     },
     "doc-retrieval-cluster": {
@@ -170,9 +152,8 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/cookbook-review/04-retrieval-rag.md:25",
-        "tests/fixtures/cookbook-roadmap/BASELINE.md:34",
-        "docs/cookbook-review/04-retrieval-rag.md:35"
+        "docs/cookbook-review/04-retrieval-rag.md",
+        "tests/fixtures/cookbook-roadmap/BASELINE.md"
       ]
     },
     "exact-classify-tool-calls": {
@@ -181,9 +162,8 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_tool_call_classification.py:25",
-        "tests/python/test_cookbook_roadmap_baseline.py:73",
-        "tests/python/test_tool_call_classification.py:29"
+        "tests/python/test_cookbook_roadmap_baseline.py",
+        "tests/python/test_tool_call_classification.py"
       ]
     },
     "exact-merge-prompt": {
@@ -192,8 +172,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh:584",
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh:4387"
+        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
       ]
     },
     "exact-proxy-search-entry": {
@@ -202,9 +181,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2507",
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2599",
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2602"
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
       ]
     },
     "exact-render-markdown-summary": {
@@ -213,9 +190,8 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 0.5,
       "safety_top10": [
-        "bundle/.ralph/python/render-benchmark-markdown.py:179",
-        "bundle/.ralph/python/continuation_summary.py:832",
-        "bundle/.ralph/python/continuation_summary.py:915"
+        "bundle/.ralph/python/continuation_summary.py",
+        "bundle/.ralph/python/render-benchmark-markdown.py"
       ]
     },
     "exact-score-candidate": {
@@ -224,9 +200,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/python/mcp-proxy-search-rank.py:138",
-        "bundle/.ralph/python/mcp-proxy-search-rank.py:191",
-        "bundle/.ralph/python/mcp-proxy-search-rank.py:139"
+        "bundle/.ralph/python/mcp-proxy-search-rank.py"
       ]
     },
     "mcp-path-allowed": {
@@ -235,9 +209,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:841",
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:1657",
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2060"
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
       ]
     },
     "mcp-permission-classify-path": {
@@ -246,9 +218,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/permission-classify.sh:80",
-        "bundle/.ralph/bash-lib/permission-classify.sh:324",
-        "bundle/.ralph/bash-lib/permission-classify.sh:78"
+        "bundle/.ralph/bash-lib/permission-classify.sh"
       ]
     },
     "mcp-search-rank-baseline": {
@@ -257,9 +227,8 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/fixtures/cookbook-roadmap/bm25-rankings-baseline.json:4",
-        "tests/fixtures/cookbook-roadmap/bm25-rankings-baseline.json:3",
-        "tests/python/test_cookbook_roadmap_baseline.py:36"
+        "tests/fixtures/cookbook-roadmap/bm25-rankings-baseline.json",
+        "tests/python/test_cookbook_roadmap_baseline.py"
       ]
     },
     "orch-handoff-collect": {
@@ -268,9 +237,7 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/bats/orchestration/orchestration-handoffs.bats:196",
-        "tests/bats/orchestration/orchestration-handoffs.bats:217",
-        "tests/bats/orchestration/orchestration-handoffs.bats:253"
+        "tests/bats/orchestration/orchestration-handoffs.bats"
       ]
     },
     "orch-parallel-stages": {
@@ -279,9 +246,8 @@
       "recall_at_5": 0.666667,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/cookbook-review/02-agent-patterns.md:11",
-        "scripts/validate-orchestration-schema.sh:39",
-        "scripts/validate-orchestration-schema.sh:41"
+        "docs/cookbook-review/02-agent-patterns.md",
+        "scripts/validate-orchestration-schema.sh"
       ]
     },
     "orch-validate-schema-script": {
@@ -290,9 +256,9 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "scripts/validate-orchestration-schema.sh:6",
-        "tests/bats/orchestration/orchestration-schema.bats:7",
-        "tests/bats/validate-orchestration-schema-usage.bats:6"
+        "scripts/validate-orchestration-schema.sh",
+        "tests/bats/orchestration/orchestration-schema.bats",
+        "tests/bats/validate-orchestration-schema-usage.bats"
       ]
     },
     "plan-todo-open-task": {
@@ -301,9 +267,8 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md:135",
-        "docs/MCP.md:65",
-        "docs/MCP.md:62"
+        "AGENTS.md",
+        "docs/MCP.md"
       ]
     },
     "plan-validate-classic": {
@@ -312,9 +277,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/bats/plan/validate-plan.bats:16",
-        "tests/bats/plan/validate-plan.bats:17",
-        "tests/bats/plan/validate-plan.bats:8"
+        "tests/bats/plan/validate-plan.bats"
       ]
     },
     "python-artifact-schema": {
@@ -323,9 +286,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/python/artifact_json_schema.py:199",
-        "bundle/.ralph/python/artifact_json_schema.py:241",
-        "bundle/.ralph/python/artifact_json_schema.py:228"
+        "bundle/.ralph/python/artifact_json_schema.py"
       ]
     },
     "python-evaluator-contract": {
@@ -334,9 +295,8 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 0.5,
       "safety_top10": [
-        "tests/python/test_cookbook_offline_e2e.py:126",
-        "tests/python/test_evaluator_contract.py:109",
-        "tests/python/test_evaluator_contract.py:101"
+        "tests/python/test_cookbook_offline_e2e.py",
+        "tests/python/test_evaluator_contract.py"
       ]
     },
     "python-load-ralph-script": {
@@ -345,9 +305,8 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/ralph_script_loader.py:103",
-        "tests/python/ralph_script_loader.py:118",
-        "tests/python/test_ralph_script_loader.py:21"
+        "tests/python/ralph_script_loader.py",
+        "tests/python/test_ralph_script_loader.py"
       ]
     },
     "python-optimization-hint": {
@@ -356,9 +315,7 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_tool_call_target_telemetry.py:67",
-        "tests/python/test_tool_call_target_telemetry.py:256",
-        "tests/python/test_tool_call_target_telemetry.py:272"
+        "tests/python/test_tool_call_target_telemetry.py"
       ]
     },
     "shell-gather-candidates": {
@@ -367,8 +324,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2446",
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh:2599"
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
       ]
     },
     "shell-inject-handoffs": {
@@ -377,9 +333,7 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/bats/orchestration/orchestration-handoffs.bats:415",
-        "tests/bats/orchestration/orchestration-handoffs.bats:728",
-        "tests/bats/orchestration/orchestration-handoffs.bats:590"
+        "tests/bats/orchestration/orchestration-handoffs.bats"
       ]
     },
     "shell-load-policy": {
@@ -388,7 +342,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh:461"
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh"
       ]
     },
     "shell-verify-artifact-schemas": {
@@ -397,9 +351,7 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_artifact_schema_validator.py:224",
-        "tests/python/test_artifact_schema_validator.py:246",
-        "tests/python/test_artifact_schema_validator.py:27"
+        "tests/python/test_artifact_schema_validator.py"
       ]
     },
     "test-continuation-summary": {
@@ -408,9 +360,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_continuation_summary.py:108",
-        "tests/python/test_continuation_summary.py:109",
-        "tests/python/test_continuation_summary.py:78"
+        "tests/python/test_continuation_summary.py"
       ]
     },
     "test-evaluator-contract": {
@@ -419,9 +369,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_evaluator_contract.py:40",
-        "tests/python/test_evaluator_contract.py:46",
-        "tests/python/test_evaluator_contract.py:89"
+        "tests/python/test_evaluator_contract.py"
       ]
     },
     "test-proxy-search-bats": {
@@ -430,9 +378,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/bats/mcp-proxy/mcp-proxy-search.bats:206",
-        "tests/bats/mcp-proxy/mcp-proxy-search.bats:162",
-        "tests/bats/mcp-proxy/mcp-proxy-search.bats:135"
+        "tests/bats/mcp-proxy/mcp-proxy-search.bats"
       ]
     },
     "test-search-rank-unit": {
@@ -441,9 +387,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_mcp_proxy_search_rank.py:275",
-        "tests/python/test_mcp_proxy_search_rank.py:336",
-        "tests/python/test_mcp_proxy_search_rank.py:340"
+        "tests/python/test_mcp_proxy_search_rank.py"
       ]
     }
   },

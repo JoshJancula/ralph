@@ -10,7 +10,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$TEST_TMPDIR"
+  rm -rf "${TEST_TMPDIR:-}"
 }
 
 @test "validate-plan accepts a valid classic markdown plan" {

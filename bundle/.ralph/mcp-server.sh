@@ -37,33 +37,8 @@ load_server_libs() {
   source "$SCRIPT_DIR/bash-lib/mcp/mcp-prompts.sh"
 
   if [[ -z "${RALPH_MCP_PROXY_LOGGING_LOADED:-}" ]]; then
-    RALPH_MCP_PROXY_LOGGING_LOADED=1
-
-    ralph_mcp_proxy_log_line() {
-      local level="${1:-info}"
-      shift || true
-      local message="$*"
-      local line
-      line="$(printf '[%s] [mcp-proxy] %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$level" "$message")"
-      printf '%s' "$line" >&2
-      if [[ -n "${RALPH_MCP_PROXY_LOG_FILE:-}" ]]; then
-        mkdir -p "$(dirname "$RALPH_MCP_PROXY_LOG_FILE")" 2>/dev/null || true
-        printf '%s' "$line" >> "$RALPH_MCP_PROXY_LOG_FILE" 2>/dev/null || true
-      fi
-    }
-
-    ralph_mcp_proxy_log_request() {
-      local method="${1:-}"
-      local request_id="${2:-}"
-      local policy_name="${3:-}"
-      ralph_mcp_proxy_log_line info "request method=$method id=${request_id:-null} policy=${policy_name:-default}"
-    }
-
-    ralph_mcp_proxy_log_action() {
-      local action="${1:-}"
-      shift || true
-      ralph_mcp_proxy_log_line info "$action${*:+: $*}"
-    }
+    # shellcheck source=bash-lib/mcp-proxy/mcp-proxy-logging.sh
+    source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-logging.sh"
   fi
 
   # shellcheck source=bash-lib/mcp-proxy/mcp-proxy-policy.sh
@@ -1112,8 +1087,11 @@ handle_proxy_owned_tool() {
   local id_present="$3"
   local id_raw="$4"
   local result_json=""
+  local _call_start
+  _call_start="$(date +%s)"
 
   if ralph_mcp_proxy_call_arguments_denied "$tool_name" "$args_json"; then
+    ralph_mcp_proxy_log_tool_call_jsonl "$tool_name" "$id_raw" "0" "denied" "${RALPH_MCP_PROXY_LAST_DENY_REASON:-denied}" 2>/dev/null || true
     dispatch_proxy_tool_violation \
       "$id_present" \
       "$id_raw" \
@@ -1128,7 +1106,12 @@ handle_proxy_owned_tool() {
 
   invoke_proxy_owned_tool_once "$tool_name" "$args_json" result_json
 
+  local _call_end _duration_s _exit_status
+  _call_end="$(date +%s)"
+  _duration_s=$(( _call_end - _call_start ))
+
   if [[ "${RALPH_MCP_PROXY_FATAL_VIOLATION:-0}" == "1" ]]; then
+    ralph_mcp_proxy_log_tool_call_jsonl "$tool_name" "$id_raw" "$_duration_s" "fatal-violation" "${RALPH_MCP_PROXY_FATAL_REASON:-fatal proxy violation}" 2>/dev/null || true
     dispatch_proxy_tool_violation \
       "$id_present" \
       "$id_raw" \
@@ -1140,6 +1123,15 @@ handle_proxy_owned_tool() {
       "$args_json"
     return
   fi
+
+  _exit_status="ok"
+  if [[ "$(jq -r '.isError // false' <<<"$result_json" 2>/dev/null)" == "true" ]]; then
+    _exit_status="error"
+  fi
+  if printf '%s' "$result_json" | jq -e '.content[0].text | fromjson? | .shellTimeoutHandoff == true' >/dev/null 2>&1; then
+    _exit_status="timeout-handoff"
+  fi
+  ralph_mcp_proxy_log_tool_call_jsonl "$tool_name" "$id_raw" "$_duration_s" "$_exit_status" "" 2>/dev/null || true
 
   send_proxy_owned_tool_result "$tool_name" "$args_json" "$id_present" "$id_raw" "$result_json"
 }
@@ -1311,6 +1303,16 @@ main() {
   export RALPH_PROJECT_ROOT="$project_root"
   export RALPH_AGENT_WORKSPACE="$agent_workspace"
   export RALPH_PLAN_WORKSPACE_ROOT="$plan_workspace_root"
+
+  # Auto-initialize the per-plan MCP log file when RALPH_PLAN_KEY is set and
+  # RALPH_MCP_PROXY_LOG_FILE is not already configured. This enables plan-scoped
+  # observability without requiring the caller to set the path explicitly.
+  if [[ -n "${RALPH_PLAN_KEY:-}" && -z "${RALPH_MCP_PROXY_LOG_FILE:-}" ]]; then
+    local auto_log_dir
+    auto_log_dir="${plan_workspace_root}/.ralph-workspace/logs/${RALPH_PLAN_KEY}"
+    mkdir -p "$auto_log_dir" 2>/dev/null || true
+    export RALPH_MCP_PROXY_LOG_FILE="${auto_log_dir}/mcp.log"
+  fi
 
   WORKSPACE_ROOT="${workspace%/}"
   [[ -z "$WORKSPACE_ROOT" ]] && WORKSPACE_ROOT="/"

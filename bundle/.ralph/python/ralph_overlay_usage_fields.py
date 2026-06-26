@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Mapping, MutableMapping, Sequence
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -63,6 +63,72 @@ OVERLAY_USAGE_DEFAULTS: dict[str, Any] = {
     "runtime_overlay_warnings": [],
     "byte_savings_by_path": {},
 }
+
+OPENCODE_CACHE_DEMUX_KEYS = (
+    "opencode_cache_fields_seen",
+    "cache_read_input_tokens_estimated",
+    "cache_read_estimate_method",
+)
+
+
+def opencode_cache_key_injected_from_env() -> bool:
+    """True when Ralph injected or detected ambient OpenCode cache settings."""
+    prompt = os.environ.get("RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED", "")
+    ambient = os.environ.get("RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS", "")
+    return coerce_bool(prompt) or coerce_bool(ambient)
+
+
+def merge_demux_opencode_cache_fields(
+    record: MutableMapping[str, Any],
+    demux_usage: Mapping[str, Any],
+) -> None:
+    """Copy OpenCode cache telemetry from demux USAGE_FILE into an invocation record."""
+    if not isinstance(demux_usage, Mapping):
+        return
+    for key in OPENCODE_CACHE_DEMUX_KEYS:
+        if key in demux_usage:
+            record[key] = demux_usage[key]
+    if "tool_turns" in demux_usage:
+        record["tool_turns"] = coerce_int(demux_usage.get("tool_turns"))
+
+
+def aggregate_opencode_cache_summary(
+    invocations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize OpenCode cache telemetry across plan invocations."""
+    opencode = [
+        record
+        for record in invocations
+        if isinstance(record, Mapping) and record.get("runtime") == "opencode"
+    ]
+    if not opencode:
+        return {}
+
+    fields_seen_known = any("opencode_cache_fields_seen" in record for record in opencode)
+    fields_seen = any(coerce_bool(record.get("opencode_cache_fields_seen")) for record in opencode)
+    estimated_total = sum(
+        coerce_int(record.get("cache_read_input_tokens_estimated")) for record in opencode
+    )
+    estimate_methods = [
+        str(record.get("cache_read_estimate_method") or "none").strip()
+        for record in opencode
+        if str(record.get("cache_read_estimate_method") or "none").strip() not in ("", "none")
+    ]
+    estimate_method = estimate_methods[0] if estimate_methods else "none"
+    key_injected = any(
+        coerce_bool(record.get("opencode_cache_key_injected")) for record in opencode
+    ) or opencode_cache_key_injected_from_env()
+
+    out: dict[str, Any] = {"opencode_cache_key_injected": key_injected}
+    if fields_seen_known:
+        out["opencode_cache_fields_seen"] = 1 if fields_seen else 0
+    if estimated_total > 0 or any(
+        "cache_read_input_tokens_estimated" in record for record in opencode
+    ):
+        out["cache_read_input_tokens_estimated"] = estimated_total
+        out["cache_read_estimate_method"] = estimate_method
+    return out
+
 
 HOOK_METRIC_KEYS = (
     "native_hook_events",

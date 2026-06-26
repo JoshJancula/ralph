@@ -141,7 +141,7 @@ opencode_cache_key_injected = False
 if runtime == "opencode":
     opencode_cache_key_injected = _env_truthy(
         os.environ.get("RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED", "")
-    )
+    ) or _env_truthy(os.environ.get("RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS", ""))
 started_at = sys.argv[12] if len(sys.argv) > 12 else ""
 ended_at = sys.argv[13] if len(sys.argv) > 13 else ""
 plan_key = sys.argv[14] if len(sys.argv) > 14 else ""
@@ -286,6 +286,20 @@ if merge_path.strip():
                     classified = classify_tool_calls(bt)
                     for counter_key in ACCOUNTING_KEYS:
                         record[counter_key] = classified.get(counter_key, 0)
+                if runtime == "opencode":
+                    overlay_module = _load_overlay_fields_module()
+                    if overlay_module is not None and hasattr(
+                        overlay_module, "merge_demux_opencode_cache_fields"
+                    ):
+                        overlay_module.merge_demux_opencode_cache_fields(record, mu)
+                    else:
+                        for key in (
+                            "opencode_cache_fields_seen",
+                            "cache_read_input_tokens_estimated",
+                            "cache_read_estimate_method",
+                        ):
+                            if key in mu:
+                                record[key] = mu[key]
     except Exception:
         pass
 if split_parent_id:

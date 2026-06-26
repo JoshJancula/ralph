@@ -82,7 +82,7 @@ Agent definitions with the same name as ambient servers override the ambient def
 | Claude | Temp config via `--strict-mcp-config --mcp-config <temp>` | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available -- Claude requires a native `Read` before `Edit`/`Write`, so stripping `Read` would deadlock edits. `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` also strips `Read` for read-only plans. |
 | Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. Agent `mcp_servers` are merged before Ralph's entry. |
 | Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. Agent `mcp_servers` are translated to `--config mcp_servers.<agent-server>.*` overrides. |
-| OpenCode | Temp config via `OPENCODE_CONFIG` merging with native config | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. Agent `mcp_servers` are merged into the effective config. |
+| OpenCode | Temp config via `OPENCODE_CONFIG` merging with native config | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). In `hybrid`, native OpenCode tools (`read`, `grep`, `glob`, `bash`) and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. Agent `mcp_servers` are merged into the effective config. See [OpenCode hybrid contract](#opencode-hybrid-contract). |
 | Antigravity | Temp config via `ANTIGRAVITY_CONFIG` when needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. Agent `mcp_servers` merged into temporary config only when needed. |
 
 **Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses Ralph proxy tools with native reads or searches, instead of just logging a warning. Codex strict runs add a live preflight that proves a real `ralph_proxy_read` works before the plan starts.
@@ -174,7 +174,7 @@ Default `--runtime-dir` is `$PWD/.$runtime`. At least one of `--hooks`, `--mcp`,
 
 **Codex trusted-project caveat:** project-scoped `.codex/config.toml` and `.codex/hooks.json` load only when Codex trusts the project. If hooks or MCP do not apply after `ralph setup`, add a trusted entry under `~/.codex/config.toml` (for example `[projects."/absolute/path/to/project"]` with `trust_level = "trusted"`) or trust the project in the Codex UI. User-level `~/.codex/config.toml` still loads when the project is untrusted, but project-local Ralph entries are skipped.
 
-**OpenCode MCP-first recommendation:** `ralph setup --hooks` copies the Ralph runtime plugin into `.opencode/plugins/`, but headless hook invocation is unproven. Prefer `ralph setup --mcp` (project-root `opencode.json`) or plan runs with `--ralph-mode hybrid` so Ralph MCP tools and compaction are authoritative. The setup command prints a note when installing OpenCode hooks.
+**OpenCode MCP-first recommendation:** `ralph setup --hooks` copies the Ralph runtime plugin into `.opencode/plugins/`, but headless hook invocation is unproven. Prefer `ralph setup --mcp` (project-root `opencode.json`) or plan runs with `--ralph-mode hybrid` so Ralph MCP tools are injected and native exploration output is compacted through the shared Ralph result-windowing path (MCP-proxy compaction is authoritative unless revalidation records `headless_mutation_reaches_model: yes`). The setup command prints a note when installing OpenCode hooks.
 
 Durable MCP details and per-runtime file paths: [MCP.md](MCP.md#durable-mcp-setup-ralph-setup---mcp). Per-run overlay behavior below still applies when you use `--ralph-mode native` or `hybrid` on `ralph run-plan`.
 
@@ -187,7 +187,7 @@ Native adapters are merged for one run and restored afterward (see [Overlay stat
 | Claude | Proven | True PostToolUse:Bash output replacement (Claude Code 2.1.162). PreToolUse input rewrite also available. |
 | Cursor | Proven (wrapper) | PreToolUse input rewrite and wrapper-based shell compaction (Cursor Agent 2026.06.03). Direct Shell output replacement is not available; MCP compaction covers that. |
 | Codex | Proven (wrapper) | Wrapper-based shell compaction via PreToolUse (Codex CLI 0.136.0). PostToolUse output replacement not proven. |
-| OpenCode | Unproven | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). `hybrid` keeps MCP compaction authoritative and records native hook effectiveness as unproven until that changes. |
+| OpenCode | Unproven (plugin hooks) | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; MCP-proxy native-result compaction is authoritative and the plugin hook path is best-effort until revalidation proves headless mutation reaches the model. |
 
 "Wrapper-based" means the hook rewrites the command to run through a Ralph wrapper that captures, compacts, and stores the output -- same storage and retrieval as everything else.
 
@@ -234,7 +234,17 @@ Use **`--ralph-mode hybrid`** when you want wrapper hooks plus MCP fallback (`fa
 
 ### OpenCode
 
-Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` into the workspace's `.opencode/plugins/` for the run and removes it afterward. Because headless hook invocation is unproven, runs record `native_hooks_effective=false` and treat MCP compaction as authoritative. Investigation notes: `bundle/.opencode/plugins/SPIKE-output-mutation.md`.
+<a id="opencode-hybrid-contract"></a>
+
+Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` into the workspace's `.opencode/plugins/` for the run and removes it afterward. Investigation notes: `bundle/.opencode/plugins/SPIKE-output-mutation.md`.
+
+**Hybrid tool access:** `--ralph-mode hybrid` injects Ralph MCP (`mcp.ralph.enabled=true`) and keeps native OpenCode exploration tools (`read`, `grep`, `glob`, `bash`) available. Ralph does not deny or hide native tools as a compaction strategy. Overlay summary records `tool_access_mode=hybrid` and capability `opencode-hybrid-native-and-ralph-mcp`.
+
+**Native exploration compaction:** Large native read/grep/glob/bash output is windowed through Ralph's shared `native-result-compact` path (same stored-result envelope and `ralph_proxy_result_*` retrieval as MCP proxy tools). Savings appear under `result_windowing` telemetry and `native_shell_compaction_authoritative` in overlay/usage records.
+
+**Authoritative compaction path:** By default, **MCP-proxy compaction** (`RALPH_NATIVE_RESULT_COMPACT=1`, `RALPH_PROXY_SHELL_COMPACT=1`, `native-result-compact-cli.sh`) is authoritative for OpenCode plan runs. Ralph checks `.ralph-workspace/artifacts/PLAN13/opencode-hook-revalidation.md` when present; only when that artifact records `headless_mutation_reaches_model: yes` does Ralph treat the **plugin-hook mutation** path (`tool.execute.after` in `ralph-runtime-hooks.ts`) as authoritative instead. Without that revalidation verdict, the staged plugin remains best-effort/conditional and runs record `native_hooks_effective=false`.
+
+**Cache-read reporting:** Provider cache-read token fields (`cache_read_input_tokens`, `cache_read_per_tool_turn`) are model/provider dependent and are **telemetry only**. They inform optimization hints (for example `RALPH_CACHE_READ_PER_TURN_WARN`) but are not Ralph's primary context-control mechanism; bounded tool output and result windowing are.
 
 ## Overlay state and cleanup
 

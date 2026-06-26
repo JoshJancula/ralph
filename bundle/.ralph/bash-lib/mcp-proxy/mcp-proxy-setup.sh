@@ -206,6 +206,42 @@ ralph_mcp_proxy_preflight() {
     return 1
   fi
 
+  # Parse tool names from tools/list response and detect the Claude-side namespace.
+  # The server exposes tools as `ralph_proxy_*`; the Claude CLI prepends `mcp__<name>__`
+  # where <name> is the server registration name ("ralph" in the generated MCP config).
+  # Cache the namespace once per session so downstream code (allowedTools, prompts,
+  # live preflight) can use it without re-running the handshake.
+  if command -v python3 >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    local detected_tools detected_namespace
+    detected_tools="$(python3 - "$stdout_file" <<'PY' 2>/dev/null
+import sys, json
+names = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            if isinstance(d.get("result"), dict) and isinstance(d["result"].get("tools"), list):
+                names = [t.get("name", "") for t in d["result"]["tools"] if t.get("name", "")]
+        except Exception:
+            pass
+print("\n".join(names))
+PY
+    )"
+    # The server config always registers the server as "ralph", so the Claude-side
+    # namespace is deterministically "mcp__ralph__". Prefer it when the tools list
+    # contains at least one ralph_proxy_* tool; fall back to the direct name otherwise.
+    if printf '%s\n' "$detected_tools" | grep -q "^ralph_proxy_"; then
+      detected_namespace="mcp__ralph__"
+    else
+      detected_namespace=""
+    fi
+    export RALPH_MCP_TOOL_NAMESPACE="${detected_namespace}"
+    export RALPH_MCP_DETECTED_TOOL_NAMES="${detected_tools}"
+  fi
+
   rm -rf "$tmpdir"
   echo "OK"
   return 0

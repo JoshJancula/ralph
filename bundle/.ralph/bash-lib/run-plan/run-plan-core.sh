@@ -119,7 +119,8 @@ ralph_mode_prompt_guidance_common_footer() {
 Prefer targeted search and partial file/log reads first.
 If the TODO already names exact commands or files, start there before rereading README/AGENTS or remapping the repo.
 - Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. TODO `verification:` is agent-run verification instructions; TODO `verify:` and plan-level `verify:` are strict runner-executed commands. The runner executes strict verify commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary when verification fails—do not rerun strict verify commands through agent-side shell helpers.
-- The async shell tools (`shell_start`, `shell_wait`, `shell_status`, `shell_read`, `shell_cancel`) are a manual fallback surface for when a human is directly monitoring a job. They are not the primary path for agent automation—prefer runner-first `verify:` metadata for verification and `ralph_proxy_shell` for synchronous commands. When you must use async tools, `shell_wait` is the blocking call; `shell_status` is an occasional spot check, never a polling loop.
+- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only (e.g., `ls`, `cat`, `grep`, `git status`). Do not run test/lint/build/install/docs-check commands through `ralph_proxy_shell`; those block the MCP transport and risk dropping the connection. Use `ralph_proxy_shell_start` + `ralph_proxy_shell_wait` for any command that could take more than a few seconds.
+- The async shell tools (`shell_start`, `shell_wait`, `shell_status`, `shell_read`, `shell_cancel`) are a manual fallback surface for when a human is directly monitoring a job. They are not the primary path for agent automation—prefer runner-first `verify:` metadata for verification. When you must use async tools, `shell_wait` is the blocking call; `shell_status` is an occasional spot check, never a polling loop.
 - When you must rerun a verification manually (agent-run `verification:` only), launch it with `ralph_proxy_shell_start` and block on completion with `ralph_proxy_shell_wait` (pass `waitSeconds` to control how long the server waits) so the wait happens server-side and `shell_status` does not flood the cache.
 - Treat `ralph_proxy_shell_status` as an occasional manual progress check—avoid short-interval polling loops, inspect output through `ralph_proxy_shell_read`, and cancel with `ralph_proxy_shell_cancel` when you need to intervene.
 EOF
@@ -2582,6 +2583,7 @@ ralph_run_plan_mcp_preflight_or_exit() {
     1|true|yes|on)
       ralph_run_plan_log "MCP preflight skipped (--skip-mcp-preflight or RALPH_SKIP_MCP_PREFLIGHT=1)"
       export RALPH_MCP_PREFLIGHT_PASSED=0
+      export RALPH_MCP_PREFLIGHT_OUTCOME="skipped"
       return 0
       ;;
   esac
@@ -2595,6 +2597,12 @@ ralph_run_plan_mcp_preflight_or_exit() {
   fi
   ralph_run_plan_log "MCP preflight: ${preflight_msg:-OK}"
   export RALPH_MCP_PREFLIGHT_PASSED=1
+  export RALPH_MCP_PREFLIGHT_OUTCOME="passed"
+  # RALPH_MCP_TOOL_NAMESPACE is set by ralph_mcp_proxy_preflight during the
+  # deterministic handshake; export it for downstream use in allowedTools and prompts.
+  if [[ -n "${RALPH_MCP_TOOL_NAMESPACE:-}" ]]; then
+    ralph_run_plan_log "MCP tool namespace detected: ${RALPH_MCP_TOOL_NAMESPACE}"
+  fi
 
   # Opt-in end-to-end gate: actually drive the claude CLI and confirm it can reach
   # a ralph proxy tool. The deterministic preflight above only validates the bash
@@ -3126,7 +3134,7 @@ PY
   if (( _summary_cache_read_tokens + _summary_cache_creation_tokens > 0 )); then
     _summary_cache_observed=1
   elif [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]] \
-    && grep -q '"opencode_cache_fields_seen"[[:space:]]*:[[:space:]]*true' "$RALPH_LOG_DIR/invocation-usage.json" 2>/dev/null; then
+    && grep -qE '"opencode_cache_fields_seen"[[:space:]]*:[[:space:]]*(true|1)' "$RALPH_LOG_DIR/invocation-usage.json" 2>/dev/null; then
     _summary_cache_observed=1
   fi
   if [[ "$_summary_cache_observed" -eq 1 ]]; then
@@ -3194,6 +3202,7 @@ from tool_call_classification import (
     empty_savings_bucket,
     finalize_savings_bucket,
 )
+from ralph_overlay_usage_fields import aggregate_opencode_cache_summary
 from usage_accounting import aggregate_records, apply_canonical_to_summary
 
 summary_path = sys.argv[1]
@@ -3352,6 +3361,9 @@ try:
         summary["byte_savings_by_path"] = byte_savings_by_path
 
     apply_canonical_to_summary(summary, invocations)
+    opencode_cache_summary = aggregate_opencode_cache_summary(invocations)
+    if opencode_cache_summary:
+        summary.update(opencode_cache_summary)
 
     tmp = f"{summary_path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -3546,7 +3558,7 @@ _ralph_append_invocation_usage_history() {
   local _tool_turns="${30:-0}"
   local _usage_merge_path="${31:-}"
   local _overlay_summary_path="${32:-}"
-  local _overlay_fields_py="${SCRIPT_DIR:-}/python/ralph-overlay-usage-fields.py"
+  local _overlay_fields_py="${SCRIPT_DIR:-}/python/ralph_overlay_usage_fields.py"
   if [[ ! -f "$_overlay_fields_py" ]]; then
     _overlay_fields_py=""
   fi
@@ -4294,9 +4306,10 @@ Rules:
 - Use the repo toolchain documented in README/AGENTS.md. Follow verification steps in the plan.
 - If the TODO already specifies exact files or commands, start there. Do not reread README/AGENTS.md or remap the repo unless the TODO requires missing context.
 - Prefer targeted search and partial file/log reads first; avoid full log reads unless needed.
+- \`ralph_proxy_shell\` (synchronous) is for short bounded exploratory commands only (e.g., \`ls\`, \`cat\`, \`grep\`, \`git status\`). Do not run test/lint/build/install/docs-check commands through \`ralph_proxy_shell\`; those block the MCP transport and risk dropping the connection. Use \`ralph_proxy_shell_start\` + \`ralph_proxy_shell_wait\` for any command that could take more than a few seconds.
 - Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side \`ralph_proxy_shell_start\` + \`ralph_proxy_shell_status\` loops; those helpers are a manual fallback for when a human is directly monitoring a job, not the primary automation path.
 - When you must rerun a verification manually (agent-run \`verification:\` only), launch it with \`ralph_proxy_shell_start\`, block on completion with \`ralph_proxy_shell_wait\` (pass \`waitSeconds\` to control how long the server waits), treat \`ralph_proxy_shell_status\` as an occasional manual progress check, inspect the stored output with \`ralph_proxy_shell_read\`, and cancel with \`ralph_proxy_shell_cancel\` when necessary.
-- The async shell tools are a manual fallback surface for when a human is monitoring a job. `shell_wait` is the blocking call only in that manual context; `shell_status` is an occasional spot check, never a polling loop.
+- The async shell tools are a manual fallback surface for when a human is monitoring a job. \`shell_wait\` is the blocking call only in that manual context; \`shell_status\` is an occasional spot check, never a polling loop.
 $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_request_verify_verdict")"
 
     fi
@@ -4304,6 +4317,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     if [[ "$_prompt_mode" == "fresh" ]]; then
       case "${RALPH_MODE:-no}" in
         ralph|hybrid)
+          PROMPT+=$'\n- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only. Do not run test/lint/build/install commands through `ralph_proxy_shell`; those block the MCP transport. Use `ralph_proxy_shell_start` + `ralph_proxy_shell_wait` for any command that could take more than a few seconds.'
           PROMPT+=$'\n- Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict `verify:` / plan-level `verify:` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through `ralph_proxy_shell_start` + `ralph_proxy_shell_status` loops; only rerun verification manually for agent-run `verification:` instructions.'
           PROMPT+=$'\n- The async shell tools are a manual fallback for when a human is directly monitoring a job. `shell_wait` is the blocking call only in that context; `shell_status` is an occasional spot check, never a polling loop.'
           ;;

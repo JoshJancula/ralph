@@ -82,12 +82,26 @@ class TestRetrievalEvalHarness(unittest.TestCase):
             if not safety:
                 continue
             result = by_id[qid]
-            top_set = set(result.top_results)
+            # Compare on path, not path:line, so the gate is drift-proof.
+            top_paths = {reval._normalize_path(r.split(":", 1)[0]) for r in result.top_results}
             for required in safety:
+                required_path = reval._normalize_path(required.split(":", 1)[0])
                 self.assertIn(
+                    required_path,
+                    top_paths,
+                    msg=f"safety gate failed for {qid}: missing {required_path!r} in top-10",
+                )
+
+    def test_safety_anchors_are_paths_not_line_numbers(self) -> None:
+        # Safety anchors must be project-relative paths so they survive edits
+        # that shift line numbers; reject any path:NN form to keep them stable.
+        per_base = self.baseline.get("per_query") or {}
+        for qid, entry in per_base.items():
+            for required in entry.get("safety_top10") or []:
+                self.assertNotRegex(
                     required,
-                    top_set,
-                    msg=f"safety gate failed for {qid}: missing {required!r} in top-10",
+                    r":\d+$",
+                    msg=f"safety anchor for {qid} is line-pinned: {required!r}",
                 )
 
     def test_json_report_is_deterministic(self) -> None:

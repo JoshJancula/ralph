@@ -9,13 +9,20 @@ silently reported as zero.
 
 from __future__ import annotations
 
-import unittest
-
+import json
 import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
 
 from ralph_script_loader import load_ralph_script
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+USAGE_RECORD = REPO_ROOT / "bundle/.ralph/python/ralph-usage-record.py"
+PYTHONPATH_DIR = REPO_ROOT / "bundle/.ralph/python"
 DEMUX = load_ralph_script("run-plan-cli-json-demux")
 
 
@@ -161,6 +168,163 @@ class TestOpencodeCacheExtraction(unittest.TestCase):
                 os.environ.pop("RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS", None)
             else:
                 os.environ["RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS"] = old_ambient
+
+
+class TestOpencodeCacheRepresentedCases(unittest.TestCase):
+    """Four provider reporting shapes represented in demux telemetry."""
+
+    def test_case_measured_cache_reads(self) -> None:
+        acc = _fresh_acc()
+        DEMUX.extract_usage(
+            {
+                "type": "step_finish",
+                "part": {"tokens": {"input": 50, "output": 10, "cache": {"read": 42, "write": 3}}},
+            },
+            "opencode",
+            acc,
+        )
+        DEMUX.finalize_usage(acc, "opencode")
+        self.assertEqual(acc["cache_read_input_tokens"], 42)
+        self.assertEqual(acc["opencode_cache_fields_seen"], 1)
+        self.assertEqual(acc["cache_read_input_tokens_estimated"], 0)
+        self.assertEqual(acc["cache_read_estimate_method"], "none")
+
+    def test_case_alternate_cached_token_fields(self) -> None:
+        acc = _fresh_acc()
+        DEMUX.extract_usage(
+            {
+                "type": "step_finish",
+                "part": {
+                    "tokens": {"input": 90, "output": 5, "cache": {"read": 0, "write": 0}},
+                    "usage": {"prompt_tokens_details": {"cached_tokens": 61}},
+                },
+            },
+            "opencode",
+            acc,
+        )
+        DEMUX.finalize_usage(acc, "opencode")
+        self.assertEqual(acc["cache_read_input_tokens"], 61)
+        self.assertEqual(acc["opencode_cache_fields_seen"], 1)
+        self.assertEqual(acc["cache_read_input_tokens_estimated"], 0)
+
+    def test_case_zero_reporting_provider(self) -> None:
+        acc = _fresh_acc()
+        DEMUX.extract_usage(
+            {"type": "step_finish", "part": {"tokens": {"input": 12000, "output": 8}}},
+            "opencode",
+            acc,
+        )
+        DEMUX.finalize_usage(acc, "opencode")
+        self.assertEqual(acc["cache_read_input_tokens"], 0)
+        self.assertEqual(acc["opencode_cache_fields_seen"], 0)
+        self.assertEqual(acc["cache_read_input_tokens_estimated"], 0)
+        self.assertEqual(acc["cache_read_estimate_method"], "none")
+
+    def test_case_estimated_cache_reads(self) -> None:
+        old_prompt = os.environ.get("RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED")
+        try:
+            os.environ["RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED"] = "1"
+            acc = _fresh_acc()
+            for input_tokens in (15000, 14000):
+                DEMUX.extract_usage(
+                    {
+                        "type": "step_finish",
+                        "part": {
+                            "tokens": {
+                                "input": input_tokens,
+                                "output": 0,
+                                "cache": {"read": 0, "write": 0},
+                            }
+                        },
+                    },
+                    "opencode",
+                    acc,
+                )
+            DEMUX.finalize_usage(acc, "opencode")
+            self.assertEqual(acc["cache_read_input_tokens"], 0)
+            self.assertEqual(acc["cache_read_input_tokens_estimated"], 14000)
+            self.assertEqual(acc["cache_read_estimate_method"], "prefix-stability")
+        finally:
+            if old_prompt is None:
+                os.environ.pop("RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED", None)
+            else:
+                os.environ["RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED"] = old_prompt
+
+
+class TestOpencodeCachePersistence(unittest.TestCase):
+    def test_demux_fields_persist_through_usage_record(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            demux_usage = tmp_path / "demux.usage.json"
+            demux_usage.write_text(
+                json.dumps(
+                    {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "tool_calls_total": 0,
+                        "tool_calls_by_tool": {},
+                        "tool_calls_sequence": [],
+                        "tool_turns": 2,
+                        "opencode_cache_fields_seen": 0,
+                        "cache_read_input_tokens_estimated": 9000,
+                        "cache_read_estimate_method": "prefix-stability",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            usage_file = tmp_path / "invocation-usage.json"
+            overlay_helper = REPO_ROOT / "bundle/.ralph/python/ralph_overlay_usage_fields.py"
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(PYTHONPATH_DIR)
+            env["RALPH_OPENCODE_PROMPT_CACHE_KEY_INJECTED"] = "1"
+            cmd = [
+                sys.executable,
+                str(USAGE_RECORD),
+                str(usage_file),
+                "1",
+                "ollama-cloud/kimi-k2.7-code",
+                "opencode",
+                "5",
+                "100",
+                "20",
+                "0",
+                "0",
+                "0",
+                "0.0",
+                "2026-01-01T00:01:00Z",
+                "2026-01-01T00:01:05Z",
+                "plan-cache",
+                "",
+                "fresh",
+                "",
+                "",
+                "0",
+                "",
+                "",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "",
+                "0",
+                "",
+                "2",
+                str(demux_usage),
+                "",
+                str(overlay_helper),
+            ]
+            subprocess.run(cmd, check=True, env=env)
+            with open(usage_file, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            invocation = doc["invocations"][0]
+            self.assertEqual(invocation["opencode_cache_fields_seen"], 0)
+            self.assertEqual(invocation["cache_read_input_tokens_estimated"], 9000)
+            self.assertEqual(invocation["cache_read_estimate_method"], "prefix-stability")
+            self.assertTrue(invocation["opencode_cache_key_injected"])
 
 
 if __name__ == "__main__":

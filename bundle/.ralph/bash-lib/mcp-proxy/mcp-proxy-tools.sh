@@ -352,23 +352,45 @@ ralph_mcp_proxy_tool_catalog_telemetry_append() {
 
 ralph_mcp_proxy_tool_catalog_telemetry_record_json() {
   local event="${1:-}" query="${2:-}" tool_name="${3:-}" rank="${4:-}" outcome="${5:-}"
-  local tools_list_count="${6:-}" schema_bytes="${7:-}" args_shape_json="${8:-{}}"
-  local timestamp query_hash
+  local tools_list_count="${6:-}" schema_bytes="${7:-}" args_shape_json="${8:-}"
+  local timestamp query_hash rank_json tools_list_count_json schema_bytes_json
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   query_hash=""
   if [[ -n "$query" ]]; then
     query_hash="$(ralph_hook_telemetry_sha256 "$query")"
   fi
+
+  rank_json="null"
+  if [[ -n "$rank" && "$rank" =~ ^[0-9]+$ ]]; then
+    rank_json="$rank"
+  fi
+
+  tools_list_count_json="null"
+  if [[ -n "$tools_list_count" && "$tools_list_count" =~ ^[0-9]+$ ]]; then
+    tools_list_count_json="$tools_list_count"
+  fi
+
+  schema_bytes_json="null"
+  if [[ -n "$schema_bytes" && "$schema_bytes" =~ ^[0-9]+$ ]]; then
+    schema_bytes_json="$schema_bytes"
+  fi
+
+  if [[ -n "$args_shape_json" ]] && jq -e . >/dev/null 2>&1 <<<"$args_shape_json"; then
+    :
+  else
+    args_shape_json='{}'
+  fi
+
   jq -nc \
     --arg timestamp "$timestamp" \
     --arg event "$event" \
     --arg queryHash "$query_hash" \
     --arg toolName "$tool_name" \
     --arg outcome "$outcome" \
-    --argjson rank "${rank:-null}" \
-    --argjson toolsListCount "${tools_list_count:-null}" \
-    --argjson schemaBytes "${schema_bytes:-null}" \
-    --argjson argumentShape "${args_shape_json:-{}}" \
+    --argjson rank "$rank_json" \
+    --argjson toolsListCount "$tools_list_count_json" \
+    --argjson schemaBytes "$schema_bytes_json" \
+    --argjson argumentShape "$args_shape_json" \
     '{
       timestamp: $timestamp,
       event: $event,
@@ -3987,10 +4009,158 @@ ralph_mcp_proxy_owned_tool_shell_cancel() {
   ralph_mcp_proxy_tool_success_json "$response_json"
 }
 
+ralph_mcp_proxy_owned_tool_shell_sync_timeout_seconds() {
+  # Hard ceiling for the synchronous ralph_proxy_shell path. Keep it strictly
+  # below the typical host MCP client transport timeout (Claude's default is
+  # 60s) so the single stdio read loop never blocks long enough to produce
+  # `-32000 Connection closed`. The policy-owned shell timeout still governs
+  # the underlying `timeout` wrapper; this value is a safety net above which we
+  # hand the command off to the async job machinery instead of blocking the
+  # transport. A command with an explicit `timeoutSeconds` arg below this cap
+  # continues to run synchronously.
+  local policy_timeout="${1:-}"
+  local default_cap=30
+  local user_cap
+  user_cap="${RALPH_PROXY_SHELL_SYNC_TIMEOUT_SECONDS:-}"
+  if [[ -n "$user_cap" ]] && [[ "$user_cap" =~ ^[0-9]+$ ]] && (( user_cap >= 1 )); then
+    if [[ -n "$policy_timeout" ]] && [[ "$policy_timeout" =~ ^[0-9]+$ ]] && (( user_cap > policy_timeout )); then
+      printf '%s\n' "$policy_timeout"
+      return 0
+    fi
+    printf '%s\n' "$user_cap"
+    return 0
+  fi
+  printf '%s\n' "$default_cap"
+}
+
+ralph_mcp_proxy_owned_tool_shell_handoff_json() {
+  # Structured handoff returned when a synchronous ralph_proxy_shell command
+  # would exceed the server-side hard timeout. The agent can re-issue the same
+  # command with ralph_proxy_shell_start and wait with ralph_proxy_shell_wait,
+  # or the caller can drive the returned nextActions directly.
+  local command="${1:-}"
+  local timeout_seconds="${2:-}"
+  local handoff_message="${3:-}"
+
+  jq -nc \
+    --arg command "$command" \
+    --arg timeoutSeconds "$timeout_seconds" \
+    --arg handoffMessage "$handoff_message" \
+    --arg nextTool "ralph_proxy_shell_start" \
+    --arg waitTool "ralph_proxy_shell_wait" \
+    --arg readTool "ralph_proxy_shell_read" \
+    '{
+      shellTimeoutHandoff: true,
+      command: $command,
+      timeoutSeconds: $timeoutSeconds,
+      message: $handoffMessage,
+      nextActions: [
+        {tool: $nextTool, args: {command: $command}},
+        {tool: $waitTool, args: {jobId: "<jobId from start response>", waitSeconds: $timeoutSeconds}},
+        {tool: $readTool, args: {jobId: "<jobId from start response>", stream: "combined", tailBytes: 8192}}
+      ]
+    }'
+}
+
+# Returns 0 (true) when the command matches a known verification/build shape
+# that is likely to block the synchronous shell for a long time. Patterns:
+# npm test, npm run <test|lint|build|check>, yarn/pnpm equivalents,
+# package-manager install, make <check|test|docs>, large unbounded find, etc.
+# Commands that pass an explicit timeoutSeconds are exempt (the caller signals
+# they know the runtime).
+ralph_mcp_proxy_shell_is_long_verification_command() {
+  local command="${1:-}"
+  local args_json="${2:-{}}"
+
+  # Commands with explicit timeoutSeconds are caller-managed; skip the heuristic.
+  local req_timeout
+  req_timeout="$(jq -r '.timeoutSeconds // empty' <<<"$args_json" 2>/dev/null)"
+  if [[ -n "$req_timeout" && "$req_timeout" != "null" && "$req_timeout" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  # Strip leading env assignments and sudo for pattern matching
+  local cmd_stripped="$command"
+  # Remove leading VAR=val pairs
+  while [[ "$cmd_stripped" =~ ^[A-Za-z_][A-Za-z0-9_]*=([^[:space:]]*)[[:space:]]+ ]]; do
+    cmd_stripped="${cmd_stripped#*=*[[:space:]]}"
+  done
+  # Remove leading whitespace
+  cmd_stripped="${cmd_stripped#"${cmd_stripped%%[! ]*}"}"
+
+  # npm / yarn / pnpm test, lint, build, check, install, ci, audit
+  if [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+(test|install|ci|audit)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+(test|install|ci|audit)$ ]]; then
+    return 0
+  fi
+  if [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+run[[:space:]]+(test|lint|build|check|typecheck|e2e|ci)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+run[[:space:]]+(test|lint|build|check|typecheck|e2e|ci)$ ]]; then
+    return 0
+  fi
+
+  # make check, make test, make docs, make all, make install
+  if [[ "$cmd_stripped" =~ ^make[[:space:]]+(check|test|docs|all|install|build)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^make[[:space:]]+(check|test|docs|all|install|build)$ ]]; then
+    return 0
+  fi
+
+  # pytest, jest, mocha, cargo test, go test, python -m pytest
+  if [[ "$cmd_stripped" =~ ^(pytest|jest|mocha|vitest)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^(pytest|jest|mocha|vitest)$ ]]; then
+    return 0
+  fi
+  if [[ "$cmd_stripped" =~ ^cargo[[:space:]]+(test|build|check)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^cargo[[:space:]]+(test|build|check)$ ]]; then
+    return 0
+  fi
+  if [[ "$cmd_stripped" =~ ^go[[:space:]]+(test|build|vet)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^go[[:space:]]+(test|build|vet)$ ]]; then
+    return 0
+  fi
+  if [[ "$cmd_stripped" =~ ^python[3]?[[:space:]]+-m[[:space:]]+(pytest|unittest)[[:space:]] ]] || \
+     [[ "$cmd_stripped" =~ ^python[3]?[[:space:]]+-m[[:space:]]+(pytest|unittest)$ ]]; then
+    return 0
+  fi
+
+  # Docs checks
+  if [[ "$cmd_stripped" =~ ^(bash|sh)[[:space:]].*docs[-_]check ]] || \
+     [[ "$cmd_stripped" =~ docs[-_](check|build|generate) ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+ralph_mcp_proxy_shell_long_verification_guidance_json() {
+  local command="${1:-}"
+  jq -nc \
+    --arg command "$command" \
+    --arg startTool "ralph_proxy_shell_start" \
+    --arg waitTool "ralph_proxy_shell_wait" \
+    --arg readTool "ralph_proxy_shell_read" \
+    '{
+      syncShellVerificationSteered: true,
+      command: $command,
+      message: "This command matches a long-running verification or build pattern. Use ralph_proxy_shell_start to run it asynchronously and poll with ralph_proxy_shell_wait, or use runner-owned verify: metadata in the plan so the runner executes it outside the MCP transport. Synchronous ralph_proxy_shell is reserved for short bounded exploratory commands.",
+      nextActions: [
+        {tool: $startTool, args: {command: $command}},
+        {tool: $waitTool, args: {jobId: "<jobId from start response>", waitSeconds: 120}},
+        {tool: $readTool, args: {jobId: "<jobId from start response>", stream: "combined", tailBytes: 8192}}
+      ]
+    }'
+}
+
+ralph_mcp_proxy_shell_verify_steer_enabled() {
+  case "${RALPH_PROXY_SHELL_VERIFY_STEER:-1}" in
+    0|false|no|off) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 ralph_mcp_proxy_owned_tool_shell() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
-  local command original_command timeout_sec max_shell_bytes tmp_out tmp_err stdout stderr text exit_code
+  local command original_command timeout_sec sync_timeout_sec max_shell_bytes tmp_out tmp_err stdout stderr text exit_code
 
   command="$(jq -r '.command // empty' <<< "$args_json")"
   original_command="$command"
@@ -4021,13 +4191,58 @@ ralph_mcp_proxy_owned_tool_shell() {
     return 0
   fi
 
+  # Server-side heuristic: detect verification/build commands that are likely to
+  # block the synchronous shell long enough to trigger a transport timeout. Return
+  # a structured guidance before execution so the agent can switch to async.
+  # The hard timeout below is the safety net; this is the early steer.
+  if ralph_mcp_proxy_shell_verify_steer_enabled && \
+     ralph_mcp_proxy_shell_is_long_verification_command "$command" "$args_json"; then
+    local guidance_json
+    guidance_json="$(ralph_mcp_proxy_shell_long_verification_guidance_json "$command")"
+    ralph_mcp_proxy_log_action "verify-steer" "tool=ralph_proxy_shell command=${command:0:120}"
+    ralph_mcp_proxy_tool_success_json "$guidance_json"
+    return 0
+  fi
+
   ralph_mcp_proxy_mutation_counter_bump
 
+  sync_timeout_sec="$(ralph_mcp_proxy_owned_tool_shell_sync_timeout_seconds "$timeout_sec")"
+
+  # Determine how long we are willing to block the single stdio read loop for a
+  # synchronous command. Use the caller's explicit timeoutSeconds when provided,
+  # otherwise fall back to the policy-owned shell timeout. Clamp execution to the
+  # transport-safe sync cap so long commands cannot outlive Claude's MCP client
+  # transport timeout and kill the connection. Short bounded commands finish well
+  # before the cap and behave exactly as before.
+  local requested_timeout execute_timeout
+  requested_timeout="$(jq -r '.timeoutSeconds // empty' <<< "$args_json")"
+  if [[ -z "$requested_timeout" || "$requested_timeout" == "null" ]] || [[ ! "$requested_timeout" =~ ^[0-9]+$ ]] || (( requested_timeout <= 0 )); then
+    requested_timeout="$timeout_sec"
+  fi
+  execute_timeout="$requested_timeout"
+  if (( execute_timeout > sync_timeout_sec )); then
+    execute_timeout="$sync_timeout_sec"
+  fi
+
   local exec_json
-  exec_json="$(ralph_native_shell_execute_command_json "$workspace" "$command" "bash" "$timeout_sec")"
+  exec_json="$(ralph_native_shell_execute_command_json "$workspace" "$command" "bash" "$execute_timeout")"
   stdout="$(jq -r '.stdout // ""' <<<"$exec_json")"
   stderr="$(jq -r '.stderr // ""' <<<"$exec_json")"
   exit_code="$(jq -r '.exitCode // 0' <<<"$exec_json")"
+
+  # When the transport-safe cap fires (timeout exit code 124), do not return a
+  # generic error and do not let the transport close. Return a structured
+  # handoff that points the agent at the async job machinery.
+  if [[ "$exit_code" -eq 124 ]]; then
+    local handoff_json
+    handoff_json="$(ralph_mcp_proxy_owned_tool_shell_handoff_json \
+      "$command" \
+      "$sync_timeout_sec" \
+      "Synchronous shell command reached the transport-safe timeout (${sync_timeout_sec}s). Re-issue with ralph_proxy_shell_start, wait with ralph_proxy_shell_wait, or read the result with ralph_proxy_shell_read.")"
+    ralph_mcp_proxy_log_action "timeout-handoff" "tool=ralph_proxy_shell cap=${sync_timeout_sec}s command=${command:0:120}"
+    ralph_mcp_proxy_tool_success_json "$handoff_json"
+    return 0
+  fi
 
   if ralph_mcp_proxy_shell_compact_enabled; then
     ralph_mcp_proxy_owned_tool_shell_compact \
