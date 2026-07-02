@@ -313,6 +313,67 @@ EOF
   rm -f "$prompt_funcs" "$runner"
 }
 
+@test "prompt_agent_source_mode does not block on read when stdin is not a tty" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local prompt_funcs runner
+  prompt_funcs="$(mktemp)"
+  runner="$(mktemp)"
+  cat bundle/.ralph/bash-lib/run-plan/run-plan-agent.sh > "$prompt_funcs"
+
+  cat <<'EOS' > "$runner"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$PROMPT_FUNCS_FILE"
+list_prebuilt_agent_ids() {
+  printf "%s\n" "architect"
+}
+AGENTS_ROOT_REL=".agents/agents"
+C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+NON_INTERACTIVE_FLAG=0
+PREBUILT_AGENT=""
+INTERACTIVE_SELECT_AGENT_FLAG=0
+INTERACTIVE_SELECT_MODEL_FLAG=0
+PLAN_MODEL_CLI=""
+prompt_agent_source_mode "$REPO_ROOT"
+printf "\nagent_flag=%s model_flag=%s\n" "$INTERACTIVE_SELECT_AGENT_FLAG" "$INTERACTIVE_SELECT_MODEL_FLAG"
+EOS
+  chmod +x "$runner"
+
+  # No pty: stdin is /dev/null, so the interactive read must be skipped rather
+  # than blocking forever. Flags stay at defaults so normal resolution proceeds.
+  run env PROMPT_FUNCS_FILE="$prompt_funcs" REPO_ROOT="$REPO_ROOT" bash "$runner" </dev/null
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent_flag=0 model_flag=0"* ]]
+  rm -f "$prompt_funcs" "$runner"
+}
+
+@test "antigravity AGENTS_ROOT_REL resolves to .agents/agents not .antigravity/agents" {
+  local out
+  out="$(
+    source bundle/.ralph/bash-lib/runtime-normalize.sh
+    printf '%s/agents' "$(ralph_runtime_config_dirname antigravity)"
+  )"
+  [ "$out" = ".agents/agents" ]
+}
+
+@test "antigravity model chain yields empty success (not failure) when stdin is not a tty" {
+  local out rc
+  out="$(
+    source bundle/.ralph/bash-lib/select-model/select-model-common.sh 2>/dev/null || true
+    NON_INTERACTIVE_FLAG=0
+    PLAN_MODEL_CLI="" ANTIGRAVITY_PLAN_MODEL="" OPENCODE_PLAN_MODEL="" CURSOR_PLAN_MODEL=""
+    # No model anywhere + non-tty stdin must not abort (set -e safe) and must
+    # not emit a model, so agy falls back to its own default.
+    _select_model_resolve_antigravity_chain "" "" "" "0" </dev/null
+    printf 'rc=%s' "$?"
+  )"
+  rc="${out##*rc=}"
+  [ "$rc" = "0" ]
+  [[ "${out%rc=*}" == "" ]]
+}
+
 @test "runtime-specific context branching toggles compact mode outside claude" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"

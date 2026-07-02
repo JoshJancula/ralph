@@ -71,6 +71,7 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 | `RALPH_PLAN_INVOCATION_TIMEOUT_RAW` | Invocation timeout string (e.g. `30m`, `1800s`, `2h`). Set by `--timeout`. |
 | `RALPH_PLAN_CONTEXT_BUDGET` | `full`, `standard`, or `lean`; controls how much context is attached to prompts (default `standard`). Invalid values fall back to `standard`. |
 | `RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME` | Cap on human-context bytes for fresh invocations when using standard/lean budget (default `2048`). |
+| `RALPH_PLAN_TRANSCRIPT_EVICTION` | `off`, `safe`, or `aggressive`; controls how aggressively Ralph compacts repeated tool-turn history into the runner-owned continuation summary. Defaults to `safe` in `ralph`/`hybrid` and `off` in `no`/`native` unless explicitly set. `safe` keeps transcript pruning on but bounded; `aggressive` may also lower the prompt context budget to `lean`. |
 
 ## Post-TODO verification
 
@@ -464,6 +465,8 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `RALPH_MCP_CONTEXTUAL_SEARCH` | off in `no`/`native`; auto `1` in `ralph`/`hybrid` when unset | When enabled, `ralph_proxy_search` ranks candidates with separate boosts for project-relative path, nearest enclosing symbol, and nearest Markdown/AsciiDoc heading (path-only fallback when Python or symbol extraction is unavailable). Returned hits keep the original `path:line` and source line text. Opt out with `RALPH_MCP_CONTEXTUAL_SEARCH=0`. Context indexes cache under `$RALPH_PLAN_WORKSPACE_ROOT/search-context/`. |
+| `RALPH_MCP_SEARCH_PER_FILE_CAP` | `40` | Maximum candidate lines `ralph_proxy_search` gathers from any single file before ranking. Distributes the overall candidate budget (`maxSearchCandidates`) across files so one large file cannot starve the pool; when a per-file or global cap drops lines, the result is flagged as truncated so the agent can narrow the path/glob or page via the result follow-up tools. Clamped to at most the candidate budget. Requires `python3` for camelCase/snake_case query-term expansion in the gather step; without it the search degrades to literal-term matching. |
+| `RALPH_MCP_SEARCH_PER_CHUNK_LIMIT` | `3` | Maximum ranked results `ralph_proxy_search` returns from any single enclosing chunk (nearest symbol or heading when contextual ranking is on, otherwise the file), so one large file or function cannot monopolize the top results and crowd out other relevant files. A two-pass fill keeps the result count at the requested limit when capping leaves slots. Set `0` to disable the cap. Tuned on the retrieval-eval fixture: `3` lifts recall@5/@10 with no precision, MRR, or safety-gate regression. |
 
 ### Native exploration result compaction (`RALPH_NATIVE_RESULT_COMPACT`)
 
@@ -539,9 +542,9 @@ The shell compact envelope's `command` field reflects the command actually execu
 - **Codex:** Bash `PreToolUse` input rewrite proven on CLI 0.136.0 (T5). Primary path is wrapper-based compaction (`RALPH_NATIVE_SHELL_WRAPPER=1`); simple rewrite only via fallback when wrapper is off.
 - **OpenCode:** No native rewrite adapter. Use MCP proxy rewrite (`RALPH_PROXY_SHELL_REWRITE=1` with `--ralph-mode ralph`).
 
-## Cookbook feature gates (Tier 1 through Tier 3)
+## Feature gates (Tier 1 through Tier 3)
 
-Cookbook optimizations follow the [rollout convention](#ralph-mode-plan-runs) above: enabled in `ralph`/`hybrid` unless the listed variable is `0`; disabled in `no`/`native` unless set to `1`. Invalid boolean values fail early. Migration and promotion rules: [docs/cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md).
+These Ralph feature gates follow the [rollout convention](#ralph-mode-plan-runs) above: enabled in `ralph`/`hybrid` unless the listed variable is `0`; disabled in `no`/`native` unless set to `1`. Invalid boolean values fail early.
 
 | Variable | Purpose |
 |----------|---------|

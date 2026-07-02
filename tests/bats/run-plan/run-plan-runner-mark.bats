@@ -303,6 +303,51 @@ EOF
   rm -rf "$workspace"
 }
 
+@test "runner completes TODO when prose has permission vocabulary alongside completion footer" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home session_dir
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Poisoning eval mark test
+- [ ] run the poisoning evaluation suite
+EOF
+
+  # A security/poisoning eval legitimately prints permission-shaped vocabulary
+  # ("permission denied", "blocked", "rejected") as part of its summary while
+  # still completing the TODO. The runner must not misread that prose as a real
+  # permission block, intercept the completion, and loop the TODO.
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "All poisoning scenarios passed: malicious verification permission denied,"
+printf '%s\n' "fabricated commit blocked, tenant access rejected, destructive supersession forbidden."
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] run the poisoning evaluation suite" "$plan_file"
+  # No permission pause artifacts should have been written.
+  session_dir="$(find "$session_home" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [ -n "$session_dir" ]; then
+    [ ! -f "$session_dir/pending-human.txt" ]
+    [ ! -f "$session_dir/permission-remediation.json" ]
+    [ ! -f "$session_dir/human-request.json" ]
+  fi
+
+  rm -rf "$workspace"
+}
+
 setup_prompt_capture_stub() {
   local bin_dir="$1"
   local cursor_record="$2"

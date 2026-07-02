@@ -23,6 +23,10 @@ if [[ -z "${RALPH_HOOK_TELEMETRY_LOADED:-}" ]]; then
   source "$_NATIVE_SHELL_LIB_DIR/../hook-telemetry.sh"
   RALPH_HOOK_TELEMETRY_LOADED=1
 fi
+if [[ -z "${RALPH_PROCESS_TEARDOWN_LOADED:-}" ]]; then
+  # shellcheck source=/dev/null
+  source "$_NATIVE_SHELL_LIB_DIR/../ralph-process-teardown.sh"
+fi
 if [[ -z "${RALPH_MCP_PROXY_RESULT_STORE_LOADED:-}" ]]; then
   # shellcheck source=/dev/null
   source "$_NATIVE_SHELL_LIB_DIR/../mcp-proxy/mcp-proxy-result-store.sh"
@@ -172,8 +176,90 @@ ralph_native_shell_append_footer() {
 }
 
 # Execute a shell command once in workspace; prints JSON with stdout, stderr, exitCode.
+ralph_native_shell_launch_process_group() {
+  local workspace="${1:-}" command="${2:-}" shell_exe="${3:-bash}" stdout_path="${4:-}" stderr_path="${5:-}"
+  local pid="" pgid="" sid="" isolated="false" launch_mode="plain"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$shell_exe" -c 'cd "$1" || exit 1; exec "$2" -c "$3"' _ "$workspace" "$shell_exe" "$command" >"$stdout_path" 2>"$stderr_path" &
+    pid=$!
+    isolated="true"
+    launch_mode="setsid"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os, sys; os.chdir(sys.argv[1]); os.setsid(); os.execvp(sys.argv[2], [sys.argv[2], "-c", sys.argv[3]])' "$workspace" "$shell_exe" "$command" >"$stdout_path" 2>"$stderr_path" &
+    pid=$!
+    isolated="true"
+    launch_mode="python-setsid"
+  else
+    "$shell_exe" -c 'cd "$1" || exit 1; exec "$2" -c "$3"' _ "$workspace" "$shell_exe" "$command" >"$stdout_path" 2>"$stderr_path" &
+    pid=$!
+  fi
+
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    sid="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  fi
+  [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="$pid"
+  [[ "$sid" =~ ^[0-9]+$ ]] || sid="$pgid"
+
+  RALPH_NATIVE_SHELL_LAUNCH_PID="$pid"
+  RALPH_NATIVE_SHELL_LAUNCH_PGID="$pgid"
+  RALPH_NATIVE_SHELL_LAUNCH_SID="$sid"
+  RALPH_NATIVE_SHELL_LAUNCH_ISOLATED="$isolated"
+  RALPH_NATIVE_SHELL_LAUNCH_MODE="$launch_mode"
+}
+
+ralph_native_shell_launch_process_group_json() {
+  ralph_native_shell_launch_process_group "$@"
+  jq -nc \
+    --argjson pid "${RALPH_NATIVE_SHELL_LAUNCH_PID:-0}" \
+    --argjson pgid "${RALPH_NATIVE_SHELL_LAUNCH_PGID:-0}" \
+    --argjson sid "${RALPH_NATIVE_SHELL_LAUNCH_SID:-0}" \
+    --argjson isolated "$([[ "${RALPH_NATIVE_SHELL_LAUNCH_ISOLATED:-false}" == "true" ]] && printf true || printf false)" \
+    --arg launchMode "${RALPH_NATIVE_SHELL_LAUNCH_MODE:-plain}" \
+    '{pid:$pid,pgid:$pgid,sid:$sid,isolatedProcessGroup:$isolated,launchMode:$launchMode}'
+}
+
+ralph_native_shell_terminate_spawned_job() {
+  local pid="${1:-}" pgid="${2:-}" isolated="${3:-false}" max_wait="${4:-1}"
+  local escalated=0
+
+  if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
+    if [[ "$pgid" =~ ^[0-9]+$ ]]; then
+      kill -TERM -"$pgid" 2>/dev/null || true
+      local waited=0
+      while (( waited < max_wait * 10 )) && kill -0 -"$pgid" 2>/dev/null; do
+        sleep 0.1
+        ((waited++)) || true
+      done
+      if kill -0 -"$pgid" 2>/dev/null; then
+        escalated=1
+        kill -KILL -"$pgid" 2>/dev/null || true
+      fi
+    fi
+  elif [[ "$pid" =~ ^[0-9]+$ ]]; then
+    ralph_kill_tree "$pid"
+    escalated=1
+  fi
+
+  printf '%s\n' "$escalated"
+}
+
+ralph_native_shell_pid_running() {
+  local pid="${1:-}"
+  local stat=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  [[ -n "$stat" ]] || return 0
+  [[ "$stat" == Z* ]] && return 1
+  return 0
+}
+
 ralph_native_shell_execute_command_json() {
   local workspace="${1:-}" command="${2:-}" shell_exe="${3:-bash}" timeout_sec="${4:-}"
+  local pid pgid sid isolated launch_mode timed_out=0 kill_escalated=0
+  local start_epoch now
 
   if [[ -z "$workspace" || -z "$command" ]]; then
     return 1
@@ -188,39 +274,31 @@ ralph_native_shell_execute_command_json() {
   local tmp_out tmp_err stdout stderr exit_code
   tmp_out="$(mktemp)"
   tmp_err="$(mktemp)"
+  ralph_native_shell_launch_process_group "$workspace" "$command" "$shell_exe" "$tmp_out" "$tmp_err"
+  pid="${RALPH_NATIVE_SHELL_LAUNCH_PID:-0}"
+  pgid="${RALPH_NATIVE_SHELL_LAUNCH_PGID:-0}"
+  sid="${RALPH_NATIVE_SHELL_LAUNCH_SID:-0}"
+  isolated="${RALPH_NATIVE_SHELL_LAUNCH_ISOLATED:-false}"
+  launch_mode="${RALPH_NATIVE_SHELL_LAUNCH_MODE:-plain}"
+
+  start_epoch="$(date +%s)"
+  while ralph_native_shell_pid_running "$pid"; do
+    now="$(date +%s)"
+    if (( now - start_epoch >= timeout_sec )); then
+      timed_out=1
+      kill_escalated="$(ralph_native_shell_terminate_spawned_job "$pid" "$pgid" "$isolated" 1)"
+      break
+    fi
+    sleep 0.1
+  done
+
   set +e
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$timeout_sec" "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$timeout_sec" "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
-  elif command -v perl >/dev/null 2>&1; then
-    # Portable fallback (macOS without GNU coreutils). perl alarm kills the
-    # child shell after timeout_sec; returns 124 on timeout to match `timeout(1)`.
-    perl -e '
-      my $timeout = shift;
-      my $workspace = shift;
-      my $command = shift;
-      my $shell = shift;
-      my $out = shift;
-      my $err = shift;
-      my $pid = fork();
-      if ($pid == 0) {
-        open(STDOUT, ">", $out) or die $!;
-        open(STDERR, ">", $err) or die $!;
-        chdir($workspace) or die $!;
-        exec($shell, "-c", $command) or die $!;
-      }
-      local $SIG{ALRM} = sub { kill "TERM", $pid; sleep 1; kill "KILL", $pid; waitpid($pid, 0); exit 124; };
-      alarm($timeout);
-      waitpid($pid, 0);
-      my $code = $? >> 8;
-      exit($code);
-    ' "$timeout_sec" "$workspace" "$command" "$shell_exe" "$tmp_out" "$tmp_err"
-  else
-    "$shell_exe" -c "cd \"\$1\" && $command" _ "$workspace" >"$tmp_out" 2>"$tmp_err"
-  fi
+  wait "$pid" 2>/dev/null
   exit_code=$?
   set -e
+  if (( timed_out == 1 )); then
+    exit_code=124
+  fi
   stdout="$(<"$tmp_out")"
   stderr="$(<"$tmp_err")"
   rm -f "$tmp_out" "$tmp_err"
@@ -229,7 +307,14 @@ ralph_native_shell_execute_command_json() {
     --arg stdout "$stdout" \
     --arg stderr "$stderr" \
     --argjson exitCode "$exit_code" \
-    '{stdout: $stdout, stderr: $stderr, exitCode: $exitCode}'
+    --argjson pid "${pid:-0}" \
+    --argjson pgid "${pgid:-0}" \
+    --argjson sid "${sid:-0}" \
+    --arg launchMode "$launch_mode" \
+    --argjson isolatedProcessGroup "$([[ "$isolated" == "true" ]] && printf true || printf false)" \
+    --argjson timedOut "$([[ "$timed_out" -eq 1 ]] && printf true || printf false)" \
+    --argjson killEscalated "$([[ "$kill_escalated" -eq 1 ]] && printf true || printf false)" \
+    '{stdout: $stdout, stderr: $stderr, exitCode: $exitCode, pid:$pid, pgid:$pgid, sid:$sid, launchMode:$launchMode, isolatedProcessGroup:$isolatedProcessGroup, timedOut:$timedOut, killEscalated:$killEscalated}'
 }
 
 # Shared compaction pipeline after command execution.

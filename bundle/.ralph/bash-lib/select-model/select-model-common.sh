@@ -261,8 +261,13 @@ _select_model_resolve_antigravity_chain() {
   if [[ "$ni" == "1" ]]; then
     return 1
   fi
-  if [[ ! -r /dev/tty ]]; then
-    return 1
+  # Only prompt when we truly have an attended terminal. A non-tty stdin
+  # (piped/background/caffeinate-wrapped run) must not reach the picker, which
+  # would otherwise block on /dev/tty or crash interactive-select with an
+  # unbound-variable read. Emit an empty model (exit 0) so the caller proceeds
+  # and agy uses its own default, matching cursor/opencode batch behavior.
+  if [[ ! -t 0 || ! -r /dev/tty ]]; then
+    return 0
   fi
 
   local picked=""

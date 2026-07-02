@@ -91,8 +91,10 @@ response_is_error() {
     .shellTimeoutHandoff == true
     and (.timeoutSeconds | tonumber) == 1
     and .command == "sleep 30"
-    and (.nextActions | map(.tool) | index("ralph_proxy_shell_start") != null)
+    and (.jobId | test("^[a-f0-9]{16}$"))
+    and .asyncJobCreated == true
     and (.nextActions | map(.tool) | index("ralph_proxy_shell_wait") != null)
+    and (.nextActions | map(.tool) | index("ralph_proxy_shell_status") != null)
     and (.nextActions | map(.tool) | index("ralph_proxy_shell_read") != null)
   '
 }
@@ -123,6 +125,19 @@ response_is_error() {
   second_response="$(invoke_sync_tool ralph_proxy_shell "$(jq -nc --arg command 'echo still-alive' '{command:$command}')" RALPH_PROXY_SHELL_SYNC_TIMEOUT_SECONDS=1)"
   [[ "$(response_is_error "$second_response")" == "false" ]]
   [[ "$(response_text "$second_response")" == "still-alive" ]]
+}
+
+@test "repeating the same sync-timeout command stays on the managed async path" {
+  command -v jq >/dev/null || skip "jq required"
+  command -v perl >/dev/null || skip "perl required for timeout fallback"
+
+  local first_response second_response first_json second_json
+  first_response="$(invoke_sync_tool ralph_proxy_shell "$(jq -nc --arg command 'sleep 20' '{command:$command}')" RALPH_PROXY_SHELL_SYNC_TIMEOUT_SECONDS=1)"
+  second_response="$(invoke_sync_tool ralph_proxy_shell "$(jq -nc --arg command 'sleep 20' '{command:$command}')" RALPH_PROXY_SHELL_SYNC_TIMEOUT_SECONDS=1)"
+  first_json="$(response_text "$first_response")"
+  second_json="$(response_text "$second_response")"
+  [[ "$(jq -r '.normalizedCommandHash' <<<"$first_json")" == "$(jq -r '.normalizedCommandHash' <<<"$second_json")" ]]
+  printf '%s\n' "$second_json" | jq -e '.shellTimeoutHandoff == true and (.asyncJobReused == true or .asyncJobCreated == true)'
 }
 
 @test "sync shell cap is configurable via RALPH_PROXY_SHELL_SYNC_TIMEOUT_SECONDS" {

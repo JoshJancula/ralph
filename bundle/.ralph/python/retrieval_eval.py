@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-DEFAULT_MAX_CANDIDATES = 500
+DEFAULT_MAX_CANDIDATES = 800
 EVAL_TOP_K = 10
 RANK_MAX_RESULTS = 50
 
@@ -452,6 +452,7 @@ def evaluate_query(
     *,
     state_root: Path | None = None,
     contextual: bool = False,
+    expand_terms=None,
 ) -> QueryEvalResult:
     query_id = str(entry.get("id") or "")
     query = str(entry.get("query") or "")
@@ -461,6 +462,10 @@ def evaluate_query(
     candidates = gather_candidates(
         query, project_root, search_path, glob_filter, max_candidates, normalize_terms
     )
+    if not candidates.strip() and expand_terms is not None:
+        candidates = gather_candidates(
+            query, project_root, search_path, glob_filter, max_candidates, expand_terms
+        )
     ranked = rank_candidates(
         query,
         candidates,
@@ -515,6 +520,12 @@ def run_evaluation(
     if state_root is None:
         state_root = project_root / ".ralph-workspace"
 
+    # Mirror the production gather exactly: gather with literal terms, and only
+    # when that pool is empty (cross-morphology query) fall back to identifier
+    # subtokens. Unconditional expansion floods the pool and regresses quality.
+    expand = getattr(search_rank, "expand_query_terms", None)
+    expand_terms = (lambda query: expand(query)[0]) if expand is not None else None
+
     payload = json.loads(queries_path.read_text(encoding="utf-8"))
     queries = payload.get("queries") or []
     results = [
@@ -525,6 +536,7 @@ def run_evaluation(
             search_rank.normalize_terms,
             state_root=state_root,
             contextual=contextual,
+            expand_terms=expand_terms,
         )
         for entry in queries
     ]

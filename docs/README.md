@@ -21,8 +21,7 @@ Pick what matches what you are doing. You can read them in any order.
 | [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
 | [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
 | [TOOLING.md](TOOLING.md) | Optional Ralph mode (`--ralph-mode` / `RALPH_MODE`): MCP proxy tools, shell output compaction, native adapters per runtime, overlay cleanup |
-| [cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md) | Tier 1 through Tier 3 cookbook optimization status and feature gates |
-| [cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md) | Migration and compatibility for cookbook features |
+| [ENVIRONMENT.md](ENVIRONMENT.md) | Full environment variable reference, session/resume controls, feature gates, models |
 | [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, what it changes on disk, `.cursorignore`, hooks, Codex caveats, killswitch configuration |
 | [BENCHMARKS.md](BENCHMARKS.md) | Token and compaction benchmark report across Ralph optimization paths (run `ralph benchmark`) |
 
@@ -87,6 +86,8 @@ RALPH_BASH_COMPACT=1 \
 **Supported command families:** `git status`, `git diff`, `bats`, `grep`, `find`, `npm test`, `pytest`, `vitest`, `tsc`, `eslint`, `cargo test`, `go test`, `ls`, `tree`, `docker ps`, `docker logs`, `kubectl`, `gh pr view`, `gh pr list`, and more.
 
 **Supported command families, defaults by mode, and the retrieval workflow:** [TOOLING.md#shell-output-compaction](TOOLING.md#shell-output-compaction).
+
+If you want Ralph to compact repeated tool-turn history inside the plan loop, use `RALPH_PLAN_TRANSCRIPT_EVICTION` (`safe` by default in `ralph`/`hybrid`). That setting trims the runner-owned continuation summary, not the underlying runtime transcript.
 
 ## Telemetry and usage tracking
 

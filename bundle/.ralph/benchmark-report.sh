@@ -108,12 +108,45 @@ while [[ $# -gt 0 ]]; do
         echo "Error: --plan requires a key or path." >&2
         exit 1
       fi
-      # Normalize: if it looks like a path or ends in .md, reduce to basename without .md
-      plan_value="$2"
+
+      raw_plan_value="$2"
+
+      # If the --plan value looks like a path, try to infer the containing
+      # .ralph-workspace and include its logs directory in the search set.
+      if [[ "$raw_plan_value" == /* || "$raw_plan_value" == */* ]]; then
+        plan_path="$raw_plan_value"
+
+        # Make relative paths absolute for safe directory walking.
+        if [[ "$plan_path" != /* ]]; then
+          plan_dir_rel="$(dirname "$plan_path")"
+          plan_dir_abs=""
+          if plan_dir_abs="$(cd "$plan_dir_rel" 2>/dev/null && pwd)"; then
+            plan_path="$plan_dir_abs/$(basename "$plan_path")"
+          fi
+        fi
+
+        _walk_dir=""
+        if _walk_dir_tmp="$(cd "$(dirname "$plan_path")" 2>/dev/null && pwd)"; then
+          _walk_dir="$_walk_dir_tmp"
+        fi
+
+        while [[ -n "$_walk_dir" ]]; do
+          if [[ "$(basename "$_walk_dir")" == ".ralph-workspace" ]]; then
+            ws_dir="$(dirname "$_walk_dir")"
+            add_logs_dir "${ws_dir}/.ralph-workspace/logs"
+            break
+          fi
+          if [[ "$_walk_dir" == "/" ]]; then
+            break
+          fi
+          _walk_dir="$(dirname "$_walk_dir")"
+        done
+      fi
+
+      # Preserve filter normalization (basename without .md) for matching.
+      plan_value="$raw_plan_value"
       if [[ "$plan_value" == */* ]] || [[ "$plan_value" == *.md ]]; then
-        # It looks like a path
         plan_value="$(basename "$plan_value")"
-        # Remove .md extension if present
         plan_value="${plan_value%.md}"
       fi
       plan_filters+=("$plan_value")

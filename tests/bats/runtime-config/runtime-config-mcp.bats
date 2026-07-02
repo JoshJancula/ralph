@@ -45,6 +45,26 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+@test "runtime-config-mcp resolves RALPH_RESULT_WINDOWING_LOG into ralph server env in cursor hybrid mode" {
+  [ -f "$LIB" ] || skip "runtime-config-mcp.sh missing"
+  [ -f "$PY" ] || skip "runtime-config-mcp.py missing"
+
+  LOG_PATH="$TEST_TMPDIR/windowing.jsonl"
+
+  run env RALPH_MODE=hybrid RALPH_RESULT_WINDOWING_LOG="$LOG_PATH" bash -c '
+    source "$1"
+    source "$2"
+    export WORKSPACE="$3"
+    export RALPH_PROJECT_ROOT="$3"
+    ralph_runtime_config_mcp_resolve cursor "$3" "" "$3"
+    jq -e --arg expected "$RALPH_RESULT_WINDOWING_LOG" \
+      ".mcpServers.ralph.env.RALPH_RESULT_WINDOWING_LOG == \$expected" \
+      "$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+  ' _ "$MCP_SETUP" "$LIB" "$WORKSPACE"
+
+  [ "$status" -eq 0 ]
+}
+
 @test "runtime-config-mcp fails before CLI for missing agent reference" {
   [ -f "$LIB" ] || skip "runtime-config-mcp.sh missing"
 

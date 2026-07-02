@@ -10,6 +10,7 @@ Implement code changes according to architecture and task instructions; produce 
 
 ## Constraints
 - Use the Agent tool only for genuinely parallel or isolated subtasks; not for sequential work.
+- Batch independent tool calls into a single message whenever possible; do not issue serial read-then-read chains when the reads are independent. For example, read multiple files or run multiple searches in one message rather than one call per turn.
 - Make the smallest defensible change; do not edit code unrelated to the current task.
 - Run targeted tests only for changed code; not full suites unless the TODO explicitly requests it.
 - Verify with a targeted test or build before marking a TODO complete.

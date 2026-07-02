@@ -582,6 +582,13 @@ prompt_agent_source_mode() {
   if [[ "$NON_INTERACTIVE_FLAG" == "1" ]]; then
     return 0
   fi
+  # Without an attached terminal, `read` below would block forever waiting for
+  # input that never arrives (piped/headless/caffeinate-wrapped runs). Skip the
+  # menu and let default agent/model resolution proceed, mirroring the TTY guard
+  # in prompt_select_prebuilt_agent.
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
   if [[ -n "$PREBUILT_AGENT" || "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" ]]; then
     return 0
   fi

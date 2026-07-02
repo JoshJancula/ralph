@@ -90,6 +90,28 @@ ralph_validate_session_strategy() {
   esac
 }
 
+ralph_validate_transcript_eviction() {
+  local mode="${1:-}"
+  case "$mode" in
+    off|safe|aggressive|"")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ralph_normalize_transcript_eviction() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    off|safe|aggressive) printf '%s' "$value" ;;
+    "") printf '' ;;
+    *) printf '%s' "${1:-}" ;;
+  esac
+}
+
 ralph_validate_ralph_mode() {
   local mode="${1:-}"
   case "$mode" in
@@ -149,6 +171,58 @@ ralph_apply_mode_compaction_defaults() {
   fi
 }
 
+# Apply transcript-eviction defaults for safe prompt pruning and continuation-summary compaction.
+# Args: $1 - resolved RALPH_MODE value (no, native, ralph, hybrid)
+# Sets RALPH_PLAN_TRANSCRIPT_EVICTION=safe in ralph|hybrid when unset, off otherwise.
+# Safe mode also ensures continuation summaries are enabled and rendered compactly.
+# Explicit env values win; unset-only defaults apply.
+ralph_apply_mode_transcript_eviction_defaults() {
+  local mode="${1:-no}"
+
+  if [[ -z "${RALPH_PLAN_TRANSCRIPT_EVICTION:-}" ]]; then
+    case "$mode" in
+      ralph|hybrid)
+        RALPH_PLAN_TRANSCRIPT_EVICTION=safe
+        export RALPH_PLAN_TRANSCRIPT_EVICTION
+        ;;
+      *)
+        RALPH_PLAN_TRANSCRIPT_EVICTION=off
+        export RALPH_PLAN_TRANSCRIPT_EVICTION
+        ;;
+    esac
+  fi
+
+  case "${RALPH_PLAN_TRANSCRIPT_EVICTION:-off}" in
+    safe|aggressive)
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY=1
+        export RALPH_CONTINUATION_SUMMARY
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_HIERARCHICAL:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_HIERARCHICAL=1
+        export RALPH_CONTINUATION_SUMMARY_HIERARCHICAL
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES=8192
+        export RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES
+      fi
+      ;;
+  esac
+
+  case "${RALPH_PLAN_TRANSCRIPT_EVICTION:-off}" in
+    aggressive)
+      if [[ -z "${RALPH_PLAN_CONTEXT_BUDGET:-}" ]]; then
+        RALPH_PLAN_CONTEXT_BUDGET=lean
+        export RALPH_PLAN_CONTEXT_BUDGET
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT=3
+        export RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT
+      fi
+      ;;
+  esac
+}
+
 # Map RALPH_MODE to internal behavior knobs.
 # Args: $1 - resolved RALPH_MODE value (no, native, ralph, hybrid)
 # Sets: RALPH_AGENT_TOOL_ACCESS, RALPH_NATIVE_HOOKS
@@ -173,6 +247,7 @@ ralph_apply_ralph_mode_to_knobs() {
       ;;
   esac
   ralph_apply_mode_compaction_defaults "$mode"
+  ralph_apply_mode_transcript_eviction_defaults "$mode"
   if [[ -z "${RALPH_MCP_CONTEXTUAL_SEARCH:-}" ]]; then
     case "$mode" in
       ralph|hybrid)
@@ -600,6 +675,14 @@ ralph_run_plan_parse_args() {
   if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
     ralph_validate_claude_permission_mode "$CLAUDE_PLAN_PERMISSION_MODE"
     export CLAUDE_PLAN_PERMISSION_MODE
+  fi
+
+  if [[ -n "${RALPH_PLAN_TRANSCRIPT_EVICTION:-}" ]]; then
+    RALPH_PLAN_TRANSCRIPT_EVICTION="$(ralph_normalize_transcript_eviction "$RALPH_PLAN_TRANSCRIPT_EVICTION")"
+    if ! ralph_validate_transcript_eviction "$RALPH_PLAN_TRANSCRIPT_EVICTION"; then
+      ralph_die "Error: RALPH_PLAN_TRANSCRIPT_EVICTION must be one of off, safe, or aggressive."
+    fi
+    export RALPH_PLAN_TRANSCRIPT_EVICTION
   fi
 
   # Resolve RALPH_MODE from the flag or env var only. When neither supplies a

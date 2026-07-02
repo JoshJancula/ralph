@@ -63,7 +63,9 @@ ralph_run_plan_routing_set_runtime_context() {
   RUNTIME="$runtime"
   RUNTIME_ROOT="$(ralph_resolve_runtime_root "$runtime" "$workspace")" || return 1
   export RALPH_RUNTIME_ROOT="$RUNTIME_ROOT"
-  AGENTS_ROOT_REL=".${runtime}/agents"
+  # Derive the display label from the runtime's config dirname so antigravity
+  # shows ".agents/agents" rather than the bogus ".antigravity/agents".
+  AGENTS_ROOT_REL="$(ralph_runtime_config_dirname "$runtime")/agents"
   AGENTS_ROOT="$RUNTIME_ROOT/agents"
 
   SELECT_MODEL_SCRIPT="$(ralph_select_model_script "$runtime" "$workspace" "$script_dir")" || return 1

@@ -124,7 +124,7 @@ ralph_run_plan_remove_invocation_sidecars() {
 # Cancel runner-owned async shell jobs recorded under the plan tool-results tree.
 ralph_run_plan_async_shell_jobs_teardown() {
   local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
-  local root state_file pid status
+  local root state_file pid pgid isolated status
   [[ -n "$plan_key" && -n "${WORKSPACE:-}" ]] || return 0
   [[ "$plan_key" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
   root="$WORKSPACE/.ralph-workspace/tool-results/$plan_key/shell-jobs"
@@ -135,9 +135,16 @@ ralph_run_plan_async_shell_jobs_teardown() {
     status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
     [[ "$status" == "running" ]] || continue
     pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    ralph_kill_tree_and_reap "$pid"
-    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
+    pgid="$(jq -r '.pgid // empty' "$state_file" 2>/dev/null || true)"
+    isolated="$(jq -r '.isolatedProcessGroup // false' "$state_file" 2>/dev/null || true)"
+    if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
+      ralph_kill_process_group "$pgid" 1
+    elif [[ "$pid" =~ ^[0-9]+$ ]]; then
+      ralph_kill_tree_and_reap "$pid"
+    else
+      continue
+    fi
+    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt | .terminationReason = "cancelled"' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
   done < <(find "$root" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
 }
 

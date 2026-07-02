@@ -56,6 +56,7 @@ ralph_run_plan_sync_mode_knobs() {
   esac
   export RALPH_MCP_TOOLS_ENABLED
   ralph_apply_mode_compaction_defaults "$mode"
+  ralph_apply_mode_transcript_eviction_defaults "$mode"
 }
 
 # shellcheck source=run-plan-reasoning-effort.sh

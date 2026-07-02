@@ -350,6 +350,34 @@ ralph_mcp_proxy_tool_catalog_telemetry_append() {
   ralph_hook_telemetry_append_jsonl "$log_path" "$record_json"
 }
 
+# Emit a lightweight per-search outcome record for retrieval-quality tracking.
+# result_count==0 is the in-loop search-miss signal; expanded_fallback marks a
+# cross-morphology query that needed subtoken gathering; pool_capped marks a
+# truncated candidate pool. No-op unless telemetry is enabled.
+ralph_mcp_proxy_search_telemetry_emit() {
+  local query="${1:-}" result_count="${2:-0}" candidate_count="${3:-0}"
+  local expanded_fallback="${4:-0}" pool_capped="${5:-0}"
+  local timestamp query_hash record_json
+  ralph_hook_telemetry_enabled || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  query_hash=""
+  [[ -n "$query" ]] && query_hash="$(ralph_hook_telemetry_sha256 "$query")"
+  [[ "$result_count" =~ ^[0-9]+$ ]] || result_count=0
+  [[ "$candidate_count" =~ ^[0-9]+$ ]] || candidate_count=0
+  record_json="$(jq -nc \
+    --arg timestamp "$timestamp" \
+    --arg queryHash "$query_hash" \
+    --argjson resultCount "$result_count" \
+    --argjson candidateCount "$candidate_count" \
+    --argjson expandedFallback "$([[ "$expanded_fallback" == "1" ]] && echo true || echo false)" \
+    --argjson poolCapped "$([[ "$pool_capped" == "1" ]] && echo true || echo false)" \
+    --argjson searchMiss "$([[ "$result_count" -eq 0 ]] && echo true || echo false)" \
+    '{timestamp:$timestamp, event:"search_outcome", queryHash:$queryHash, resultCount:$resultCount, candidateCount:$candidateCount, expandedFallback:$expandedFallback, poolCapped:$poolCapped, searchMiss:$searchMiss}' 2>/dev/null || true)"
+  [[ -n "$record_json" ]] || return 0
+  ralph_mcp_proxy_tool_catalog_telemetry_append "$record_json"
+}
+
 ralph_mcp_proxy_tool_catalog_telemetry_record_json() {
   local event="${1:-}" query="${2:-}" tool_name="${3:-}" rank="${4:-}" outcome="${5:-}"
   local tools_list_count="${6:-}" schema_bytes="${7:-}" args_shape_json="${8:-}"
@@ -405,7 +433,8 @@ ralph_mcp_proxy_tool_catalog_telemetry_record_json() {
 }
 
 ralph_mcp_proxy_tool_search_sanitize_args_json() {
-  local args_json="${1:-{}}"
+  local args_json="${1:-}"
+  [[ -n "$args_json" ]] || args_json='{}'
   jq -c 'if type == "object" then with_entries(.value = (.value | type)) else {} end' <<<"$args_json" 2>/dev/null || printf '{}'
 }
 
@@ -784,6 +813,84 @@ ralph_mcp_proxy_canonicalize_path() {
   printf '%s/%s\n' "$dir" "$(basename "$expanded")"
 }
 
+# Resolve a path purely lexically: expand ~, collapse '//' and '/.' segments,
+# without touching the filesystem (no symlink resolution, no existence check).
+# Callers must guard against '..' separately; this helper assumes the input has
+# already passed the parent-traversal check. Used to tell "path does not exist
+# yet but would be inside the workspace" apart from "path escapes the workspace".
+ralph_mcp_proxy_lexical_path() {
+  local raw="${1:-}"
+  [[ -n "$raw" ]] || return 1
+  if [[ "$raw" == "~" ]]; then
+    raw="$HOME"
+  elif [[ "$raw" == ~/* ]]; then
+    raw="$HOME/${raw#~/}"
+  fi
+  local seg result=""
+  local IFS=/
+  for seg in $raw; do
+    case "$seg" in
+      ''|.) continue ;;
+      *) result+="/$seg" ;;
+    esac
+  done
+  printf '%s\n' "${result:-/}"
+}
+
+# Transport-safe time cap for the synchronous read-only search tools
+# (ralph_proxy_grep / _search / _repomap / _glob). The MCP server processes
+# requests on a single stdio read loop, so a search over a large tree blocks
+# every queued request and trips the host client's per-request transport
+# timeout (`-32001 Request timed out`). Keep this strictly below that client
+# timeout. Overridable with RALPH_PROXY_SEARCH_SYNC_TIMEOUT_SECONDS.
+ralph_mcp_proxy_search_sync_timeout_seconds() {
+  local user_cap="${RALPH_PROXY_SEARCH_SYNC_TIMEOUT_SECONDS:-}"
+  if [[ -n "$user_cap" ]] && [[ "$user_cap" =~ ^[0-9]+$ ]] && (( user_cap >= 1 )); then
+    printf '%s\n' "$user_cap"
+    return 0
+  fi
+  printf '%s\n' 25
+}
+
+# Run a read-only search command with stdout captured to <outfile>, bounded by
+# the transport-safe cap when the `timeout` binary is available. Returns the
+# command's exit status, or 124 when the cap fired (GNU/BSD `timeout`
+# convention) so callers can surface a recoverable "narrow your scope" error
+# instead of silently returning zero results or blocking the transport.
+# Usage: ralph_mcp_proxy_run_search_cmd <outfile> -- <cmd> [args...]
+ralph_mcp_proxy_run_search_cmd() {
+  local outfile="${1:-}"
+  shift || true
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+  local secs rc
+  secs="$(ralph_mcp_proxy_search_sync_timeout_seconds)"
+  if [[ -n "$secs" ]] && command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@" >"$outfile" 2>/dev/null
+    rc=$?
+  else
+    "$@" >"$outfile" 2>/dev/null
+    rc=$?
+  fi
+  return "$rc"
+}
+
+# Exec a read-only enumeration command bounded by the transport-safe cap,
+# streaming its stdout to the caller's pipe. Unlike ralph_mcp_proxy_run_search_cmd
+# this is for pipeline/process-substitution contexts (e.g. `find ... -print0`
+# feeding a read loop): on timeout the stream simply ends early and the caller
+# proceeds with partial results, which is acceptable for best-effort enumeration.
+ralph_mcp_proxy_search_timeout_cmd() {
+  local secs
+  secs="$(ralph_mcp_proxy_search_sync_timeout_seconds)"
+  if [[ -n "$secs" ]] && command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
 ralph_mcp_proxy_path_is_hidden_debug_log() {
   local candidate="${1:-}"
   local base
@@ -1012,6 +1119,31 @@ ralph_mcp_proxy_path_is_allowed() {
           printf '%s\n' "$resolved_path"
           return 0
         fi
+      fi
+    fi
+    # Canonicalization can fail for a path whose parent directory does not exist
+    # (e.g. a relative path with a wrong prefix). Such a path is a mistake, not a
+    # boundary escape. If the lexical (filesystem-free) form would still fall
+    # under an allowed root, report "does not exist" (2) instead of "outside the
+    # workspace" (1) so callers can return a recoverable error rather than a
+    # fatal violation that kills the server.
+    if [[ "$canonical_ok" -eq 0 ]]; then
+      local lexical
+      lexical="$(ralph_mcp_proxy_lexical_path "$candidate" 2>/dev/null || true)"
+      if [[ -n "$lexical" ]]; then
+        local root root_real root_lex
+        for root in "${allowed_roots[@]}"; do
+          root_real="$(ralph_mcp_proxy_resolve_allowed_root "$root" 2>/dev/null)" || root_real=""
+          root_real="${root_real%/}"
+          root_lex="$(ralph_mcp_proxy_lexical_path "$root" 2>/dev/null || true)"
+          root_lex="${root_lex%/}"
+          if [[ -n "$root_real" && ( "$lexical" == "$root_real" || "$lexical" == "$root_real/"* ) ]]; then
+            return 2
+          fi
+          if [[ -n "$root_lex" && ( "$lexical" == "$root_lex" || "$lexical" == "$root_lex/"* ) ]]; then
+            return 2
+          fi
+        done
       fi
     fi
     return 1
@@ -1396,6 +1528,7 @@ ralph_mcp_proxy_result_read_emit_response() {
   local byte_start="${5:-0}"
   local byte_limit="${6:-0}"
   local auto_ranged="${7:-0}"
+  local source_label="${8:-}"
 
   local byte_cap token_cap read_window preview original_bytes returned_bytes
   local envelope_json next_actions_json breakpoints_json extra_json guidance_text
@@ -1439,7 +1572,9 @@ ralph_mcp_proxy_result_read_emit_response() {
     extra_json="$(jq -nc \
       --argjson autoRanged "$([[ "$auto_ranged" == "1" ]] && echo true || echo false)" \
       --arg guidance "$guidance_text" \
-      '{autoRanged: $autoRanged, guidance: $guidance}')"
+      --arg source "$source_label" \
+      '{autoRanged: $autoRanged, guidance: $guidance}
+        | if $source == "" then . else . + {source: $source} end')"
     envelope_json="$(ralph_mcp_proxy_result_envelope_build_json \
       "$preview" \
       "$original_bytes" \
@@ -1946,7 +2081,7 @@ ralph_mcp_proxy_enumerate_eligible_files() {
     [[ -n "$rel" && "$rel" != "$abs_path" ]] || continue
     printf '%s\0' "$rel"
   done >"$out_file" < <(
-    find "$search_root_abs" \
+    ralph_mcp_proxy_search_timeout_cmd find "$search_root_abs" \
       \( \
         -name .git -o \
         -name .ralph-workspace -o \
@@ -2161,6 +2296,7 @@ ralph_mcp_proxy_owned_tool_grep() {
   export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
 
   tmp_out="$(mktemp)"
+  local search_rc=0
   if command -v rg >/dev/null 2>&1; then
     local -a rg_args=(--line-number --no-heading --color=never)
     if [[ -n "$glob_filter" ]]; then
@@ -2171,14 +2307,24 @@ ralph_mcp_proxy_owned_tool_grep() {
         : >"$tmp_out"
       elif [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "${search_path##*/}"; then
         : >"$tmp_out"
-      elif ! rg "${rg_args[@]}" "$pattern" "$search_path" >"$tmp_out" 2>/dev/null; then
-        : >"$tmp_out"
+      else
+        ralph_mcp_proxy_run_search_cmd "$tmp_out" -- rg "${rg_args[@]}" "$pattern" "$search_path"
+        search_rc=$?
       fi
-    elif ! rg "${rg_args[@]}" "$pattern" "$search_path" >"$tmp_out" 2>/dev/null; then
-      : >"$tmp_out"
+    else
+      ralph_mcp_proxy_run_search_cmd "$tmp_out" -- rg "${rg_args[@]}" "$pattern" "$search_path"
+      search_rc=$?
     fi
   else
     ralph_mcp_proxy_owned_tool_grep_search "$pattern" "$search_path" "$glob_filter" "$tmp_out"
+  fi
+  if [[ "$search_rc" -eq 124 ]]; then
+    rm -f "$tmp_out"
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_grep: search exceeded $(ralph_mcp_proxy_search_sync_timeout_seconds)s; narrow the path or glob filter and retry"
+    return 0
+  fi
+  if [[ "$search_rc" -ne 0 ]]; then
+    : >"$tmp_out"
   fi
   full_text="$(<"$tmp_out")"
   rm -f "$tmp_out"
@@ -2286,10 +2432,15 @@ ralph_mcp_proxy_owned_tool_search_build_or_pattern() {
   local query="${1:-}"
   local -a terms=()
   local term escaped joined=""
+  local term_source="${2:-original}"
+  local term_cmd=ralph_mcp_proxy_owned_tool_search_normalize_terms
+  if [[ "$term_source" == "expanded" ]]; then
+    term_cmd=ralph_mcp_proxy_owned_tool_search_expanded_terms
+  fi
   while IFS= read -r term; do
     [[ -n "$term" ]] || continue
     terms+=("$term")
-  done < <(ralph_mcp_proxy_owned_tool_search_normalize_terms "$query")
+  done < <("$term_cmd" "$query")
   if [[ ${#terms[@]} -eq 0 ]]; then
     return 1
   fi
@@ -2318,6 +2469,25 @@ ralph_mcp_proxy_contextual_search_enabled() {
 
 ralph_mcp_proxy_owned_tool_search_rank_script() {
   printf '%s/../python/mcp-proxy-search-rank.py\n' "${RALPH_COMPACTORS_LIB_DIR:-$_MCP_PROXY_TOOLS_LIB_DIR}"
+}
+
+ralph_mcp_proxy_owned_tool_search_normalize_script() {
+  printf '%s/../python/mcp-proxy-search-normalize-terms.py\n' "${RALPH_COMPACTORS_LIB_DIR:-$_MCP_PROXY_TOOLS_LIB_DIR}"
+}
+
+# Emit original query terms plus derived identifier subtokens (camelCase /
+# snake_case / digit splits) so the candidate gather reaches morphological
+# variants. Expansion is gated on python3 + the normalize script; without them
+# this degrades to plain (un-expanded) normalization, keeping the awk-only path
+# internally consistent with the awk ranker (neither side expands).
+ralph_mcp_proxy_owned_tool_search_expanded_terms() {
+  local query="${1:-}"
+  local normalize_script
+  normalize_script="$(ralph_mcp_proxy_owned_tool_search_normalize_script)"
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$normalize_script" ]]; then
+    python3 "$normalize_script" --expand "$query" && return 0
+  fi
+  ralph_mcp_proxy_owned_tool_search_normalize_terms "$query"
 }
 
 ralph_mcp_proxy_owned_tool_search_rank_awk() {
@@ -2384,6 +2554,21 @@ ralph_mcp_proxy_owned_tool_search_relative_path() {
   printf '%s\n' "${filepath##*/}"
 }
 
+# Per-file ceiling on gathered candidate lines. Distributes the global
+# max_candidates budget across files so one large file cannot starve the pool
+# and truncation is relevance-distributed rather than first-N-by-path.
+ralph_mcp_proxy_owned_tool_search_per_file_cap() {
+  local max_candidates="${1:-500}"
+  local cap="${RALPH_MCP_SEARCH_PER_FILE_CAP:-40}"
+  if ! [[ "$cap" =~ ^[0-9]+$ ]] || [[ "$cap" -lt 1 ]]; then
+    cap=40
+  fi
+  if [[ "$max_candidates" =~ ^[0-9]+$ ]] && [[ "$cap" -gt "$max_candidates" ]]; then
+    cap="$max_candidates"
+  fi
+  printf '%s\n' "$cap"
+}
+
 ralph_mcp_proxy_owned_tool_search_gather_rg() {
   local or_pattern="${1:-}"
   local search_path="${2:-}"
@@ -2392,6 +2577,8 @@ ralph_mcp_proxy_owned_tool_search_gather_rg() {
   local output_file="${5:-}"
   local -a rg_args=()
   local count=0
+  local per_file_cap last_relpath="" file_count=0
+  per_file_cap="$(ralph_mcp_proxy_owned_tool_search_per_file_cap "$max_candidates")"
 
   [[ -n "$or_pattern" && -n "$search_path" && -n "$output_file" ]] || return 1
   : >"$output_file"
@@ -2422,16 +2609,26 @@ ralph_mcp_proxy_owned_tool_search_gather_rg() {
 
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    count=$((count + 1))
-    if [[ "$count" -gt "$max_candidates" ]]; then
-      break
-    fi
     local relpath lineno content
     relpath="${line%%:*}"
     relpath="$(ralph_mcp_proxy_owned_tool_search_relative_path "$search_path" "$relpath")"
     lineno="${line#*:}"
     lineno="${lineno%%:*}"
     content="${line#*:*:}"
+    if [[ "$relpath" != "$last_relpath" ]]; then
+      last_relpath="$relpath"
+      file_count=0
+    fi
+    file_count=$((file_count + 1))
+    if [[ "$file_count" -gt "$per_file_cap" ]]; then
+      RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED=1
+      continue
+    fi
+    count=$((count + 1))
+    if [[ "$count" -gt "$max_candidates" ]]; then
+      RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED=1
+      break
+    fi
     printf '%s:%s:%s\n' "$relpath" "$lineno" "$content"
   done < <(rg "${rg_args[@]}" "$search_path" 2>/dev/null || true) >>"$output_file"
 }
@@ -2443,6 +2640,8 @@ ralph_mcp_proxy_owned_tool_search_gather_fallback() {
   local max_candidates="${4:-500}"
   local output_file="${5:-}"
   local tmp_files relpath abs_path line lineno content count=0
+  local per_file_cap file_count=0
+  per_file_cap="$(ralph_mcp_proxy_owned_tool_search_per_file_cap "$max_candidates")"
 
   [[ -n "$or_pattern" && -n "$search_path" && -n "$output_file" ]] || return 1
   : >"$output_file"
@@ -2478,10 +2677,17 @@ ralph_mcp_proxy_owned_tool_search_gather_fallback() {
     fi
     abs_path="$search_path/$relpath"
     [[ -f "$abs_path" ]] || continue
+    file_count=0
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -n "$line" ]] || continue
+      file_count=$((file_count + 1))
+      if [[ "$file_count" -gt "$per_file_cap" ]]; then
+        RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED=1
+        break
+      fi
       count=$((count + 1))
       if [[ "$count" -gt "$max_candidates" ]]; then
+        RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED=1
         rm -f "$tmp_files"
         return 0
       fi
@@ -2499,6 +2705,10 @@ ralph_mcp_proxy_owned_tool_search_gather_candidates() {
   local glob_filter="${3:-}"
   local max_candidates="${4:-500}"
   local output_file="${5:-}"
+
+  # Reset the pool-capped signal; the gather backends raise it when a per-file
+  # or global cap drops candidate lines so the handler can flag truncation.
+  RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED=0
 
   if ralph_mcp_proxy_owned_tool_search_gather_rg "$or_pattern" "$search_path" "$glob_filter" "$max_candidates" "$output_file"; then
     return 0
@@ -2649,6 +2859,22 @@ ralph_mcp_proxy_owned_tool_search() {
   ralph_mcp_proxy_owned_tool_search_gather_candidates \
     "$or_pattern" "$search_path" "$glob_filter" "$max_candidates" "$tmp_candidates"
   candidate_count="$(ralph_mcp_proxy_owned_tool_grep_count_lines "$(<"$tmp_candidates")")"
+
+  # Fallback expansion: only when the literal-term pool is empty (cross-morphology
+  # queries like a camelCase term against snake_case code) do we re-gather with
+  # identifier subtokens. Expanding unconditionally floods the pool with common
+  # subtokens and buries exact matches, so it is strictly a recall backstop.
+  local used_expanded_fallback=0
+  if [[ "$candidate_count" -eq 0 ]]; then
+    local expanded_or_pattern=""
+    if expanded_or_pattern="$(ralph_mcp_proxy_owned_tool_search_build_or_pattern "$query" expanded)" \
+      && [[ -n "$expanded_or_pattern" && "$expanded_or_pattern" != "$or_pattern" ]]; then
+      ralph_mcp_proxy_owned_tool_search_gather_candidates \
+        "$expanded_or_pattern" "$search_path" "$glob_filter" "$max_candidates" "$tmp_candidates"
+      candidate_count="$(ralph_mcp_proxy_owned_tool_grep_count_lines "$(<"$tmp_candidates")")"
+      used_expanded_fallback=1
+    fi
+  fi
   if ! ralph_mcp_proxy_owned_tool_search_rank_candidates \
     "$query" "$tmp_candidates" "$return_limit" "$tmp_ranked"; then
     rm -f "$tmp_candidates" "$tmp_ranked"
@@ -2669,8 +2895,16 @@ ralph_mcp_proxy_owned_tool_search() {
   rm -f "$tmp_candidates" "$tmp_ranked" "$compact_text"
 
   match_count="$(ralph_mcp_proxy_owned_tool_grep_count_lines "$preview_text")"
+  ralph_mcp_proxy_search_telemetry_emit \
+    "$query" "$match_count" "$candidate_count" \
+    "$used_expanded_fallback" "${RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED:-0}" 2>/dev/null || true
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "ralph_proxy_search")"
   if [[ "$candidate_count" -gt "$return_limit" ]]; then
+    truncated=1
+  elif [[ "${RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED:-0}" == "1" ]]; then
+    # The candidate pool itself was capped (per-file or global ceiling), so
+    # signal truncation even when the returned count fits, letting the agent
+    # narrow the path/glob or page via result follow-up tools.
     truncated=1
   elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
     truncated=1
@@ -3280,6 +3514,17 @@ ralph_mcp_proxy_owned_tool_result_read() {
     read_window="$byte_cap"
   fi
 
+  # Resolve a source label (the tool that produced this result) so a
+  # misremembered/stale resultId reveals itself in the readback envelope. This
+  # prevents the model from re-reading e.g. a grep result expecting file content.
+  local source_label=""
+  local _result_read_entry_json
+  _result_read_entry_json="$(ralph_mcp_proxy_result_tool_index_entry_json "$workspace" "$plan_key" "$result_id" 2>/dev/null || true)"
+  if [[ -n "$_result_read_entry_json" ]]; then
+    source_label="$(jq -r '.tool // empty' <<< "$_result_read_entry_json" 2>/dev/null || true)"
+    [[ "$source_label" == "null" ]] && source_label=""
+  fi
+
   if [[ -n "$line_start" && "$line_start" != "null" ]]; then
     if [[ ! "$line_start" =~ ^[0-9]+$ ]] || [[ "$line_start" -lt 1 ]]; then
       ralph_mcp_proxy_tool_error_json "ralph_proxy_result_read: lineStart must be a positive integer"
@@ -3297,7 +3542,7 @@ ralph_mcp_proxy_owned_tool_result_read() {
       ralph_mcp_proxy_tool_error_json "ralph_proxy_result_read: failed to read line range"
       return 0
     fi
-    ralph_mcp_proxy_result_read_emit_response "$workspace" "$result_id" "$view" "$text" "$byte_start" "$byte_limit" "$auto_ranged"
+    ralph_mcp_proxy_result_read_emit_response "$workspace" "$result_id" "$view" "$text" "$byte_start" "$byte_limit" "$auto_ranged" "$source_label"
     return 0
   fi
 
@@ -3323,7 +3568,7 @@ ralph_mcp_proxy_owned_tool_result_read() {
     ralph_mcp_proxy_tool_error_json "ralph_proxy_result_read: failed to read byte range"
     return 0
   fi
-  ralph_mcp_proxy_result_read_emit_response "$workspace" "$result_id" "$view" "$text" "$byte_start" "$byte_limit" "$auto_ranged"
+  ralph_mcp_proxy_result_read_emit_response "$workspace" "$result_id" "$view" "$text" "$byte_start" "$byte_limit" "$auto_ranged" "$source_label"
 }
 
 ralph_mcp_proxy_owned_tool_result_search() {
@@ -3690,21 +3935,109 @@ ralph_mcp_proxy_shell_job_read_file_range() {
   dd if="$file_path" bs=1 skip="$byte_start" count="$((byte_end - byte_start))" 2>/dev/null || true
 }
 
-ralph_mcp_proxy_shell_job_kill_tree() {
-  local root_pid="${1:-}" current child
-  [[ "$root_pid" =~ ^[0-9]+$ ]] || return 0
-  while IFS= read -r child; do
-    [[ -n "$child" ]] || continue
-    ralph_mcp_proxy_shell_job_kill_tree "$child"
-  done < <(pgrep -P "$root_pid" 2>/dev/null || true)
-  kill -TERM "$root_pid" 2>/dev/null || true
-  sleep 0.2
-  kill -KILL "$root_pid" 2>/dev/null || true
+ralph_mcp_proxy_shell_job_state_json() {
+  local job_dir="${1:-}"
+  [[ -f "$job_dir/state.json" ]] || return 1
+  cat "$job_dir/state.json"
+}
+
+ralph_mcp_proxy_shell_command_scope_key() {
+  local todo_id="${RALPH_CURRENT_TODO_ID:-}"
+  local todo_line="${RALPH_CURRENT_TODO_LINE:-}"
+  local todo_ordinal="${RALPH_CURRENT_TODO_ORDINAL:-}"
+  local todo_hash="${RALPH_CURRENT_TODO_HASH:-}"
+  if [[ -n "$todo_id" ]]; then
+    printf 'todo-id-%s\n' "$todo_id"
+  elif [[ -n "$todo_line" ]]; then
+    printf 'todo-line-%s\n' "$todo_line"
+  elif [[ -n "$todo_ordinal" ]]; then
+    printf 'todo-ordinal-%s\n' "$todo_ordinal"
+  elif [[ -n "$todo_hash" ]]; then
+    printf 'todo-hash-%s\n' "$(printf '%s' "$todo_hash" | tr -c 'A-Za-z0-9._-' '_')"
+  else
+    printf 'plan\n'
+  fi
+}
+
+ralph_mcp_proxy_shell_command_state_root() {
+  local workspace="${1:-}" plan_key="${2:-}"
+  printf '%s/.ralph-workspace/tool-results/%s/shell-command-state/%s\n' "$workspace" "$plan_key" "$(ralph_mcp_proxy_shell_command_scope_key)"
+}
+
+ralph_mcp_proxy_shell_command_state_dir() {
+  local workspace="${1:-}" plan_key="${2:-}" command_hash="${3:-}"
+  [[ "$command_hash" =~ ^[a-f0-9]{64}$ ]] || return 1
+  printf '%s/%s\n' "$(ralph_mcp_proxy_shell_command_state_root "$workspace" "$plan_key")" "$command_hash"
+}
+
+ralph_mcp_proxy_shell_command_state_file() {
+  local workspace="${1:-}" plan_key="${2:-}" command_hash="${3:-}" dir
+  dir="$(ralph_mcp_proxy_shell_command_state_dir "$workspace" "$plan_key" "$command_hash")" || return 1
+  printf '%s/state.json\n' "$dir"
+}
+
+ralph_mcp_proxy_shell_command_state_read() {
+  local workspace="${1:-}" plan_key="${2:-}" command_hash="${3:-}" file
+  file="$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$plan_key" "$command_hash")" || return 1
+  [[ -f "$file" ]] || return 1
+  cat "$file"
+}
+
+ralph_mcp_proxy_shell_command_state_write() {
+  local file="${1:-}" tmp
+  tmp="${file}.$$"
+  mkdir -p "$(dirname "$file")"
+  cat >"$tmp"
+  mv "$tmp" "$file"
+}
+
+ralph_mcp_proxy_shell_command_state_init_json() {
+  local command="${1:-}" normalized_command="${2:-}" command_hash="${3:-}"
+  jq -nc \
+    --arg command "$command" \
+    --arg normalizedCommand "$normalized_command" \
+    --arg normalizedCommandHash "$command_hash" \
+    --arg scopeKey "$(ralph_mcp_proxy_shell_command_scope_key)" \
+    '{command:$command,normalizedCommand:$normalizedCommand,normalizedCommandHash:$normalizedCommandHash,scopeKey:$scopeKey,requestCount:0,syncTimeoutCount:0,asyncReuseCount:0,activeJobId:null,lastJobId:null,lastStatus:null,lastRequestAt:null,lastSyncTimeoutAt:null,retryBreakerTripped:false}'
+}
+
+ralph_mcp_proxy_shell_command_state_update() {
+  local workspace="${1:-}" plan_key="${2:-}" command_hash="${3:-}" jq_filter="${4:-.}" state_json file
+  file="$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$plan_key" "$command_hash")" || return 1
+  if ! state_json="$(ralph_mcp_proxy_shell_command_state_read "$workspace" "$plan_key" "$command_hash" 2>/dev/null)"; then
+    state_json="$(ralph_mcp_proxy_shell_command_state_init_json "" "" "$command_hash")"
+  fi
+  jq -c "$jq_filter" <<<"$state_json" | ralph_mcp_proxy_shell_command_state_write "$file"
+}
+
+ralph_mcp_proxy_shell_job_kill_managed() {
+  local pid="${1:-}" pgid="${2:-}" isolated="${3:-false}"
+  local escalated=0
+  if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
+    if [[ "$pgid" =~ ^[0-9]+$ ]]; then
+      kill -TERM -"$pgid" 2>/dev/null || true
+      local waited=0
+      while (( waited < 10 )) && kill -0 -"$pgid" 2>/dev/null; do
+        sleep 0.1
+        ((waited++)) || true
+      done
+      if kill -0 -"$pgid" 2>/dev/null; then
+        escalated=1
+        kill -KILL -"$pgid" 2>/dev/null || true
+      fi
+    fi
+  elif [[ "$pid" =~ ^[0-9]+$ ]]; then
+    ralph_kill_tree "$pid"
+    escalated=1
+  fi
+  printf '%s\n' "$escalated"
 }
 
 ralph_mcp_proxy_shell_job_finish() {
   local workspace="${1:-}" job_dir="${2:-}" command="${3:-}" timeout_sec="${4:-}" max_shell_bytes="${5:-}" start_epoch="${6:-}" exit_code="${7:-0}"
+  local normalized_command="${8:-}" command_hash="${9:-}" termination_reason="${10:-}"
   local status ended_at ended_epoch stdout stderr combined result_id result_path preview outcome_json metadata_json
+  local pid pgid sid supervisor_pid isolated launch_mode kill_escalated
 
   ended_epoch="$(date +%s)"
   ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -3718,6 +4051,17 @@ ralph_mcp_proxy_shell_job_finish() {
   if [[ "$exit_code" -eq 124 || "$exit_code" -eq 137 ]]; then
     status="timed_out"
   fi
+  if [[ "$termination_reason" == "cancelled" ]]; then
+    status="cancelled"
+  fi
+
+  pid="$(cat "$job_dir/pid" 2>/dev/null || echo 0)"
+  pgid="$(cat "$job_dir/pgid" 2>/dev/null || echo 0)"
+  sid="$(cat "$job_dir/sid" 2>/dev/null || echo 0)"
+  supervisor_pid="$(cat "$job_dir/supervisor.pid" 2>/dev/null || echo 0)"
+  isolated="$(cat "$job_dir/isolated-process-group" 2>/dev/null || echo false)"
+  launch_mode="$(cat "$job_dir/launch-mode" 2>/dev/null || echo plain)"
+  kill_escalated="$(cat "$job_dir/kill-escalated" 2>/dev/null || echo 0)"
 
   result_id=""
   result_path=""
@@ -3740,12 +4084,21 @@ ralph_mcp_proxy_shell_job_finish() {
     --arg jobId "$(basename "$job_dir")" \
     --arg status "$status" \
     --arg command "$command" \
+    --arg normalizedCommand "$normalized_command" \
+    --arg normalizedCommandHash "$command_hash" \
     --arg startedAt "$(cat "$job_dir/started-at.txt" 2>/dev/null || true)" \
     --arg endedAt "$ended_at" \
     --arg resultId "$result_id" \
     --arg resultPath "$result_path" \
     --arg preview "$preview" \
-    --argjson pid "$(cat "$job_dir/pid" 2>/dev/null || echo 0)" \
+    --arg launchMode "$launch_mode" \
+    --arg terminationReason "${termination_reason:-}" \
+    --argjson pid "${pid:-0}" \
+    --argjson pgid "${pgid:-0}" \
+    --argjson sid "${sid:-0}" \
+    --argjson supervisorPid "${supervisor_pid:-0}" \
+    --argjson isolatedProcessGroup "$([[ "$isolated" == "true" || "$isolated" == "1" ]] && printf true || printf false)" \
+    --argjson killEscalated "$([[ "$kill_escalated" == "1" ]] && printf true || printf false)" \
     --argjson exitCode "$exit_code" \
     --argjson timeoutSeconds "$timeout_sec" \
     --argjson startEpoch "$start_epoch" \
@@ -3753,14 +4106,109 @@ ralph_mcp_proxy_shell_job_finish() {
     --argjson stdoutBytes "$(wc -c <"$job_dir/stdout.log" 2>/dev/null | tr -d ' ' || echo 0)" \
     --argjson stderrBytes "$(wc -c <"$job_dir/stderr.log" 2>/dev/null | tr -d ' ' || echo 0)" \
     --argjson combinedBytes "$(wc -c <"$job_dir/combined.log" 2>/dev/null | tr -d ' ' || echo 0)" \
-    '{jobId:$jobId,status:$status,command:$command,pid:$pid,exitCode:$exitCode,timeoutSeconds:$timeoutSeconds,startedAt:$startedAt,startEpoch:$startEpoch,endedAt:$endedAt,elapsedSeconds:$elapsedSeconds,stdoutBytes:$stdoutBytes,stderrBytes:$stderrBytes,combinedBytes:$combinedBytes,resultId:(if $resultId == "" then null else $resultId end),resultPath:(if $resultPath == "" then null else $resultPath end),preview:$preview}' \
+    '{jobId:$jobId,status:$status,command:$command,normalizedCommand:(if $normalizedCommand == "" then null else $normalizedCommand end),normalizedCommandHash:(if $normalizedCommandHash == "" then null else $normalizedCommandHash end),pid:$pid,pgid:$pgid,sid:$sid,supervisorPid:$supervisorPid,isolatedProcessGroup:$isolatedProcessGroup,launchMode:$launchMode,killEscalated:$killEscalated,terminationReason:(if $terminationReason == "" then null else $terminationReason end),exitCode:$exitCode,timeoutSeconds:$timeoutSeconds,startedAt:$startedAt,startEpoch:$startEpoch,endedAt:$endedAt,elapsedSeconds:$elapsedSeconds,stdoutBytes:$stdoutBytes,stderrBytes:$stderrBytes,combinedBytes:$combinedBytes,resultId:(if $resultId == "" then null else $resultId end),resultPath:(if $resultPath == "" then null else $resultPath end),preview:$preview}' \
     | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
+
+  if [[ -n "$command_hash" ]]; then
+    local plan_key state_file state_json
+    plan_key="$(ralph_mcp_proxy_shell_job_plan_key)"
+    state_file="$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$plan_key" "$command_hash" 2>/dev/null || true)"
+    if [[ -n "$state_file" ]]; then
+      if state_json="$(ralph_mcp_proxy_shell_command_state_read "$workspace" "$plan_key" "$command_hash" 2>/dev/null)"; then
+        jq -c \
+          --arg lastJobId "$(basename "$job_dir")" \
+          --arg lastStatus "$status" \
+          '.activeJobId = null | .lastJobId = $lastJobId | .lastStatus = $lastStatus | .retryBreakerTripped = false' \
+          <<<"$state_json" | ralph_mcp_proxy_shell_command_state_write "$state_file"
+      fi
+    fi
+  fi
+}
+
+ralph_mcp_proxy_shell_job_running_json() {
+  local job_id="${1:-}" command="${2:-}" timeout_sec="${3:-}" started_at="${4:-}" start_epoch="${5:-}" pid="${6:-0}" pgid="${7:-0}" sid="${8:-0}" supervisor_pid="${9:-0}" normalized_command="${10:-}" command_hash="${11:-}" launch_mode="${12:-plain}" isolated="${13:-true}"
+  local isolated_json=false
+  [[ "$isolated" == "true" || "$isolated" == "1" ]] && isolated_json=true
+  jq -nc \
+    --arg jobId "$job_id" \
+    --arg status "running" \
+    --arg command "$command" \
+    --arg normalizedCommand "$normalized_command" \
+    --arg normalizedCommandHash "$command_hash" \
+    --arg startedAt "$started_at" \
+    --arg launchMode "$launch_mode" \
+    --argjson startEpoch "$start_epoch" \
+    --argjson timeoutSeconds "$timeout_sec" \
+    --argjson pid "${pid:-0}" \
+    --argjson pgid "${pgid:-0}" \
+    --argjson sid "${sid:-0}" \
+    --argjson supervisorPid "${supervisor_pid:-0}" \
+    --argjson isolatedProcessGroup "$isolated_json" \
+    '{jobId:$jobId,status:$status,command:$command,normalizedCommand:(if $normalizedCommand == "" then null else $normalizedCommand end),normalizedCommandHash:(if $normalizedCommandHash == "" then null else $normalizedCommandHash end),pid:$pid,pgid:$pgid,sid:$sid,supervisorPid:$supervisorPid,isolatedProcessGroup:$isolatedProcessGroup,launchMode:$launchMode,exitCode:null,timeoutSeconds:$timeoutSeconds,startedAt:$startedAt,startEpoch:$startEpoch,endedAt:null,elapsedSeconds:0,stdoutBytes:0,stderrBytes:0,combinedBytes:0,resultId:null,resultPath:null,preview:""}'
+}
+
+ralph_mcp_proxy_shell_job_start_managed() {
+  local workspace="${1:-}" command="${2:-}" timeout_sec="${3:-}" max_shell_bytes="${4:-}" normalized_command="${5:-}" command_hash="${6:-}"
+  local plan_key job_id job_dir started_at start_epoch launch_json pid pgid sid isolated launch_mode supervisor_pid
+
+  plan_key="$(ralph_mcp_proxy_shell_job_plan_key)"
+  job_id="$(ralph_mcp_proxy_shell_job_id_new)"
+  job_dir="$(ralph_mcp_proxy_shell_job_dir "$workspace" "$plan_key" "$job_id")" || return 1
+  mkdir -p "$job_dir"
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  start_epoch="$(date +%s)"
+  printf '%s\n' "$started_at" >"$job_dir/started-at.txt"
+  ralph_mcp_proxy_shell_job_running_json "$job_id" "$command" "$timeout_sec" "$started_at" "$start_epoch" 0 0 0 0 "$normalized_command" "$command_hash" "pending" "false" | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
+
+  (
+    set +e
+    local _exit=0 _timed_out=0 _kill_escalated=0 _now
+    ralph_native_shell_launch_process_group "$workspace" "$command" "bash" "$job_dir/stdout.log" "$job_dir/stderr.log"
+    pid="${RALPH_NATIVE_SHELL_LAUNCH_PID:-0}"
+    pgid="${RALPH_NATIVE_SHELL_LAUNCH_PGID:-0}"
+    sid="${RALPH_NATIVE_SHELL_LAUNCH_SID:-0}"
+    isolated="${RALPH_NATIVE_SHELL_LAUNCH_ISOLATED:-false}"
+    launch_mode="${RALPH_NATIVE_SHELL_LAUNCH_MODE:-plain}"
+    printf '%s\n' "$pid" >"$job_dir/pid"
+    printf '%s\n' "$pgid" >"$job_dir/pgid"
+    printf '%s\n' "$sid" >"$job_dir/sid"
+    printf '%s\n' "$isolated" >"$job_dir/isolated-process-group"
+    printf '%s\n' "$launch_mode" >"$job_dir/launch-mode"
+    printf '%s\n' "$$" >"$job_dir/supervisor.pid"
+    ralph_mcp_proxy_shell_job_running_json "$job_id" "$command" "$timeout_sec" "$started_at" "$start_epoch" "$pid" "$pgid" "$sid" "$$" "$normalized_command" "$command_hash" "$launch_mode" "$isolated" | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
+
+    while ralph_native_shell_pid_running "$pid"; do
+      _now="$(date +%s)"
+      if (( _now - start_epoch >= timeout_sec )); then
+        _timed_out=1
+        _kill_escalated="$(ralph_mcp_proxy_shell_job_kill_managed "$pid" "$pgid" "$isolated")"
+        printf '%s\n' "$_kill_escalated" >"$job_dir/kill-escalated"
+        ralph_mcp_proxy_log_action "process-group-timeout" "tool=ralph_proxy_shell jobId=$job_id pgid=$pgid commandHash=${command_hash:0:12} escalated=$_kill_escalated"
+        break
+      fi
+      sleep 0.1
+    done
+
+    wait "$pid" 2>/dev/null
+    _exit=$?
+    if (( _timed_out == 1 )); then
+      _exit=124
+    fi
+    ralph_mcp_proxy_shell_job_finish "$workspace" "$job_dir" "$command" "$timeout_sec" "$max_shell_bytes" "$start_epoch" "$_exit" "$normalized_command" "$command_hash"
+  ) &
+  supervisor_pid=$!
+  disown "$supervisor_pid" 2>/dev/null || true
+  printf '%s\n' "$supervisor_pid" >"$job_dir/supervisor.pid"
+
+  jq -c --argjson supervisorPid "$supervisor_pid" '.supervisorPid = $supervisorPid' "$job_dir/state.json" | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
+  RALPH_MCP_PROXY_SHELL_JOB_START_JSON="$(cat "$job_dir/state.json")"
+  export RALPH_MCP_PROXY_SHELL_JOB_START_JSON
 }
 
 ralph_mcp_proxy_owned_tool_shell_start() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
-  local command original_command timeout_sec max_shell_bytes plan_key job_id job_dir started_at start_epoch pid
+  local command original_command timeout_sec max_shell_bytes running_json
 
   command="$(jq -r '.command // empty' <<< "$args_json")"
   original_command="$command"
@@ -3784,50 +4232,18 @@ ralph_mcp_proxy_owned_tool_shell_start() {
 
   ralph_mcp_proxy_mutation_counter_bump
 
-  plan_key="$(ralph_mcp_proxy_shell_job_plan_key)"
-  job_id="$(ralph_mcp_proxy_shell_job_id_new)"
-  job_dir="$(ralph_mcp_proxy_shell_job_dir "$workspace" "$plan_key" "$job_id")" || {
-    ralph_mcp_proxy_tool_error_json "ralph_proxy_shell_start: invalid job path"
+  if ! ralph_mcp_proxy_shell_job_start_managed "$workspace" "$command" "$timeout_sec" "$max_shell_bytes" "" ""; then
+    ralph_mcp_proxy_tool_error_json "ralph_proxy_shell_start: failed to launch managed job"
     return 0
-  }
-  mkdir -p "$job_dir"
-  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  start_epoch="$(date +%s)"
-  printf '%s\n' "$started_at" >"$job_dir/started-at.txt"
-
-  jq -nc \
-    --arg jobId "$job_id" \
-    --arg status "running" \
-    --arg command "$command" \
-    --arg startedAt "$started_at" \
-    --argjson startEpoch "$start_epoch" \
-    --argjson timeoutSeconds "$timeout_sec" \
-    '{jobId:$jobId,status:$status,command:$command,pid:null,exitCode:null,timeoutSeconds:$timeoutSeconds,startedAt:$startedAt,startEpoch:$startEpoch,endedAt:null,elapsedSeconds:0,stdoutBytes:0,stderrBytes:0,combinedBytes:0,resultId:null,resultPath:null,preview:""}' \
-    | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
-
-  (
-    set +e
-    local _exit=0
-    if command -v timeout >/dev/null 2>&1; then
-      timeout "$timeout_sec" bash -c "cd \"\$1\" && $command" _ "$workspace" >"$job_dir/stdout.log" 2>"$job_dir/stderr.log"
-      _exit=$?
-    else
-      bash -c "cd \"\$1\" && $command" _ "$workspace" >"$job_dir/stdout.log" 2>"$job_dir/stderr.log"
-      _exit=$?
-    fi
-    ralph_mcp_proxy_shell_job_finish "$workspace" "$job_dir" "$command" "$timeout_sec" "$max_shell_bytes" "$start_epoch" "$_exit"
-  ) &
-  pid=$!
-  disown "$pid" 2>/dev/null || true
-  printf '%s\n' "$pid" >"$job_dir/pid"
-  jq --argjson pid "$pid" '.pid = $pid' "$job_dir/state.json" | ralph_mcp_proxy_shell_job_write_state "$job_dir/state.json"
+  fi
+  running_json="${RALPH_MCP_PROXY_SHELL_JOB_START_JSON:-}"
 
   ralph_mcp_proxy_tool_success_json "$(
     jq -c \
       --arg nextWait "ralph_proxy_shell_wait" \
       --arg nextRead "ralph_proxy_shell_read" \
       '. + {nextActions:[{tool:$nextWait,args:{jobId:.jobId}},{tool:$nextRead,args:{jobId:.jobId,stream:"combined",tailBytes:8192}}]}' \
-      "$job_dir/state.json"
+      <<<"$running_json"
   )"
 }
 
@@ -3850,17 +4266,22 @@ ralph_mcp_proxy_owned_tool_shell_status() {
 }
 
 ralph_mcp_proxy_shell_status_response_json() {
-  local job_dir="${1:-}" args_json="${2:-{}}" tail_bytes state status pid now started_epoch preview stdout_bytes stderr_bytes combined_bytes response_json
+  local job_dir="${1:-}" args_json="${2:-}" tail_bytes state status pid pgid isolated now started_epoch preview stdout_bytes stderr_bytes combined_bytes response_json
+  [[ -n "$args_json" ]] || args_json='{}'
   tail_bytes="$(jq -r '.tailBytes // 4096' <<< "$args_json")"
   state="$(cat "$job_dir/state.json")"
   status="$(jq -r '.status // "unknown"' <<< "$state")"
   pid="$(jq -r '.pid // empty' <<< "$state")"
+  pgid="$(jq -r '.pgid // empty' <<< "$state")"
+  isolated="$(jq -r '.isolatedProcessGroup // false' <<< "$state")"
   stdout_bytes="$(wc -c <"$job_dir/stdout.log" 2>/dev/null | tr -d ' ' || echo 0)"
   stderr_bytes="$(wc -c <"$job_dir/stderr.log" 2>/dev/null | tr -d ' ' || echo 0)"
   cat "$job_dir/stdout.log" "$job_dir/stderr.log" 2>/dev/null >"$job_dir/combined.current.log" || true
   combined_bytes="$(wc -c <"$job_dir/combined.current.log" 2>/dev/null | tr -d ' ' || echo 0)"
   preview="$(ralph_mcp_proxy_shell_job_tail_file "$job_dir/combined.current.log" "$tail_bytes")"
-  if [[ "$status" == "running" && "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null; then
+  if [[ "$status" == "running" && "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]] && ! kill -0 -"$pgid" 2>/dev/null; then
+    status="unknown"
+  elif [[ "$status" == "running" && "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null; then
     status="unknown"
   fi
   now="$(date +%s)"
@@ -3979,7 +4400,7 @@ ralph_mcp_proxy_owned_tool_shell_read() {
 
 ralph_mcp_proxy_owned_tool_shell_cancel() {
   local workspace="${1:-}"
-  local args_json job_id plan_key job_dir state pid now started_epoch response_json
+  local args_json job_id plan_key job_dir state pid pgid isolated now started_epoch response_json kill_escalated
   args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
   job_id="$(jq -r '.jobId // empty' <<< "$args_json")"
   plan_key="$(ralph_mcp_proxy_shell_job_plan_key)"
@@ -3993,19 +4414,32 @@ ralph_mcp_proxy_owned_tool_shell_cancel() {
   }
   state="$(cat "$job_dir/state.json")"
   pid="$(jq -r '.pid // empty' <<< "$state")"
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    ralph_mcp_proxy_shell_job_kill_tree "$pid"
-  fi
+  pgid="$(jq -r '.pgid // empty' <<< "$state")"
+  isolated="$(jq -r '.isolatedProcessGroup // false' <<< "$state")"
+  kill_escalated="$(ralph_mcp_proxy_shell_job_kill_managed "$pid" "$pgid" "$isolated")"
+  printf '%s\n' "$kill_escalated" >"$job_dir/kill-escalated"
+  ralph_mcp_proxy_log_action "process-group-cancel" "tool=ralph_proxy_shell jobId=$job_id pgid=$pgid escalated=$kill_escalated"
   now="$(date +%s)"
   started_epoch="$(jq -r '.startEpoch // empty' <<< "$state")"
   [[ "$started_epoch" =~ ^[0-9]+$ ]] || started_epoch="$now"
   response_json="$(jq -c \
     --arg status "cancelled" \
     --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg terminationReason "cancelled" \
+    --argjson killEscalated "$([[ "$kill_escalated" == "1" ]] && printf true || printf false)" \
     --argjson elapsedSeconds "$((now - started_epoch))" \
-    '.status = $status | .endedAt = $endedAt | .elapsedSeconds = $elapsedSeconds' \
+    '.status = $status | .endedAt = $endedAt | .terminationReason = $terminationReason | .killEscalated = $killEscalated | .elapsedSeconds = $elapsedSeconds' \
     <<< "$state")"
   printf '%s\n' "$response_json" >"$job_dir/state.json"
+  local command_hash
+  command_hash="$(jq -r '.normalizedCommandHash // empty' <<<"$state")"
+  if [[ -n "$command_hash" ]]; then
+    local state_file command_state_json
+    state_file="$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$plan_key" "$command_hash" 2>/dev/null || true)"
+    if [[ -n "$state_file" ]] && command_state_json="$(ralph_mcp_proxy_shell_command_state_read "$workspace" "$plan_key" "$command_hash" 2>/dev/null)"; then
+      jq -c --arg lastJobId "$job_id" '.activeJobId = null | .lastJobId = $lastJobId | .lastStatus = "cancelled"' <<<"$command_state_json" | ralph_mcp_proxy_shell_command_state_write "$state_file"
+    fi
+  fi
   ralph_mcp_proxy_tool_success_json "$response_json"
 }
 
@@ -4041,111 +4475,286 @@ ralph_mcp_proxy_owned_tool_shell_handoff_json() {
   local command="${1:-}"
   local timeout_seconds="${2:-}"
   local handoff_message="${3:-}"
+  local command_hash="${4:-}"
+  local job_json="${5:-}"
+  local reused="${6:-false}"
+  local created="${7:-false}"
+  [[ -n "$job_json" ]] || job_json='{}'
+  local reused_json=false
+  local created_json=false
+  [[ "$reused" == "true" || "$reused" == "1" ]] && reused_json=true
+  [[ "$created" == "true" || "$created" == "1" ]] && created_json=true
 
   jq -nc \
     --arg command "$command" \
     --arg timeoutSeconds "$timeout_seconds" \
     --arg handoffMessage "$handoff_message" \
-    --arg nextTool "ralph_proxy_shell_start" \
+    --arg normalizedCommandHash "$command_hash" \
     --arg waitTool "ralph_proxy_shell_wait" \
+    --arg statusTool "ralph_proxy_shell_status" \
     --arg readTool "ralph_proxy_shell_read" \
+    --argjson job "$job_json" \
+    --argjson asyncJobReused "$reused_json" \
+    --argjson asyncJobCreated "$created_json" \
     '{
       shellTimeoutHandoff: true,
       command: $command,
+      normalizedCommandHash: $normalizedCommandHash,
+      jobId: ($job.jobId // null),
+      asyncJobReused: $asyncJobReused,
+      asyncJobCreated: $asyncJobCreated,
       timeoutSeconds: $timeoutSeconds,
       message: $handoffMessage,
       nextActions: [
-        {tool: $nextTool, args: {command: $command}},
-        {tool: $waitTool, args: {jobId: "<jobId from start response>", waitSeconds: $timeoutSeconds}},
-        {tool: $readTool, args: {jobId: "<jobId from start response>", stream: "combined", tailBytes: 8192}}
+        {tool: $waitTool, args: {jobId: ($job.jobId // "<jobId>"), waitSeconds: ($timeoutSeconds | tonumber)}},
+        {tool: $statusTool, args: {jobId: ($job.jobId // "<jobId>")}},
+        {tool: $readTool, args: {jobId: ($job.jobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
       ]
     }'
 }
 
+ralph_mcp_proxy_shell_request_record_json() {
+  local state_json="${1:-}"
+  [[ -n "$state_json" ]] || state_json='{}'
+  jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.requestCount = ((.requestCount // 0) + 1) | .lastRequestAt = $now' \
+    <<<"$state_json"
+}
+
+ralph_mcp_proxy_shell_state_capture_timeout_json() {
+  local state_json="${1:-}"
+  [[ -n "$state_json" ]] || state_json='{}'
+  jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.syncTimeoutCount = ((.syncTimeoutCount // 0) + 1) | .lastSyncTimeoutAt = $now' \
+    <<<"$state_json"
+}
+
+ralph_mcp_proxy_shell_job_is_running() {
+  local workspace="${1:-}" plan_key="${2:-}" job_id="${3:-}" job_dir state status pgid isolated pid
+  job_dir="$(ralph_mcp_proxy_shell_job_dir "$workspace" "$plan_key" "$job_id" 2>/dev/null || true)"
+  [[ -n "$job_dir" && -f "$job_dir/state.json" ]] || return 1
+  state="$(cat "$job_dir/state.json")"
+  status="$(jq -r '.status // ""' <<<"$state")"
+  [[ "$status" == "running" ]] || return 1
+  pgid="$(jq -r '.pgid // empty' <<<"$state")"
+  isolated="$(jq -r '.isolatedProcessGroup // false' <<<"$state")"
+  pid="$(jq -r '.pid // empty' <<<"$state")"
+  if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
+    kill -0 -"$pgid" 2>/dev/null
+    return $?
+  fi
+  ralph_native_shell_pid_running "$pid"
+}
+
+ralph_mcp_proxy_shell_command_acquire_job_json() {
+  local workspace="${1:-}" command="${2:-}" timeout_sec="${3:-}" max_shell_bytes="${4:-}" normalized_command="${5:-}" command_hash="${6:-}" reason="${7:-}"
+  local plan_key state_file state_json active_job_id running_json
+  local reused=false created=false
+
+  plan_key="$(ralph_mcp_proxy_shell_job_plan_key)"
+  state_file="$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$plan_key" "$command_hash")" || return 1
+  if ! state_json="$(ralph_mcp_proxy_shell_command_state_read "$workspace" "$plan_key" "$command_hash" 2>/dev/null)"; then
+    state_json="$(ralph_mcp_proxy_shell_command_state_init_json "$command" "$normalized_command" "$command_hash")"
+  fi
+  state_json="$(jq -c \
+    --arg command "$command" \
+    --arg normalizedCommand "$normalized_command" \
+    --arg normalizedCommandHash "$command_hash" \
+    '.command = $command | .normalizedCommand = $normalizedCommand | .normalizedCommandHash = $normalizedCommandHash' \
+    <<<"$state_json")"
+  state_json="$(ralph_mcp_proxy_shell_request_record_json "$state_json")"
+
+  active_job_id="$(jq -r '.activeJobId // empty' <<<"$state_json")"
+  if [[ -n "$active_job_id" ]] && ralph_mcp_proxy_shell_job_is_running "$workspace" "$plan_key" "$active_job_id"; then
+    reused=true
+    running_json="$(ralph_mcp_proxy_shell_job_state_json "$(ralph_mcp_proxy_shell_job_dir "$workspace" "$plan_key" "$active_job_id")")"
+    state_json="$(jq -c '.asyncReuseCount = ((.asyncReuseCount // 0) + 1)' <<<"$state_json")"
+  else
+    ralph_mcp_proxy_shell_job_start_managed "$workspace" "$command" "$timeout_sec" "$max_shell_bytes" "$normalized_command" "$command_hash" || return 1
+    running_json="${RALPH_MCP_PROXY_SHELL_JOB_START_JSON:-}"
+    created=true
+    active_job_id="$(jq -r '.jobId // empty' <<<"$running_json")"
+  fi
+
+  state_json="$(jq -c \
+    --arg activeJobId "$active_job_id" \
+    --arg lastJobId "$active_job_id" \
+    --arg lastStatus "running" \
+    --arg reason "$reason" \
+    '.activeJobId = $activeJobId | .lastJobId = $lastJobId | .lastStatus = $lastStatus | .lastReason = $reason' \
+    <<<"$state_json")"
+  printf '%s\n' "$state_json" | ralph_mcp_proxy_shell_command_state_write "$state_file"
+
+  RALPH_MCP_PROXY_SHELL_COMMAND_ACQUIRE_JSON="$(jq -nc \
+    --argjson job "$running_json" \
+    --argjson state "$state_json" \
+    --argjson reused "$([[ "$reused" == "true" ]] && printf true || printf false)" \
+    --argjson created "$([[ "$created" == "true" ]] && printf true || printf false)" \
+    '{job:$job,state:$state,reused:$reused,created:$created}')"
+  export RALPH_MCP_PROXY_SHELL_COMMAND_ACQUIRE_JSON
+}
+
+ralph_mcp_proxy_shell_retry_breaker_error_json() {
+  local command="${1:-}" command_hash="${2:-}" state_json="${3:-}" job_json="${4:-}"
+  [[ -n "$state_json" ]] || state_json='{}'
+  [[ -n "$job_json" ]] || job_json='{}'
+  jq -nc \
+    --arg command "$command" \
+    --arg normalizedCommandHash "$command_hash" \
+    --argjson state "$state_json" \
+    --argjson job "$job_json" \
+    '{
+      syncShellRetryBlocked: true,
+      command: $command,
+      normalizedCommandHash: $normalizedCommandHash,
+      jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // null),
+      message: "Repeated synchronous requests for the same managed verification command were blocked. Use the existing async job with ralph_proxy_shell_wait, ralph_proxy_shell_status, or ralph_proxy_shell_read instead of reissuing ralph_proxy_shell.",
+      nextActions: [
+        {tool: "ralph_proxy_shell_wait", args: {jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // "<jobId>"), waitSeconds: 120}},
+        {tool: "ralph_proxy_shell_status", args: {jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // "<jobId>")}},
+        {tool: "ralph_proxy_shell_read", args: {jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
+      ]
+    }'
+}
+
+ralph_mcp_proxy_shell_trim_spaces() {
+  local text="${1:-}"
+  text="${text#"${text%%[![:space:]]*}"}"
+  text="${text%"${text##*[![:space:]]}"}"
+  printf '%s' "$text"
+}
+
+ralph_mcp_proxy_shell_unquote_outer() {
+  local text; text="$(ralph_mcp_proxy_shell_trim_spaces "${1:-}")"
+  local first last len
+  len="${#text}"
+  if (( len >= 2 )); then
+    first="${text:0:1}"
+    last="${text:len-1:1}"
+    if [[ "$first" == "$last" && ( "$first" == "'" || "$first" == '"' ) ]]; then
+      printf '%s' "${text:1:len-2}"
+      return 0
+    fi
+  fi
+  printf '%s' "$text"
+}
+
+ralph_mcp_proxy_shell_normalize_command_shape() {
+  local command; command="$(ralph_mcp_proxy_shell_trim_spaces "${1:-}")"
+  local previous="" inner depth=0
+
+  while [[ -n "$command" && "$command" != "$previous" && $depth -lt 12 ]]; do
+    previous="$command"
+    depth=$((depth + 1))
+    command="$(ralph_mcp_proxy_shell_trim_spaces "$command")"
+
+    while [[ "$command" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+(.+)$ ]]; do
+      command="${BASH_REMATCH[1]}"
+      command="$(ralph_mcp_proxy_shell_trim_spaces "$command")"
+    done
+    if [[ "$command" =~ ^env[[:space:]]+(.+)$ ]]; then
+      command="${BASH_REMATCH[1]}"
+      while [[ "$command" =~ ^-[A-Za-z]+[[:space:]]+(.+)$ ]]; do
+        command="${BASH_REMATCH[1]}"
+      done
+      while [[ "$command" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+(.+)$ ]]; do
+        command="${BASH_REMATCH[1]}"
+      done
+    fi
+    if [[ "$command" == cd[[:space:]]* && "$command" == *"&&"* ]]; then
+      command="${command#*&&}"
+      command="$(ralph_mcp_proxy_shell_trim_spaces "$command")"
+    fi
+    if [[ "$command" =~ ^(bash|sh)[[:space:]]+-l?c[[:space:]]+(.+)$ ]]; then
+      inner="$(ralph_mcp_proxy_shell_unquote_outer "${BASH_REMATCH[2]}")"
+      if [[ -n "$inner" ]]; then
+        command="$inner"
+      fi
+    fi
+    if [[ "$command" =~ ^(.+)[[:space:]]*\|[[:space:]]*(tail|head|sed|cat)([[:space:]].*)?$ ]]; then
+      command="${BASH_REMATCH[1]}"
+    fi
+  done
+
+  command="$(printf '%s' "$command" | tr '\n' ' ' | tr -s '[:space:]' ' ' | tr '[:upper:]' '[:lower:]')"
+  ralph_mcp_proxy_shell_trim_spaces "$command"
+}
+
 # Returns 0 (true) when the command matches a known verification/build shape
-# that is likely to block the synchronous shell for a long time. Patterns:
-# npm test, npm run <test|lint|build|check>, yarn/pnpm equivalents,
-# package-manager install, make <check|test|docs>, large unbounded find, etc.
-# Commands that pass an explicit timeoutSeconds are exempt (the caller signals
-# they know the runtime).
+# that is likely to block the synchronous shell for a long time, even when the
+# command is wrapped in cd/env/bash -c forms or tailed through a trailing pipe.
 ralph_mcp_proxy_shell_is_long_verification_command() {
   local command="${1:-}"
-  local args_json="${2:-{}}"
+  local cmd_stripped
+  cmd_stripped="$(ralph_mcp_proxy_shell_normalize_command_shape "$command")"
 
-  # Commands with explicit timeoutSeconds are caller-managed; skip the heuristic.
-  local req_timeout
-  req_timeout="$(jq -r '.timeoutSeconds // empty' <<<"$args_json" 2>/dev/null)"
-  if [[ -n "$req_timeout" && "$req_timeout" != "null" && "$req_timeout" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-
-  # Strip leading env assignments and sudo for pattern matching
-  local cmd_stripped="$command"
-  # Remove leading VAR=val pairs
-  while [[ "$cmd_stripped" =~ ^[A-Za-z_][A-Za-z0-9_]*=([^[:space:]]*)[[:space:]]+ ]]; do
-    cmd_stripped="${cmd_stripped#*=*[[:space:]]}"
-  done
-  # Remove leading whitespace
-  cmd_stripped="${cmd_stripped#"${cmd_stripped%%[! ]*}"}"
-
-  # npm / yarn / pnpm test, lint, build, check, install, ci, audit
-  if [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+(test|install|ci|audit)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+(test|install|ci|audit)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+(test|install|ci|audit)([[:space:]]|$) ]] || \
+     [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+run[[:space:]]+(test|test:cov|lint|build|check|typecheck|e2e|ci|coverage)([[:space:]]|$) ]]; then
     return 0
   fi
-  if [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+run[[:space:]]+(test|lint|build|check|typecheck|e2e|ci)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^(npm|yarn|pnpm)[[:space:]]+run[[:space:]]+(test|lint|build|check|typecheck|e2e|ci)$ ]]; then
+  if [[ "$cmd_stripped" =~ (^|[[:space:]])(--coverage|coveragereporters=|coverage)([[:space:]]|$) ]]; then
     return 0
   fi
-
-  # make check, make test, make docs, make all, make install
-  if [[ "$cmd_stripped" =~ ^make[[:space:]]+(check|test|docs|all|install|build)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^make[[:space:]]+(check|test|docs|all|install|build)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^make[[:space:]]+(check|test|docs|all|install|build)([[:space:]]|$) ]]; then
     return 0
   fi
-
-  # pytest, jest, mocha, cargo test, go test, python -m pytest
-  if [[ "$cmd_stripped" =~ ^(pytest|jest|mocha|vitest)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^(pytest|jest|mocha|vitest)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^(pytest|jest|mocha|vitest)([[:space:]]|$) ]] || \
+     [[ "$cmd_stripped" =~ ^vitest[[:space:]]+run([[:space:]]|$) ]]; then
     return 0
   fi
-  if [[ "$cmd_stripped" =~ ^cargo[[:space:]]+(test|build|check)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^cargo[[:space:]]+(test|build|check)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^cargo[[:space:]]+(test|build|check)([[:space:]]|$) ]]; then
     return 0
   fi
-  if [[ "$cmd_stripped" =~ ^go[[:space:]]+(test|build|vet)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^go[[:space:]]+(test|build|vet)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^go[[:space:]]+(test|build|vet)([[:space:]]|$) ]]; then
     return 0
   fi
-  if [[ "$cmd_stripped" =~ ^python[3]?[[:space:]]+-m[[:space:]]+(pytest|unittest)[[:space:]] ]] || \
-     [[ "$cmd_stripped" =~ ^python[3]?[[:space:]]+-m[[:space:]]+(pytest|unittest)$ ]]; then
+  if [[ "$cmd_stripped" =~ ^python[3]?[[:space:]]+-m[[:space:]]+(pytest|unittest)([[:space:]]|$) ]]; then
     return 0
   fi
-
-  # Docs checks
   if [[ "$cmd_stripped" =~ ^(bash|sh)[[:space:]].*docs[-_]check ]] || \
      [[ "$cmd_stripped" =~ docs[-_](check|build|generate) ]]; then
     return 0
   fi
-
   return 1
 }
 
+ralph_mcp_proxy_shell_dedupe_retry_limit() {
+  local limit="${RALPH_PROXY_SHELL_DEDUPE_RETRY_LIMIT:-3}"
+  if [[ ! "$limit" =~ ^[0-9]+$ || "$limit" -lt 1 ]]; then
+    limit=3
+  fi
+  printf '%s\n' "$limit"
+}
+
 ralph_mcp_proxy_shell_long_verification_guidance_json() {
-  local command="${1:-}"
+  local command="${1:-}" command_hash="${2:-}" job_json="${3:-}" reused="${4:-false}" created="${5:-false}"
+  [[ -n "$job_json" ]] || job_json='{}'
+  local reused_json=false
+  local created_json=false
+  [[ "$reused" == "true" || "$reused" == "1" ]] && reused_json=true
+  [[ "$created" == "true" || "$created" == "1" ]] && created_json=true
   jq -nc \
     --arg command "$command" \
+    --arg normalizedCommandHash "$command_hash" \
     --arg startTool "ralph_proxy_shell_start" \
     --arg waitTool "ralph_proxy_shell_wait" \
+    --arg statusTool "ralph_proxy_shell_status" \
     --arg readTool "ralph_proxy_shell_read" \
+    --argjson job "$job_json" \
+    --argjson asyncJobReused "$reused_json" \
+    --argjson asyncJobCreated "$created_json" \
     '{
       syncShellVerificationSteered: true,
       command: $command,
-      message: "This command matches a long-running verification or build pattern. Use ralph_proxy_shell_start to run it asynchronously and poll with ralph_proxy_shell_wait, or use runner-owned verify: metadata in the plan so the runner executes it outside the MCP transport. Synchronous ralph_proxy_shell is reserved for short bounded exploratory commands.",
+      normalizedCommandHash: $normalizedCommandHash,
+      jobId: ($job.jobId // null),
+      asyncJobReused: $asyncJobReused,
+      asyncJobCreated: $asyncJobCreated,
+      message: "This command matches a long-running verification or build pattern. Ralph started or reused a managed async job instead of executing it through synchronous ralph_proxy_shell. Use ralph_proxy_shell_wait or ralph_proxy_shell_read, or move the command into runner-owned verify: metadata.",
       nextActions: [
-        {tool: $startTool, args: {command: $command}},
-        {tool: $waitTool, args: {jobId: "<jobId from start response>", waitSeconds: 120}},
-        {tool: $readTool, args: {jobId: "<jobId from start response>", stream: "combined", tailBytes: 8192}}
+        {tool: $waitTool, args: {jobId: ($job.jobId // "<jobId>"), waitSeconds: 120}},
+        {tool: $statusTool, args: {jobId: ($job.jobId // "<jobId>")}},
+        {tool: $readTool, args: {jobId: ($job.jobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
       ]
     }'
 }
@@ -4160,7 +4769,9 @@ ralph_mcp_proxy_shell_verify_steer_enabled() {
 ralph_mcp_proxy_owned_tool_shell() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
-  local command original_command timeout_sec sync_timeout_sec max_shell_bytes tmp_out tmp_err stdout stderr text exit_code
+  local command original_command timeout_sec sync_timeout_sec max_shell_bytes stdout stderr text exit_code
+  local normalized_command command_hash state_json managed_json managed_job_json managed_state_json managed_reused managed_created retry_limit
+  local exec_json timed_out kill_escalated
 
   command="$(jq -r '.command // empty' <<< "$args_json")"
   original_command="$command"
@@ -4191,16 +4802,65 @@ ralph_mcp_proxy_owned_tool_shell() {
     return 0
   fi
 
+  normalized_command="$(ralph_mcp_proxy_shell_normalize_command_shape "$command")"
+  command_hash="$(ralph_hook_telemetry_sha256 "$normalized_command")"
+  if ! state_json="$(ralph_mcp_proxy_shell_command_state_read "$workspace" "$(ralph_mcp_proxy_shell_job_plan_key)" "$command_hash" 2>/dev/null)"; then
+    state_json="$(ralph_mcp_proxy_shell_command_state_init_json "$command" "$normalized_command" "$command_hash")"
+  fi
+
   # Server-side heuristic: detect verification/build commands that are likely to
-  # block the synchronous shell long enough to trigger a transport timeout. Return
-  # a structured guidance before execution so the agent can switch to async.
-  # The hard timeout below is the safety net; this is the early steer.
+  # block the synchronous shell long enough to trigger a transport timeout. For
+  # matched commands, synchronous shell execution is disallowed; Ralph creates or
+  # reuses a managed async job and returns the job contract immediately.
   if ralph_mcp_proxy_shell_verify_steer_enabled && \
      ralph_mcp_proxy_shell_is_long_verification_command "$command" "$args_json"; then
+    retry_limit="$(ralph_mcp_proxy_shell_dedupe_retry_limit)"
+    ralph_mcp_proxy_shell_command_acquire_job_json "$workspace" "$command" "$timeout_sec" "$max_shell_bytes" "$normalized_command" "$command_hash" "verify-steer" || {
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_shell failed to create managed async verification job"
+      return 0
+    }
+    managed_json="${RALPH_MCP_PROXY_SHELL_COMMAND_ACQUIRE_JSON:-}"
+    managed_job_json="$(jq -c '.job' <<<"$managed_json")"
+    managed_state_json="$(jq -c '.state' <<<"$managed_json")"
+    managed_reused="$(jq -r '.reused' <<<"$managed_json")"
+    managed_created="$(jq -r '.created' <<<"$managed_json")"
+    if (( $(jq -r '.requestCount // 0' <<<"$managed_state_json") > retry_limit )); then
+      local blocker_json
+      blocker_json="$(ralph_mcp_proxy_shell_retry_breaker_error_json "$command" "$command_hash" "$managed_state_json" "$managed_job_json")"
+      ralph_mcp_proxy_log_action "retry-breaker" "tool=ralph_proxy_shell commandHash=${command_hash:0:12} jobId=$(jq -r '.jobId // ""' <<<"$managed_job_json")"
+      ralph_mcp_proxy_tool_error_json "$blocker_json"
+      return 0
+    fi
     local guidance_json
-    guidance_json="$(ralph_mcp_proxy_shell_long_verification_guidance_json "$command")"
-    ralph_mcp_proxy_log_action "verify-steer" "tool=ralph_proxy_shell command=${command:0:120}"
+    guidance_json="$(ralph_mcp_proxy_shell_long_verification_guidance_json "$command" "$command_hash" "$managed_job_json" "$managed_reused" "$managed_created")"
+    ralph_mcp_proxy_log_action "verify-steer" "tool=ralph_proxy_shell commandHash=${command_hash:0:12} reused=$managed_reused created=$managed_created"
+    if [[ "$managed_reused" == "true" ]]; then
+      ralph_mcp_proxy_log_action "async-job-reuse" "tool=ralph_proxy_shell commandHash=${command_hash:0:12} jobId=$(jq -r '.jobId // ""' <<<"$managed_job_json")"
+    fi
     ralph_mcp_proxy_tool_success_json "$guidance_json"
+    return 0
+  fi
+
+  if (( $(jq -r '.syncTimeoutCount // 0' <<<"$state_json") > 0 )); then
+    ralph_mcp_proxy_shell_command_acquire_job_json "$workspace" "$command" "$timeout_sec" "$max_shell_bytes" "$normalized_command" "$command_hash" "prior-sync-timeout" || {
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_shell failed to create managed async timeout job"
+      return 0
+    }
+    managed_json="${RALPH_MCP_PROXY_SHELL_COMMAND_ACQUIRE_JSON:-}"
+    managed_job_json="$(jq -c '.job' <<<"$managed_json")"
+    managed_reused="$(jq -r '.reused' <<<"$managed_json")"
+    managed_created="$(jq -r '.created' <<<"$managed_json")"
+    local prior_timeout_json
+    prior_timeout_json="$(ralph_mcp_proxy_owned_tool_shell_handoff_json \
+      "$command" \
+      "$timeout_sec" \
+      "This command previously exceeded the synchronous transport-safe timeout for the current plan/TODO. Ralph reused or created a managed async job instead of attempting sync execution again." \
+      "$command_hash" \
+      "$managed_job_json" \
+      "$managed_reused" \
+      "$managed_created")"
+    ralph_mcp_proxy_log_action "timeout-handoff-reuse" "tool=ralph_proxy_shell commandHash=${command_hash:0:12} reused=$managed_reused created=$managed_created"
+    ralph_mcp_proxy_tool_success_json "$prior_timeout_json"
     return 0
   fi
 
@@ -4224,22 +4884,37 @@ ralph_mcp_proxy_owned_tool_shell() {
     execute_timeout="$sync_timeout_sec"
   fi
 
-  local exec_json
   exec_json="$(ralph_native_shell_execute_command_json "$workspace" "$command" "bash" "$execute_timeout")"
   stdout="$(jq -r '.stdout // ""' <<<"$exec_json")"
   stderr="$(jq -r '.stderr // ""' <<<"$exec_json")"
   exit_code="$(jq -r '.exitCode // 0' <<<"$exec_json")"
+  timed_out="$(jq -r '.timedOut // false' <<<"$exec_json")"
+  kill_escalated="$(jq -r '.killEscalated // false' <<<"$exec_json")"
 
   # When the transport-safe cap fires (timeout exit code 124), do not return a
-  # generic error and do not let the transport close. Return a structured
-  # handoff that points the agent at the async job machinery.
-  if [[ "$exit_code" -eq 124 ]]; then
+  # generic error and do not let the transport close. Record the timeout and
+  # transition the command into a managed async job contract for this plan/TODO.
+  if [[ "$exit_code" -eq 124 || "$timed_out" == "true" ]]; then
+    state_json="$(ralph_mcp_proxy_shell_state_capture_timeout_json "$state_json")"
+    printf '%s\n' "$state_json" | ralph_mcp_proxy_shell_command_state_write "$(ralph_mcp_proxy_shell_command_state_file "$workspace" "$(ralph_mcp_proxy_shell_job_plan_key)" "$command_hash")"
+    ralph_mcp_proxy_shell_command_acquire_job_json "$workspace" "$command" "$timeout_sec" "$max_shell_bytes" "$normalized_command" "$command_hash" "sync-timeout-handoff" || {
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_shell failed to create managed async timeout job"
+      return 0
+    }
+    managed_json="${RALPH_MCP_PROXY_SHELL_COMMAND_ACQUIRE_JSON:-}"
+    managed_job_json="$(jq -c '.job' <<<"$managed_json")"
+    managed_reused="$(jq -r '.reused' <<<"$managed_json")"
+    managed_created="$(jq -r '.created' <<<"$managed_json")"
     local handoff_json
     handoff_json="$(ralph_mcp_proxy_owned_tool_shell_handoff_json \
       "$command" \
       "$sync_timeout_sec" \
-      "Synchronous shell command reached the transport-safe timeout (${sync_timeout_sec}s). Re-issue with ralph_proxy_shell_start, wait with ralph_proxy_shell_wait, or read the result with ralph_proxy_shell_read.")"
-    ralph_mcp_proxy_log_action "timeout-handoff" "tool=ralph_proxy_shell cap=${sync_timeout_sec}s command=${command:0:120}"
+      "Synchronous shell command reached the transport-safe timeout (${sync_timeout_sec}s). Ralph created or reused a managed async job so the same command will not be relaunched through synchronous shell for this plan/TODO." \
+      "$command_hash" \
+      "$managed_job_json" \
+      "$managed_reused" \
+      "$managed_created")"
+    ralph_mcp_proxy_log_action "timeout-handoff" "tool=ralph_proxy_shell cap=${sync_timeout_sec}s commandHash=${command_hash:0:12} killEscalated=$kill_escalated reused=$managed_reused created=$managed_created"
     ralph_mcp_proxy_tool_success_json "$handoff_json"
     return 0
   fi
@@ -4363,7 +5038,8 @@ ralph_mcp_proxy_owned_tool_batch() {
 
 ralph_mcp_proxy_owned_tool_tool_search() {
   local workspace="${1:-}"
-  local args_json="${2:-{}}"
+  local args_json="${2:-}"
+  [[ -n "$args_json" ]] || args_json='{}'
   local action query max_results target_tool target_args rank_script catalog_json
   local ranked_json record args_shape outcome rank_value
 

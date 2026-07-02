@@ -48,6 +48,8 @@ Interactive terminal runs prompt for a mode when nothing chose one (no flag, no 
 
 **Compaction defaults by mode:** in `ralph` or `hybrid` mode, Ralph sets `RALPH_PROXY_SHELL_COMPACT=1` (MCP shell compaction) unless you already exported the variable. In `native` or `hybrid` mode, it sets `RALPH_BASH_COMPACT=1` (Claude native Bash compaction) the same way. Export either as `0` to opt out. In `no` mode both stay off unless you enable them yourself.
 
+**Transcript eviction defaults by mode:** `RALPH_PLAN_TRANSCRIPT_EVICTION` defaults to `safe` in `ralph` or `hybrid` mode and to `off` in `no` or `native` mode unless you override it. `safe` keeps the runner-owned continuation summary on and renders it more compactly so older repetitive tool-turn detail can be collapsed into a shorter prompt block; `aggressive` tightens the summary further and may lower the context budget. This is prompt pruning, not literal deletion of the runtime transcript.
+
 ## What tools you get
 
 When Ralph MCP is active, `tools/list` always includes the orchestration and result tools. The proxy read/search/shell tools appear in `ralph` and `hybrid` modes only. Tool order is deterministic (sorted by name).
@@ -367,9 +369,9 @@ The experimental knowledge-graph tools (`ralph_knowledge_*`) are hidden unless t
 
 **Claude says it cannot Edit/Write files.** Claude's `Edit`/`Write` require a prior native `Read` of the file; `ralph_proxy_read` does not satisfy that gate. Ralph keeps native `Read` precisely so edits work. If edits fail, confirm you have not set `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` (read-only plans only).
 
-## Cookbook optimizations (Ralph/hybrid)
+## Ralph optimizations (Ralph/hybrid)
 
-Tier 1 through Tier 3 cookbook features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, progressive context, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#cookbook-feature-gates-tier-1-through-tier-3), [docs/cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md), and [docs/cookbook-review/BACKLOG.md](cookbook-review/BACKLOG.md).
+Tier 1 through Tier 3 Ralph features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, progressive context, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#feature-gates-tier-1-through-tier-3).
 
 Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval (`bundle/.ralph/python/retrieval_eval.py`), and tool eval (`bundle/.ralph/python/tool_eval.py`).
 

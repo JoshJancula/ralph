@@ -236,3 +236,83 @@ teardown() {
   ' _ "$POLICY_LIB" '{"name":"bad-search","proxyOwnedTools":{"maxSearchCandidates":"many"}}'
   [ "$status" -eq 1 ]
 }
+
+@test "build_or_pattern defaults to literal terms only" {
+  load_proxy_search_libs
+  run ralph_mcp_proxy_owned_tool_search_build_or_pattern "getUserName"
+  [ "$status" -eq 0 ]
+  # No unconditional expansion: the camelCase term is matched literally so the
+  # candidate pool is not flooded with common subtokens.
+  [ "$output" = "getUserName" ]
+}
+
+@test "build_or_pattern expanded mode adds identifier subtokens" {
+  command -v python3 >/dev/null || skip "python3 required for term expansion"
+  load_proxy_search_libs
+  run ralph_mcp_proxy_owned_tool_search_build_or_pattern "getUserName" expanded
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"getUserName"* ]]
+  [[ "$output" == *"user"* ]]
+  [[ "$output" == *"name"* ]]
+}
+
+@test "gather distributes candidates per-file and signals when pool is capped" {
+  load_proxy_search_libs
+  local dir out
+  dir="$(mktemp -d)"
+  out="$(mktemp)"
+  local i
+  for i in $(seq 1 100); do echo "needle line $i"; done >"$dir/a.txt"
+  for i in $(seq 1 5); do echo "needle line $i"; done >"$dir/b.txt"
+  RALPH_MCP_SEARCH_PER_FILE_CAP=40
+  ralph_mcp_proxy_owned_tool_search_gather_candidates "needle" "$dir" "" 500 "$out"
+  [ "${RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED:-0}" = "1" ]
+  local a_count b_count
+  a_count="$(grep -c '^a.txt:' "$out" || true)"
+  b_count="$(grep -c '^b.txt:' "$out" || true)"
+  [ "$a_count" -eq 40 ]
+  [ "$b_count" -eq 5 ]
+  rm -rf "$dir" "$out"
+}
+
+@test "gather leaves capped signal unset for a small pool" {
+  load_proxy_search_libs
+  local dir out
+  dir="$(mktemp -d)"
+  out="$(mktemp)"
+  echo "needle one" >"$dir/a.txt"
+  echo "needle two" >"$dir/b.txt"
+  RALPH_MCP_SEARCH_PER_FILE_CAP=40
+  ralph_mcp_proxy_owned_tool_search_gather_candidates "needle" "$dir" "" 500 "$out"
+  [ "${RALPH_MCP_PROXY_SEARCH_GATHER_CAPPED:-0}" = "0" ]
+  rm -rf "$dir" "$out"
+}
+
+@test "search telemetry emits a search_outcome record with miss/fallback flags" {
+  command -v jq >/dev/null || skip "jq required"
+  load_proxy_search_libs
+  local root log
+  root="$(mktemp -d)"
+  export RALPH_PLAN_WORKSPACE_ROOT="$root"
+  export RALPH_PLAN_KEY="t"
+  export RALPH_HOOK_TELEMETRY=1
+  # result_count 0 -> searchMiss true; expanded_fallback 1; pool_capped 0
+  ralph_mcp_proxy_search_telemetry_emit "needle query" 0 12 1 0
+  log="$root/logs/t/tool-catalog-telemetry.jsonl"
+  [ -f "$log" ]
+  run jq -e 'select(.event=="search_outcome") | .searchMiss==true and .expandedFallback==true and .candidateCount==12' "$log"
+  [ "$status" -eq 0 ]
+  rm -rf "$root"
+}
+
+@test "search telemetry is a no-op when disabled" {
+  load_proxy_search_libs
+  local root
+  root="$(mktemp -d)"
+  export RALPH_PLAN_WORKSPACE_ROOT="$root"
+  export RALPH_PLAN_KEY="t"
+  export RALPH_HOOK_TELEMETRY=0
+  ralph_mcp_proxy_search_telemetry_emit "q" 3 3 0 0
+  [ ! -f "$root/logs/t/tool-catalog-telemetry.jsonl" ]
+  rm -rf "$root"
+}

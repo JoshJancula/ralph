@@ -147,3 +147,47 @@ wait_for_job_with_wait() {
     and (.content[0].text | fromjson | .status) == "cancelled"
   '
 }
+
+@test "async shell cancel kills descendant workers in the managed process group" {
+  command -v jq >/dev/null || skip "jq required"
+
+  local child_pid_file start_response job_id cancel_response child_pid
+  child_pid_file="$WS/child.pid"
+  start_response="$(invoke_async_tool ralph_proxy_shell_start "$(jq -nc --arg command "sleep 30 & child=\$!; echo \$child > \"$child_pid_file\"; wait" '{command:$command}')")"
+  job_id="$(response_json_text "$start_response" | jq -r '.jobId')"
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -f "$child_pid_file" ]] && break
+    sleep 0.2
+  done
+  [ -f "$child_pid_file" ] || { printf 'child pid file not written\n' >&3; false; }
+  child_pid="$(tr -d '[:space:]' <"$child_pid_file")"
+  [[ "$child_pid" =~ ^[0-9]+$ ]] || { printf 'invalid child pid: %s\n' "$child_pid" >&3; false; }
+
+  cancel_response="$(invoke_async_tool ralph_proxy_shell_cancel "$(jq -nc --arg jobId "$job_id" '{jobId:$jobId}')")"
+  printf '%s\n' "$cancel_response" | jq -e '.isError == false and (.content[0].text | fromjson | .status) == "cancelled"'
+  ! kill -0 "$child_pid" 2>/dev/null
+}
+
+@test "async shell timeout kills descendant workers in the managed process group" {
+  command -v jq >/dev/null || skip "jq required"
+
+  local child_pid_file start_response job_id final_response child_pid
+  child_pid_file="$WS/timeout-child.pid"
+  start_response="$(invoke_async_tool ralph_proxy_shell_start "$(jq -nc --arg command "sleep 30 & child=\$!; echo \$child > \"$child_pid_file\"; wait" '{command:$command}')")"
+  job_id="$(response_json_text "$start_response" | jq -r '.jobId')"
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -f "$child_pid_file" ]] && break
+    sleep 0.2
+  done
+  [ -f "$child_pid_file" ] || { printf 'timeout child pid file not written\n' >&3; false; }
+  child_pid="$(tr -d '[:space:]' <"$child_pid_file")"
+
+  final_response="$(wait_for_job_with_wait "$job_id" 5)"
+  printf '%s\n' "$final_response" | jq -e '
+    .isError == false
+    and (.content[0].text | fromjson | .status) == "timed_out"
+  '
+  ! kill -0 "$child_pid" 2>/dev/null
+}

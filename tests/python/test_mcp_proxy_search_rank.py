@@ -758,6 +758,148 @@ class TestSearchContext(unittest.TestCase):
         self.assertFalse(contextual_search_enabled(None, ralph_mode="no"))
 
 
+class TestSplitIdentifier(unittest.TestCase):
+    """Tests for split_identifier - identifier subtoken derivation."""
+
+    def test_camel_case(self) -> None:
+        self.assertEqual(
+            search_rank.split_identifier("getUserName"), ["get", "user", "name"]
+        )
+
+    def test_snake_case(self) -> None:
+        self.assertEqual(
+            search_rank.split_identifier("get_user_name"), ["get", "user", "name"]
+        )
+
+    def test_kebab_case(self) -> None:
+        self.assertEqual(
+            search_rank.split_identifier("run-plan-core"), ["run", "plan", "core"]
+        )
+
+    def test_acronym_boundary(self) -> None:
+        self.assertEqual(
+            search_rank.split_identifier("HTTPServer"), ["http", "server"]
+        )
+
+    def test_digit_letter_boundary(self) -> None:
+        # short numeric pieces below MIN_SUBTOKEN_LEN are dropped
+        self.assertEqual(search_rank.split_identifier("utf8"), ["utf"])
+
+    def test_short_subtokens_dropped(self) -> None:
+        # "id" (len 2) is below MIN_SUBTOKEN_LEN and dropped
+        self.assertEqual(search_rank.split_identifier("user_id"), ["user"])
+
+    def test_plain_word_yields_no_subtokens(self) -> None:
+        self.assertEqual(search_rank.split_identifier("hello"), [])
+
+
+class TestExpandQueryTerms(unittest.TestCase):
+    """Tests for expand_query_terms - weighted term expansion."""
+
+    def test_originals_kept_with_weight_one(self) -> None:
+        terms, weight = search_rank.expand_query_terms("hello world")
+        self.assertEqual(terms[:2], ["hello", "world"])
+        self.assertEqual(weight["hello"], 1.0)
+        self.assertEqual(weight["world"], 1.0)
+
+    def test_subtokens_appended_with_derived_weight(self) -> None:
+        terms, weight = search_rank.expand_query_terms("getUserName")
+        self.assertEqual(terms[0], "getUserName")
+        self.assertIn("user", terms)
+        self.assertEqual(weight["user"], search_rank.DERIVED_TERM_WEIGHT)
+        self.assertLess(weight["user"], weight["getusername"])
+
+    def test_no_duplicate_terms(self) -> None:
+        terms, _ = search_rank.expand_query_terms("user get_user")
+        self.assertEqual(len(terms), len(set(t.lower() for t in terms)))
+
+    def test_empty_query(self) -> None:
+        terms, weight = search_rank.expand_query_terms("")
+        self.assertEqual(terms, [])
+        self.assertEqual(weight, {})
+
+
+class TestExpandedRankingBehavior(unittest.TestCase):
+    """Integration: expanded terms reach morphological variants but originals win."""
+
+    def setUp(self) -> None:
+        self.old_stdin = sys.stdin
+        self.old_stdout = sys.stdout
+        self.old_argv = sys.argv
+
+    def tearDown(self) -> None:
+        sys.stdin = self.old_stdin
+        sys.stdout = self.old_stdout
+        sys.argv = self.old_argv
+
+    def _run(self, query: str, lines: list[str]) -> list[str]:
+        sys.stdin = io.StringIO("\n".join(lines))
+        sys.stdout = io.StringIO()
+        sys.argv = ["mcp-proxy-search-rank", "--query", query, "--contextual", "0"]
+        search_rank.main()
+        return sys.stdout.getvalue().strip().split("\n")
+
+    def test_camelcase_query_matches_snake_case(self) -> None:
+        output = self._run(
+            "getUserName",
+            ["a.py:1:def get_user_name():", "b.py:2:unrelated content here"],
+        )
+        # The snake_case definition is reached via subtokens and ranks first.
+        self.assertIn("get_user_name", output[0])
+
+    def test_exact_compound_outranks_subtoken_only(self) -> None:
+        output = self._run(
+            "getUserName",
+            [
+                "a.py:1:value = getUserName()",   # exact compound match
+                "b.py:1:def get_user_name():",     # subtoken-only match
+            ],
+        )
+        self.assertIn("getUserName", output[0])
+
+
+class TestPerChunkDiversification(unittest.TestCase):
+    """Tests for chunk-aware result diversification (per-chunk caps)."""
+
+    def setUp(self) -> None:
+        self.old_stdin = sys.stdin
+        self.old_stdout = sys.stdout
+        self.old_argv = sys.argv
+
+    def tearDown(self) -> None:
+        sys.stdin = self.old_stdin
+        sys.stdout = self.old_stdout
+        sys.argv = self.old_argv
+
+    def _run(self, lines: list[str], *extra: str) -> list[str]:
+        sys.stdin = io.StringIO("\n".join(lines))
+        sys.stdout = io.StringIO()
+        sys.argv = ["mcp-proxy-search-rank", "--query", "content", "--contextual", "0", *extra]
+        search_rank.main()
+        return [ln for ln in sys.stdout.getvalue().strip().split("\n") if ln]
+
+    def test_cap_frees_slots_for_other_files(self) -> None:
+        lines = [f"a.py:{i}:content line" for i in range(1, 6)] + ["b.py:1:content line"]
+        out = self._run(lines, "--max-results", "3", "--per-chunk-limit", "2")
+        # With a per-file cap of 2, b.py surfaces instead of a third a.py line.
+        self.assertEqual(len(out), 3)
+        self.assertTrue(any(ln.startswith("b.py:") for ln in out))
+        self.assertEqual(sum(1 for ln in out if ln.startswith("a.py:")), 2)
+
+    def test_disabled_cap_allows_monopoly(self) -> None:
+        lines = [f"a.py:{i}:content line" for i in range(1, 6)] + ["b.py:1:content line"]
+        out = self._run(lines, "--max-results", "3", "--per-chunk-limit", "0")
+        # Without a cap, the highest-ranked file fills every slot.
+        self.assertEqual(len(out), 3)
+        self.assertTrue(all(ln.startswith("a.py:") for ln in out))
+
+    def test_two_pass_fill_preserves_count(self) -> None:
+        # Fewer candidates than max_results: capping must not drop results.
+        lines = [f"a.py:{i}:content line" for i in range(1, 5)]
+        out = self._run(lines, "--max-results", "10", "--per-chunk-limit", "2")
+        self.assertEqual(len(out), 4)
+
+
 # Import math for IDF tests
 import math
 

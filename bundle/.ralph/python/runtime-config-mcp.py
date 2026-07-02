@@ -677,13 +677,21 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
                 searched_paths=sources,
             )
         ralph_env_extra: dict[str, str] = {}
+        # Telemetry log paths required for `ralph benchmark` savings tracking.
         for key in (
-            "RALPH_PROJECT_ROOT",
-            "RALPH_AGENT_WORKSPACE",
-            "RALPH_PLAN_KEY",
-            "RALPH_ARTIFACT_NS",
-            "RALPH_PLAN_WORKSPACE_ROOT",
             "RALPH_AGENT_TOOL_ACCESS",
+            "RALPH_AGENT_WORKSPACE",
+            "RALPH_ARTIFACT_NS",
+            "RALPH_BASH_COMPACT_LOG",
+            "RALPH_BASH_REWRITE_LOG",
+            "RALPH_HOOK_TELEMETRY",
+            "RALPH_HOOK_WINDOWING_TELEMETRY",
+            "RALPH_PLAN_KEY",
+            "RALPH_PLAN_WORKSPACE_ROOT",
+            "RALPH_PROJECT_ROOT",
+            "RALPH_PROXY_SHELL_COMPACT",
+            "RALPH_PROXY_SHELL_COMPACT_LOG",
+            "RALPH_RESULT_WINDOWING_LOG",
         ):
             val = os.environ.get(key, "")
             if val:

@@ -456,4 +456,4 @@ In `ralph` or `hybrid` mode, Ralph defaults to a **compact** MCP catalog (`RALPH
 
 Implementation: `bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh`, `bundle/.ralph/python/mcp-proxy-tool-search-rank.py`. Baseline byte counts: `tests/fixtures/cookbook-roadmap/mcp-tools-list-baseline.json`. Never emit `nextCursor: null` on `tools/list`.
 
-Set `RALPH_MCP_COMPACT_TOOL_CATALOG=0` in Ralph/hybrid to restore the full catalog for debugging. Native/no mode keeps the historical full catalog unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#cookbook-feature-gates-tier-1-through-tier-3) and [cookbook-review/MIGRATION.md](cookbook-review/MIGRATION.md).
+Set `RALPH_MCP_COMPACT_TOOL_CATALOG=0` in Ralph/hybrid to restore the full catalog for debugging. Native/no mode keeps the historical full catalog unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#feature-gates-tier-1-through-tier-3).

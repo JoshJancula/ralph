@@ -16,8 +16,10 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 
 setup() {
   bats_skip_known_ci_flakes
+  # Prevent caffeinate re-exec on macOS so parallel runs do not race on the cache file.
+  export RALPH_PLAN_NO_CAFFEINATE=1
   # Unset removed env vars so they do not pollute test cases that expect clean state.
-  unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_OPTIMIZATION_MODE RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET
+  unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_OPTIMIZATION_MODE RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET RALPH_PLAN_TRANSCRIPT_EVICTION
 }
 
 @test "run-plan --help shows usage" {
@@ -572,6 +574,46 @@ setup() {
   rm -f "$plan_file"
 }
 
+@test "RALPH_PLAN_TRANSCRIPT_EVICTION env var fails with clear error on invalid value" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  run bash -c '
+    set -euo pipefail
+    WORKSPACE="$(pwd)"
+    export WORKSPACE
+    export RALPH_PLAN_TRANSCRIPT_EVICTION=maybe
+    PREBUILT_AGENT=""
+    PLAN_MODEL_CLI=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=1
+    SKIP_MCP_PREFLIGHT_FLAG=1
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    SESSION_STRATEGY_FLAG=""
+    RUNTIME=""
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    CLAUDE_TOOLS_FROM_AGENT=""
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    plan="$1"
+    ralph_root="$2"
+    source "$ralph_root/bash-lib/error-handling.sh"
+    source "$ralph_root/bash-lib/run-plan/run-plan-runtime.sh"
+    source "$ralph_root/bash-lib/run-plan/run-plan-args.sh"
+    ralph_run_plan_parse_args --runtime cursor --plan "$plan"
+  ' _ "$plan_file" "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"RALPH_PLAN_TRANSCRIPT_EVICTION"* ]] && [[ "$output" == *"off, safe, or aggressive"* ]]
+
+  rm -f "$plan_file"
+}
+
 @test "workspace preferences load ralph_mode_default" {
   command -v jq >/dev/null 2>&1 || skip "jq not available"
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
@@ -866,6 +908,74 @@ setup() {
   [[ "$output" == *"hybrid_result=1"* ]]
 }
 
+@test "ralph_apply_mode_transcript_eviction_defaults enables safe eviction for ralph and hybrid modes" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash -c '
+    source "$1/bash-lib/run-plan/run-plan-args.sh"
+    unset RALPH_PLAN_TRANSCRIPT_EVICTION RALPH_CONTINUATION_SUMMARY RALPH_CONTINUATION_SUMMARY_HIERARCHICAL RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES
+    ralph_apply_mode_transcript_eviction_defaults "ralph"
+    printf "ralph_eviction=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+    printf "ralph_summary=%s\n" "${RALPH_CONTINUATION_SUMMARY:-unset}"
+    printf "ralph_hier=%s\n" "${RALPH_CONTINUATION_SUMMARY_HIERARCHICAL:-unset}"
+    printf "ralph_bytes=%s\n" "${RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES:-unset}"
+    unset RALPH_PLAN_TRANSCRIPT_EVICTION RALPH_CONTINUATION_SUMMARY RALPH_CONTINUATION_SUMMARY_HIERARCHICAL RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES
+    ralph_apply_mode_transcript_eviction_defaults "hybrid"
+    printf "hybrid_eviction=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+  ' _ "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ralph_eviction=safe"* ]]
+  [[ "$output" == *"ralph_summary=1"* ]]
+  [[ "$output" == *"ralph_hier=1"* ]]
+  [[ "$output" == *"ralph_bytes=8192"* ]]
+  [[ "$output" == *"hybrid_eviction=safe"* ]]
+}
+
+@test "ralph_apply_mode_transcript_eviction_defaults leaves no/native modes off by default" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash -c '
+    source "$1/bash-lib/run-plan/run-plan-args.sh"
+    unset RALPH_PLAN_TRANSCRIPT_EVICTION
+    ralph_apply_mode_transcript_eviction_defaults "no"
+    printf "no_eviction=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+    unset RALPH_PLAN_TRANSCRIPT_EVICTION
+    ralph_apply_mode_transcript_eviction_defaults "native"
+    printf "native_eviction=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+  ' _ "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no_eviction=off"* ]]
+  [[ "$output" == *"native_eviction=off"* ]]
+}
+
+@test "ralph_apply_mode_transcript_eviction_defaults respects explicit aggressive and off values" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash -c '
+    source "$1/bash-lib/run-plan/run-plan-args.sh"
+    RALPH_PLAN_TRANSCRIPT_EVICTION="aggressive"
+    unset RALPH_PLAN_CONTEXT_BUDGET RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT
+    ralph_apply_mode_transcript_eviction_defaults "no"
+    printf "aggressive=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+    printf "budget=%s\n" "${RALPH_PLAN_CONTEXT_BUDGET:-unset}"
+    printf "recent=%s\n" "${RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT:-unset}"
+    RALPH_PLAN_TRANSCRIPT_EVICTION="off"
+    unset RALPH_PLAN_CONTEXT_BUDGET RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT
+    ralph_apply_mode_transcript_eviction_defaults "hybrid"
+    printf "off=%s\n" "${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
+    printf "off_budget=%s\n" "${RALPH_PLAN_CONTEXT_BUDGET:-unset}"
+  ' _ "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"aggressive=aggressive"* ]]
+  [[ "$output" == *"budget=lean"* ]]
+  [[ "$output" == *"recent=3"* ]]
+  [[ "$output" == *"off=off"* ]]
+  [[ "$output" == *"off_budget=unset"* ]]
+}
+
 @test "ralph_apply_mode_compaction_defaults leaves compaction unset for native and no modes" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
@@ -921,16 +1031,18 @@ setup() {
 
   run bash -c '
     source "$1/bash-lib/run-plan/run-plan-args.sh"
-    unset RALPH_PROXY_SHELL_COMPACT RALPH_BASH_COMPACT
+    unset RALPH_PROXY_SHELL_COMPACT RALPH_BASH_COMPACT RALPH_PLAN_TRANSCRIPT_EVICTION
     ralph_apply_ralph_mode_to_knobs "hybrid"
     printf "%s\n" \
       "RALPH_PROXY_SHELL_COMPACT=${RALPH_PROXY_SHELL_COMPACT:-unset}" \
-      "RALPH_BASH_COMPACT=${RALPH_BASH_COMPACT:-unset}"
+      "RALPH_BASH_COMPACT=${RALPH_BASH_COMPACT:-unset}" \
+      "RALPH_PLAN_TRANSCRIPT_EVICTION=${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
   ' _ "$(dirname "$RUN_PLAN_SH")"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"RALPH_PROXY_SHELL_COMPACT=1"* ]]
   [[ "$output" == *"RALPH_BASH_COMPACT=1"* ]]
+  [[ "$output" == *"RALPH_PLAN_TRANSCRIPT_EVICTION=safe"* ]]
 }
 
 @test "ralph_run_plan_sync_mode_knobs derives RALPH_PROXY_SHELL_COMPACT from ralph mode" {
@@ -939,16 +1051,39 @@ setup() {
   run bash -c '
     source "$1/bash-lib/run-plan/run-plan-invoke-common.sh"
     RALPH_MODE="ralph"
-    unset RALPH_PROXY_SHELL_COMPACT RALPH_BASH_COMPACT
+    unset RALPH_PROXY_SHELL_COMPACT RALPH_BASH_COMPACT RALPH_PLAN_TRANSCRIPT_EVICTION
     ralph_run_plan_sync_mode_knobs
     printf "%s\n" \
       "RALPH_PROXY_SHELL_COMPACT=${RALPH_PROXY_SHELL_COMPACT:-unset}" \
-      "RALPH_BASH_COMPACT=${RALPH_BASH_COMPACT:-unset}"
+      "RALPH_BASH_COMPACT=${RALPH_BASH_COMPACT:-unset}" \
+      "RALPH_PLAN_TRANSCRIPT_EVICTION=${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
   ' _ "$(dirname "$RUN_PLAN_SH")"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"RALPH_PROXY_SHELL_COMPACT=1"* ]]
   [[ "$output" == *"RALPH_BASH_COMPACT=unset"* ]]
+  [[ "$output" == *"RALPH_PLAN_TRANSCRIPT_EVICTION=safe"* ]]
+}
+
+@test "ralph_run_plan_sync_mode_knobs respects explicit RALPH_PLAN_TRANSCRIPT_EVICTION override" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  run bash -c '
+    source "$1/bash-lib/run-plan/run-plan-invoke-common.sh"
+    RALPH_MODE="hybrid"
+    RALPH_PLAN_TRANSCRIPT_EVICTION="off"
+    unset RALPH_CONTINUATION_SUMMARY RALPH_CONTINUATION_SUMMARY_HIERARCHICAL
+    ralph_run_plan_sync_mode_knobs
+    printf "%s\n" \
+      "RALPH_PLAN_TRANSCRIPT_EVICTION=${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}" \
+      "RALPH_CONTINUATION_SUMMARY=${RALPH_CONTINUATION_SUMMARY:-unset}" \
+      "RALPH_CONTINUATION_SUMMARY_HIERARCHICAL=${RALPH_CONTINUATION_SUMMARY_HIERARCHICAL:-unset}"
+  ' _ "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RALPH_PLAN_TRANSCRIPT_EVICTION=off"* ]]
+  [[ "$output" == *"RALPH_CONTINUATION_SUMMARY=unset"* ]]
+  [[ "$output" == *"RALPH_CONTINUATION_SUMMARY_HIERARCHICAL=unset"* ]]
 }
 
 @test "ralph_run_plan_sync_mode_knobs honors explicit RALPH_PROXY_SHELL_COMPACT=0 opt-out" {

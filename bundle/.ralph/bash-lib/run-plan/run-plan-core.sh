@@ -1327,7 +1327,9 @@ RUNTIME_ROOT="$(ralph_resolve_runtime_root "$RUNTIME" "$WORKSPACE")" || {
   ralph_die "Error: runtime config root not found for $RUNTIME. Checked $WORKSPACE/.$RUNTIME, ${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.$RUNTIME, and ${RALPH_HOME:-$HOME/.ralph}/bundle/.$RUNTIME."
 }
 export RALPH_RUNTIME_ROOT="$RUNTIME_ROOT"
-AGENTS_ROOT_REL=".${RUNTIME}/agents"
+# Derive the display label from the runtime's config dirname so antigravity
+# shows ".agents/agents" rather than the bogus ".antigravity/agents".
+AGENTS_ROOT_REL="$(ralph_runtime_config_dirname "$RUNTIME")/agents"
 AGENTS_ROOT="$RUNTIME_ROOT/agents"
 
 RALPH_RUN_PLAN_RELATIVE=".ralph/run-plan.sh --runtime ${RUNTIME}"
@@ -1606,7 +1608,7 @@ RALPH_PLAN_HINT_FEED_FORWARD="${RALPH_PLAN_HINT_FEED_FORWARD:-1}"
 export RALPH_PLAN_HINT_FEED_FORWARD
 
 if declare -F runtime_overlay_restore_stale_runs >/dev/null 2>&1; then
-  if overlay_restore_output="$(runtime_overlay_restore_stale_runs "$WORKSPACE" "" )"; then
+  if overlay_restore_output="$(runtime_overlay_restore_stale_runs "$WORKSPACE" "${RALPH_PLAN_KEY:-}" "" "recovered_after_interruption" "$RUNTIME")"; then
     if [[ -n "$overlay_restore_output" ]]; then
       while IFS= read -r line; do
         ralph_run_plan_log "$line"
@@ -2491,6 +2493,7 @@ if declare -F ralph_apply_shell_compact_defaults >/dev/null 2>&1; then
 fi
 
 ralph_run_plan_log "Shell Compaction: ${RALPH_PROXY_SHELL_COMPACT:-unset}"
+ralph_run_plan_log "Transcript Eviction: ${RALPH_PLAN_TRANSCRIPT_EVICTION:-unset}"
 
 
 ralph_run_plan_log_tool_access_breakdown() {
@@ -4713,7 +4716,32 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     _permission_block_type="none"
     # Permission denials can surface as explicit runtime output even when the
     # CLI exits 0, so classify the output segment independently of exit code.
-    if declare -F ralph_permission_block_type >/dev/null 2>&1; then
+    #
+    # But when the agent printed an explicit completion sentinel on a clean
+    # exit (and left no pending human-input request), the TODO genuinely
+    # finished -- a real permission denial would have stopped it short of
+    # completion. In that case the segment's prose can still contain
+    # permission-shaped vocabulary ("permission denied", "blocked",
+    # "rejected") purely as domain output (for example a security or
+    # poisoning evaluation summary). Treating that as a permission block
+    # would intercept the completion, pause for the operator, and then
+    # re-run the same TODO on resume -- looping forever and asking the
+    # operator to approve marking the TODO complete. Skip classification
+    # when completion is clearly signaled.
+    _permission_skip_for_completion=0
+    if [[ "$exit_code" -eq 0 ]] && [[ ! -f "$PENDING_HUMAN" ]]; then
+      if [[ -f "${USAGE_FILE:-}" ]] && command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("completion_sentinel_seen") else 1)' "${USAGE_FILE}" >/dev/null 2>&1; then
+        _permission_skip_for_completion=1
+      elif declare -F _ralph_completion_sentinel_seen_in_text >/dev/null 2>&1 \
+        && _ralph_completion_sentinel_seen_in_text "$_inv_output_segment"; then
+        _permission_skip_for_completion=1
+      fi
+    fi
+    if [[ "$_permission_skip_for_completion" == "1" ]]; then
+      ralph_run_plan_log "Skipping permission classification: agent signaled TODO completion on clean exit (line $line_num)"
+    fi
+    if [[ "$_permission_skip_for_completion" != "1" ]] && declare -F ralph_permission_block_type >/dev/null 2>&1; then
       _permission_block_type="$(ralph_permission_block_type "$_inv_output_segment" "$exit_code" "$_inv_effective_runtime" 2>/dev/null || printf 'none')"
       if [[ "$_permission_block_type" != "none" ]] && declare -F ralph_prepare_permission_pause >/dev/null 2>&1; then
         ralph_prepare_permission_pause \

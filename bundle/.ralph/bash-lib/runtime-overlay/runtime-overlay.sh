@@ -296,6 +296,8 @@ runtime_overlay_restore_stale_runs() {
   local workspace_root="${1:-$(_runtime_overlay_workspace_root)}"
   local plan_filter_arg="${2:-}"
   local threshold_seconds="${3:-$(runtime_overlay_threshold_seconds)}"
+  local recovered_status="${4:-cleaned}"
+  local runtime_filter="${5:-}"
   if [[ "$plan_filter_arg" == "--all" || "$plan_filter_arg" == "all" ]]; then
     plan_filter_arg=""
   fi
@@ -307,12 +309,14 @@ runtime_overlay_restore_stale_runs() {
     printf 'runtime_overlay_restore_stale_runs requires python3\n' >&2
     return 1
   fi
-  python3 - "$workspace_root" "$plan_filter_arg" "$threshold_seconds" <<'PY'
+  python3 - "$workspace_root" "$plan_filter_arg" "$threshold_seconds" "$recovered_status" "$runtime_filter" <<'PY'
 import json, os, shutil, sys, time
 
 workspace_root = sys.argv[1]
 plan_filter_arg = sys.argv[2]
 threshold_seconds = int(sys.argv[3]) if sys.argv[3].isdigit() else 3600
+recovered_status = sys.argv[4] or "cleaned"
+runtime_filter = sys.argv[5] or None
 plan_filter = None if not plan_filter_arg else plan_filter_arg
 runtime_config_root = os.path.join(workspace_root, ".ralph-workspace", "runtime-config")
 if not os.path.isdir(runtime_config_root):
@@ -342,7 +346,9 @@ for plan_dir in sorted(os.listdir(runtime_config_root)):
         journal_plan = data.get("plan_key") or plan_dir
         if plan_filter and journal_plan != plan_filter:
             continue
-        if data.get("cleanup_status") == "cleaned":
+        if runtime_filter and data.get("runtime") != runtime_filter:
+            continue
+        if data.get("cleanup_status") in ("cleaned", "recovered_after_interruption"):
             continue
         pid = data.get("pid", 0)
         start_time = data.get("start_time", 0)
@@ -394,9 +400,14 @@ for plan_dir in sorted(os.listdir(runtime_config_root)):
                 messages.append(f"Error removing generated overlay file {path}: {exc}")
                 had_errors = True
         if success:
-            data["cleanup_status"] = "cleaned"
+            data["cleanup_status"] = recovered_status
             data["cleanup_time"] = now
-            messages.append(f"Restored stale runtime overlay for plan {journal_plan} (journal {journal_file})")
+            if recovered_status == "cleaned":
+                messages.append(f"Restored stale runtime overlay for plan {journal_plan} (journal {journal_file})")
+            else:
+                data["recovered_after_interruption"] = True
+                data["recovered_time"] = now
+                messages.append(f"Recovered stale runtime overlay after interruption for plan {journal_plan} runtime {data.get('runtime','')} (journal {journal_file})")
         else:
             had_errors = True
             messages.append(f"Runtime overlay restore incomplete for {journal_path}")

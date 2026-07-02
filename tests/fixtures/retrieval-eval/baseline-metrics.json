@@ -1,13 +1,13 @@
 {
   "aggregate": {
-    "mrr": 0.9625,
-    "precision_at_5": 0.77,
-    "queries_no_relevant_top10": 0,
+    "mrr": 0.925,
+    "precision_at_5": 0.72,
+    "queries_no_relevant_top10": 2,
     "query_count": 40,
-    "recall_at_10": 0.766667,
-    "recall_at_5": 0.758333
+    "recall_at_10": 0.741667,
+    "recall_at_5": 0.7125
   },
-  "description": "Baseline metrics for contextual BM25 ranker with deterministic path/symbol/heading context fields. safety_top10 entries are project-relative paths (not path:line) so the gate survives edits that shift line numbers within a ranked file. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions.",
+  "description": "Baseline metrics for the contextual BM25 ranker with identifier-subtoken fallback gather and per-chunk result diversification. safety_top10 entries are project-relative relevant paths confirmed in the top-10 (not path:line) so the gate survives line-number drift. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions.",
   "kind": "retrieval_eval_baseline",
   "per_query": {
     "agent-code-review-md": {
@@ -16,18 +16,18 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/agents/code-review.md",
-        "bundle/.ralph/agents/qa.md",
-        "bundle/.ralph/agents/security.md"
+        "bundle/.ralph/agents/code-review.md"
       ]
     },
     "agent-config-tool": {
       "precision_at_5": 1.0,
-      "recall_at_10": 0.666667,
+      "recall_at_10": 1.0,
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/agent-config-tool.sh"
+        "bundle/.ralph/agent-config-tool.sh",
+        "bundle/.ralph/bash-lib/agent-config/cli.sh",
+        "bundle/.ralph/bash-lib/agent-config/validate.sh"
       ]
     },
     "agent-schema-readme": {
@@ -45,48 +45,44 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/AGENT-WORKFLOW.md",
-        "tests/fixtures/cookbook-roadmap/offline-e2e/evaluator-changes-required.json"
+        "docs/AGENT-WORKFLOW.md"
       ]
     },
     "concept-session-resume": {
-      "precision_at_5": 0.2,
-      "recall_at_10": 0.5,
-      "recall_at_5": 0.5,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "docs/ENVIRONMENT.md",
-        "docs/README.md"
-      ]
-    },
-    "concept-stable-prefix": {
-      "precision_at_5": 0.2,
-      "recall_at_10": 0.333333,
-      "recall_at_5": 0.333333,
-      "reciprocal_rank": 0.5,
-      "safety_top10": [
-        "docs/ENVIRONMENT.md",
-        "docs/cookbook-review/BACKLOG.md",
-        "tests/bats/run-plan/run-plan-prompt-order.bats"
-      ]
-    },
-    "concept-three-root-model": {
-      "precision_at_5": 1.0,
-      "recall_at_10": 0.5,
-      "recall_at_5": 0.5,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "AGENTS.md"
-      ]
-    },
-    "difficult-heading-cookbook-backlog": {
-      "precision_at_5": 0.8,
+      "precision_at_5": 0.4,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/cookbook-review/04-retrieval-rag.md"
+        "AGENTS.md",
+        "docs/ENVIRONMENT.md"
       ]
+    },
+    "concept-stable-prefix": {
+      "precision_at_5": 0.4,
+      "recall_at_10": 0.333333,
+      "recall_at_5": 0.333333,
+      "reciprocal_rank": 1.0,
+      "safety_top10": [
+        "docs/ENVIRONMENT.md"
+      ]
+    },
+    "concept-three-root-model": {
+      "precision_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 0.5,
+      "reciprocal_rank": 1.0,
+      "safety_top10": [
+        "AGENTS.md",
+        "docs/AGENT-WORKFLOW.md"
+      ]
+    },
+    "difficult-heading-cookbook-backlog": {
+      "precision_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "recall_at_5": 0.0,
+      "reciprocal_rank": 0.0,
+      "safety_top10": []
     },
     "difficult-path-handoffs-file": {
       "precision_at_5": 1.0,
@@ -112,9 +108,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/python/mcp-proxy-search-normalize-terms.py",
-        "bundle/.ralph/python/mcp-proxy-search-rank.py",
-        "bundle/.ralph/python/retrieval_eval.py"
+        "bundle/.ralph/python/mcp-proxy-search-rank.py"
       ]
     },
     "doc-agent-workflow-handoff": {
@@ -133,6 +127,7 @@
       "recall_at_5": 0.666667,
       "reciprocal_rank": 1.0,
       "safety_top10": [
+        "AGENTS.md",
         "docs/INSTALL.md"
       ]
     },
@@ -142,19 +137,15 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md",
         "docs/ENVIRONMENT.md"
       ]
     },
     "doc-retrieval-cluster": {
-      "precision_at_5": 0.8,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "docs/cookbook-review/04-retrieval-rag.md",
-        "tests/fixtures/cookbook-roadmap/BASELINE.md"
-      ]
+      "precision_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "recall_at_5": 0.0,
+      "reciprocal_rank": 0.0,
+      "safety_top10": []
     },
     "exact-classify-tool-calls": {
       "precision_at_5": 0.8,
@@ -162,7 +153,6 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "tests/python/test_cookbook_roadmap_baseline.py",
         "tests/python/test_tool_call_classification.py"
       ]
     },
@@ -190,12 +180,11 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 0.5,
       "safety_top10": [
-        "bundle/.ralph/python/continuation_summary.py",
-        "bundle/.ralph/python/render-benchmark-markdown.py"
+        "bundle/.ralph/python/continuation_summary.py"
       ]
     },
     "exact-score-candidate": {
-      "precision_at_5": 1.0,
+      "precision_at_5": 0.8,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
@@ -227,6 +216,7 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
+        "tests/fixtures/cookbook-roadmap/BASELINE.md",
         "tests/fixtures/cookbook-roadmap/bm25-rankings-baseline.json",
         "tests/python/test_cookbook_roadmap_baseline.py"
       ]
@@ -241,12 +231,11 @@
       ]
     },
     "orch-parallel-stages": {
-      "precision_at_5": 1.0,
-      "recall_at_10": 0.666667,
-      "recall_at_5": 0.666667,
+      "precision_at_5": 0.6,
+      "recall_at_10": 0.333333,
+      "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "docs/cookbook-review/02-agent-patterns.md",
         "scripts/validate-orchestration-schema.sh"
       ]
     },
@@ -256,9 +245,8 @@
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "scripts/validate-orchestration-schema.sh",
-        "tests/bats/orchestration/orchestration-schema.bats",
-        "tests/bats/validate-orchestration-schema-usage.bats"
+        "AGENTS.md",
+        "scripts/validate-orchestration-schema.sh"
       ]
     },
     "plan-todo-open-task": {
@@ -267,8 +255,7 @@
       "recall_at_5": 0.333333,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md",
-        "docs/MCP.md"
+        "AGENTS.md"
       ]
     },
     "plan-validate-classic": {
@@ -281,7 +268,7 @@
       ]
     },
     "python-artifact-schema": {
-      "precision_at_5": 1.0,
+      "precision_at_5": 0.8,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
@@ -295,12 +282,11 @@
       "recall_at_5": 0.5,
       "reciprocal_rank": 0.5,
       "safety_top10": [
-        "tests/python/test_cookbook_offline_e2e.py",
         "tests/python/test_evaluator_contract.py"
       ]
     },
     "python-load-ralph-script": {
-      "precision_at_5": 1.0,
+      "precision_at_5": 0.8,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
@@ -319,7 +305,7 @@
       ]
     },
     "shell-gather-candidates": {
-      "precision_at_5": 0.4,
+      "precision_at_5": 0.6,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,

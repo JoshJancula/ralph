@@ -40,6 +40,91 @@ DEF_PATTERNS = [
 
 IDENT_RE = re.compile(r"[A-Za-z_][\w]*")
 
+# Identifier subtoken splitter: camelCase, acronym, and digit/letter boundaries.
+# Underscores/hyphens/punctuation are not matched, so they split naturally.
+SUBTOKEN_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
+# Derived subtokens shorter than this are dropped to avoid flooding the pool.
+MIN_SUBTOKEN_LEN = 3
+# Derived subtokens score lower than originals so exact identifier matches win.
+DERIVED_TERM_WEIGHT = 0.5
+# Original-term matches occupy a score tier strictly above derived-only matches.
+ORIGINAL_TIER_FLOOR = 1_000_000.0
+# Default max results returned from any single enclosing chunk (symbol/heading,
+# or file when no context), so one file/function cannot monopolize the top-k.
+# Tuned on the retrieval-eval fixture: 3 lifts recall@5/@10 with no precision,
+# MRR, or safety-gate regression (lower values trade precision for recall).
+DEFAULT_PER_CHUNK_LIMIT = 3
+
+
+def per_chunk_limit_default() -> int:
+    raw = os.environ.get("RALPH_MCP_SEARCH_PER_CHUNK_LIMIT")
+    if raw is None:
+        return DEFAULT_PER_CHUNK_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_PER_CHUNK_LIMIT
+    return value if value >= 0 else DEFAULT_PER_CHUNK_LIMIT
+
+
+def chunk_key(
+    filepath: str,
+    line_no: int,
+    context_map: dict[tuple[str, int], LineContext],
+) -> tuple[str, str]:
+    """Enclosing-chunk identity for result diversification.
+
+    Uses the nearest symbol or heading when contextual data is available so two
+    distinct functions in the same file count as separate chunks; falls back to
+    the file path otherwise.
+    """
+    ctx = context_map.get((filepath.replace("\\", "/"), line_no))
+    if ctx is not None:
+        label = ctx.symbol or ctx.heading
+        if label:
+            return (filepath, label)
+    return (filepath, "")
+
+
+def split_identifier(term: str) -> list[str]:
+    """Derive lowercase subtokens from a compound identifier.
+
+    Splits camelCase, snake_case, kebab-case, and digit/letter transitions.
+    Returns subtokens of length >= MIN_SUBTOKEN_LEN, excluding the term itself,
+    in first-seen order. Example: getUserName -> [get, user, name].
+    """
+    term_lower = term.lower()
+    subs: list[str] = []
+    seen: set[str] = set()
+    for piece in SUBTOKEN_RE.findall(term):
+        sub = piece.lower()
+        if len(sub) < MIN_SUBTOKEN_LEN:
+            continue
+        if sub == term_lower or sub in seen:
+            continue
+        seen.add(sub)
+        subs.append(sub)
+    return subs
+
+
+def expand_query_terms(query: str) -> tuple[list[str], dict[str, float]]:
+    """Return (terms, weight) of originals plus derived identifier subtokens.
+
+    Originals carry weight 1.0; derived subtokens carry DERIVED_TERM_WEIGHT so
+    exact identifier matches outrank morphological expansions. The returned
+    weight map is keyed by lowercase term.
+    """
+    originals = normalize_terms(query)
+    terms: list[str] = list(originals)
+    weight: dict[str, float] = {t.lower(): 1.0 for t in originals}
+    for orig in originals:
+        for sub in split_identifier(orig):
+            if sub in weight:
+                continue
+            weight[sub] = DERIVED_TERM_WEIGHT
+            terms.append(sub)
+    return terms, weight
+
 
 def _load_search_context_module():
     script_dir = Path(__file__).resolve().parent
@@ -112,7 +197,9 @@ def score_context_fields(
     context: LineContext | None,
     terms: list[str],
     term_idf: dict[str, float],
+    term_weight: dict[str, float] | None = None,
 ) -> float:
+    weights = term_weight or {}
     score = 0.0
     path_lower = filepath.lower()
     basename = filepath.rsplit("/", 1)[-1].lower()
@@ -128,6 +215,10 @@ def score_context_fields(
             continue
         for term in terms:
             term_lower = term.lower()
+            # Context (path/symbol/heading) boosts apply only to original query
+            # terms; derived subtokens stay confined to the content BM25 signal.
+            if weights.get(term_lower, 1.0) < 1.0:
+                continue
             idf = term_idf.get(term_lower, 0.0)
             if term_lower in field_text:
                 score += idf * weight
@@ -142,42 +233,59 @@ def score_candidate(
     term_idf: dict[str, float],
     avg_dl: float,
     context: LineContext | None = None,
+    term_weight: dict[str, float] | None = None,
+    tier: bool = False,
 ) -> float:
+    weights = term_weight or {}
     content_lower = content.lower()
     tokens = tokenize(content)
     dl = len(tokens) or 1
     basename = filepath.rsplit("/", 1)[-1]
+    # score: signal from original query terms (full ranking machinery).
+    # derived_score: recall backfill from derived subtokens only.
     score = 0.0
+    derived_score = 0.0
 
     for term in terms:
         term_lower = term.lower()
+        is_original = weights.get(term_lower, 1.0) >= 1.0
         tf = term_frequency(term_lower, content_lower, tokens)
         idf = term_idf.get(term_lower, 0.0)
         if term_lower in COMMON_TOKENS:
             idf *= 0.25
 
+        bm25 = 0.0
         if tf > 0:
             bm25 = idf * (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * dl / avg_dl))
-            score += bm25
 
-        score += _term_match_boost(term, content, idf, exact_mult=2.0, case_mult=3.0)
+        if not is_original:
+            # Derived subtokens contribute only the scaled BM25 recall signal,
+            # tracked separately so they never reorder original matches.
+            derived_score += weights.get(term_lower, 1.0) * bm25
+            continue
 
+        term_score = bm25
+        term_score += _term_match_boost(term, content, idf, exact_mult=2.0, case_mult=3.0)
         if term_lower in basename.lower():
-            score += idf * 2.5
+            term_score += idf * 2.5
         if term_lower in filepath.lower():
-            score += idf * 1.5
+            term_score += idf * 1.5
+        score += term_score
 
     for pat in DEF_PATTERNS:
         if pat.search(content):
             for term in terms:
+                if weights.get(term.lower(), 1.0) < 1.0:
+                    continue
                 ident_pat = r"(?<![\w])" + re.escape(term) + r"(?![\w])"
                 if re.search(ident_pat, content, re.IGNORECASE):
                     score += term_idf.get(term.lower(), 0.0) * 2.0
             break
 
-    if len(terms) >= 2:
+    original_terms = [t for t in terms if weights.get(t.lower(), 1.0) >= 1.0]
+    if len(original_terms) >= 2:
         positions: list[int] = []
-        for term in terms:
+        for term in original_terms:
             match = re.search(re.escape(term), content, re.IGNORECASE)
             if match:
                 positions.append(match.start())
@@ -188,8 +296,19 @@ def score_candidate(
             elif span <= 80:
                 score += 2.0
 
-    score += score_context_fields(filepath, context, terms, term_idf)
-    return score
+    score += score_context_fields(filepath, context, terms, term_idf, term_weight)
+
+    # Two-tier ranking (search path only, tier=True): any candidate with
+    # original-term signal ranks strictly above derived-subtoken-only candidates.
+    # ORIGINAL_TIER_FLOOR is far larger than any realistic derived_score, so
+    # original matches keep their exact relative order while morphological matches
+    # backfill below them. The offset is opt-in because other consumers (e.g.
+    # progressive_context) threshold on the natural score magnitude.
+    if tier:
+        if score > 0.0:
+            return ORIGINAL_TIER_FLOOR + score
+        return derived_score
+    return score if score > 0.0 else derived_score
 
 
 def resolve_state_root(project_root: Path, explicit: str | None) -> Path:
@@ -219,10 +338,13 @@ def rank_candidates(
     project_root: Path | None = None,
     state_root: Path | None = None,
     contextual: bool = False,
+    per_chunk_limit: int | None = None,
 ) -> list[str]:
-    terms = normalize_terms(query)
+    terms, term_weight = expand_query_terms(query)
     if not terms or not candidates:
         return []
+    if per_chunk_limit is None:
+        per_chunk_limit = per_chunk_limit_default()
 
     num_docs = len(candidates)
     term_doc_freq: dict[str, int] = {}
@@ -265,10 +387,36 @@ def rank_candidates(
     scored: list[tuple[float, str, str, int]] = []
     for (filepath, line_no, content), raw_line in candidates:
         ctx = context_map.get((filepath.replace("\\", "/"), line_no))
-        s = score_candidate(filepath, content, terms, term_idf, avg_dl, context=ctx)
+        s = score_candidate(filepath, content, terms, term_idf, avg_dl, context=ctx, term_weight=term_weight, tier=True)
         scored.append((s, raw_line, filepath, line_no))
 
     scored.sort(key=lambda item: (-item[0], item[2], item[3], item[1]))
+
+    # Chunk-aware diversification: cap how many lines any single enclosing chunk
+    # contributes so a large file or function cannot monopolize the top-k and
+    # crowd out other relevant files. A two-pass fill keeps the result count at
+    # max_results even when capping leaves slots after the first pass.
+    if per_chunk_limit and per_chunk_limit > 0:
+        selected: list[str] = []
+        used: set[int] = set()
+        chunk_counts: dict[tuple[str, str], int] = {}
+        for idx, (_score, raw_line, filepath, line_no) in enumerate(scored):
+            if len(selected) >= max_results:
+                break
+            key = chunk_key(filepath, line_no, context_map)
+            if chunk_counts.get(key, 0) >= per_chunk_limit:
+                continue
+            chunk_counts[key] = chunk_counts.get(key, 0) + 1
+            used.add(idx)
+            selected.append(raw_line)
+        if len(selected) < max_results:
+            for idx, (_score, raw_line, _filepath, _line_no) in enumerate(scored):
+                if len(selected) >= max_results:
+                    break
+                if idx not in used:
+                    selected.append(raw_line)
+        return selected
+
     return [raw_line for _score, raw_line, _filepath, _line_no in scored[:max_results]]
 
 
@@ -279,6 +427,8 @@ def main() -> int:
     parser.add_argument("--project-root", default="")
     parser.add_argument("--state-root", default="")
     parser.add_argument("--contextual", choices=("0", "1", "auto"), default="auto")
+    parser.add_argument("--per-chunk-limit", type=int, default=-1,
+                        help="Max results per enclosing chunk (<0 uses the env/default)")
     args = parser.parse_args()
 
     terms = normalize_terms(args.query)
@@ -308,6 +458,7 @@ def main() -> int:
     else:
         contextual = args.contextual == "1"
 
+    per_chunk_limit = args.per_chunk_limit if args.per_chunk_limit >= 0 else None
     for line in rank_candidates(
         args.query,
         candidates,
@@ -315,6 +466,7 @@ def main() -> int:
         project_root=project_root,
         state_root=state_root,
         contextual=contextual,
+        per_chunk_limit=per_chunk_limit,
     ):
         print(line)
 

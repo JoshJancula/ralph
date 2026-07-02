@@ -210,3 +210,49 @@ assert data["cleanup_status"] == "cleaned"
 assert data["mutated_files"][1]["restored"] is True
 PY
 }
+
+@test "runtime overlay stale restore can mark recovered-after-interruption distinctly" {
+  source "$RUNTIME_OVERLAY_LIB"
+
+  plan_key="recover-plan"
+  plan_dir="$workspace/.ralph-workspace/runtime-config/$plan_key"
+  journal_dir="$plan_dir/journals"
+  originals_dir="$plan_dir/originals"
+  mkdir -p "$journal_dir" "$originals_dir/.cursor" "$workspace/.cursor"
+
+  cursor_target="$workspace/.cursor/mcp.json"
+  cursor_backup="$originals_dir/.cursor/mcp.json"
+  printf '%s' '{"original":true}' > "$cursor_backup"
+  printf '%s' '{"mutated":true}' > "$cursor_target"
+
+  journal_path="$journal_dir/journal-${plan_key}-777-1.json"
+  python3 - <<'PY' "$journal_path" "$plan_key" "$workspace" "$cursor_target" "$cursor_backup"
+import json, sys
+path, plan_key, workspace, cursor, cursor_backup = sys.argv[1:]
+data = {
+    "pid": 777,
+    "start_time": 1,
+    "runtime": "cursor",
+    "plan_key": plan_key,
+    "workspace_root": workspace,
+    "cleanup_status": "pending",
+    "cleanup_time": None,
+    "generated_files": [],
+    "mutated_files": [{"path": cursor, "backup": cursor_backup, "restored": False}]
+}
+with open(path, "w") as fh:
+    json.dump(data, fh, indent=2)
+PY
+
+  run runtime_overlay_restore_stale_runs "$workspace" "$plan_key" 0 "recovered_after_interruption" "cursor"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$cursor_target")" = '{"original":true}' ]
+
+  python3 - <<'PY' "$journal_path"
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["cleanup_status"] == "recovered_after_interruption"
+assert data["recovered_after_interruption"] is True
+assert data["mutated_files"][0]["restored"] is True
+PY
+}

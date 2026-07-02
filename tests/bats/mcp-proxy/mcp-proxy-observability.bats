@@ -52,7 +52,7 @@ invoke_tool_with_plan_log() {
 
   invoke_tool_with_plan_log ralph_proxy_shell "$(jq -nc --arg command 'echo hello' '{command:$command}')"
 
-  [[ -f "$(plan_log_path)" ]] || fail "per-plan MCP log not created at $(plan_log_path)"
+  [[ -f "$(plan_log_path)" ]] || { printf 'per-plan MCP log not created at %s\n' "$(plan_log_path)" >&3; false; }
 }
 
 @test "plan log contains at least one log line after a tool call" {
@@ -63,7 +63,7 @@ invoke_tool_with_plan_log() {
   local log_path
   log_path="$(plan_log_path)"
   [[ -f "$log_path" ]] || skip "plan log not created"
-  [[ -s "$log_path" ]] || fail "plan log is empty after tool call"
+  [[ -s "$log_path" ]] || { printf 'plan log is empty after tool call\n' >&3; false; }
 }
 
 @test "timeout-handoff is recorded in plan log when sync cap fires" {
@@ -76,8 +76,20 @@ invoke_tool_with_plan_log() {
 
   local log_path
   log_path="$(plan_log_path)"
-  [[ -f "$log_path" ]] || fail "plan log not created"
-  grep -q "timeout-handoff" "$log_path" || fail "timeout-handoff marker not found in plan log"
+  [[ -f "$log_path" ]] || { printf 'plan log not created\n' >&3; false; }
+  grep -q "timeout-handoff" "$log_path" || { printf 'timeout-handoff marker not found in plan log\n' >&3; false; }
+}
+
+@test "async-job-reuse is recorded in plan log when long verification command repeats" {
+  command -v jq >/dev/null || skip "jq required"
+
+  invoke_tool_with_plan_log ralph_proxy_shell "$(jq -nc --arg command "bash -lc 'npm run test:cov -- --coverageReporters=text-summary; sleep 5'" '{command:$command}')"
+  invoke_tool_with_plan_log ralph_proxy_shell "$(jq -nc --arg command "bash -lc 'npm run test:cov -- --coverageReporters=text-summary; sleep 5'" '{command:$command}')"
+
+  local log_path
+  log_path="$(plan_log_path)"
+  [[ -f "$log_path" ]] || { printf 'plan log not created\n' >&3; false; }
+  grep -q "async-job-reuse" "$log_path" || { printf 'async-job-reuse marker not found in plan log\n' >&3; false; }
 }
 
 @test "plan log is written to the path derived from RALPH_PLAN_WORKSPACE_ROOT" {
@@ -88,7 +100,7 @@ invoke_tool_with_plan_log() {
 
   invoke_tool_with_plan_log ralph_proxy_shell "$(jq -nc --arg command 'ls' '{command:$command}')"
 
-  [[ -f "$expected_log" ]] || fail "expected log not at $expected_log"
+  [[ -f "$expected_log" ]] || { printf 'expected log not at %s\n' "$expected_log" >&3; false; }
 }
 
 @test "ralph_mcp_proxy_plan_log_path returns plan-scoped path from env" {
@@ -106,7 +118,7 @@ invoke_tool_with_plan_log() {
   )"
 
   [[ "$result" == "/tmp/ws/.ralph-workspace/logs/my-plan/mcp.log" ]] \
-    || fail "unexpected plan log path: $result"
+    || { printf 'unexpected plan log path: %s\n' "$result" >&3; false; }
 }
 
 @test "ralph_mcp_proxy_plan_log_path returns nothing when RALPH_PLAN_KEY is unset" {

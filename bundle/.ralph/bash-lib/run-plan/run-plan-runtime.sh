@@ -275,6 +275,9 @@ prompt_ralph_mode() {
 ralph_apply_shell_compact_defaults() {
   if declare -F ralph_apply_mode_compaction_defaults >/dev/null 2>&1; then
     ralph_apply_mode_compaction_defaults "${RALPH_MODE:-no}"
+    if declare -F ralph_apply_mode_transcript_eviction_defaults >/dev/null 2>&1; then
+      ralph_apply_mode_transcript_eviction_defaults "${RALPH_MODE:-no}"
+    fi
     return 0
   fi
 
@@ -305,4 +308,51 @@ ralph_apply_shell_compact_defaults() {
         ;;
     esac
   fi
+}
+
+ralph_apply_mode_transcript_eviction_defaults() {
+  local mode="${1:-no}"
+
+  if [[ -z "${RALPH_PLAN_TRANSCRIPT_EVICTION:-}" ]]; then
+    case "$mode" in
+      ralph|hybrid)
+        RALPH_PLAN_TRANSCRIPT_EVICTION=safe
+        export RALPH_PLAN_TRANSCRIPT_EVICTION
+        ;;
+      *)
+        RALPH_PLAN_TRANSCRIPT_EVICTION=off
+        export RALPH_PLAN_TRANSCRIPT_EVICTION
+        ;;
+    esac
+  fi
+
+  case "${RALPH_PLAN_TRANSCRIPT_EVICTION:-off}" in
+    safe|aggressive)
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY=1
+        export RALPH_CONTINUATION_SUMMARY
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_HIERARCHICAL:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_HIERARCHICAL=1
+        export RALPH_CONTINUATION_SUMMARY_HIERARCHICAL
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES=8192
+        export RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES
+      fi
+      ;;
+  esac
+
+  case "${RALPH_PLAN_TRANSCRIPT_EVICTION:-off}" in
+    aggressive)
+      if [[ -z "${RALPH_PLAN_CONTEXT_BUDGET:-}" ]]; then
+        RALPH_PLAN_CONTEXT_BUDGET=lean
+        export RALPH_PLAN_CONTEXT_BUDGET
+      fi
+      if [[ -z "${RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT:-}" ]]; then
+        RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT=3
+        export RALPH_CONTINUATION_SUMMARY_RECENT_DETAIL_COUNT
+      fi
+      ;;
+  esac
 }

@@ -119,6 +119,38 @@ class TestRuntimeConfigMcp(unittest.TestCase):
         self.assertIn("ralph", result["summary"]["mcp_effective_names"])
         self.assertTrue(any("ralph:protected overlay" in d for d in result["summary"]["mcp_override_decisions"]))
 
+    def test_ralph_telemetry_log_env_forwarding(self) -> None:
+        script = str(self.project / ".ralph" / "mcp-server.sh")
+        os.makedirs(os.path.dirname(script), exist_ok=True)
+        Path(script).write_text("# stub\n", encoding="utf-8")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RALPH_RESULT_WINDOWING_LOG": "windowing-log-path",
+                "RALPH_PROXY_SHELL_COMPACT_LOG": "proxy-shell-compact-log-path",
+            },
+            clear=False,
+        ):
+            result = self._resolve(
+                ralph_mode="hybrid",
+                ralph_server_script=script,
+            )
+
+        env = result["runtime_config"]["mcpServers"]["ralph"]["env"]
+        self.assertEqual(env["RALPH_RESULT_WINDOWING_LOG"], "windowing-log-path")
+        self.assertEqual(env["RALPH_PROXY_SHELL_COMPACT_LOG"], "proxy-shell-compact-log-path")
+
+        # Negative: if RALPH_RESULT_WINDOWING_LOG is unset, it must not be injected.
+        with mock.patch.dict(os.environ, {}, clear=True):
+            result2 = self._resolve(
+                ralph_mode="hybrid",
+                ralph_server_script=script,
+            )
+
+        env2 = result2["runtime_config"]["mcpServers"]["ralph"]["env"]
+        self.assertNotIn("RALPH_RESULT_WINDOWING_LOG", env2)
+
     def test_missing_env_var_fails(self) -> None:
         (self.project / ".cursor" / "mcp.json").write_text(
             json.dumps(

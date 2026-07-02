@@ -52,14 +52,29 @@ class LineContext:
 
 
 def contextual_search_enabled(explicit: str | None = None, ralph_mode: str | None = None) -> bool:
-    value = explicit if explicit is not None else os.environ.get("RALPH_MCP_CONTEXTUAL_SEARCH")
+    if explicit is not None:
+        value = str(explicit).strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+
+    # When callers provide an explicit ralph_mode, it must override any
+    # contextual-search env var. This keeps the behavior deterministic for
+    # unit tests and for explicit runtime mode selection.
+    if ralph_mode is not None:
+        mode = str(ralph_mode).strip().lower()
+        return mode in {"ralph", "hybrid"}
+
+    value = os.environ.get("RALPH_MCP_CONTEXTUAL_SEARCH")
     if value is not None and str(value).strip() != "":
         normalized = str(value).strip().lower()
         if normalized in {"1", "true", "yes", "on"}:
             return True
         if normalized in {"0", "false", "no", "off"}:
             return False
-    mode = (ralph_mode if ralph_mode is not None else os.environ.get("RALPH_MODE", "no")).lower()
+
+    mode = str(os.environ.get("RALPH_MODE", "no")).strip().lower()
     return mode in {"ralph", "hybrid"}
 
 
