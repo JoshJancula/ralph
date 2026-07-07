@@ -15,10 +15,16 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASELINE_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "benchmark-channel-attribution"
+OVERLAY_WRITE_SCRIPT = REPO_ROOT / "bundle" / ".ralph" / "python" / "runtime-overlay-write-summary.py"
+OVERLAY_FIELDS_SCRIPT = REPO_ROOT / "bundle" / ".ralph" / "python" / "ralph_overlay_usage_fields.py"
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "bundle" / ".ralph" / "python"))
 
@@ -120,8 +126,23 @@ class TestCompactArtifactRetrieval(unittest.TestCase):
 
     def test_envelope_and_compacted_readback(self) -> None:
         lines = [
-            {"event": "envelope", "resultId": "abc123", "originalBytes": 2000, "returnedBytes": 200},
-            {"event": "readback", "resultId": "abc123", "view": "compacted", "returnedBytes": 300},
+            {
+                "event": "envelope",
+                "resultId": "abc123",
+                "runtime": "cursor",
+                "channel": "proxy_read_windowing",
+                "originalBytes": 2000,
+                "returnedBytes": 200,
+            },
+            {
+                "event": "readback",
+                "resultId": "abc123",
+                "runtime": "cursor",
+                "channel": "stored_result_readback",
+                "sourceResultChannel": "proxy_read_windowing",
+                "view": "compacted",
+                "returnedBytes": 300,
+            },
         ]
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
             for line in lines:
@@ -199,6 +220,103 @@ class TestCompactArtifactRetrieval(unittest.TestCase):
             "search_followup": 1,
             "raw_exactness": 1,
         })
+
+
+class TestRuntimeOverlayPerRuntimeSummaries(unittest.TestCase):
+    """Per-runtime summaries are isolated; aggregate summary.json is regenerated."""
+
+    def _write_overlay_summary(self, summary_path: Path, env: dict[str, str]) -> None:
+        merged = os.environ.copy()
+        merged.update(env)
+        state_dir = env.get("RUNTIME_OVERLAY_STATE_DIR_VALUE") or str(summary_path.parent)
+        merged.setdefault("RUNTIME_OVERLAY_STATE_DIR_VALUE", state_dir)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(OVERLAY_WRITE_SCRIPT),
+                str(summary_path),
+                str(OVERLAY_FIELDS_SCRIPT),
+            ],
+            env=merged,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            msg=proc.stderr or proc.stdout,
+        )
+
+    def test_runtime_overlay_per_runtime_summaries_isolated_and_aggregate_merged(
+        self,
+    ) -> None:
+        fixture = json.loads(
+            (BASELINE_FIXTURE_DIR / "mixed-runtime-overlay-stale-summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            summary_path = state_dir / "summary.json"
+            first_env = dict(fixture["first_write_env"])
+            first_env["RUNTIME_OVERLAY_STATE_DIR_VALUE"] = str(state_dir)
+            self._write_overlay_summary(summary_path, first_env)
+
+            cursor_path = state_dir / "summaries" / "cursor.json"
+            self.assertTrue(cursor_path.is_file())
+            cursor_summary = json.loads(cursor_path.read_text(encoding="utf-8"))
+            self.assertEqual(cursor_summary["runtime"], "cursor")
+            self.assertEqual(cursor_summary["tool_access_mode"], "native")
+
+            first_aggregate = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(first_aggregate["runtime"], "cursor")
+            self.assertEqual(first_aggregate["runtimes_present"], ["cursor"])
+            self.assertEqual(first_aggregate["tool_access_mode"], "native")
+
+            second_env = dict(fixture["second_write_env"])
+            second_env["RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE"] = "opencode"
+            second_env["RUNTIME_OVERLAY_STATE_DIR_VALUE"] = str(state_dir)
+            self._write_overlay_summary(summary_path, second_env)
+
+            opencode_path = state_dir / "summaries" / "opencode.json"
+            self.assertTrue(opencode_path.is_file())
+            opencode_summary = json.loads(opencode_path.read_text(encoding="utf-8"))
+            self.assertEqual(opencode_summary["runtime"], "opencode")
+            self.assertEqual(opencode_summary["tool_access_mode"], "ralph")
+            self.assertEqual(opencode_summary["native_hooks_effective"], "false")
+            self.assertEqual(opencode_summary["mcp_effective"], "true")
+            self.assertEqual(opencode_summary["overlay_mode"], "hybrid")
+
+            cursor_again = json.loads(cursor_path.read_text(encoding="utf-8"))
+            self.assertEqual(cursor_again["runtime"], "cursor")
+            self.assertEqual(cursor_again["tool_access_mode"], "native")
+            self.assertEqual(cursor_again["native_hooks_effective"], "true")
+            self.assertEqual(cursor_again["mcp_effective"], "false")
+            self.assertEqual(cursor_again["overlay_mode"], "bounded")
+
+            aggregate = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(aggregate["plan_key"], fixture["plan_key"])
+            self.assertEqual(aggregate["runtimes_present"], ["cursor", "opencode"])
+            self.assertEqual(aggregate["runtime"], "opencode")
+            self.assertIn("runtime_overlays", aggregate)
+            self.assertEqual(
+                aggregate["runtime_overlays"]["cursor"]["tool_access_mode"],
+                "native",
+            )
+            self.assertEqual(
+                aggregate["runtime_overlays"]["opencode"]["tool_access_mode"],
+                "ralph",
+            )
+            self.assertEqual(
+                aggregate["runtime_overlays"]["cursor"]["native_hooks_effective"],
+                "true",
+            )
+            self.assertEqual(
+                aggregate["runtime_overlays"]["opencode"]["native_hooks_effective"],
+                "false",
+            )
+            self.assertNotIn("tool_access_mode", aggregate)
 
 
 class TestNoAgentDrivenPollingLoops(unittest.TestCase):

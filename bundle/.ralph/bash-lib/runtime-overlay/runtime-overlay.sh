@@ -37,6 +37,8 @@ RUNTIME_OVERLAY_GENERATED_FILES=()
 RUNTIME_OVERLAY_MUTATED_FILES=()
 RUNTIME_OVERLAY_WARNINGS=()
 RUNTIME_OVERLAY_CAPABILITIES=()
+RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
+RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE=()
 RUNTIME_OVERLAY_EXTERNAL_TEMP_FILES=()
 RUNTIME_OVERLAY_CLEANUP_CMDS=()
 RUNTIME_OVERLAY_JOURNAL_DIR=""
@@ -433,6 +435,16 @@ runtime_overlay_summary_path() {
   printf '%s/summary.json' "$state_dir"
 }
 
+runtime_overlay_per_runtime_summary_path() {
+  local runtime="${1:-${RUNTIME_OVERLAY_SUMMARY_RUNTIME:-}}"
+  local state_dir
+  state_dir="$(runtime_overlay_state_dir)"
+  if [[ -z "$runtime" ]]; then
+    runtime_overlay_die "Runtime overlay per-runtime summary requires a runtime name."
+  fi
+  printf '%s/summaries/%s.json' "$state_dir" "$runtime"
+}
+
 runtime_overlay_init_state() {
   local runtime="${1:-${RUNTIME:-}}"
   local plan_key="${2:-${RALPH_PLAN_KEY:-}}"
@@ -467,6 +479,8 @@ runtime_overlay_init_state() {
   RUNTIME_OVERLAY_MUTATED_FILES=()
   RUNTIME_OVERLAY_WARNINGS=()
   RUNTIME_OVERLAY_CAPABILITIES=()
+  RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
+  RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE=()
   RUNTIME_OVERLAY_EXTERNAL_TEMP_FILES=()
   RUNTIME_OVERLAY_CLEANUP_CMDS=()
   if [[ -n "${RALPH_AGENT_TOOL_ACCESS:-}" ]]; then
@@ -564,13 +578,63 @@ runtime_overlay_set_fallback_path_active() {
   runtime_overlay_log_decision "fallback_path_active" "$1"
 }
 
-# When native output mutation is unproven, MCP proxy shell compaction is the documented fallback.
+runtime_overlay_add_proven_channel() {
+  local channel="$1"
+  local existing=""
+  [[ -z "$channel" ]] && return 0
+  for existing in "${RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS[@]-}"; do
+    [[ "$existing" == "$channel" ]] && return 0
+  done
+  RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS+=("$channel")
+  runtime_overlay_log_decision "proven_channel" "$channel"
+}
+
+runtime_overlay_add_fallback_channel() {
+  local channel="$1"
+  local existing=""
+  [[ -z "$channel" ]] && return 0
+  for existing in "${RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE[@]-}"; do
+    [[ "$existing" == "$channel" ]] && return 0
+  done
+  RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE+=("$channel")
+  runtime_overlay_log_decision "fallback_channel" "$channel"
+}
+
+runtime_overlay_note_native_shell_hook_proven() {
+  runtime_overlay_add_proven_channel "native_shell_hook"
+}
+
+runtime_overlay_note_native_result_hook_measured_only() {
+  runtime_overlay_add_fallback_channel "native_result_hook"
+}
+
+runtime_overlay_note_native_result_hook_proven() {
+  runtime_overlay_add_proven_channel "native_result_hook"
+}
+
+runtime_overlay_note_mcp_proxy_channels_proven() {
+  runtime_overlay_add_proven_channel "proxy_shell"
+  runtime_overlay_add_proven_channel "native_result_mcp_fallback"
+}
+
+# When native output mutation is unproven, MCP proxy compaction is the documented fallback.
 runtime_overlay_note_mcp_compaction_fallback_authoritative() {
   local active="false"
-  if [[ "${RALPH_AGENT_TOOL_ACCESS:-native}" == "ralph" ]]; then
-    case "${RALPH_PROXY_SHELL_COMPACT:-}" in
+  local tool_access="${RALPH_AGENT_TOOL_ACCESS:-native}"
+  case "$tool_access" in
+    ralph|hybrid)
+      case "${RALPH_PROXY_SHELL_COMPACT:-}" in
+        1 | true | yes | on) active="true" ;;
+      esac
+      ;;
+  esac
+  if [[ "$active" != "true" ]] && [[ "${RALPH_MODE:-}" == "hybrid" ]]; then
+    case "${RALPH_PROXY_SHELL_COMPACT:-1}" in
       1 | true | yes | on) active="true" ;;
     esac
+  fi
+  if [[ "$active" == "true" ]]; then
+    runtime_overlay_note_mcp_proxy_channels_proven
   fi
   if declare -F runtime_overlay_set_fallback_path_active >/dev/null 2>&1; then
     runtime_overlay_set_fallback_path_active "$active"
@@ -707,6 +771,8 @@ runtime_overlay_record_external_temp_file() {
 
 runtime_overlay_write_summary() {
   local summary_file
+  local write_script
+  local overlay_fields_py
   summary_file="$(runtime_overlay_summary_path)"
   mkdir -p "$(dirname "$summary_file")"
   export RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE="${RUNTIME_OVERLAY_SUMMARY_RUNTIME:-}"
@@ -741,246 +807,14 @@ runtime_overlay_write_summary() {
   export RUNTIME_OVERLAY_ARRAY_MUTATED_FILES="$(printf '%s\n' "${RUNTIME_OVERLAY_MUTATED_FILES[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_WARNINGS="$(printf '%s\n' "${RUNTIME_OVERLAY_WARNINGS[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_CAPABILITIES="$(printf '%s\n' "${RUNTIME_OVERLAY_CAPABILITIES[@]-}")"
+  export RUNTIME_OVERLAY_ARRAY_PROVEN_CHANNELS="$(printf '%s\n' "${RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS[@]-}")"
+  export RUNTIME_OVERLAY_ARRAY_FALLBACK_CHANNELS="$(printf '%s\n' "${RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE[@]-}")"
   export RUNTIME_OVERLAY_STATE_DIR_VALUE="${RUNTIME_OVERLAY_STATE_DIR:-}"
   export RUNTIME_OVERLAY_SUMMARY_UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local overlay_fields_py
+  write_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/python/runtime-overlay-write-summary.py"
   overlay_fields_py="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/python/ralph_overlay_usage_fields.py"
-  python3 - "$summary_file" "$overlay_fields_py" <<'PY'
-import json, os, subprocess, sys
-
-def list_from_env(key):
-    raw = os.environ.get(key, "")
-    return [line for line in raw.splitlines() if line]
-
-def hook_metrics(state_dir, helper, mutation_proven=False):
-    if not state_dir or not os.path.isfile(helper):
-        return {
-            "native_hook_events": 0,
-            "hook_compactions": 0,
-            "hook_rewrites": 0,
-            "hook_original_bytes": 0,
-            "hook_compacted_bytes": 0,
-            "proxy_shell_compaction_events": 0,
-            "proxy_shell_compactions": 0,
-            "proxy_shell_original_bytes": 0,
-            "proxy_shell_compacted_bytes": 0,
-            "compaction_original_bytes": 0,
-            "compaction_compacted_bytes": 0,
-            "compaction_saved_bytes": 0,
-            "compaction_measured_not_applied_bytes": 0,
-        }
-    plan_key = os.environ.get("RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE", "")
-    proc = subprocess.run(
-        [sys.executable, helper, "aggregate-hook-telemetry", state_dir, plan_key],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return {
-            "native_hook_events": 0,
-            "hook_compactions": 0,
-            "hook_rewrites": 0,
-            "hook_original_bytes": 0,
-            "hook_compacted_bytes": 0,
-            "proxy_shell_compaction_events": 0,
-            "proxy_shell_compactions": 0,
-            "proxy_shell_original_bytes": 0,
-            "proxy_shell_compacted_bytes": 0,
-            "compaction_original_bytes": 0,
-            "compaction_compacted_bytes": 0,
-            "compaction_saved_bytes": 0,
-            "compaction_measured_not_applied_bytes": 0,
-        }
-    try:
-        metrics = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        metrics = {}
-    if not isinstance(metrics, dict):
-        metrics = {}
-    native_original = int(metrics.get("hook_original_bytes") or 0)
-    native_compacted = int(metrics.get("hook_compacted_bytes") or 0)
-    proxy_original = int(metrics.get("proxy_shell_original_bytes") or 0)
-    proxy_compacted = int(metrics.get("proxy_shell_compacted_bytes") or 0)
-    hook_saved = max(0, native_original - native_compacted)
-    proxy_saved = max(0, proxy_original - proxy_compacted)
-    compaction_original = native_original + proxy_original
-    compaction_compacted = native_compacted + proxy_compacted
-    if mutation_proven:
-        compaction_saved = hook_saved + proxy_saved
-        compaction_measured_not_applied = 0
-    else:
-        compaction_saved = proxy_saved
-        compaction_measured_not_applied = hook_saved
-    return {
-        "native_hook_events": int(metrics.get("native_hook_events") or 0),
-        "hook_compactions": int(metrics.get("hook_compactions") or 0),
-        "hook_rewrites": int(metrics.get("hook_rewrites") or 0),
-        "hook_original_bytes": native_original,
-        "hook_compacted_bytes": native_compacted,
-        "proxy_shell_compaction_events": int(metrics.get("proxy_shell_compaction_events") or 0),
-        "proxy_shell_compactions": int(metrics.get("proxy_shell_compactions") or 0),
-        "proxy_shell_original_bytes": proxy_original,
-        "proxy_shell_compacted_bytes": proxy_compacted,
-        "compaction_original_bytes": compaction_original,
-        "compaction_compacted_bytes": compaction_compacted,
-        "compaction_saved_bytes": compaction_saved,
-        "compaction_measured_not_applied_bytes": compaction_measured_not_applied,
-    }
-
-def byte_savings_metrics(state_dir, helper):
-    if not state_dir or not os.path.isfile(helper):
-        return {}
-    plan_key = os.environ.get("RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE", "")
-    proc = subprocess.run(
-        [sys.executable, helper, "aggregate-byte-savings", state_dir, plan_key],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return {}
-    try:
-        metrics = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return {}
-    return metrics if isinstance(metrics, dict) else {}
-
-def coerce_bool(value):
-    if isinstance(value, bool):
-        return value
-    if value is None or value == "":
-        return False
-    text = str(value).strip().lower()
-    return text in ("1", "true", "yes", "on")
-
-def coerce_opt_out_value(value):
-    if value is None:
-        return ""
-    return str(value)
-
-def is_opted_out(value):
-    text = coerce_opt_out_value(value).strip().lower()
-    return text in ("0", "false", "no", "off")
-
-def optimization_entry(name, capability_names, summary_key, opt_out_envs):
-    capability_names = list(capability_names)
-    opt_out_envs = list(opt_out_envs)
-    summary_value = os.environ.get(summary_key, "")
-    capability_hits = [cap for cap in capability_names if cap in capabilities]
-    opt_out_values = {env: coerce_opt_out_value(os.environ.get(env, "")) for env in opt_out_envs}
-    opt_out_env = opt_out_envs[0] if len(opt_out_envs) == 1 else None
-    opt_out_value = opt_out_values.get(opt_out_env, "") if opt_out_env else None
-    return {
-        "name": name,
-        "value": summary_value,
-        "effective": coerce_bool(summary_value) or bool(capability_hits),
-        "capabilities": capability_hits,
-        "opt_out_env": opt_out_env,
-        "opt_out_envs": opt_out_envs,
-        "opt_out_value": opt_out_value,
-        "opt_out_values": opt_out_values,
-        "opted_out": any(is_opted_out(value) for value in opt_out_values.values()),
-    }
-
-summary_path = sys.argv[1]
-helper = sys.argv[2]
-state_dir = os.environ.get("RUNTIME_OVERLAY_STATE_DIR_VALUE", "")
-capabilities = set(list_from_env("RUNTIME_OVERLAY_ARRAY_CAPABILITIES"))
-
-native_hooks_configured_str = os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_CONFIGURED_VALUE", "")
-native_hooks_configured = coerce_bool(native_hooks_configured_str)
-hook_events = int(os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOK_EVENTS_VALUE", "") or 0)
-
-data = {
-    "runtime": os.environ.get("RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE", ""),
-    "plan_key": os.environ.get("RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE", ""),
-    "tool_access_mode": os.environ.get("RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE_VALUE", ""),
-    "native_hooks_requested": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_REQUESTED_VALUE", ""),
-    "native_hooks_configured": native_hooks_configured,
-    "native_hook_events": hook_events,
-    "native_hooks_observed_effect": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_OBSERVED_EFFECT_VALUE", "") or None,
-    "native_hooks_observed_reason": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_OBSERVED_REASON_VALUE", "") or None,
-    "native_hooks_effective": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_EFFECTIVE_VALUE", ""),
-    "native_hooks_reason": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_REASON_VALUE", ""),
-    "native_hooks_used_on_run": False,  # computed below from observed telemetry
-    "native_output_mutation_proven": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_OUTPUT_MUTATION_PROVEN_VALUE", ""),
-    "native_shell_wrapper_enabled": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_WRAPPER_ENABLED_VALUE", ""),
-    "native_shell_wrapper_effective": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_WRAPPER_EFFECTIVE_VALUE", ""),
-    "native_shell_wrapper_reason": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_WRAPPER_REASON_VALUE", ""),
-    "native_shell_compaction_authoritative": os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_COMPACTION_AUTHORITATIVE_VALUE", ""),
-    "fallback_path_active": os.environ.get("RUNTIME_OVERLAY_SUMMARY_FALLBACK_PATH_ACTIVE_VALUE", ""),
-    "mcp_effective": os.environ.get("RUNTIME_OVERLAY_SUMMARY_MCP_EFFECTIVE_VALUE", ""),
-    "mcp_config_sources": list_from_env("RUNTIME_OVERLAY_SUMMARY_MCP_CONFIG_SOURCES_VALUE"),
-    "mcp_effective_names": list_from_env("RUNTIME_OVERLAY_SUMMARY_MCP_EFFECTIVE_NAMES_VALUE"),
-    "mcp_override_decisions": list_from_env("RUNTIME_OVERLAY_SUMMARY_MCP_OVERRIDE_DECISIONS_VALUE"),
-    "mcp_failure_reason": os.environ.get("RUNTIME_OVERLAY_SUMMARY_MCP_FAILURE_REASON_VALUE", ""),
-    "mcp_preflight_outcome": os.environ.get("RUNTIME_OVERLAY_SUMMARY_MCP_PREFLIGHT_OUTCOME_VALUE", "") or None,
-    "mcp_tool_namespace": os.environ.get("RUNTIME_OVERLAY_SUMMARY_MCP_TOOL_NAMESPACE_VALUE", "") or None,
-    "proxy_shell_compact_effective": os.environ.get("RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE_VALUE", ""),
-    "cache_key_injected": coerce_bool(os.environ.get("RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_VALUE", "")),
-    "cache_key_injected_provider_id": os.environ.get("RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID_VALUE", ""),
-    "overlay_mode": os.environ.get("RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE", ""),
-    "generated_files": list_from_env("RUNTIME_OVERLAY_ARRAY_GENERATED_FILES"),
-    "mutated_files": list_from_env("RUNTIME_OVERLAY_ARRAY_MUTATED_FILES"),
-    "warnings": list_from_env("RUNTIME_OVERLAY_ARRAY_WARNINGS"),
-    "capabilities": list_from_env("RUNTIME_OVERLAY_ARRAY_CAPABILITIES"),
-    "updated_at": os.environ.get("RUNTIME_OVERLAY_SUMMARY_UPDATED_AT", ""),
-}
-mutation_proven = coerce_bool(os.environ.get("RUNTIME_OVERLAY_SUMMARY_NATIVE_OUTPUT_MUTATION_PROVEN_VALUE", ""))
-hook_metrics_data = hook_metrics(state_dir, helper, mutation_proven)
-hook_metrics_data["native_hook_events"] = max(hook_events, hook_metrics_data.get("native_hook_events", 0))
-data.update(hook_metrics_data)
-if state_dir:
-    data["overlay_state_dir"] = state_dir
-byte_savings_data = byte_savings_metrics(state_dir, helper)
-if byte_savings_data:
-    data["byte_savings_by_path"] = byte_savings_data
-
-data["optimizations"] = {
-    "native_hooks": optimization_entry(
-        "native_hooks",
-        (
-            "cursor-hooks-merged",
-            "claude-hooks-merged",
-            "codex-hooks-injected-per-run",
-            "opencode-plugin-local-load",
-        ),
-        "RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_EFFECTIVE_VALUE",
-        ("RALPH_NATIVE_HOOKS",),
-    ),
-    "native_shell_wrapper": optimization_entry(
-        "native_shell_wrapper",
-        (
-            "cursor-native-shell-wrapper-compact",
-            "codex-native-shell-wrapper-compact",
-        ),
-        "RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_WRAPPER_EFFECTIVE_VALUE",
-        ("RALPH_NATIVE_SHELL_WRAPPER",),
-    ),
-    "proxy_shell_compact": optimization_entry(
-        "proxy_shell_compact",
-        ("cursor-mcp-proxy-shell-compact",),
-        "RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE_VALUE",
-        ("RALPH_PROXY_SHELL_COMPACT",),
-    ),
-    "mcp_optimization": optimization_entry(
-        "mcp_optimization",
-        ("cursor-mcp-optimization",),
-        "RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE",
-        ("RALPH_OPTIMIZATION_MODE",),
-    ),
-}
-
-if native_hooks_configured:
-    observed_hook_events = hook_metrics_data.get("native_hook_events", 0)
-    data["native_hooks_used_on_run"] = observed_hook_events > 0
-    if observed_hook_events == 0:
-        data["native_hooks_observed_effect"] = "configured_but_no_surface_observed"
-        if not data.get("native_hooks_observed_reason"):
-            data["native_hooks_observed_reason"] = "hook active but no hook surface observed"
-with open(summary_path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
+  if ! command -v python3 &>/dev/null; then
+    runtime_overlay_die "Python3 is required to write the runtime overlay summary."
+  fi
+  python3 "$write_script" "$summary_file" "$overlay_fields_py"
 }

@@ -26,6 +26,7 @@ from tool_call_classification import (
     savings_from_path_data,
 )
 from result_windowing_metrics import (
+    WINDOWING_CHANNEL_NAMES,
     analyze_result_windowing_log,
     stored_result_readback_guidance,
 )
@@ -46,6 +47,9 @@ _LOW_SAVINGS_PERCENT_THRESHOLD = 10
 _MIN_BYTES_FOR_SAVINGS_ANALYSIS = 1_000
 _SHELL_STATUS_POLL_MIN_CALLS = 3
 _SHELL_STATUS_POLL_RATIO = 2
+_SHELL_COMPACTION_PATHS = ("hook_compaction", "proxy_shell_compaction")
+_OPTIMIZATION_PATHS = _SHELL_COMPACTION_PATHS + ("result_windowing",)
+_SHELL_COMPACTION_CHANNELS = ("native_shell_hook", "proxy_shell")
 
 
 def _lower_label(label: Any) -> str:
@@ -283,7 +287,7 @@ def _ralph_mode_adoption_findings(
         proxy_shell_original_bytes = _as_int(record.get("proxy_shell_original_bytes", 0))
         hook_compacted = hook_compactions > 0 and hook_original_bytes > 0
         proxy_compacted = proxy_shell_compactions > 0 and proxy_shell_original_bytes > 0
-        compaction_proven = hook_compacted or proxy_compacted
+        compaction_proven = hook_compacted or proxy_compacted or _invocation_has_path_savings(record)
         edit_adjacent_pattern = (native_file_read > 0 and native_shell == 0 and native_search == 0 and native_write > 0)
         if compaction_proven or edit_adjacent_pattern:
             continue
@@ -326,7 +330,7 @@ def _native_shell_bypass_findings(
         proxy_shell_original_bytes = _as_int(record.get("proxy_shell_original_bytes", 0))
         hook_compacted = hook_compactions > 0 and hook_original_bytes > 0
         proxy_compacted = proxy_shell_compactions > 0 and proxy_shell_original_bytes > 0
-        compaction_proven = hook_compacted or proxy_compacted
+        compaction_proven = hook_compacted or proxy_compacted or _invocation_has_path_savings(record)
         if compaction_proven:
             continue
         findings.append(
@@ -591,6 +595,249 @@ def _summarize_compaction_telemetry(
     return summary
 
 
+def _path_has_meaningful_savings(path_bucket: Any) -> bool:
+    if not isinstance(path_bucket, Mapping):
+        return False
+    return _as_int(path_bucket.get("saved_bytes")) >= _MIN_BYTES_FOR_SAVINGS_ANALYSIS
+
+
+def _invocation_has_path_savings(record: Mapping[str, Any]) -> bool:
+    savings = record.get("byte_savings_by_path")
+    if not isinstance(savings, Mapping):
+        return False
+    for path_name in _OPTIMIZATION_PATHS:
+        if _path_has_meaningful_savings(savings.get(path_name)):
+            return True
+    return False
+
+
+def _invocation_compaction_proven(record: Mapping[str, Any]) -> bool:
+    hook_compactions = _as_int(record.get("hook_compactions", 0))
+    hook_original_bytes = _as_int(record.get("hook_original_bytes", 0))
+    proxy_shell_compactions = _as_int(record.get("proxy_shell_compactions", 0))
+    proxy_shell_original_bytes = _as_int(record.get("proxy_shell_original_bytes", 0))
+    counter_proven = (
+        (hook_compactions > 0 and hook_original_bytes > 0)
+        or (proxy_shell_compactions > 0 and proxy_shell_original_bytes > 0)
+    )
+    return counter_proven or _invocation_has_path_savings(record)
+
+
+def _summarize_byte_savings_by_channel(
+    invocations: Sequence[Mapping[str, Any]],
+    plan_key: str = "",
+) -> Dict[str, Any]:
+    """Summarize per-channel savings using final cumulative invocation snapshots."""
+    summary: Dict[str, Any] = {
+        channel: empty_savings_bucket(include_hidden=True)
+        for channel in WINDOWING_CHANNEL_NAMES
+    }
+    target_plan_key = str(plan_key or "").strip()
+    latest: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for record in invocations:
+        channel_savings = record.get("byte_savings_by_channel")
+        if not isinstance(channel_savings, dict):
+            continue
+        record_plan = str(record.get("plan_key") or "").strip()
+        if target_plan_key and record_plan and record_plan != target_plan_key:
+            continue
+        for channel_name, path_data in channel_savings.items():
+            if not isinstance(path_data, dict):
+                continue
+            if channel_name not in summary:
+                continue
+            key = (target_plan_key or record_plan, channel_name)
+            latest[key] = savings_from_path_data(path_data)
+
+    for (_key_plan, channel_name), channel_bucket in latest.items():
+        merge_savings_buckets({channel_name: summary[channel_name]}, {channel_name: channel_bucket})
+
+    for channel_name in summary:
+        finalize_savings_bucket(summary[channel_name])
+
+    return summary
+
+
+def _aggregate_channel_provenance(
+    invocations: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    proven: set[str] = set()
+    fallback: set[str] = set()
+    activity: Dict[str, int] = {channel: 0 for channel in WINDOWING_CHANNEL_NAMES}
+
+    for record in invocations:
+        record_proven = record.get("native_optimization_proven_channels")
+        if isinstance(record_proven, list):
+            for channel in record_proven:
+                text = str(channel or "").strip()
+                if text:
+                    proven.add(text)
+        record_fallback = record.get("fallback_channels_active")
+        if isinstance(record_fallback, list):
+            for channel in record_fallback:
+                text = str(channel or "").strip()
+                if text:
+                    fallback.add(text)
+        counts = record.get("channel_activity_counts")
+        if isinstance(counts, Mapping):
+            for channel_name, count in counts.items():
+                if channel_name in activity:
+                    activity[channel_name] += _as_int(count)
+
+    return {
+        "native_optimization_proven_channels": sorted(proven),
+        "fallback_channels_active": sorted(fallback),
+        "channel_activity_counts": activity,
+    }
+
+
+def _has_meaningful_optimization_evidence(
+    byte_savings_summary: Mapping[str, Any],
+    channel_savings_summary: Mapping[str, Any],
+    channel_provenance: Mapping[str, Any],
+) -> bool:
+    for path_name in _OPTIMIZATION_PATHS:
+        if _path_has_meaningful_savings(byte_savings_summary.get(path_name)):
+            return True
+    proven = channel_provenance.get("native_optimization_proven_channels")
+    if isinstance(proven, list) and proven:
+        return True
+    for channel_name in WINDOWING_CHANNEL_NAMES:
+        if _path_has_meaningful_savings(channel_savings_summary.get(channel_name)):
+            return True
+    return False
+
+
+def _shell_path_saved_bytes(byte_savings_summary: Mapping[str, Any]) -> int:
+    total = 0
+    for path_name in _SHELL_COMPACTION_PATHS:
+        bucket = byte_savings_summary.get(path_name)
+        if isinstance(bucket, Mapping):
+            total += _as_int(bucket.get("saved_bytes"))
+    return total
+
+
+def _shell_channel_saved_bytes(channel_savings_summary: Mapping[str, Any]) -> int:
+    total = 0
+    for channel_name in _SHELL_COMPACTION_CHANNELS:
+        bucket = channel_savings_summary.get(channel_name)
+        if isinstance(bucket, Mapping):
+            total += _as_int(bucket.get("saved_bytes"))
+    return total
+
+
+def _invocation_has_shell_activity(record: Mapping[str, Any]) -> bool:
+    if _as_int(record.get("native_shell_calls")) > 0:
+        return True
+    compaction_records = record.get("compaction_telemetry") or []
+    if not isinstance(compaction_records, list):
+        return False
+    for telemetry in compaction_records:
+        if not isinstance(telemetry, Mapping):
+            continue
+        family = _lower_label(telemetry.get("family"))
+        if family in ("shell", "bash", "proxy_shell", "native_shell"):
+            return True
+    return False
+
+
+def _missed_compaction_from_channel_evidence(
+    invocations: Sequence[Mapping[str, Any]],
+    *,
+    byte_savings_summary: Mapping[str, Any],
+    channel_savings_summary: Mapping[str, Any],
+    channel_provenance: Mapping[str, Any],
+    compaction_summary: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Populate missed compaction only from channel/path evidence, not tool mix."""
+    findings: List[Dict[str, Any]] = list(_large_uncompacted_outputs(invocations))
+    has_evidence = _has_meaningful_optimization_evidence(
+        byte_savings_summary, channel_savings_summary, channel_provenance
+    )
+
+    shell_saved = max(
+        _shell_path_saved_bytes(byte_savings_summary),
+        _shell_channel_saved_bytes(channel_savings_summary),
+    )
+    shell_activity = any(_invocation_has_shell_activity(record) for record in invocations)
+    proven_channels = channel_provenance.get("native_optimization_proven_channels")
+    proven_shell_channels = [
+        channel
+        for channel in (proven_channels if isinstance(proven_channels, list) else [])
+        if str(channel) in _SHELL_COMPACTION_CHANNELS
+    ]
+
+    if shell_activity and shell_saved == 0 and not proven_shell_channels:
+        findings.append(
+            {
+                "pattern_id": "shell_channel_zero_savings",
+                "evidence_type": "channel",
+                "shell_saved_bytes": shell_saved,
+                "note": "Shell activity observed without savings on native_shell_hook or proxy_shell channels",
+            }
+        )
+
+    fallback_channels = channel_provenance.get("fallback_channels_active")
+    has_fallback = isinstance(fallback_channels, list) and bool(fallback_channels)
+    compactions_skipped = _as_int(compaction_summary.get("compactions_skipped"))
+    if (
+        shell_activity
+        and shell_saved == 0
+        and not proven_shell_channels
+        and not has_fallback
+        and compactions_skipped > 0
+        and not has_evidence
+    ):
+        findings.append(
+            {
+                "pattern_id": "absent_authoritative_fallback_channels",
+                "evidence_type": "channel",
+                "compactions_skipped": compactions_skipped,
+                "note": "Compaction skipped without proven shell channels or active fallback channels",
+            }
+        )
+
+    return findings
+
+
+def _build_tool_adoption_diagnostics(
+    invocations: Sequence[Mapping[str, Any]],
+    aggregate_findings: Sequence[Mapping[str, Any]],
+    ralph_mode_findings: Sequence[Mapping[str, Any]],
+    native_shell_bypass: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    heavy_native = [
+        item
+        for item in aggregate_findings
+        if str(item.get("pattern_id") or "").startswith("heavy_native_read")
+    ]
+    return {
+        "heavy_native_read_mix": heavy_native,
+        "ralph_mode_native_explore_tools": list(ralph_mode_findings),
+        "native_shell_preferred_over_proxy": list(native_shell_bypass),
+    }
+
+
+def _build_optimization_evidence(
+    byte_savings_summary: Mapping[str, Any],
+    channel_savings_summary: Mapping[str, Any],
+    channel_provenance: Mapping[str, Any],
+    compaction_summary: Mapping[str, Any],
+) -> Dict[str, Any]:
+    has_savings = _has_meaningful_optimization_evidence(
+        byte_savings_summary, channel_savings_summary, channel_provenance
+    )
+    return {
+        "has_meaningful_savings": has_savings,
+        "byte_savings_by_path": dict(byte_savings_summary),
+        "byte_savings_by_channel": dict(channel_savings_summary),
+        "channel_provenance": dict(channel_provenance),
+        "compaction_applied": _as_int(compaction_summary.get("compactions_applied")),
+        "compaction_skipped": _as_int(compaction_summary.get("compactions_skipped")),
+    }
+
+
 def build_discover_report(
     usage_doc: Mapping[str, Any],
     *,
@@ -695,16 +942,37 @@ def build_discover_report(
     high_token_low_cache = _high_token_low_cache_invocations(invocations)
     compaction_summary = _summarize_compaction_telemetry(invocations, plan_key=plan_key)
     byte_savings_summary = _summarize_byte_savings_by_path(invocations, plan_key=plan_key)
-    large_uncompacted = _large_uncompacted_outputs(invocations)
+    channel_savings_summary = _summarize_byte_savings_by_channel(invocations, plan_key=plan_key)
+    channel_provenance = _aggregate_channel_provenance(invocations)
     ralph_mode_findings = _ralph_mode_adoption_findings(invocations)
     native_shell_bypass = _native_shell_bypass_findings(invocations)
-    missed_savings = large_uncompacted + native_shell_bypass
+    missed_savings = _missed_compaction_from_channel_evidence(
+        invocations,
+        byte_savings_summary=byte_savings_summary,
+        channel_savings_summary=channel_savings_summary,
+        channel_provenance=channel_provenance,
+        compaction_summary=compaction_summary,
+    )
+    tool_adoption_diagnostics = _build_tool_adoption_diagnostics(
+        invocations,
+        aggregate_findings,
+        ralph_mode_findings,
+        native_shell_bypass,
+    )
+    optimization_evidence = _build_optimization_evidence(
+        byte_savings_summary,
+        channel_savings_summary,
+        channel_provenance,
+        compaction_summary,
+    )
     async_shell_polling_findings = _async_shell_polling_findings(invocations)
 
     stored_result_usage: Dict[str, Any] = {}
     windowing_path = result_windowing_log_path(plan_key=plan_key)
     if windowing_path is not None:
-        stored_result_usage = analyze_result_windowing_log(windowing_path)
+        stored_result_usage = analyze_result_windowing_log(
+            windowing_path, plan_key=plan_key
+        )
     seq_result_reads = 0
     seq_result_search = 0
     for record in invocations:
@@ -733,6 +1001,8 @@ def build_discover_report(
         data_sources.append("compaction_telemetry")
     if any(v.get("count", 0) > 0 for v in byte_savings_summary.values()):
         data_sources.append("byte_savings_by_path")
+    if any(v.get("count", 0) > 0 for v in channel_savings_summary.values()):
+        data_sources.append("byte_savings_by_channel")
     if stored_result_usage.get("readback_count", 0) > 0 or stored_result_usage.get(
         "envelope_count", 0
     ) > 0:
@@ -762,6 +1032,10 @@ def build_discover_report(
         "high_token_low_cache_invocations": high_token_low_cache,
         "compaction_summary": compaction_summary,
         "byte_savings_summary": byte_savings_summary,
+        "byte_savings_by_channel": channel_savings_summary,
+        "channel_provenance": channel_provenance,
+        "tool_adoption_diagnostics": tool_adoption_diagnostics,
+        "optimization_evidence": optimization_evidence,
         "missed_compaction_opportunities": missed_savings,
         "stored_result_usage": stored_result_usage,
     }

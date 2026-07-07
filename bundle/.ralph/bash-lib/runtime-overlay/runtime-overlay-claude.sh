@@ -253,6 +253,12 @@ run_plan_invoke_claude_native_hooks_prepare() {
     if declare -F runtime_overlay_set_fallback_path_active >/dev/null 2>&1; then
       runtime_overlay_set_fallback_path_active "false"
     fi
+    if declare -F runtime_overlay_note_native_shell_hook_proven >/dev/null 2>&1; then
+      runtime_overlay_note_native_shell_hook_proven
+    fi
+    if declare -F runtime_overlay_note_native_result_hook_proven >/dev/null 2>&1; then
+      runtime_overlay_note_native_result_hook_proven
+    fi
     if declare -F runtime_overlay_add_capability >/dev/null 2>&1; then
       runtime_overlay_add_capability "claude-hooks-detected"
     fi
@@ -325,6 +331,12 @@ run_plan_invoke_claude_native_hooks_prepare() {
   fi
   if declare -F runtime_overlay_set_fallback_path_active >/dev/null 2>&1; then
     runtime_overlay_set_fallback_path_active "false"
+  fi
+  if declare -F runtime_overlay_note_native_shell_hook_proven >/dev/null 2>&1; then
+    runtime_overlay_note_native_shell_hook_proven
+  fi
+  if declare -F runtime_overlay_note_native_result_hook_proven >/dev/null 2>&1; then
+    runtime_overlay_note_native_result_hook_proven
   fi
   if declare -F runtime_overlay_add_capability >/dev/null 2>&1; then
     runtime_overlay_add_capability "claude-hooks-merged"

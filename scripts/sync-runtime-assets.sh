@@ -221,6 +221,88 @@ sync_assets_render_with_marker() {
   ' "$REPO_ROOT/$canonical_rel"
 }
 
+sync_assets_parse_inline_array() {
+  # Convert an inline YAML array literal like ["a", "b"] into one item per line
+  # (unquoted). Canonical rule globs never contain commas inside quotes, so a
+  # simple comma split is sufficient.
+  local raw="$1"
+  printf '%s' "$raw" | sed -E 's/^[[:space:]]*\[//; s/\][[:space:]]*$//' | awk -F',' '{
+    for (i = 1; i <= NF; i++) {
+      v = $i
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      gsub(/^\x27|\x27$/, "", v)
+      if (v != "") print v
+    }
+  }'
+}
+
+# Render a rule file for a specific runtime, transforming the canonical
+# Cursor-style frontmatter (globs + alwaysApply) into each runtime's native
+# schema. cursor/codex/opencode keep the verbatim canonical frontmatter (cursor
+# is native; codex/opencode consume the file through Ralph's own injection only).
+sync_assets_render_rule_for_runtime() {
+  local runtime="$1"
+  local canonical_rel="$2"
+  local canonical_abs="$REPO_ROOT/$canonical_rel"
+  local marker="${MARKER_PREFIX}${canonical_rel}${MARKER_SUFFIX}"
+
+  case "$runtime" in
+    cursor | codex | opencode)
+      sync_assets_render_with_marker "$canonical_rel"
+      return 0
+      ;;
+  esac
+
+  local name description always_apply globs_raw
+  name="$(agent_source_fm_scalar "$canonical_abs" "name")"
+  description="$(agent_source_fm_scalar "$canonical_abs" "description")"
+  always_apply="$(agent_source_fm_scalar "$canonical_abs" "alwaysApply")"
+  globs_raw="$(agent_source_fm_scalar "$canonical_abs" "globs")"
+
+  local -a globs=()
+  local glob
+  while IFS= read -r glob; do
+    [[ -n "$glob" ]] || continue
+    globs+=("$glob")
+  done < <(sync_assets_parse_inline_array "$globs_raw")
+
+  local is_always=0
+  [[ "$always_apply" == "true" ]] && is_always=1
+
+  printf -- '---\n'
+  [[ -n "$name" ]] && printf 'name: %s\n' "$name"
+  [[ -n "$description" ]] && printf 'description: %s\n' "$description"
+
+  case "$runtime" in
+    claude)
+      # Native Claude rules use `paths`; a rule with no `paths` loads always.
+      if [[ "$is_always" -eq 0 && "${#globs[@]}" -gt 0 ]]; then
+        printf 'paths:\n'
+        for glob in "${globs[@]}"; do
+          printf '  - "%s"\n' "$glob"
+        done
+      fi
+      ;;
+    antigravity)
+      # Native Antigravity rules use `trigger` for activation.
+      if [[ "$is_always" -eq 1 || "${#globs[@]}" -eq 0 ]]; then
+        printf 'trigger: always_on\n'
+      else
+        printf 'trigger: glob\n'
+        printf 'globs:\n'
+        for glob in "${globs[@]}"; do
+          printf '  - "%s"\n' "$glob"
+        done
+      fi
+      ;;
+  esac
+
+  printf -- '---\n'
+  printf '%s\n' "$marker"
+  agent_source_fm_body "$canonical_abs"
+}
+
 sync_assets_has_marker() {
   local file="$1"
   [[ -f "$file" ]] || return 1
@@ -284,18 +366,19 @@ sync_assets_expected_agent_config_dest() {
 sync_assets_check_or_write_file() {
   local dest_rel="$1"
   local canonical_rel="$2"
+  local runtime="$3"
   local dest_abs="$REPO_ROOT/$dest_rel"
   local expected_file
   expected_file="$(mktemp)"
-  sync_assets_render_with_marker "$canonical_rel" >"$expected_file"
+  sync_assets_render_rule_for_runtime "$runtime" "$canonical_rel" >"$expected_file"
 
   if [[ ! -f "$dest_abs" ]]; then
-    rm -f "$expected_file"
     sync_assets_report_issue "missing: $dest_rel"
     if [[ "$CHECK_MODE" -eq 0 ]]; then
       mkdir -p "$(dirname "$dest_abs")"
-      sync_assets_render_with_marker "$canonical_rel" >"$dest_abs"
+      cp "$expected_file" "$dest_abs"
     fi
+    rm -f "$expected_file"
     return 0
   fi
 
@@ -307,7 +390,7 @@ sync_assets_check_or_write_file() {
   if ! cmp -s "$expected_file" "$dest_abs"; then
     sync_assets_report_issue "differs: $dest_rel"
     if [[ "$CHECK_MODE" -eq 0 ]]; then
-      sync_assets_render_with_marker "$canonical_rel" >"$dest_abs"
+      cp "$expected_file" "$dest_abs"
     fi
   fi
 
@@ -327,7 +410,7 @@ sync_assets_sync_rules_for_layer() {
     rule_name="$(basename "$rule_path")"
     for runtime in "${RUNTIMES[@]}"; do
       dest_rel="$(sync_assets_expected_rule_dest "$layer" "$runtime" "$rule_name")"
-      sync_assets_check_or_write_file "$dest_rel" "$rules_canonical/$rule_name"
+      sync_assets_check_or_write_file "$dest_rel" "$rules_canonical/$rule_name" "$runtime"
     done
   done < <(find "$rules_dir" -maxdepth 1 -type f -name '*.md' | LC_ALL=C sort)
 }

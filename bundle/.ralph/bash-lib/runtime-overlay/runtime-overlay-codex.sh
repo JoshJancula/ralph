@@ -224,6 +224,9 @@ run_plan_invoke_codex_native_hooks_prepare() {
     if declare -F runtime_overlay_set_native_shell_compaction_authoritative >/dev/null 2>&1; then
       runtime_overlay_set_native_shell_compaction_authoritative "wrapper_based_native_shell_compaction"
     fi
+    if declare -F runtime_overlay_note_native_shell_hook_proven >/dev/null 2>&1; then
+      runtime_overlay_note_native_shell_hook_proven
+    fi
   else
     if declare -F runtime_overlay_set_native_shell_wrapper_enabled >/dev/null 2>&1; then
       runtime_overlay_set_native_shell_wrapper_enabled "false"
@@ -238,6 +241,9 @@ run_plan_invoke_codex_native_hooks_prepare() {
     if [[ "${RALPH_NATIVE_SHELL_WRAPPER:-0}" != "0" ]]; then
       runtime_overlay_add_capability "codex-native-shell-wrapper-compact"
     fi
+  fi
+  if declare -F runtime_overlay_note_native_result_hook_measured_only >/dev/null 2>&1; then
+    runtime_overlay_note_native_result_hook_measured_only
   fi
   if declare -F runtime_overlay_note_mcp_compaction_fallback_authoritative >/dev/null 2>&1; then
     runtime_overlay_note_mcp_compaction_fallback_authoritative

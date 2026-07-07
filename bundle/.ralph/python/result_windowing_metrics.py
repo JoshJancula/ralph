@@ -14,6 +14,26 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
+from tool_call_classification import (
+    accumulate_savings_event,
+    empty_savings_bucket,
+    finalize_savings_bucket,
+)
+
+# Canonical optimization channel ids for result-windowing attribution.
+WINDOWING_CHANNEL_NAMES = (
+    "native_shell_hook",
+    "proxy_shell",
+    "native_result_hook",
+    "native_result_mcp_fallback",
+    "proxy_read_windowing",
+    "proxy_search_windowing",
+    "stored_result_readback",
+)
+
+CHANNEL_ATTRIBUTION_EXACT = "exact"
+CHANNEL_ATTRIBUTION_LEGACY = "legacy"
+
 
 def _coerce_int(value: Any, default: int = 0) -> int:
     if value in (None, ""):
@@ -55,6 +75,7 @@ def _parse_envelope(record: Mapping[str, Any]) -> Dict[str, int] | None:
             record.get("tokenCapTriggered", record.get("token_cap_triggered"))
         )
         or 0,
+        "channel": str(record.get("channel") or "").strip() or None,
     }
 
 
@@ -72,6 +93,11 @@ def _parse_readback(record: Mapping[str, Any]) -> Dict[str, Any] | None:
         "returned_bytes": returned_bytes,
         "returned_tokens": returned_tokens,
         "reason": str(record.get("reason") or "").strip() or None,
+        "channel": str(record.get("channel") or "").strip() or None,
+        "source_result_channel": str(
+            record.get("sourceResultChannel", record.get("source_result_channel")) or ""
+        ).strip()
+        or None,
     }
 
 
@@ -92,6 +118,21 @@ def _load_windowing_records(path: Path | str) -> List[Dict[str, Any]]:
         if isinstance(record, dict):
             records.append(record)
     return records
+
+
+def _record_plan_key(record: Mapping[str, Any]) -> str:
+    return str(record.get("planKey", record.get("plan_key")) or "").strip()
+
+
+def _filter_records_for_plan_key(
+    records: Sequence[Mapping[str, Any]],
+    plan_key: str | None,
+) -> List[Mapping[str, Any]]:
+    requested = str(plan_key or "").strip()
+    if not requested:
+        return list(records)
+    matching = [record for record in records if _record_plan_key(record) == requested]
+    return matching if matching else list(records)
 
 
 def _token_fields_from_record(record: Mapping[str, Any]) -> Tuple[int, int, int]:
@@ -116,7 +157,11 @@ def _token_fields_from_record(record: Mapping[str, Any]) -> Tuple[int, int, int]
     return original_tokens, returned_tokens, token_cap or 0
 
 
-def analyze_result_windowing_log(path: Path | str) -> Dict[str, Any]:
+def analyze_result_windowing_log(
+    path: Path | str,
+    *,
+    plan_key: str | None = None,
+) -> Dict[str, Any]:
     """Analyze a result-windowing.jsonl log.
 
     Returns both diagnostic counters and decision-grade net consumption fields.
@@ -125,7 +170,8 @@ def analyze_result_windowing_log(path: Path | str) -> Dict[str, Any]:
     """
     envelopes: Dict[str, Dict[str, int]] = {}
     readbacks: List[Dict[str, Any]] = []
-    for record in _load_windowing_records(path):
+    records = _filter_records_for_plan_key(_load_windowing_records(path), plan_key)
+    for record in records:
         event = str(record.get("event") or "").strip().lower()
         if event == "envelope":
             parsed = _parse_envelope(record)
@@ -369,6 +415,156 @@ def aggregate_windowing_savings(
         "readbacks_by_result": readbacks_by_result,
         "legacy_events": legacy_events,
     }
+
+
+def _empty_channel_bucket(*, attribution: str = CHANNEL_ATTRIBUTION_EXACT) -> dict[str, Any]:
+    bucket: dict[str, Any] = empty_savings_bucket(include_hidden=True)
+    bucket["attribution"] = attribution
+    return bucket
+
+
+def _mark_channel_attribution(bucket: dict[str, Any], attribution: str) -> None:
+    current = str(bucket.get("attribution") or CHANNEL_ATTRIBUTION_EXACT)
+    if current == CHANNEL_ATTRIBUTION_LEGACY or attribution == CHANNEL_ATTRIBUTION_LEGACY:
+        bucket["attribution"] = CHANNEL_ATTRIBUTION_LEGACY
+    else:
+        bucket["attribution"] = CHANNEL_ATTRIBUTION_EXACT
+
+
+def _resolve_result_channel_target(
+    envelope: Mapping[str, Any],
+    readbacks: Sequence[Mapping[str, Any]],
+) -> tuple[str, str]:
+    """Return (channel_name, attribution) for a resultId group."""
+    envelope_channel = str(envelope.get("channel") or "").strip()
+    if not envelope_channel:
+        return "stored_result_readback", CHANNEL_ATTRIBUTION_LEGACY
+
+    if not readbacks:
+        return envelope_channel, CHANNEL_ATTRIBUTION_EXACT
+
+    for readback in readbacks:
+        source_channel = str(readback.get("source_result_channel") or "").strip()
+        if not source_channel:
+            return "stored_result_readback", CHANNEL_ATTRIBUTION_LEGACY
+        if source_channel != envelope_channel:
+            return "stored_result_readback", CHANNEL_ATTRIBUTION_LEGACY
+
+    return envelope_channel, CHANNEL_ATTRIBUTION_EXACT
+
+
+def aggregate_windowing_savings_by_channel(
+    path: Path | str,
+    *,
+    estimate_tokens_fn=None,
+    plan_key: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return per-channel net savings for result-windowing.jsonl records.
+
+    Envelope savings net readback cost against sourceResultChannel when present.
+    Legacy records without channel/source attribution accumulate under
+    stored_result_readback with attribution marked legacy rather than guessing.
+    """
+    if estimate_tokens_fn is None:
+        estimate_tokens_fn = _estimate_tokens
+
+    records = _filter_records_for_plan_key(_load_windowing_records(path), plan_key)
+    envelopes: Dict[str, Dict[str, Any]] = {}
+    readbacks: List[Dict[str, Any]] = []
+    legacy_events: List[Dict[str, int]] = []
+
+    for record in records:
+        event = str(record.get("event") or "").strip().lower()
+        result_id = str(record.get("resultId") or "").strip()
+        if event == "envelope" and result_id:
+            parsed = _parse_envelope(record)
+            if parsed is not None:
+                envelopes[result_id] = parsed
+        elif event == "readback" and result_id:
+            parsed = _parse_readback(record)
+            if parsed is not None:
+                readbacks.append(parsed)
+        elif event != "envelope" and event != "readback" and not result_id:
+            original_bytes = _coerce_int(record.get("originalBytes"))
+            returned_bytes = _coerce_int(
+                record.get("returnedBytes", record.get("postBytes"))
+            )
+            original_tokens, returned_tokens, token_cap = _token_fields_from_record(
+                record
+            )
+            if original_tokens <= 0 and returned_tokens <= 0 and original_bytes > 0:
+                original_tokens = estimate_tokens_fn(original_bytes)
+                returned_tokens = estimate_tokens_fn(returned_bytes)
+            legacy_events.append(
+                {
+                    "original_bytes": original_bytes,
+                    "returned_bytes": returned_bytes,
+                    "original_tokens": original_tokens,
+                    "returned_tokens": returned_tokens,
+                    "token_cap": token_cap,
+                }
+            )
+
+    buckets: dict[str, dict[str, Any]] = {
+        channel: _empty_channel_bucket() for channel in WINDOWING_CHANNEL_NAMES
+    }
+
+    grouped_readbacks: Dict[str, List[Dict[str, Any]]] = {}
+    for readback in readbacks:
+        grouped_readbacks.setdefault(readback["result_id"], []).append(readback)
+
+    for result_id, envelope in envelopes.items():
+        result_readbacks = grouped_readbacks.get(result_id, [])
+        extra_bytes = sum(item["returned_bytes"] for item in result_readbacks)
+        extra_tokens = sum(item["returned_tokens"] for item in result_readbacks)
+        original_bytes = envelope["original_bytes"]
+        original_tokens = envelope["original_tokens"]
+        consumed_bytes = envelope["returned_bytes"] + extra_bytes
+        consumed_tokens = envelope["returned_tokens"] + extra_tokens
+        net_post_bytes = (
+            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
+        )
+        net_post_tokens = (
+            min(original_tokens, consumed_tokens)
+            if original_tokens > 0
+            else consumed_tokens
+        )
+        channel_name, attribution = _resolve_result_channel_target(
+            envelope, result_readbacks
+        )
+        bucket = buckets[channel_name]
+        accumulate_savings_event(
+            bucket,
+            pre_bytes=original_bytes,
+            post_bytes=net_post_bytes,
+            pre_tokens=original_tokens,
+            post_tokens=net_post_tokens,
+            token_cap_trigger=bool(envelope["token_cap_triggered"]),
+            hidden_from_context=True,
+        )
+        _mark_channel_attribution(bucket, attribution)
+
+    legacy_bucket = buckets["stored_result_readback"]
+    for entry in legacy_events:
+        accumulate_savings_event(
+            legacy_bucket,
+            pre_bytes=entry["original_bytes"],
+            post_bytes=entry["returned_bytes"],
+            pre_tokens=entry["original_tokens"],
+            post_tokens=entry["returned_tokens"],
+            token_cap_trigger=bool(entry["token_cap"]),
+            hidden_from_context=True,
+        )
+        _mark_channel_attribution(legacy_bucket, CHANNEL_ATTRIBUTION_LEGACY)
+
+    for channel_name, bucket in buckets.items():
+        if _coerce_int(bucket.get("count")) > 0:
+            finalize_savings_bucket(bucket)
+        else:
+            bucket.pop("savings_percent", None)
+            bucket.pop("savings_percent_tokens", None)
+
+    return buckets
 
 
 def stored_result_readback_guidance(stats: Mapping[str, Any]) -> str:

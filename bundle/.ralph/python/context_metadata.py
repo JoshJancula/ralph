@@ -74,19 +74,59 @@ def extract_frontmatter(text: str) -> list[str]:
     return lines[1:end]
 
 
+def _collect_block_sequence(fm_lines: list[str], start: int) -> tuple[list[str], int]:
+    """Collect an indented `- item` block sequence starting after index `start`.
+
+    Returns the parsed items and the index of the first line that is not part of
+    the sequence. Used for block-style `globs:`/`paths:` lists emitted by the
+    native Claude/Antigravity rule renderers.
+    """
+    items: list[str] = []
+    idx = start
+    n = len(fm_lines)
+    while idx < n:
+        raw = fm_lines[idx]
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        # Sequence items are indented and start with a dash.
+        if (len(raw) - len(raw.lstrip())) > 0 and stripped.startswith("-"):
+            item = stripped[1:].strip()
+            if item:
+                items.append(_unquote(item))
+            idx += 1
+            continue
+        break
+    return items, idx
+
+
 def parse_frontmatter_dict(fm_lines: list[str]) -> dict[str, object]:
     data: dict[str, object] = {}
-    for line in fm_lines:
+    idx = 0
+    n = len(fm_lines)
+    while idx < n:
+        line = fm_lines[idx]
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            idx += 1
             continue
         kv = _parse_key_value(stripped)
         if not kv:
+            idx += 1
             continue
         key, value = kv
         if value is None:
+            # A bare `key:` may introduce a block-style sequence on the
+            # following indented `- item` lines (globs/paths).
+            items, next_idx = _collect_block_sequence(fm_lines, idx + 1)
+            if items:
+                data[key] = items
+                idx = next_idx
+                continue
+            idx += 1
             continue
-        if key == "globs" and isinstance(value, str) and value.startswith("["):
+        if key in ("globs", "paths") and isinstance(value, str) and value.startswith("["):
             try:
                 data[key] = _parse_inline_array(value)
             except ValueError:
@@ -101,6 +141,7 @@ def parse_frontmatter_dict(fm_lines: list[str]) -> dict[str, object]:
                 data[key] = value
         else:
             data[key] = value
+        idx += 1
     return data
 
 
@@ -175,7 +216,11 @@ def _derive_description(path: str, fm: dict[str, object]) -> str:
 
 
 def _derive_globs(fm: dict[str, object]) -> list[str]:
+    # Native Claude rules scope with `paths`; treat it as a glob source when
+    # `globs` is absent (Cursor/Antigravity keep using `globs`).
     raw = fm.get("globs")
+    if raw is None:
+        raw = fm.get("paths")
     if isinstance(raw, list):
         return [str(item).strip() for item in raw if str(item).strip()]
     if isinstance(raw, str) and raw.strip():
@@ -186,6 +231,25 @@ def _derive_globs(fm: dict[str, object]) -> list[str]:
                 return [raw.strip()]
         return [raw.strip()]
     return []
+
+
+def _derive_always_apply(fm: dict[str, object]) -> bool | None:
+    """Resolve always-apply across the three native rule schemas.
+
+    Precedence: explicit Cursor `alwaysApply` > Antigravity `trigger` >
+    Claude `paths` presence > default. A rule with no scoping information
+    defaults to always-apply (load the full body), which is the safe default.
+    """
+    if "alwaysApply" in fm:
+        return parse_bool(fm.get("alwaysApply"))
+    trigger = fm.get("trigger")
+    if isinstance(trigger, str) and trigger.strip():
+        # `always_on` loads unconditionally; `glob`/`model_decision` are scoped.
+        return trigger.strip().lower() == "always_on"
+    if "paths" in fm:
+        # Claude: presence of `paths` means the rule is path-scoped.
+        return False
+    return True
 
 
 def parse_rule_or_skill_file(path: Path, *, kind: str, rel_path: str) -> RuleSkillMetadata:
@@ -220,16 +284,16 @@ def parse_rule_or_skill_file(path: Path, *, kind: str, rel_path: str) -> RuleSki
     fm = parse_frontmatter_dict(fm_lines)
     name = _derive_name(rel_path, fm)
     description = _derive_description(rel_path, fm)
-    always_apply = parse_bool(fm.get("alwaysApply")) if kind == "rule" else None
+    always_apply = _derive_always_apply(fm) if kind == "rule" else None
     globs = _derive_globs(fm) if kind == "rule" else []
 
     metadata_complete = True
     if not description:
         metadata_complete = False
         warnings.append(f"missing description in {rel_path}; loading full body")
-    if kind == "rule" and always_apply is None and "alwaysApply" not in fm:
+    if kind == "rule" and always_apply is None:
         metadata_complete = False
-        warnings.append(f"missing alwaysApply in {rel_path}; loading full body")
+        warnings.append(f"invalid alwaysApply in {rel_path}; loading full body")
     if kind == "skill" and not name:
         metadata_complete = False
         warnings.append(f"missing name in {rel_path}; loading full body")

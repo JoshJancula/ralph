@@ -245,7 +245,14 @@ ralph_native_hook_post_tool_native_result_compact_main() {
     --arg title "$(jq -r '.tool_output.title // .tool_response.title // empty' <<<"$hook_input" 2>/dev/null || true)" \
     --arg path "$(jq -r '.tool_input.path // .tool_args.path // empty' <<<"$hook_input" 2>/dev/null || true)" \
     '{tool_args: $tool_args, title: $title, path: $path}')"
-  compact_text="$(ralph_native_hook_compact_text_result "$workspace" "$plan_key" "$proxy_tool" "$text" "$context_json")" \
+  compact_text="$(ralph_native_hook_compact_text_result \
+    "$workspace" \
+    "$plan_key" \
+    "$proxy_tool" \
+    "$text" \
+    "$context_json" \
+    "$tool_name" \
+    "native_result_hook")" \
     || ralph_native_hook_post_tool_native_result_compact_fail_open
 
   ralph_native_hook_emit_post_tool_compact_output "$compact_text" "$output_json" "$hook_input"
@@ -280,7 +287,14 @@ ralph_native_hook_native_result_compact_cli_main() {
 
   ralph_native_hook_result_compact_load_libs "$workspace" || return 0
   proxy_tool="$(ralph_native_hook_native_to_proxy_tool "$tool_name")"
-  compact_text="$(ralph_native_hook_compact_text_result "$workspace" "$plan_key" "$proxy_tool" "$text" "$context_json")" \
+  compact_text="$(ralph_native_hook_compact_text_result \
+    "$workspace" \
+    "$plan_key" \
+    "$proxy_tool" \
+    "$text" \
+    "$context_json" \
+    "$tool_name" \
+    "native_result_mcp_fallback")" \
     || return 0
 
   jq -nc --arg text "$compact_text" '{applied: true, compacted: $text}'
@@ -613,6 +627,8 @@ ralph_native_hook_compact_text_result() {
   local workspace="${1:-}" plan_key="${2:-}" proxy_tool="${3:-}" text="${4:-}"
   local context_json byte_cap original_bytes compact_result shaped_json
   local storage_text preview_text truncated_flag match_metadata_json metadata_json pattern_or_query
+  local surfaced_tool_name="${6:-}" windowing_channel="${7:-}"
+  local saved_windowing_channel saved_surfaced_tool saved_normalized_tool
 
   [[ -n "$workspace" && -n "$text" ]] || return 1
   context_json="$(ralph_native_hook_context_json_or_empty "${5:-}")"
@@ -644,6 +660,17 @@ ralph_native_hook_compact_text_result() {
     truncated_flag=1
   fi
 
+  saved_windowing_channel="${RALPH_RESULT_WINDOWING_CHANNEL:-}"
+  saved_surfaced_tool="${RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME:-}"
+  saved_normalized_tool="${RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME:-}"
+  if [[ -n "$windowing_channel" ]]; then
+    export RALPH_RESULT_WINDOWING_CHANNEL="$windowing_channel"
+  fi
+  if [[ -n "$surfaced_tool_name" ]]; then
+    export RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME="$surfaced_tool_name"
+    export RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME="$proxy_tool"
+  fi
+
   compact_result="$(ralph_mcp_proxy_owned_tool_maybe_envelope_text_result \
     "$workspace" \
     "$proxy_tool" \
@@ -654,30 +681,33 @@ ralph_native_hook_compact_text_result() {
     "" \
     "$pattern_or_query" \
     "$metadata_json")"
+
+  if [[ -n "$windowing_channel" ]]; then
+    if [[ -n "$saved_windowing_channel" ]]; then
+      export RALPH_RESULT_WINDOWING_CHANNEL="$saved_windowing_channel"
+    else
+      unset RALPH_RESULT_WINDOWING_CHANNEL
+    fi
+  fi
+  if [[ -n "$surfaced_tool_name" ]]; then
+    if [[ -n "$saved_surfaced_tool" ]]; then
+      export RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME="$saved_surfaced_tool"
+    else
+      unset RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME
+    fi
+    if [[ -n "$saved_normalized_tool" ]]; then
+      export RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME="$saved_normalized_tool"
+    else
+      unset RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME
+    fi
+  fi
+
   [[ -n "$compact_result" ]] || return 1
 
   shaped_json="$(jq -r '.content[0].text // empty' <<<"$compact_result")"
   [[ -n "$shaped_json" ]] || return 1
   if [[ "$shaped_json" == "$text" ]]; then
     return 1
-  fi
-
-  if declare -F ralph_hook_telemetry_append_windowing_log >/dev/null 2>&1; then
-    local telemetry_returned_bytes="${#shaped_json}"
-    local telemetry_original_tokens="" telemetry_returned_tokens=""
-    if declare -F ralph_mcp_proxy_result_estimate_tokens >/dev/null 2>&1; then
-      telemetry_original_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$storage_text" 2>/dev/null || true)"
-      telemetry_returned_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$shaped_json" 2>/dev/null || true)"
-    fi
-    ralph_hook_telemetry_append_windowing_log \
-      "$workspace" \
-      "$plan_key" \
-      "$proxy_tool" \
-      "${#storage_text}" \
-      "$telemetry_returned_bytes" \
-      "$telemetry_original_tokens" \
-      "$telemetry_returned_tokens" \
-      "$byte_cap"
   fi
 
   printf '%s\n' "$shaped_json"

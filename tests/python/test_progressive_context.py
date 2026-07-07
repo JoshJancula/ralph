@@ -42,6 +42,82 @@ Do not use emojis.
         self.assertEqual(meta.always_apply, True)
         self.assertIn("Do not use emojis", meta.body_without_frontmatter)
 
+    def _parse_rule(self, text: str) -> "cm.RuleSkillMetadata":
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write(text)
+            path = Path(handle.name)
+        try:
+            return cm.parse_rule_or_skill_file(path, kind="rule", rel_path="rules/x.md")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_claude_paths_block_scoped(self) -> None:
+        meta = self._parse_rule(
+            """---
+name: bash-style
+description: Shell scripts must use set -euo pipefail
+paths:
+  - "**/*.sh"
+  - "**/*.bats"
+---
+
+# Body
+""",
+        )
+        self.assertTrue(meta.metadata_complete)
+        self.assertEqual(meta.warnings, [])
+        self.assertEqual(meta.always_apply, False)
+        self.assertEqual(meta.globs, ["**/*.sh", "**/*.bats"])
+
+    def test_claude_no_paths_is_always_apply(self) -> None:
+        meta = self._parse_rule(
+            """---
+name: no-emoji
+description: Do not use emojis in any project artifact
+---
+
+# Body
+""",
+        )
+        self.assertTrue(meta.metadata_complete)
+        self.assertEqual(meta.warnings, [])
+        self.assertEqual(meta.always_apply, True)
+        self.assertEqual(meta.globs, [])
+
+    def test_antigravity_trigger_always_on(self) -> None:
+        meta = self._parse_rule(
+            """---
+name: docs-hygiene
+description: Documentation must describe current behavior only
+trigger: always_on
+---
+
+# Body
+""",
+        )
+        self.assertTrue(meta.metadata_complete)
+        self.assertEqual(meta.warnings, [])
+        self.assertEqual(meta.always_apply, True)
+
+    def test_antigravity_trigger_glob_scoped(self) -> None:
+        meta = self._parse_rule(
+            """---
+name: bash-style
+description: Shell scripts must use set -euo pipefail
+trigger: glob
+globs:
+  - "**/*.sh"
+  - "**/*.bats"
+---
+
+# Body
+""",
+        )
+        self.assertTrue(meta.metadata_complete)
+        self.assertEqual(meta.warnings, [])
+        self.assertEqual(meta.always_apply, False)
+        self.assertEqual(meta.globs, ["**/*.sh", "**/*.bats"])
+
     def test_missing_frontmatter_falls_back_to_full_body(self) -> None:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write("# No frontmatter\nKeep everything.\n")

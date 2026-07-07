@@ -22,6 +22,26 @@ PATH_ORDER = [
     "result_windowing",
 ]
 
+CHANNEL_LABELS: dict[str, str] = {
+    "native_shell_hook": "Native shell hook compaction",
+    "proxy_shell": "Proxy shell compaction",
+    "native_result_hook": "Native result hook compaction",
+    "native_result_mcp_fallback": "Native result MCP fallback windowing",
+    "proxy_read_windowing": "Proxy read windowing",
+    "proxy_search_windowing": "Proxy search windowing",
+    "stored_result_readback": "Stored result readback",
+}
+
+CHANNEL_ORDER = [
+    "native_shell_hook",
+    "proxy_shell",
+    "native_result_hook",
+    "native_result_mcp_fallback",
+    "proxy_read_windowing",
+    "proxy_search_windowing",
+    "stored_result_readback",
+]
+
 
 def fmt_int(value: Any) -> str:
     if value is None:
@@ -58,6 +78,115 @@ def _run_date(run: Mapping[str, Any]) -> str:
     if ended:
         return str(ended)
     return "-"
+
+
+def _sort_runs_newest_first(runs: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    def sort_key(run: Mapping[str, Any]) -> tuple[int, str]:
+        ended = str(run.get("ended_at") or "").strip()
+        return (1 if ended else 0, ended)
+
+    return sorted(runs, key=sort_key, reverse=True)
+
+
+def _channel_has_activity(bucket: Mapping[str, Any]) -> bool:
+    return (
+        _as_int(bucket.get("pre_optimization_bytes")) > 0
+        or _as_int(bucket.get("saved_bytes")) > 0
+        or _as_int(bucket.get("count")) > 0
+    )
+
+
+def _channel_attribution_label(attribution: Any) -> str:
+    if str(attribution or "exact") == "legacy":
+        return "legacy (unknown)"
+    return "exact"
+
+
+def _partition_channels(
+    per_channel: Mapping[str, Mapping[str, Any]],
+) -> tuple[list[tuple[str, Mapping[str, Any]]], list[tuple[str, Mapping[str, Any]]]]:
+    exact: list[tuple[str, Mapping[str, Any]]] = []
+    legacy: list[tuple[str, Mapping[str, Any]]] = []
+    for channel_name in CHANNEL_ORDER:
+        bucket = per_channel.get(channel_name) or {}
+        if not _channel_has_activity(bucket):
+            continue
+        if str(bucket.get("attribution") or "exact") == "legacy":
+            legacy.append((channel_name, bucket))
+        else:
+            exact.append((channel_name, bucket))
+    return exact, legacy
+
+
+def _channel_metric(value: Any) -> str:
+    if value is None:
+        return "-"
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    if numeric <= 0:
+        return "-"
+    return fmt_int(numeric)
+
+
+def _append_channel_table(
+    lines: list[str],
+    entries: Sequence[tuple[str, Mapping[str, Any]]],
+) -> None:
+    headers = [
+        "Channel",
+        "Attribution",
+        "Saved bytes",
+        "Saved tokens",
+        "Gross readback",
+        "Net consumed",
+    ]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    for channel_name, bucket in entries:
+        lines.append(
+            "| {channel} | {attribution} | {saved_bytes} | {saved_tokens} | {gross} | {net} |".format(
+                channel=CHANNEL_LABELS.get(channel_name, channel_name),
+                attribution=_channel_attribution_label(bucket.get("attribution")),
+                saved_bytes=_channel_metric(bucket.get("saved_bytes")),
+                saved_tokens=_channel_metric(bucket.get("saved_tokens")),
+                gross=_channel_metric(bucket.get("gross_readback_bytes")),
+                net=_channel_metric(bucket.get("net_consumed_bytes")),
+            )
+        )
+
+
+def _append_channel_sections(lines: list[str], per_channel: Mapping[str, Mapping[str, Any]]) -> None:
+    exact, legacy = _partition_channels(per_channel)
+    if not exact and not legacy:
+        return
+
+    lines.append("## Optimization by channel")
+    lines.append("")
+    lines.append(
+        "Exact channel attribution shows where tool-output savings came from. "
+        "Gross readback is diagnostic follow-up cost; net consumed is the "
+        "decision-grade bytes agents actually re-read after windowing."
+    )
+    lines.append("")
+
+    if exact:
+        lines.append("### Exact attribution")
+        lines.append("")
+        _append_channel_table(lines, exact)
+        lines.append("")
+
+    if legacy:
+        lines.append("### Legacy / unknown attribution")
+        lines.append("")
+        lines.append(
+            "Historical runs without channel metadata are grouped here. "
+            "Treat these totals as approximate until a new run records exact channels."
+        )
+        lines.append("")
+        _append_channel_table(lines, legacy)
+        lines.append("")
 
 
 def _session_usage_rows(session_usage: Mapping[str, Any]) -> list[list[str]]:
@@ -182,6 +311,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     run_count = int(report.get("runs_count", report.get("run_count", 1)) or 1)
     date_range = report.get("date_range", {})
     per_path = report.get("per_path", {})
+    per_channel = report.get("per_channel", {})
     tool_output = report.get("tool_output_counterfactual", {})
     session_usage = report.get("session_usage", {})
     readback_summary = report.get("readback_summary") or {}
@@ -189,6 +319,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     could_have_saved = report.get("could_have_saved", {})
     runs = report.get("runs", [])
     optimization_opportunities = report.get("optimization_opportunities")
+    optimization_opportunities_source = report.get("optimization_opportunities_source")
 
     net_savings_bytes = _as_int(tool_output.get("net_savings_bytes"))
     net_savings_tokens = _as_int(tool_output.get("net_savings_tokens"))
@@ -278,27 +409,37 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             )
         lines.append("")
 
+    if isinstance(per_channel, Mapping) and per_channel:
+        _append_channel_sections(lines, per_channel)
+
     if runs:
         lines.append("## Per run")
         lines.append("")
         per_run_headers = [
             "Run",
             "Date",
-            "Bytes saved (measured)",
-            "Est. tokens saved",
-            "Trimmed % (of inspected output)",
+            "Gross trim %",
+            "Net savings %",
+            "Without Ralph bytes",
+            "With Ralph bytes",
         ]
         lines.append("| " + " | ".join(per_run_headers) + " |")
         lines.append("| " + " | ".join(["---"] * len(per_run_headers)) + " |")
-        for run in runs:
+        for run in _sort_runs_newest_first(runs):
             run_id = run.get("id", "-")
+            run_tool_output = run.get("tool_output_counterfactual") or {}
             lines.append(
-                "| {run} | {date} | {bytes} | {tokens} | {trimmed} |".format(
+                "| {run} | {date} | {gross_trim} | {net_trim} | {without_ralph} | {with_ralph} |".format(
                     run=run_id,
                     date=_run_date(run),
-                    bytes=fmt_int(run.get("saved_bytes", 0)),
-                    tokens=fmt_int(run.get("saved_tokens", 0)),
-                    trimmed=fmt_pct(run.get("savings_percent", 0)),
+                    gross_trim=fmt_pct(run.get("savings_percent", 0)),
+                    net_trim=fmt_pct(run_tool_output.get("net_savings_percent", 0)),
+                    without_ralph=fmt_int(
+                        run_tool_output.get("hypothetical_without_ralph_bytes")
+                    ),
+                    with_ralph=fmt_int(
+                        run_tool_output.get("actual_with_ralph_bytes")
+                    ),
                 )
             )
         lines.append("")
@@ -356,6 +497,21 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     if isinstance(optimization_opportunities, Mapping) and optimization_opportunities:
         lines.append("## Improvement opportunities")
         lines.append("")
+        if isinstance(optimization_opportunities_source, Mapping):
+            plan_key = str(optimization_opportunities_source.get("plan_key") or "").strip()
+            ended_at = str(optimization_opportunities_source.get("ended_at") or "").strip()
+            source_parts: list[str] = []
+            if plan_key:
+                source_parts.append(f"`{plan_key}`")
+            if ended_at:
+                source_parts.append(ended_at)
+            if source_parts:
+                lines.append(
+                    "Guidance sourced from the most recent eligible run: "
+                    + " at ".join(source_parts)
+                    + "."
+                )
+                lines.append("")
         missed = optimization_opportunities.get("missed_compaction_opportunities")
         if isinstance(missed, list) and missed:
             lines.append("Missed compaction opportunities:")
@@ -430,6 +586,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "of what the model would have ingested, not a discount off the billed session input tokens above. "
         "'Actual with Ralph' includes follow-up stored-result readbacks, so heavy rereads can drive "
         "net savings toward zero even when previews were compact."
+    )
+    lines.append(
+        "- **Optimization by channel** is the authoritative breakdown of where savings came from. "
+        "Exact channels come from runtime telemetry; legacy/unknown rows reflect historical runs "
+        "without channel metadata."
     )
     lines.append(
         "- **Net savings** (in the Tool output table) is the estimated reduction in bytes/tokens sent "

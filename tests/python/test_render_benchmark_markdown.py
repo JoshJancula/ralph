@@ -146,7 +146,11 @@ def _sample_report(**overrides: object) -> dict:
                 "pre_optimization_bytes": 300,
                 "savings_percent": 30.0,
                 "per_path": {},
-                "tool_output_counterfactual": {},
+                "tool_output_counterfactual": {
+                    "hypothetical_without_ralph_bytes": 300,
+                    "actual_with_ralph_bytes": 210,
+                    "net_savings_percent": 30.0,
+                },
                 "session_usage": {},
             },
             {
@@ -158,10 +162,105 @@ def _sample_report(**overrides: object) -> dict:
                 "pre_optimization_bytes": 300,
                 "savings_percent": 20.0,
                 "per_path": {},
-                "tool_output_counterfactual": {},
+                "tool_output_counterfactual": {
+                    "hypothetical_without_ralph_bytes": 300,
+                    "actual_with_ralph_bytes": 240,
+                    "net_savings_percent": 20.0,
+                },
                 "session_usage": {},
             },
         ],
+        "optimization_opportunities_source": {
+            "plan_key": "run-b",
+            "ended_at": "2026-01-02T00:05:00Z",
+        },
+        "per_channel": {
+            "native_shell_hook": {
+                "pre_optimization_bytes": 0,
+                "post_optimization_bytes": 0,
+                "saved_bytes": 0,
+                "count": 0,
+                "pre_optimization_tokens": 0,
+                "post_optimization_tokens": 0,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "exact",
+            },
+            "proxy_shell": {
+                "pre_optimization_bytes": 200,
+                "post_optimization_bytes": 150,
+                "saved_bytes": 50,
+                "count": 1,
+                "pre_optimization_tokens": 50,
+                "post_optimization_tokens": 38,
+                "saved_tokens": 12,
+                "token_cap_triggers": 0,
+                "hidden_from_context": 50,
+                "hidden_from_context_tokens": 12,
+                "attribution": "exact",
+                "gross_hidden_bytes": 50,
+                "gross_hidden_tokens": 12,
+            },
+            "native_result_hook": {
+                "pre_optimization_bytes": 0,
+                "post_optimization_bytes": 0,
+                "saved_bytes": 0,
+                "count": 0,
+                "pre_optimization_tokens": 0,
+                "post_optimization_tokens": 0,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "exact",
+            },
+            "native_result_mcp_fallback": {
+                "pre_optimization_bytes": 0,
+                "post_optimization_bytes": 0,
+                "saved_bytes": 0,
+                "count": 0,
+                "pre_optimization_tokens": 0,
+                "post_optimization_tokens": 0,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "exact",
+            },
+            "proxy_read_windowing": {
+                "pre_optimization_bytes": 1000,
+                "post_optimization_bytes": 1000,
+                "saved_bytes": 0,
+                "count": 1,
+                "pre_optimization_tokens": 250,
+                "post_optimization_tokens": 250,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "exact",
+                "gross_readback_bytes": 1400,
+                "gross_readback_tokens": 350,
+                "net_consumed_bytes": 1000,
+                "net_consumed_tokens": 250,
+            },
+            "proxy_search_windowing": {
+                "pre_optimization_bytes": 0,
+                "post_optimization_bytes": 0,
+                "saved_bytes": 0,
+                "count": 0,
+                "pre_optimization_tokens": 0,
+                "post_optimization_tokens": 0,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "exact",
+            },
+            "stored_result_readback": {
+                "pre_optimization_bytes": 0,
+                "post_optimization_bytes": 0,
+                "saved_bytes": 0,
+                "count": 0,
+                "pre_optimization_tokens": 0,
+                "post_optimization_tokens": 0,
+                "saved_tokens": 0,
+                "token_cap_triggers": 0,
+                "attribution": "legacy",
+            },
+        },
     }
     report.update(overrides)
     return report
@@ -194,6 +293,53 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         self.assertIn("| Net savings | 150 | 38 |", output)
         self.assertIn("| Net savings rate | 25.0% | - |", output)
         self.assertIn("**Measured but not applied:** 13 bytes", output)
+        self.assertIn("| Run | Date | Gross trim % | Net savings % | Without Ralph bytes | With Ralph bytes |", output)
+
+    def test_renders_per_channel_table_with_gross_and_net(self) -> None:
+        output = render_markdown(_sample_report())
+
+        self.assertIn("## Optimization by channel", output)
+        self.assertIn("### Exact attribution", output)
+        self.assertIn(
+            "| Proxy shell compaction | exact | 50 | 12 | - | - |",
+            output,
+        )
+        self.assertIn(
+            "| Proxy read windowing | exact | - | - | 1,400 | 1,000 |",
+            output,
+        )
+        self.assertNotIn("### Legacy / unknown attribution", output)
+
+    def test_renders_legacy_unknown_attribution_in_separate_section(self) -> None:
+        report = _sample_report()
+        report["per_channel"]["stored_result_readback"] = {
+            "pre_optimization_bytes": 1000,
+            "post_optimization_bytes": 300,
+            "saved_bytes": 700,
+            "count": 1,
+            "pre_optimization_tokens": 250,
+            "post_optimization_tokens": 75,
+            "saved_tokens": 175,
+            "token_cap_triggers": 0,
+            "attribution": "legacy",
+            "gross_readback_bytes": 100,
+            "net_consumed_bytes": 300,
+        }
+        output = render_markdown(report)
+
+        self.assertIn("### Legacy / unknown attribution", output)
+        self.assertIn("Historical runs without channel metadata", output)
+        self.assertIn(
+            "| Stored result readback | legacy (unknown) | 700 | 175 | 100 | 300 |",
+            output,
+        )
+
+    def test_per_run_table_is_sorted_newest_first_and_uses_gross_and_net_columns(self) -> None:
+        output = render_markdown(_sample_report())
+
+        run_b_index = output.index("| run-b | 2026-01-02T00:00:00Z to 2026-01-02T00:05:00Z | 20.0% | 20.0% | 300 | 240 |")
+        run_a_index = output.index("| run-a | 2026-01-01T00:00:00Z to 2026-01-01T00:05:00Z | 30.0% | 30.0% | 300 | 210 |")
+        self.assertLess(run_b_index, run_a_index)
 
         # Readback section distinguishes gross vs net and uses effective rate.
         self.assertIn("Effective windowing savings rate: **0.0%**", output)
@@ -270,6 +416,7 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         output = render_markdown(report)
         self.assertIn("## Why savings are low", output)
         self.assertIn("## Improvement opportunities", output)
+        self.assertIn("Guidance sourced from the most recent eligible run: `run-b` at 2026-01-02T00:05:00Z.", output)
         self.assertIn("Discover opportunity", output)
         self.assertIn("native shell output not compacted", output)
         self.assertIn("repeated_native_read_like", output)

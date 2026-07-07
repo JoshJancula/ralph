@@ -413,6 +413,81 @@ describe('dashboard API metrics summary', () => {
     expect(readback.effective_windowing_savings_rate).toBe(0.65);
   });
 
+  it('scopes mixed-plan result-windowing logs to the summary plan key', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'plan-mixed');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'plan-mixed');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'plan-mixed',
+        artifact_ns: 'plan-mixed',
+        invocations: 1,
+        started_at: '2026-06-02T00:00:00Z',
+        ended_at: '2026-06-02T00:05:00Z',
+        byte_savings_by_path: {
+          result_windowing: {
+            pre_optimization_bytes: 1000,
+            post_optimization_bytes: 100,
+            saved_bytes: 900,
+            pre_optimization_tokens: 250,
+            post_optimization_tokens: 25,
+            saved_tokens: 225,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 900,
+            hidden_from_context_tokens: 225,
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'plan-mixed',
+          resultId: 'local',
+          originalBytes: 1000,
+          returnedBytes: 100,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'plan-mixed',
+          resultId: 'local',
+          view: 'compacted',
+          returnedBytes: 50,
+        }),
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'foreign-plan',
+          resultId: 'foreign',
+          originalBytes: 5000,
+          returnedBytes: 500,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'foreign-plan',
+          resultId: 'foreign',
+          view: 'raw',
+          returnedBytes: 4000,
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=plan-mixed');
+
+    expect(res.status).toBe(200);
+    expect(res.body.readback_summary).toMatchObject({
+      envelope_original_bytes: 1000,
+      readback_count: 1,
+      gross_readback_bytes: 50,
+    });
+  });
+
   it('keeps metrics local-first when a HOME workspace is also available', async () => {
     const homeRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-home-'));
     const homeWorkspace = join(homeRoot, 'shared-project');
@@ -1252,5 +1327,184 @@ describe('dashboard API metrics summary', () => {
       ralph_proxy_calls: 4,
       ralph_knowledge_calls: 1,
     });
+  });
+
+  it('returns per-channel savings with exact attribution in /api/benchmarks', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'exact-channel-plan');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'exact-channel-plan');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'exact-channel-plan',
+        artifact_ns: 'exact-channel-plan',
+        invocations: 1,
+        started_at: '2026-05-03T00:00:00Z',
+        ended_at: '2026-05-03T00:05:00Z',
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'exact-channel-plan',
+          resultId: 'read-1',
+          channel: 'proxy_read_windowing',
+          originalBytes: 1000,
+          returnedBytes: 200,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'exact-channel-plan',
+          resultId: 'read-1',
+          sourceResultChannel: 'proxy_read_windowing',
+          view: 'compacted',
+          returnedBytes: 100,
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=exact-channel-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel).toBeDefined();
+    expect(res.body.per_channel.proxy_read_windowing).toMatchObject({
+      attribution: 'exact',
+      saved_bytes: 700,
+      gross_readback_bytes: 100,
+      net_consumed_bytes: 300,
+    });
+    expect(res.body.per_channel.stored_result_readback.saved_bytes).toBe(0);
+  });
+
+  it('aggregates mixed-runtime channel savings from invocation logs in /api/benchmarks', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'mixed-channel-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'mixed-channel-plan',
+        artifact_ns: 'mixed-channel-plan',
+        invocations: 2,
+        started_at: '2026-07-01T10:00:00Z',
+        ended_at: '2026-07-01T11:00:00Z',
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            plan_key: 'mixed-channel-plan',
+            byte_savings_by_channel: {
+              native_result_hook: {
+                pre_optimization_bytes: 500,
+                post_optimization_bytes: 100,
+                saved_bytes: 400,
+                count: 1,
+                pre_optimization_tokens: 125,
+                post_optimization_tokens: 25,
+                saved_tokens: 100,
+                token_cap_triggers: 0,
+                hidden_from_context: 400,
+                hidden_from_context_tokens: 100,
+                attribution: 'exact',
+              },
+            },
+          },
+          {
+            runtime: 'codex',
+            plan_key: 'mixed-channel-plan',
+            byte_savings_by_channel: {
+              proxy_shell: {
+                pre_optimization_bytes: 800,
+                post_optimization_bytes: 200,
+                saved_bytes: 600,
+                count: 1,
+                pre_optimization_tokens: 200,
+                post_optimization_tokens: 50,
+                saved_tokens: 150,
+                token_cap_triggers: 0,
+                hidden_from_context: 600,
+                hidden_from_context_tokens: 150,
+                attribution: 'exact',
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=mixed-channel-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel.native_result_hook).toMatchObject({
+      saved_bytes: 400,
+      attribution: 'exact',
+      gross_hidden_bytes: 400,
+    });
+    expect(res.body.per_channel.proxy_shell).toMatchObject({
+      saved_bytes: 600,
+      attribution: 'exact',
+      gross_hidden_bytes: 600,
+    });
+  });
+
+  it('does not surface missed compaction when channel savings evidence exists', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'channel-evidence-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'channel-evidence-plan',
+        artifact_ns: 'channel-evidence-plan',
+        invocations: 1,
+        started_at: '2026-06-10T00:00:00Z',
+        ended_at: '2026-06-10T00:10:00Z',
+        byte_savings_by_channel: {
+          proxy_read_windowing: {
+            pre_optimization_bytes: 5000,
+            post_optimization_bytes: 1000,
+            saved_bytes: 4000,
+            count: 2,
+            pre_optimization_tokens: 1250,
+            post_optimization_tokens: 250,
+            saved_tokens: 1000,
+            token_cap_triggers: 0,
+            hidden_from_context: 4000,
+            hidden_from_context_tokens: 1000,
+            attribution: 'exact',
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'discover-report.json'),
+      JSON.stringify({
+        missed_compaction_opportunities: [
+          { original_bytes: 9000, skip_reason: 'stale-heavy-native-signal' },
+        ],
+        aggregate_findings: [
+          {
+            pattern_id: 'heavy_native_read_vs_proxy',
+            native_read_share: 0.8,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=channel-evidence-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel.proxy_read_windowing.saved_bytes).toBe(4000);
+    expect(res.body.optimization_opportunities).toBeDefined();
+    expect(res.body.optimization_opportunities.missed_compaction_opportunities).toBeUndefined();
+    expect(res.body.optimization_opportunities.native_read_findings).toHaveLength(1);
   });
 });

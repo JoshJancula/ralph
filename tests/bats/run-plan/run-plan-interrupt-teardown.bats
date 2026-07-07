@@ -624,6 +624,172 @@ interrupt_teardown_read_pid_file() {
   [ "$status" -eq 129 ]
 }
 
+@test "interrupt trap handler tears down agent tree before usage finalization" {
+  local order_log
+  order_log="$TEST_TMPDIR/order.log"
+
+  run env ORDER_LOG="$order_log" bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    _ralph_finalize_plan_usage_on_exit() { echo finalize >>"$ORDER_LOG"; }
+    ralph_run_plan_process_teardown_on_exit() { echo teardown >>"$ORDER_LOG"; }
+    ralph_run_plan_interrupt_trap_handler INT
+  ' _ "$TEARDOWN_LIB" "$CLEANUP_LIB"
+
+  [ "$status" -eq 130 ]
+  [ "$(sed -n 1p "$order_log")" = "teardown" ]
+  [ "$(sed -n 2p "$order_log")" = "finalize" ]
+}
+
+@test "interrupt trap handler ignores repeated signals during teardown" {
+  local state_dir
+  state_dir="$TEST_TMPDIR/repeat-signal"
+  mkdir -p "$state_dir"
+
+  # A second Ctrl-C mid-teardown must not kill the runner. The handler has to
+  # set INT/TERM/HUP to ignore before teardown starts; the stubbed teardown
+  # records the trap table and re-signals the shell, simulating a user
+  # pressing Ctrl-C again while the agent tree is being reaped.
+  run env STATE_DIR="$state_dir" bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    _ralph_finalize_plan_usage_on_exit() { :; }
+    ralph_run_plan_process_teardown_on_exit() {
+      trap -p INT TERM HUP >"$STATE_DIR/traps.txt"
+      kill -TERM $$ 2>/dev/null || true
+      sleep 0.2
+      echo done >"$STATE_DIR/marker"
+    }
+    ralph_run_plan_interrupt_trap_handler INT
+  ' _ "$TEARDOWN_LIB" "$CLEANUP_LIB"
+
+  [ "$status" -eq 130 ]
+  [ -f "$state_dir/marker" ]
+  [ "$(grep -c "trap -- ''" "$state_dir/traps.txt")" -eq 3 ]
+}
+
+@test "interrupt trap handler completes teardown when usage finalization fails" {
+  local marker
+  marker="$TEST_TMPDIR/teardown-ran"
+
+  run env MARKER="$marker" bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    _ralph_finalize_plan_usage_on_exit() { return 1; }
+    ralph_run_plan_process_teardown_on_exit() { touch "$MARKER"; }
+    ralph_run_plan_interrupt_trap_handler INT
+  ' _ "$TEARDOWN_LIB" "$CLEANUP_LIB"
+
+  [ "$status" -eq 130 ]
+  [ -f "$marker" ]
+}
+
+@test "agent group guard reaps TERM-ignoring agent group when runner dies" {
+  local state_dir
+  state_dir="$TEST_TMPDIR/guard-state"
+  mkdir -p "$state_dir"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    state="$2"
+
+    sleep 60 &
+    runner_pid=$!
+
+    set -m
+    (
+      ralph_run_plan_agent_group_guard "$runner_pid" "$BASHPID"
+      bash -c "trap \"\" TERM; while true; do sleep 0.1; done" &
+      printf "%s" "$!" >"$state/child.pid"
+      sleep 60
+    ) &
+    leader_pid=$!
+    set +m
+
+    for _ in $(seq 1 50); do [[ -s "$state/child.pid" ]] && break; sleep 0.1; done
+    child_pid="$(cat "$state/child.pid")"
+    [[ "$child_pid" =~ ^[0-9]+$ ]]
+
+    kill -KILL "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+
+    for _ in $(seq 1 80); do
+      if ! kill -0 "$child_pid" 2>/dev/null && ! kill -0 "$leader_pid" 2>/dev/null; then
+        exit 0
+      fi
+      sleep 0.1
+    done
+    kill -KILL -"$leader_pid" 2>/dev/null || true
+    exit 9
+  ' _ "$TEARDOWN_LIB" "$state_dir"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "agent teardown reaps signal-immune group guard via pid sidecar" {
+  local sidecar
+  sidecar="$TEST_TMPDIR/guard-pid.sidecar"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    export RALPH_PLAN_INVOCATION_GUARD_PID_FILE="$2"
+    bash -c "trap \"\" TERM; while true; do sleep 0.1; done" &
+    guard_pid=$!
+    printf "%s\n" "$guard_pid" >"$RALPH_PLAN_INVOCATION_GUARD_PID_FILE"
+    ralph_run_plan_agent_teardown
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$guard_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$guard_pid" 2>/dev/null; then
+      exit 9
+    fi
+    if [[ -f "$RALPH_PLAN_INVOCATION_GUARD_PID_FILE" ]]; then
+      exit 8
+    fi
+  ' _ "$TEARDOWN_LIB" "$sidecar"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "agent group guard exits quietly once its group is empty" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+
+    sleep 60 &
+    runner_pid=$!
+
+    set -m
+    (
+      ralph_run_plan_agent_group_guard "$runner_pid" "$BASHPID"
+      sleep 0.3
+    ) &
+    leader_pid=$!
+    set +m
+
+    wait "$leader_pid" 2>/dev/null || true
+
+    for _ in $(seq 1 60); do
+      if ! pgrep -g "$leader_pid" >/dev/null 2>&1; then
+        kill "$runner_pid" 2>/dev/null || true
+        exit 0
+      fi
+      sleep 0.1
+    done
+    kill "$runner_pid" 2>/dev/null || true
+    kill -KILL -"$leader_pid" 2>/dev/null || true
+    exit 9
+  ' _ "$TEARDOWN_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
 }

@@ -232,6 +232,17 @@ class OpencodeHybridRegressionTests(unittest.TestCase):
         window_bucket = savings["result_windowing"]
         self.assertGreater(window_bucket["saved_bytes"], 0)
         self.assertGreaterEqual(window_bucket["count"], PLAN54_REPEATED_READ_COUNT)
+        records = [
+            json.loads(line)
+            for line in self.window_log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        envelope_records = [record for record in records if record.get("event") == "envelope"]
+        self.assertGreater(len(envelope_records), 0)
+        for record in envelope_records:
+            self.assertEqual(record.get("channel"), "native_result_mcp_fallback")
+            self.assertEqual(record.get("toolName"), "Read")
+            self.assertEqual(record.get("normalizedToolName"), "ralph_proxy_read")
 
     def test_compaction_disabled_preserves_old_unbounded_behavior(self) -> None:
         env = {

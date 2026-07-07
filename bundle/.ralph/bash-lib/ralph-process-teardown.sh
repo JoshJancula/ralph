@@ -103,6 +103,94 @@ ralph_launcher_death_watchdog() {
   kill -KILL "$$"
 }
 
+# Return 0 when the process group has live members other than the given pid.
+# Args: $1 = process-group id, $2 = pid to exclude (the caller)
+ralph_process_group_has_other_members() {
+  local pgid="${1:-}"
+  local self_pid="${2:-}"
+  local member
+  [[ "$pgid" =~ ^[0-9]+$ ]] || return 1
+  while IFS= read -r member; do
+    [[ "$member" =~ ^[0-9]+$ ]] || continue
+    [[ "$member" == "$self_pid" ]] && continue
+    return 0
+  done < <(pgrep -g "$pgid" 2>/dev/null || true)
+  return 1
+}
+
+# Env-gated debug trace for the agent group guard. Always returns 0 so it is
+# safe under errexit.
+ralph_teardown_guard_debug() {
+  [[ -n "${RALPH_TEARDOWN_DEBUG_LOG:-}" ]] || return 0
+  printf '%s\n' "$*" >>"$RALPH_TEARDOWN_DEBUG_LOG" 2>/dev/null || true
+}
+
+# Guard the agent invocation process group against runner death. Must be
+# started from inside the backgrounded invocation subshell so it lives in the
+# agent's process group. Watches the runner pid and reaps the invocation's own
+# process group when the runner disappears (killed mid-teardown, SIGKILL,
+# crash) so runtime CLIs and their MCP children are never orphaned. Exits
+# quietly once the group has no other members. Ignores INT/TERM/HUP so the
+# group-wide SIGTERM sent by normal teardown cannot stop it before it can
+# escalate; runner-side teardown reaps it directly via its pid sidecar
+# (RALPH_PLAN_INVOCATION_GUARD_PID_FILE).
+# Args: $1 = runner pid, $2 = agent process-group id
+ralph_run_plan_agent_group_guard() {
+  local runner_pid="${1:-}"
+  local pgid="${2:-}"
+  [[ "$runner_pid" =~ ^[0-9]+$ ]] || return 0
+  [[ "$pgid" =~ ^[0-9]+$ ]] || return 0
+  (
+    trap '' INT TERM HUP
+    # The guard must never die from inherited shell strictness: a single
+    # failing compound under errexit would silently remove the orphan
+    # protection for the whole invocation.
+    set +e +u
+    set +o pipefail 2>/dev/null
+    if [[ -n "${RALPH_PLAN_INVOCATION_GUARD_PID_FILE:-}" ]]; then
+      printf '%s\n' "$BASHPID" >"$RALPH_PLAN_INVOCATION_GUARD_PID_FILE" 2>/dev/null
+    fi
+    ralph_teardown_guard_debug "guard start pid=$BASHPID runner=$runner_pid pgid=$pgid"
+    # pgrep's process snapshot can be transiently incomplete during the fork
+    # churn of invocation startup (observed on macOS), so a single empty
+    # membership result must not end the guard. Require several consecutive
+    # empty observations before concluding the group is really gone.
+    local empty_checks=0
+    while kill -0 "$runner_pid" 2>/dev/null; do
+      if ralph_process_group_has_other_members "$pgid" "$BASHPID"; then
+        empty_checks=0
+      else
+        empty_checks=$((empty_checks + 1))
+        if (( empty_checks >= 3 )); then
+          ralph_teardown_guard_debug "guard exit-empty pid=$BASHPID"
+          exit 0
+        fi
+      fi
+      sleep 1
+    done
+    ralph_teardown_guard_debug "guard runner-dead pid=$BASHPID"
+    if ralph_process_group_has_other_members "$pgid" "$BASHPID"; then
+      printf '%s\n' "ralph-process-teardown: plan runner $runner_pid exited; reaping agent process group $pgid" >&2
+      kill -TERM -"$pgid" 2>/dev/null
+      ralph_teardown_guard_debug "guard sent TERM to -$pgid"
+      sleep 2
+      kill -KILL -"$pgid" 2>/dev/null
+    fi
+    exit 0
+  ) &
+}
+
+# Wrapper for backgrounded agent invocations: start the runner-death guard
+# inside the invocation's own process group, then run the invoke function.
+# $$ still expands to the runner pid inside the backgrounded subshell, while
+# BASHPID is the subshell (process-group leader) pid.
+# Args: $1 = invoke function name
+ralph_run_plan_invoke_with_group_guard() {
+  local invoke_fn="$1"
+  ralph_run_plan_agent_group_guard "$$" "$BASHPID"
+  "$invoke_fn"
+}
+
 # Read a numeric runtime CLI PID from the per-invocation sidecar when present.
 # Args: none (uses RALPH_PLAN_INVOCATION_CLI_PID_FILE)
 # Prints the PID on success; returns non-zero when missing or malformed.
@@ -119,6 +207,22 @@ ralph_run_plan_read_cli_pid_from_sidecar() {
 ralph_run_plan_remove_invocation_sidecars() {
   rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
   rm -f "${RALPH_PLAN_INVOCATION_CLI_START_FILE:-}" 2>/dev/null || true
+  rm -f "${RALPH_PLAN_INVOCATION_GUARD_PID_FILE:-}" 2>/dev/null || true
+}
+
+# Reap the invocation's group guard via its pid sidecar. The guard ignores
+# TERM (it must survive group-wide SIGTERM to escalate), so runner-side
+# teardown kills it directly with KILL before signalling the group; otherwise
+# every teardown would wait out the full grace period and escalate to a
+# group SIGKILL just to clear the guard.
+ralph_run_plan_reap_agent_group_guard() {
+  local sidecar="${RALPH_PLAN_INVOCATION_GUARD_PID_FILE:-}"
+  local guard_pid=""
+  [[ -n "$sidecar" && -f "$sidecar" ]] || return 0
+  guard_pid="$(tr -d '[:space:]' <"$sidecar" 2>/dev/null || true)"
+  rm -f "$sidecar" 2>/dev/null || true
+  [[ "$guard_pid" =~ ^[0-9]+$ ]] || return 0
+  kill -KILL "$guard_pid" 2>/dev/null || true
 }
 
 # Cancel runner-owned async shell jobs recorded under the plan tool-results tree.
@@ -166,6 +270,8 @@ ralph_run_plan_agent_teardown() {
     wait "$watchdog_pid" 2>/dev/null || true
     unset RALPH_LAUNCHER_WATCHDOG_PID
   fi
+
+  ralph_run_plan_reap_agent_group_guard
 
   if [[ "$agent_pid" =~ ^[0-9]+$ ]]; then
     ralph_kill_process_group "$agent_pid" 2

@@ -567,7 +567,9 @@ def optimization_hint_line(usage: Mapping[str, Any]) -> str:
         plan_key = str(usage.get("plan_key") or usage.get("planKey") or "").strip()
         windowing_path = result_windowing_log_path(plan_key=plan_key)
         if windowing_path is not None:
-            readback_stats = analyze_result_windowing_log(windowing_path)
+            readback_stats = analyze_result_windowing_log(
+                windowing_path, plan_key=plan_key
+            )
         else:
             readback_stats = {}
 

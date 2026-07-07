@@ -13,14 +13,38 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from ralph_overlay_usage_fields import aggregate_byte_savings_by_channel
+from result_windowing_metrics import (
+    WINDOWING_CHANNEL_NAMES,
+    _filter_records_for_plan_key,
+    _load_windowing_records,
+    _parse_envelope,
+    _parse_readback,
+    _resolve_result_channel_target,
+)
 from token_estimate import estimate_tokens
 from tool_call_classification import (
     SAVINGS_PATH_NAMES,
     empty_savings_bucket,
     finalize_savings_bucket,
+    merge_savings_buckets,
+    savings_from_path_data,
 )
 from tool_call_target_telemetry import analyze_result_windowing_log
 from usage_accounting import aggregate_records
+
+_CHANNEL_SAVINGS_KEYS = (
+    "pre_optimization_bytes",
+    "post_optimization_bytes",
+    "saved_bytes",
+    "count",
+    "pre_optimization_tokens",
+    "post_optimization_tokens",
+    "saved_tokens",
+    "token_cap_triggers",
+    "hidden_from_context",
+    "hidden_from_context_tokens",
+)
 
 
 def _as_int(value: Any) -> int:
@@ -174,6 +198,234 @@ def _windowing_log_for_summary(summary_path: str) -> Path | None:
         return None
     candidate = log_dir.parent.parent / "runtime-config" / plan_key / "result-windowing.jsonl"
     return candidate if candidate.is_file() else None
+
+
+def _state_dir_for_summary(summary_path: str) -> Path | None:
+    log_dir = Path(summary_path).resolve().parent
+    plan_key = log_dir.name
+    if not plan_key:
+        return None
+    candidate = log_dir.parent.parent / "runtime-config" / plan_key
+    return candidate if candidate.is_dir() else None
+
+
+def _empty_channels() -> dict[str, dict[str, int | float | str]]:
+    return {
+        channel: {
+            **empty_savings_bucket(include_hidden=True),
+            "attribution": "exact",
+        }
+        for channel in WINDOWING_CHANNEL_NAMES
+    }
+
+
+def _channel_has_activity(bucket: Mapping[str, Any]) -> bool:
+    return (
+        _as_int(bucket.get("pre_optimization_bytes")) > 0
+        or _as_int(bucket.get("saved_bytes")) > 0
+        or _as_int(bucket.get("count")) > 0
+    )
+
+
+def _merge_channel_bucket(
+    target: dict[str, int | float | str],
+    source: Mapping[str, Any],
+) -> None:
+    for key in _CHANNEL_SAVINGS_KEYS:
+        if key in source:
+            target[key] = _as_int(target.get(key)) + _as_int(source.get(key))
+    source_attribution = str(source.get("attribution") or "exact")
+    if source_attribution == "legacy" or target.get("attribution") == "legacy":
+        target["attribution"] = "legacy"
+    else:
+        target["attribution"] = "exact"
+
+
+def _finalize_channel_buckets(
+    channels: dict[str, dict[str, int | float | str]],
+) -> dict[str, dict[str, int | float | str]]:
+    per_channel: dict[str, dict[str, int | float | str]] = {}
+    for channel_name in WINDOWING_CHANNEL_NAMES:
+        bucket = dict(channels[channel_name])
+        if _channel_has_activity(bucket):
+            finalize_savings_bucket(bucket)
+        per_channel[channel_name] = bucket
+    return per_channel
+
+
+def _aggregate_invocation_channels(
+    path: str,
+    plan_key: str,
+) -> dict[str, dict[str, int | float | str]]:
+    out = _empty_channels()
+    if not os.path.isfile(path):
+        return out
+    with open(path, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    invocations = doc.get("invocations")
+    if not isinstance(invocations, list):
+        return out
+
+    target_plan_key = str(plan_key or "").strip()
+    latest: dict[tuple[str, str], dict[str, int | float | str]] = {}
+    for record in invocations:
+        if not isinstance(record, Mapping):
+            continue
+        channel_savings = record.get("byte_savings_by_channel")
+        if not isinstance(channel_savings, Mapping):
+            continue
+        record_plan = str(record.get("plan_key") or "").strip()
+        if target_plan_key and record_plan and record_plan != target_plan_key:
+            continue
+        for channel_name, path_data in channel_savings.items():
+            if channel_name not in out or not isinstance(path_data, Mapping):
+                continue
+            key = (target_plan_key or record_plan, channel_name)
+            latest[key] = savings_from_path_data(path_data)
+            if path_data.get("attribution") == "legacy":
+                latest[key]["attribution"] = "legacy"
+
+    for (_key_plan, channel_name), channel_bucket in latest.items():
+        merge_savings_buckets(
+            {channel_name: out[channel_name]},
+            {channel_name: channel_bucket},
+        )
+        if channel_bucket.get("attribution") == "legacy":
+            out[channel_name]["attribution"] = "legacy"
+
+    return _finalize_channel_buckets(out)
+
+
+def _summary_channels(
+    summary: Mapping[str, Any],
+    summary_path: str,
+    plan_key: str,
+) -> dict[str, dict[str, int | float | str]]:
+    channel_data = summary.get("byte_savings_by_channel")
+    if isinstance(channel_data, Mapping):
+        out = _empty_channels()
+        for channel_name in WINDOWING_CHANNEL_NAMES:
+            raw_bucket = channel_data.get(channel_name)
+            if isinstance(raw_bucket, Mapping):
+                _merge_channel_bucket(out[channel_name], raw_bucket)
+        if any(_channel_has_activity(bucket) for bucket in out.values()):
+            return _finalize_channel_buckets(out)
+
+    invocation_path = os.path.join(os.path.dirname(summary_path), "invocation-usage.json")
+    invocation_channels = _aggregate_invocation_channels(invocation_path, plan_key)
+    if any(_channel_has_activity(bucket) for bucket in invocation_channels.values()):
+        return invocation_channels
+
+    state_dir = _state_dir_for_summary(summary_path)
+    if state_dir is not None:
+        return aggregate_byte_savings_by_channel(str(state_dir), plan_key=plan_key)
+
+    return _empty_channels()
+
+
+def _windowing_readback_by_channel(
+    path: Path | str,
+    *,
+    plan_key: str | None = None,
+) -> dict[str, dict[str, int]]:
+    stats = {
+        channel: {
+            "gross_readback_bytes": 0,
+            "gross_readback_tokens": 0,
+            "net_consumed_bytes": 0,
+            "net_consumed_tokens": 0,
+        }
+        for channel in WINDOWING_CHANNEL_NAMES
+    }
+    if not os.path.isfile(str(path)):
+        return stats
+
+    records = _filter_records_for_plan_key(_load_windowing_records(path), plan_key)
+    envelopes: dict[str, dict[str, Any]] = {}
+    readbacks: list[dict[str, Any]] = []
+    for record in records:
+        event = str(record.get("event") or "").strip().lower()
+        if event == "envelope":
+            parsed = _parse_envelope(record)
+            if parsed is not None:
+                envelopes[parsed["result_id"]] = parsed
+        elif event == "readback":
+            parsed = _parse_readback(record)
+            if parsed is not None:
+                readbacks.append(parsed)
+
+    grouped_readbacks: dict[str, list[dict[str, Any]]] = {}
+    for readback in readbacks:
+        grouped_readbacks.setdefault(readback["result_id"], []).append(readback)
+
+    for result_id, envelope in envelopes.items():
+        result_readbacks = grouped_readbacks.get(result_id, [])
+        extra_bytes = sum(_as_int(item.get("returned_bytes")) for item in result_readbacks)
+        extra_tokens = sum(_as_int(item.get("returned_tokens")) for item in result_readbacks)
+        original_bytes = _as_int(envelope.get("original_bytes"))
+        original_tokens = _as_int(envelope.get("original_tokens"))
+        preview_bytes = _as_int(envelope.get("returned_bytes"))
+        preview_tokens = _as_int(envelope.get("returned_tokens"))
+        consumed_bytes = preview_bytes + extra_bytes
+        consumed_tokens = preview_tokens + extra_tokens
+        net_post_bytes = (
+            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
+        )
+        net_post_tokens = (
+            min(original_tokens, consumed_tokens)
+            if original_tokens > 0
+            else consumed_tokens
+        )
+        channel_name, _attribution = _resolve_result_channel_target(envelope, result_readbacks)
+        if channel_name not in stats:
+            continue
+        bucket = stats[channel_name]
+        bucket["gross_readback_bytes"] += extra_bytes
+        bucket["gross_readback_tokens"] += extra_tokens
+        bucket["net_consumed_bytes"] += net_post_bytes
+        bucket["net_consumed_tokens"] += net_post_tokens
+
+    return stats
+
+
+def _enrich_channel_diagnostics(
+    per_channel: dict[str, dict[str, int | float | str]],
+    readback_by_channel: Mapping[str, Mapping[str, int]] | None,
+) -> None:
+    """Add diagnostic gross/net fields to per-channel buckets."""
+    for channel_name, bucket in per_channel.items():
+        if channel_name in ("native_shell_hook", "proxy_shell", "native_result_hook"):
+            bucket["gross_hidden_bytes"] = _as_int(bucket.get("hidden_from_context"))
+            bucket["gross_hidden_tokens"] = _as_int(bucket.get("hidden_from_context_tokens"))
+
+        if readback_by_channel:
+            channel_stats = readback_by_channel.get(channel_name) or {}
+            gross_readback_bytes = _as_int(channel_stats.get("gross_readback_bytes"))
+            net_consumed_bytes = _as_int(channel_stats.get("net_consumed_bytes"))
+            if gross_readback_bytes > 0:
+                bucket["gross_readback_bytes"] = gross_readback_bytes
+                bucket["gross_readback_tokens"] = _as_int(
+                    channel_stats.get("gross_readback_tokens")
+                )
+            if net_consumed_bytes > 0:
+                bucket["net_consumed_bytes"] = net_consumed_bytes
+                bucket["net_consumed_tokens"] = _as_int(
+                    channel_stats.get("net_consumed_tokens")
+                )
+
+        if (
+            "net_consumed_bytes" not in bucket
+            and channel_name
+            in (
+                "proxy_read_windowing",
+                "proxy_search_windowing",
+                "native_result_mcp_fallback",
+                "stored_result_readback",
+            )
+            and _as_int(bucket.get("count")) > 0
+        ):
+            bucket["net_consumed_bytes"] = _as_int(bucket.get("post_optimization_bytes"))
+            bucket["net_consumed_tokens"] = _as_int(bucket.get("post_optimization_tokens"))
 
 
 def _savings_path_status(
@@ -462,6 +714,10 @@ def _load_discover_report_for_summary(summary_path: str) -> Mapping[str, Any] | 
     return None
 
 
+def _summary_plan_key(summary: Mapping[str, Any], summary_path: str) -> str:
+    return str(summary.get("plan_key") or "").strip() or _run_id(summary, summary_path)
+
+
 def _normalize_optimization_opportunities(
     discover: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -512,6 +768,7 @@ def _normalize_optimization_opportunities(
 
 def build_report(paths: Sequence[str]) -> dict[str, Any]:
     aggregate_paths = _empty_paths()
+    aggregate_channels = _empty_channels()
     session_usage = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -544,8 +801,9 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         "effective_windowing_savings_rate": 0.0,
     }
 
-    first_summary_path = ""
     optimization_opportunities: dict[str, Any] | None = None
+    optimization_opportunities_source: dict[str, Any] | None = None
+    discover_candidates: list[tuple[datetime | None, str, str, str | None]] = []
 
     for path in paths:
         try:
@@ -554,8 +812,6 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
             print(f"Warning: skipping unreadable summary {path}: {exc}", file=sys.stderr)
             skipped_summaries += 1
             continue
-        if not first_summary_path:
-            first_summary_path = path
         run_count += max(0, _as_int(summary.get("invocations", summary.get("steps", 1))))
         input_tokens += _as_int(summary.get("input_tokens"))
         cache_create_tokens += _as_int(summary.get("cache_creation_input_tokens"))
@@ -582,8 +838,11 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         summary_paths = _summary_paths(summary, path)
         readback_stats: dict[str, Any] = {}
         windowing_log = _windowing_log_for_summary(path)
+        plan_key = _summary_plan_key(summary, path)
         if windowing_log is not None:
-            readback_stats = analyze_result_windowing_log(windowing_log)
+            readback_stats = analyze_result_windowing_log(
+                windowing_log, plan_key=plan_key
+            )
             for key in readback_totals:
                 if key in readback_stats:
                     # Ratio fields are recalculated from totals at the end;
@@ -610,12 +869,20 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         run_per_path, run_saved_bytes, run_saved_tokens, run_pre_bytes = _finalize_path_buckets(
             summary_paths
         )
+        run_channels = _summary_channels(summary, path, plan_key)
+        run_readback_by_channel = (
+            _windowing_readback_by_channel(windowing_log, plan_key=plan_key)
+            if windowing_log is not None
+            else None
+        )
+        _enrich_channel_diagnostics(run_channels, run_readback_by_channel)
         run_tool_output = _build_tool_output_counterfactual(
             summary_paths, run_windowing_totals, _as_int(summary.get("compaction_measured_not_applied_bytes"))
         )
         runs.append(
             {
                 "id": _run_id(summary, path),
+                "plan_key": plan_key,
                 "started_at": _isoformat(start),
                 "ended_at": _isoformat(end),
                 "saved_bytes": run_saved_bytes,
@@ -625,6 +892,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
                 if run_pre_bytes > 0
                 else 0,
                 "per_path": run_per_path,
+                "per_channel": run_channels,
                 "tool_output_counterfactual": run_tool_output,
                 "session_usage": {
                     "input_tokens": _as_int(summary.get("input_tokens")),
@@ -638,13 +906,33 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
                 },
             }
         )
+        discover_candidates.append((_parse_ts(summary.get("ended_at")), path, plan_key, _isoformat(end)))
         for path_name in SAVINGS_PATH_NAMES:
             _merge_bucket(aggregate_paths[path_name], summary_paths[path_name])
+        for channel_name in WINDOWING_CHANNEL_NAMES:
+            _merge_channel_bucket(
+                aggregate_channels[channel_name],
+                run_channels[channel_name],
+            )
 
-    if first_summary_path:
-        discover_data = _load_discover_report_for_summary(first_summary_path)
+    discover_candidates.sort(
+        key=lambda item: (
+            item[0] is not None,
+            item[0] or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+        reverse=True,
+    )
+    for _ended_at, summary_path, plan_key, ended_at_iso in discover_candidates:
+        discover_data = _load_discover_report_for_summary(summary_path)
         if discover_data is not None:
-            optimization_opportunities = _normalize_optimization_opportunities(discover_data)
+            normalized = _normalize_optimization_opportunities(discover_data)
+            if normalized:
+                optimization_opportunities = normalized
+                optimization_opportunities_source = {
+                    "plan_key": plan_key,
+                    "ended_at": ended_at_iso,
+                }
+                break
 
     saved_bytes = 0
     saved_tokens = 0
@@ -678,6 +966,31 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
             )
 
     _enrich_path_diagnostics(per_path, readback_totals, could_have_saved_bytes)
+
+    per_channel = _finalize_channel_buckets(aggregate_channels)
+    aggregate_readback_by_channel: dict[str, dict[str, int]] = {
+        channel: {
+            "gross_readback_bytes": 0,
+            "gross_readback_tokens": 0,
+            "net_consumed_bytes": 0,
+            "net_consumed_tokens": 0,
+        }
+        for channel in WINDOWING_CHANNEL_NAMES
+    }
+    for run in runs:
+        run_channels = run.get("per_channel")
+        if not isinstance(run_channels, Mapping):
+            continue
+        for channel_name in WINDOWING_CHANNEL_NAMES:
+            bucket = run_channels.get(channel_name)
+            if not isinstance(bucket, Mapping):
+                continue
+            target = aggregate_readback_by_channel[channel_name]
+            target["gross_readback_bytes"] += _as_int(bucket.get("gross_readback_bytes"))
+            target["gross_readback_tokens"] += _as_int(bucket.get("gross_readback_tokens"))
+            target["net_consumed_bytes"] += _as_int(bucket.get("net_consumed_bytes"))
+            target["net_consumed_tokens"] += _as_int(bucket.get("net_consumed_tokens"))
+    _enrich_channel_diagnostics(per_channel, aggregate_readback_by_channel)
 
     # Compute aggregate readback metrics from the net-windowing module values.
     net_consumed_bytes = _as_int(readback_totals.get("net_consumed_bytes"))
@@ -746,6 +1059,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         "session_usage": session_usage,
         "tool_output_counterfactual": tool_output_counterfactual,
         "per_path": per_path,
+        "per_channel": per_channel,
         "readback_summary": {
             "envelope_count": readback_totals["envelope_count"],
             "readback_count": readback_totals["readback_count"],
@@ -770,6 +1084,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
             "compaction_measured_not_applied_bytes": could_have_saved_bytes,
         },
         "optimization_opportunities": optimization_opportunities,
+        "optimization_opportunities_source": optimization_opportunities_source,
         "skipped_summaries": skipped_summaries,
         "runs_count": len(runs),
         "runs": runs,

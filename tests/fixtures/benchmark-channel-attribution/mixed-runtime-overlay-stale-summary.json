@@ -1,0 +1,34 @@
+{
+  "kind": "mixed_runtime_overlay_contamination",
+  "plan_key": "PLAN8-mixed-runtime",
+  "description": "Cursor writes summary.json first; a later OpenCode invocation omits runtime and reuses the stale cursor value via _ms() fallback.",
+  "first_write_env": {
+    "RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE": "cursor",
+    "RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE": "PLAN8-mixed-runtime",
+    "RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE_VALUE": "native",
+    "RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_EFFECTIVE_VALUE": "true",
+    "RUNTIME_OVERLAY_SUMMARY_MCP_EFFECTIVE_VALUE": "false",
+    "RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE": "bounded",
+    "RUNTIME_OVERLAY_SUMMARY_UPDATED_AT": "2026-07-01T10:00:00Z"
+  },
+  "second_write_env": {
+    "RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE": "PLAN8-mixed-runtime",
+    "RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE_VALUE": "ralph",
+    "RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_EFFECTIVE_VALUE": "false",
+    "RUNTIME_OVERLAY_SUMMARY_MCP_EFFECTIVE_VALUE": "true",
+    "RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE": "hybrid",
+    "RUNTIME_OVERLAY_SUMMARY_UPDATED_AT": "2026-07-01T11:00:00Z"
+  },
+  "expected_after_second_write": {
+    "runtime": "cursor",
+    "plan_key": "PLAN8-mixed-runtime",
+    "tool_access_mode": "ralph",
+    "native_hooks_effective": "false",
+    "mcp_effective": "true",
+    "overlay_mode": "hybrid"
+  },
+  "later_todo_assertions": [
+    "expected_after_second_write.runtime should become opencode (or the second writer runtime)",
+    "summary.json should be a generated aggregate rebuilt from per-runtime summaries under summaries/<runtime>.json"
+  ]
+}

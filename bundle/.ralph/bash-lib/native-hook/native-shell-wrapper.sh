@@ -435,6 +435,27 @@ ralph_native_shell_compact_pipeline_json() {
     include_tokens="true"
   fi
 
+  if declare -F ralph_hook_telemetry_append_windowing_log >/dev/null 2>&1 \
+    && [[ -n "$result_id" ]] \
+    && [[ "$original_bytes" -gt 0 ]] \
+    && [[ "$returned_bytes" -lt "$original_bytes" ]]; then
+    RALPH_RESULT_WINDOWING_CHANNEL="native_shell_hook"
+    RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME="bash"
+    RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME="$store_tool"
+    export RALPH_RESULT_WINDOWING_CHANNEL RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME
+    ralph_hook_telemetry_append_windowing_log \
+      "$workspace" \
+      "$plan_key" \
+      "bash" \
+      "$original_bytes" \
+      "$returned_bytes" \
+      "$original_tokens" \
+      "$returned_tokens" \
+      0 \
+      "$result_id"
+    unset RALPH_RESULT_WINDOWING_CHANNEL RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME
+  fi
+
   jq -nc \
     --arg command "$command" \
     --argjson exitCode "$exit_code" \

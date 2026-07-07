@@ -185,5 +185,159 @@ class TestWindowingNetting(unittest.TestCase):
         self.assertEqual(telemetry[0]["saved_tokens"], 180)
 
 
+class TestChannelAggregation(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    def _write_window_log(self, records: list[dict[str, Any]]) -> None:
+        path = self.tmp_dir / "result-windowing.jsonl"
+        with open(path, "w", encoding="utf-8") as fh:
+            for record in records:
+                fh.write(json.dumps(record) + "\n")
+
+    def _channel_savings(self) -> dict[str, Any]:
+        return OVERLAY.aggregate_byte_savings_by_channel(str(self.tmp_dir))
+
+    def test_proxy_read_envelope_attributes_to_proxy_read_windowing(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-read",
+                    "runtime": "cursor",
+                    "channel": "proxy_read_windowing",
+                    "originalBytes": 1000,
+                    "returnedBytes": 200,
+                }
+            ]
+        )
+        channels = self._channel_savings()
+        bucket = channels["proxy_read_windowing"]
+        self.assertEqual(bucket["saved_bytes"], 800)
+        self.assertEqual(bucket["attribution"], "exact")
+        self.assertEqual(channels["stored_result_readback"]["saved_bytes"], 0)
+
+    def test_proxy_search_envelope_attributes_to_proxy_search_windowing(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-search",
+                    "runtime": "cursor",
+                    "channel": "proxy_search_windowing",
+                    "originalBytes": 2000,
+                    "returnedBytes": 400,
+                }
+            ]
+        )
+        bucket = self._channel_savings()["proxy_search_windowing"]
+        self.assertEqual(bucket["saved_bytes"], 1600)
+        self.assertEqual(bucket["attribution"], "exact")
+
+    def test_native_result_hook_envelope(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-hook",
+                    "runtime": "cursor",
+                    "channel": "native_result_hook",
+                    "originalBytes": 5000,
+                    "returnedBytes": 500,
+                }
+            ]
+        )
+        bucket = self._channel_savings()["native_result_hook"]
+        self.assertEqual(bucket["saved_bytes"], 4500)
+        self.assertEqual(bucket["attribution"], "exact")
+
+    def test_native_result_mcp_fallback_envelope(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-fallback",
+                    "runtime": "opencode",
+                    "channel": "native_result_mcp_fallback",
+                    "originalBytes": 8000,
+                    "returnedBytes": 800,
+                }
+            ]
+        )
+        bucket = self._channel_savings()["native_result_mcp_fallback"]
+        self.assertEqual(bucket["saved_bytes"], 7200)
+        self.assertEqual(bucket["attribution"], "exact")
+
+    def test_readback_netting_by_source_result_channel(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-net",
+                    "runtime": "cursor",
+                    "channel": "proxy_read_windowing",
+                    "originalBytes": 1000,
+                    "returnedBytes": 200,
+                },
+                {
+                    "event": "readback",
+                    "resultId": "res-net",
+                    "runtime": "cursor",
+                    "channel": "stored_result_readback",
+                    "sourceResultChannel": "proxy_read_windowing",
+                    "view": "compacted",
+                    "returnedBytes": 300,
+                },
+            ]
+        )
+        channels = self._channel_savings()
+        bucket = channels["proxy_read_windowing"]
+        self.assertEqual(bucket["saved_bytes"], 500)
+        self.assertEqual(bucket["attribution"], "exact")
+        self.assertEqual(channels["stored_result_readback"]["saved_bytes"], 0)
+
+    def test_legacy_logs_without_channel_fields_use_stored_result_readback(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-legacy",
+                    "originalBytes": 1000,
+                    "returnedBytes": 200,
+                },
+                {
+                    "event": "readback",
+                    "resultId": "res-legacy",
+                    "view": "compacted",
+                    "returnedBytes": 100,
+                },
+            ]
+        )
+        channels = self._channel_savings()
+        bucket = channels["stored_result_readback"]
+        self.assertEqual(bucket["saved_bytes"], 700)
+        self.assertEqual(bucket["attribution"], "legacy")
+        self.assertEqual(channels["proxy_read_windowing"]["saved_bytes"], 0)
+
+    def test_byte_savings_by_path_remains_compatible(self) -> None:
+        self._write_window_log(
+            [
+                {
+                    "event": "envelope",
+                    "resultId": "res-both",
+                    "channel": "proxy_read_windowing",
+                    "originalBytes": 1000,
+                    "returnedBytes": 100,
+                }
+            ]
+        )
+        by_path = OVERLAY.aggregate_byte_savings_by_path(str(self.tmp_dir))
+        by_channel = self._channel_savings()
+        self.assertEqual(by_path["result_windowing"]["saved_bytes"], 900)
+        self.assertEqual(by_channel["proxy_read_windowing"]["saved_bytes"], 900)
+        self.assertIn("byte_savings_by_channel", OVERLAY.OVERLAY_USAGE_DEFAULTS)
+
+
 if __name__ == "__main__":
     unittest.main()

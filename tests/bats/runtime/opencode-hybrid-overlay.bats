@@ -82,6 +82,8 @@ assert summary["native_hooks_effective"] == "false", summary
 assert summary["native_hooks_used_on_run"] is False, summary
 assert summary["native_hooks_reason"] == "plugin_injected_unproven_headless", summary
 assert summary["native_hooks_observed_effect"] == "configured_but_no_surface_observed", summary
+assert "native_result_mcp_fallback" in summary["native_optimization_proven_channels"], summary
+assert "native_result_hook" in summary["fallback_channels_active"], summary
 assert "opencode-plugin-local-load" in summary["capabilities"], summary
 assert "opencode-hybrid-native-and-ralph-mcp" in summary["capabilities"], summary
 PY

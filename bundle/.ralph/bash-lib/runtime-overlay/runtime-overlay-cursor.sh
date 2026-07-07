@@ -415,6 +415,9 @@ ralph_cursor_record_active_native_hooks_summary() {
     if declare -F runtime_overlay_set_native_shell_compaction_authoritative >/dev/null 2>&1; then
       runtime_overlay_set_native_shell_compaction_authoritative "wrapper_based_native_shell_compaction"
     fi
+    if declare -F runtime_overlay_note_native_shell_hook_proven >/dev/null 2>&1; then
+      runtime_overlay_note_native_shell_hook_proven
+    fi
   else
     if declare -F runtime_overlay_set_native_shell_wrapper_enabled >/dev/null 2>&1; then
       runtime_overlay_set_native_shell_wrapper_enabled "false"
@@ -425,6 +428,14 @@ ralph_cursor_record_active_native_hooks_summary() {
   fi
   if declare -F runtime_overlay_set_fallback_path_active >/dev/null 2>&1; then
     runtime_overlay_set_fallback_path_active "false"
+  fi
+  if ralph_cursor_proxy_shell_compact_effective \
+    && [[ "${RALPH_AGENT_TOOL_ACCESS:-native}" == "ralph" ]] \
+    && declare -F runtime_overlay_add_proven_channel >/dev/null 2>&1; then
+    runtime_overlay_add_proven_channel "proxy_shell"
+  fi
+  if declare -F runtime_overlay_note_native_result_hook_measured_only >/dev/null 2>&1; then
+    runtime_overlay_note_native_result_hook_measured_only
   fi
   if declare -F runtime_overlay_add_capability >/dev/null 2>&1; then
     runtime_overlay_add_capability "$hooks_capability"

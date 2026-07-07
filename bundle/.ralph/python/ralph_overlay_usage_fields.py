@@ -22,7 +22,11 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from result_windowing_metrics import aggregate_windowing_savings
+from result_windowing_metrics import (
+    WINDOWING_CHANNEL_NAMES,
+    aggregate_windowing_savings,
+    aggregate_windowing_savings_by_channel,
+)
 from tool_call_classification import (
     SAVINGS_PATH_NAMES,
     accumulate_savings_event,
@@ -62,6 +66,10 @@ OVERLAY_USAGE_DEFAULTS: dict[str, Any] = {
     "runtime_overlay_mode": "",
     "runtime_overlay_warnings": [],
     "byte_savings_by_path": {},
+    "byte_savings_by_channel": {},
+    "native_optimization_proven_channels": [],
+    "fallback_channels_active": [],
+    "channel_activity_counts": {},
 }
 
 OPENCODE_CACHE_DEMUX_KEYS = (
@@ -149,6 +157,7 @@ HOOK_METRIC_KEYS = (
     "proxy_shell_original_bytes",
     "proxy_shell_compacted_bytes",
     "byte_savings_by_path",
+    "byte_savings_by_channel",
 )
 
 
@@ -313,6 +322,120 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
     return savings_by_path
 
 
+def channel_activity_counts_from_savings(
+    channel_savings: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    """Derive per-channel event counts from byte_savings_by_channel buckets."""
+    counts = {channel: 0 for channel in WINDOWING_CHANNEL_NAMES}
+    if not isinstance(channel_savings, Mapping):
+        return counts
+    for channel_name, bucket in channel_savings.items():
+        if channel_name not in counts or not isinstance(bucket, Mapping):
+            continue
+        counts[channel_name] = coerce_int(bucket.get("count"))
+    return counts
+
+
+def aggregate_byte_savings_by_channel(state_dir: str, plan_key: str = "") -> dict[str, dict[str, int | float | str]]:
+    """Aggregate byte and estimated-token savings telemetry by optimization channel."""
+    savings_by_channel: dict[str, dict[str, int | float | str]] = {
+        channel: empty_savings_bucket(include_hidden=True)
+        for channel in WINDOWING_CHANNEL_NAMES
+    }
+    for bucket in savings_by_channel.values():
+        bucket["attribution"] = "exact"
+    if not state_dir:
+        return savings_by_channel
+
+    plan_key = str(plan_key or "").strip()
+
+    def _record_matches(record: dict[str, Any]) -> bool:
+        record_plan_key = str(record.get("plan_key") or record.get("planKey") or "").strip()
+        if plan_key and record_plan_key and record_plan_key != plan_key:
+            return False
+        return True
+
+    def _accumulate_compact(path: str, channel_name: str) -> None:
+        if not os.path.isfile(path):
+            return
+        bucket = savings_by_channel[channel_name]
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or not _record_matches(record):
+                continue
+            if record.get("compactionSkipped") is True:
+                continue
+
+            original_bytes = coerce_int(record.get("originalBytes"))
+            compacted_bytes = coerce_int(record.get("compactedBytes"))
+            original_tokens, compacted_tokens, token_cap = token_fields_from_record(record)
+            if original_tokens <= 0 and compacted_tokens <= 0 and original_bytes > 0:
+                original_tokens = estimate_tokens("x" * original_bytes)
+                compacted_tokens = estimate_tokens("x" * compacted_bytes)
+
+            accumulate_savings_event(
+                bucket,
+                pre_bytes=original_bytes,
+                post_bytes=compacted_bytes,
+                pre_tokens=original_tokens,
+                post_tokens=compacted_tokens,
+                token_cap_trigger=token_cap,
+                hidden_from_context=True,
+            )
+
+    _accumulate_compact(os.path.join(state_dir, "bash-compact.jsonl"), "native_result_hook")
+    _accumulate_compact(os.path.join(state_dir, "proxy-shell-compact.jsonl"), "proxy_shell")
+
+    window_path = os.path.join(state_dir, "result-windowing.jsonl")
+    if os.path.isfile(window_path):
+        window_channels = aggregate_windowing_savings_by_channel(
+            window_path,
+            estimate_tokens_fn=lambda b: estimate_tokens("x" * b),
+            plan_key=plan_key or None,
+        )
+        for channel_name, channel_data in window_channels.items():
+            if channel_name not in savings_by_channel:
+                continue
+            if not isinstance(channel_data, dict):
+                continue
+            target = savings_by_channel[channel_name]
+            for key in (
+                "pre_optimization_bytes",
+                "post_optimization_bytes",
+                "saved_bytes",
+                "count",
+                "pre_optimization_tokens",
+                "post_optimization_tokens",
+                "saved_tokens",
+                "token_cap_triggers",
+                "hidden_from_context",
+                "hidden_from_context_tokens",
+            ):
+                if key in channel_data:
+                    target[key] = coerce_int(target.get(key)) + coerce_int(channel_data.get(key))
+            channel_attribution = str(channel_data.get("attribution") or "exact")
+            if channel_attribution == "legacy" or target.get("attribution") == "legacy":
+                target["attribution"] = "legacy"
+            else:
+                target["attribution"] = "exact"
+
+    for channel_name in WINDOWING_CHANNEL_NAMES:
+        finalize_savings_bucket(savings_by_channel[channel_name])
+
+    return savings_by_channel
+
+
 def aggregate_hook_telemetry(state_dir: str, plan_key: str = "") -> dict[str, int]:
     metrics = {key: 0 for key in HOOK_METRIC_KEYS}
     if not state_dir:
@@ -408,6 +531,18 @@ def fields_from_summary(summary: Any) -> dict[str, Any]:
     byte_savings = summary.get("byte_savings_by_path")
     if isinstance(byte_savings, dict):
         out["byte_savings_by_path"] = byte_savings
+    channel_savings = summary.get("byte_savings_by_channel")
+    if isinstance(channel_savings, dict):
+        out["byte_savings_by_channel"] = channel_savings
+    proven_channels = summary.get("native_optimization_proven_channels")
+    if isinstance(proven_channels, list):
+        out["native_optimization_proven_channels"] = proven_channels
+    fallback_channels = summary.get("fallback_channels_active")
+    if isinstance(fallback_channels, list):
+        out["fallback_channels_active"] = fallback_channels
+    activity_counts = summary.get("channel_activity_counts")
+    if isinstance(activity_counts, dict):
+        out["channel_activity_counts"] = activity_counts
     return out
 
 
@@ -420,6 +555,202 @@ def load_summary(path: str) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+RUNTIME_OVERLAY_SCALAR_FIELDS = (
+    "tool_access_mode",
+    "native_hooks_requested",
+    "native_hooks_configured",
+    "native_hooks_observed_effect",
+    "native_hooks_observed_reason",
+    "native_hooks_effective",
+    "native_hooks_reason",
+    "native_hooks_used_on_run",
+    "native_output_mutation_proven",
+    "native_shell_wrapper_enabled",
+    "native_shell_wrapper_effective",
+    "native_shell_wrapper_reason",
+    "native_shell_compaction_authoritative",
+    "fallback_path_active",
+    "mcp_effective",
+    "mcp_failure_reason",
+    "mcp_preflight_outcome",
+    "mcp_tool_namespace",
+    "proxy_shell_compact_effective",
+    "cache_key_injected",
+    "cache_key_injected_provider_id",
+    "overlay_mode",
+)
+
+RUNTIME_OVERLAY_NUMERIC_FIELDS = (
+    "native_hook_events",
+    "hook_compactions",
+    "hook_rewrites",
+    "hook_original_bytes",
+    "hook_compacted_bytes",
+    "proxy_shell_compaction_events",
+    "proxy_shell_compactions",
+    "proxy_shell_original_bytes",
+    "proxy_shell_compacted_bytes",
+    "compaction_original_bytes",
+    "compaction_compacted_bytes",
+    "compaction_saved_bytes",
+    "compaction_measured_not_applied_bytes",
+)
+
+RUNTIME_OVERLAY_LIST_FIELDS = (
+    "mcp_config_sources",
+    "mcp_effective_names",
+    "mcp_override_decisions",
+    "generated_files",
+    "mutated_files",
+    "warnings",
+    "capabilities",
+    "native_optimization_proven_channels",
+    "fallback_channels_active",
+)
+
+
+def _merge_unique_lists(*lists: Sequence[Any] | None) -> list[Any]:
+    seen: set[Any] = set()
+    merged: list[Any] = []
+    for lst in lists:
+        if not lst:
+            continue
+        for item in lst:
+            if item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+    return merged
+
+
+def _merge_channel_activity_counts(*dicts: Mapping[str, Any] | None) -> dict[str, int]:
+    merged = {channel: 0 for channel in WINDOWING_CHANNEL_NAMES}
+    for payload in dicts:
+        if not isinstance(payload, Mapping):
+            continue
+        for channel_name, count in payload.items():
+            if channel_name not in merged:
+                continue
+            merged[channel_name] = merged[channel_name] + coerce_int(count)
+    return merged
+
+
+def _extract_runtime_overlay_scalars(summary: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in RUNTIME_OVERLAY_SCALAR_FIELDS:
+        if key in summary:
+            out[key] = summary[key]
+    optimizations = summary.get("optimizations")
+    if isinstance(optimizations, dict):
+        out["optimizations"] = optimizations
+    activity_counts = summary.get("channel_activity_counts")
+    if isinstance(activity_counts, dict):
+        out["channel_activity_counts"] = activity_counts
+    return out
+
+
+def merge_runtime_overlay_summaries(state_dir: str, plan_key: str = "") -> dict[str, Any]:
+    """Build the compatibility aggregate summary.json from per-runtime summaries."""
+    summaries_dir = os.path.join(state_dir, "summaries")
+    per_runtime: dict[str, dict[str, Any]] = {}
+    if os.path.isdir(summaries_dir):
+        for name in sorted(os.listdir(summaries_dir)):
+            if not name.endswith(".json"):
+                continue
+            runtime = name[:-5].strip()
+            if not runtime:
+                continue
+            loaded = load_summary(os.path.join(summaries_dir, name))
+            if not isinstance(loaded, dict):
+                continue
+            loaded["runtime"] = runtime
+            per_runtime[runtime] = loaded
+
+    runtimes_present = sorted(per_runtime.keys())
+    if not runtimes_present:
+        return {}
+
+    resolved_plan_key = str(plan_key or "").strip()
+    if not resolved_plan_key:
+        for summary in per_runtime.values():
+            candidate = str(summary.get("plan_key") or "").strip()
+            if candidate:
+                resolved_plan_key = candidate
+                break
+
+    aggregate: dict[str, Any] = {
+        "plan_key": resolved_plan_key,
+        "runtimes_present": runtimes_present,
+        "overlay_state_dir": state_dir,
+    }
+
+    for field in RUNTIME_OVERLAY_NUMERIC_FIELDS:
+        aggregate[field] = sum(coerce_int(per_runtime[r].get(field)) for r in runtimes_present)
+
+    for field in RUNTIME_OVERLAY_LIST_FIELDS:
+        aggregate[field] = _merge_unique_lists(*(per_runtime[r].get(field) for r in runtimes_present))
+
+    byte_savings_by_path = aggregate_byte_savings_by_path(state_dir, plan_key=resolved_plan_key)
+    if _byte_savings_has_data(byte_savings_by_path):
+        aggregate["byte_savings_by_path"] = byte_savings_by_path
+
+    byte_savings_by_channel = aggregate_byte_savings_by_channel(state_dir, plan_key=resolved_plan_key)
+    if _channel_savings_has_data(byte_savings_by_channel):
+        aggregate["byte_savings_by_channel"] = byte_savings_by_channel
+
+    aggregate["native_optimization_proven_channels"] = _merge_unique_lists(
+        *(per_runtime[r].get("native_optimization_proven_channels") for r in runtimes_present)
+    )
+    aggregate["fallback_channels_active"] = _merge_unique_lists(
+        *(per_runtime[r].get("fallback_channels_active") for r in runtimes_present)
+    )
+    aggregate["channel_activity_counts"] = _merge_channel_activity_counts(
+        *(per_runtime[r].get("channel_activity_counts") for r in runtimes_present)
+    )
+    if _channel_savings_has_data(byte_savings_by_channel):
+        telemetry_counts = channel_activity_counts_from_savings(byte_savings_by_channel)
+        merged_counts = aggregate["channel_activity_counts"]
+        for channel_name, count in telemetry_counts.items():
+            if count > merged_counts.get(channel_name, 0):
+                merged_counts[channel_name] = count
+        aggregate["channel_activity_counts"] = merged_counts
+
+    runtime_overlays = {
+        runtime: _extract_runtime_overlay_scalars(per_runtime[runtime])
+        for runtime in runtimes_present
+    }
+    aggregate["runtime_overlays"] = runtime_overlays
+
+    latest_runtime = max(
+        runtimes_present,
+        key=lambda runtime: str(per_runtime[runtime].get("updated_at") or ""),
+    )
+    aggregate["runtime"] = latest_runtime
+    aggregate["updated_at"] = str(per_runtime[latest_runtime].get("updated_at") or "")
+
+    if len(runtimes_present) == 1:
+        only_runtime = runtimes_present[0]
+        source = per_runtime[only_runtime]
+        for key in RUNTIME_OVERLAY_SCALAR_FIELDS:
+            if key in source:
+                aggregate[key] = source[key]
+        optimizations = source.get("optimizations")
+        if isinstance(optimizations, dict):
+            aggregate["optimizations"] = optimizations
+        for key in ("mcp_config_sources", "mcp_effective_names", "mcp_override_decisions"):
+            if key in source and key not in aggregate:
+                aggregate[key] = source[key]
+        for key in (
+            "native_optimization_proven_channels",
+            "fallback_channels_active",
+            "channel_activity_counts",
+        ):
+            if key in source:
+                aggregate[key] = source[key]
+
+    return aggregate
 
 
 def _normalize_compaction_record(raw: Any) -> dict[str, Any] | None:
@@ -516,6 +847,10 @@ def _byte_savings_has_data(byte_savings: Any) -> bool:
     return False
 
 
+def _channel_savings_has_data(channel_savings: Any) -> bool:
+    return _byte_savings_has_data(channel_savings)
+
+
 def load_compaction_telemetry(state_dir: str, plan_key: str = "") -> list[dict[str, Any]]:
     if not state_dir:
         return []
@@ -567,6 +902,13 @@ def merge_overlay_fields(record: dict[str, Any], summary_path: str) -> None:
     elif not _byte_savings_has_data(existing_savings):
         record["byte_savings_by_path"] = byte_savings
 
+    existing_channel_savings = record.get("byte_savings_by_channel")
+    channel_savings = aggregate_byte_savings_by_channel(state_dir, plan_key=plan_key)
+    if _channel_savings_has_data(channel_savings):
+        record["byte_savings_by_channel"] = channel_savings
+    elif not _channel_savings_has_data(existing_channel_savings):
+        record["byte_savings_by_channel"] = channel_savings
+
 
 def main() -> int:
     if len(sys.argv) < 2:
@@ -585,6 +927,16 @@ def main() -> int:
     if command == "aggregate-byte-savings" and len(sys.argv) >= 3:
         plan_key = sys.argv[3] if len(sys.argv) > 3 else ""
         json.dump(aggregate_byte_savings_by_path(sys.argv[2], plan_key=plan_key), sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    if command == "aggregate-byte-savings-by-channel" and len(sys.argv) >= 3:
+        plan_key = sys.argv[3] if len(sys.argv) > 3 else ""
+        json.dump(aggregate_byte_savings_by_channel(sys.argv[2], plan_key=plan_key), sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+    if command == "merge-runtime-summaries" and len(sys.argv) >= 3:
+        plan_key = sys.argv[3] if len(sys.argv) > 3 else ""
+        json.dump(merge_runtime_overlay_summaries(sys.argv[2], plan_key=plan_key), sys.stdout)
         sys.stdout.write("\n")
         return 0
     return 2

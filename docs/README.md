@@ -46,6 +46,8 @@ Out-of-process restarts and operator-driven re-invocations can pick up the most 
 
 **Session strategy modes:**
 
+- `fresh` mode (default) aka **The Meeseeks Technique**, if you've seen Rick and Morty, `fresh` mode is a Meeseeks box. Press the button (the runner picks the next open TODO), a Meeseeks pops into existence with one job and no history, does that job, and blinks out once it's confirmed complete. The next TODO summons a brand new Meeseeks that has never heard of the last one. This is a deliberate isolation strategy, not a limitation: each TODO gets a clean context window, no drift from earlier turns, no leftover assumptions from a task that isn't its own. If you want continuity across TODOs instead, that's what `resume`, `reset`, and `compact` are for. TODOs can be as vague or as broad as you write them, but we recommend keeping them simple and achievable, the same way you'd brief a Meeseeks: a clear, well-scoped task lets the agent finish cleanly, while a vague, open-ended one gives it room to thrash.
+- `resume` mode keeps the same CLI session across TODOs with no reset or compact command injected: the agent retains full prior turns and accumulated context from every earlier TODO in the plan. Use it when later TODOs benefit from remembering decisions made earlier in the run; be aware context grows unbounded over a long plan.
 - `reset` mode reuses the session ID but prefixes each TODO prompt with a reset command when configured (Claude defaults to `/clear`). Override with `RALPH_PLAN_RESET_COMMAND` globally or `RALPH_PLAN_RESET_COMMAND_<RUNTIME>` per runtime.
 - `compact` mode is similar to `reset` but prefixes a compact-optimized command instead: `/compress` for Cursor (overridable with `RALPH_PLAN_COMPACT_COMMAND_CURSOR`), `/compact` for Codex (`RALPH_PLAN_COMPACT_COMMAND_CODEX`), or `/clear` for Claude (`RALPH_PLAN_RESET_COMMAND_CLAUDE`). OpenCode does not support compact mode; use fresh/resume/reset instead. Override all runtimes with `RALPH_PLAN_COMPACT_COMMAND`.
 
@@ -97,7 +99,7 @@ Ralph logs token usage, compaction savings, hook telemetry, and other metrics pe
 .ralph-workspace/logs/<plan-key>/invocation-usage.json
 ```
 
-Per-run summary: `.ralph-workspace/runtime-config/<plan-key>/summary.json` (includes `native_hooks_effective`, overlay fields, mutation counts).
+Per-run summary: `.ralph-workspace/runtime-config/<plan-key>/summary.json` (aggregate rebuilt from `summaries/<runtime>.json` when multiple runtimes share a `plan_key`; includes `native_hooks_effective`, overlay fields, `byte_savings_by_channel`, and mutation counts).
 
 Plan-aggregate telemetry (discover report): `.ralph-workspace/logs/<plan-key>/discover-report.json` (includes compaction events, missed savings, low-value filters, and optimization opportunities).
 
@@ -115,6 +117,8 @@ ralph benchmark --write-doc     # also regenerate docs/BENCHMARKS.md
 ```
 
 It aggregates every `.ralph-workspace/logs/<plan-key>/plan-usage-summary.json` into one report
-(token and compaction figures per optimization path) and is the source for [BENCHMARKS.md](BENCHMARKS.md).
+(token and compaction figures per optimization path and per optimization channel) and is the source for [BENCHMARKS.md](BENCHMARKS.md).
 Under the hood `ralph benchmark` runs `ralph-benchmark-report.py` (aggregate) then
 `render-benchmark-markdown.py` (render) for you; unreadable summaries are skipped with a warning.
+
+**Trust model:** For **new runs**, the report's **Optimization by channel** section is authoritative: each savings row names an exact channel id (`proxy_read_windowing`, `proxy_shell`, `stored_result_readback`, and others; see [TOOLING.md#optimization-channel-attribution](TOOLING.md#optimization-channel-attribution)). **Historical runs** without channel metadata appear under **Legacy / unknown attribution**; treat those totals as approximate until a new run records exact channels. Tool-adoption diagnostics (**Improvement opportunities**, native-read share, proxy adoption) are separate from optimization evidence and do not prove byte savings.

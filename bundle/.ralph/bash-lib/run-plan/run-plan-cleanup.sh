@@ -3,7 +3,7 @@
 # Public interface:
 #   ralph_run_plan_process_teardown_on_exit -- kill agent tree and launcher watchdog
 #   ralph_run_plan_exit_trap_handler -- EXIT trap: finalize usage, teardown, prompt_cleanup_on_exit
-#   ralph_run_plan_interrupt_trap_handler -- INT/TERM/HUP trap: finalize usage, teardown, overlay cleanup
+#   ralph_run_plan_interrupt_trap_handler -- INT/TERM/HUP trap: teardown first, then finalize usage and overlay cleanup
 #   prompt_cleanup_on_exit -- may run cleanup-plan.sh or print the command
 
 # Prompt the user for optional cleanup output when the runner exits.
@@ -55,16 +55,29 @@ ralph_run_plan_interrupt_trap_handler() {
     HUP) exit_code=129 ;;
   esac
 
-  trap - EXIT INT TERM HUP
+  # Ignore repeated signals instead of restoring default dispositions: a
+  # second Ctrl-C must not kill the runner mid-teardown, which would orphan
+  # the agent process group (it runs in its own group and never receives
+  # terminal SIGINT). The EXIT trap stays armed as a safety net; teardown
+  # and usage finalization are both idempotent.
+  trap '' INT TERM HUP
   ALLOW_CLEANUP_PROMPT=0
   EXIT_STATUS="interrupted"
 
-  if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
-    _ralph_finalize_plan_usage_on_exit
-  fi
+  printf '\n[%s] Interrupt (SIG%s) received; terminating agent process tree (PID %s)...\n' \
+    "$(date '+%H:%M:%S')" "$signal" "${AGENT_PID:-none}" >&2
+
+  # Kill the agent process group before any bookkeeping so a slow or failing
+  # usage finalization can never leave the agent tree running.
   ralph_run_plan_process_teardown_on_exit
-  if declare -F ralph_runtime_overlay_signal_trap_handler >/dev/null 2>&1; then
-    ralph_runtime_overlay_signal_trap_handler
+  printf '[%s] Agent process tree terminated.\n' "$(date '+%H:%M:%S')" >&2
+
+  if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
+    _ralph_finalize_plan_usage_on_exit || true
   fi
+  if declare -F ralph_runtime_overlay_signal_trap_handler >/dev/null 2>&1; then
+    ralph_runtime_overlay_signal_trap_handler || true
+  fi
+  trap - EXIT
   exit "$exit_code"
 }

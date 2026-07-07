@@ -57,6 +57,11 @@ summary = json.load(open(sys.argv[1]))
 assert summary["tool_access_mode"] == "hybrid", summary
 assert summary["native_shell_compaction_authoritative"] == "mcp_proxy_compaction", summary
 assert summary["native_hooks_effective"] == "false", summary
+assert "native_result_mcp_fallback" in summary["native_optimization_proven_channels"], summary
+assert "proxy_shell" in summary["native_optimization_proven_channels"], summary
+assert "native_result_hook" in summary["fallback_channels_active"], summary
+assert "native_result_hook" not in summary["native_optimization_proven_channels"], summary
+assert "channel_activity_counts" in summary, summary
 assert "opencode-hybrid-native-and-ralph-mcp" in summary["capabilities"], summary
 PY
 }

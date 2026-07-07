@@ -169,6 +169,60 @@ EOF
   chmod +x "$bin_dir/$exe_name"
 }
 
+write_prompt_gated_stub_cli() {
+  local bin_dir="$1"
+  local exe_name="$2"
+  local runtime_label="$3"
+  local record_file="$4"
+  local plan_file="$5"
+
+  cat >"$bin_dir/$exe_name" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime_label="$runtime_label"
+record_file="$record_file"
+plan_file="$plan_file"
+prompt="\${!#}"
+model=""
+
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    --model)
+      model="\${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+printf '%s|%s\n' "\$runtime_label" "\$model" >>"\$record_file"
+
+if [[ "\$prompt" == *"Complete exactly this TODO"* ]]; then
+  python3 - "\$plan_file" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if "status: open" in text:
+    path.write_text(text.replace("status: open", "status: completed", 1))
+PY
+
+  printf '%s\n' "TODO_COMPLETION: COMPLETE"
+  printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+  printf '%s\n' "AGENT_INVOCATION_COMPLETE"
+else
+  printf '%s\n' "preflight"
+fi
+
+exit 0
+EOF
+  chmod +x "$bin_dir/$exe_name"
+}
+
 extract_log_lines() {
   local file="$1"
   if [[ -s "$file" ]]; then
@@ -320,6 +374,78 @@ EOF
   [ "$codex_rule" = "0" ]
   [ "$cursor_rule" = "1" ]
   [ "$stage_ctx" = "0" ]
+
+  rm -rf "$workspace"
+}
+
+@test "yaml todo routing bootstraps non-interactive runs without a global model" {
+  local workspace bin_dir session_home plan_file cursor_log codex_log registry_file
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  registry_file="$(mktemp)"
+  mkdir -p "$bin_dir" "$session_home"
+
+  plan_file="$workspace/PLAN.md"
+  cat >"$plan_file" <<'EOF'
+---
+name: yaml-routing-bootstrap
+todos:
+  - id: first
+    runtime: codex
+    model: codex-override-model
+    status: open
+    content: First routed TODO
+  - id: second
+    runtime: cursor
+    model: cursor-override-model
+    status: open
+    content: Second routed TODO
+---
+EOF
+
+  cursor_log="$workspace/cursor.log"
+  codex_log="$workspace/codex.log"
+  write_prompt_gated_stub_cli "$bin_dir" cursor-agent cursor "$cursor_log" "$plan_file"
+  write_prompt_gated_stub_cli "$bin_dir" codex codex "$codex_log" "$plan_file"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    export RALPH_PLAN_NO_CAFFEINATE=1
+    export RALPH_LAUNCHER_PID=$$
+    export RALPH_WORKSPACES_FILE="$5"
+    unset CURSOR_PLAN_MODEL CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
+    unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
+    "$4" --runtime cursor --plan PLAN.md --non-interactive
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
+
+  [ "$status" -eq 0 ]
+
+  codex_lines=()
+  while IFS= read -r line; do
+    codex_lines+=("$line")
+  done < <(extract_log_lines "$codex_log")
+  [ "${#codex_lines[@]}" -ge 1 ]
+  IFS='|' read -r runtime model <<< "${codex_lines[$(( ${#codex_lines[@]} - 1 ))]}"
+  [ "$runtime" = "codex" ]
+  [ "$model" = "codex-override-model" ]
+
+  cursor_lines=()
+  while IFS= read -r line; do
+    cursor_lines+=("$line")
+  done < <(extract_log_lines "$cursor_log")
+  [ "${#cursor_lines[@]}" -ge 1 ]
+  IFS='|' read -r runtime model <<< "${cursor_lines[$(( ${#cursor_lines[@]} - 1 ))]}"
+  [ "$runtime" = "cursor" ]
+  [ "$model" = "cursor-override-model" ]
+
+  run grep -c "status: completed" "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
 
   rm -rf "$workspace"
 }

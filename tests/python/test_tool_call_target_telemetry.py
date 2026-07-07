@@ -158,6 +158,157 @@ class TestToolCallTargetTelemetry(unittest.TestCase):
         self.assertEqual(stats["readback_reason_counts"], {})
         self.assertEqual(stats["net_consumed_bytes"], 150)
 
+    def test_analyze_result_windowing_log_filters_to_matching_plan_key(self) -> None:
+        lines = [
+            {
+                "event": "envelope",
+                "planKey": "plan-a",
+                "resultId": "a1",
+                "originalBytes": 1000,
+                "returnedBytes": 200,
+            },
+            {
+                "event": "readback",
+                "planKey": "plan-a",
+                "resultId": "a1",
+                "view": "compacted",
+                "returnedBytes": 100,
+            },
+            {
+                "event": "envelope",
+                "planKey": "plan-b",
+                "resultId": "b1",
+                "originalBytes": 5000,
+                "returnedBytes": 500,
+            },
+            {
+                "event": "readback",
+                "planKey": "plan-b",
+                "resultId": "b1",
+                "view": "raw",
+                "returnedBytes": 4000,
+            },
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+            path = handle.name
+        try:
+            stats = analyze_result_windowing_log(path, plan_key="plan-a")
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        self.assertEqual(stats["envelope_count"], 1)
+        self.assertEqual(stats["readback_count"], 1)
+        self.assertEqual(stats["gross_readback_bytes"], 100)
+        self.assertEqual(stats["envelope_original_bytes"], 1000)
+
+    def test_analyze_result_windowing_log_falls_back_for_legacy_records(self) -> None:
+        lines = [
+            {
+                "event": "envelope",
+                "resultId": "legacy-1",
+                "originalBytes": 1000,
+                "returnedBytes": 100,
+            },
+            {
+                "event": "readback",
+                "resultId": "legacy-1",
+                "view": "raw",
+                "returnedBytes": 800,
+            },
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+            path = handle.name
+        try:
+            stats = analyze_result_windowing_log(path, plan_key="missing-plan")
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        self.assertEqual(stats["envelope_count"], 1)
+        self.assertEqual(stats["readback_count"], 1)
+        self.assertEqual(stats["gross_readback_bytes"], 800)
+
+    def test_channel_attributed_windowing_records_parse(self) -> None:
+        lines = [
+            {
+                "event": "envelope",
+                "planKey": "plan-a",
+                "runtime": "cursor",
+                "channel": "proxy_read_windowing",
+                "toolName": "ralph_proxy_read",
+                "normalizedToolName": "ralph_proxy_read",
+                "resultId": "a1",
+                "originalBytes": 1000,
+                "returnedBytes": 200,
+            },
+            {
+                "event": "readback",
+                "planKey": "plan-a",
+                "runtime": "cursor",
+                "channel": "stored_result_readback",
+                "sourceResultChannel": "proxy_read_windowing",
+                "resultId": "a1",
+                "view": "compacted",
+                "returnedBytes": 100,
+            },
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+            path = handle.name
+        try:
+            with open(path, encoding="utf-8") as fh:
+                envelope = json.loads(fh.readline())
+                readback = json.loads(fh.readline())
+            stats = analyze_result_windowing_log(path, plan_key="plan-a")
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        self.assertEqual(envelope["channel"], "proxy_read_windowing")
+        self.assertEqual(envelope["runtime"], "cursor")
+        self.assertEqual(readback["channel"], "stored_result_readback")
+        self.assertEqual(readback["sourceResultChannel"], "proxy_read_windowing")
+        self.assertEqual(stats["envelope_count"], 1)
+        self.assertEqual(stats["readback_count"], 1)
+
+    def test_legacy_windowing_records_without_channel_fields_still_parse(self) -> None:
+        """Legacy windowing telemetry without runtime/channel/sourceResultChannel."""
+        lines = [
+            {
+                "event": "envelope",
+                "planKey": "plan-a",
+                "resultId": "a1",
+                "toolName": "ralph_proxy_read",
+                "originalBytes": 1000,
+                "returnedBytes": 200,
+            },
+            {
+                "event": "readback",
+                "planKey": "plan-a",
+                "resultId": "a1",
+                "view": "compacted",
+                "returnedBytes": 100,
+            },
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            for line in lines:
+                handle.write(json.dumps(line) + "\n")
+            path = handle.name
+        try:
+            with open(path, encoding="utf-8") as fh:
+                record = json.loads(fh.readline())
+            stats = analyze_result_windowing_log(path, plan_key="plan-a")
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        for key in ("runtime", "channel", "sourceResultChannel"):
+            self.assertNotIn(key, record)
+        self.assertEqual(stats["envelope_count"], 1)
+        self.assertEqual(stats["readback_count"], 1)
+
     def test_readback_negation_rate_can_exceed_one_but_net_savings_zero(self) -> None:
         """Gross readback can exceed original, but net savings is capped at zero.
 

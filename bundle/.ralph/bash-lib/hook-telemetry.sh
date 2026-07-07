@@ -187,9 +187,92 @@ ralph_hook_telemetry_append_compact_log() {
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 
+ralph_hook_telemetry_windowing_runtime() {
+  local runtime="${RALPH_PLAN_RUNTIME:-${RALPH_NATIVE_SHELL_CLI_RUNTIME:-${RUNTIME:-}}}"
+  printf '%s\n' "$runtime"
+}
+
+ralph_hook_telemetry_windowing_channel_for_tool() {
+  local tool_name="${1:-}"
+  case "$tool_name" in
+    ralph_proxy_read) printf 'proxy_read_windowing\n' ;;
+    ralph_proxy_grep | ralph_proxy_search) printf 'proxy_search_windowing\n' ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
+ralph_hook_telemetry_windowing_resolve_channel() {
+  local tool_name="${1:-}"
+  local channel="${RALPH_RESULT_WINDOWING_CHANNEL:-}"
+  if [[ -n "$channel" ]]; then
+    printf '%s\n' "$channel"
+    return 0
+  fi
+  channel="$(ralph_hook_telemetry_windowing_channel_for_tool "$tool_name")"
+  printf '%s\n' "$channel"
+}
+
+ralph_hook_telemetry_windowing_resolve_tool_name() {
+  local tool_name="${1:-}"
+  if [[ -n "${RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME:-}" ]]; then
+    printf '%s\n' "$RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME"
+    return 0
+  fi
+  printf '%s\n' "$tool_name"
+}
+
+ralph_hook_telemetry_windowing_envelope_channels_init() {
+  if [[ -z "${_RALPH_WINDOWING_ENVELOPE_CHANNELS_INIT:-}" ]]; then
+    declare -gA _RALPH_WINDOWING_ENVELOPE_CHANNELS=()
+    _RALPH_WINDOWING_ENVELOPE_CHANNELS_INIT=1
+  fi
+}
+
+ralph_hook_telemetry_remember_envelope_channel() {
+  local result_id="${1:-}" channel="${2:-}"
+  [[ -n "$result_id" && -n "$channel" ]] || return 0
+  ralph_hook_telemetry_windowing_envelope_channels_init
+  _RALPH_WINDOWING_ENVELOPE_CHANNELS["$result_id"]="$channel"
+}
+
+ralph_hook_telemetry_log_lines_reversed() {
+  local log_path="${1:-}"
+  [[ -n "$log_path" && -f "$log_path" ]] || return 1
+  if tail -r "$log_path" 2>/dev/null; then
+    return 0
+  fi
+  tac "$log_path" 2>/dev/null
+}
+
+ralph_hook_telemetry_lookup_envelope_channel() {
+  local result_id="${1:-}" log_path="${2:-${RALPH_RESULT_WINDOWING_LOG:-}}"
+  local line channel=""
+  [[ -n "$result_id" ]] || return 1
+  ralph_hook_telemetry_windowing_envelope_channels_init
+  channel="${_RALPH_WINDOWING_ENVELOPE_CHANNELS[$result_id]:-}"
+  if [[ -n "$channel" ]]; then
+    printf '%s\n' "$channel"
+    return 0
+  fi
+  [[ -n "$log_path" && -f "$log_path" ]] || return 1
+  while IFS= read -r line; do
+    channel="$(jq -r --arg rid "$result_id" '
+      select((.event // "") == "envelope" and (.resultId // "") == $rid)
+      | .channel // empty
+    ' <<<"$line" 2>/dev/null || true)"
+    if [[ -n "$channel" ]]; then
+      ralph_hook_telemetry_remember_envelope_channel "$result_id" "$channel"
+      printf '%s\n' "$channel"
+      return 0
+    fi
+  done < <(ralph_hook_telemetry_log_lines_reversed "$log_path" 2>/dev/null || true)
+  return 1
+}
+
 # Build one JSON object for MCP/native result windowing (envelope) telemetry.
 # Args: workspace plan_key tool_name original_bytes returned_bytes
 #       original_tokens returned_tokens token_cap_triggered [result_id]
+#       [runtime] [channel] [normalized_tool_name]
 # The optional result_id ties this envelope record to any later readback
 # records (see ralph_hook_telemetry_append_result_readback_log) so savings
 # accounting can net out raw-view escalations for the same stored result.
@@ -198,7 +281,19 @@ ralph_hook_telemetry_windowing_record_json() {
   local original_bytes="${4:-0}" returned_bytes="${5:-0}"
   local original_tokens="${6:-}" returned_tokens="${7:-}" token_cap_triggered="${8:-0}"
   local result_id="${9:-}"
-  local timestamp token_cap_json
+  local runtime="${10:-}" channel="${11:-}" normalized_tool_name="${12:-}"
+  local timestamp token_cap_json surfaced_tool_name
+
+  surfaced_tool_name="$(ralph_hook_telemetry_windowing_resolve_tool_name "$tool_name")"
+  if [[ -z "$runtime" ]]; then
+    runtime="$(ralph_hook_telemetry_windowing_runtime)"
+  fi
+  if [[ -z "$channel" ]]; then
+    channel="$(ralph_hook_telemetry_windowing_resolve_channel "$tool_name")"
+  fi
+  if [[ -z "$normalized_tool_name" ]]; then
+    normalized_tool_name="${RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME:-}"
+  fi
 
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$token_cap_triggered" == "1" ]]; then
@@ -211,13 +306,16 @@ ralph_hook_telemetry_windowing_record_json() {
     --arg timestamp "$timestamp" \
     --arg workspace "$workspace" \
     --arg planKey "$plan_key" \
-    --arg toolName "$tool_name" \
+    --arg toolName "$surfaced_tool_name" \
     --argjson originalBytes "$original_bytes" \
     --argjson returnedBytes "$returned_bytes" \
     --argjson tokenCapTriggered "$token_cap_json" \
     --arg originalTokens "$original_tokens" \
     --arg returnedTokens "$returned_tokens" \
     --arg resultId "$result_id" \
+    --arg runtime "$runtime" \
+    --arg channel "$channel" \
+    --arg normalizedToolName "$normalized_tool_name" \
     '{
       timestamp: $timestamp,
       workspace: $workspace,
@@ -230,7 +328,10 @@ ralph_hook_telemetry_windowing_record_json() {
     }
     + (if $originalTokens != "" and ($originalTokens | test("^[0-9]+$")) then {originalTokens: ($originalTokens | tonumber)} else {} end)
     + (if $returnedTokens != "" and ($returnedTokens | test("^[0-9]+$")) then {returnedTokens: ($returnedTokens | tonumber)} else {} end)
-    + (if $resultId != "" then {resultId: $resultId} else {} end)'
+    + (if $resultId != "" then {resultId: $resultId} else {} end)
+    + (if $runtime != "" then {runtime: $runtime} else {} end)
+    + (if $channel != "" then {channel: $channel} else {} end)
+    + (if $normalizedToolName != "" then {normalizedToolName: $normalizedToolName} else {} end)'
 }
 
 ralph_hook_telemetry_append_windowing_log() {
@@ -262,6 +363,13 @@ ralph_hook_telemetry_append_windowing_log() {
     "$returned_tokens" \
     "$token_cap_triggered" \
     "$result_id")"
+  if [[ -n "$result_id" ]]; then
+    local recorded_channel
+    recorded_channel="$(jq -r '.channel // empty' <<<"$line" 2>/dev/null || true)"
+    if [[ -n "$recorded_channel" ]]; then
+      ralph_hook_telemetry_remember_envelope_channel "$result_id" "$recorded_channel"
+    fi
+  fi
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 
@@ -287,8 +395,40 @@ ralph_hook_telemetry_append_result_readback_log() {
   [[ -n "$result_id" ]] || return 0
   [[ "$returned_bytes" =~ ^[0-9]+$ ]] || returned_bytes=0
 
+  local runtime channel source_result_channel
+  runtime="$(ralph_hook_telemetry_windowing_runtime)"
+  channel="stored_result_readback"
+  source_result_channel="$(ralph_hook_telemetry_lookup_envelope_channel "$result_id" "$log_path" 2>/dev/null || true)"
+
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  line="$(jq -nc --arg timestamp "$timestamp" --arg workspace "$workspace" --arg planKey "$plan_key" --arg toolName "$tool_name" --arg resultId "$result_id" --arg view "$view" --argjson returnedBytes "$returned_bytes" --arg returnedTokens "$returned_tokens" --arg reason "$reason" '{timestamp:$timestamp,workspace:$workspace,planKey:$planKey,toolName:(if $toolName == "" then null else $toolName end),event:"readback",resultId:$resultId,view:(if $view == "" then "compacted" else $view end),returnedBytes:$returnedBytes} + (if $returnedTokens != "" and ($returnedTokens | test("^[0-9]+$")) then {returnedTokens: ($returnedTokens | tonumber)} else {} end) + (if $reason != "" then {reason: $reason} else {} end)')"
+  line="$(jq -nc \
+    --arg timestamp "$timestamp" \
+    --arg workspace "$workspace" \
+    --arg planKey "$plan_key" \
+    --arg toolName "$tool_name" \
+    --arg resultId "$result_id" \
+    --arg view "$view" \
+    --argjson returnedBytes "$returned_bytes" \
+    --arg returnedTokens "$returned_tokens" \
+    --arg reason "$reason" \
+    --arg runtime "$runtime" \
+    --arg channel "$channel" \
+    --arg sourceResultChannel "$source_result_channel" \
+    '{
+      timestamp: $timestamp,
+      workspace: $workspace,
+      planKey: $planKey,
+      toolName: (if $toolName == "" then null else $toolName end),
+      event: "readback",
+      resultId: $resultId,
+      view: (if $view == "" then "compacted" else $view end),
+      returnedBytes: $returnedBytes
+    }
+    + (if $returnedTokens != "" and ($returnedTokens | test("^[0-9]+$")) then {returnedTokens: ($returnedTokens | tonumber)} else {} end)
+    + (if $reason != "" then {reason: $reason} else {} end)
+    + (if $runtime != "" then {runtime: $runtime} else {} end)
+    + (if $channel != "" then {channel: $channel} else {} end)
+    + (if $sourceResultChannel != "" then {sourceResultChannel: $sourceResultChannel} else {} end)')"
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 

@@ -32,7 +32,32 @@ const SAVINGS_PATH_NAMES = [
 ] as const;
 const SAVINGS_PATHS_WITH_HIDDEN = new Set(['hook_compaction', 'proxy_shell_compaction', 'result_windowing']);
 
+const WINDOWING_CHANNEL_NAMES = [
+  'native_shell_hook',
+  'proxy_shell',
+  'native_result_hook',
+  'native_result_mcp_fallback',
+  'proxy_read_windowing',
+  'proxy_search_windowing',
+  'stored_result_readback',
+] as const;
+
+const CHANNEL_SAVINGS_KEYS = [
+  'pre_optimization_bytes',
+  'post_optimization_bytes',
+  'saved_bytes',
+  'count',
+  'pre_optimization_tokens',
+  'post_optimization_tokens',
+  'saved_tokens',
+  'token_cap_triggers',
+  'hidden_from_context',
+  'hidden_from_context_tokens',
+] as const;
+
 type SavingsPathName = (typeof SAVINGS_PATH_NAMES)[number];
+type WindowingChannelName = (typeof WINDOWING_CHANNEL_NAMES)[number];
+type ChannelAttribution = 'exact' | 'legacy';
 
 interface SessionUsage {
   input_tokens: number;
@@ -77,6 +102,12 @@ interface SavingsBucket {
   net_readback_cost_bytes?: number;
   effective_windowing_savings_rate?: number;
   compaction_measured_not_applied_bytes?: number;
+  net_consumed_bytes?: number;
+  net_consumed_tokens?: number;
+}
+
+interface ChannelBucket extends SavingsBucket {
+  attribution: ChannelAttribution;
 }
 
 interface ReadbackSummary {
@@ -112,6 +143,7 @@ interface SavingsReport {
   session_usage: SessionUsage;
   tool_output_counterfactual: ToolOutputCounterfactual;
   per_path: Record<SavingsPathName, SavingsBucket>;
+  per_channel: Record<WindowingChannelName, ChannelBucket>;
   cache: {
     cache_read_tokens: number;
     cache_hit_ratio: number;
@@ -120,6 +152,8 @@ interface SavingsReport {
     compaction_measured_not_applied_bytes: number;
   };
   readback_summary?: ReadbackSummary;
+  optimization_opportunities?: Record<string, unknown> | null;
+  optimization_opportunities_source?: { plan_key: string; ended_at: string | null } | null;
 }
 
 const DASHBOARD_EXPLORER_ROOT_KEYS = new Set([
@@ -166,6 +200,7 @@ interface UsageSummaryRecord {
   compaction_measured_not_applied_bytes?: number;
   model_breakdown?: ModelBreakdownItem[];
   byte_savings_by_path?: Record<string, unknown>;
+  byte_savings_by_channel?: Record<string, unknown>;
   invocations?: number;
   steps?: number;
   todos_done?: number;
@@ -566,6 +601,125 @@ function finalizeAllSavingsBuckets(buckets: Record<SavingsPathName, SavingsBucke
   }
 }
 
+function createEmptyChannelBucket(attribution: ChannelAttribution = 'exact'): ChannelBucket {
+  return {
+    ...createEmptySavingsBucket(true),
+    attribution,
+  };
+}
+
+function createEmptyChannelBuckets(): Record<WindowingChannelName, ChannelBucket> {
+  const buckets = {} as Record<WindowingChannelName, ChannelBucket>;
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    buckets[channelName] = createEmptyChannelBucket('exact');
+  }
+  return buckets;
+}
+
+function channelHasActivity(bucket: ChannelBucket): boolean {
+  return bucket.pre_optimization_bytes > 0 || bucket.saved_bytes > 0 || bucket.count > 0;
+}
+
+function markChannelAttribution(bucket: ChannelBucket, attribution: ChannelAttribution): void {
+  if (bucket.attribution === 'legacy' || attribution === 'legacy') {
+    bucket.attribution = 'legacy';
+  } else {
+    bucket.attribution = 'exact';
+  }
+}
+
+function mergeChannelBucket(target: ChannelBucket, source: Record<string, unknown>): void {
+  for (const key of CHANNEL_SAVINGS_KEYS) {
+    if (key in source) {
+      const current = key === 'hidden_from_context' || key === 'hidden_from_context_tokens'
+        ? (target[key] ?? 0)
+        : (target[key as keyof ChannelBucket] as number);
+      (target as Record<string, number>)[key] = toInt(current) + toInt(source[key]);
+    }
+  }
+  const sourceAttribution = String(source['attribution'] ?? 'exact');
+  markChannelAttribution(target, sourceAttribution === 'legacy' ? 'legacy' : 'exact');
+}
+
+function mergeChannelBuckets(
+  target: Record<WindowingChannelName, ChannelBucket>,
+  source: Record<WindowingChannelName, ChannelBucket>,
+): void {
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    mergeChannelBucket(target[channelName], source[channelName] as unknown as Record<string, unknown>);
+  }
+}
+
+function finalizeChannelBuckets(
+  channels: Record<WindowingChannelName, ChannelBucket>,
+): Record<WindowingChannelName, ChannelBucket> {
+  const perChannel = {} as Record<WindowingChannelName, ChannelBucket>;
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    const bucket = { ...channels[channelName] };
+    if (channelHasActivity(bucket)) {
+      finalizeSavingsBucket(bucket);
+    } else {
+      delete bucket.savings_percent;
+      delete bucket.savings_percent_tokens;
+    }
+    perChannel[channelName] = bucket;
+  }
+  return perChannel;
+}
+
+function accumulateChannelSavingsEvent(
+  bucket: ChannelBucket,
+  params: {
+    preBytes: number;
+    postBytes: number;
+    preTokens: number;
+    postTokens: number;
+    tokenCapTrigger: boolean;
+  },
+): void {
+  const { preBytes, postBytes, preTokens, postTokens, tokenCapTrigger } = params;
+  bucket.pre_optimization_bytes += preBytes;
+  bucket.post_optimization_bytes += postBytes;
+  bucket.saved_bytes += Math.max(0, preBytes - postBytes);
+  bucket.pre_optimization_tokens += preTokens;
+  bucket.post_optimization_tokens += postTokens;
+  bucket.saved_tokens += Math.max(0, preTokens - postTokens);
+  bucket.count += 1;
+  if (tokenCapTrigger) {
+    bucket.token_cap_triggers += 1;
+  }
+  if (bucket.hidden_from_context !== undefined) {
+    bucket.hidden_from_context += Math.max(0, preBytes - postBytes);
+  }
+  if (bucket.hidden_from_context_tokens !== undefined) {
+    bucket.hidden_from_context_tokens += Math.max(0, preTokens - postTokens);
+  }
+}
+
+function channelHasMeaningfulSavings(bucket: ChannelBucket | SavingsBucket | undefined): boolean {
+  if (!bucket) {
+    return false;
+  }
+  return bucket.saved_bytes > 0 || bucket.count > 0;
+}
+
+function hasMeaningfulOptimizationEvidence(
+  perPath: Record<SavingsPathName, SavingsBucket>,
+  perChannel: Record<WindowingChannelName, ChannelBucket>,
+): boolean {
+  for (const pathName of SAVINGS_PATH_NAMES) {
+    if (channelHasMeaningfulSavings(perPath[pathName])) {
+      return true;
+    }
+  }
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    if (channelHasMeaningfulSavings(perChannel[channelName])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function savingsPathFromFamily(family: string): SavingsPathName | null {
   const normalized = family.trim().toLowerCase();
   if (['hook_compaction', 'hook', 'bash'].includes(normalized)) {
@@ -848,7 +1002,23 @@ function windowingLogForSummary(summaryPath: string): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
-function analyzeResultWindowingLog(path: string): ReadbackSummary {
+function recordPlanKey(record: Record<string, unknown>): string {
+  return String(record['planKey'] ?? record['plan_key'] ?? '').trim();
+}
+
+function filterWindowingRecordsForPlanKey(
+  records: Record<string, unknown>[],
+  planKey?: string,
+): Record<string, unknown>[] {
+  const requested = String(planKey ?? '').trim();
+  if (!requested) {
+    return records;
+  }
+  const matching = records.filter((record) => recordPlanKey(record) === requested);
+  return matching.length > 0 ? matching : records;
+}
+
+function analyzeResultWindowingLog(path: string, planKey?: string): ReadbackSummary {
   const empty: ReadbackSummary = {
     envelope_count: 0,
     readback_count: 0,
@@ -871,8 +1041,7 @@ function analyzeResultWindowingLog(path: string): ReadbackSummary {
   } catch {
     return empty;
   }
-  const envelopes = new Map<string, { original_bytes: number; returned_bytes: number; original_tokens: number; returned_tokens: number }>();
-  const readbacks: Array<{ resultId?: string; view?: string; returnedBytes?: number; returnedTokens?: number }> = [];
+  const records: Record<string, unknown>[] = [];
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -880,38 +1049,43 @@ function analyzeResultWindowingLog(path: string): ReadbackSummary {
     }
     try {
       const record = JSON.parse(trimmed) as Record<string, unknown>;
-      const event = String(record['event'] ?? '');
-      const resultId = String(record['resultId'] ?? '');
-      if (event === 'envelope' && resultId) {
-        const originalBytes = toInt(record['originalBytes']);
-        const returnedBytes = toInt(record['returnedBytes']);
-        let originalTokens = toInt(record['originalTokens']);
-        let returnedTokens = toInt(record['returnedTokens']);
-        if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
-          originalTokens = estimateTokensFromBytes(originalBytes);
-          returnedTokens = estimateTokensFromBytes(returnedBytes);
-        }
-        envelopes.set(resultId, {
-          original_bytes: originalBytes,
-          returned_bytes: returnedBytes,
-          original_tokens: originalTokens,
-          returned_tokens: returnedTokens,
-        });
-      } else if (event === 'readback' && resultId) {
-        const returnedBytes = toInt(record['returnedBytes']);
-        let returnedTokens = toInt(record['returnedTokens']);
-        if (returnedTokens <= 0 && returnedBytes > 0) {
-          returnedTokens = estimateTokensFromBytes(returnedBytes);
-        }
-        readbacks.push({
-          resultId,
-          view: String(record['view'] ?? 'compacted'),
-          returnedBytes,
-          returnedTokens,
-        });
-      }
+      records.push(record);
     } catch {
       continue;
+    }
+  }
+  const envelopes = new Map<string, { original_bytes: number; returned_bytes: number; original_tokens: number; returned_tokens: number }>();
+  const readbacks: Array<{ resultId?: string; view?: string; returnedBytes?: number; returnedTokens?: number }> = [];
+  for (const record of filterWindowingRecordsForPlanKey(records, planKey)) {
+    const event = String(record['event'] ?? '');
+    const resultId = String(record['resultId'] ?? '');
+    if (event === 'envelope' && resultId) {
+      const originalBytes = toInt(record['originalBytes']);
+      const returnedBytes = toInt(record['returnedBytes']);
+      let originalTokens = toInt(record['originalTokens']);
+      let returnedTokens = toInt(record['returnedTokens']);
+      if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
+        originalTokens = estimateTokensFromBytes(originalBytes);
+        returnedTokens = estimateTokensFromBytes(returnedBytes);
+      }
+      envelopes.set(resultId, {
+        original_bytes: originalBytes,
+        returned_bytes: returnedBytes,
+        original_tokens: originalTokens,
+        returned_tokens: returnedTokens,
+      });
+    } else if (event === 'readback' && resultId) {
+      const returnedBytes = toInt(record['returnedBytes']);
+      let returnedTokens = toInt(record['returnedTokens']);
+      if (returnedTokens <= 0 && returnedBytes > 0) {
+        returnedTokens = estimateTokensFromBytes(returnedBytes);
+      }
+      readbacks.push({
+        resultId,
+        view: String(record['view'] ?? 'compacted'),
+        returnedBytes,
+        returnedTokens,
+      });
     }
   }
   let rawCount = 0;
@@ -1068,6 +1242,554 @@ function emptyReadbackSummary(): ReadbackSummary {
   };
 }
 
+interface ParsedWindowingEnvelope {
+  result_id: string;
+  original_bytes: number;
+  returned_bytes: number;
+  original_tokens: number;
+  returned_tokens: number;
+  token_cap_triggered: number;
+  channel: string | null;
+}
+
+interface ParsedWindowingReadback {
+  result_id: string;
+  view: string;
+  returned_bytes: number;
+  returned_tokens: number;
+  source_result_channel: string | null;
+}
+
+interface ChannelReadbackStats {
+  gross_readback_bytes: number;
+  gross_readback_tokens: number;
+  net_consumed_bytes: number;
+  net_consumed_tokens: number;
+}
+
+function stateDirForSummary(summaryPath: string): string | null {
+  const logDir = dirname(summaryPath);
+  const planKey = basename(logDir);
+  if (!planKey) {
+    return null;
+  }
+  const candidate = join(logDir, '..', '..', 'runtime-config', planKey);
+  return existsSync(candidate) ? candidate : null;
+}
+
+function loadWindowingRecords(path: string): Record<string, unknown>[] {
+  let raw = '';
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const records: Record<string, unknown>[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const record = JSON.parse(trimmed) as Record<string, unknown>;
+      records.push(record);
+    } catch {
+      continue;
+    }
+  }
+  return records;
+}
+
+function recordMatchesPlanKey(record: Record<string, unknown>, planKey: string): boolean {
+  const recordPlanKey = recordPlanKey(record);
+  if (planKey && recordPlanKey && recordPlanKey !== planKey) {
+    return false;
+  }
+  return true;
+}
+
+function parseWindowingEnvelope(record: Record<string, unknown>): ParsedWindowingEnvelope | null {
+  const resultId = String(record['resultId'] ?? '').trim();
+  if (!resultId) {
+    return null;
+  }
+  const originalBytes = toInt(record['originalBytes']);
+  const returnedBytes = toInt(record['returnedBytes']);
+  let originalTokens = toInt(record['originalTokens']);
+  let returnedTokens = toInt(record['returnedTokens']);
+  if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
+    originalTokens = estimateTokensFromBytes(originalBytes);
+    returnedTokens = estimateTokensFromBytes(returnedBytes);
+  }
+  return {
+    result_id: resultId,
+    original_bytes: originalBytes,
+    returned_bytes: returnedBytes,
+    original_tokens: originalTokens,
+    returned_tokens: returnedTokens,
+    token_cap_triggered: toInt(record['tokenCapTriggered'] ?? record['token_cap_triggered']),
+    channel: String(record['channel'] ?? '').trim() || null,
+  };
+}
+
+function parseWindowingReadback(record: Record<string, unknown>): ParsedWindowingReadback | null {
+  const resultId = String(record['resultId'] ?? '').trim();
+  if (!resultId) {
+    return null;
+  }
+  const returnedBytes = toInt(record['returnedBytes']);
+  let returnedTokens = toInt(record['returnedTokens']);
+  if (returnedTokens <= 0 && returnedBytes > 0) {
+    returnedTokens = estimateTokensFromBytes(returnedBytes);
+  }
+  const sourceChannel = String(
+    record['sourceResultChannel'] ?? record['source_result_channel'] ?? '',
+  ).trim();
+  return {
+    result_id: resultId,
+    view: String(record['view'] ?? 'compacted').toLowerCase(),
+    returned_bytes: returnedBytes,
+    returned_tokens: returnedTokens,
+    source_result_channel: sourceChannel || null,
+  };
+}
+
+function resolveResultChannelTarget(
+  envelope: ParsedWindowingEnvelope,
+  readbacks: ParsedWindowingReadback[],
+): [WindowingChannelName, ChannelAttribution] {
+  const envelopeChannel = envelope.channel ?? '';
+  if (!envelopeChannel) {
+    return ['stored_result_readback', 'legacy'];
+  }
+  if (!readbacks.length) {
+    const channel = WINDOWING_CHANNEL_NAMES.includes(envelopeChannel as WindowingChannelName)
+      ? (envelopeChannel as WindowingChannelName)
+      : 'stored_result_readback';
+    return [channel, 'exact'];
+  }
+  for (const readback of readbacks) {
+    const sourceChannel = readback.source_result_channel ?? '';
+    if (!sourceChannel) {
+      return ['stored_result_readback', 'legacy'];
+    }
+    if (sourceChannel !== envelopeChannel) {
+      return ['stored_result_readback', 'legacy'];
+    }
+  }
+  const channel = WINDOWING_CHANNEL_NAMES.includes(envelopeChannel as WindowingChannelName)
+    ? (envelopeChannel as WindowingChannelName)
+    : 'stored_result_readback';
+  return [channel, 'exact'];
+}
+
+function emptyChannelReadbackStats(): Record<WindowingChannelName, ChannelReadbackStats> {
+  const stats = {} as Record<WindowingChannelName, ChannelReadbackStats>;
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    stats[channelName] = {
+      gross_readback_bytes: 0,
+      gross_readback_tokens: 0,
+      net_consumed_bytes: 0,
+      net_consumed_tokens: 0,
+    };
+  }
+  return stats;
+}
+
+function aggregateWindowingSavingsByChannel(
+  path: string,
+  planKey?: string,
+): Record<WindowingChannelName, ChannelBucket> {
+  const buckets = createEmptyChannelBuckets();
+  const records = filterWindowingRecordsForPlanKey(loadWindowingRecords(path), planKey);
+  const envelopes = new Map<string, ParsedWindowingEnvelope>();
+  const readbacks: ParsedWindowingReadback[] = [];
+  const legacyEvents: Array<{
+    original_bytes: number;
+    returned_bytes: number;
+    original_tokens: number;
+    returned_tokens: number;
+    token_cap: number;
+  }> = [];
+
+  for (const record of records) {
+    const event = String(record['event'] ?? '').trim().toLowerCase();
+    const resultId = String(record['resultId'] ?? '').trim();
+    if (event === 'envelope' && resultId) {
+      const parsed = parseWindowingEnvelope(record);
+      if (parsed) {
+        envelopes.set(parsed.result_id, parsed);
+      }
+    } else if (event === 'readback' && resultId) {
+      const parsed = parseWindowingReadback(record);
+      if (parsed) {
+        readbacks.push(parsed);
+      }
+    } else if (event !== 'envelope' && event !== 'readback' && !resultId) {
+      const originalBytes = toInt(record['originalBytes']);
+      const returnedBytes = toInt(record['returnedBytes'] ?? record['postBytes']);
+      let originalTokens = toInt(record['originalTokens']);
+      let returnedTokens = toInt(record['returnedTokens'] ?? record['returned_tokens']);
+      const tokenCap = toInt(record['tokenCapTriggered'] ?? record['token_cap_triggered']);
+      if (originalTokens <= 0 && returnedTokens <= 0 && originalBytes > 0) {
+        originalTokens = estimateTokensFromBytes(originalBytes);
+        returnedTokens = estimateTokensFromBytes(returnedBytes);
+      }
+      legacyEvents.push({
+        original_bytes: originalBytes,
+        returned_bytes: returnedBytes,
+        original_tokens: originalTokens,
+        returned_tokens: returnedTokens,
+        token_cap: tokenCap,
+      });
+    }
+  }
+
+  const groupedReadbacks = new Map<string, ParsedWindowingReadback[]>();
+  for (const readback of readbacks) {
+    const group = groupedReadbacks.get(readback.result_id) ?? [];
+    group.push(readback);
+    groupedReadbacks.set(readback.result_id, group);
+  }
+
+  for (const [resultId, envelope] of envelopes) {
+    const resultReadbacks = groupedReadbacks.get(resultId) ?? [];
+    const extraBytes = resultReadbacks.reduce((sum, item) => sum + item.returned_bytes, 0);
+    const extraTokens = resultReadbacks.reduce((sum, item) => sum + item.returned_tokens, 0);
+    const consumedBytes = envelope.returned_bytes + extraBytes;
+    const consumedTokens = envelope.returned_tokens + extraTokens;
+    const netPostBytes =
+      envelope.original_bytes > 0 ? Math.min(envelope.original_bytes, consumedBytes) : consumedBytes;
+    const netPostTokens =
+      envelope.original_tokens > 0
+        ? Math.min(envelope.original_tokens, consumedTokens)
+        : consumedTokens;
+    const [channelName, attribution] = resolveResultChannelTarget(envelope, resultReadbacks);
+    const bucket = buckets[channelName];
+    accumulateChannelSavingsEvent(bucket, {
+      preBytes: envelope.original_bytes,
+      postBytes: netPostBytes,
+      preTokens: envelope.original_tokens,
+      postTokens: netPostTokens,
+      tokenCapTrigger: envelope.token_cap_triggered > 0,
+    });
+    markChannelAttribution(bucket, attribution);
+  }
+
+  const legacyBucket = buckets['stored_result_readback'];
+  for (const entry of legacyEvents) {
+    accumulateChannelSavingsEvent(legacyBucket, {
+      preBytes: entry.original_bytes,
+      postBytes: entry.returned_bytes,
+      preTokens: entry.original_tokens,
+      postTokens: entry.returned_tokens,
+      tokenCapTrigger: entry.token_cap > 0,
+    });
+    markChannelAttribution(legacyBucket, 'legacy');
+  }
+
+  return finalizeChannelBuckets(buckets);
+}
+
+function windowingReadbackByChannel(path: string, planKey?: string): Record<WindowingChannelName, ChannelReadbackStats> {
+  const stats = emptyChannelReadbackStats();
+  const records = filterWindowingRecordsForPlanKey(loadWindowingRecords(path), planKey);
+  const envelopes = new Map<string, ParsedWindowingEnvelope>();
+  const readbacks: ParsedWindowingReadback[] = [];
+
+  for (const record of records) {
+    const event = String(record['event'] ?? '').trim().toLowerCase();
+    const resultId = String(record['resultId'] ?? '').trim();
+    if (event === 'envelope' && resultId) {
+      const parsed = parseWindowingEnvelope(record);
+      if (parsed) {
+        envelopes.set(parsed.result_id, parsed);
+      }
+    } else if (event === 'readback' && resultId) {
+      const parsed = parseWindowingReadback(record);
+      if (parsed) {
+        readbacks.push(parsed);
+      }
+    }
+  }
+
+  const groupedReadbacks = new Map<string, ParsedWindowingReadback[]>();
+  for (const readback of readbacks) {
+    const group = groupedReadbacks.get(readback.result_id) ?? [];
+    group.push(readback);
+    groupedReadbacks.set(readback.result_id, group);
+  }
+
+  for (const [resultId, envelope] of envelopes) {
+    const resultReadbacks = groupedReadbacks.get(resultId) ?? [];
+    const extraBytes = resultReadbacks.reduce((sum, item) => sum + item.returned_bytes, 0);
+    const extraTokens = resultReadbacks.reduce((sum, item) => sum + item.returned_tokens, 0);
+    const consumedBytes = envelope.returned_bytes + extraBytes;
+    const consumedTokens = envelope.returned_tokens + extraTokens;
+    const netPostBytes =
+      envelope.original_bytes > 0 ? Math.min(envelope.original_bytes, consumedBytes) : consumedBytes;
+    const netPostTokens =
+      envelope.original_tokens > 0
+        ? Math.min(envelope.original_tokens, consumedTokens)
+        : consumedTokens;
+    const [channelName] = resolveResultChannelTarget(envelope, resultReadbacks);
+    const bucket = stats[channelName];
+    bucket.gross_readback_bytes += extraBytes;
+    bucket.gross_readback_tokens += extraTokens;
+    bucket.net_consumed_bytes += netPostBytes;
+    bucket.net_consumed_tokens += netPostTokens;
+  }
+
+  return stats;
+}
+
+function enrichChannelDiagnostics(
+  perChannel: Record<WindowingChannelName, ChannelBucket>,
+  readbackByChannel: Record<WindowingChannelName, ChannelReadbackStats> | null,
+): void {
+  for (const channelName of WINDOWING_CHANNEL_NAMES) {
+    const bucket = perChannel[channelName];
+    if (['native_shell_hook', 'proxy_shell', 'native_result_hook'].includes(channelName)) {
+      bucket.gross_hidden_bytes = bucket.hidden_from_context ?? 0;
+      bucket.gross_hidden_tokens = bucket.hidden_from_context_tokens ?? 0;
+    }
+
+    if (readbackByChannel) {
+      const channelStats = readbackByChannel[channelName];
+      const grossReadbackBytes = channelStats.gross_readback_bytes;
+      const netConsumedBytes = channelStats.net_consumed_bytes;
+      if (grossReadbackBytes > 0) {
+        bucket.gross_readback_bytes = grossReadbackBytes;
+        bucket.gross_readback_tokens = channelStats.gross_readback_tokens;
+      }
+      if (netConsumedBytes > 0) {
+        bucket.net_consumed_bytes = netConsumedBytes;
+        bucket.net_consumed_tokens = channelStats.net_consumed_tokens;
+      }
+    }
+
+    if (
+      bucket.net_consumed_bytes === undefined &&
+      ['proxy_read_windowing', 'proxy_search_windowing', 'native_result_mcp_fallback', 'stored_result_readback'].includes(
+        channelName,
+      ) &&
+      bucket.count > 0
+    ) {
+      bucket.net_consumed_bytes = bucket.post_optimization_bytes;
+      bucket.net_consumed_tokens = bucket.post_optimization_tokens;
+    }
+  }
+}
+
+function accumulateCompactJsonl(
+  path: string,
+  channelName: WindowingChannelName,
+  planKey: string,
+  buckets: Record<WindowingChannelName, ChannelBucket>,
+): void {
+  if (!existsSync(path)) {
+    return;
+  }
+  const bucket = buckets[channelName];
+  for (const record of loadWindowingRecords(path)) {
+    if (!recordMatchesPlanKey(record, planKey)) {
+      continue;
+    }
+    if (record['compactionSkipped'] === true) {
+      continue;
+    }
+    const originalBytes = toInt(record['originalBytes']);
+    const compactedBytes = toInt(record['compactedBytes']);
+    let originalTokens = toInt(record['originalTokens'] ?? record['original_tokens']);
+    let compactedTokens = toInt(
+      record['compactedTokens'] ?? record['compacted_tokens'] ?? record['returnedTokens'] ?? record['returned_tokens'],
+    );
+    const tokenCap = toInt(record['tokenCapTriggered'] ?? record['token_cap_triggered']) > 0;
+    if (originalTokens <= 0 && compactedTokens <= 0 && originalBytes > 0) {
+      originalTokens = estimateTokensFromBytes(originalBytes);
+      compactedTokens = estimateTokensFromBytes(compactedBytes);
+    }
+    accumulateChannelSavingsEvent(bucket, {
+      preBytes: originalBytes,
+      postBytes: compactedBytes,
+      preTokens: originalTokens,
+      postTokens: compactedTokens,
+      tokenCapTrigger: tokenCap,
+    });
+  }
+}
+
+function aggregateByteSavingsByChannel(stateDir: string, planKey: string): Record<WindowingChannelName, ChannelBucket> {
+  const buckets = createEmptyChannelBuckets();
+  if (!stateDir) {
+    return buckets;
+  }
+
+  accumulateCompactJsonl(join(stateDir, 'bash-compact.jsonl'), 'native_result_hook', planKey, buckets);
+  accumulateCompactJsonl(join(stateDir, 'proxy-shell-compact.jsonl'), 'proxy_shell', planKey, buckets);
+
+  const windowPath = join(stateDir, 'result-windowing.jsonl');
+  if (existsSync(windowPath)) {
+    const windowChannels = aggregateWindowingSavingsByChannel(windowPath, planKey || undefined);
+    for (const channelName of WINDOWING_CHANNEL_NAMES) {
+      mergeChannelBucket(buckets[channelName], windowChannels[channelName] as unknown as Record<string, unknown>);
+    }
+  }
+
+  return finalizeChannelBuckets(buckets);
+}
+
+async function aggregateInvocationChannels(
+  path: string,
+  planKey: string,
+): Promise<Record<WindowingChannelName, ChannelBucket>> {
+  const out = createEmptyChannelBuckets();
+  if (!existsSync(path)) {
+    return out;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(path, 'utf8'));
+  } catch {
+    return out;
+  }
+  if (!isObject(payload)) {
+    return out;
+  }
+  const invocations = Array.isArray(payload['invocations']) ? payload['invocations'] : [];
+  const targetPlanKey = planKey.trim();
+  const latest = new Map<string, ChannelBucket>();
+
+  for (const record of invocations) {
+    if (!isObject(record)) {
+      continue;
+    }
+    const channelSavings = record['byte_savings_by_channel'];
+    if (!isObject(channelSavings)) {
+      continue;
+    }
+    const recordPlan = String(record['plan_key'] ?? '').trim();
+    if (targetPlanKey && recordPlan && recordPlan !== targetPlanKey) {
+      continue;
+    }
+    for (const channelName of WINDOWING_CHANNEL_NAMES) {
+      const pathData = channelSavings[channelName];
+      if (!isObject(pathData)) {
+        continue;
+      }
+      const bucket = createEmptyChannelBucket('exact');
+      mergeChannelBucket(bucket, pathData);
+      latest.set(`${targetPlanKey || recordPlan}\u0000${channelName}`, bucket);
+    }
+  }
+
+  for (const [key, channelBucket] of latest) {
+    const channelName = key.split('\u0000')[1] as WindowingChannelName;
+    if (WINDOWING_CHANNEL_NAMES.includes(channelName)) {
+      mergeChannelBucket(out[channelName], channelBucket as unknown as Record<string, unknown>);
+    }
+  }
+
+  return finalizeChannelBuckets(out);
+}
+
+async function summaryChannels(
+  summaryPath: string,
+  summary: UsageSummaryRecord,
+  planKey: string,
+): Promise<Record<WindowingChannelName, ChannelBucket>> {
+  const channelData = summary.byte_savings_by_channel;
+  if (isObject(channelData)) {
+    const out = createEmptyChannelBuckets();
+    for (const channelName of WINDOWING_CHANNEL_NAMES) {
+      const rawBucket = channelData[channelName];
+      if (isObject(rawBucket)) {
+        mergeChannelBucket(out[channelName], rawBucket);
+      }
+    }
+    if (Object.values(out).some(channelHasActivity)) {
+      return finalizeChannelBuckets(out);
+    }
+  }
+
+  const invocationPath = join(dirname(summaryPath), 'invocation-usage.json');
+  const invocationChannels = await aggregateInvocationChannels(invocationPath, planKey);
+  if (Object.values(invocationChannels).some(channelHasActivity)) {
+    return invocationChannels;
+  }
+
+  const stateDir = stateDirForSummary(summaryPath);
+  if (stateDir) {
+    return aggregateByteSavingsByChannel(stateDir, planKey);
+  }
+
+  return createEmptyChannelBuckets();
+}
+
+function loadDiscoverReportForSummary(summaryPath: string): Record<string, unknown> | null {
+  const discoverPath = join(dirname(summaryPath), 'discover-report.json');
+  if (!existsSync(discoverPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(discoverPath, 'utf8')) as unknown;
+    return isObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOptimizationOpportunities(
+  discover: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+
+  const missed = discover['missed_compaction_opportunities'];
+  if (Array.isArray(missed) && missed.length > 0) {
+    const deduped: Record<string, unknown>[] = [];
+    const seen = new Set<string>();
+    for (const item of missed) {
+      if (!isObject(item)) {
+        continue;
+      }
+      const key = JSON.stringify(item, Object.keys(item).sort());
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      deduped.push({ ...item });
+    }
+    if (deduped.length > 0) {
+      out['missed_compaction_opportunities'] = deduped;
+    }
+  }
+
+  const patterns = discover['sequence_patterns'];
+  if (Array.isArray(patterns) && patterns.length > 0) {
+    out['sequence_patterns'] = patterns;
+  }
+
+  const storedUsage = discover['stored_result_usage'];
+  if (isObject(storedUsage)) {
+    const recommendation = storedUsage['recommendation'];
+    if (recommendation) {
+      out['stored_result_usage'] = { recommendation };
+    }
+  }
+
+  const findings = discover['aggregate_findings'];
+  if (Array.isArray(findings)) {
+    const nativeReadFindings = findings.filter(
+      (item) => isObject(item) && String(item['pattern_id'] ?? '').startsWith('heavy_native_read'),
+    );
+    if (nativeReadFindings.length > 0) {
+      out['native_read_findings'] = nativeReadFindings;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport> {
   if (summaryPaths.length === 0) {
     return emptySavingsReport();
@@ -1085,6 +1807,9 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
   let toolCallsTotal = 0;
   let couldHaveSavedBytes = 0;
   const readbackTotals = emptyReadbackSummary();
+  const aggregateChannels = createEmptyChannelBuckets();
+  const aggregateReadbackByChannel = emptyChannelReadbackStats();
+  const discoverCandidates: Array<{ endedAtMs: number | null; summaryPath: string; planKey: string; endedAtIso: string | null }> = [];
 
   for (const summaryPath of summaryPaths) {
     let record: UsageSummaryRecord;
@@ -1117,8 +1842,53 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
     mergeSavingsBuckets(aggregateBuckets, recordBuckets);
 
     const windowingLog = windowingLogForSummary(summaryPath);
+    const planKey = String(record.plan_key ?? '').trim() || basename(dirname(summaryPath)).trim();
     if (windowingLog) {
-      mergeReadbackSummary(readbackTotals, analyzeResultWindowingLog(windowingLog));
+      mergeReadbackSummary(readbackTotals, analyzeResultWindowingLog(windowingLog, planKey));
+    }
+
+    const runChannels = await summaryChannels(summaryPath, record, planKey);
+    const runReadbackByChannel = windowingLog
+      ? windowingReadbackByChannel(windowingLog, planKey)
+      : null;
+    enrichChannelDiagnostics(runChannels, runReadbackByChannel);
+    mergeChannelBuckets(aggregateChannels, runChannels);
+    for (const channelName of WINDOWING_CHANNEL_NAMES) {
+      const runBucket = runChannels[channelName];
+      const target = aggregateReadbackByChannel[channelName];
+      target.gross_readback_bytes += toInt(runBucket.gross_readback_bytes);
+      target.gross_readback_tokens += toInt(runBucket.gross_readback_tokens);
+      target.net_consumed_bytes += toInt(runBucket.net_consumed_bytes);
+      target.net_consumed_tokens += toInt(runBucket.net_consumed_tokens);
+    }
+
+    discoverCandidates.push({
+      endedAtMs: endMs,
+      summaryPath,
+      planKey,
+      endedAtIso: formatIsoDateMs(endMs),
+    });
+  }
+
+  discoverCandidates.sort((a, b) => {
+    const aScore = a.endedAtMs ?? 0;
+    const bScore = b.endedAtMs ?? 0;
+    return bScore - aScore;
+  });
+  let optimizationOpportunities: Record<string, unknown> | null = null;
+  let optimizationOpportunitiesSource: { plan_key: string; ended_at: string | null } | null = null;
+  for (const candidate of discoverCandidates) {
+    const discoverData = loadDiscoverReportForSummary(candidate.summaryPath);
+    if (discoverData) {
+      const normalized = normalizeOptimizationOpportunities(discoverData);
+      if (normalized) {
+        optimizationOpportunities = normalized;
+        optimizationOpportunitiesSource = {
+          plan_key: candidate.planKey,
+          ended_at: candidate.endedAtIso,
+        };
+        break;
+      }
     }
   }
 
@@ -1162,6 +1932,21 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
     }
     if (pathName === 'proxy_shell_compaction') {
       bucket.compaction_measured_not_applied_bytes = couldHaveSavedBytes;
+    }
+  }
+
+  const perChannel = finalizeChannelBuckets(aggregateChannels);
+  enrichChannelDiagnostics(perChannel, aggregateReadbackByChannel);
+
+  if (
+    optimizationOpportunities &&
+    hasMeaningfulOptimizationEvidence(perPath, perChannel) &&
+    optimizationOpportunities['missed_compaction_opportunities']
+  ) {
+    delete optimizationOpportunities['missed_compaction_opportunities'];
+    if (Object.keys(optimizationOpportunities).length === 0) {
+      optimizationOpportunities = null;
+      optimizationOpportunitiesSource = null;
     }
   }
 
@@ -1242,6 +2027,7 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
     session_usage: sessionUsage,
     tool_output_counterfactual: toolOutputCounterfactual,
     per_path: perPath,
+    per_channel: perChannel,
     cache: {
       cache_read_tokens: cacheReadTokens,
       cache_hit_ratio: cacheHitRatio,
@@ -1263,6 +2049,8 @@ async function buildSavingsReport(summaryPaths: string[]): Promise<SavingsReport
             ) / 10000
           : 0,
     },
+    optimization_opportunities: optimizationOpportunities,
+    optimization_opportunities_source: optimizationOpportunitiesSource,
   };
 }
 
@@ -2604,6 +3392,7 @@ function emptySavingsReport(): SavingsReport {
       compaction_measured_not_applied_tokens: 0,
     },
     per_path: buckets,
+    per_channel: finalizeChannelBuckets(createEmptyChannelBuckets()),
     cache: {
       cache_read_tokens: 0,
       cache_hit_ratio: 0,

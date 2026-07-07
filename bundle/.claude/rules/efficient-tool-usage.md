@@ -1,8 +1,6 @@
 ---
 name: efficient-tool-usage
 description: Redirect large command output to Ralph artifact logs; report compact exit status before details.
-globs: ["**/*"]
-alwaysApply: true
 ---
 <!-- GENERATED from bundle/.ralph/rules/efficient-tool-usage.md by scripts/sync-runtime-assets.sh - edit the canonical file -->
 

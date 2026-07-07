@@ -187,9 +187,20 @@ _runtime_overlay_opencode_set_compaction_authoritative() {
   if declare -F runtime_overlay_set_native_shell_compaction_authoritative >/dev/null 2>&1; then
     runtime_overlay_set_native_shell_compaction_authoritative "$authoritative"
   fi
-  if [[ "$authoritative" == "mcp_proxy_compaction" ]] \
-    && declare -F runtime_overlay_note_mcp_compaction_fallback_authoritative >/dev/null 2>&1; then
-    runtime_overlay_note_mcp_compaction_fallback_authoritative
+  if [[ "$authoritative" == "mcp_proxy_compaction" ]]; then
+    if declare -F runtime_overlay_note_mcp_proxy_channels_proven >/dev/null 2>&1; then
+      runtime_overlay_note_mcp_proxy_channels_proven
+    fi
+    if declare -F runtime_overlay_note_native_result_hook_measured_only >/dev/null 2>&1; then
+      runtime_overlay_note_native_result_hook_measured_only
+    fi
+    if declare -F runtime_overlay_note_mcp_compaction_fallback_authoritative >/dev/null 2>&1; then
+      runtime_overlay_note_mcp_compaction_fallback_authoritative
+    fi
+  else
+    if declare -F runtime_overlay_note_native_result_hook_proven >/dev/null 2>&1; then
+      runtime_overlay_note_native_result_hook_proven
+    fi
   fi
 }
 

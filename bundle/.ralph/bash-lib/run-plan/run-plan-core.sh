@@ -1026,6 +1026,48 @@ for path, required in seen.items():
 PY
 }
 
+ralph_run_plan_seed_yaml_bootstrap_context() {
+  local plan_path="$1"
+  local plan_format next line_num todo_id todo_target _seed_next_rest
+  local eff_stage="" eff_runtime="" eff_agent="" eff_model=""
+  local eff_session_strategy="" eff_context_budget="" eff_plan_file=""
+
+  plan_format="$(plan_detect_format "$plan_path" 2>/dev/null || printf 'default')"
+  if ! plan_format_is_yaml "$plan_format"; then
+    return 0
+  fi
+  if ! plan_pipeline_has_metadata "$plan_path" \
+     && ! plan_pipeline_any_todo_has_routing "$plan_path"; then
+    return 0
+  fi
+
+  next="$(get_next_todo "$plan_path" 2>/dev/null || true)"
+  [[ -n "$next" ]] || return 0
+
+  line_num="${next%%|*}"
+  todo_id=""
+  todo_target="$line_num"
+  _seed_next_rest="${next#*|}"
+  todo_id="${_seed_next_rest%%|*}"
+  todo_target="${todo_id:-$line_num}"
+
+  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_plan_file <<< "$(
+    ralph_run_plan_routing_effective_metadata_fields "$plan_path" "$todo_target"
+  )"; then
+    return 1
+  fi
+
+  if [[ -z "${RUNTIME:-}" && -n "$eff_runtime" ]]; then
+    RUNTIME="$eff_runtime"
+  fi
+  if [[ -z "${PREBUILT_AGENT:-}" && -n "$eff_agent" ]]; then
+    PREBUILT_AGENT="$eff_agent"
+  fi
+  if [[ -z "${PLAN_MODEL_CLI:-}" && -n "$eff_model" ]]; then
+    PLAN_MODEL_CLI="$eff_model"
+  fi
+}
+
 ralph_run_plan_pipeline_input_artifacts_prepare() {
   local plan_path="$1"
   local todo_target="$2"
@@ -1584,6 +1626,10 @@ fi
 
 if [[ -f "$PLAN_PATH" ]] && ! plan_pipeline_validate_plan "$PLAN_PATH"; then
   exit 1
+fi
+
+if ! ralph_run_plan_seed_yaml_bootstrap_context "$PLAN_PATH"; then
+  ralph_die "Error: failed to resolve initial YAML todo routing context."
 fi
 
 # Per-plan logs and session files under .ralph-workspace/ (override with RALPH_PLAN_WORKSPACE_ROOT).
@@ -4538,6 +4584,10 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     RALPH_PLAN_INVOCATION_CLI_PID_FILE="$RALPH_LOG_DIR/.plan-runner-cli-pid.$$"
     export RALPH_PLAN_INVOCATION_CLI_PID_FILE
     rm -f "$RALPH_PLAN_INVOCATION_CLI_PID_FILE"
+    # Guard PID sidecar so teardown can reap the signal-immune group guard directly.
+    RALPH_PLAN_INVOCATION_GUARD_PID_FILE="$RALPH_LOG_DIR/.plan-runner-guard-pid.$$"
+    export RALPH_PLAN_INVOCATION_GUARD_PID_FILE
+    rm -f "$RALPH_PLAN_INVOCATION_GUARD_PID_FILE"
     PROGRESS_INTERVAL="${CURSOR_PLAN_PROGRESS_INTERVAL:-30}"
     AGENT_POLL_INTERVAL="${RALPH_PLAN_AGENT_POLL_INTERVAL:-1}"
     START_TIME="$(date +%s)"
@@ -4584,34 +4634,35 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       fi
     fi
 
-    # Run each agent invocation in its own process group.
+    # Run each agent invocation in its own process group, with a guard inside
+    # that group that reaps it if the runner dies without completing teardown.
     unset RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE
     set -m
     case "$RUNTIME" in
       cursor)
         # shellcheck source=bash-lib/run-plan/run-plan-invoke-cursor.sh
         source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-invoke-cursor.sh"
-        ralph_run_plan_invoke_cursor &
+        ralph_run_plan_invoke_with_group_guard ralph_run_plan_invoke_cursor &
         ;;
       claude)
         # shellcheck source=bash-lib/run-plan/run-plan-invoke-claude.sh
         source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-invoke-claude.sh"
-        ralph_run_plan_invoke_claude &
+        ralph_run_plan_invoke_with_group_guard ralph_run_plan_invoke_claude &
         ;;
       codex)
         # shellcheck source=bash-lib/run-plan/run-plan-invoke-codex.sh
         source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-invoke-codex.sh"
-        ralph_run_plan_invoke_codex &
+        ralph_run_plan_invoke_with_group_guard ralph_run_plan_invoke_codex &
         ;;
       opencode)
         # shellcheck source=bash-lib/run-plan/run-plan-invoke-opencode.sh
         source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-invoke-opencode.sh"
-        ralph_run_plan_invoke_opencode &
+        ralph_run_plan_invoke_with_group_guard ralph_run_plan_invoke_opencode &
         ;;
       antigravity)
         # shellcheck source=bash-lib/run-plan/run-plan-invoke-antigravity.sh
         source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-invoke-antigravity.sh"
-        ralph_run_plan_invoke_antigravity &
+        ralph_run_plan_invoke_with_group_guard ralph_run_plan_invoke_antigravity &
         ;;
       *)
         ralph_die "Error: unsupported runtime for invocation: $RUNTIME"

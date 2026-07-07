@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +16,18 @@ from typing import Any
 from ralph_script_loader import load_ralph_script
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASELINE_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "benchmark-channel-attribution"
+OVERLAY_WRITE_SCRIPT = REPO_ROOT / "bundle" / ".ralph" / "python" / "runtime-overlay-write-summary.py"
+OVERLAY_FIELDS_SCRIPT = REPO_ROOT / "bundle" / ".ralph" / "python" / "ralph_overlay_usage_fields.py"
+
 SAVINGS_REPORT = load_ralph_script("ralph-benchmark-report")
 DISCOVER_REPORT = load_ralph_script("ralph-discover-report")
+OVERLAY_FIELDS = load_ralph_script("ralph_overlay_usage_fields")
+RENDER_MARKDOWN = load_ralph_script("render-benchmark-markdown")
+
+E2E_FIXTURE_DIR = BASELINE_FIXTURE_DIR / "e2e"
+E2E_MANIFEST = E2E_FIXTURE_DIR / "manifest.json"
 
 
 class TestSavingsReport(unittest.TestCase):
@@ -39,6 +52,9 @@ class TestSavingsReport(unittest.TestCase):
         invocation_path = summary_path.parent / "invocation-usage.json"
         self._write_json(invocation_path, {"invocations": invocations})
         return invocation_path
+
+    def _load_baseline_fixture(self, name: str) -> dict[str, Any]:
+        return json.loads((BASELINE_FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
     def _assert_no_pricing_fields(self, value: Any) -> None:
         if isinstance(value, dict):
@@ -558,6 +574,433 @@ class TestSavingsReport(unittest.TestCase):
             report["tool_output_counterfactual"]["net_savings_percent"], 0.0
         )
 
+    def test_build_report_scopes_windowing_log_to_matching_plan_key(self) -> None:
+        run_dir = self.tmp_dir / "logs" / "plan-a"
+        summary = {
+            "plan_key": "plan-a",
+            "invocations": 1,
+            "started_at": "2026-05-02T00:00:00Z",
+            "ended_at": "2026-05-02T00:05:00Z",
+            "byte_savings_by_path": {
+                "result_windowing": {
+                    "pre_optimization_bytes": 1000,
+                    "post_optimization_bytes": 100,
+                    "saved_bytes": 900,
+                    "pre_optimization_tokens": 250,
+                    "post_optimization_tokens": 25,
+                    "saved_tokens": 225,
+                    "count": 1,
+                    "token_cap_triggers": 0,
+                    "hidden_from_context": 900,
+                    "hidden_from_context_tokens": 225,
+                },
+            },
+        }
+        summary_path = self._write_summary(run_dir, summary)
+
+        runtime_config_dir = self.tmp_dir / "runtime-config" / run_dir.name
+        runtime_config_dir.mkdir(parents=True, exist_ok=True)
+        log_path = runtime_config_dir / "result-windowing.jsonl"
+        with log_path.open("w", encoding="utf-8") as handle:
+            for record in [
+                {
+                    "event": "envelope",
+                    "planKey": "plan-a",
+                    "resultId": "a1",
+                    "originalBytes": 1000,
+                    "returnedBytes": 100,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "plan-a",
+                    "resultId": "a1",
+                    "view": "compacted",
+                    "returnedBytes": 50,
+                },
+                {
+                    "event": "envelope",
+                    "planKey": "plan-b",
+                    "resultId": "b1",
+                    "originalBytes": 5000,
+                    "returnedBytes": 500,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "plan-b",
+                    "resultId": "b1",
+                    "view": "raw",
+                    "returnedBytes": 4500,
+                },
+            ]:
+                handle.write(json.dumps(record) + "\n")
+
+        report = self.report_module.build_report([str(summary_path)])
+
+        self.assertEqual(report["readback_summary"]["envelope_original_bytes"], 1000)
+        self.assertEqual(report["readback_summary"]["gross_readback_bytes"], 50)
+        self.assertEqual(report["readback_summary"]["readback_count"], 1)
+        self.assertIn("per_channel", report)
+        self.assertIn("per_channel", report["runs"][0])
+        legacy_bucket = report["per_channel"]["stored_result_readback"]
+        self.assertEqual(legacy_bucket["attribution"], "legacy")
+        self.assertGreater(legacy_bucket["saved_bytes"], 0)
+
+    def test_build_report_includes_exact_per_channel_attribution(self) -> None:
+        run_dir = self.tmp_dir / "logs" / "exact-channel-plan"
+        summary = {
+            "plan_key": "exact-channel-plan",
+            "invocations": 1,
+            "started_at": "2026-05-03T00:00:00Z",
+            "ended_at": "2026-05-03T00:05:00Z",
+        }
+        summary_path = self._write_summary(run_dir, summary)
+
+        runtime_config_dir = self.tmp_dir / "runtime-config" / run_dir.name
+        runtime_config_dir.mkdir(parents=True, exist_ok=True)
+        log_path = runtime_config_dir / "result-windowing.jsonl"
+        with log_path.open("w", encoding="utf-8") as handle:
+            for record in [
+                {
+                    "event": "envelope",
+                    "planKey": "exact-channel-plan",
+                    "resultId": "read-1",
+                    "channel": "proxy_read_windowing",
+                    "originalBytes": 1000,
+                    "returnedBytes": 200,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "exact-channel-plan",
+                    "resultId": "read-1",
+                    "sourceResultChannel": "proxy_read_windowing",
+                    "view": "compacted",
+                    "returnedBytes": 100,
+                },
+            ]:
+                handle.write(json.dumps(record) + "\n")
+
+        report = self.report_module.build_report([str(summary_path)])
+
+        self.assertIn("per_channel", report)
+        run = report["runs"][0]
+        self.assertIn("per_channel", run)
+        exact_bucket = report["per_channel"]["proxy_read_windowing"]
+        self.assertEqual(exact_bucket["attribution"], "exact")
+        self.assertEqual(exact_bucket["saved_bytes"], 700)
+        self.assertEqual(exact_bucket["gross_readback_bytes"], 100)
+        self.assertEqual(exact_bucket["net_consumed_bytes"], 300)
+        self.assertEqual(report["per_channel"]["stored_result_readback"]["saved_bytes"], 0)
+
+    def test_build_report_surfaces_legacy_unknown_attribution_separately(self) -> None:
+        run_dir = self.tmp_dir / "logs" / "legacy-channel-plan"
+        summary = {
+            "plan_key": "legacy-channel-plan",
+            "invocations": 1,
+            "started_at": "2026-05-04T00:00:00Z",
+            "ended_at": "2026-05-04T00:05:00Z",
+        }
+        summary_path = self._write_summary(run_dir, summary)
+
+        runtime_config_dir = self.tmp_dir / "runtime-config" / run_dir.name
+        runtime_config_dir.mkdir(parents=True, exist_ok=True)
+        log_path = runtime_config_dir / "result-windowing.jsonl"
+        with log_path.open("w", encoding="utf-8") as handle:
+            for record in [
+                {
+                    "event": "envelope",
+                    "planKey": "legacy-channel-plan",
+                    "resultId": "legacy-1",
+                    "originalBytes": 1000,
+                    "returnedBytes": 200,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "legacy-channel-plan",
+                    "resultId": "legacy-1",
+                    "view": "compacted",
+                    "returnedBytes": 100,
+                },
+            ]:
+                handle.write(json.dumps(record) + "\n")
+
+        report = self.report_module.build_report([str(summary_path)])
+
+        legacy_bucket = report["per_channel"]["stored_result_readback"]
+        self.assertEqual(legacy_bucket["attribution"], "legacy")
+        self.assertEqual(legacy_bucket["saved_bytes"], 700)
+        self.assertEqual(legacy_bucket["gross_readback_bytes"], 100)
+        self.assertEqual(legacy_bucket["net_consumed_bytes"], 300)
+        self.assertEqual(report["per_channel"]["proxy_read_windowing"]["saved_bytes"], 0)
+
+    def test_build_report_uses_most_recent_optimization_opportunities_source(self) -> None:
+        older_dir = self.tmp_dir / "logs" / "older-plan"
+        older_summary_path = self._write_summary(
+            older_dir,
+            {
+                "plan_key": "older-plan",
+                "invocations": 1,
+                "started_at": "2026-05-01T00:00:00Z",
+                "ended_at": "2026-05-01T00:05:00Z",
+            },
+        )
+        self._write_json(
+            older_dir / "discover-report.json",
+            {
+                "missed_compaction_opportunities": [
+                    {"original_bytes": 2000, "skip_reason": "older-opportunity"}
+                ]
+            },
+        )
+
+        newest_dir = self.tmp_dir / "logs" / "newest-plan"
+        newest_summary_path = self._write_summary(
+            newest_dir,
+            {
+                "plan_key": "newest-plan",
+                "invocations": 1,
+                "started_at": "2026-06-01T00:00:00Z",
+                "ended_at": "2026-06-01T00:05:00Z",
+            },
+        )
+        self._write_json(
+            newest_dir / "discover-report.json",
+            {
+                "missed_compaction_opportunities": [
+                    {"original_bytes": 3000, "skip_reason": "newest-opportunity"}
+                ]
+            },
+        )
+
+        report = self.report_module.build_report(
+            [str(older_summary_path), str(newest_summary_path)]
+        )
+
+        self.assertEqual(
+            report["optimization_opportunities"]["missed_compaction_opportunities"][0][
+                "skip_reason"
+            ],
+            "newest-opportunity",
+        )
+        self.assertEqual(
+            report["optimization_opportunities_source"]["plan_key"], "newest-plan"
+        )
+        self.assertEqual(
+            report["optimization_opportunities_source"]["ended_at"],
+            "2026-06-01T00:05:00Z",
+        )
+
+    def test_baseline_result_windowing_is_single_blended_bucket(self) -> None:
+        """Current overlay aggregation folds all windowing into one result_windowing bucket."""
+        state_dir = self.tmp_dir / "runtime-config" / "blended-windowing"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        window_path = state_dir / "result-windowing.jsonl"
+        with window_path.open("w", encoding="utf-8") as handle:
+            for record in [
+                {
+                    "event": "envelope",
+                    "planKey": "blended-windowing",
+                    "resultId": "proxy-read",
+                    "toolName": "ralph_proxy_read",
+                    "originalBytes": 5000,
+                    "returnedBytes": 500,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "blended-windowing",
+                    "resultId": "proxy-read",
+                    "view": "compacted",
+                    "returnedBytes": 200,
+                },
+                {
+                    "event": "envelope",
+                    "planKey": "blended-windowing",
+                    "resultId": "stored-readback",
+                    "toolName": "ralph_proxy_result_read",
+                    "originalBytes": 8000,
+                    "returnedBytes": 800,
+                },
+                {
+                    "event": "readback",
+                    "planKey": "blended-windowing",
+                    "resultId": "stored-readback",
+                    "view": "raw",
+                    "returnedBytes": 400,
+                },
+            ]:
+                handle.write(json.dumps(record) + "\n")
+
+        hook_path = state_dir / "bash-compact.jsonl"
+        hook_path.write_text(
+            json.dumps(
+                {
+                    "planKey": "blended-windowing",
+                    "originalBytes": 2000,
+                    "compactedBytes": 1000,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        savings = OVERLAY_FIELDS.aggregate_byte_savings_by_path(
+            str(state_dir), "blended-windowing"
+        )
+
+        self.assertEqual(
+            set(savings.keys()),
+            {
+                "pre_tool_rewrite",
+                "hook_compaction",
+                "proxy_shell_compaction",
+                "result_windowing",
+            },
+        )
+        self.assertGreater(savings["result_windowing"]["saved_bytes"], 0)
+        self.assertGreater(savings["hook_compaction"]["saved_bytes"], 0)
+        for key in savings:
+            self.assertNotIn("proxy_read_windowing", key)
+            self.assertNotIn("stored_result_readback", key)
+
+    def test_baseline_discover_heavy_native_finding_is_ratio_driven_not_bytes(
+        self,
+    ) -> None:
+        """Discover flags heavy_native from tool-call ratios, not saved bytes."""
+        fixture = self._load_baseline_fixture("native-heavy-with-real-optimization.json")
+        invocations = fixture["invocations"]
+        expected = fixture["expected_baseline"]
+
+        report = DISCOVER_REPORT.build_discover_report(
+            {"invocations": invocations},
+            plan_key=fixture["plan_key"],
+        )
+
+        aggregate_ids = {
+            item["pattern_id"]
+            for item in report["aggregate_findings"]
+            if isinstance(item, dict)
+        }
+        self.assertIn(expected["aggregate_finding_pattern_id"], aggregate_ids)
+
+        savings = DISCOVER_REPORT._summarize_byte_savings_by_path(
+            invocations, plan_key=fixture["plan_key"]
+        )
+        self.assertGreaterEqual(
+            savings["result_windowing"]["saved_bytes"],
+            expected["result_windowing_saved_bytes_min"],
+        )
+        self.assertGreaterEqual(
+            savings["hook_compaction"]["saved_bytes"],
+            expected["hook_compaction_saved_bytes_min"],
+        )
+        self.assertGreaterEqual(
+            savings["proxy_shell_compaction"]["saved_bytes"],
+            expected["proxy_shell_compaction_saved_bytes_min"],
+        )
+
+        native_read_share = report["aggregate_findings"][0]["native_read_share"]
+        self.assertGreaterEqual(native_read_share, expected["native_read_share_min"])
+
+    def test_discover_native_heavy_with_real_savings_separates_diagnostics_from_missed(
+        self,
+    ) -> None:
+        """Native-heavy tool mix with real channel savings is not flagged as unoptimized."""
+        fixture = self._load_baseline_fixture("native-heavy-with-real-optimization.json")
+        report = DISCOVER_REPORT.build_discover_report(
+            {"invocations": fixture["invocations"]},
+            plan_key=fixture["plan_key"],
+        )
+
+        self.assertEqual(report["missed_compaction_opportunities"], [])
+        self.assertTrue(report["optimization_evidence"]["has_meaningful_savings"])
+        self.assertGreater(
+            report["optimization_evidence"]["byte_savings_by_path"]["result_windowing"][
+                "saved_bytes"
+            ],
+            0,
+        )
+        diagnostics = report["tool_adoption_diagnostics"]
+        self.assertTrue(diagnostics["heavy_native_read_mix"])
+        self.assertEqual(
+            diagnostics["heavy_native_read_mix"][0]["pattern_id"],
+            fixture["expected_baseline"]["aggregate_finding_pattern_id"],
+        )
+        self.assertEqual(diagnostics["ralph_mode_native_explore_tools"], [])
+        self.assertEqual(diagnostics["native_shell_preferred_over_proxy"], [])
+
+    def test_discover_no_channel_savings_populates_missed_compaction_from_evidence(
+        self,
+    ) -> None:
+        """Runs without savings still surface channel-based missed compaction findings."""
+        invocations = [
+            {
+                "plan_key": "no-channel-savings",
+                "iteration": 1,
+                "runtime": "cursor",
+                "agent_tool_access": "ralph",
+                "native_shell_calls": 2,
+                "native_read_like_calls": 4,
+                "ralph_proxy_calls": 0,
+                "byte_savings_by_path": {
+                    "hook_compaction": {
+                        "pre_optimization_bytes": 0,
+                        "post_optimization_bytes": 0,
+                        "saved_bytes": 0,
+                        "count": 0,
+                        "pre_optimization_tokens": 0,
+                        "post_optimization_tokens": 0,
+                        "saved_tokens": 0,
+                        "token_cap_triggers": 0,
+                    },
+                    "proxy_shell_compaction": {
+                        "pre_optimization_bytes": 0,
+                        "post_optimization_bytes": 0,
+                        "saved_bytes": 0,
+                        "count": 0,
+                        "pre_optimization_tokens": 0,
+                        "post_optimization_tokens": 0,
+                        "saved_tokens": 0,
+                        "token_cap_triggers": 0,
+                    },
+                    "result_windowing": {
+                        "pre_optimization_bytes": 0,
+                        "post_optimization_bytes": 0,
+                        "saved_bytes": 0,
+                        "count": 0,
+                        "pre_optimization_tokens": 0,
+                        "post_optimization_tokens": 0,
+                        "saved_tokens": 0,
+                        "token_cap_triggers": 0,
+                    },
+                },
+                "compaction_telemetry": [
+                    {
+                        "plan_key": "no-channel-savings",
+                        "original_bytes": 9000,
+                        "compacted_bytes": 0,
+                        "compaction_skipped": True,
+                        "skip_reason": "below threshold",
+                        "family": "shell",
+                    }
+                ],
+            }
+        ]
+        report = DISCOVER_REPORT.build_discover_report(
+            {"invocations": invocations},
+            plan_key="no-channel-savings",
+        )
+
+        self.assertFalse(report["optimization_evidence"]["has_meaningful_savings"])
+        missed = report["missed_compaction_opportunities"]
+        self.assertTrue(missed)
+        skip_types = {item.get("skip_type") for item in missed if "skip_type" in item}
+        pattern_ids = {item.get("pattern_id") for item in missed if "pattern_id" in item}
+        self.assertIn("compaction_skipped", skip_types)
+        self.assertIn("shell_channel_zero_savings", pattern_ids)
+        bypass = report["tool_adoption_diagnostics"]["native_shell_preferred_over_proxy"]
+        self.assertEqual(len(bypass), 1)
+        self.assertEqual(bypass[0]["pattern_id"], "native_shell_bypassed_compaction")
+        self.assertNotIn("native_shell_bypassed_compaction", pattern_ids)
+
     def test_discover_report_summation_uses_latest_cumulative_snapshot(self) -> None:
         """_summarize_byte_savings_by_path now matches benchmark latest-snapshot semantics.
 
@@ -878,3 +1321,293 @@ class TestSavingsReport(unittest.TestCase):
         findings = DISCOVER_REPORT._async_shell_polling_findings(invocations)
         self.assertTrue(len(findings) >= 1)
         self.assertEqual(findings[0]["pattern_id"], "repeated_shell_status_polling")
+
+
+class TestRuntimeOverlayChannelProvenance(unittest.TestCase):
+    """Runtime summaries expose explicit proven and fallback optimization channels."""
+
+    def setUp(self) -> None:
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    def _write_overlay_summary(self, env: dict[str, str]) -> dict[str, Any]:
+        state_dir = Path(env["RUNTIME_OVERLAY_STATE_DIR_VALUE"])
+        summary_path = state_dir / "summary.json"
+        merged = os.environ.copy()
+        merged.update(env)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(OVERLAY_WRITE_SCRIPT),
+                str(summary_path),
+                str(OVERLAY_FIELDS_SCRIPT),
+            ],
+            env=merged,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+        runtime = env["RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE"]
+        per_runtime_path = state_dir / "summaries" / f"{runtime}.json"
+        return json.loads(per_runtime_path.read_text(encoding="utf-8"))
+
+    def test_codex_summary_distinguishes_measured_hook_from_mcp_fallback(self) -> None:
+        state_dir = self.tmp_dir / "runtime-config" / "codex-provenance"
+        state_dir.mkdir(parents=True)
+        summary = self._write_overlay_summary(
+            {
+                "RUNTIME_OVERLAY_STATE_DIR_VALUE": str(state_dir),
+                "RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE": "codex",
+                "RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE": "codex-provenance",
+                "RUNTIME_OVERLAY_SUMMARY_NATIVE_OUTPUT_MUTATION_PROVEN_VALUE": "false",
+                "RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_COMPACTION_AUTHORITATIVE_VALUE": "wrapper_based_native_shell_compaction",
+                "RUNTIME_OVERLAY_SUMMARY_FALLBACK_PATH_ACTIVE_VALUE": "true",
+                "RUNTIME_OVERLAY_ARRAY_PROVEN_CHANNELS": "native_shell_hook\nproxy_shell\nnative_result_mcp_fallback",
+                "RUNTIME_OVERLAY_ARRAY_FALLBACK_CHANNELS": "native_result_hook",
+            }
+        )
+        self.assertIn("native_shell_hook", summary["native_optimization_proven_channels"])
+        self.assertIn("proxy_shell", summary["native_optimization_proven_channels"])
+        self.assertIn("native_result_mcp_fallback", summary["native_optimization_proven_channels"])
+        self.assertIn("native_result_hook", summary["fallback_channels_active"])
+        self.assertNotIn("native_result_hook", summary["native_optimization_proven_channels"])
+        self.assertIn("channel_activity_counts", summary)
+
+    def test_opencode_hybrid_summary_distinguishes_mcp_fallback_from_hook(self) -> None:
+        state_dir = self.tmp_dir / "runtime-config" / "opencode-hybrid-provenance"
+        state_dir.mkdir(parents=True)
+        window_log = state_dir / "result-windowing.jsonl"
+        with window_log.open("w", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "event": "envelope",
+                        "planKey": "opencode-hybrid-provenance",
+                        "resultId": "read-1",
+                        "toolName": "Read",
+                        "normalizedToolName": "ralph_proxy_read",
+                        "channel": "native_result_mcp_fallback",
+                        "originalBytes": 5000,
+                        "returnedBytes": 500,
+                    }
+                )
+                + "\n"
+            )
+        summary = self._write_overlay_summary(
+            {
+                "RUNTIME_OVERLAY_STATE_DIR_VALUE": str(state_dir),
+                "RUNTIME_OVERLAY_SUMMARY_RUNTIME_VALUE": "opencode",
+                "RUNTIME_OVERLAY_SUMMARY_PLAN_KEY_VALUE": "opencode-hybrid-provenance",
+                "RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE_VALUE": "hybrid",
+                "RUNTIME_OVERLAY_SUMMARY_NATIVE_SHELL_COMPACTION_AUTHORITATIVE_VALUE": "mcp_proxy_compaction",
+                "RUNTIME_OVERLAY_SUMMARY_NATIVE_HOOKS_EFFECTIVE_VALUE": "false",
+                "RUNTIME_OVERLAY_ARRAY_PROVEN_CHANNELS": "proxy_shell\nnative_result_mcp_fallback",
+                "RUNTIME_OVERLAY_ARRAY_FALLBACK_CHANNELS": "native_result_hook",
+            }
+        )
+        self.assertEqual(summary["native_shell_compaction_authoritative"], "mcp_proxy_compaction")
+        self.assertIn("native_result_mcp_fallback", summary["native_optimization_proven_channels"])
+        self.assertIn("native_result_hook", summary["fallback_channels_active"])
+        self.assertGreater(summary["channel_activity_counts"]["native_result_mcp_fallback"], 0)
+        self.assertEqual(summary["channel_activity_counts"]["native_result_hook"], 0)
+
+    def test_aggregate_merges_provenance_from_multiple_runtimes(self) -> None:
+        state_dir = self.tmp_dir / "runtime-config" / "mixed-provenance"
+        state_dir.mkdir(parents=True)
+        summaries_dir = state_dir / "summaries"
+        summaries_dir.mkdir()
+        (summaries_dir / "cursor.json").write_text(
+            json.dumps(
+                {
+                    "runtime": "cursor",
+                    "plan_key": "mixed-provenance",
+                    "native_optimization_proven_channels": ["native_shell_hook", "proxy_shell"],
+                    "fallback_channels_active": ["native_result_hook"],
+                    "channel_activity_counts": OVERLAY_FIELDS.channel_activity_counts_from_savings({}),
+                    "updated_at": "2026-07-01T10:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (summaries_dir / "opencode.json").write_text(
+            json.dumps(
+                {
+                    "runtime": "opencode",
+                    "plan_key": "mixed-provenance",
+                    "native_optimization_proven_channels": [
+                        "native_result_mcp_fallback",
+                        "proxy_shell",
+                    ],
+                    "fallback_channels_active": ["native_result_hook"],
+                    "channel_activity_counts": OVERLAY_FIELDS.channel_activity_counts_from_savings({}),
+                    "updated_at": "2026-07-01T11:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        aggregate = OVERLAY_FIELDS.merge_runtime_overlay_summaries(
+            str(state_dir), plan_key="mixed-provenance"
+        )
+        self.assertEqual(
+            sorted(aggregate["native_optimization_proven_channels"]),
+            sorted(
+                [
+                    "native_shell_hook",
+                    "proxy_shell",
+                    "native_result_mcp_fallback",
+                ]
+            ),
+        )
+        self.assertEqual(aggregate["fallback_channels_active"], ["native_result_hook"])
+        self.assertIn("channel_activity_counts", aggregate)
+
+
+class TestBenchmarkChannelAttributionE2E(unittest.TestCase):
+    """End-to-end synthetic fixture: overlay summaries, discover, benchmark JSON, Markdown."""
+
+    def setUp(self) -> None:
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.manifest = json.loads(E2E_MANIFEST.read_text(encoding="utf-8"))
+        self.plan_key = self.manifest["plan_key"]
+        self._materialize_workspace()
+
+    def _write_jsonl(self, path: Path, records: list[dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+
+    def _materialize_workspace(self) -> None:
+        manifest = self.manifest
+        runtime_cfg = manifest["runtime_config"]
+        state_dir = self.tmp_dir / ".ralph-workspace" / "runtime-config" / self.plan_key
+        logs_dir = self.tmp_dir / ".ralph-workspace" / "logs" / self.plan_key
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        self._write_jsonl(
+            state_dir / "bash-compact.jsonl",
+            runtime_cfg["bash_compact_records"],
+        )
+        self._write_jsonl(
+            state_dir / "proxy-shell-compact.jsonl",
+            runtime_cfg["proxy_shell_compact_records"],
+        )
+        self._write_jsonl(
+            state_dir / "result-windowing.jsonl",
+            runtime_cfg["result_windowing_records"],
+        )
+
+        summaries_dir = state_dir / "summaries"
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+        for runtime, summary in runtime_cfg["per_runtime_summaries"].items():
+            (summaries_dir / f"{runtime}.json").write_text(
+                json.dumps(summary), encoding="utf-8"
+            )
+
+        (logs_dir / "plan-usage-summary.json").write_text(
+            json.dumps(manifest["plan_usage_summary"]), encoding="utf-8"
+        )
+        (logs_dir / "invocation-usage.json").write_text(
+            json.dumps({"invocations": manifest["invocations"]}), encoding="utf-8"
+        )
+
+        self.state_dir = state_dir
+        self.logs_dir = logs_dir
+        self.summary_path = logs_dir / "plan-usage-summary.json"
+
+    @staticmethod
+    def _channel_slice(
+        channels: dict[str, Any], channel_name: str
+    ) -> dict[str, Any]:
+        bucket = channels.get(channel_name) or {}
+        out: dict[str, Any] = {
+            "saved_bytes": bucket.get("saved_bytes", 0),
+            "attribution": bucket.get("attribution", "exact"),
+        }
+        for key in ("gross_readback_bytes", "net_consumed_bytes"):
+            if key in bucket:
+                out[key] = bucket[key]
+        return out
+
+    def _assert_channels_match_expected(
+        self,
+        channels: dict[str, Any],
+        *,
+        source: str,
+        include_readback_diagnostics: bool = False,
+    ) -> None:
+        expected = self.manifest["expected_per_channel"]
+        for channel_name, want in expected.items():
+            got = self._channel_slice(channels, channel_name)
+            for key, value in want.items():
+                if key in ("gross_readback_bytes", "net_consumed_bytes") and not include_readback_diagnostics:
+                    continue
+                self.assertEqual(
+                    got.get(key),
+                    value,
+                    msg=f"{source} channel {channel_name}.{key}",
+                )
+
+    def test_overlay_aggregate_matches_runtime_config_telemetry(self) -> None:
+        aggregate = OVERLAY_FIELDS.merge_runtime_overlay_summaries(
+            str(self.state_dir), plan_key=self.plan_key
+        )
+        self.assertEqual(aggregate["plan_key"], self.plan_key)
+        self.assertEqual(sorted(aggregate["runtimes_present"]), ["cursor", "opencode"])
+        self.assertIn("byte_savings_by_channel", aggregate)
+        self.assertIn("native_result_hook", aggregate["native_optimization_proven_channels"])
+        self.assertIn("proxy_read_windowing", aggregate["native_optimization_proven_channels"])
+        self._assert_channels_match_expected(
+            aggregate["byte_savings_by_channel"], source="overlay aggregate"
+        )
+
+    def test_benchmark_discover_and_markdown_agree_on_channel_attribution(self) -> None:
+        overlay = OVERLAY_FIELDS.merge_runtime_overlay_summaries(
+            str(self.state_dir), plan_key=self.plan_key
+        )
+        overlay_channels = overlay["byte_savings_by_channel"]
+
+        benchmark = SAVINGS_REPORT.build_report([str(self.summary_path)])
+        self.assertIn("per_channel", benchmark)
+        self._assert_channels_match_expected(benchmark["per_channel"], source="benchmark", include_readback_diagnostics=True)
+
+        discover = DISCOVER_REPORT.build_discover_report(
+            {"invocations": self.manifest["invocations"]},
+            plan_key=self.plan_key,
+        )
+        self._assert_channels_match_expected(
+            discover["byte_savings_by_channel"], source="discover"
+        )
+
+        markdown = RENDER_MARKDOWN.render_markdown(benchmark)
+        for needle in self.manifest["expected_markdown_contains"]:
+            self.assertIn(needle, markdown, msg=f"missing markdown: {needle!r}")
+
+        expected_discover = self.manifest["expected_discover"]
+        if expected_discover.get("missed_compaction_opportunities_empty"):
+            self.assertEqual(discover["missed_compaction_opportunities"], [])
+        if expected_discover.get("has_meaningful_savings"):
+            self.assertTrue(discover["optimization_evidence"]["has_meaningful_savings"])
+        if expected_discover.get("cursor_heavy_native_read_mix"):
+            cursor_discover = DISCOVER_REPORT.build_discover_report(
+                {"invocations": [self.manifest["invocations"][0]]},
+                plan_key=self.plan_key,
+            )
+            diagnostics = cursor_discover["tool_adoption_diagnostics"]
+            self.assertTrue(diagnostics["heavy_native_read_mix"])
+            self.assertEqual(
+                diagnostics["heavy_native_read_mix"][0]["pattern_id"],
+                expected_discover["cursor_heavy_native_pattern_id"],
+            )
+
+        for channel_name in self.manifest["expected_per_channel"]:
+            overlay_slice = self._channel_slice(overlay_channels, channel_name)
+            benchmark_slice = self._channel_slice(benchmark["per_channel"], channel_name)
+            discover_slice = self._channel_slice(
+                discover["byte_savings_by_channel"], channel_name
+            )
+            for key in ("saved_bytes", "attribution"):
+                self.assertEqual(overlay_slice.get(key), benchmark_slice.get(key), msg=channel_name)
+                self.assertEqual(overlay_slice.get(key), discover_slice.get(key), msg=channel_name)

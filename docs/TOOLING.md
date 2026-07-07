@@ -256,9 +256,13 @@ Everything Ralph mutates for a run is journaled so it can be undone. Per plan ke
 .ralph-workspace/runtime-config/<plan-key>/
   journals/          # recovery journals (PID, mutated files, backups)
   originals/         # byte backups of mutated workspace files
-  summary.json       # what happened: mode, hook effectiveness, telemetry, warnings
+  summaries/         # per-runtime overlay summaries (one JSON file per runtime)
+    <runtime>.json
+  summary.json       # aggregate rebuilt from summaries/; compatibility entry point
   hook-telemetry/    # per-run hook event logs
 ```
+
+Multi-runtime plans (orchestration stages, runtime switches under one `plan_key`) write one summary per runtime under `summaries/<runtime>.json` and rebuild the top-level `summary.json` from those files. The aggregate includes `runtimes_present` and a `runtime_overlays` map with per-runtime scalars so later invocations do not overwrite an earlier runtime's evidence.
 
 Normal exits restore everything via `EXIT` traps. `SIGKILL` and force-quit skip traps, so the journals are the recovery source of truth:
 
@@ -280,7 +284,14 @@ The most useful fields, written at cleanup and copied into usage records:
 | `native_output_mutation_proven` | Agent-visible output replacement is proven on this build |
 | `mcp_effective`, `proxy_shell_compact_effective` | Whether MCP injection and MCP compaction ran |
 | `hook_compactions`, `hook_rewrites`, `hook_original_bytes`, `hook_compacted_bytes` | Aggregated savings telemetry |
+| `byte_savings_by_channel` | Per-channel optimization evidence (exact attribution on new runs) |
+| `channel_activity_counts` | Event counts per optimization channel |
+| `native_optimization_proven_channels` | Channels Ralph proved active for this runtime |
+| `fallback_channels_active` | Channels that fell back to MCP when native hooks were unproven |
+| `runtimes_present`, `runtime_overlays` | Present on aggregate `summary.json` when multiple runtimes contributed |
 | `mutated_files`, `generated_files`, `warnings`, `capabilities` | Audit trail |
+
+Per-runtime files under `summaries/<runtime>.json` carry the same channel fields for that runtime only. See [Optimization channel attribution](#optimization-channel-attribution) for channel id meanings.
 
 If `native_hooks_effective` is `false` when you expected hooks: on Claude check for `CLAUDE_PLAN_BARE`; on Cursor check that `python3`/`jq` are installed; on Codex and OpenCode some surfaces are expected to be unproven (see the table above). `native_hooks_reason` says why.
 
@@ -341,13 +352,43 @@ Proxy path policy distinguishes the **project root** (`--workspace`; where `.ral
 
 ## Telemetry
 
-Compaction and hook activity land in `.ralph-workspace/logs/<plan-key>/discover-report.json` (per-event savings, families, skip reasons) and in the per-run `summary.json` and `invocation-usage.json`. All local files, nothing uploaded. When reading the numbers, keep the layers apart: `ralph_proxy_calls` counts actual proxy tool adoption from the transcript; `hook_*` fields come from overlay journals; `native_hooks_effective` is a build capability flag, not proof anything fired this run (that is `native_hooks_used_on_run`).
+Compaction and hook activity land in `.ralph-workspace/logs/<plan-key>/discover-report.json` (per-event savings, families, skip reasons) and in the per-run `summary.json` (or `summaries/<runtime>.json`) and `invocation-usage.json`. All local files, nothing uploaded.
+
+When reading the numbers, keep three layers apart:
+
+| Layer | Source | What it measures |
+|-------|--------|------------------|
+| **Optimization evidence** | `byte_savings_by_channel`, benchmark `per_channel` | Bytes/tokens Ralph actually trimmed or windowed, with exact channel ids on new runs |
+| **Coarse path totals** | `byte_savings_by_path`, benchmark `per_path` | Legacy rollups (`hook_compaction`, `proxy_shell_compaction`, `result_windowing`) kept for compatibility |
+| **Tool-adoption diagnostics** | `ralph_proxy_calls`, `native_read_like_calls`, discover `sequence_patterns`, benchmark **Improvement opportunities** | Whether agents used proxy vs native tools and which usage patterns appeared; not proof of savings |
+
+`hook_*` fields come from overlay journals. `native_hooks_effective` is a build capability flag, not proof anything fired this run (that is `native_hooks_used_on_run`).
 
 Inspect savings after a run:
 
 ```bash
 cat ".ralph-workspace/logs/<plan-key>/discover-report.json" | jq '.compaction_events[] | select(.savings_percent > 50)'
 ```
+
+### Optimization channel attribution
+
+New plan runs record **exact** optimization channels in overlay summaries and benchmark reports. Each channel id names one compaction or windowing path:
+
+| Channel id | Meaning |
+|------------|---------|
+| `native_shell_hook` | Native shell hook compacted command output (for example Cursor/Codex Bash hooks) |
+| `proxy_shell` | `ralph_proxy_shell` compacted allowlisted command output |
+| `native_result_hook` | Native exploration hook windowed read/grep/glob/bash output |
+| `native_result_mcp_fallback` | MCP fallback windowing when native result hooks are unproven |
+| `proxy_read_windowing` | `ralph_proxy_read` bounded preview with stored full output |
+| `proxy_search_windowing` | `ralph_proxy_grep` / search windowing with stored full output |
+| `stored_result_readback` | Follow-up `ralph_proxy_result_*` reads after an envelope preview |
+
+Channel buckets carry `attribution: exact` on new runs. **Historical runs** recorded before per-channel telemetry may appear with `attribution: legacy`; benchmark Markdown groups those under **Legacy / unknown attribution**. Treat legacy rows as approximate totals, not authoritative channel splits. Re-run the plan (or wait for new invocations) to get exact attribution.
+
+The benchmark report's **Optimization by channel** section is the authoritative breakdown of where tool-output savings came from. **Improvement opportunities** (missed compaction, native-read-after-grep patterns, heavy native read share) are adoption hints only; they do not replace channel evidence.
+
+`ralph benchmark` aggregates `plan-usage-summary.json` files into JSON/Markdown; regenerate [BENCHMARKS.md](BENCHMARKS.md) with `ralph benchmark --write-doc` (generated output; do not hand-edit).
 
 ## Post-TODO verification
 
