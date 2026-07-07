@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "python"))
 import retrieval_eval as reval  # noqa: E402
 
 
+@unittest.skipUnless(shutil.which("rg"), "rg not installed")
 class TestRetrievalEvalHarness(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

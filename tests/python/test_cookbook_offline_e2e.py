@@ -56,7 +56,12 @@ class TestCookbookOfflineE2E(unittest.TestCase):
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            msg=f"merge script failed: stdout={proc.stdout!r} stderr={proc.stderr!r}",
         )
         merged = proc.stdout
         expected = f"{spec['stable_block']}\n\n{spec['volatile_todo']}"

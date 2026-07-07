@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import unittest
@@ -32,6 +33,7 @@ class TestCookbookRoadmapBaseline(unittest.TestCase):
         for runtime in ("claude", "opencode", "cursor", "codex", "antigravity"):
             self.assertIn(runtime, data["runtimes"])
 
+    @unittest.skipUnless(shutil.which("rg"), "rg not installed")
     def test_bm25_rankings_match_baseline(self) -> None:
         baseline = _load_fixture("bm25-rankings-baseline.json")
         rank_script = REPO_ROOT / "bundle" / ".ralph" / "python" / "mcp-proxy-search-rank.py"
