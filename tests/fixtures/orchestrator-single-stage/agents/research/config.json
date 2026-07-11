@@ -1,0 +1,9 @@
+{
+  "name": "research",
+  "description": "Fixture research agent",
+  "system": "You are a fixture.",
+  "model": "fixture-model",
+  "output_artifacts": [
+    ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{PLAN_KEY}}/research.md"
+  ]
+}
