@@ -8,6 +8,7 @@ Parses only the constrained mcp_servers schema with no external dependencies.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,47 @@ SECRET_VALUE_RE = re.compile(r"(?i)(sk-|Bearer\s+|Basic\s+|ghp_|gho_|key-)")
 def _fail(message: str) -> None:
     print(message, file=sys.stderr)
     sys.exit(1)
+
+
+def _env_json_string_array(var_name: str) -> list[str] | None:
+    raw = os.environ.get(var_name)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    out: list[str] = []
+    for item in data:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
+
+
+def _warn_unresolved_mcp_servers(normalized: list[dict[str, object]]) -> None:
+    """
+    Optional WARN behavior driven by env vars.
+
+    The caller (bash read_mcp_servers) sets:
+      - RALPH_AGENT_ID: agent identifier to print in WARN
+      - RALPH_RESOLVED_MCP_SERVERS_JSON: JSON array of configured MCP server names
+    """
+    agent_id = os.environ.get("RALPH_AGENT_ID") or os.environ.get("AGENT_ID") or ""
+    available = _env_json_string_array("RALPH_RESOLVED_MCP_SERVERS_JSON")
+    if not agent_id or available is None:
+        return
+    available_set = set(available)
+    for entry in normalized:
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if entry.get("reference") is True and name not in available_set:
+            print(
+                f"WARN: agent {agent_id} declares mcp server '{name}' but it is not configured",
+                file=sys.stderr,
+            )
 
 
 def _unquote(value: str) -> str:
@@ -464,6 +506,7 @@ def cmd_redact_config(path: str) -> None:
         print(json.dumps([]))
         return
     normalized = _validate_mcp_servers(data["mcp_servers"])
+    _warn_unresolved_mcp_servers(normalized)
     print(json.dumps(_redact_mcp_servers(normalized), indent=2))
 
 
@@ -475,6 +518,7 @@ def cmd_frontmatter(path: str) -> None:
         normalized = _validate_mcp_servers(items)
     except ValueError as e:
         _fail(str(e))
+    _warn_unresolved_mcp_servers(normalized)
     for entry in normalized:
         print(json.dumps(entry, separators=(',', ':')))
 

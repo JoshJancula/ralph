@@ -237,6 +237,14 @@ def render_invocation_summary(
 ) -> str:
     renderer = InvocationSummaryRenderer(color=color, ascii_only=ascii_only)
 
+    usage_data: dict = {}
+    if usage_json:
+        try:
+            usage_data = json.loads(usage_json)
+        except (ValueError, TypeError):
+            usage_data = {}
+    usage_unsupported = bool(usage_data.get("usage_unsupported"))
+
     rate_limit_display = (
         rate_limit_status if rate_limit_status and rate_limit_status != "none" else "n/a"
     )
@@ -272,12 +280,15 @@ def render_invocation_summary(
         hit_code = "dim"
 
     usage_rows: List[Optional[List[str]]] = [
-        ["Input", fmt_int(input_tokens)],
-        ["Output", fmt_int(output_tokens)],
+        ["Input", "n/a" if usage_unsupported else fmt_int(input_tokens)],
+        ["Output", "n/a" if usage_unsupported else fmt_int(output_tokens)],
         ["Tool Calls", fmt_int(tool_calls)],
-        ["Cache Read", fmt_int(cache_read)],
-        ["Cache Write", fmt_int(cache_create)],
-        ["Cache Hit", renderer.paint(f"{cache_hit}%", hit_code)],
+        ["Cache Read", "n/a" if usage_unsupported else fmt_int(cache_read)],
+        ["Cache Write", "n/a" if usage_unsupported else fmt_int(cache_create)],
+        [
+            "Cache Hit",
+            "n/a" if usage_unsupported else renderer.paint(f"{cache_hit}%", hit_code),
+        ],
     ]
     usage_label_codes = ["green", "green", "cyan", "yellow", "yellow", "yellow"]
 
@@ -304,12 +315,8 @@ def render_invocation_summary(
     combined_width = renderer.table_width(top_block)
 
     detail_rows: List[List[str]] = []
-    if usage_json:
-        try:
-            data = json.loads(usage_json)
-        except (ValueError, TypeError):
-            data = {}
-        tool_counts = data.get("tool_calls_by_tool") or {}
+    if usage_data:
+        tool_counts = usage_data.get("tool_calls_by_tool") or {}
         detail_rows = [
             [display_tool_family(name), str(name), fmt_int(count)]
             for name, count in sorted(

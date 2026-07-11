@@ -105,3 +105,40 @@ prepare_project_with_mcp_server() {
   [ "$status" -eq 0 ]
   jq -e '.mcp.ralph.environment.RALPH_MODE == "hybrid"' "$project_dir/opencode.json"
 }
+
+@test "setup_mcp_claude merges a mota MCP server fragment alongside ralph" {
+  command -v jq >/dev/null || skip "jq required"
+  [ -f "$SETUP_MCP_SH" ] || skip "setup-mcp.sh missing"
+
+  local project_dir="$TEST_TEMP_DIR/project"
+  local runtime_dir="$project_dir/.claude"
+  local bin_dir="$TEST_TEMP_DIR/bin"
+  prepare_project_with_mcp_server "$project_dir"
+  mkdir -p "$runtime_dir" "$bin_dir"
+
+  cat >"$bin_dir/mota" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$bin_dir/mota"
+
+  run bash -c "
+    set -euo pipefail
+    source \"$SETUP_HELPERS_SH\"
+    source \"$SETUP_MCP_SH\"
+    export BUNDLE_ROOT=\"$BUNDLE_ROOT\"
+    export PATH=\"$bin_dir:\$PATH\"
+    export MOTA_API_URL=\"http://localhost:3000/api\"
+    setup_mcp_claude \"$runtime_dir\" \"$project_dir\"
+  "
+  [ "$status" -eq 0 ]
+
+  local config_path="$project_dir/.mcp.json"
+  [ -f "$config_path" ]
+  jq -e '.mcpServers | has("ralph") and has("mota")' "$config_path"
+  jq -e '.mcpServers.mota.command == "mota"' "$config_path"
+  jq -e '.mcpServers.mota.args == ["mcp", "serve"]' "$config_path"
+  jq -e '.mcpServers.mota.env.MOTA_API_URL == "http://localhost:3000/api"' "$config_path"
+  jq -e '.mcpServers.mota.env | has("MOTA_BOT_TOKEN") | not' "$config_path"
+  jq -e '.mcpServers.mota.env | has("MOTA_ORG_MCP_KEY") | not' "$config_path"
+}

@@ -427,6 +427,7 @@ def plan_summary_with_invocation_fallback(summary: Dict[str, Any], invocations: 
     effective["cache_hit_ratio"] = totals.get("cache_hit_ratio", effective["cache_efficiency_ratio"])
     effective["runtimes"] = unique_record_values(invocations, "runtime")
     effective["models"] = unique_record_values(invocations, "model")
+    effective["usage_unsupported"] = all_unsupported(invocations)
     return effective
 
 
@@ -494,6 +495,14 @@ def runtimes_for_model(records: Sequence[Dict[str, Any]]) -> str:
     return ",".join(ordered) if ordered else "-"
 
 
+def all_unsupported(records: Sequence[Dict[str, Any]]) -> bool:
+    """True iff every record in the set has usage_unsupported truthy (and the set is non-empty)."""
+    recs = [r for r in records if isinstance(r, dict)]
+    if not recs:
+        return False
+    return all(bool(r.get("usage_unsupported")) for r in recs)
+
+
 def aggregate_by_model(invocations: Sequence[Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Group invocations by model; preserve first-seen model order."""
     buckets: Dict[str, List[Dict[str, Any]]] = {}
@@ -511,6 +520,7 @@ def aggregate_by_model(invocations: Sequence[Dict[str, Any]]) -> List[Tuple[str,
         recs = buckets[key]
         agg = aggregate(recs)
         agg["invocation_count"] = len(recs)
+        agg["usage_unsupported"] = all_unsupported(recs)
         out.append((key, agg, recs))
     return out
 
@@ -534,6 +544,7 @@ def aggregate_by_runtime_model(invocations: Sequence[Dict[str, Any]]) -> List[Tu
         recs = buckets[(runtime, model)]
         agg = aggregate(recs)
         agg["invocation_count"] = len(recs)
+        agg["usage_unsupported"] = all_unsupported(recs)
         has_todo_completion = any("todo_completed" in record for record in recs)
         if has_todo_completion:
             agg["todos_done"] = sum(1 for record in recs if record.get("todo_completed") is True)
@@ -591,19 +602,20 @@ def summarize_plan(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]
     if timing:
         emit(f"  {c('dim', 'Window:')}      {timing}")
     totals = aggregate(invocations)
+    plan_unsupported = all_unsupported(invocations)
     emit()
     emit(c("bold", "Totals"))
     emit(
-        f"  input={fmt_tokens(summary_value(summary, 'input_tokens', invocations, totals['input_tokens']))} "
-        f"output={fmt_tokens(summary_value(summary, 'output_tokens', invocations, totals['output_tokens']))} "
-        f"cache_create={fmt_tokens(summary_value(summary, 'cache_creation_input_tokens', invocations, totals['cache_creation_input_tokens']))} "
-        f"cache_read={fmt_tokens(summary_value(summary, 'cache_read_input_tokens', invocations, totals['cache_read_input_tokens']))}"
+        f"  input={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'input_tokens', invocations, totals['input_tokens']))} "
+        f"output={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'output_tokens', invocations, totals['output_tokens']))} "
+        f"cache_create={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'cache_creation_input_tokens', invocations, totals['cache_creation_input_tokens']))} "
+        f"cache_read={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'cache_read_input_tokens', invocations, totals['cache_read_input_tokens']))}"
     )
     cache_hit_ratio = summary_value(summary, 'cache_hit_ratio', invocations, 0)
     emit(
-        f"  max_turn={fmt_tokens(summary_value(summary, 'max_turn_total_tokens', invocations, totals['max_turn_total_tokens']))} "
+        f"  max_turn={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'max_turn_total_tokens', invocations, totals['max_turn_total_tokens']))} "
         f"tool_calls={fmt_tokens(summary_value(summary, 'tool_calls_total', invocations, totals['tool_calls_total']))} "
-        + color_cache_hit_token(cache_hit_ratio)
+        + ("n/a" if plan_unsupported else color_cache_hit_token(cache_hit_ratio))
     )
     per_turn = summary_value(summary, "cache_read_per_tool_turn", invocations, None)
     per_call = summary_value(summary, "cache_read_per_tool_call", invocations, None)
@@ -927,6 +939,7 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
                     "elapsed_seconds": 0,
                     "invocation_count": 0,
                     "tool_calls_total": 0,
+                    "usage_unsupported": True,
                 }
             bucket = runtime_buckets[rt]
             bucket["input_tokens"] += as_int(record.get("input_tokens"))
@@ -934,6 +947,7 @@ def aggregate_all(plans: List[Tuple[str, str]], orchestrations: List[Tuple[str, 
             bucket["cache_creation_input_tokens"] += as_int(record.get("cache_creation_input_tokens"))
             bucket["cache_read_input_tokens"] += as_int(record.get("cache_read_input_tokens"))
             bucket["tool_calls_total"] += as_int(record.get("tool_calls_total"))
+            bucket["usage_unsupported"] = bucket["usage_unsupported"] and bool(record.get("usage_unsupported"))
             bucket["elapsed_seconds"] += float(record.get("elapsed_seconds", 0)) if record.get("elapsed_seconds") else 0.0
             max_turn = as_int(record.get("max_turn_total_tokens"))
             if max_turn > bucket["max_turn_total_tokens"]:
@@ -1099,16 +1113,17 @@ def summarize_all(
         rows = []
         for runtime in sorted(by_runtime.keys()):
             agg = by_runtime[runtime]
+            unsupported = bool(agg.get("usage_unsupported"))
             rows.append([
                 runtime,
                 str(agg.get("invocation_count", 0)),
                 format_elapsed(agg.get("elapsed_seconds")),
-                fmt_int(agg.get("input_tokens")),
-                fmt_int(agg.get("output_tokens")),
-                fmt_int(agg.get("cache_creation_input_tokens")),
-                fmt_int(agg.get("cache_read_input_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("input_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("output_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("cache_creation_input_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("cache_read_input_tokens")),
                 fmt_int(agg.get("tool_calls_total")),
-                color_cache_hit(agg.get("cache_hit_ratio")),
+                "n/a" if unsupported else color_cache_hit(agg.get("cache_hit_ratio")),
             ])
         for line in render_table(headers, rows, aligns):
             emit(line)
@@ -1143,16 +1158,17 @@ def summarize_all(
         )
         for model_name, agg, recs in sorted_models:
             runtimes = runtimes_for_model(list(recs))
+            unsupported = bool(agg.get("usage_unsupported"))
             rows.append([
                 model_name,
                 runtimes,
                 str(agg.get("invocation_count", len(recs))),
                 format_elapsed(agg.get("elapsed_seconds")),
-                fmt_int(agg.get("input_tokens")),
-                fmt_int(agg.get("output_tokens")),
-                fmt_int(agg.get("cache_read_input_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("input_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("output_tokens")),
+                "n/a" if unsupported else fmt_int(agg.get("cache_read_input_tokens")),
                 fmt_int(agg.get("tool_calls_total")),
-                color_cache_hit(agg.get("cache_hit_ratio")),
+                "n/a" if unsupported else color_cache_hit(agg.get("cache_hit_ratio")),
             ])
         for line in render_table(headers, rows, aligns):
             emit(line)
@@ -1208,8 +1224,9 @@ def summarize_all(
                 todos_done = as_int(summary.get("todos_done"), 0)
                 todos_total = as_int(summary.get("todos_total"), 0)
                 elapsed = format_elapsed(effective_summary.get("elapsed_seconds", 0))
-                input_tokens = fmt_int(effective_summary.get("input_tokens", 0))
-                output_tokens = fmt_int(effective_summary.get("output_tokens", 0))
+                plan_unsupported = bool(effective_summary.get("usage_unsupported"))
+                input_tokens = "n/a" if plan_unsupported else fmt_int(effective_summary.get("input_tokens", 0))
+                output_tokens = "n/a" if plan_unsupported else fmt_int(effective_summary.get("output_tokens", 0))
                 cache_hit_val = effective_summary.get("cache_hit_ratio", 0)
                 status = c("yellow", "incomplete") if todos_done < todos_total else c("dim", "ok")
                 proj_cell = project if first_in_project else ""
@@ -1227,7 +1244,7 @@ def summarize_all(
                 if show_plan_tool_calls:
                     rows[-1].append(fmt_int(effective_summary.get("tool_calls_total", 0)))
                 rows[-1].extend([
-                    color_cache_hit(cache_hit_val),
+                    "n/a" if plan_unsupported else color_cache_hit(cache_hit_val),
                     status,
                 ])
                 pair_breakdown = aggregate_by_runtime_model(plan_invocations)
@@ -1235,6 +1252,7 @@ def summarize_all(
                     for runtime_name, model_name, pair in pair_breakdown:
                         pair_todos = as_int(pair.get("todos_done"), 0)
                         pair_todos_label = f"~{pair_todos}" if pair.get("todos_estimated") else str(pair_todos)
+                        pair_unsupported = bool(pair.get("usage_unsupported"))
                         pair_row = [
                             "",
                             "",
@@ -1243,13 +1261,13 @@ def summarize_all(
                             str(pair.get("invocation_count", 0)),
                             pair_todos_label,
                             format_elapsed(pair.get("elapsed_seconds", 0)),
-                            fmt_int(pair.get("input_tokens", 0)),
-                            fmt_int(pair.get("output_tokens", 0)),
+                            "n/a" if pair_unsupported else fmt_int(pair.get("input_tokens", 0)),
+                            "n/a" if pair_unsupported else fmt_int(pair.get("output_tokens", 0)),
                         ]
                         if show_plan_tool_calls:
                             pair_row.append(fmt_int(pair.get("tool_calls_total", 0)))
                         pair_row.extend([
-                            color_cache_hit(pair.get("cache_hit_ratio", 0)),
+                            "n/a" if pair_unsupported else color_cache_hit(pair.get("cache_hit_ratio", 0)),
                             "",
                         ])
                         rows.append(pair_row)

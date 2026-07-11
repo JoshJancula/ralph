@@ -182,5 +182,43 @@ class TestClassifyToolCallsFamilyRows(unittest.TestCase):
         self.assertEqual(inv_summary.display_tool_family("custom_tool"), "unknown")
 
 
+class TestUsageUnsupportedRendering(unittest.TestCase):
+    """Antigravity records mark usage_unsupported: token/cache cells render n/a."""
+
+    def test_unsupported_usage_shows_na(self) -> None:
+        usage_json = json.dumps(
+            {"usage_unsupported": True, "tool_calls_by_tool": {"ralph_proxy_glob": 2}}
+        )
+        text = _render_plain(
+            runtime="antigravity",
+            model="antigravity/test-model",
+            input_tokens="0",
+            output_tokens="0",
+            tool_calls="2",
+            cache_create="0",
+            cache_read="0",
+            cache_hit="0",
+            usage_json=usage_json,
+        )
+        self.assertIn("n/a", text)
+        input_line = next(line for line in text.splitlines() if "Input" in line)
+        self.assertIn("n/a", input_line)
+        output_line = next(line for line in text.splitlines() if "Output" in line)
+        self.assertIn("n/a", output_line)
+        cache_read_line = next(line for line in text.splitlines() if "Cache Read" in line)
+        self.assertIn("n/a", cache_read_line)
+        cache_write_line = next(line for line in text.splitlines() if "Cache Write" in line)
+        self.assertIn("n/a", cache_write_line)
+        cache_hit_line = next(line for line in text.splitlines() if "Cache Hit" in line)
+        self.assertIn("n/a", cache_hit_line)
+        tool_calls_line = next(line for line in text.splitlines() if "Tool Calls" in line)
+        self.assertIn("2", tool_calls_line)
+
+    def test_supported_usage_unaffected(self) -> None:
+        text = _render_plain()
+        input_line = next(line for line in text.splitlines() if "Input" in line)
+        self.assertNotIn("n/a", input_line)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -406,6 +406,7 @@ def _iter_input_candidates(tool_input: Mapping[str, Any]) -> List[Mapping[str, A
 _NO_HIGHLIGHT = os.environ.get("RALPH_PLAN_PRETTY_NO_HIGHLIGHT") == "1"
 _ANSI_ESCAPE_RE = re.compile(r"\033\[[0-9;]*m")
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_ANTIGRAVITY_TOOL_CALL_RE = re.compile(r"^\*\s+([\w.]+)\(")
 
 # Map file extension to a language key in _LANG_SPECS.
 _LANG_BY_EXT: Dict[str, str] = {
@@ -829,6 +830,15 @@ class PrettyRenderer:
                 return []
             self._seen_plain_warnings.add(line)
             return [f"{self.dim}{line}{self.reset}"]
+        if self.mode == "antigravity":
+            match = _ANTIGRAVITY_TOOL_CALL_RE.match(line)
+            if match:
+                name = match.group(1)
+                open_idx = line.find("(")
+                close_idx = line.rfind(")")
+                arg = line[open_idx + 1 : close_idx] if 0 <= open_idx < close_idx else ""
+                return self._queue_tool_line(name, arg.strip())
+            return self._buffer_text(line)
         rendered_prompt = self._render_plain_prompt_echo_line(line)
         if rendered_prompt is not None:
             return rendered_prompt

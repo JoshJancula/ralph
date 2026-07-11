@@ -76,6 +76,10 @@ case "$cmd" in
     [[ $# -eq 2 ]] || usage
     list_agent_ids "$2"
     ;;
+  mcp-servers)
+    [[ $# -eq 3 ]] || usage
+    read_mcp_servers "$2" "$3"
+    ;;
   validate)
     [[ $# -eq 4 ]] || usage
     validate_config "$2" "$3"

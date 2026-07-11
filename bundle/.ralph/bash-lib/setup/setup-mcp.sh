@@ -9,6 +9,7 @@
 #   setup_mcp_codex <runtime_dir> <project_root>
 #   setup_mcp_opencode <runtime_dir> <project_root>
 #   setup_mcp_antigravity <runtime_dir> <project_root>
+#   setup_mcp_build_mota_fragment <runtime> <project_root>
 
 set -euo pipefail
 
@@ -191,6 +192,110 @@ setup_mcp_build_ralph_fragment() {
   esac
 }
 
+setup_mcp_build_mota_fragment() {
+  local runtime="$1"
+  local project_root="$2"
+  local api_base_url="${MOTA_API_URL:-}"
+
+  runtime="$(ralph_normalize_runtime_name "$runtime")"
+
+  if ! command -v mota &>/dev/null; then
+    printf 'Warning: mota command not found; skipping mota MCP server registration.\n' >&2
+    printf '{}'
+    return 0
+  fi
+
+  printf 'mota MCP server registered; export MOTA_ORG_MCP_KEY (or MOTA_BOT_TOKEN) in the environment that launches your coding agent.\n' >&2
+
+  case "$runtime" in
+    cursor|claude|antigravity)
+      if [[ -n "$api_base_url" ]]; then
+        jq -n \
+          --arg api_base_url "$api_base_url" \
+          '{
+            mcpServers: {
+              mota: (
+                {
+                  type: "stdio",
+                  command: "mota",
+                  args: ["mcp", "serve"]
+                } + {env: {MOTA_API_URL: $api_base_url}}
+              )
+            }
+          }'
+      else
+        jq -n \
+          '{
+            mcpServers: {
+              mota: {
+                type: "stdio",
+                command: "mota",
+                args: ["mcp", "serve"]
+              }
+            }
+          }'
+      fi
+      ;;
+    opencode)
+      if [[ -n "$api_base_url" ]]; then
+        jq -n \
+          --arg api_base_url "$api_base_url" \
+          '{
+            mcp: {
+              mota: (
+                {
+                  type: "local",
+                  command: ["mota", "mcp", "serve"],
+                  enabled: true
+                } + {environment: {MOTA_API_URL: $api_base_url}}
+              )
+            }
+          }'
+      else
+        jq -n \
+          '{
+            mcp: {
+              mota: {
+                type: "local",
+                command: ["mota", "mcp", "serve"],
+                enabled: true
+              }
+            }
+          }'
+      fi
+      ;;
+    codex)
+      if [[ -n "$api_base_url" ]]; then
+        jq -n \
+          --arg api_base_url "$api_base_url" \
+          '{
+            mcp_servers: {
+              mota: {
+                command: "mota",
+                args: ["mcp", "serve"],
+                env: {MOTA_API_URL: $api_base_url}
+              }
+            }
+          }'
+      else
+        jq -n \
+          '{
+            mcp_servers: {
+              mota: {
+                command: "mota",
+                args: ["mcp", "serve"]
+              }
+            }
+          }'
+      fi
+      ;;
+    *)
+      printf 'Error: unsupported runtime %s for durable MCP setup\n' "$runtime" >&2
+      return 1
+      ;;
+  esac
+}
+
 setup_mcp_write_merged_config() {
   local target="$1"
   local fragment_json="$2"
@@ -265,6 +370,7 @@ setup_mcp_write_merged_codex_config() {
   local target="$1"
   local server_script="$2"
   local project_root="$3"
+  local mota_fragment_json="${4:-}"
   local merge_script tmpfile source_arg=""
 
   if [[ -n "${SETUP_DRY_RUN:-}" ]]; then
@@ -292,7 +398,12 @@ setup_mcp_write_merged_codex_config() {
     source_arg="-"
   fi
 
-  if ! python3 "$merge_script" "$source_arg" "$tmpfile" "$server_script" "$project_root"; then
+  if [[ -n "$mota_fragment_json" ]]; then
+    if ! python3 "$merge_script" "$source_arg" "$tmpfile" "$server_script" "$project_root" "$mota_fragment_json"; then
+      rm -f "$tmpfile"
+      return 1
+    fi
+  elif ! python3 "$merge_script" "$source_arg" "$tmpfile" "$server_script" "$project_root"; then
     rm -f "$tmpfile"
     return 1
   fi
@@ -309,7 +420,7 @@ setup_mcp_write_merged_codex_config() {
 setup_mcp_cursor() {
   local runtime_dir="$1"
   local project_root="$2"
-  local target server_script fragment_json
+  local target server_script fragment_json mota_fragment_json merged_fragment_json
 
   if ! setup_mcp_require_jq; then
     return 1
@@ -329,14 +440,23 @@ setup_mcp_cursor() {
     return 1
   fi
 
+  if ! mota_fragment_json="$(setup_mcp_build_mota_fragment cursor "$project_root")"; then
+    return 1
+  fi
+
+  if ! merged_fragment_json="$(jq -n --argjson ralph "$fragment_json" --argjson mota "$mota_fragment_json" '{mcpServers: (($ralph.mcpServers // {}) + ($mota.mcpServers // {})) }')"; then
+    printf 'Error: failed to combine cursor MCP fragments\n' >&2
+    return 1
+  fi
+
   setup_merge_status "Merge Cursor MCP config" "$target"
-  setup_mcp_write_merged_config "$target" "$fragment_json" "Cursor MCP config"
+  setup_mcp_write_merged_config "$target" "$merged_fragment_json" "Cursor MCP config"
 }
 
 setup_mcp_claude() {
   local runtime_dir="$1"
   local project_root="$2"
-  local target server_script fragment_json
+  local target server_script fragment_json mota_fragment_json merged_fragment_json
 
   if ! setup_mcp_require_jq; then
     return 1
@@ -356,14 +476,23 @@ setup_mcp_claude() {
     return 1
   fi
 
+  if ! mota_fragment_json="$(setup_mcp_build_mota_fragment claude "$project_root")"; then
+    return 1
+  fi
+
+  if ! merged_fragment_json="$(jq -n --argjson ralph "$fragment_json" --argjson mota "$mota_fragment_json" '{mcpServers: (($ralph.mcpServers // {}) + ($mota.mcpServers // {})) }')"; then
+    printf 'Error: failed to combine claude MCP fragments\n' >&2
+    return 1
+  fi
+
   setup_merge_status "Merge Claude MCP config" "$target"
-  setup_mcp_write_merged_config "$target" "$fragment_json" "Claude MCP config"
+  setup_mcp_write_merged_config "$target" "$merged_fragment_json" "Claude MCP config"
 }
 
 setup_mcp_codex() {
   local runtime_dir="$1"
   local project_root="$2"
-  local target server_script
+  local target server_script mota_fragment_json
 
   target="$runtime_dir/config.toml"
 
@@ -375,14 +504,18 @@ setup_mcp_codex() {
     return 1
   fi
 
+  if ! mota_fragment_json="$(setup_mcp_build_mota_fragment codex "$project_root")"; then
+    return 1
+  fi
+
   setup_merge_status "Merge Codex MCP config" "$target"
-  setup_mcp_write_merged_codex_config "$target" "$server_script" "$project_root"
+  setup_mcp_write_merged_codex_config "$target" "$server_script" "$project_root" "$mota_fragment_json"
 }
 
 setup_mcp_opencode() {
   local runtime_dir="$1"
   local project_root="$2"
-  local target server_script fragment_json
+  local target server_script fragment_json mota_fragment_json merged_fragment_json
 
   if ! setup_mcp_require_jq; then
     return 1
@@ -402,14 +535,23 @@ setup_mcp_opencode() {
     return 1
   fi
 
+  if ! mota_fragment_json="$(setup_mcp_build_mota_fragment opencode "$project_root")"; then
+    return 1
+  fi
+
+  if ! merged_fragment_json="$(jq -n --argjson ralph "$fragment_json" --argjson mota "$mota_fragment_json" '{mcp: (($ralph.mcp // {}) + ($mota.mcp // {})) }')"; then
+    printf 'Error: failed to combine opencode MCP fragments\n' >&2
+    return 1
+  fi
+
   setup_merge_status "Merge OpenCode MCP config" "$target"
-  setup_mcp_write_merged_opencode_config "$target" "$fragment_json" "OpenCode MCP config"
+  setup_mcp_write_merged_opencode_config "$target" "$merged_fragment_json" "OpenCode MCP config"
 }
 
 setup_mcp_antigravity() {
   local runtime_dir="$1"
   local project_root="$2"
-  local target server_script fragment_json
+  local target server_script fragment_json mota_fragment_json merged_fragment_json
 
   if ! setup_mcp_require_jq; then
     return 1
@@ -430,8 +572,17 @@ setup_mcp_antigravity() {
     return 1
   fi
 
+  if ! mota_fragment_json="$(setup_mcp_build_mota_fragment antigravity "$project_root")"; then
+    return 1
+  fi
+
+  if ! merged_fragment_json="$(jq -n --argjson ralph "$fragment_json" --argjson mota "$mota_fragment_json" '{mcpServers: (($ralph.mcpServers // {}) + ($mota.mcpServers // {})) }')"; then
+    printf 'Error: failed to combine antigravity MCP fragments\n' >&2
+    return 1
+  fi
+
   setup_merge_status "Merge Antigravity MCP config" "$target"
-  setup_mcp_write_merged_config "$target" "$fragment_json" "Antigravity MCP config"
+  setup_mcp_write_merged_config "$target" "$merged_fragment_json" "Antigravity MCP config"
 }
 
 setup_mcp_for_runtime() {

@@ -7,6 +7,7 @@ usage_file: optional path; written with JSON token usage summary at EOF
 """
 import json
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -97,6 +98,17 @@ def _merge_tool_call(
     if isinstance(seq, list) and len(seq) < _TOOL_SEQUENCE_CAP:
         seq.append(label)
     record_tool_target(acc, label, tool_input)
+
+
+_ANTIGRAVITY_TOOL_CALL_RE = re.compile(r"^\*\s+([\w.]+)\(")
+
+
+def _extract_antigravity_plain_tool_call(line: str, acc: Dict[str, Any]) -> None:
+    """Recognize agy's plain-text tool-call bullet convention (`* toolname(args)`)."""
+    match = _ANTIGRAVITY_TOOL_CALL_RE.match(line)
+    if not match:
+        return
+    _merge_tool_call(acc, match.group(1))
 
 
 def _codex_item_tool_name(item: Dict[str, Any]) -> Optional[str]:
@@ -704,6 +716,10 @@ def compute_cache_read_ratios(acc: Dict[str, Any]) -> Tuple[float, float]:
 
 def finalize_usage(acc: Dict[str, Any], mode: str) -> None:
     """Apply end-of-stream usage fixups that depend on the full event sequence."""
+    if mode == "antigravity":
+        # agy never reports token/cache usage anywhere accessible; this is a
+        # permanent limitation of the runtime, not a transient miss.
+        acc["usage_unsupported"] = True
     if mode == "claude" and not acc.get("_claude_turn_usage_seen"):
         # No per-turn assistant usage was observed (e.g. a stream that only produced a
         # result event); fall back to whatever the result event reported.
@@ -949,6 +965,8 @@ def main() -> None:
             o = json.loads(line)
         except json.JSONDecodeError:
             plain_lines = [line]
+            if mode == "antigravity":
+                _extract_antigravity_plain_tool_call(line, usage_acc)
             completion_sentinel_seen = _note_completion_sentinel(
                 plain_lines, completion_sentinel_seen
             )

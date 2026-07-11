@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge Ralph MCP server config into a Codex config.toml file."""
+import json
 import os
 import sys
 
@@ -99,15 +100,38 @@ def merge_ralph_mcp(data, server_script, project_root):
     }
 
 
+def merge_additional_mcp_fragment(data, fragment_json):
+    if not fragment_json:
+        return
+
+    try:
+        fragment = json.loads(fragment_json)
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(f"Error: invalid JSON in additional MCP fragment: {exc}\n")
+        sys.exit(1)
+
+    additional_servers = fragment.get("mcp_servers", {})
+    if additional_servers is None:
+        return
+    if not isinstance(additional_servers, dict):
+        sys.stderr.write("Error: additional MCP fragment must contain an mcp_servers table\n")
+        sys.exit(1)
+
+    mcp_servers = data.setdefault("mcp_servers", {})
+    for name, entry in additional_servers.items():
+        mcp_servers[name] = entry
+
+
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in (5, 6):
         sys.stderr.write(
             "Usage: setup-merge-codex-mcp.py <source_path|-> <output_path> "
-            "<server_script> <project_root>\n"
+            "<server_script> <project_root> [additional_mcp_fragment_json]\n"
         )
         sys.exit(1)
 
     source_path, output_path, server_script, project_root = sys.argv[1:5]
+    additional_mcp_fragment_json = sys.argv[5] if len(sys.argv) == 6 else ""
     if not server_script or not project_root:
         sys.stderr.write("Error: server_script and project_root are required\n")
         sys.exit(1)
@@ -120,6 +144,7 @@ def main():
         sys.exit(1)
 
     merge_ralph_mcp(data, server_script, project_root)
+    merge_additional_mcp_fragment(data, additional_mcp_fragment_json)
 
     try:
         write_toml(data, output_path)
