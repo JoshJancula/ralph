@@ -70,10 +70,24 @@ WORKSPACE="$(pwd)"
 WORKSPACE_ROOT_OVERRIDE=""
 ORCH_FILE=""
 
+# Single-stage mode: execute exactly one stage and emit a StageOutcomeReport.
+# When SINGLE_STAGE_MODE=1 the orchestrator routes into the per-stage function,
+# skips stage-index advancement, router/planner application, loopControl,
+# parallel wave scheduling, and humanAck waiting. Ordinary mode leaves these
+# variables at their defaults and follows the same code path as before.
+SINGLE_STAGE_MODE=0
+SINGLE_STAGE_ID=""
+SINGLE_STAGE_RUN_ID=""
+SINGLE_STAGE_ATTEMPT_ID=""
+SINGLE_STAGE_STARTED_AT=""
+SINGLE_STAGE_REPORT_WRITTEN=0
+
 usage() {
   echo "Usage: $0 --orchestration <orchestration_plan.orch.json> [workspace_dir]" >&2
   echo "   or: $0 <orchestration_plan.orch.json> [workspace_dir]" >&2
   echo "Optional: append --workspace-root <path> to set a custom .ralph-workspace location" >&2
+  echo "Single stage: --single-stage <stageId> --run-id <runId> --attempt-id <attemptId>" >&2
+  echo "              executes exactly one stage and writes a StageOutcomeReport." >&2
   exit 1
 }
 
@@ -87,6 +101,22 @@ while [[ $# -gt 0 ]]; do
   --orchestration|-f)
       [[ -n "${2:-}" ]] || usage
       ORCH_FILE="$2"
+      shift 2
+      ;;
+  --single-stage)
+      [[ -n "${2:-}" ]] || usage
+      SINGLE_STAGE_ID="$2"
+      SINGLE_STAGE_MODE=1
+      shift 2
+      ;;
+  --run-id)
+      [[ -n "${2:-}" ]] || usage
+      SINGLE_STAGE_RUN_ID="$2"
+      shift 2
+      ;;
+  --attempt-id)
+      [[ -n "${2:-}" ]] || usage
+      SINGLE_STAGE_ATTEMPT_ID="$2"
       shift 2
       ;;
     -h|--help)
@@ -112,6 +142,14 @@ done
 # Positional args: first existing file becomes ORCH_FILE; optional directory becomes WORKSPACE.
 if [[ -z "$ORCH_FILE" ]]; then
   usage
+fi
+
+if [[ "$SINGLE_STAGE_MODE" == "1" ]]; then
+  if [[ -z "$SINGLE_STAGE_RUN_ID" || -z "$SINGLE_STAGE_ATTEMPT_ID" ]]; then
+    echo "Orchestrator error: --single-stage requires --run-id and --attempt-id" >&2
+    usage
+  fi
+  SINGLE_STAGE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 if [[ "$ORCH_FILE" != /* ]]; then
@@ -291,6 +329,101 @@ orch_signal_handler() {
 trap 'orch_signal_handler INT' INT
 trap 'orch_signal_handler TERM' TERM
 trap 'orch_signal_handler HUP' HUP
+
+# ---------------------------------------------------------------------------
+# Single-stage StageOutcomeReport emission.
+#
+# The report matches shared/src/models/orchestration.model.ts::StageOutcomeReport
+# and is persisted at
+#   <workspaceRoot>/artifacts/<artifactNs>/stage-outcomes/<attemptId>.json
+# so loop/retry attempts never overwrite each other. JSON is built with jq
+# (never echo interpolation), written to a temp file, fsync'd when a platform
+# utility supports it, then atomically renamed into place.
+# ---------------------------------------------------------------------------
+orch_single_stage_report_path() {
+  [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" && -n "${RALPH_ARTIFACT_NS:-}" && -n "$SINGLE_STAGE_ATTEMPT_ID" ]] || return 1
+  printf '%s/artifacts/%s/stage-outcomes/%s.json' \
+    "$RALPH_PLAN_WORKSPACE_ROOT" "$RALPH_ARTIFACT_NS" "$SINGLE_STAGE_ATTEMPT_ID"
+}
+
+# Best-effort durable flush of a single file. Prefers a real per-file fsync via
+# python3; falls back to sync(1) when present. Never fails the caller.
+orch_fsync_path() {
+  local target="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$target" <<'PY' 2>/dev/null || true
+import os, sys
+p = sys.argv[1]
+try:
+    fd = os.open(p, os.O_RDONLY)
+except OSError:
+    sys.exit(0)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+  elif command -v sync >/dev/null 2>&1; then
+    sync 2>/dev/null || true
+  fi
+}
+
+orch_single_stage_write_report() {
+  local outcome="$1" exit_code="$2" reason="${3:-}"
+  [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 1
+  [[ "$exit_code" =~ ^-?[0-9]+$ ]] || exit_code=1
+  local report_path report_dir tmp_file finished_at
+  report_path="$(orch_single_stage_report_path)" || return 1
+  report_dir="$(dirname "$report_path")"
+  mkdir -p "$report_dir" 2>/dev/null || return 1
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp_file="$(mktemp "$report_dir/.stage-outcome-XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --argjson schemaVersion 1 \
+    --arg runId "$SINGLE_STAGE_RUN_ID" \
+    --arg stageId "$SINGLE_STAGE_ID" \
+    --arg attemptId "$SINGLE_STAGE_ATTEMPT_ID" \
+    --arg outcome "$outcome" \
+    --argjson exitCode "$exit_code" \
+    --arg startedAt "${SINGLE_STAGE_STARTED_AT:-$finished_at}" \
+    --arg finishedAt "$finished_at" \
+    --arg reason "$reason" \
+    '{schemaVersion: $schemaVersion, runId: $runId, stageId: $stageId, attemptId: $attemptId, outcome: $outcome, exitCode: $exitCode, startedAt: $startedAt, finishedAt: $finishedAt}
+       + (if $reason == "" then {} else {reason: $reason} end)' \
+    > "$tmp_file" 2>/dev/null; then
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+  orch_fsync_path "$tmp_file"
+  if ! mv -f "$tmp_file" "$report_path" 2>/dev/null; then
+    rm -f "$tmp_file" 2>/dev/null || true
+    return 1
+  fi
+  orch_fsync_path "$report_dir"
+  SINGLE_STAGE_REPORT_WRITTEN=1
+  return 0
+}
+
+# EXIT trap for single-stage mode: if the stage terminated before a report was
+# written (runner failure, artifact failure, or a signal), emit a failed or
+# cancelled report using the process exit code, without masking it.
+orch_single_stage_exit_trap() {
+  local ec=$?
+  if [[ "${SINGLE_STAGE_MODE:-0}" == "1" && "${SINGLE_STAGE_REPORT_WRITTEN:-0}" != "1" ]]; then
+    local outcome="failed" reason="stage terminated before completion"
+    if [[ -n "${ORCH_INTERRUPT_SIGNAL:-}" ]]; then
+      outcome="cancelled"
+      reason="received signal ${ORCH_INTERRUPT_SIGNAL}"
+    fi
+    orch_single_stage_write_report "$outcome" "$ec" "$reason" || true
+  fi
+  return "$ec"
+}
+
+if [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]]; then
+  trap 'orch_single_stage_exit_trap' EXIT
+fi
 
 # Inlined here (not only bash-lib/orchestrator-verify.sh) so this script stays self-contained for operators.
 artifact_remediation_text() {
@@ -1007,6 +1140,10 @@ orch_stage_execute() {
     fi
   fi
 
+  # Single-stage mode executes exactly one stage: no humanAck waiting, router
+  # target application, planner advancement, or loopControl. The orchestration
+  # transition/retry decision is made downstream from the StageOutcomeReport.
+  if [[ "${SINGLE_STAGE_MODE:-0}" != "1" ]]; then
   human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""
   if [[ -n "$human_ack_rel" && "${ORCHESTRATOR_HUMAN_ACK:-0}" == "1" ]]; then
     human_ack_rel="$(expand_artifact_tokens "$human_ack_rel")"
@@ -1086,6 +1223,7 @@ orch_stage_execute() {
       printf -v "$step_status_var" '%s' 1
       return 1
     fi
+  fi
   fi
 
   # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see run-plan-core.sh).
@@ -1342,6 +1480,69 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     map_stage_id="$(orch_stage_normalize_id "$map_stage_id")"
     [[ -n "$map_stage_id" ]] && orch_stage_index_map_set "$map_stage_id" "$map_idx"
   done
+
+  # Single-stage mode: resolve exactly one stage by id, run it through the
+  # per-stage function, emit a StageOutcomeReport, and exit. Router target
+  # application, planner advancement, loopControl, humanAck waiting (skipped
+  # inside orch_stage_execute), parallel wave scheduling, and stage-index
+  # advancement are all bypassed because this branch never enters the loops.
+  if [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]]; then
+    ss_norm_id="$(orch_stage_normalize_id "$SINGLE_STAGE_ID")"
+    if [[ -z "$ss_norm_id" ]] || ! ss_idx="$(orch_stage_index_map_get "$ss_norm_id")"; then
+      ralph_orchestrator_log "FAIL single-stage: unknown stage id '$SINGLE_STAGE_ID'"
+      echo -e "${C_R}${C_BOLD}Single-stage: unknown stage id '${SINGLE_STAGE_ID}'${C_RST}" >&2
+      echo "  No stage with that id exists in $ORCH_FILE." >&2
+      echo "  Log: $LOG_FILE" >&2
+      orch_single_stage_write_report "failed" 1 "unknown stage id: $SINGLE_STAGE_ID" || true
+      exit 1
+    fi
+    stage="$(jq ".stages[$ss_idx]" "$ORCH_FILE" 2>/dev/null)" || {
+      ralph_orchestrator_log "FAIL single-stage: unable to read stage $ss_norm_id"
+      orch_single_stage_write_report "failed" 1 "unable to read stage $ss_norm_id" || true
+      exit 1
+    }
+    stage_id="$ss_norm_id"
+    stage_iter="$(orch_stage_iteration_map_get "$stage_id")"
+    runtime_raw="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
+    if ! runtime="$(orchestrator_validate_runtime "$runtime_raw")"; then
+      ralph_orchestrator_log "FAIL single-stage: invalid RUNTIME '$runtime_raw'"
+      echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, opencode, or antigravity.${C_RST}" >&2
+      echo "  Log: $LOG_FILE" >&2
+      orch_single_stage_write_report "failed" 1 "invalid runtime: $runtime_raw" || true
+      exit 1
+    fi
+    agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
+    agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+    stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
+    agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
+    [[ -z "$agent_source" ]] && agent_source="prebuilt"
+    plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
+    planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
+    step_index=$((step_index + 1))
+    plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
+    step_rc=0
+    # orch_stage_execute exits directly on runner/artifact failure; the EXIT trap
+    # then records the failed/cancelled report with the real exit code. Non-zero
+    # returns (validation without exit) are handled explicitly here.
+    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" step_rc "$ss_idx"; then
+      orch_single_stage_write_report "failed" "${step_rc:-1}" "stage execution failed" || true
+      exit "${step_rc:-1}"
+    fi
+    if [[ "${step_rc:-0}" -gt 0 ]]; then
+      orch_single_stage_write_report "failed" "$step_rc" "stage execution returned $step_rc" || true
+      exit "$step_rc"
+    fi
+    if ! orch_single_stage_write_report "success" 0 ""; then
+      ralph_orchestrator_log "FAIL single-stage: unable to write StageOutcomeReport"
+      echo -e "${C_R}${C_BOLD}Single-stage: failed to write StageOutcomeReport${C_RST}" >&2
+      echo "  Log: $LOG_FILE" >&2
+      exit 1
+    fi
+    ss_report_path="$(orch_single_stage_report_path 2>/dev/null || echo "")"
+    ralph_orchestrator_log "single-stage complete: stage=$stage_id outcome=success report=$ss_report_path"
+    echo -e "${C_G}${C_BOLD}Single-stage complete${C_RST} (stage=$stage_id). Report: $ss_report_path"
+    exit 0
+  fi
 
   parallel_waves_raw="$(jq -c '.parallelStages // empty' "$ORCH_FILE" 2>/dev/null || echo "")"
   if [[ -n "$parallel_waves_raw" ]]; then

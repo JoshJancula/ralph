@@ -66,6 +66,15 @@ mkdir -p "$(dirname "$run_out")"
   echo '}'
 } > "$run_out"
 
+# Optional delay so a caller can deliver a signal while the stage is "running".
+# Touch a readiness marker first so tests can wait for the stub to be active.
+if [[ -n "${RUN_PLAN_STUB_READY_FILE:-}" ]]; then
+  : > "$RUN_PLAN_STUB_READY_FILE" 2>/dev/null || true
+fi
+if [[ -n "${RUN_PLAN_STUB_SLEEP_SECONDS:-}" ]]; then
+  sleep "$RUN_PLAN_STUB_SLEEP_SECONDS"
+fi
+
 # If RUN_PLAN_STUB_WRITE_ARTIFACTS is a list of paths, create each as a non-empty file.
 if [[ -n "${RUN_PLAN_STUB_WRITE_ARTIFACTS:-}" ]]; then
   IFS=',' read -r -a artifact_paths <<< "$RUN_PLAN_STUB_WRITE_ARTIFACTS"
