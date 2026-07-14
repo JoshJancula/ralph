@@ -97,55 +97,6 @@ CONFIG
   rm -rf "$agents_root"
 }
 
-@test "mcp-servers subcommand prints redacted normalized JSON" {
-  local agents_root agent_id cfg
-  agents_root="$(mktemp -d)"
-  agent_id="mcp-reader"
-  cfg="$agents_root/$agent_id/config.json"
-  mkdir -p "$agents_root/$agent_id"
-  cat <<CONFIG > "$cfg"
-{
-  "name": "mcp-reader",
-  "model": "gpt-test",
-  "description": "Agent with MCP servers",
-  "rules": [
-    "rule-mcp-reader"
-  ],
-  "skills": [
-    "skill-mcp-reader"
-  ],
-  "output_artifacts": [
-    {
-      "path": "artifacts/mcp-reader.txt",
-      "required": true
-    }
-  ],
-  "mcp_servers": [
-    {"name": "ambient-server", "reference": true},
-    {
-      "name": "portable-stdio",
-      "transport": "stdio",
-      "command": "node",
-      "args": ["/path/to/server.js"],
-      "env": {"API_KEY": "\${MY_API_KEY}"}
-    }
-  ]
-}
-CONFIG
-
-  run bash "$(agent_config_tool_path)" mcp-servers "$agents_root" "$agent_id"
-  [ "$status" -eq 0 ]
-  python3 -c "
-import json, sys
-data = json.loads(sys.stdin.read())
-assert len(data) == 2, data
-assert data[0] == {'name': 'ambient-server', 'reference': True}
-assert data[1]['name'] == 'portable-stdio'
-assert data[1]['env']['API_KEY'] == '***REDACTED***'
-" <<<"$output"
-  rm -rf "$agents_root"
-}
-
 @test "progressive context emits tier1 metadata and stable alwaysApply bodies" {
   local agents_root workspace rules_dir cfg_dir
   agents_root="$(mktemp -d)"

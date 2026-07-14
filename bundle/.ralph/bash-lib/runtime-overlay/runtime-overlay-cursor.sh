@@ -135,6 +135,7 @@ path = sys.argv[1]
 required = {
     "pre-tool-shell-policy.sh",
     "post-tool-shell-telemetry.sh",
+    "post-tool-native-result-compact.sh",
     "post-tool-mcp-compact.sh",
     "after-shell-telemetry.sh",
 }
@@ -162,6 +163,12 @@ if found == required:
     sys.exit(0)
 sys.exit(1)
 PY
+}
+
+runtime_overlay_cursor_preserve_durable_install() {
+  local hooks_file="${1:-}"
+  [[ -n "$hooks_file" ]] || return 1
+  runtime_overlay_cursor_hooks_detected_in_file "$hooks_file"
 }
 
 runtime_overlay_cursor_merge_hooks_file() {
@@ -275,6 +282,16 @@ run_plan_invoke_cursor_hooks_scripts_prepare() {
 run_plan_invoke_cursor_hooks_config_cleanup() {
   local target="${CURSOR_PLAN_HOOKS_CONFIG_TARGET:-}"
   local idx backup script_target
+
+  if [[ -n "$target" ]] && runtime_overlay_cursor_preserve_durable_install "$target"; then
+    unset CURSOR_PLAN_HOOKS_CONFIG_TARGET
+    unset CURSOR_PLAN_HOOKS_CONFIG_BACKUP
+    unset CURSOR_PLAN_HOOKS_CONFIG_HAD_FILE
+    unset CURSOR_PLAN_NATIVE_HOOKS_ACTIVE
+    CURSOR_PLAN_HOOKS_SCRIPT_TARGETS=()
+    CURSOR_PLAN_HOOKS_SCRIPT_BACKUPS=()
+    return 0
+  fi
 
   if [[ -n "$target" ]]; then
     if [[ "${CURSOR_PLAN_HOOKS_CONFIG_HAD_FILE:-0}" == "1" ]]; then

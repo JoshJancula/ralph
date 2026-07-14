@@ -172,7 +172,7 @@ Commands:
                Use -- before args for npm start.
   install      Run the global Ralph installer
   workspaces   Manage the Ralph workspace registry
-  setup        Set up runtime hooks and MCP (see: ralph setup --help)
+  setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
   config       Manage Ralph configuration (see: ralph config --help)
   agent        Manage agent profiles (see: ralph agent --help)
 
@@ -642,11 +642,14 @@ if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
   install_log_divider "----------------------------------------------------------------------"
   if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
     install_log_next_line "Command: ensure ~/.local/bin is on PATH, then run ralph --help"
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir ~/.claude --hooks"
     install_log_next_line "Plans: run ralph run-plan --plan PLAN.md --runtime <runtime> from a project"
   elif [[ -d "$TARGET/.ralph/ralph-dashboard" ]]; then
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir \"$TARGET/.claude\" --hooks"
     install_log_next_line "Dashboard: cd .ralph/ralph-dashboard && npm install && npm run build && npm start"
     install_log_next_line "Plans: copy .ralph/plan-templates/classic.plan.template.md to something like PLAN.md and pass --plan to run-plan.sh"
   else
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir \"$TARGET/.claude\" --hooks"
     install_log_next_line "Plans: copy .ralph/plan-templates/classic.plan.template.md to something like PLAN.md and pass --plan to run-plan.sh"
   fi
   if [[ "${GLOBAL_INSTALL:-0}" -ne 1 ]]; then

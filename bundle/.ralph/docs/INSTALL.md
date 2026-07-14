@@ -50,7 +50,8 @@ ralph dashboard                                                # start the dashb
 ralph workspaces list                                          # list registered projects
 ralph config killswitch init                                   # add per-project killswitch config
 ralph config killswitch                                        # show active killswitch source and paths
-ralph setup --runtime claude --hooks --mcp                     # durable hooks + MCP for a runtime
+ralph setup --runtime claude --runtime-dir ~/.claude --hooks   # durable Claude compaction hooks in your user runtime
+ralph setup --runtime claude --hooks --mcp                     # project-local hooks + MCP for a runtime
 ralph install ...                                              # re-run the installer
 ```
 
@@ -58,7 +59,7 @@ Each command dispatches to the matching script under `$RALPH_HOME` (for example,
 
 ### Runtime setup (`ralph setup`)
 
-Use `ralph setup` to install Ralph hooks and MCP configuration into a runtime directory so they are available in normal IDE sessions, not only during `ralph run-plan`. The installer can prompt for the same MCP writes; `ralph setup` is the durable, repeatable CLI for adding or refreshing them later.
+Use `ralph setup` to install durable Ralph compaction hooks and MCP configuration into a runtime directory so they are available in normal IDE sessions, not only during `ralph run-plan`. Use `--hooks` when you want Ralph's compaction behavior outside Ralph runs. The installer copies the assets; `ralph setup` is the durable, repeatable activation command.
 
 ```bash
 ralph setup --runtime <claude|cursor|codex|opencode|antigravity> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
@@ -67,8 +68,8 @@ ralph setup --runtime <claude|cursor|codex|opencode|antigravity> [--runtime-dir 
 | Flag | Meaning |
 |------|---------|
 | `--runtime` | Required. One of `claude`, `cursor`, `codex`, `opencode`, `antigravity`. |
-| `--runtime-dir` | Runtime directory to configure. Default: `$PWD/.$runtime` (for example `$PWD/.cursor`). |
-| `--hooks` | Copy hook scripts and merge hook config into the runtime directory. |
+| `--runtime-dir` | Runtime directory to configure. Default: `$PWD/.$runtime` (for example `$PWD/.cursor`). Use `~/.claude`, `~/.cursor`, `~/.codex`, `~/.opencode`, or `~/.agents` for user-home installs. |
+| `--hooks` | Copy durable compaction/native hook scripts and merge Ralph hook config into the runtime directory. |
 | `--mcp` | Merge a durable Ralph MCP server entry (`RALPH_MODE=hybrid`). |
 | `--all` | Both `--hooks` and `--mcp`. |
 | `--dry-run` | Print targets without writing. |
@@ -79,14 +80,23 @@ At least one of `--hooks`, `--mcp`, or `--all` is required. Project root is infe
 Examples:
 
 ```bash
-# Claude: hooks under .claude/ and MCP at project-root .mcp.json (not inside .claude/)
+# Claude: durable hooks in your user runtime
+ralph setup --runtime claude --runtime-dir ~/.claude --hooks
+
+# Cursor: durable hooks in your user runtime
+ralph setup --runtime cursor --runtime-dir ~/.cursor --hooks
+
+# Claude: project-local hooks under .claude/ and MCP at project-root .mcp.json (not inside .claude/)
 ralph setup --runtime claude --hooks --mcp
 
-# Cursor: explicit runtime directory; --all installs hooks and MCP
+# Cursor: explicit project runtime directory; --all installs hooks and MCP
 ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all
 
-# Codex: hooks + MCP in .codex/config.toml (see trusted-project caveat in docs/MCP.md)
-ralph setup --runtime codex --all
+# Codex: user-home durable hooks
+ralph setup --runtime codex --runtime-dir ~/.codex --hooks
+
+# Codex: project-local hooks + MCP in .codex/config.toml (see trusted-project caveat in docs/MCP.md)
+ralph setup --runtime codex --runtime-dir /path/to/project/.codex --all
 
 # Preview only
 ralph setup --runtime opencode --all --dry-run

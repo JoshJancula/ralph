@@ -68,6 +68,13 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _as_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _run_date(run: Mapping[str, Any]) -> str:
     started = run.get("started_at")
     ended = run.get("ended_at")
@@ -348,15 +355,35 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "before the AI read it (net of stored-result readbacks)."
     )
     lines.append("")
+    token_quality = str(tool_output.get("token_quality") or "legacy_or_mixed")
+    if token_quality == "measured":
+        token_quality_note = (
+            "Bytes are measured from actual output differences; token figures are estimated "
+            "from Ralph's dependency-free token estimator run over the actual per-path text."
+        )
+    else:
+        token_quality_note = (
+            "Bytes are measured from actual output differences; token figures are estimated "
+            "(some or all from a bytes/4-equivalent fallback where actual-text token data was "
+            "unavailable -- see Data quality below)."
+        )
     lines.append(
-        "Bytes are measured from actual output differences; token figures are estimated "
-        "at roughly 4 bytes per token. These are tool-output counterfactuals, not a discount "
-        "off the billed session tokens below."
+        f"{token_quality_note} These are tool-output counterfactuals, not a discount "
+        "off the billed session tokens below. All Ralph token figures are estimates, never "
+        "provider-measured billed tokens."
     )
     lines.append("")
     lines.append(
         "> **Generated file -- do not hand-edit.** "
         "Regenerate via `ralph benchmark --write-doc`."
+    )
+    lines.append("")
+
+    optimization_events_total = _as_int(report.get("optimization_events_total"))
+    tool_calls_total = _as_int(session_usage.get("tool_calls_total"))
+    lines.append(
+        f"Ralph recorded {fmt_int(optimization_events_total)} optimization events across "
+        f"{fmt_int(tool_calls_total)} tool calls; optimization events are not unique-call coverage."
     )
     lines.append("")
 
@@ -407,6 +434,130 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "were measured but unavailable in this runtime mode (for example, native-mode runs "
                 "without Ralph proxy)."
             )
+        lines.append("")
+
+    hook_config_by_runtime = report.get("hook_config_by_runtime")
+    if isinstance(hook_config_by_runtime, Mapping) and hook_config_by_runtime:
+        lines.append("## Hook status by runtime")
+        lines.append("")
+        lines.append("| Runtime | Channel | Status | Reasons |")
+        lines.append("| --- | --- | --- | --- |")
+        for runtime_name in sorted(hook_config_by_runtime):
+            channels = hook_config_by_runtime.get(runtime_name)
+            if not isinstance(channels, Mapping):
+                continue
+            for channel_name in sorted(channels):
+                channel_data = channels.get(channel_name)
+                if not isinstance(channel_data, Mapping):
+                    continue
+                status = str(channel_data.get("status") or "unknown")
+                reasons = channel_data.get("reasons")
+                reasons_text = ", ".join(reasons) if isinstance(reasons, list) and reasons else "-"
+                lines.append(f"| {runtime_name} | {channel_name} | {status} | {reasons_text} |")
+        lines.append("")
+    else:
+        lines.append("## Hook status by runtime")
+        lines.append("")
+        lines.append("unknown (no config record)")
+        lines.append("")
+
+    windowing_by_source_tool = report.get("windowing_by_source_tool")
+    if isinstance(windowing_by_source_tool, Mapping) and windowing_by_source_tool:
+        lines.append("## Result windowing by source tool")
+        lines.append("")
+        lines.append(
+            "| Tool | Events | Inline candidate bytes | Delivered bytes | "
+            "Net consumed bytes | Net saved bytes | Source-capped | Quality |"
+        )
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        for tool_name in sorted(windowing_by_source_tool):
+            bucket = windowing_by_source_tool.get(tool_name)
+            if not isinstance(bucket, Mapping):
+                continue
+            quality = str(bucket.get("measurement_quality") or "legacy_storage_counterfactual")
+            quality_label = "legacy" if quality != "v2_measured" else "v2"
+            lines.append(
+                f"| {tool_name} | {fmt_int(bucket.get('events'))} | "
+                f"{fmt_int(bucket.get('inline_candidate_bytes'))} | "
+                f"{fmt_int(bucket.get('delivered_bytes'))} | "
+                f"{fmt_int(bucket.get('net_consumed_bytes'))} | "
+                f"{fmt_int(bucket.get('net_saved_bytes'))} | "
+                f"{fmt_int(bucket.get('source_capped_count'))} | {quality_label} |"
+            )
+        lines.append("")
+
+    source_cap_summary = report.get("source_cap_operational_summary")
+    if isinstance(source_cap_summary, Mapping) and _as_int(source_cap_summary.get("capped_event_count")) > 0:
+        lines.append("## Source-capped search operations")
+        lines.append("")
+        lines.append(
+            f"**{fmt_int(source_cap_summary.get('capped_event_count'))}** source search(es) stopped "
+            f"early after hitting a source cap; **{fmt_int(source_cap_summary.get('stored_bytes_total'))}** "
+            "bytes were captured/stored across them."
+        )
+        lines.append("")
+        reasons = source_cap_summary.get("cap_reasons")
+        if isinstance(reasons, Mapping) and reasons:
+            lines.append("| Cap reason | Count |")
+            lines.append("| --- | --- |")
+            for reason in sorted(reasons):
+                lines.append(f"| {reason} | {fmt_int(reasons.get(reason))} |")
+            lines.append("")
+        limits = source_cap_summary.get("configured_limits_bytes")
+        if isinstance(limits, list) and limits:
+            lines.append(f"Configured byte-cap limit(s) observed: {', '.join(fmt_int(v) for v in limits)}.")
+            lines.append("")
+        lines.append(
+            "Uncaptured/avoided source bytes beyond these caps are unknown -- collection stopped "
+            "early -- and are not added to any token/context savings figure above."
+        )
+        lines.append("")
+
+    dominance_warning = report.get("dominance_warning")
+    if isinstance(dominance_warning, Mapping) and dominance_warning:
+        quality = str(dominance_warning.get("measurement_quality") or "legacy_storage_counterfactual")
+        quality_label = "legacy" if quality != "v2_measured" else "v2"
+        share_pct = fmt_pct(_as_float(dominance_warning.get("share")) * 100)
+        lines.append(
+            f"> **Caution:** a single result-windowing event from **{dominance_warning.get('surfaced_tool')}** "
+            f"({quality_label} measurement) accounts for **{share_pct}** of total attributed net "
+            "windowing savings. Treat the headline savings rate as sensitive to this one event."
+        )
+        lines.append("")
+
+    telemetry_unattributed = report.get("telemetry_unattributed")
+    skipped_summaries = _as_int(report.get("skipped_summaries"))
+    has_unattributed = isinstance(telemetry_unattributed, list) and telemetry_unattributed
+    if has_unattributed or skipped_summaries > 0 or token_quality != "measured":
+        lines.append("## Data quality")
+        lines.append("")
+        if token_quality != "measured":
+            lines.append(
+                f"- Token-figure quality: **{token_quality}** -- some or all token counterfactuals "
+                "used a bytes/4-equivalent fallback rather than an estimate over actual text."
+            )
+        if skipped_summaries > 0:
+            lines.append(
+                f"- **{fmt_int(skipped_summaries)}** run summary file(s) were malformed or unreadable "
+                "and were skipped (excluded from all totals above)."
+            )
+        if has_unattributed:
+            lines.append(
+                f"- **{fmt_int(len(telemetry_unattributed))}** unattributed telemetry group(s) "
+                "(mismatched, fallback-marked, or missing plan key) were excluded from savings "
+                "totals above as diagnostics only:"
+            )
+            lines.append("")
+            lines.append("  | Log kind | Observed key | Fallback | Count | Bytes |")
+            lines.append("  | --- | --- | --- | --- | --- |")
+            for entry in telemetry_unattributed:
+                if not isinstance(entry, Mapping):
+                    continue
+                lines.append(
+                    f"  | {entry.get('logKind', '-')} | {entry.get('observedKey', '-')} | "
+                    f"{'yes' if entry.get('fallback') else 'no'} | {fmt_int(entry.get('count'))} | "
+                    f"{fmt_int(entry.get('bytes'))} |"
+                )
         lines.append("")
 
     if isinstance(per_channel, Mapping) and per_channel:
@@ -561,17 +712,6 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     f"- `{pid}`: {fmt_pct(share * 100)} of read-like calls were native reads."
                 )
             lines.append("")
-
-    skipped = int(report.get("skipped_summaries", 0) or 0)
-    if skipped > 0:
-        lines.append("## Data quality")
-        lines.append("")
-        lines.append(
-            f"- **Skipped:** {fmt_int(skipped)} unreadable summary "
-            f"file{'s' if skipped != 1 else ''} were excluded (malformed JSON); "
-            "their savings are not counted above."
-        )
-        lines.append("")
 
     lines.append("## How to read this")
     lines.append("")

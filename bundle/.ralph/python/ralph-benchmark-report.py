@@ -13,7 +13,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from ralph_overlay_usage_fields import aggregate_byte_savings_by_channel
+from ralph_overlay_usage_fields import (
+    aggregate_byte_savings_by_channel,
+    aggregate_telemetry_unattributed,
+)
 from result_windowing_metrics import (
     WINDOWING_CHANNEL_NAMES,
     _filter_records_for_plan_key,
@@ -21,6 +24,9 @@ from result_windowing_metrics import (
     _parse_envelope,
     _parse_readback,
     _resolve_result_channel_target,
+    aggregate_source_cap_operational_summary,
+    aggregate_windowing_by_source_tool,
+    aggregate_windowing_savings,
 )
 from token_estimate import estimate_tokens
 from tool_call_classification import (
@@ -604,24 +610,43 @@ def _build_tool_output_counterfactual(
     """
     hypothetical_without_ralph_bytes = 0
     actual_with_ralph_bytes = 0
+    hypothetical_without_ralph_tokens = 0
+    actual_with_ralph_tokens = 0
+    any_legacy_token_quality = False
     for path_name in SAVINGS_PATH_NAMES:
         bucket = per_path.get(path_name) or {}
         pre = _as_int(bucket.get("pre_optimization_bytes"))
         post = _as_int(bucket.get("post_optimization_bytes"))
         hypothetical_without_ralph_bytes += pre
         actual_with_ralph_bytes += post
+        # Use the same per-path token totals shown in run details -- these
+        # come from Ralph's dependency-free estimator run over the actual
+        # text (or, for legacy records, a bytes/4 fallback already baked into
+        # the bucket) -- rather than re-deriving tokens from summed bytes.
+        hypothetical_without_ralph_tokens += _as_int(bucket.get("pre_optimization_tokens"))
+        actual_with_ralph_tokens += _as_int(bucket.get("post_optimization_tokens"))
+        if str(bucket.get("token_quality") or "") in ("legacy_bytes_div4", "mixed"):
+            any_legacy_token_quality = True
 
     # Result-windowing buckets already reflect net post in saved_bytes, but we
     # can derive a cleaner counterfactual from the explicit summary windowing
     # totals when they exist. Fall back to per_path post when missing.
     window_original = _as_int(windowing_totals.get("original_bytes"))
     window_returned = _as_int(windowing_totals.get("returned_bytes"))
+    window_original_tokens = _as_int(windowing_totals.get("original_tokens"))
+    window_returned_tokens = _as_int(windowing_totals.get("returned_tokens"))
     if window_original > 0:
         hypothetical_without_ralph_bytes += window_original - _as_int(
             per_path.get("result_windowing", {}).get("pre_optimization_bytes", 0)
         )
         actual_with_ralph_bytes += window_returned - _as_int(
             per_path.get("result_windowing", {}).get("post_optimization_bytes", 0)
+        )
+        hypothetical_without_ralph_tokens += window_original_tokens - _as_int(
+            per_path.get("result_windowing", {}).get("pre_optimization_tokens", 0)
+        )
+        actual_with_ralph_tokens += window_returned_tokens - _as_int(
+            per_path.get("result_windowing", {}).get("post_optimization_tokens", 0)
         )
     # When the summary does not include explicit original/returned windowing
     # totals, reconcile the per-path windowing bucket with net readback cost so
@@ -630,14 +655,25 @@ def _build_tool_output_counterfactual(
         rw = per_path["result_windowing"]
         net_readback_cost = _as_int(rw.get("net_readback_cost_bytes"))
         actual_with_ralph_bytes += max(0, net_readback_cost)
+        actual_with_ralph_tokens += _estimate_tokens_from_bytes(max(0, net_readback_cost))
 
     actual_with_ralph_bytes = max(actual_with_ralph_bytes, 0)
     hypothetical_without_ralph_bytes = max(hypothetical_without_ralph_bytes, 0)
+    actual_with_ralph_tokens = max(actual_with_ralph_tokens, 0)
+    hypothetical_without_ralph_tokens = max(hypothetical_without_ralph_tokens, 0)
 
-    hypothetical_without_ralph_tokens = _estimate_tokens_from_bytes(
-        hypothetical_without_ralph_bytes
-    )
-    actual_with_ralph_tokens = _estimate_tokens_from_bytes(actual_with_ralph_bytes)
+    # A fixture with no token data at all anywhere in per_path/windowing totals
+    # (all zero) still needs a token figure; fall back to the byte-derived
+    # estimate only in that all-zero case, never displacing real token totals.
+    if hypothetical_without_ralph_tokens == 0 and hypothetical_without_ralph_bytes > 0:
+        hypothetical_without_ralph_tokens = _estimate_tokens_from_bytes(
+            hypothetical_without_ralph_bytes
+        )
+        any_legacy_token_quality = True
+    if actual_with_ralph_tokens == 0 and actual_with_ralph_bytes > 0:
+        actual_with_ralph_tokens = _estimate_tokens_from_bytes(actual_with_ralph_bytes)
+        any_legacy_token_quality = True
+
     net_savings_bytes = max(0, hypothetical_without_ralph_bytes - actual_with_ralph_bytes)
     net_savings_tokens = max(0, hypothetical_without_ralph_tokens - actual_with_ralph_tokens)
 
@@ -666,6 +702,7 @@ def _build_tool_output_counterfactual(
         "net_savings_percent": net_savings_percent,
         "compaction_measured_not_applied_bytes": counterfactual_opportunity_bytes,
         "compaction_measured_not_applied_tokens": counterfactual_opportunity_tokens,
+        "token_quality": "legacy_or_mixed" if any_legacy_token_quality else "measured",
     }
 
 
@@ -804,6 +841,16 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
     optimization_opportunities: dict[str, Any] | None = None
     optimization_opportunities_source: dict[str, Any] | None = None
     discover_candidates: list[tuple[datetime | None, str, str, str | None]] = []
+    telemetry_unattributed: dict[tuple[str, str, bool], dict[str, int]] = {}
+    hook_config_by_runtime: dict[str, dict[str, dict[str, Any]]] = {}
+    windowing_by_source_tool: dict[str, dict[str, Any]] = {}
+    dominance_events: list[dict[str, Any]] = []
+    source_cap_summary: dict[str, Any] = {
+        "capped_event_count": 0,
+        "stored_bytes_total": 0,
+        "cap_reasons": {},
+        "configured_limits_bytes": set(),
+    }
 
     for path in paths:
         try:
@@ -853,6 +900,88 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
                     readback_totals[key] += _as_int(readback_stats.get(key))
 
         run_windowing_totals = _aggregate_windowing_from_summary(summary)
+
+        if windowing_log is not None:
+            run_source_cap = aggregate_source_cap_operational_summary(
+                windowing_log, plan_key=plan_key
+            )
+            source_cap_summary["capped_event_count"] += _as_int(
+                run_source_cap.get("capped_event_count")
+            )
+            source_cap_summary["stored_bytes_total"] += _as_int(
+                run_source_cap.get("stored_bytes_total")
+            )
+            for reason, count in (run_source_cap.get("cap_reasons") or {}).items():
+                source_cap_summary["cap_reasons"][reason] = (
+                    source_cap_summary["cap_reasons"].get(reason, 0) + _as_int(count)
+                )
+            for limit in run_source_cap.get("configured_limits_bytes") or []:
+                source_cap_summary["configured_limits_bytes"].add(_as_int(limit))
+
+            run_by_tool = aggregate_windowing_by_source_tool(
+                windowing_log, estimate_tokens_fn=_estimate_tokens_from_bytes, plan_key=plan_key
+            )
+            run_windowing_full = aggregate_windowing_savings(
+                windowing_log, estimate_tokens_fn=_estimate_tokens_from_bytes, plan_key=plan_key
+            )
+            for row in run_windowing_full["per_result"]:
+                net_saved = max(
+                    0, _as_int(row.get("original_bytes")) - _as_int(row.get("net_post_bytes"))
+                )
+                if net_saved > 0:
+                    dominance_events.append(
+                        {
+                            "net_saved_bytes": net_saved,
+                            "surfaced_tool": row.get("surfaced_tool", "unknown"),
+                            "measurement_quality": row.get(
+                                "measurement_quality", "legacy_storage_counterfactual"
+                            ),
+                        }
+                    )
+            for tool_name, tool_bucket in run_by_tool.items():
+                target = windowing_by_source_tool.setdefault(
+                    tool_name,
+                    {
+                        "events": 0,
+                        "inline_candidate_bytes": 0,
+                        "delivered_bytes": 0,
+                        "net_consumed_bytes": 0,
+                        "_qualities": set(),
+                        "source_capped_count": 0,
+                    },
+                )
+                target["events"] += _as_int(tool_bucket.get("events"))
+                target["inline_candidate_bytes"] += _as_int(tool_bucket.get("inline_candidate_bytes"))
+                target["delivered_bytes"] += _as_int(tool_bucket.get("delivered_bytes"))
+                target["net_consumed_bytes"] += _as_int(tool_bucket.get("net_consumed_bytes"))
+                target["source_capped_count"] += _as_int(tool_bucket.get("source_capped_count"))
+                target["_qualities"].add(str(tool_bucket.get("measurement_quality") or "legacy_storage_counterfactual"))
+
+        state_dir = _state_dir_for_summary(path)
+        if state_dir is not None and plan_key:
+            for diag in aggregate_telemetry_unattributed(str(state_dir), plan_key):
+                key = (diag["logKind"], diag["observedKey"], bool(diag["fallback"]))
+                bucket = telemetry_unattributed.setdefault(key, {"count": 0, "bytes": 0})
+                bucket["count"] += _as_int(diag.get("count"))
+                bucket["bytes"] += _as_int(diag.get("bytes"))
+
+        run_hook_config = summary.get("hook_config_by_runtime")
+        if isinstance(run_hook_config, Mapping):
+            for runtime_name, channels in run_hook_config.items():
+                if not isinstance(channels, Mapping):
+                    continue
+                runtime_bucket = hook_config_by_runtime.setdefault(str(runtime_name), {})
+                for channel_name, channel_data in channels.items():
+                    if not isinstance(channel_data, Mapping):
+                        continue
+                    status = str(channel_data.get("status") or "unknown")
+                    reasons = channel_data.get("reasons")
+                    reasons_list = list(reasons) if isinstance(reasons, list) else []
+                    channel_bucket = runtime_bucket.setdefault(
+                        str(channel_name), {"statuses": set(), "reasons": set()}
+                    )
+                    channel_bucket["statuses"].add(status)
+                    channel_bucket["reasons"].update(reasons_list)
 
         for path_name in SAVINGS_PATH_NAMES:
             bucket = summary_paths[path_name]
@@ -1045,10 +1174,102 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         else 0.0
     )
 
+    telemetry_unattributed_list = [
+        {
+            "logKind": key[0],
+            "observedKey": key[1],
+            "fallback": key[2],
+            "count": value["count"],
+            "bytes": value["bytes"],
+        }
+        for key, value in sorted(telemetry_unattributed.items())
+    ]
+
+    hook_config_by_runtime_final: dict[str, dict[str, dict[str, Any]]] = {}
+    for runtime_name, channels in hook_config_by_runtime.items():
+        runtime_out: dict[str, dict[str, Any]] = {}
+        for channel_name, channel_bucket in channels.items():
+            statuses = channel_bucket["statuses"]
+            if statuses == {"enabled"}:
+                status = "enabled"
+            elif statuses == {"disabled"}:
+                status = "disabled"
+            elif statuses == {"unknown"} or not statuses:
+                status = "unknown"
+            else:
+                status = "mixed"
+            runtime_out[channel_name] = {
+                "status": status,
+                "reasons": sorted(channel_bucket["reasons"]),
+            }
+        hook_config_by_runtime_final[runtime_name] = runtime_out
+
+    windowing_by_source_tool_final: dict[str, dict[str, Any]] = {}
+    for tool_name, bucket in windowing_by_source_tool.items():
+        net_saved = max(0, bucket["inline_candidate_bytes"] - bucket["net_consumed_bytes"])
+        qualities = bucket["_qualities"]
+        if qualities == {"v2_measured"}:
+            quality = "v2_measured"
+        elif qualities == {"legacy_storage_counterfactual"}:
+            quality = "legacy_storage_counterfactual"
+        else:
+            quality = "mixed"
+        windowing_by_source_tool_final[tool_name] = {
+            "events": bucket["events"],
+            "inline_candidate_bytes": bucket["inline_candidate_bytes"],
+            "delivered_bytes": bucket["delivered_bytes"],
+            "net_consumed_bytes": bucket["net_consumed_bytes"],
+            "net_saved_bytes": net_saved,
+            "source_capped_count": bucket["source_capped_count"],
+            "measurement_quality": quality,
+        }
+
+    # Single-event dominance (TODO: flag-corrected-single-event-dominance).
+    # Denominator is total attributed net savings (v2 inline candidate minus
+    # delivered, net of readbacks) across dominance_events only -- never
+    # mixed with unattributed or source-avoided operational quantities.
+    DOMINANCE_THRESHOLD_SHARE = 0.5
+    dominance_warning: dict[str, Any] | None = None
+    total_attributed_net_savings = sum(
+        _as_int(event.get("net_saved_bytes")) for event in dominance_events
+    )
+    if dominance_events and total_attributed_net_savings > 0:
+        top_event = max(dominance_events, key=lambda event: _as_int(event.get("net_saved_bytes")))
+        share = _as_int(top_event.get("net_saved_bytes")) / total_attributed_net_savings
+        if share > DOMINANCE_THRESHOLD_SHARE:
+            dominance_warning = {
+                "surfaced_tool": top_event.get("surfaced_tool", "unknown"),
+                "share": round(share, 4),
+                "net_saved_bytes": _as_int(top_event.get("net_saved_bytes")),
+                "measurement_quality": top_event.get(
+                    "measurement_quality", "legacy_storage_counterfactual"
+                ),
+                "threshold": DOMINANCE_THRESHOLD_SHARE,
+            }
+
+    # Optimization events (TODO: render-optimization-event-observability-line):
+    # the sum of attributed per-path event counts. This is NOT unique
+    # inspected-call coverage -- per-path counts may double-count one call,
+    # omit no-savings inspections, and lack a shared call id.
+    optimization_events_total = sum(
+        _as_int((per_path.get(path_name) or {}).get("count")) for path_name in SAVINGS_PATH_NAMES
+    )
+
     return {
         "schema_version": 2,
         "kind": "ralph_benchmark_report",
         "run_count": run_count,
+        "optimization_events_total": optimization_events_total,
+        "telemetry_unattributed": telemetry_unattributed_list,
+        "hook_config_by_runtime": hook_config_by_runtime_final,
+        "windowing_by_source_tool": windowing_by_source_tool_final,
+        "dominance_warning": dominance_warning,
+        "source_cap_operational_summary": {
+            "capped_event_count": source_cap_summary["capped_event_count"],
+            "stored_bytes_total": source_cap_summary["stored_bytes_total"],
+            "cap_reasons": source_cap_summary["cap_reasons"],
+            "configured_limits_bytes": sorted(source_cap_summary["configured_limits_bytes"]),
+        },
         "date_range": {
             "started_at": _isoformat(started_at),
             "ended_at": _isoformat(ended_at),

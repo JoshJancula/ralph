@@ -3240,7 +3240,8 @@ PY
 {"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${_summary_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_summary_input_tokens},"output_tokens":${_summary_output_tokens},"cache_creation_input_tokens":${_summary_cache_creation_tokens},"cache_read_input_tokens":${_summary_cache_read_tokens},"cache_read_per_tool_turn":${_summary_cache_read_per_tool_turn},"cache_read_per_tool_call":${_summary_cache_read_per_tool_call},"max_turn_total_tokens":${_summary_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio},"cache_reporting":"${_summary_cache_reporting}","prompt_bytes":${_summary_prompt_bytes},"todo_bytes":${_summary_todo_bytes},"todo_continuation_lines":${_summary_todo_continuation_lines},"direct_verification_count":${_summary_direct_verification_count},"verification_bytes_suppressed":${_summary_verification_bytes_suppressed},"rate_limit_count":${_summary_rate_limit_count},"tool_turns":${_summary_tool_turns},"tool_calls_total":${_summary_tool_calls_total},"compaction_original_bytes":${_summary_compaction_original_bytes},"compaction_compacted_bytes":${_summary_compaction_compacted_bytes},"compaction_saved_bytes":${_summary_compaction_saved_bytes},"compaction_measured_not_applied_bytes":${_summary_compaction_measured_not_applied_bytes}}
 _SUMMARY_EOF
   if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
-    PYTHONPATH="$SCRIPT_DIR/python" python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" "${RALPH_PLAN_KEY:-}" <<'PY'
+    PYTHONPATH="$SCRIPT_DIR/python" python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" "${RALPH_PLAN_KEY:-}" \
+      "$(ralph_hooks_config_snapshot_path "${RALPH_PLAN_WORKSPACE_ROOT:-}" 2>/dev/null || true)" <<'PY'
 import json
 import os
 import sys
@@ -3251,7 +3252,7 @@ from tool_call_classification import (
     empty_savings_bucket,
     finalize_savings_bucket,
 )
-from ralph_overlay_usage_fields import aggregate_opencode_cache_summary
+from ralph_overlay_usage_fields import aggregate_hook_config_by_runtime, aggregate_opencode_cache_summary
 from usage_accounting import aggregate_records, apply_canonical_to_summary
 
 summary_path = sys.argv[1]
@@ -3413,6 +3414,11 @@ try:
     opencode_cache_summary = aggregate_opencode_cache_summary(invocations)
     if opencode_cache_summary:
         summary.update(opencode_cache_summary)
+
+    hooks_config_path = sys.argv[4] if len(sys.argv) > 4 else ""
+    hook_config_by_runtime = aggregate_hook_config_by_runtime(hooks_config_path, plan_key)
+    if hook_config_by_runtime:
+        summary["hook_config_by_runtime"] = hook_config_by_runtime
 
     tmp = f"{summary_path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -3890,6 +3896,18 @@ while true; do
       exit 1
     fi
     iteration=$total_invocations
+
+    # One hooks-config.jsonl snapshot per invocation/runtime, written after
+    # mode defaults and runtime adapter preparation have both run (never
+    # during runtime_overlay_init_state, which precedes both).
+    if declare -F ralph_hooks_config_snapshot_append >/dev/null 2>&1; then
+      ralph_hooks_config_snapshot_append \
+        "${RALPH_PLAN_WORKSPACE_ROOT:-}" \
+        "${RALPH_PLAN_KEY:-}" \
+        "$iteration" \
+        "${RUNTIME:-}" \
+        "${RALPH_MODE:-no}" || true
+    fi
 
     read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
     remaining=$((total_count - done_count))

@@ -221,6 +221,21 @@ def _coerce_bool(value: object) -> bool:
     return text in ("1", "true", "yes", "on")
 
 
+# Token measurement provenance labels for a single event's token figures.
+#   "measured"          - from Ralph's dependency-free estimator run over actual text
+#   "legacy_bytes_div4" - a bytes/4-equivalent fallback (no actual text was available)
+#   "missing"           - no token figure at all for this event
+TOKEN_QUALITY_MEASURED = "measured"
+TOKEN_QUALITY_LEGACY = "legacy_bytes_div4"
+TOKEN_QUALITY_MISSING = "missing"
+
+_TOKEN_QUALITY_COUNT_KEYS = (
+    "token_quality_measured_events",
+    "token_quality_legacy_events",
+    "token_quality_missing_events",
+)
+
+
 def empty_savings_bucket(*, include_hidden: bool = False) -> dict[str, int | float]:
     """Return a zeroed savings bucket with additive byte and token fields."""
     bucket: dict[str, int | float] = {
@@ -232,6 +247,9 @@ def empty_savings_bucket(*, include_hidden: bool = False) -> dict[str, int | flo
         "post_optimization_tokens": 0,
         "saved_tokens": 0,
         "token_cap_triggers": 0,
+        "token_quality_measured_events": 0,
+        "token_quality_legacy_events": 0,
+        "token_quality_missing_events": 0,
     }
     if include_hidden:
         bucket["hidden_from_context"] = 0
@@ -240,7 +258,12 @@ def empty_savings_bucket(*, include_hidden: bool = False) -> dict[str, int | flo
 
 
 def finalize_savings_bucket(bucket: dict[str, int | float]) -> None:
-    """Compute savings_percent fields for bytes and tokens when pre > 0."""
+    """Compute savings_percent fields for bytes and tokens when pre > 0, and
+    an overall token_quality label: "measured" when every event's tokens came
+    from actual-text estimation, "legacy_bytes_div4" when every event used the
+    bytes-derived fallback, "missing" when no event had token data, or "mixed"
+    when more than one of those was observed.
+    """
     pre_bytes = _coerce_int(bucket.get("pre_optimization_bytes"))
     saved_bytes = _coerce_int(bucket.get("saved_bytes"))
     if pre_bytes > 0:
@@ -249,6 +272,21 @@ def finalize_savings_bucket(bucket: dict[str, int | float]) -> None:
     saved_tokens = _coerce_int(bucket.get("saved_tokens"))
     if pre_tokens > 0:
         bucket["savings_percent_tokens"] = round((saved_tokens / pre_tokens) * 100, 1)
+
+    measured = _coerce_int(bucket.get("token_quality_measured_events"))
+    legacy = _coerce_int(bucket.get("token_quality_legacy_events"))
+    missing = _coerce_int(bucket.get("token_quality_missing_events"))
+    observed_kinds = sum(1 for n in (measured, legacy, missing) if n > 0)
+    if observed_kinds == 0:
+        bucket["token_quality"] = TOKEN_QUALITY_MISSING
+    elif observed_kinds > 1:
+        bucket["token_quality"] = "mixed"
+    elif measured > 0:
+        bucket["token_quality"] = TOKEN_QUALITY_MEASURED
+    elif legacy > 0:
+        bucket["token_quality"] = TOKEN_QUALITY_LEGACY
+    else:
+        bucket["token_quality"] = TOKEN_QUALITY_MISSING
 
 
 def accumulate_savings_event(
@@ -260,6 +298,7 @@ def accumulate_savings_event(
     post_tokens: int = 0,
     token_cap_trigger: bool = False,
     hidden_from_context: bool = False,
+    token_quality: str = TOKEN_QUALITY_MEASURED,
 ) -> None:
     """Add one optimization event into a per-path savings bucket."""
     saved_bytes = pre_bytes - post_bytes
@@ -280,6 +319,13 @@ def accumulate_savings_event(
             bucket["hidden_from_context_tokens"] = (
                 _coerce_int(bucket.get("hidden_from_context_tokens")) + saved_tokens
             )
+    if pre_tokens <= 0 and post_tokens <= 0:
+        quality_key = "token_quality_missing_events"
+    elif token_quality == TOKEN_QUALITY_LEGACY:
+        quality_key = "token_quality_legacy_events"
+    else:
+        quality_key = "token_quality_measured_events"
+    bucket[quality_key] = _coerce_int(bucket.get(quality_key)) + 1
 
 
 def merge_savings_buckets(
@@ -302,6 +348,9 @@ def merge_savings_buckets(
             "token_cap_triggers",
             "hidden_from_context",
             "hidden_from_context_tokens",
+            "token_quality_measured_events",
+            "token_quality_legacy_events",
+            "token_quality_missing_events",
         ):
             if key in path_data:
                 bucket[key] = _coerce_int(bucket.get(key)) + _coerce_int(path_data.get(key))

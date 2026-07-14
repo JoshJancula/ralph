@@ -423,7 +423,21 @@ def _match_docker_ps(_cmd: str, tokens: list[str]) -> bool:
 
 
 def _match_docker_logs(_cmd: str, tokens: list[str]) -> bool:
-    return len(tokens) >= 2 and _basename(tokens[0]) == "docker" and tokens[1] == "logs"
+    """Match supported Docker log command forms by command text, never by
+    output shape: `docker logs`, `docker compose logs`, `docker-compose logs`.
+    """
+    if len(tokens) < 2:
+        return False
+    base = _basename(tokens[0])
+    if base == "docker":
+        if tokens[1] == "logs":
+            return True
+        if len(tokens) >= 3 and tokens[1] == "compose" and tokens[2] == "logs":
+            return True
+        return False
+    if base == "docker-compose":
+        return tokens[1] == "logs"
+    return False
 
 
 def _match_kubectl_get(_cmd: str, tokens: list[str]) -> bool:

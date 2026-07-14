@@ -48,23 +48,6 @@ read_mcp_proxy_policy() {
   [[ -n "$p" ]] && echo "$p"
 }
 
-read_mcp_servers() {
-  local agents_root="$1" agent_id="$2"
-  local cfg
-  cfg="$(load_cfg_path "$agents_root" "$agent_id")"
-  [[ -f "$cfg" ]] || return 1
-  command -v python3 &>/dev/null || return 1
-  local mcp_script=""
-  if [[ -n "${script_dir:-}" && -f "${script_dir}/python/agent-config-mcp.py" ]]; then
-    mcp_script="${script_dir}/python/agent-config-mcp.py"
-  else
-    mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)/python/agent-config-mcp.py"
-    [[ -f "$mcp_script" ]] || mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../../.." && pwd)/python/agent-config-mcp.py"
-  fi
-  [[ -f "$mcp_script" ]] || return 1
-  python3 "$mcp_script" --redact-config "$cfg" 2>/dev/null || true
-}
-
 read_model() {
   local agents_root="$1" agent_id="$2"
   local cfg

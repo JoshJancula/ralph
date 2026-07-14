@@ -8,6 +8,25 @@ if [[ -n "${RALPH_NATIVE_RESULT_COMPACT_LOADED:-}" ]]; then
 fi
 RALPH_NATIVE_RESULT_COMPACT_LOADED=1
 
+_ralph_native_result_compact_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$_ralph_native_result_compact_dir/native-hook-debug.sh" 2>/dev/null || true
+unset _ralph_native_result_compact_dir
+
+# Best-effort runtime/hook label for debug records; falls back to "unknown"
+# when the hook input has not been parsed yet (e.g. missing-jq failures).
+ralph_native_hook_debug_runtime_label() {
+  local hook_input="${1:-}"
+  if [[ -n "$hook_input" ]] && command -v jq >/dev/null 2>&1 \
+    && jq -e '.tool_output' <<<"$hook_input" >/dev/null 2>&1; then
+    printf 'cursor:native_result_hook\n'
+  elif [[ -n "$hook_input" ]]; then
+    printf 'claude:native_result_hook\n'
+  else
+    printf 'unknown:native_result_hook\n'
+  fi
+}
+
 ralph_native_hook_result_compact_truthy() {
   case "${1:-}" in
     1 | true | yes | on) return 0 ;;
@@ -110,10 +129,12 @@ ralph_native_hook_extract_tool_output_text() {
   text="$(jq -r '
     if (.content | type) == "string" and ((.content // "") | length) > 0 then .content
     elif (.content | type) == "array" and ((.content[0].text // "") | length) > 0 then .content[0].text
+    elif ((.file.content // "") | length) > 0 then .file.content
     elif ((.success.content // "") | length) > 0 then .success.content
     elif ((.result.success.content // "") | length) > 0 then .result.success.content
     elif ((.text // "") | length) > 0 then .text
     elif (.output | type) == "string" then .output
+    elif (has("stdout")) and ((.stdout // "") | length) > 0 then .stdout
     else empty end
   ' <<<"$output_json")"
   [[ -n "$text" ]] || return 1
@@ -136,6 +157,16 @@ ralph_native_hook_emit_claude_exploration_updated_output() {
     if jq -e '.content | type == "array"' <<<"$original_json" >/dev/null 2>&1; then
       jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
         '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .content = [{type: "text", text: $text}])}}'
+      return 0
+    fi
+    if jq -e '.file.content | type == "string"' <<<"$original_json" >/dev/null 2>&1; then
+      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .file.content = $text)}}'
+      return 0
+    fi
+    if jq -e 'has("stdout")' <<<"$original_json" >/dev/null 2>&1; then
+      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .stdout = $text)}}'
       return 0
     fi
     jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
@@ -205,10 +236,19 @@ ralph_native_hook_post_tool_native_result_compact_fail_open() {
 
 ralph_native_hook_post_tool_native_result_compact_main() {
   local hook_input="${1:-}"
-  [[ -n "$hook_input" ]] || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if [[ -z "$hook_input" ]]; then
+    ralph_native_hook_debug_log "malformed_input" "$(ralph_native_hook_debug_runtime_label "")" "" "empty hook stdin"
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
 
   ralph_native_hook_result_compact_enabled || ralph_native_hook_post_tool_native_result_compact_fail_open
-  command -v jq >/dev/null 2>&1 || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if ! command -v jq >/dev/null 2>&1; then
+    ralph_native_hook_debug_log "missing_jq" "$(ralph_native_hook_debug_runtime_label "$hook_input")" "" "jq not found on PATH"
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
+
+  local runtime_label
+  runtime_label="$(ralph_native_hook_debug_runtime_label "$hook_input")"
 
   local event tool_name output_json text workspace plan_key proxy_tool compact_text
   event="$(jq -r '.hook_event_name // ""' <<<"$hook_input")"
@@ -225,18 +265,35 @@ ralph_native_hook_post_tool_native_result_compact_main() {
   elif jq -e '.tool_response' <<<"$hook_input" >/dev/null 2>&1; then
     output_json="$(jq -c '.tool_response' <<<"$hook_input")"
   else
+    ralph_native_hook_debug_log "malformed_input" "$runtime_label" "$tool_name" "hook input has neither tool_output nor tool_response"
     ralph_native_hook_post_tool_native_result_compact_fail_open
   fi
-  [[ -n "$output_json" ]] || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if [[ -z "$output_json" ]]; then
+    ralph_native_hook_debug_log "malformed_input" "$runtime_label" "$tool_name" "tool_output/tool_response is empty"
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
 
-  text="$(ralph_native_hook_extract_tool_output_text "$output_json")" \
-    || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if ! text="$(ralph_native_hook_extract_tool_output_text "$output_json")"; then
+    # Grep (files_with_matches/count) and Glob legitimately carry no text
+    # field; that is expected, not an actionable failure. Read/Bash/
+    # SemanticSearch are expected to always carry text, so treat a miss there
+    # as an unrecognized response shape worth recording.
+    case "$tool_name" in
+      Grep | Glob) : ;;
+      *) ralph_native_hook_debug_log "unrecognized_shape" "$runtime_label" "$tool_name" "no known text field in tool output" ;;
+    esac
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
 
-  workspace="$(ralph_native_hook_workspace_from_hook_input "$hook_input")" \
-    || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if ! workspace="$(ralph_native_hook_workspace_from_hook_input "$hook_input")"; then
+    ralph_native_hook_debug_log "missing_workspace" "$runtime_label" "$tool_name" "could not resolve workspace root"
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
   plan_key="$(ralph_native_hook_plan_key_from_env "native-result-hook")"
-  ralph_native_hook_result_compact_load_libs "$workspace" \
-    || ralph_native_hook_post_tool_native_result_compact_fail_open
+  if ! ralph_native_hook_result_compact_load_libs "$workspace"; then
+    ralph_native_hook_debug_log "missing_bootstrap_or_library" "$runtime_label" "$tool_name" "failed to source mcp-proxy/hook-telemetry libs"
+    ralph_native_hook_post_tool_native_result_compact_fail_open
+  fi
 
   proxy_tool="$(ralph_native_hook_native_to_proxy_tool "$tool_name")"
   local context_json
@@ -310,6 +367,16 @@ ralph_native_hook_emit_cursor_updated_tool_output() {
   if jq -e '.content[0].text' <<<"$original_json" >/dev/null 2>&1; then
     jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
       '{updated_tool_output: ($orig | .content[0].text = $text)}'
+    return 0
+  fi
+  if jq -e '.file.content | type == "string"' <<<"$original_json" >/dev/null 2>&1; then
+    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
+      '{updated_tool_output: ($orig | .file.content = $text)}'
+    return 0
+  fi
+  if jq -e 'has("stdout")' <<<"$original_json" >/dev/null 2>&1; then
+    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
+      '{updated_tool_output: ($orig | .stdout = $text)}'
     return 0
   fi
   jq -nc --arg text "$compact_text" '{updated_tool_output: {content: $text}}'
@@ -702,10 +769,16 @@ ralph_native_hook_compact_text_result() {
     fi
   fi
 
-  [[ -n "$compact_result" ]] || return 1
+  if [[ -z "$compact_result" ]]; then
+    ralph_native_hook_debug_log "compaction_failed" "native_result_hook" "$surfaced_tool_name" "envelope builder returned no result"
+    return 1
+  fi
 
   shaped_json="$(jq -r '.content[0].text // empty' <<<"$compact_result")"
-  [[ -n "$shaped_json" ]] || return 1
+  if [[ -z "$shaped_json" ]]; then
+    ralph_native_hook_debug_log "compaction_failed" "native_result_hook" "$surfaced_tool_name" "envelope result missing content[0].text"
+    return 1
+  fi
   if [[ "$shaped_json" == "$text" ]]; then
     return 1
   fi

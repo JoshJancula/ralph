@@ -29,6 +29,8 @@ from result_windowing_metrics import (
 )
 from tool_call_classification import (
     SAVINGS_PATH_NAMES,
+    TOKEN_QUALITY_LEGACY,
+    TOKEN_QUALITY_MEASURED,
     accumulate_savings_event,
     empty_savings_bucket,
     finalize_savings_bucket,
@@ -234,9 +236,11 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
             original_bytes = coerce_int(record.get("originalBytes"))
             compacted_bytes = coerce_int(record.get("compactedBytes"))
             original_tokens, compacted_tokens, token_cap = token_fields_from_record(record)
+            token_quality = TOKEN_QUALITY_MEASURED
             if original_tokens <= 0 and compacted_tokens <= 0 and original_bytes > 0:
                 original_tokens = estimate_tokens("x" * original_bytes)
                 compacted_tokens = estimate_tokens("x" * compacted_bytes)
+                token_quality = TOKEN_QUALITY_LEGACY
 
             accumulate_savings_event(
                 bucket,
@@ -246,6 +250,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
                 post_tokens=compacted_tokens,
                 token_cap_trigger=token_cap,
                 hidden_from_context=True,
+                token_quality=token_quality,
             )
 
     _accumulate_compact(os.path.join(state_dir, "bash-compact.jsonl"), "hook_compaction")
@@ -293,9 +298,14 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
         # netting (preview + readback capped at original bytes/tokens) and legacy
         # per-line records without resultId.
         aggregated = aggregate_windowing_savings(
-            window_path, estimate_tokens_fn=lambda b: estimate_tokens("x" * b)
+            window_path, estimate_tokens_fn=lambda b: estimate_tokens("x" * b), plan_key=plan_key
         )
         for row in aggregated["per_result"]:
+            row_quality = (
+                TOKEN_QUALITY_MEASURED
+                if row.get("measurement_quality") == "v2_measured"
+                else TOKEN_QUALITY_LEGACY
+            )
             accumulate_savings_event(
                 window_bucket,
                 pre_bytes=row["original_bytes"],
@@ -304,6 +314,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
                 post_tokens=row["net_post_tokens"],
                 token_cap_trigger=bool(row["token_cap_triggered"]),
                 hidden_from_context=True,
+                token_quality=row_quality,
             )
         for entry in aggregated["legacy_events"]:
             accumulate_savings_event(
@@ -313,6 +324,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
                 pre_tokens=entry["original_tokens"],
                 post_tokens=entry["returned_tokens"],
                 token_cap_trigger=bool(entry["token_cap"]),
+                token_quality=TOKEN_QUALITY_LEGACY,
                 hidden_from_context=True,
             )
 
@@ -320,6 +332,83 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
         finalize_savings_bucket(savings_by_path[path_name])
 
     return savings_by_path
+
+
+_UNATTRIBUTED_LOG_SOURCES = (
+    ("bash-compact.jsonl", "bash_compact"),
+    ("proxy-shell-compact.jsonl", "proxy_shell_compact"),
+    ("bash-rewrite.jsonl", "bash_rewrite"),
+    ("result-windowing.jsonl", "result_windowing"),
+)
+
+
+def aggregate_telemetry_unattributed(state_dir: str, plan_key: str = "") -> list[dict[str, Any]]:
+    """Diagnostics for telemetry records that did not positively attribute to
+    plan_key: a mismatched plan_key, a fallback-marked key, or a missing key.
+
+    Never included in SAVINGS_PATH_NAMES buckets, per-path/channel totals, or
+    tool-output counterfactuals -- aggregate_byte_savings_by_path already
+    excludes these records via its own _record_matches filter; this function
+    independently re-scans the same logs purely to surface what got excluded
+    and why, as a separate data-quality object.
+    """
+    plan_key = str(plan_key or "").strip()
+    if not state_dir or not plan_key:
+        return []
+
+    diagnostics: dict[tuple[str, str, bool], dict[str, int]] = {}
+
+    def _record_bytes(record: dict[str, Any]) -> int:
+        for key in ("originalBytes", "compactedBytes"):
+            value = record.get(key)
+            if value is not None:
+                return coerce_int(value)
+        command = record.get("command")
+        if isinstance(command, str):
+            return len(command.encode("utf-8"))
+        return 0
+
+    def _scan(filename: str, log_kind: str) -> None:
+        path = os.path.join(state_dir, filename)
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            return
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            observed_key = str(record.get("plan_key") or record.get("planKey") or "").strip()
+            if observed_key == plan_key:
+                continue  # positively attributed; not a diagnostic
+            fallback = coerce_bool(record.get("planKeyFallback"))
+            bucket_key = (log_kind, observed_key or "(missing)", fallback)
+            bucket = diagnostics.setdefault(bucket_key, {"count": 0, "bytes": 0})
+            bucket["count"] += 1
+            bucket["bytes"] += _record_bytes(record)
+
+    for filename, log_kind in _UNATTRIBUTED_LOG_SOURCES:
+        _scan(filename, log_kind)
+
+    return [
+        {
+            "logKind": key[0],
+            "observedKey": key[1],
+            "fallback": key[2],
+            "count": value["count"],
+            "bytes": value["bytes"],
+        }
+        for key, value in sorted(diagnostics.items())
+    ]
 
 
 def channel_activity_counts_from_savings(
@@ -380,9 +469,11 @@ def aggregate_byte_savings_by_channel(state_dir: str, plan_key: str = "") -> dic
             original_bytes = coerce_int(record.get("originalBytes"))
             compacted_bytes = coerce_int(record.get("compactedBytes"))
             original_tokens, compacted_tokens, token_cap = token_fields_from_record(record)
+            token_quality = TOKEN_QUALITY_MEASURED
             if original_tokens <= 0 and compacted_tokens <= 0 and original_bytes > 0:
                 original_tokens = estimate_tokens("x" * original_bytes)
                 compacted_tokens = estimate_tokens("x" * compacted_bytes)
+                token_quality = TOKEN_QUALITY_LEGACY
 
             accumulate_savings_event(
                 bucket,
@@ -392,6 +483,7 @@ def aggregate_byte_savings_by_channel(state_dir: str, plan_key: str = "") -> dic
                 post_tokens=compacted_tokens,
                 token_cap_trigger=token_cap,
                 hidden_from_context=True,
+                token_quality=token_quality,
             )
 
     _accumulate_compact(os.path.join(state_dir, "bash-compact.jsonl"), "native_result_hook")
@@ -485,6 +577,82 @@ def aggregate_hook_telemetry(state_dir: str, plan_key: str = "") -> dict[str, in
                 metrics["hook_rewrites"] += 1
 
     return metrics
+
+
+def aggregate_hook_config_by_runtime(hooks_config_path: str, plan_key: str = "") -> dict[str, Any]:
+    """Aggregate hooks-config.jsonl snapshots into a per-runtime, per-channel
+    enabled/disabled/mixed/unknown status with all distinct reasons observed.
+
+    A legacy run with no snapshot file (or an empty file) produces an empty
+    dict rather than fabricating a runtime entry, so callers can distinguish
+    "no config recorded" (render as unknown) from "recorded, all disabled".
+    """
+    result: dict[str, Any] = {}
+    if not hooks_config_path or not os.path.isfile(hooks_config_path):
+        return result
+
+    plan_key = str(plan_key or "").strip()
+
+    # runtime -> channel -> {"enabled": set[bool], "reasons": set[str]}
+    buckets: dict[str, dict[str, dict[str, Any]]] = {}
+
+    try:
+        with open(hooks_config_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return result
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        record_plan_key = str(record.get("planKey") or "").strip()
+        if plan_key and record_plan_key and record_plan_key != plan_key:
+            continue
+        runtime = str(record.get("runtime") or "unknown").strip() or "unknown"
+        channels = record.get("channels")
+        if not isinstance(channels, list):
+            continue
+        runtime_bucket = buckets.setdefault(runtime, {})
+        for channel_record in channels:
+            if not isinstance(channel_record, dict):
+                continue
+            channel_name = str(channel_record.get("channel") or "").strip()
+            if not channel_name:
+                continue
+            channel_bucket = runtime_bucket.setdefault(
+                channel_name, {"enabled": set(), "reasons": set()}
+            )
+            channel_bucket["enabled"].add(coerce_bool(channel_record.get("enabled")))
+            reason = str(channel_record.get("reason") or "").strip()
+            if reason:
+                channel_bucket["reasons"].add(reason)
+
+    for runtime, channel_buckets in buckets.items():
+        runtime_out: dict[str, Any] = {}
+        for channel_name, channel_bucket in channel_buckets.items():
+            enabled_states = channel_bucket["enabled"]
+            if not enabled_states:
+                status = "unknown"
+            elif enabled_states == {True}:
+                status = "enabled"
+            elif enabled_states == {False}:
+                status = "disabled"
+            else:
+                status = "mixed"
+            runtime_out[channel_name] = {
+                "status": status,
+                "reasons": sorted(channel_bucket["reasons"]),
+            }
+        result[runtime] = runtime_out
+
+    return result
 
 
 def fields_from_summary(summary: Any) -> dict[str, Any]:

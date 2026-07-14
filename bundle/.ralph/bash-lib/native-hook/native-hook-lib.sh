@@ -125,6 +125,21 @@ ralph_native_hook_plan_key() {
   printf '%s\n' "$default_key"
 }
 
+# Prints a stable, non-sensitive reason code when the plan key was resolved
+# from neither RALPH_PLAN_KEY nor RALPH_ARTIFACT_NS (i.e. a fallback/default
+# key was used), or an empty string when either was explicitly set. Never
+# fails; callers pass the result explicitly into telemetry builders instead
+# of re-deriving it from a global at record-write time.
+ralph_native_hook_plan_key_fallback_reason() {
+  if [[ -n "${RALPH_PLAN_KEY:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${RALPH_ARTIFACT_NS:-}" ]]; then
+    return 0
+  fi
+  printf 'no_plan_key_or_artifact_ns_env\n'
+}
+
 # Resolve project/workspace root from env var or hook JSON payload.
 # Args: env_dir_var input_json_var (name holding JSON string)
 ralph_native_hook_project_dir() {
@@ -330,6 +345,8 @@ ralph_native_hook_append_compact_log() {
   local workspace="${1:-}" plan_key="${2:-}" command="${3:-}" compact_json="${4:-}"
   local original_stdout="${5-}" original_stderr="${6-}" storage_path="${7-}"
   local exit_code="${8:-0}"
+  local plan_key_fallback="${9:-}" plan_key_fallback_reason="${10:-}"
+  local delivered_bytes="${11:-}" delivered_tokens="${12:-}"
   [[ -n "${RALPH_BASH_COMPACT_LOG:-}" ]] || return 0
   ralph_native_hook_source_telemetry_lib "$workspace" || return 0
   ralph_hook_telemetry_append_compact_log \
@@ -340,7 +357,12 @@ ralph_native_hook_append_compact_log() {
     "$original_stdout" \
     "$original_stderr" \
     "${storage_path:-}" \
-    "$exit_code"
+    "$exit_code" \
+    "" \
+    "$plan_key_fallback" \
+    "$plan_key_fallback_reason" \
+    "$delivered_bytes" \
+    "$delivered_tokens"
 }
 
 # Build a shell command that runs native-shell-wrapper.sh with env gates set.

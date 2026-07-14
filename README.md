@@ -53,15 +53,16 @@ git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git m
 
 Or clone Ralph once and run **`install.sh /path/to/your-repo`**. Submodule and subtree layouts, **`install.sh`** flags, partial installs, uninstall, and a global-vs-local comparison: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
-After install, configure a runtime directory with hooks and MCP for normal IDE sessions (not only plan runs):
+After install, use `ralph setup` to enable durable compaction hooks for normal IDE sessions. You can target either a project runtime dir or your user-home runtime dir:
 
 ```bash
 cd /path/to/your-project
-ralph setup --runtime claude --hooks --mcp          # Claude hooks + project-root .mcp.json
-ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all
-ralph setup --runtime codex --all                   # hooks + .codex/config.toml MCP entry
-ralph setup --runtime opencode --all                # hooks + opencode.json MCP entry
-ralph setup --runtime antigravity --all             # hooks + .agents/mcp_config.json MCP entry
+ralph setup --runtime claude --runtime-dir ~/.claude --hooks     # durable Claude compaction hooks for all projects
+ralph setup --runtime cursor --runtime-dir ~/.cursor --hooks     # durable Cursor compaction hooks for all projects
+ralph setup --runtime claude --runtime-dir /path/to/project/.claude --hooks --mcp
+ralph setup --runtime codex --runtime-dir /path/to/project/.codex --all
+ralph setup --runtime opencode --runtime-dir /path/to/project/.opencode --hooks
+ralph setup --runtime antigravity --runtime-dir /path/to/project/.agents --all
 ```
 
 See **[docs/INSTALL.md](docs/INSTALL.md)** (command reference) and **[docs/MCP.md](docs/MCP.md)** / **[docs/TOOLING.md](docs/TOOLING.md)** (runtime-specific paths and caveats).

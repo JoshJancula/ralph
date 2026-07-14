@@ -876,6 +876,129 @@ ralph_mcp_proxy_run_search_cmd() {
   return "$rc"
 }
 
+# Streaming bounded collector (PLAN15). Runs a search command (ripgrep or
+# equivalent), bounds its output to byteCap/lineCap/perLineBytes without ever
+# buffering the full result in a Bash variable, and reports whether/why it
+# capped via RALPH_MCP_PROXY_GREP_COLLECT_* globals. The output temp file is
+# bounded by construction: the awk bounding stage writes accepted lines
+# directly to $out_file, one at a time.
+#
+# Args: out_file byte_cap line_cap per_line_cap -- <command...>
+#
+# Deliberately runs with pipefail disabled for the duration of the pipeline:
+# once the awk stage caps and exits, the upstream search command can receive
+# SIGPIPE (exit 141) purely because its reader closed early. That is a
+# successful partial search, not a search failure, so it must not be
+# conflated with a genuine ripgrep error via an unhandled `cmd | head`-style
+# pipeline under the MCP server's active pipefail setting.
+ralph_mcp_proxy_bounded_search_collect() {
+  local out_file="${1:-}" byte_cap="${2:-}" line_cap="${3:-}" per_line_cap="${4:-}"
+  shift 4 || true
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+
+  RALPH_MCP_PROXY_GREP_COLLECT_STATUS="error"
+  RALPH_MCP_PROXY_GREP_COLLECT_CAPPED="0"
+  RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON=""
+  RALPH_MCP_PROXY_GREP_COLLECT_BYTES="0"
+  RALPH_MCP_PROXY_GREP_COLLECT_LINES="0"
+  RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED="0"
+  export RALPH_MCP_PROXY_GREP_COLLECT_STATUS RALPH_MCP_PROXY_GREP_COLLECT_CAPPED \
+    RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON RALPH_MCP_PROXY_GREP_COLLECT_BYTES \
+    RALPH_MCP_PROXY_GREP_COLLECT_LINES RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED
+
+  local awk_script="$_MCP_PROXY_TOOLS_LIB_DIR/mcp-proxy-grep-source-cap.awk"
+  : >"$out_file"
+  if [[ ! -f "$awk_script" ]] || ! [[ "$byte_cap" =~ ^[0-9]+$ ]] || ! [[ "$line_cap" =~ ^[0-9]+$ ]] \
+    || ! [[ "$per_line_cap" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  local awk_stderr
+  awk_stderr="$(mktemp)"
+
+  local restore_pipefail=0
+  if [[ -o pipefail ]]; then
+    restore_pipefail=1
+    set +o pipefail
+  fi
+
+  local secs
+  secs="$(ralph_mcp_proxy_search_sync_timeout_seconds)"
+  if [[ -n "$secs" ]] && command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@" 2>/dev/null \
+      | LC_ALL=C awk -v byteCap="$byte_cap" -v lineCap="$line_cap" -v perLineBytes="$per_line_cap" \
+        -v out="$out_file" -f "$awk_script" 2>"$awk_stderr"
+  else
+    "$@" 2>/dev/null \
+      | LC_ALL=C awk -v byteCap="$byte_cap" -v lineCap="$line_cap" -v perLineBytes="$per_line_cap" \
+        -v out="$out_file" -f "$awk_script" 2>"$awk_stderr"
+  fi
+  local -a _pipe_status=("${PIPESTATUS[@]}")
+  local cmd_status="${_pipe_status[0]}"
+  local awk_status="${_pipe_status[1]:-1}"
+
+  if [[ "$restore_pipefail" -eq 1 ]]; then
+    set -o pipefail
+  fi
+
+  local capped=0 reason="" lines=0 bytes=0 any_trunc=0
+  if [[ -f "$awk_stderr" ]]; then
+    local line key value
+    while IFS= read -r line; do
+      key="${line%%=*}"
+      value="${line#*=}"
+      case "$key" in
+        capped) capped="$value" ;;
+        reason) reason="$value" ;;
+        lines) lines="$value" ;;
+        bytes) bytes="$value" ;;
+        anyLineTruncated) any_trunc="$value" ;;
+      esac
+    done <"$awk_stderr"
+  fi
+  rm -f "$awk_stderr"
+
+  RALPH_MCP_PROXY_GREP_COLLECT_CAPPED="$capped"
+  RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON="$reason"
+  RALPH_MCP_PROXY_GREP_COLLECT_LINES="$lines"
+  RALPH_MCP_PROXY_GREP_COLLECT_BYTES="$bytes"
+  RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED="$any_trunc"
+
+  if [[ "$awk_status" -ne 0 ]]; then
+    RALPH_MCP_PROXY_GREP_COLLECT_STATUS="error"
+    return 1
+  fi
+
+  if [[ "$capped" == "1" ]]; then
+    # Deliberate partial search: cmd_status may be a genuine success (0),
+    # no-match-before-cap (rare), or SIGPIPE (141) from the reader closing
+    # early. All are a successful bounded capture.
+    RALPH_MCP_PROXY_GREP_COLLECT_STATUS="ok"
+    return 0
+  fi
+
+  case "$cmd_status" in
+    0)
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="ok"
+      return 0
+      ;;
+    1)
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="no_match"
+      return 0
+      ;;
+    124)
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="timeout"
+      return 124
+      ;;
+    *)
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="error"
+      return 1
+      ;;
+  esac
+}
+
 # Exec a read-only enumeration command bounded by the transport-safe cap,
 # streaming its stdout to the caller's pipe. Unlike ralph_mcp_proxy_run_search_cmd
 # this is for pipeline/process-substitution contexts (e.g. `find ... -print0`
@@ -1254,13 +1377,57 @@ ralph_mcp_proxy_call_arguments_denied() {
 ralph_mcp_proxy_append_windowing_telemetry() {
   local workspace="${1:-}" tool_name="${2:-}" original_bytes="${3:-0}" returned_bytes="${4:-0}"
   local original_tokens="${5:-}" returned_tokens="${6:-}" byte_cap="${7:-0}" result_id="${8:-}"
+  local inline_candidate_bytes="${9:-}" inline_candidate_tokens="${10:-}"
+  local delivered_bytes="${11:-}" delivered_tokens="${12:-}"
+  local source_capped="${13:-}" source_cap_reason="${14:-}"
+  local source_cap_limit_bytes="${15:-}" source_cap_limit_lines="${16:-}" source_cap_limit_per_line_bytes="${17:-}"
   local plan_key token_cap_triggered=0
+  local plan_key_fallback_reason plan_key_fallback
 
   declare -F ralph_hook_telemetry_append_windowing_log >/dev/null 2>&1 || return 0
   plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
+  plan_key_fallback_reason="$(ralph_mcp_proxy_result_tool_plan_key_fallback_reason)"
+  if [[ -n "$plan_key_fallback_reason" ]]; then
+    plan_key_fallback="true"
+  else
+    plan_key_fallback="false"
+  fi
   if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "$original_bytes" -gt "$byte_cap" ]]; then
     token_cap_triggered=1
   fi
+
+  # Source-cap fields: only ever report sourceCapped:true (with reason and
+  # limits) when the collector actually capped. Never estimate an
+  # avoided-byte figure for what collection did not read -- a source cap
+  # cannot know unconsumed output without defeating the cap.
+  local source_complete=""
+  if [[ "$source_capped" == "true" ]]; then
+    source_complete="false"
+  elif [[ -n "$original_bytes" ]]; then
+    source_capped="false"
+    source_complete="true"
+  fi
+
+  local v2_fields_json="{}"
+  if declare -F ralph_hook_telemetry_windowing_v2_fields_json >/dev/null 2>&1 \
+    && { [[ "$inline_candidate_bytes" =~ ^[0-9]+$ ]] || [[ "$inline_candidate_tokens" =~ ^[0-9]+$ ]] \
+         || [[ "$delivered_bytes" =~ ^[0-9]+$ ]] || [[ "$delivered_tokens" =~ ^[0-9]+$ ]] \
+         || [[ "$source_capped" == "true" ]]; }; then
+    v2_fields_json="$(ralph_hook_telemetry_windowing_v2_fields_json \
+      "$original_bytes" \
+      "$inline_candidate_bytes" \
+      "$inline_candidate_tokens" \
+      "$delivered_bytes" \
+      "$delivered_tokens" \
+      "$original_bytes" \
+      "$source_capped" \
+      "$source_complete" \
+      "$source_cap_reason" \
+      "$source_cap_limit_bytes" \
+      "$source_cap_limit_lines" \
+      "$source_cap_limit_per_line_bytes")"
+  fi
+
   ralph_hook_telemetry_append_windowing_log \
     "$workspace" \
     "$plan_key" \
@@ -1270,7 +1437,10 @@ ralph_mcp_proxy_append_windowing_telemetry() {
     "$original_tokens" \
     "$returned_tokens" \
     "$token_cap_triggered" \
-    "$result_id"
+    "$result_id" \
+    "$v2_fields_json" \
+    "$plan_key_fallback" \
+    "$plan_key_fallback_reason"
 }
 
 ralph_mcp_proxy_append_readback_telemetry() {
@@ -1307,13 +1477,24 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   local next_actions_json="${7:-}"
   local grep_pattern="${8:-}"
   local metadata_json="${9:-}"
+  local extra_envelope_json="${10:-}"
+  local source_capped_flag="${11:-0}"
   local byte_cap token_cap preview returned_bytes original_bytes result_id plan_key
   local breakpoints_json envelope_json compact_text marker read_window
   local original_tokens="" returned_tokens="" token_args=()
+  local inline_candidate_bytes inline_candidate_tokens=""
 
   original_bytes=${#storage_text}
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "$tool_name")"
   token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$tool_name")"
+
+  # Inline candidate: the caller-supplied preview_text as handed in, i.e. the
+  # output after tool-level limits (head_limit/max_matches for grep) but
+  # before this function's own byte/token delivery caps are applied. This is
+  # distinct from original_bytes (the full captured/stored source) and from
+  # the final delivered preview computed below.
+  inline_candidate_bytes="${#preview_text}"
+  inline_candidate_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$preview_text" 2>/dev/null || true)"
 
   local needs_envelope=0
   if [[ "$truncated_flag" == "1" ]]; then
@@ -1403,7 +1584,7 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
       read_window="$byte_cap"
     fi
     if [[ "$tool_name" == "ralph_proxy_grep" || "$tool_name" == "ralph_proxy_search" ]]; then
-      next_actions_json="$(ralph_mcp_proxy_result_envelope_grep_next_actions_json "$result_id" "$grep_pattern" "$read_window")"
+      next_actions_json="$(ralph_mcp_proxy_result_envelope_grep_next_actions_json "$result_id" "$grep_pattern" "$read_window" "" "$source_capped_flag")"
     elif [[ "$tool_name" == "ralph_proxy_glob" ]]; then
       next_actions_json="$(ralph_mcp_proxy_result_envelope_glob_next_actions_json "$result_id" "$grep_pattern" "$read_window")"
     elif [[ "$tool_name" == "ralph_proxy_result_reduce" ]]; then
@@ -1419,7 +1600,10 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   if [[ "$original_tokens" =~ ^[0-9]+$ ]] && [[ "$returned_tokens" =~ ^[0-9]+$ ]]; then
     token_args=("$original_tokens" "$returned_tokens")
   fi
-  envelope_json="$(ralph_mcp_proxy_result_envelope_build_json "$preview" "$original_bytes" "$returned_bytes" "$result_id" "$breakpoints_json" "$next_actions_json" "true" "${token_args[@]}")" || {
+  if [[ ${#token_args[@]} -eq 0 ]]; then
+    token_args=("" "")
+  fi
+  envelope_json="$(ralph_mcp_proxy_result_envelope_build_json "$preview" "$original_bytes" "$returned_bytes" "$result_id" "$breakpoints_json" "$next_actions_json" "true" "${token_args[@]}" "$extra_envelope_json")" || {
     marker="$(ralph_mcp_proxy_truncation_marker)"
     if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
       ralph_mcp_proxy_tool_success_json "${preview_text:0:byte_cap}${marker}"
@@ -1432,6 +1616,31 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
     ralph_mcp_proxy_tool_success_json "$preview_text"
     return 0
   }
+  # Delivered: the final compact envelope text actually sent inline, i.e.
+  # after preview, breakpoints, retrieval guidance, next actions, token
+  # fields, and any source-cap metadata are serialized. Not preview length.
+  local delivered_bytes delivered_tokens
+  if declare -F ralph_hook_telemetry_utf8_byte_count >/dev/null 2>&1; then
+    delivered_bytes="$(ralph_hook_telemetry_utf8_byte_count "$compact_text" 2>/dev/null || true)"
+  fi
+  if [[ -z "$delivered_bytes" ]]; then
+    delivered_bytes="$(printf '%s' "$compact_text" | wc -c | tr -d ' ')"
+  fi
+  delivered_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$compact_text" 2>/dev/null || true)"
+
+  # Source-cap state, when present, travels in extra_envelope_json (set by
+  # callers like ralph_mcp_proxy_owned_tool_grep). Reuse it here rather than
+  # threading yet more positional args through this function.
+  local source_capped="" source_cap_reason="" source_cap_limit_bytes=""
+  local source_cap_limit_lines="" source_cap_limit_per_line_bytes=""
+  if [[ -n "$extra_envelope_json" ]] && jq -e '.sourceCapped == true' <<<"$extra_envelope_json" >/dev/null 2>&1; then
+    source_capped="true"
+    source_cap_reason="$(jq -r '.sourceCapReason // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_bytes="$(jq -r '.sourceCapLimitBytes // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_lines="$(jq -r '.sourceCapLimitLines // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_per_line_bytes="$(jq -r '.sourceCapLimitPerLineBytes // empty' <<<"$extra_envelope_json")"
+  fi
+
   ralph_mcp_proxy_append_windowing_telemetry \
     "$workspace" \
     "$tool_name" \
@@ -1440,7 +1649,16 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
     "$original_tokens" \
     "$returned_tokens" \
     "$byte_cap" \
-    "$result_id"
+    "$result_id" \
+    "$inline_candidate_bytes" \
+    "$inline_candidate_tokens" \
+    "$delivered_bytes" \
+    "$delivered_tokens" \
+    "$source_capped" \
+    "$source_cap_reason" \
+    "$source_cap_limit_bytes" \
+    "$source_cap_limit_lines" \
+    "$source_cap_limit_per_line_bytes"
   ralph_mcp_proxy_tool_success_json "$compact_text"
 }
 
@@ -1779,7 +1997,34 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
     read_window="$byte_cap"
   fi
   breakpoints_json="$(ralph_mcp_proxy_result_envelope_default_breakpoints_json "$original_bytes" "$returned_bytes")"
-  next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
+
+  # A duplicate of a source-capped search must keep reporting incompleteness
+  # on every replay -- it must never be re-emitted as a complete/full result
+  # just because it came from the dedupe cache instead of a fresh search.
+  local source_capped_cached="0"
+  if [[ -n "$metadata_json" ]] && jq -e '.sourceCapped == true' <<<"$metadata_json" >/dev/null 2>&1; then
+    source_capped_cached="1"
+  fi
+
+  if [[ "$tool_name" == "ralph_proxy_grep" || "$tool_name" == "ralph_proxy_search" ]]; then
+    next_actions_json="$(ralph_mcp_proxy_result_envelope_grep_next_actions_json "$result_id" "" "$read_window" "" "$source_capped_cached")"
+  else
+    next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
+  fi
+
+  local dedupe_extra_json='{"deduped":true}'
+  if [[ "$source_capped_cached" == "1" ]]; then
+    dedupe_extra_json="$(jq -nc --argjson cached "$metadata_json" \
+      '{deduped: true, sourceComplete: false, sourceCapped: true}
+       + (
+           $cached
+           | to_entries
+           | map(select(.key | test("^sourceCap|^sourceLastCaptured")))
+           | from_entries
+         )
+       + {guidance: "The source search stopped early after hitting a source cap on the original (now deduped) call; this stored result only covers the captured prefix, not the full search space. Narrow the pattern or path (or use ralph_proxy_result_search on this resultId) for a more complete search rather than treating rawRef as exhaustive."}')"
+  fi
+
   envelope_json="$(ralph_mcp_proxy_result_envelope_build_json \
     "$preview" \
     "$original_bytes" \
@@ -1790,7 +2035,7 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
     "true" \
     "" \
     "" \
-    '{"deduped":true}')" || {
+    "$dedupe_extra_json")" || {
     ralph_mcp_proxy_tool_success_json "$preview"
     return 0
   }
@@ -2097,51 +2342,126 @@ ralph_mcp_proxy_enumerate_eligible_files() {
   )
 }
 
+# Pure-Bash fallback grep collector used when ripgrep is unavailable. When
+# byte_cap/line_cap/per_line_cap (args 5-7) are supplied, applies the same
+# source-cap contract as ralph_mcp_proxy_bounded_search_collect: per-line
+# truncation, a global byte/line budget, and RALPH_MCP_PROXY_GREP_COLLECT_*
+# status globals. Stops grepping further files (and further lines within a
+# file) as soon as the budget is exhausted -- it does not keep scanning the
+# tree merely to discard the extra output. Omitting the cap args preserves
+# the prior unbounded behavior for any other caller.
 ralph_mcp_proxy_owned_tool_grep_search() {
   local pattern="${1:-}"
   local search_path="${2:-}"
   local glob_filter="${3:-}"
   local output_file="${4:-}"
-  local tmp_files relpath abs_path base line
+  local byte_cap="${5:-}" line_cap="${6:-}" per_line_cap="${7:-}"
+  local tmp_files relpath abs_path line
+  local caps_active=0
 
   [[ -n "$pattern" && -n "$search_path" && -n "$output_file" ]] || return 1
   : >"$output_file"
 
-  if [[ -f "$search_path" ]]; then
-    if ralph_mcp_proxy_file_is_binary "$search_path"; then
-      return 0
-    fi
-    if [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "${search_path##*/}"; then
-      return 0
-    fi
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      [[ -n "$line" ]] || continue
-      printf '%s:%s\n' "${search_path##*/}" "$line"
-    done < <(grep -En -- "$pattern" "$search_path" 2>/dev/null || true)
-    return 0
+  if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$line_cap" =~ ^[0-9]+$ ]] && [[ "$per_line_cap" =~ ^[0-9]+$ ]]; then
+    caps_active=1
+    RALPH_MCP_PROXY_GREP_COLLECT_STATUS="no_match"
+    RALPH_MCP_PROXY_GREP_COLLECT_CAPPED="0"
+    RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON=""
+    RALPH_MCP_PROXY_GREP_COLLECT_BYTES="0"
+    RALPH_MCP_PROXY_GREP_COLLECT_LINES="0"
+    RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED="0"
+    export RALPH_MCP_PROXY_GREP_COLLECT_STATUS RALPH_MCP_PROXY_GREP_COLLECT_CAPPED \
+      RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON RALPH_MCP_PROXY_GREP_COLLECT_BYTES \
+      RALPH_MCP_PROXY_GREP_COLLECT_LINES RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED
   fi
 
-  [[ -d "$search_path" ]] || return 0
+  local total_bytes=0 total_lines=0 any_trunc=0 capped=0 reason=""
 
-  tmp_files="$(mktemp)"
-  ralph_mcp_proxy_enumerate_eligible_files "$search_path" "$tmp_files" || {
-    rm -f "$tmp_files"
+  # Writes one prefixed match line, applying per-line truncation and the
+  # running byte/line budget when caps are active. Returns 1 once capped so
+  # the caller can stop feeding it further lines/files.
+  _ralph_mcp_proxy_grep_search_emit() {
+    local prefixed="$1"
+    if [[ "$caps_active" -eq 1 ]]; then
+      if [[ "${#prefixed}" -gt "$per_line_cap" ]]; then
+        prefixed="${prefixed:0:per_line_cap}"
+        any_trunc=1
+      fi
+      local line_bytes=$(( ${#prefixed} + 1 ))
+      if (( total_lines + 1 > line_cap )); then
+        capped=1
+        reason="line_cap"
+        return 1
+      fi
+      if (( total_bytes + line_bytes > byte_cap )); then
+        capped=1
+        reason="byte_cap"
+        return 1
+      fi
+      total_bytes=$(( total_bytes + line_bytes ))
+      total_lines=$(( total_lines + 1 ))
+    fi
+    printf '%s\n' "$prefixed" >>"$output_file"
     return 0
   }
 
-  while IFS= read -r -d '' relpath; do
-    [[ -n "$relpath" ]] || continue
-    if [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "$relpath"; then
-      continue
+  local search_status=0
+  if [[ -f "$search_path" ]]; then
+    if ralph_mcp_proxy_file_is_binary "$search_path"; then
+      search_status=0
+    elif [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "${search_path##*/}"; then
+      search_status=0
+    else
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] || continue
+        _ralph_mcp_proxy_grep_search_emit "$(printf '%s:%s' "${search_path##*/}" "$line")" || break
+      done < <(grep -En -- "$pattern" "$search_path" 2>/dev/null || true)
     fi
-    abs_path="$search_path/$relpath"
-    [[ -f "$abs_path" ]] || continue
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      [[ -n "$line" ]] || continue
-      printf '%s:%s\n' "$relpath" "$line"
-    done < <(grep -En -- "$pattern" "$abs_path" 2>/dev/null || true)
-  done <"$tmp_files" >>"$output_file"
-  rm -f "$tmp_files"
+  elif [[ -d "$search_path" ]]; then
+    tmp_files="$(mktemp)"
+    if ! ralph_mcp_proxy_enumerate_eligible_files "$search_path" "$tmp_files"; then
+      rm -f "$tmp_files"
+      tmp_files=""
+    fi
+    if [[ -n "$tmp_files" ]]; then
+      while IFS= read -r -d '' relpath; do
+        [[ -n "$relpath" ]] || continue
+        if [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "$relpath"; then
+          continue
+        fi
+        abs_path="$search_path/$relpath"
+        [[ -f "$abs_path" ]] || continue
+        local file_capped=0
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          [[ -n "$line" ]] || continue
+          if ! _ralph_mcp_proxy_grep_search_emit "$(printf '%s:%s' "$relpath" "$line")"; then
+            file_capped=1
+            break
+          fi
+        done < <(grep -En -- "$pattern" "$abs_path" 2>/dev/null || true)
+        if [[ "$file_capped" -eq 1 ]]; then
+          break
+        fi
+      done <"$tmp_files"
+      rm -f "$tmp_files"
+    fi
+  fi
+
+  unset -f _ralph_mcp_proxy_grep_search_emit
+
+  if [[ "$caps_active" -eq 1 ]]; then
+    RALPH_MCP_PROXY_GREP_COLLECT_CAPPED="$capped"
+    RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON="$reason"
+    RALPH_MCP_PROXY_GREP_COLLECT_BYTES="$total_bytes"
+    RALPH_MCP_PROXY_GREP_COLLECT_LINES="$total_lines"
+    RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED="$any_trunc"
+    if [[ "$total_lines" -gt 0 ]]; then
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="ok"
+    else
+      RALPH_MCP_PROXY_GREP_COLLECT_STATUS="no_match"
+    fi
+  fi
+  return 0
 }
 
 ralph_mcp_proxy_owned_tool_glob_search() {
@@ -2295,8 +2615,16 @@ ralph_mcp_proxy_owned_tool_grep() {
   RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=0
   export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
 
+  byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "ralph_proxy_grep")"
+  local source_cap_policy_json source_byte_cap source_line_cap source_per_line_cap
+  source_cap_policy_json="$(ralph_mcp_proxy_grep_source_cap_policy_json "$byte_cap")"
+  source_byte_cap="$(jq -r '.byteCap' <<<"$source_cap_policy_json")"
+  source_line_cap="$(jq -r '.lineCap' <<<"$source_cap_policy_json")"
+  source_per_line_cap="$(jq -r '.perLineCap' <<<"$source_cap_policy_json")"
+
   tmp_out="$(mktemp)"
   local search_rc=0
+  local source_capped=0 source_cap_reason="" source_last_line_partial=0
   if command -v rg >/dev/null 2>&1; then
     local -a rg_args=(--line-number --no-heading --color=never)
     if [[ -n "$glob_filter" ]]; then
@@ -2308,22 +2636,41 @@ ralph_mcp_proxy_owned_tool_grep() {
       elif [[ -n "$glob_filter" ]] && ! ralph_mcp_proxy_basename_matches_glob "$glob_filter" "${search_path##*/}"; then
         : >"$tmp_out"
       else
-        ralph_mcp_proxy_run_search_cmd "$tmp_out" -- rg "${rg_args[@]}" "$pattern" "$search_path"
+        ralph_mcp_proxy_bounded_search_collect "$tmp_out" "$source_byte_cap" "$source_line_cap" "$source_per_line_cap" \
+          -- rg "${rg_args[@]}" "$pattern" "$search_path"
         search_rc=$?
+        source_capped="${RALPH_MCP_PROXY_GREP_COLLECT_CAPPED:-0}"
+        source_cap_reason="${RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON:-}"
+        source_last_line_partial="${RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED:-0}"
       fi
     else
-      ralph_mcp_proxy_run_search_cmd "$tmp_out" -- rg "${rg_args[@]}" "$pattern" "$search_path"
+      ralph_mcp_proxy_bounded_search_collect "$tmp_out" "$source_byte_cap" "$source_line_cap" "$source_per_line_cap" \
+        -- rg "${rg_args[@]}" "$pattern" "$search_path"
       search_rc=$?
+      source_capped="${RALPH_MCP_PROXY_GREP_COLLECT_CAPPED:-0}"
+      source_cap_reason="${RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON:-}"
+      source_last_line_partial="${RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED:-0}"
     fi
   else
-    ralph_mcp_proxy_owned_tool_grep_search "$pattern" "$search_path" "$glob_filter" "$tmp_out"
+    ralph_mcp_proxy_owned_tool_grep_search "$pattern" "$search_path" "$glob_filter" "$tmp_out" \
+      "$source_byte_cap" "$source_line_cap" "$source_per_line_cap"
+    search_rc=0
+    source_capped="${RALPH_MCP_PROXY_GREP_COLLECT_CAPPED:-0}"
+    source_cap_reason="${RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON:-}"
+    source_last_line_partial="${RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED:-0}"
   fi
+  # Local snapshot taken; clear the collector's globals immediately so a
+  # later, unrelated call in this process cannot inherit stale cap state.
+  unset RALPH_MCP_PROXY_GREP_COLLECT_STATUS RALPH_MCP_PROXY_GREP_COLLECT_CAPPED \
+    RALPH_MCP_PROXY_GREP_COLLECT_CAP_REASON RALPH_MCP_PROXY_GREP_COLLECT_BYTES \
+    RALPH_MCP_PROXY_GREP_COLLECT_LINES RALPH_MCP_PROXY_GREP_COLLECT_ANY_LINE_TRUNCATED
+
   if [[ "$search_rc" -eq 124 ]]; then
     rm -f "$tmp_out"
     ralph_mcp_proxy_tool_error_json "ralph_proxy_grep: search exceeded $(ralph_mcp_proxy_search_sync_timeout_seconds)s; narrow the path or glob filter and retry"
     return 0
   fi
-  if [[ "$search_rc" -ne 0 ]]; then
+  if [[ "$search_rc" -ne 0 ]] && [[ "$source_capped" != "1" ]]; then
     : >"$tmp_out"
   fi
   full_text="$(<"$tmp_out")"
@@ -2343,13 +2690,35 @@ ralph_mcp_proxy_owned_tool_grep() {
     truncated=1
   fi
 
+  # A source-capped search stopped early: the agent must always see that the
+  # source was incomplete, even if the captured prefix alone fits within
+  # return_limit/max_matches. Route through the envelope path unconditionally.
+  if [[ "$source_capped" == "1" ]]; then
+    truncated=1
+  fi
+
+  local storage_metadata_json
+  if [[ "$source_capped" == "1" ]]; then
+    storage_metadata_json="$(jq -nc \
+      --arg reason "$source_cap_reason" \
+      --argjson byteCap "$source_byte_cap" \
+      --argjson lineCap "$source_line_cap" \
+      --argjson perLineCap "$source_per_line_cap" \
+      --argjson lastLinePartial "$([[ "$source_last_line_partial" == "1" ]] && printf true || printf false)" \
+      '{storageLayout: "prefix", sourceComplete: false, sourceCapped: true, sourceCapReason: $reason,
+        sourceCapLimitBytes: $byteCap, sourceCapLimitLines: $lineCap, sourceCapLimitPerLineBytes: $perLineCap,
+        sourceLastCapturedLinePartial: $lastLinePartial}')"
+  else
+    storage_metadata_json='{"storageLayout":"full","sourceComplete":true,"sourceCapped":false}'
+  fi
+
   if [[ "$truncated" -eq 0 ]]; then
     ralph_mcp_proxy_search_dedupe_store \
       "$cache_key" \
       "$mutation_counter" \
       "$full_text" \
       "$truncated" \
-      '{"storageLayout":"full"}' \
+      "$storage_metadata_json" \
       "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
     ralph_mcp_proxy_tool_success_json "$preview_text"
     return 0
@@ -2364,6 +2733,26 @@ ralph_mcp_proxy_owned_tool_grep() {
     cluster_metadata_json="$match_metadata_json"
   fi
 
+  local grep_extra_envelope_json=""
+  if [[ "$source_capped" == "1" ]]; then
+    grep_extra_envelope_json="$(jq -nc \
+      --arg reason "$source_cap_reason" \
+      --argjson byteCap "$source_byte_cap" \
+      --argjson lineCap "$source_line_cap" \
+      --argjson perLineCap "$source_per_line_cap" \
+      --argjson lastLinePartial "$([[ "$source_last_line_partial" == "1" ]] && printf true || printf false)" \
+      '{
+        sourceComplete: false,
+        sourceCapped: true,
+        sourceCapReason: $reason,
+        sourceCapLimitBytes: $byteCap,
+        sourceCapLimitLines: $lineCap,
+        sourceCapLimitPerLineBytes: $perLineCap,
+        sourceLastCapturedLinePartial: $lastLinePartial,
+        guidance: "The source search stopped early after hitting a source cap; this preview and the stored raw/compacted views only cover the captured prefix, not the full search space. Narrow the pattern or path (or use ralph_proxy_result_search on this resultId) for a more complete search rather than treating rawRef as exhaustive."
+      }')"
+  fi
+
   ralph_mcp_proxy_owned_tool_maybe_envelope_text_result \
     "$workspace" \
     "ralph_proxy_grep" \
@@ -2373,14 +2762,16 @@ ralph_mcp_proxy_owned_tool_grep() {
     "$cluster_metadata_json" \
     "" \
     "$pattern" \
-    '{"storageLayout":"full"}'
+    "$storage_metadata_json" \
+    "$grep_extra_envelope_json" \
+    "$source_capped"
 
   ralph_mcp_proxy_search_dedupe_store \
     "$cache_key" \
     "$mutation_counter" \
     "$full_text" \
     "$truncated" \
-    '{"storageLayout":"full"}' \
+    "$storage_metadata_json" \
     "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
 }
 
@@ -3436,6 +3827,20 @@ ralph_mcp_proxy_result_tool_plan_key() {
   else
     printf 'default\n'
   fi
+}
+
+# Stable, non-sensitive reason code when ralph_mcp_proxy_result_tool_plan_key
+# fell back to "default" (neither RALPH_PLAN_KEY nor RALPH_ARTIFACT_NS set),
+# or empty when a key was explicitly provided. Computed fresh at each call
+# site rather than cached, so it never leaks stale state into a later event.
+ralph_mcp_proxy_result_tool_plan_key_fallback_reason() {
+  if [[ -n "${RALPH_PLAN_KEY:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${RALPH_ARTIFACT_NS:-}" ]]; then
+    return 0
+  fi
+  printf 'no_plan_key_or_artifact_ns_env\n'
 }
 
 ralph_mcp_proxy_result_tool_index_entry_json() {

@@ -429,8 +429,10 @@ class TestRenderBenchmarkMarkdown(unittest.TestCase):
         report = _sample_report(skipped_summaries=2)
         output = render_markdown(report)
         self.assertIn("## Data quality", output)
-        self.assertIn("Skipped", output)
+        self.assertIn("skipped", output)
         self.assertIn("2", output)
+        # Data quality is a single consolidated section, not duplicated.
+        self.assertEqual(output.count("## Data quality"), 1)
 
     def test_legacy_v1_report_renders_without_counterfactual(self) -> None:
         """A schema v1 report without tool_output_counterfactual still renders."""

@@ -143,6 +143,12 @@ source "$SCRIPT_DIR/bash-lib/error-handling.sh"
 source "$SCRIPT_DIR/bash-lib/ui-prompt.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-args.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-args.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-compaction-provenance.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-compaction-provenance.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-effective-hook-config.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-effective-hook-config.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-hooks-config-snapshot.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-hooks-config-snapshot.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-session.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-session.sh"
 # shellcheck source=bash-lib/runtime-overlay/runtime-overlay.sh

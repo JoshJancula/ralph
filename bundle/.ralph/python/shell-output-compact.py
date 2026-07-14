@@ -247,8 +247,11 @@ def compact_shell_output(
         return _not_compacted(command, stdout, stderr, exit_status)
 
     family_id = classify_command(command)
-    if family_id is None and _command_allows_shape_fallback(command):
-        family_id = detect_output_shape(combined_original)
+    if family_id is None:
+        if _command_allows_shape_fallback(command):
+            family_id = detect_output_shape(combined_original)
+        elif _command_allows_generic_shape_fallback(command):
+            family_id = detect_output_shape_generic_only(combined_original)
 
     family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
     if family_entry is None:
@@ -394,13 +397,27 @@ def classify_command(command: str) -> str | None:
 
 
 def _command_allows_shape_fallback(command: str) -> bool:
-    """Shape detection applies only when the command string is empty or unknown."""
+    """Full structural shape detection (git_diff, docker_logs, grep_style,
+    etc.) applies only when command provenance is truly absent/unknown --
+    never for a known-but-unsupported command like `sed`. A specific command
+    we cannot classify carries real semantics (e.g. arbitrary script output)
+    that output shape alone must not override with an unrelated family like
+    docker_logs.
+    """
+    cmd = (command or "").strip()
+    return not cmd
+
+
+def _command_allows_generic_shape_fallback(command: str) -> bool:
+    """The safe generic_large/numbered_dump shape fallback (size- and
+    repetition-based truncation, no semantic family claim) applies whenever
+    the command doesn't explicitly bail, regardless of whether the command
+    itself was classified.
+    """
     cmd = (command or "").strip()
     if not cmd:
         return True
-    if should_bail(cmd):
-        return False
-    return classify_command(command) is None
+    return not should_bail(cmd)
 
 
 def _detect_shape_git_diff(text: str) -> bool:
@@ -502,43 +519,61 @@ def _detect_shape_generic_large_text(text: str) -> bool:
     return len(non_empty_lines) >= _GENERIC_LARGE_MIN_LINES
 
 
+_SHAPE_STRUCTURAL: list[tuple[str, ShapeDetector]] = [
+    (FAMILY_GIT_DIFF, _detect_shape_git_diff),
+    (FAMILY_GIT_STATUS, _detect_shape_git_status),
+    (FAMILY_GREP, _detect_shape_grep_style),
+    (FAMILY_TREE, _detect_shape_tree_glyph),
+    (FAMILY_LS, _detect_shape_ls_long_format),
+    (FAMILY_FIND, _detect_shape_path_list),
+    (FAMILY_DOCKER_LOGS, _detect_shape_repeated_logs),
+]
+_SHAPE_GENERIC: list[tuple[str, ShapeDetector]] = [
+    (FAMILY_GENERIC_LARGE, _detect_shape_numbered_dump),
+    (FAMILY_GENERIC_LARGE, _detect_shape_generic_large_text),
+]
+
+
+def detect_output_shape_generic_only(text: str) -> str | None:
+    """Safe, non-semantic shape fallback: only size/repetition-based
+    generic_large truncation. Never assigns a semantic family (docker_logs,
+    git_diff, grep_style, ...) from output shape alone. Used when the
+    command is known but unsupported -- repeated output from an unsupported
+    command may still be safely truncated generically, but must not be
+    mis-labeled with an unrelated command family.
+    """
+    if not text or not text.strip():
+        return None
+    if _has_binary(text):
+        return None
+    generic_matches = [family_id for family_id, detector in _SHAPE_GENERIC if detector(text)]
+    generic_unique = list(dict.fromkeys(generic_matches))
+    if len(generic_unique) == 1:
+        return generic_unique[0]
+    return None
+
+
 def detect_output_shape(text: str) -> str | None:
     """
-    Detect output shape when command is unknown or unavailable.
+    Detect output shape when command provenance is unknown or unavailable.
     Returns family_id if a shape is strongly detected, None otherwise.
-    This is a fallback; command-based classification is primary.
+    This is a fallback; command-based classification is primary. Only call
+    this (rather than detect_output_shape_generic_only) when the command
+    string itself is empty/unknown -- see _command_allows_shape_fallback.
     """
     if not text or not text.strip():
         return None
     if _has_binary(text):
         return None
 
-    structural: list[tuple[str, ShapeDetector]] = [
-        (FAMILY_GIT_DIFF, _detect_shape_git_diff),
-        (FAMILY_GIT_STATUS, _detect_shape_git_status),
-        (FAMILY_GREP, _detect_shape_grep_style),
-        (FAMILY_TREE, _detect_shape_tree_glyph),
-        (FAMILY_LS, _detect_shape_ls_long_format),
-        (FAMILY_FIND, _detect_shape_path_list),
-        (FAMILY_DOCKER_LOGS, _detect_shape_repeated_logs),
-    ]
-    generic: list[tuple[str, ShapeDetector]] = [
-        (FAMILY_GENERIC_LARGE, _detect_shape_numbered_dump),
-        (FAMILY_GENERIC_LARGE, _detect_shape_generic_large_text),
-    ]
-
-    structural_matches = [family_id for family_id, detector in structural if detector(text)]
+    structural_matches = [family_id for family_id, detector in _SHAPE_STRUCTURAL if detector(text)]
     structural_unique = list(dict.fromkeys(structural_matches))
     if len(structural_unique) > 1:
         return None
     if len(structural_unique) == 1:
         return structural_unique[0]
 
-    generic_matches = [family_id for family_id, detector in generic if detector(text)]
-    generic_unique = list(dict.fromkeys(generic_matches))
-    if len(generic_unique) == 1:
-        return generic_unique[0]
-    return None
+    return detect_output_shape_generic_only(text)
 
 
 def _has_binary(text: str) -> bool:

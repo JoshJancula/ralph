@@ -481,6 +481,76 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 | `RALPH_BASH_COMPACT` | off in `no`/`ralph`; auto `1` in `native`/`hybrid` when unset | When `1`, `true`, `yes`, or `on`, compact native shell tool output via Claude PostToolUse:Bash hook that calls the shared compactors in `bundle/.ralph/bash-lib/compactors.sh`. Ralph sets `RALPH_BASH_COMPACT=1` in `native` and `hybrid` modes unless you already exported the variable; opt out with `RALPH_BASH_COMPACT=0`. Failed hooks must fail open and never block the agent. Only Claude ships a true PostToolUse:Bash adapter. Cursor and Codex use wrapper-based compaction instead (see `RALPH_NATIVE_SHELL_WRAPPER` below). |
 | `RALPH_BASH_COMPACT_LOG` | unset | Optional JSONL audit path for each PostToolUse:Bash compaction attempt (Claude only): `commandHash`, `originalBytes`, `compactedBytes`, `storagePath` (when stored), `compactionSkipped`, `planKey`, `workspace`. No log lines when compaction is off or the event is not PostToolUse:Bash with a `tool_response`. |
 
+### Native-hook fail-open debug logging (`RALPH_NATIVE_HOOK_DEBUG_LOG`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RALPH_NATIVE_HOOK_DEBUG_LOG` | unset | Optional JSONL path. When set to a writable path, `native-result-compact.sh` appends one record per actionable failure in the native-result-compaction path (for example `missing_jq`, `malformed_input`, `unrecognized_shape`, `missing_workspace`, `missing_bootstrap_or_library`, `compaction_failed`): `reasonCode`, `runtimeHook`, `toolName` (when known), `reasonText` (short, non-sensitive), `timestamp`. Writing is fail-open and silent in every other case (unset/empty path, unwritable path, jq missing or failing) — the writer never changes hook behavior or emits stdout/stderr. Use this to diagnose why a given tool call's native output was not compacted, without changing what the agent sees. |
+
+### Live fixture provenance (native-result-compact tool shapes)
+
+Native-result compaction recognizes tool-response shapes captured from live runtime payloads rather than assumed schemas. Fixtures and their documented discrepancies live under [`tests/fixtures/native-hook/`](../tests/fixtures/native-hook/) (`read.json`, `grep-content.json`, `grep-files-with-matches.json`, `glob.json`, `bash.json`, `provenance.json`). Notable shape facts: Read's text lives at `tool_response.file.content`; Bash merges stdout and stderr into `tool_response.stdout`, and `tool_response.stderr` is always empty in the captured payloads. `ralph_native_hook_extract_tool_output_text` and the update-emission helpers (`ralph_native_hook_emit_claude_exploration_updated_output`, `ralph_native_hook_emit_cursor_updated_tool_output`) read and write these exact paths in place rather than adding a synthetic top-level `content` field, so shape is preserved end-to-end.
+
+### Grep source capture caps (`RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_*`)
+
+`ralph_proxy_search`'s owned grep path bounds how much of a command's raw output it will ever read into memory before summarizing, independent of the summarized result's own byte cap. Caps are resolved by [`ralph_mcp_proxy_grep_source_cap_policy_json`](../bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh) and enforced by a streaming awk collector ([`mcp-proxy-grep-source-cap.awk`](../bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-grep-source-cap.awk)) that never buffers the full stream.
+
+| Variable | Default | Hard ceiling | Purpose |
+|----------|---------|--------------|---------|
+| `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_BYTE_CAP` | `262144` (256 KiB), or the result byte cap when larger | `4194304` (4 MiB) | Maximum raw source bytes captured from the search command before it is cut off. |
+| `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_LINE_CAP` | `2000` | `20000` | Maximum raw source lines captured before cutoff. |
+| `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_PER_LINE_BYTE_CAP` | `4096` | `65536` | Maximum bytes read per line; longer lines are truncated in place. |
+
+Invalid, zero, negative, or unset override values fall back to the default; values above the hard ceiling are clamped to the ceiling. These ceilings are absolute — no combination of overrides, policy, or a raised result-byte-cap floor can make an unbounded multi-megabyte source capture possible.
+
+**Partial-source raw retrieval semantics.** When a cap trims the source stream, the search result is always marked `truncated` and its envelope carries `sourceComplete: false`, `sourceCapped: true`, `capReason` (`byte_cap`, `line_cap`, or `per_line_cap`), and the limit that was hit. A cache hit on a capped search re-emits the same incompleteness on replay — a dedupe hit never claims completeness that the original capture did not have. There is no mechanism to retrieve the remainder of a capped source stream past the cap; narrow the search (path, glob, or pattern) and re-run instead.
+
+### Windowing v2 telemetry fields (measurement contract)
+
+Compaction and result-windowing telemetry (`hook-telemetry.sh`, `native-hook-lib.sh`, `mcp-proxy-tools.sh`) emit an additive `measurementVersion: 2` object alongside the legacy fields. Older `originalBytes`/`returnedBytes` fields keep their historical meaning; nothing is removed or renamed. The v2 fields distinguish four points in the data's life, since collapsing them produces misleading savings numbers:
+
+| Field | Meaning |
+|-------|---------|
+| `sourceCapturedBytes` | Bytes actually read from the underlying command/file, before any tool-level limit is applied. |
+| `inlineCandidateBytes` / `inlineCandidateTokens` | Size of the content that would have been inlined to the model absent compaction (post tool-level limits, pre-envelope). This — not `sourceCapturedBytes` — is the correct baseline for a "context saved" calculation. |
+| `deliveredBytes` / `deliveredTokens` | Size of what was actually serialized into the model-visible envelope, including any footer/preview overhead. |
+| `storedBytes` | Size of the full original persisted under `.ralph-workspace/tool-results/<plan-key>/` for later retrieval. |
+| `sourceCapped` / `sourceComplete` / `capReason` / `capLimitBytes` / `capLimitLines` / `capLimitPerLineBytes` | Whether and why the source read itself was bounded (see grep source caps above); independent of any result-size compaction. |
+| `tokenEstimatorBackend` | Which token estimator produced the token fields on this record (see token estimator quality below). |
+
+**Context-savings formula.** Net context saved by a compaction/windowing event is `inlineCandidateBytes/Tokens - deliveredBytes/Tokens`, not `sourceCapturedBytes - deliveredBytes` and not `storedBytes - deliveredBytes`. Source capping and storage are separate concerns from what the model actually received; reports must never conflate them with model-context savings.
+
+**Delivered envelope overhead.** `deliveredBytes`/`deliveredTokens` are computed from the final serialized text the model receives, including any stored-result footer (retrieval hint, storage path). This means a compaction event can show a small negative or near-zero saving when the footer overhead is close to the size of the omitted content — this is expected and reported honestly rather than hidden.
+
+### Hook-config snapshot (`hooks-config.jsonl`)
+
+Each plan-run invocation appends one JSONL record per runtime/channel to `<workspace-root>/hooks-config.jsonl` via [`ralph_hooks_config_snapshot_append`](../bundle/.ralph/bash-lib/run-plan/run-plan-hooks-config-snapshot.sh), recording the resolved effective hook configuration (enabled/disabled per channel, plus the mode/source that produced it) at the moment that invocation ran. The benchmark report aggregates this file into `hook_config_by_runtime` (enabled/disabled/mixed/unknown per runtime and channel, with reasons) so a report can state what was actually configured for a run rather than inferring it from current environment variables, which may differ from what was active historically.
+
+### Plan-key diagnostics and fallback attribution
+
+Telemetry records normally carry the plan key the run was invoked with. When a record's key is missing or does not match the plan key a report is filtering for, `planKeyFallback: true` and a `planKeyFallbackReason` are recorded on the emitting side (`hook-telemetry.sh`, `native-hook-lib.sh`) rather than silently dropping or silently including the record. Report-time aggregation (`aggregate_telemetry_unattributed`) surfaces these as `telemetry_unattributed`, grouped by log kind, observed key, and fallback reason, so a benchmark report makes visible when totals could not be cleanly attributed to the plan being reported on, instead of presenting a falsely precise number.
+
+### Token estimator quality (`tokenEstimatorBackend` / `token_quality`)
+
+Token counts in telemetry and reports carry a quality label so a reader can tell a real dependency-free token estimate from a legacy approximation:
+
+| Label | Meaning |
+|-------|---------|
+| `measured` | Produced by Ralph's dependency-free token estimator (`token_estimate.py`) run over the actual text. |
+| `legacy_bytes_div4` | Produced by dividing byte count by 4 — a coarse historical fallback used only where no measured text was available. |
+| `missing` | No token figure is available at all for this record. |
+| `mixed` | A report-level aggregate whose inputs combine measured and legacy/missing quality; reports must not present a `mixed` aggregate as if it were fully measured. |
+
+Report totals include an overall `token_quality` summary; a report must never state or imply that all token figures are `bytes / 4` when any measured figures are mixed in, and must never present a `mixed` total without the label.
+
+### Event-not-coverage wording, source attribution, and dominance warnings
+
+Optimization-event counts (`optimization_events_total`, per-path event counts) describe how many compaction/windowing events were recorded, not how many tool calls occurred or how much of a run's total output was inspected. Reports must phrase these as event counts, never as coverage of "all tool calls" or "all output," since uninstrumented paths and skipped summaries are not counted.
+
+`windowing_by_source_tool` breaks result-windowing savings down by the originating tool (`Read`, `Grep`, `Glob`, etc.) with its own `net_saved_bytes` and `measurement_quality` per tool, so a reader can see which tool actually produced a given saving rather than assuming it is evenly distributed.
+
+**Dominance warning.** When a single event or a single source tool accounts for more than `DOMINANCE_THRESHOLD_SHARE` (50%) of a report's total net saved bytes, the report emits a `dominance_warning` (surfaced tool, share, net saved bytes, measurement quality) and the rendered markdown shows a caution callout. This exists so a report does not present an average or aggregate saving that is actually driven by one outlier event as if it were representative.
+
 ### Generic compaction fallback (`RALPH_COMPACT_GENERIC_THRESHOLD_BYTES`)
 
 | Variable | Default | Purpose |

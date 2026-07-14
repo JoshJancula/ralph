@@ -1,0 +1,33 @@
+{
+  "cliVersion": "2.1.207 (Claude Code)",
+  "observationDate": "2026-07-11",
+  "captureMethod": "PostToolUse hook (matcher Read|Grep|Glob|Bash) writing raw stdin to a temp file, invoked via `claude --model claude-haiku-4-5 --dangerously-skip-permissions --tools \"Bash,Read,Grep,Glob\" -p <prompt>` against a throwaway temp project directory outside the repo.",
+  "sanitization": "session_id, prompt_id, tool_use_id, transcript_path, cwd, and all absolute filesystem paths inside tool_input/tool_response were replaced with fixed placeholder values (00000000-0000-0000-0000-000000000000, /redacted/..., raw-capture-artifact.json). File and match content strings are the real (non-sensitive, author-authored) sample text; no secrets or real project paths are present.",
+  "fixtures": {
+    "read.json": {
+      "tool": "Read",
+      "observedTextPath": ".tool_response.file.content",
+      "notes": "Confirms the plan's proposed path .tool_response.file.content is correct for this CLI version. tool_response also carries file.filePath, file.numLines, file.startLine, file.totalLines as required siblings."
+    },
+    "grep-content.json": {
+      "tool": "Grep",
+      "observedTextPath": ".tool_response.content",
+      "notes": "output_mode:\"content\" returns tool_response.content as a plain string (ripgrep-style \"file:line:text\" lines). This matches the existing extractor's top-level .content string branch; no separate Grep-specific path was needed."
+    },
+    "grep-files-with-matches.json": {
+      "tool": "Grep",
+      "observedTextPath": null,
+      "notes": "output_mode:\"files_with_matches\" (the tool default) returns only mode/filenames/numFiles with no text field at all. There is nothing to compact for this shape; extraction is expected to fail (no .content/.text/.output) and the hook should fail open, which is existing/intended behavior, not a defect."
+    },
+    "glob.json": {
+      "tool": "Glob",
+      "observedTextPath": null,
+      "notes": "Glob tool_response returns filenames/durationMs/numFiles/truncated/totalMatches/countIsComplete with no text field. Same fail-open expectation as Grep files_with_matches."
+    },
+    "bash.json": {
+      "tool": "Bash",
+      "observedTextPath": ".tool_response.stdout (and .tool_response.stderr)",
+      "notes": "DISCREPANCY FROM ASSUMPTION: this CLI version merges stdout and stderr into a single tool_response.stdout string; tool_response.stderr was observed as an always-empty string even when the command wrote to fd 2 only. Do not assume stderr is populated independently; compaction logic must treat stdout as the combined stream and treat stderr as possibly-empty even when the underlying command produced stderr output."
+    }
+  }
+}

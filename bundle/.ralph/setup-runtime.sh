@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Setup a runtime directory with Ralph hooks and MCP configuration.
+# Setup a runtime directory with durable Ralph compaction hooks and MCP configuration.
 #
 # Usage:
 #   ralph setup --runtime <claude|cursor|codex|opencode|antigravity|agy> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
@@ -8,7 +8,8 @@
 # Options:
 #   --runtime <name>      Runtime to configure (claude, cursor, codex, opencode, antigravity; agy aliases antigravity)
 #   --runtime-dir <path>  Path to the runtime directory (default: $PWD/.$runtime, $PWD/.agents for antigravity)
-#   --hooks               Install hooks for the runtime
+#                         Use ~/.claude, ~/.cursor, ~/.codex, ~/.opencode, or ~/.agents for user-home installs.
+#   --hooks               Install durable Ralph compaction/native hooks for normal runtime sessions
 #   --mcp                 Install MCP configuration for the runtime
 #   --all                 Install both hooks and MCP (equivalent to --hooks --mcp)
 #   --dry-run             Show what would be done without making changes
@@ -60,12 +61,13 @@ print_help() {
   cat << 'EOF'
 Usage: ralph setup --runtime <claude|cursor|codex|opencode|antigravity|agy> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
 
-Configure a runtime directory with Ralph hooks and MCP tools.
+Configure a runtime directory with durable Ralph compaction hooks and MCP tools.
 
 Options:
   --runtime <name>      Runtime to configure (claude, cursor, codex, opencode, antigravity; agy aliases antigravity)
   --runtime-dir <path>  Path to the runtime directory (default: $PWD/.$runtime, $PWD/.agents for antigravity)
-  --hooks               Install hooks for the runtime
+                        Use ~/.claude, ~/.cursor, ~/.codex, ~/.opencode, or ~/.agents for user-home installs.
+  --hooks               Install durable Ralph compaction/native hooks for normal runtime sessions
   --mcp                 Install MCP configuration for the runtime
   --all                 Install both hooks and MCP (equivalent to --hooks --mcp)
   --dry-run             Show what would be done without making changes
@@ -76,6 +78,12 @@ Constraints:
   - At least one of --hooks, --mcp, or --all must be specified.
   - Default --runtime-dir is "$PWD/.$runtime" (antigravity uses "$PWD/.agents").
   - Runtime-dir basename must match the selected runtime config dir unless --yes is provided.
+
+Examples:
+  ralph setup --runtime claude --runtime-dir ~/.claude --hooks
+  ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --hooks
+  ralph setup --runtime codex --runtime-dir ~/.codex --hooks
+  ralph setup --runtime claude --hooks --mcp
 EOF
 }
 

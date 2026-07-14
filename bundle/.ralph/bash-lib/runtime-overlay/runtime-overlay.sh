@@ -326,6 +326,91 @@ if not os.path.isdir(runtime_config_root):
 now = int(time.time())
 messages = []
 had_errors = False
+
+def _load_json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+def _commands_for_matcher(data, event, matcher):
+    hooks = (data or {}).get("hooks") or {}
+    out = []
+    for group in hooks.get(event) or []:
+        if group.get("matcher") != matcher:
+            continue
+        for entry in group.get("hooks") or []:
+            cmd = entry.get("command") or ""
+            if cmd:
+                out.append(cmd)
+    return out
+
+def _has_cmd(commands, needle):
+    return any(needle in cmd or cmd.endswith(needle) for cmd in commands)
+
+def _claude_hooks_detected(path):
+    data = _load_json(path)
+    if not isinstance(data, dict):
+        return False
+    env_cmds = _commands_for_matcher(data, "PreToolUse", "Read|Edit|MultiEdit|Glob|Grep|LS")
+    bash_pre = _commands_for_matcher(data, "PreToolUse", "Bash")
+    bash_post = _commands_for_matcher(data, "PostToolUse", "Bash")
+    exploration_post = _commands_for_matcher(data, "PostToolUse", "Read|Grep|Glob")
+    return (
+        _has_cmd(env_cmds, "block-env-reads.sh")
+        and _has_cmd(bash_pre, "rewrite-bash-command.sh")
+        and _has_cmd(bash_post, "compact-bash-output.sh")
+        and (
+            _has_cmd(exploration_post, "native-result-compact.sh")
+            or _has_cmd(exploration_post, "compact-native-result-output.sh")
+        )
+    )
+
+def _cursor_hooks_detected(path):
+    data = _load_json(path)
+    if not isinstance(data, dict):
+        return False
+    required = {
+        "pre-tool-shell-policy.sh",
+        "post-tool-shell-telemetry.sh",
+        "post-tool-native-result-compact.sh",
+        "post-tool-mcp-compact.sh",
+        "after-shell-telemetry.sh",
+    }
+    found = set()
+    hooks = data.get("hooks") or {}
+    for event in ("preToolUse", "postToolUse", "afterShellExecution"):
+        for entry in hooks.get(event) or []:
+            cmd = entry.get("command") or ""
+            base = os.path.basename(cmd)
+            if base in required:
+                found.add(base)
+    return found == required
+
+def _preserve_mutated_target(target):
+    if target.endswith("/.claude/settings.json"):
+        return _claude_hooks_detected(target)
+    if target.endswith("/.cursor/hooks.json"):
+        return _cursor_hooks_detected(target)
+    return False
+
+def _preserve_generated_target(path):
+    if "/.cursor/hooks/" not in path:
+        return False
+    base = os.path.basename(path)
+    required = {
+        "pre-tool-shell-policy.sh",
+        "post-tool-shell-telemetry.sh",
+        "post-tool-native-result-compact.sh",
+        "post-tool-mcp-compact.sh",
+        "after-shell-telemetry.sh",
+    }
+    if base not in required:
+        return False
+    hooks_json = os.path.join(os.path.dirname(os.path.dirname(path)), "hooks.json")
+    return _cursor_hooks_detected(hooks_json)
+
 for plan_dir in sorted(os.listdir(runtime_config_root)):
     plan_path = os.path.join(runtime_config_root, plan_dir)
     if not os.path.isdir(plan_path):
@@ -374,6 +459,9 @@ for plan_dir in sorted(os.listdir(runtime_config_root)):
             backup = entry.get("backup")
             if not target:
                 continue
+            if _preserve_mutated_target(target):
+                entry["preserved"] = True
+                continue
             try:
                 if backup and os.path.isfile(backup):
                     dirpath = os.path.dirname(target)
@@ -392,6 +480,9 @@ for plan_dir in sorted(os.listdir(runtime_config_root)):
         for entry in data.get("generated_files", []):
             path = entry.get("path")
             if not path:
+                continue
+            if _preserve_generated_target(path):
+                entry["preserved"] = True
                 continue
             try:
                 if os.path.exists(path):

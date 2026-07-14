@@ -78,6 +78,7 @@ _ = pre, post
 env_cmds = group_commands("PreToolUse", "Read|Edit|MultiEdit|Glob|Grep|LS")
 bash_pre = group_commands("PreToolUse", "Bash")
 bash_post = group_commands("PostToolUse", "Bash")
+exploration_post = group_commands("PostToolUse", "Read|Grep|Glob")
 
 if not has_cmd(env_cmds, "block-env-reads.sh"):
     sys.exit(1)
@@ -85,8 +86,19 @@ if not has_cmd(bash_pre, "rewrite-bash-command.sh"):
     sys.exit(1)
 if not has_cmd(bash_post, "compact-bash-output.sh"):
     sys.exit(1)
+if not (
+    has_cmd(exploration_post, "native-result-compact.sh")
+    or has_cmd(exploration_post, "compact-native-result-output.sh")
+):
+    sys.exit(1)
 sys.exit(0)
 PY
+}
+
+runtime_overlay_claude_preserve_durable_install() {
+  local target="${1:-}"
+  [[ -n "$target" ]] || return 1
+  runtime_overlay_claude_hooks_detected_in_file "$target"
 }
 
 runtime_overlay_claude_find_installed_hooks() {
@@ -161,6 +173,10 @@ run_plan_invoke_claude_native_hooks_cleanup() {
     return 0
   fi
   if [[ "${CLAUDE_PLAN_HOOKS_SETTINGS_MUTATED:-0}" != "1" ]]; then
+    unset CLAUDE_PLAN_HOOKS_SETTINGS_TARGET CLAUDE_PLAN_HOOKS_SETTINGS_BACKUP CLAUDE_PLAN_HOOKS_SETTINGS_MUTATED
+    return 0
+  fi
+  if runtime_overlay_claude_preserve_durable_install "$target"; then
     unset CLAUDE_PLAN_HOOKS_SETTINGS_TARGET CLAUDE_PLAN_HOOKS_SETTINGS_BACKUP CLAUDE_PLAN_HOOKS_SETTINGS_MUTATED
     return 0
   fi

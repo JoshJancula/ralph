@@ -315,17 +315,23 @@ ralph_mcp_proxy_result_envelope_grep_next_actions_json() {
   local pattern="${2:-}"
   local read_window="${3:-4096}"
   local recommended_read_view="${4:-compacted}"
+  local source_capped="${5:-0}"
+  local search_description="Search the stored grep output for more matches"
+  if [[ "$source_capped" == "1" ]]; then
+    search_description="Search the stored (partial, source-capped) grep output; the source search stopped early, so narrow the pattern or path for a complete search"
+  fi
   jq -nc \
     --arg resultId "$result_id" \
     --arg pattern "$pattern" \
     --argjson readWindow "$read_window" \
     --arg recommendedReadView "$recommended_read_view" \
+    --arg searchDescription "$search_description" \
     '
       ($readWindow | if . < 1 then 4096 else . end) as $window
       | [
           {
             tool: "ralph_proxy_result_search",
-            description: "Search the stored grep output for more matches",
+            description: $searchDescription,
             arguments: (
               {resultId: $resultId, pattern: $pattern}
               | if $pattern == "" then del(.pattern) else . end

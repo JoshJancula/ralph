@@ -77,6 +77,8 @@ ralph_hook_telemetry_compact_record_json() {
   local workspace="${1:-}" plan_key="${2:-}" command="${3:-}" compact_json="${4:-}"
   local original_stdout="${5-}" original_stderr="${6-}" storage_path="${7-}"
   local exit_code="${8:-0}"
+  local plan_key_fallback="${9:-}" plan_key_fallback_reason="${10:-}"
+  local delivered_bytes="${11:-}" delivered_tokens="${12:-}"
 
   local original_combined compact_stdout compact_stderr compact_combined
   local original_bytes compacted_bytes command_hash compaction_skipped family
@@ -109,7 +111,13 @@ ralph_hook_telemetry_compact_record_json() {
     --argjson compactionSkipped "$compaction_skipped" \
     --argjson exitCode "$exit_code" \
     --arg family "$family" \
-    '{
+    --arg planKeyFallback "$plan_key_fallback" \
+    --arg planKeyFallbackReason "$plan_key_fallback_reason" \
+    --arg deliveredBytes "$delivered_bytes" \
+    --arg deliveredTokens "$delivered_tokens" \
+    '
+    def is_nat($v): ($v != "") and ($v | test("^[0-9]+$"));
+    {
       timestamp: $timestamp,
       workspace: $workspace,
       planKey: $planKey,
@@ -120,7 +128,16 @@ ralph_hook_telemetry_compact_record_json() {
       compactionSkipped: $compactionSkipped,
       exitCode: $exitCode,
       family: (if $family == "" then null else $family end)
-    }'
+    }
+    + (if $planKeyFallback == "true" or $planKeyFallback == "false"
+       then {planKeyFallback: ($planKeyFallback == "true")}
+       else {} end)
+    + (if $planKeyFallback == "true" and $planKeyFallbackReason != ""
+       then {planKeyFallbackReason: $planKeyFallbackReason}
+       else {} end)
+    + (if is_nat($deliveredBytes) or is_nat($deliveredTokens) then {measurementVersion: 2} else {} end)
+    + (if is_nat($deliveredBytes) then {deliveredBytes: ($deliveredBytes | tonumber)} else {} end)
+    + (if is_nat($deliveredTokens) then {deliveredTokens: ($deliveredTokens | tonumber)} else {} end)'
 }
 
 # Build one JSON object for bash command rewrite telemetry.
@@ -167,6 +184,8 @@ ralph_hook_telemetry_append_compact_log() {
   local workspace="${1:-}" plan_key="${2:-}" command="${3:-}" compact_json="${4:-}"
   local original_stdout="${5-}" original_stderr="${6-}" storage_path="${7-}"
   local exit_code="${8:-0}" log_path="${9:-}"
+  local plan_key_fallback="${10:-}" plan_key_fallback_reason="${11:-}"
+  local delivered_bytes="${12:-}" delivered_tokens="${13:-}"
   local line
 
   ralph_hook_telemetry_enabled || return 0
@@ -183,7 +202,11 @@ ralph_hook_telemetry_append_compact_log() {
     "$original_stdout" \
     "$original_stderr" \
     "$storage_path" \
-    "$exit_code")"
+    "$exit_code" \
+    "$plan_key_fallback" \
+    "$plan_key_fallback_reason" \
+    "$delivered_bytes" \
+    "$delivered_tokens")"
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 
@@ -276,12 +299,66 @@ ralph_hook_telemetry_lookup_envelope_channel() {
 # The optional result_id ties this envelope record to any later readback
 # records (see ralph_hook_telemetry_append_result_readback_log) so savings
 # accounting can net out raw-view escalations for the same stored result.
+
+# Builds the additive measurementVersion:2 fields object for
+# ralph_hook_telemetry_windowing_record_json. All inputs are optional; only
+# supplied (non-empty) fields are included, and every numeric field must be a
+# non-negative integer or it is omitted rather than coerced. Returns "{}"
+# when nothing was supplied, which keeps legacy records byte-for-byte
+# unchanged (no measurementVersion key is added by the caller in that case).
+#
+# Args (all optional, pass "" to skip): sourceCapturedBytes inlineCandidateBytes
+# inlineCandidateTokens deliveredBytes deliveredTokens storedBytes sourceCapped
+# sourceComplete capReason capLimitBytes capLimitLines capLimitPerLineBytes
+# tokenEstimatorBackend
+ralph_hook_telemetry_windowing_v2_fields_json() {
+  local source_captured_bytes="${1:-}" inline_candidate_bytes="${2:-}" inline_candidate_tokens="${3:-}"
+  local delivered_bytes="${4:-}" delivered_tokens="${5:-}" stored_bytes="${6:-}"
+  local source_capped="${7:-}" source_complete="${8:-}" cap_reason="${9:-}"
+  local cap_limit_bytes="${10:-}" cap_limit_lines="${11:-}" cap_limit_per_line_bytes="${12:-}"
+  local token_estimator_backend="${13:-}"
+
+  jq -nc \
+    --arg sourceCapturedBytes "$source_captured_bytes" \
+    --arg inlineCandidateBytes "$inline_candidate_bytes" \
+    --arg inlineCandidateTokens "$inline_candidate_tokens" \
+    --arg deliveredBytes "$delivered_bytes" \
+    --arg deliveredTokens "$delivered_tokens" \
+    --arg storedBytes "$stored_bytes" \
+    --arg sourceCapped "$source_capped" \
+    --arg sourceComplete "$source_complete" \
+    --arg capReason "$cap_reason" \
+    --arg capLimitBytes "$cap_limit_bytes" \
+    --arg capLimitLines "$cap_limit_lines" \
+    --arg capLimitPerLineBytes "$cap_limit_per_line_bytes" \
+    --arg tokenEstimatorBackend "$token_estimator_backend" \
+    'def is_nat($v): ($v != "") and ($v | test("^[0-9]+$"));
+     def is_bool($v): ($v == "true") or ($v == "false");
+     {}
+     + (if is_nat($sourceCapturedBytes) then {sourceCapturedBytes: ($sourceCapturedBytes | tonumber)} else {} end)
+     + (if is_nat($inlineCandidateBytes) then {inlineCandidateBytes: ($inlineCandidateBytes | tonumber)} else {} end)
+     + (if is_nat($inlineCandidateTokens) then {inlineCandidateTokens: ($inlineCandidateTokens | tonumber)} else {} end)
+     + (if is_nat($deliveredBytes) then {deliveredBytes: ($deliveredBytes | tonumber)} else {} end)
+     + (if is_nat($deliveredTokens) then {deliveredTokens: ($deliveredTokens | tonumber)} else {} end)
+     + (if is_nat($storedBytes) then {storedBytes: ($storedBytes | tonumber)} else {} end)
+     + (if is_bool($sourceCapped) then {sourceCapped: ($sourceCapped == "true")} else {} end)
+     + (if is_bool($sourceComplete) then {sourceComplete: ($sourceComplete == "true")} else {} end)
+     + (if $capReason != "" then {capReason: $capReason} else {} end)
+     + (if is_nat($capLimitBytes) then {capLimitBytes: ($capLimitBytes | tonumber)} else {} end)
+     + (if is_nat($capLimitLines) then {capLimitLines: ($capLimitLines | tonumber)} else {} end)
+     + (if is_nat($capLimitPerLineBytes) then {capLimitPerLineBytes: ($capLimitPerLineBytes | tonumber)} else {} end)
+     + (if $tokenEstimatorBackend != "" then {tokenEstimatorBackend: $tokenEstimatorBackend} else {} end)'
+}
+
 ralph_hook_telemetry_windowing_record_json() {
   local workspace="${1:-}" plan_key="${2:-}" tool_name="${3:-}"
   local original_bytes="${4:-0}" returned_bytes="${5:-0}"
   local original_tokens="${6:-}" returned_tokens="${7:-}" token_cap_triggered="${8:-0}"
   local result_id="${9:-}"
   local runtime="${10:-}" channel="${11:-}" normalized_tool_name="${12:-}"
+  local v2_fields_json="${13:-}"
+  [[ -n "$v2_fields_json" ]] || v2_fields_json='{}'
+  local plan_key_fallback="${14:-}" plan_key_fallback_reason="${15:-}"
   local timestamp token_cap_json surfaced_tool_name
 
   surfaced_tool_name="$(ralph_hook_telemetry_windowing_resolve_tool_name "$tool_name")"
@@ -316,6 +393,9 @@ ralph_hook_telemetry_windowing_record_json() {
     --arg runtime "$runtime" \
     --arg channel "$channel" \
     --arg normalizedToolName "$normalized_tool_name" \
+    --argjson v2Fields "$v2_fields_json" \
+    --arg planKeyFallback "$plan_key_fallback" \
+    --arg planKeyFallbackReason "$plan_key_fallback_reason" \
     '{
       timestamp: $timestamp,
       workspace: $workspace,
@@ -331,7 +411,14 @@ ralph_hook_telemetry_windowing_record_json() {
     + (if $resultId != "" then {resultId: $resultId} else {} end)
     + (if $runtime != "" then {runtime: $runtime} else {} end)
     + (if $channel != "" then {channel: $channel} else {} end)
-    + (if $normalizedToolName != "" then {normalizedToolName: $normalizedToolName} else {} end)'
+    + (if $normalizedToolName != "" then {normalizedToolName: $normalizedToolName} else {} end)
+    + (if ($v2Fields | length) > 0 then {measurementVersion: 2} + $v2Fields else {} end)
+    + (if $planKeyFallback == "true" or $planKeyFallback == "false"
+       then {planKeyFallback: ($planKeyFallback == "true")}
+       else {} end)
+    + (if $planKeyFallback == "true" and $planKeyFallbackReason != ""
+       then {planKeyFallbackReason: $planKeyFallbackReason}
+       else {} end)'
 }
 
 ralph_hook_telemetry_append_windowing_log() {
@@ -339,6 +426,9 @@ ralph_hook_telemetry_append_windowing_log() {
   local original_bytes="${4:-0}" returned_bytes="${5:-0}"
   local original_tokens="${6:-}" returned_tokens="${7:-}" token_cap_triggered="${8:-0}"
   local result_id="${9:-}"
+  local v2_fields_json="${10:-${RALPH_RESULT_WINDOWING_V2_FIELDS_JSON:-}}"
+  local plan_key_fallback="${11:-${RALPH_RESULT_WINDOWING_PLAN_KEY_FALLBACK:-}}"
+  local plan_key_fallback_reason="${12:-${RALPH_RESULT_WINDOWING_PLAN_KEY_FALLBACK_REASON:-}}"
   local log_path="${RALPH_RESULT_WINDOWING_LOG:-}"
   local line
 
@@ -362,7 +452,11 @@ ralph_hook_telemetry_append_windowing_log() {
     "$original_tokens" \
     "$returned_tokens" \
     "$token_cap_triggered" \
-    "$result_id")"
+    "$result_id" \
+    "" "" "" \
+    "$v2_fields_json" \
+    "$plan_key_fallback" \
+    "$plan_key_fallback_reason")"
   if [[ -n "$result_id" ]]; then
     local recorded_channel
     recorded_channel="$(jq -r '.channel // empty' <<<"$line" 2>/dev/null || true)"

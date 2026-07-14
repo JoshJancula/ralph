@@ -58,6 +58,18 @@ ralph_native_shell_plan_key() {
   fi
 }
 
+# Stable, non-sensitive reason code when ralph_native_shell_plan_key fell
+# back to "default", or empty when a key was explicitly provided.
+ralph_native_shell_plan_key_fallback_reason() {
+  if [[ -n "${RALPH_PLAN_KEY:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${RALPH_ARTIFACT_NS:-}" ]]; then
+    return 0
+  fi
+  printf 'no_plan_key_or_artifact_ns_env\n'
+}
+
 ralph_native_shell_wrapper_libs_ready() {
   command -v jq >/dev/null 2>&1 || return 1
   [[ -f "$_NATIVE_SHELL_LIB_DIR/../compactors.sh" ]] || return 1
@@ -372,6 +384,13 @@ ralph_native_shell_compact_pipeline_json() {
     storage_text="$(ralph_mcp_proxy_shell_original_storage_text "$command" "$stdout" "$stderr" "$exit_code")"
     original_bytes=${#storage_text}
     plan_key="$(ralph_native_shell_plan_key)"
+    local plan_key_fallback_reason plan_key_fallback
+    plan_key_fallback_reason="$(ralph_native_shell_plan_key_fallback_reason)"
+    if [[ -n "$plan_key_fallback_reason" ]]; then
+      plan_key_fallback="true"
+    else
+      plan_key_fallback="false"
+    fi
     result_id="$(ralph_mcp_proxy_result_store_write \
       "$workspace" \
       "$plan_key" \
@@ -394,7 +413,9 @@ ralph_native_shell_compact_pipeline_json() {
         "$stderr" \
         "$result_path" \
         "$exit_code" \
-        "$compact_log"
+        "$compact_log" \
+        "$plan_key_fallback" \
+        "$plan_key_fallback_reason"
     else
       local compact_log="${RALPH_BASH_COMPACT_LOG:-}"
       if [[ "$store_tool" == "ralph_proxy_shell" && -n "${RALPH_PROXY_SHELL_COMPACT_LOG:-}" ]]; then
@@ -410,7 +431,9 @@ ralph_native_shell_compact_pipeline_json() {
           "$stderr" \
           "" \
           "$exit_code" \
-          "$compact_log"
+          "$compact_log" \
+          "$plan_key_fallback" \
+          "$plan_key_fallback_reason"
       fi
     fi
   fi
@@ -452,7 +475,10 @@ ralph_native_shell_compact_pipeline_json() {
       "$original_tokens" \
       "$returned_tokens" \
       0 \
-      "$result_id"
+      "$result_id" \
+      "" \
+      "${plan_key_fallback:-}" \
+      "${plan_key_fallback_reason:-}"
     unset RALPH_RESULT_WINDOWING_CHANNEL RALPH_RESULT_WINDOWING_SURFACED_TOOL_NAME RALPH_RESULT_WINDOWING_NORMALIZED_TOOL_NAME
   fi
 

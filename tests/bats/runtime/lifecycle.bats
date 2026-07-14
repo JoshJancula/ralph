@@ -150,6 +150,54 @@ assert data['cleanup_time'] is not None
   rm -rf "$workspace"
 }
 
+@test "stale restore preserves durable Claude hook install" {
+  source "$RUNTIME_OVERLAY_LIB"
+
+  workspace="$(mktemp -d)"
+  RALPH_PROJECT_ROOT="$workspace"
+  RALPH_PLAN_KEY="stale-claude-durable-hooks"
+  runtime_overlay_init_state "claude" "$RALPH_PLAN_KEY"
+
+  mkdir -p "$workspace/.claude"
+  printf '%s\n' '{"other":"original"}' > "$workspace/.claude/settings.json"
+  runtime_overlay_record_original_file "$workspace/.claude/settings.json"
+  cp "$REPO_ROOT/bundle/.claude/settings.json" "$workspace/.claude/settings.json"
+
+  run runtime_overlay_restore_stale_runs "$workspace" "$RALPH_PLAN_KEY" 0
+  [ "$status" -eq 0 ]
+  run jq -r '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[0].command' "$workspace/.claude/settings.json"
+  [ "$output" = "RALPH_NATIVE_RESULT_COMPACT=1 .claude/hooks/native-result-compact.sh" ]
+
+  rm -rf "$workspace"
+}
+
+@test "stale restore preserves durable Cursor hook install and hook scripts" {
+  source "$RUNTIME_OVERLAY_LIB"
+
+  workspace="$(mktemp -d)"
+  RALPH_PROJECT_ROOT="$workspace"
+  RALPH_PLAN_KEY="stale-cursor-durable-hooks"
+  runtime_overlay_init_state "cursor" "$RALPH_PLAN_KEY"
+
+  mkdir -p "$workspace/.cursor/hooks"
+  printf '%s\n' '{"version":1,"keep":"original"}' > "$workspace/.cursor/hooks.json"
+  runtime_overlay_record_original_file "$workspace/.cursor/hooks.json"
+  cp "$REPO_ROOT/bundle/.cursor/hooks.json" "$workspace/.cursor/hooks.json"
+
+  for script in pre-tool-shell-policy.sh post-tool-shell-telemetry.sh post-tool-native-result-compact.sh post-tool-mcp-compact.sh after-shell-telemetry.sh; do
+    cp "$REPO_ROOT/bundle/.cursor/hooks/$script" "$workspace/.cursor/hooks/$script"
+    runtime_overlay_record_generated_file "$workspace/.cursor/hooks/$script"
+  done
+
+  run runtime_overlay_restore_stale_runs "$workspace" "$RALPH_PLAN_KEY" 0
+  [ "$status" -eq 0 ]
+  [ -f "$workspace/.cursor/hooks/post-tool-native-result-compact.sh" ]
+  run jq -r '.hooks.postToolUse[] | select(.matcher == "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch") | .command' "$workspace/.cursor/hooks.json"
+  [ "$output" = ".cursor/hooks/post-tool-native-result-compact.sh" ]
+
+  rm -rf "$workspace"
+}
+
 @test "malformed ambient config: invalid JSON rejected" {
   workspace="$(mktemp -d)"
   

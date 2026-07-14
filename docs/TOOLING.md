@@ -116,6 +116,12 @@ Each family keeps what matters (failed test names, error lines, file paths, coun
 
 Beyond the built-in Python compactors, simple pattern-based rules can be added as JSON ("DSL rules") via `RALPH_COMPACTOR_DSL_RULES_PATH`; the built-ins live in `bundle/.ralph/bash-lib/compactor-dsl-builtin-rules.json`. Both kinds go through the same safety gate.
 
+When no command is known at all (for example a stored result with no attached command text), Ralph will fall back to classifying output by shape alone. When a command *is* known but unsupported, shape-based classification never assigns it a semantic family (for example a `docker logs`-style summary) -- an unsupported command with log-like output either falls back to the generic size-triggered summary or passes through unchanged. This prevents an unrelated command from being silently misreported as something it is not.
+
+### Bounded search source capture
+
+`ralph_proxy_search`'s owned grep path additionally bounds how much raw source it will read from the underlying command before summarizing (byte, line, and per-line-byte caps; see `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_*` in [ENVIRONMENT.md](ENVIRONMENT.md#grep-source-capture-caps-ralph_mcp_proxy_policy_owned_grep_source_)), independent of the result envelope's own size cap. When a cap is hit, the result is marked `truncated` and the envelope reports `sourceComplete: false` with a `capReason`; there is no way to retrieve the remainder of a capped source stream past the cap, so narrow the search and re-run instead of assuming the raw result is retrievable in full.
+
 ### Retrieving the original
 
 1. Call `ralph_proxy_shell`; the response envelope includes `resultId`.
@@ -158,7 +164,7 @@ The rules live in one shared registry (`bundle/.ralph/python/shell_command_regis
 
 ## Durable hooks and MCP (`ralph setup`)
 
-Plan runs can inject hooks and MCP for one session and restore afterward (see [Overlay state and cleanup](#overlay-state-and-cleanup)). **`ralph setup`** writes the same Ralph-owned entries durably so normal IDE sessions also get hooks and MCP without `--ralph-mode`.
+Plan runs can inject hooks and MCP for one session and restore afterward (see [Overlay state and cleanup](#overlay-state-and-cleanup)). Use **`ralph setup --hooks`** when you want Ralph's compaction/native-hook behavior in normal IDE sessions outside `ralph run-plan`. **`ralph setup`** writes the same Ralph-owned entries durably so normal IDE sessions also get hooks and MCP without `--ralph-mode`.
 
 ```bash
 ralph setup --runtime <claude|cursor|codex|opencode> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
@@ -166,6 +172,8 @@ ralph setup --runtime <claude|cursor|codex|opencode> [--runtime-dir <path>] [--h
 
 | Example | Effect |
 |---------|--------|
+| `ralph setup --runtime claude --runtime-dir ~/.claude --hooks` | Durable Claude compaction hooks in your user runtime config. |
+| `ralph setup --runtime cursor --runtime-dir ~/.cursor --hooks` | Durable Cursor compaction hooks in your user runtime config. |
 | `ralph setup --runtime claude --hooks --mcp` | Claude hooks under `.claude/`; MCP at project-root `.mcp.json`. |
 | `ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all` | Cursor hooks and `.cursor/mcp.json` at the given path. |
 | `ralph setup --runtime codex --all` | Codex hooks under `.codex/` plus `[mcp_servers.ralph]` in `.codex/config.toml`. |

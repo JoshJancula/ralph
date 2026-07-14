@@ -667,6 +667,74 @@ ralph_mcp_proxy_tool_allowed() {
   return 0
 }
 
+# Grep source-cap absolute ceilings (PLAN15). These are never exceeded
+# regardless of policy/env overrides or a derived working cap; they exist to
+# make an unbounded multi-megabyte source capture structurally impossible.
+RALPH_MCP_PROXY_GREP_SOURCE_BYTE_CAP_CEILING=4194304
+RALPH_MCP_PROXY_GREP_SOURCE_LINE_CAP_CEILING=20000
+RALPH_MCP_PROXY_GREP_SOURCE_PER_LINE_BYTE_CAP_CEILING=65536
+
+# Selected defaults (see .ralph-workspace/artifacts/*/grep-source-cap-candidates.md).
+RALPH_MCP_PROXY_GREP_SOURCE_BYTE_CAP_DEFAULT=262144
+RALPH_MCP_PROXY_GREP_SOURCE_LINE_CAP_DEFAULT=2000
+RALPH_MCP_PROXY_GREP_SOURCE_PER_LINE_BYTE_CAP_DEFAULT=4096
+
+# Clamps $2 to [1, $3]. Falls back to $1 (the default) when $2 is empty,
+# non-numeric, zero, or negative. Pure: no side effects, no env reads.
+ralph_mcp_proxy_grep_source_cap_clamp() {
+  local default_value="${1:-0}" candidate="${2:-}" ceiling="${3:-0}"
+  if [[ ! "$candidate" =~ ^[0-9]+$ ]] || [[ "$candidate" -le 0 ]]; then
+    candidate="$default_value"
+  fi
+  if [[ "$candidate" -gt "$ceiling" ]]; then
+    candidate="$ceiling"
+  fi
+  if [[ "$candidate" -le 0 ]]; then
+    candidate="$ceiling"
+  fi
+  printf '%s\n' "$candidate"
+}
+
+# Resolves grep source byte/line/per-line caps as a JSON object
+# {"byteCap":N,"lineCap":N,"perLineCap":N}. Pure given its inputs/env: same
+# arguments and environment always produce the same result.
+#
+# Args: optional result_byte_cap (used only to raise the byte cap floor when
+# the result cap legitimately needs more room; still clamped to the ceiling).
+#
+# Overrides (each independently optional, invalid values are ignored):
+#   RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_BYTE_CAP
+#   RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_LINE_CAP
+#   RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_PER_LINE_BYTE_CAP
+ralph_mcp_proxy_grep_source_cap_policy_json() {
+  local result_byte_cap="${1:-}"
+  local byte_cap line_cap per_line_cap byte_floor
+
+  byte_floor="$RALPH_MCP_PROXY_GREP_SOURCE_BYTE_CAP_DEFAULT"
+  if [[ "$result_byte_cap" =~ ^[0-9]+$ ]] && [[ "$result_byte_cap" -gt "$byte_floor" ]]; then
+    byte_floor="$result_byte_cap"
+  fi
+
+  byte_cap="$(ralph_mcp_proxy_grep_source_cap_clamp \
+    "$byte_floor" \
+    "${RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_BYTE_CAP:-}" \
+    "$RALPH_MCP_PROXY_GREP_SOURCE_BYTE_CAP_CEILING")"
+  line_cap="$(ralph_mcp_proxy_grep_source_cap_clamp \
+    "$RALPH_MCP_PROXY_GREP_SOURCE_LINE_CAP_DEFAULT" \
+    "${RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_LINE_CAP:-}" \
+    "$RALPH_MCP_PROXY_GREP_SOURCE_LINE_CAP_CEILING")"
+  per_line_cap="$(ralph_mcp_proxy_grep_source_cap_clamp \
+    "$RALPH_MCP_PROXY_GREP_SOURCE_PER_LINE_BYTE_CAP_DEFAULT" \
+    "${RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_PER_LINE_BYTE_CAP:-}" \
+    "$RALPH_MCP_PROXY_GREP_SOURCE_PER_LINE_BYTE_CAP_CEILING")"
+
+  jq -nc \
+    --argjson byteCap "$byte_cap" \
+    --argjson lineCap "$line_cap" \
+    --argjson perLineCap "$per_line_cap" \
+    '{byteCap: $byteCap, lineCap: $lineCap, perLineCap: $perLineCap}'
+}
+
 ralph_mcp_proxy_result_byte_cap_for_tool() {
   local tool_name="${1:-}"
   local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON:-{}}"

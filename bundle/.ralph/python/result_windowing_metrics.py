@@ -58,10 +58,32 @@ def _parse_envelope(record: Mapping[str, Any]) -> Dict[str, int] | None:
     result_id = str(record.get("resultId") or "").strip()
     if not result_id:
         return None
-    original_bytes = _coerce_int(record.get("originalBytes"))
-    returned_bytes = _coerce_int(record.get("returnedBytes"))
-    original_tokens = _coerce_int(record.get("originalTokens"))
-    returned_tokens = _coerce_int(record.get("returnedTokens"))
+
+    # Prefer measurementVersion:2 inline-candidate/delivered fields for gross
+    # and net context savings: inlineCandidateBytes is what was actually
+    # eligible for inline delivery (post tool-level limits), deliveredBytes is
+    # the final serialized envelope actually sent. Legacy originalBytes
+    # (source/stored bytes) and returnedBytes (preview-only) overstate savings
+    # when a source cap or large stored capture is present. Fall back to the
+    # legacy fields, labeled accordingly, when v2 fields are absent.
+    is_v2 = _coerce_int(record.get("measurementVersion")) == 2
+    has_v2_fields = (
+        record.get("inlineCandidateBytes") is not None
+        and record.get("deliveredBytes") is not None
+    )
+    if is_v2 and has_v2_fields:
+        original_bytes = _coerce_int(record.get("inlineCandidateBytes"))
+        returned_bytes = _coerce_int(record.get("deliveredBytes"))
+        original_tokens = _coerce_int(record.get("inlineCandidateTokens"))
+        returned_tokens = _coerce_int(record.get("deliveredTokens"))
+        measurement_quality = "v2_measured"
+    else:
+        original_bytes = _coerce_int(record.get("originalBytes"))
+        returned_bytes = _coerce_int(record.get("returnedBytes"))
+        original_tokens = _coerce_int(record.get("originalTokens"))
+        returned_tokens = _coerce_int(record.get("returnedTokens"))
+        measurement_quality = "legacy_storage_counterfactual"
+
     if original_tokens <= 0 and returned_tokens <= 0 and original_bytes > 0:
         original_tokens = _estimate_tokens(original_bytes)
         returned_tokens = _estimate_tokens(returned_bytes)
@@ -76,6 +98,12 @@ def _parse_envelope(record: Mapping[str, Any]) -> Dict[str, int] | None:
         )
         or 0,
         "channel": str(record.get("channel") or "").strip() or None,
+        "measurement_quality": measurement_quality,
+        "surfaced_tool": str(record.get("toolName") or "").strip() or "unknown",
+        "source_capped": bool(record.get("sourceCapped") is True),
+        "cap_reason": str(record.get("capReason") or "").strip() or None,
+        "cap_limit_bytes": _coerce_int(record.get("capLimitBytes")) or None,
+        "stored_bytes": _coerce_int(record.get("storedBytes")) or None,
     }
 
 
@@ -280,6 +308,7 @@ def aggregate_windowing_savings(
     path: Path | str,
     *,
     estimate_tokens_fn=None,
+    plan_key: str | None = None,
 ) -> Dict[str, Any]:
     """Return per-envelope and total net savings for overlay accounting.
 
@@ -287,11 +316,26 @@ def aggregate_windowing_savings(
       - total: totals usable for a result_windowing savings bucket
       - per_result: list of per-resultId net consumption rows
       - readbacks_by_result: raw readback totals keyed by resultId
+
+    When plan_key is supplied, filtering is strict (unlike
+    _filter_records_for_plan_key's report-oriented "fall back to all records
+    when nothing matches" behavior): a record whose planKey does not match is
+    excluded from savings entirely, consistent with the compact/rewrite log
+    filtering in aggregate_byte_savings_by_path. Mismatched records are a
+    caller-side diagnostics concern (see aggregate_telemetry_unattributed),
+    not a savings-accounting concern.
     """
     if estimate_tokens_fn is None:
         estimate_tokens_fn = _estimate_tokens
 
+    requested_plan_key = str(plan_key or "").strip()
     records = _load_windowing_records(path)
+    if requested_plan_key:
+        records = [
+            record
+            for record in records
+            if not _record_plan_key(record) or _record_plan_key(record) == requested_plan_key
+        ]
     envelopes: Dict[str, Dict[str, int]] = {}
     readbacks: List[Dict[str, Any]] = []
     legacy_events: List[Dict[str, int]] = []
@@ -380,6 +424,11 @@ def aggregate_windowing_savings(
                 "token_cap_triggered": envelope["token_cap_triggered"],
                 "raw_readbacks": extra["raw"],
                 "compacted_readbacks": extra["compacted"],
+                "measurement_quality": envelope.get(
+                    "measurement_quality", "legacy_storage_counterfactual"
+                ),
+                "surfaced_tool": envelope.get("surfaced_tool", "unknown"),
+                "source_capped": bool(envelope.get("source_capped", False)),
             }
         )
         total_original_bytes += original_bytes
@@ -414,6 +463,109 @@ def aggregate_windowing_savings(
         "per_result": per_result,
         "readbacks_by_result": readbacks_by_result,
         "legacy_events": legacy_events,
+    }
+
+
+def aggregate_windowing_by_source_tool(
+    path: Path | str,
+    *,
+    estimate_tokens_fn=None,
+    plan_key: str | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Aggregate v2 result-windowing records by surfaced source tool.
+
+    Per tool: events, inlineCandidateBytes (gross), deliveredBytes (gross),
+    netConsumedBytes (post readback, capped at inline candidate), netSavedBytes,
+    sourceCappedCount, and a measurementQuality label ("v2_measured",
+    "legacy_storage_counterfactual", or "mixed"). Never treats stored/source
+    capture bytes as the hypothetical model input -- inline candidate is the
+    gross "without Ralph" figure here, consistent with the measurement
+    contract used throughout this module.
+    """
+    aggregated = aggregate_windowing_savings(
+        path, estimate_tokens_fn=estimate_tokens_fn, plan_key=plan_key
+    )
+    by_tool: Dict[str, Dict[str, Any]] = {}
+    for row in aggregated["per_result"]:
+        tool = str(row.get("surfaced_tool") or "unknown")
+        bucket = by_tool.setdefault(
+            tool,
+            {
+                "events": 0,
+                "inline_candidate_bytes": 0,
+                "delivered_bytes": 0,
+                "net_consumed_bytes": 0,
+                "net_saved_bytes": 0,
+                "source_capped_count": 0,
+                "_qualities": set(),
+            },
+        )
+        bucket["events"] += 1
+        bucket["inline_candidate_bytes"] += _coerce_int(row.get("original_bytes"))
+        bucket["delivered_bytes"] += _coerce_int(row.get("returned_bytes"))
+        bucket["net_consumed_bytes"] += _coerce_int(row.get("net_post_bytes"))
+        if row.get("source_capped"):
+            bucket["source_capped_count"] += 1
+        bucket["_qualities"].add(str(row.get("measurement_quality") or "legacy_storage_counterfactual"))
+
+    for bucket in by_tool.values():
+        bucket["net_saved_bytes"] = max(
+            0, bucket["inline_candidate_bytes"] - bucket["net_consumed_bytes"]
+        )
+        qualities = bucket.pop("_qualities")
+        if qualities == {"v2_measured"}:
+            bucket["measurement_quality"] = "v2_measured"
+        elif qualities == {"legacy_storage_counterfactual"}:
+            bucket["measurement_quality"] = "legacy_storage_counterfactual"
+        else:
+            bucket["measurement_quality"] = "mixed"
+
+    return by_tool
+
+
+def aggregate_source_cap_operational_summary(
+    path: Path | str,
+    *,
+    plan_key: str | None = None,
+) -> Dict[str, Any]:
+    """Operational summary for source-capped searches: capped event count,
+    captured/stored bytes, cap reasons, and configured limits. Uncaptured/
+    avoided source bytes are never estimated here -- collection stopped
+    early, so what was not read is genuinely unknown and must not be added
+    to any token/context savings figure.
+    """
+    requested_plan_key = str(plan_key or "").strip()
+    records = _load_windowing_records(path)
+    if requested_plan_key:
+        records = [
+            record
+            for record in records
+            if not _record_plan_key(record) or _record_plan_key(record) == requested_plan_key
+        ]
+
+    capped_count = 0
+    stored_bytes_total = 0
+    reasons: Dict[str, int] = {}
+    limits: set[int] = set()
+
+    for record in records:
+        if str(record.get("event") or "").strip().lower() != "envelope":
+            continue
+        if record.get("sourceCapped") is not True:
+            continue
+        capped_count += 1
+        stored_bytes_total += _coerce_int(record.get("storedBytes"))
+        reason = str(record.get("capReason") or "unknown").strip() or "unknown"
+        reasons[reason] = reasons.get(reason, 0) + 1
+        cap_limit = _coerce_int(record.get("capLimitBytes"))
+        if cap_limit > 0:
+            limits.add(cap_limit)
+
+    return {
+        "capped_event_count": capped_count,
+        "stored_bytes_total": stored_bytes_total,
+        "cap_reasons": reasons,
+        "configured_limits_bytes": sorted(limits),
     }
 
 

@@ -18,6 +18,7 @@ install_hooks_assert_claude_assets() {
   [ -f "$root/.claude/hooks/compact-bash-output.sh" ]
   [ -f "$root/.claude/hooks/rewrite-bash-command.sh" ]
   [ -f "$root/.claude/hooks/block-env-reads.sh" ]
+  [ -f "$root/.claude/hooks/native-result-compact.sh" ]
 }
 
 install_hooks_assert_codex_assets() {
