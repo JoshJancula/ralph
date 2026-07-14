@@ -36,7 +36,7 @@ class TestToolOutputCounterfactualV2(unittest.TestCase):
         per_path["hook_compaction"] = _bucket(10000, 1000, 1000, 100)  # 10:1 ratio
         per_path["proxy_shell_compaction"] = _bucket(4000, 2000, 2000, 1000)  # 2:1 ratio
 
-        result = REPORT._build_tool_output_counterfactual(per_path, {}, 0)
+        result = REPORT._build_tool_output_counterfactual(per_path, 0)
 
         expected_pre_tokens = 1000 + 2000
         expected_post_tokens = 100 + 1000
@@ -51,7 +51,7 @@ class TestToolOutputCounterfactualV2(unittest.TestCase):
         with mock.patch.object(
             REPORT, "_estimate_tokens_from_bytes", wraps=REPORT._estimate_tokens_from_bytes
         ) as spy:
-            REPORT._build_tool_output_counterfactual(per_path, {}, 0)
+            REPORT._build_tool_output_counterfactual(per_path, 0)
             # The main hypothetical/actual token figures must come from the
             # per-path token totals, not a byte-derived estimate. (The
             # separate compaction_measured_not_applied_tokens field is an
@@ -65,7 +65,7 @@ class TestToolOutputCounterfactualV2(unittest.TestCase):
         per_path = {name: REPORT.empty_savings_bucket() for name in REPORT.SAVINGS_PATH_NAMES}
         per_path["hook_compaction"] = _bucket(10000, 1000, 0, 0)
 
-        result = REPORT._build_tool_output_counterfactual(per_path, {}, 0)
+        result = REPORT._build_tool_output_counterfactual(per_path, 0)
         self.assertGreater(result["hypothetical_without_ralph_tokens"], 0)
         self.assertEqual(result["token_quality"], "legacy_or_mixed")
 
@@ -73,7 +73,7 @@ class TestToolOutputCounterfactualV2(unittest.TestCase):
         per_path = {name: REPORT.empty_savings_bucket() for name in REPORT.SAVINGS_PATH_NAMES}
         per_path["hook_compaction"] = _bucket(10000, 1000, 1000, 100)
 
-        result = REPORT._build_tool_output_counterfactual(per_path, {}, 0)
+        result = REPORT._build_tool_output_counterfactual(per_path, 0)
         self.assertEqual(
             result["net_savings_bytes"],
             result["hypothetical_without_ralph_bytes"] - result["actual_with_ralph_bytes"],
@@ -83,17 +83,18 @@ class TestToolOutputCounterfactualV2(unittest.TestCase):
             result["hypothetical_without_ralph_tokens"] - result["actual_with_ralph_tokens"],
         )
 
-    def test_windowing_totals_token_fields_are_included(self) -> None:
+    def test_windowing_token_fields_come_from_the_recomputed_bucket(self) -> None:
+        # The counterfactual sources windowing from the per_path bucket, which is
+        # recomputed from result-windowing.jsonl and whose post totals already
+        # include readbacks. The summary's own windowing totals are no longer
+        # consulted: they stop at the delivered preview and omit readback cost.
         per_path = {name: REPORT.empty_savings_bucket() for name in REPORT.SAVINGS_PATH_NAMES}
-        windowing_totals = {
-            "original_bytes": 5000,
-            "returned_bytes": 500,
-            "original_tokens": 1250,
-            "returned_tokens": 125,
-        }
-        result = REPORT._build_tool_output_counterfactual(per_path, windowing_totals, 0)
+        per_path["result_windowing"] = _bucket(5000, 500, 1250, 125)
+
+        result = REPORT._build_tool_output_counterfactual(per_path, 0)
         self.assertEqual(result["hypothetical_without_ralph_tokens"], 1250)
         self.assertEqual(result["actual_with_ralph_tokens"], 125)
+        self.assertEqual(result["net_savings_bytes"], 4500)
 
 
 if __name__ == "__main__":

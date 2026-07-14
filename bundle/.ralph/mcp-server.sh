@@ -756,14 +756,22 @@ handle_run_plan() {
       return
       ;;
   esac
-  local runner_rel=".ralph/run-plan.sh"
-  local runner_path
-  runner_path="$(canonicalize_path "$workspace_path/$runner_rel")" || {
-    send_error "$id_present" "$id_raw" "-32602" "runner script not found for runtime: $runtime_lower"
-    return
-  }
-  if [[ ! -f "$runner_path" ]]; then
-    send_error "$id_present" "$id_raw" "-32602" "runner script missing: $runner_path"
+  # Prefer a workspace-local .ralph/run-plan.sh (dev checkouts of Ralph itself, or
+  # projects that vendor their own bundle). Fall back to the runner co-located with
+  # this mcp-server.sh (SCRIPT_DIR) -- for a global install that's
+  # $RALPH_HOME/bundle/.ralph/run-plan.sh, the same script the `ralph` CLI execs
+  # directly. Most project workspaces have no local .ralph/ at all when Ralph is
+  # installed globally, so requiring one here made ralph_run_plan fail unconditionally.
+  local runner_path=""
+  local workspace_runner_path
+  workspace_runner_path="$(canonicalize_path "$workspace_path/.ralph/run-plan.sh" 2>/dev/null)" || true
+  if [[ -n "$workspace_runner_path" && -f "$workspace_runner_path" ]]; then
+    runner_path="$workspace_runner_path"
+  elif [[ -f "$SCRIPT_DIR/run-plan.sh" ]]; then
+    runner_path="$SCRIPT_DIR/run-plan.sh"
+  fi
+  if [[ -z "$runner_path" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "no run-plan.sh found: checked $workspace_path/.ralph/run-plan.sh and $SCRIPT_DIR/run-plan.sh (this is unrelated to the requested runtime)"
     return
   fi
   local tool_access_mode=""

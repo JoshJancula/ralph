@@ -63,14 +63,72 @@ class TestWindowingBySourceTool(unittest.TestCase):
         self.assertEqual(set(by_tool.keys()), {"Read", "Grep", "Glob"})
 
         self.assertEqual(by_tool["Read"]["events"], 1)
-        # Net consumed capped at inline candidate (4800) after full raw readback.
-        self.assertEqual(by_tool["Read"]["net_consumed_bytes"], 4800)
+        # Preview (600) plus a full raw readback (4800) against a 4800-byte inline
+        # candidate: 5400 consumed, uncapped, so windowing lost 600 bytes here.
+        self.assertEqual(by_tool["Read"]["net_consumed_bytes"], 5400)
+        self.assertEqual(by_tool["Read"]["net_saved_bytes"], -600)
         self.assertEqual(by_tool["Read"]["measurement_quality"], "v2_measured")
 
         self.assertEqual(by_tool["Grep"]["source_capped_count"], 1)
         self.assertEqual(by_tool["Grep"]["inline_candidate_bytes"], 14000)
 
         self.assertEqual(by_tool["Glob"]["measurement_quality"], "legacy_storage_counterfactual")
+
+    def test_envelope_overhead_reports_negative_savings_with_no_readback(self) -> None:
+        """An envelope bigger than the output it wraps is a loss, not a wash.
+
+        This is the PLAN23 defect: the inline candidate already fit under the
+        byte cap, so windowing it only added envelope scaffolding. No readback is
+        involved -- the delivered envelope alone costs more than inlining would
+        have, and every layer must carry the negative through.
+        """
+        path = self._write([
+            {
+                "event": "envelope", "toolName": "Grep", "resultId": "f" * 16,
+                "measurementVersion": 2,
+                "originalBytes": 640000, "returnedBytes": 6400,
+                "inlineCandidateBytes": 6400, "inlineCandidateTokens": 1600,
+                "deliveredBytes": 7555, "deliveredTokens": 1889,
+            },
+        ])
+
+        by_tool = METRICS.aggregate_windowing_by_source_tool(path)
+        self.assertEqual(by_tool["Grep"]["inline_candidate_bytes"], 6400)
+        self.assertEqual(by_tool["Grep"]["delivered_bytes"], 7555)
+        self.assertEqual(by_tool["Grep"]["net_consumed_bytes"], 7555)
+        self.assertEqual(by_tool["Grep"]["net_saved_bytes"], -1155)
+
+        totals = METRICS.aggregate_windowing_savings(path)["total"]
+        self.assertEqual(totals["saved_bytes"], -1155)
+
+    def test_markdown_renders_negative_channel_savings(self) -> None:
+        """A losing channel must render as a negative number, never as a blank."""
+        markdown = RENDER.render_markdown(
+            {
+                "run_count": 1,
+                "windowing_by_source_tool": {
+                    "ralph_proxy_grep": {
+                        "events": 1,
+                        "inline_candidate_bytes": 6400,
+                        "delivered_bytes": 7555,
+                        "net_consumed_bytes": 7555,
+                        "net_saved_bytes": -1155,
+                        "source_capped_count": 0,
+                        "measurement_quality": "v2_measured",
+                    }
+                },
+                "tool_output_counterfactual": {
+                    "hypothetical_without_ralph_bytes": 6400,
+                    "actual_with_ralph_bytes": 7555,
+                    "net_savings_bytes": -1155,
+                    "net_savings_tokens": -289,
+                    "net_savings_percent": -18.0,
+                },
+            }
+        )
+        self.assertIn("-1,155", markdown)
+        self.assertIn("cost 1,155 bytes", markdown)
+        self.assertIn("-18.0%", markdown)
 
     def test_source_cap_operational_summary_never_estimates_avoided_bytes(self) -> None:
         path = self._write([

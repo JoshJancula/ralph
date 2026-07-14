@@ -117,6 +117,69 @@ ralph_mcp_proxy_result_envelope_guidance_json() {
     }'
 }
 
+# Tools eligible for the slim envelope when their inline candidate already fits
+# under the byte cap.
+#
+# The full envelope costs ~1,155 bytes of scaffolding per result (breakpoints,
+# three nextActions, guidance, compactedRef/rawRef). For grep and read, whose
+# output is already reduced by tool-level limits (head_limit/max_matches,
+# maxReadBytes), that scaffolding routinely exceeds what it saves -- windowing
+# them delivered MORE bytes than inlining would have.
+#
+# Deliberately an allowlist, not a denylist. search and repomap surface match
+# clusters and follow-up actions as their actual product, and shell's envelope
+# carries async continuation affordances; none of them may be slimmed.
+ralph_mcp_proxy_result_tool_supports_slim_envelope() {
+  case "${1:-}" in
+    ralph_proxy_grep|ralph_proxy_read) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Slim envelope: valid JSON with the fields every consumer actually reads
+# (truncated, preview, resultId, byte counts, plus any source-cap metadata), and
+# none of the retrieval scaffolding. Grep dedupe and the result follow-up tools
+# parse the response with fromjson, so the cheap path must stay JSON -- a plain
+# text body would break them.
+ralph_mcp_proxy_result_slim_envelope_build_json() {
+  local preview="${1:-}"
+  local original_bytes="${2:-0}"
+  local returned_bytes="${3:-0}"
+  local result_id="${4:-}"
+  local original_tokens="${5:-}"
+  local returned_tokens="${6:-}"
+  local extra_envelope_json="${7:-}"
+  [[ -n "$result_id" ]] || return 1
+
+  local envelope
+  envelope="$(jq -nc \
+    --arg preview "$preview" \
+    --arg resultId "$result_id" \
+    --argjson originalBytes "$original_bytes" \
+    --argjson returnedBytes "$returned_bytes" \
+    '{
+      truncated: true,
+      preview: $preview,
+      originalBytes: $originalBytes,
+      returnedBytes: $returnedBytes,
+      resultId: $resultId
+    }')" || return 1
+
+  if [[ "$original_tokens" =~ ^[0-9]+$ ]] && [[ "$returned_tokens" =~ ^[0-9]+$ ]]; then
+    envelope="$(jq -c \
+      --argjson originalTokens "$original_tokens" \
+      --argjson returnedTokens "$returned_tokens" \
+      '. + {originalTokens: $originalTokens, returnedTokens: $returnedTokens}' \
+      <<<"$envelope")" || return 1
+  fi
+
+  if [[ -n "$extra_envelope_json" ]]; then
+    envelope="$(jq -c --argjson extra "$extra_envelope_json" '. + $extra' <<<"$envelope" 2>/dev/null || printf '%s' "$envelope")"
+  fi
+
+  printf '%s' "$envelope"
+}
+
 ralph_mcp_proxy_result_compact_view_bias_for_tool() {
   local tool_label="${1:-}"
   case "$tool_label" in

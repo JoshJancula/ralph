@@ -192,6 +192,81 @@ def coerce_warnings(value: Any) -> list[str]:
     return [str(item) for item in value if str(item).strip()]
 
 
+def build_result_windowing_bucket(
+    window_path: str, plan_key: str = ""
+) -> dict[str, int | float]:
+    """Build the result_windowing savings bucket from a result-windowing.jsonl.
+
+    Result windowing savings must reflect what the agent actually consumed.
+    aggregate_windowing_savings handles per-resultId netting (preview plus
+    readbacks, uncapped) and legacy per-line records without a resultId.
+
+    Savings can be negative: when the envelope scaffolding costs more than
+    inlining the result would have, windowing is a net context loss and the
+    bucket must say so.
+
+    This is the single builder for the bucket. The runtime overlay calls it to
+    write plan-usage-summary.json, and the benchmark report calls it to recompute
+    from the log rather than trusting a summary baked by an older build.
+
+    The bucket also carries verified_* / unverified_* sub-tallies, split on
+    measurement quality. Only v2_measured events have an inlineCandidateBytes
+    baseline, so only they support a defensible counterfactual. Legacy records
+    compare against the full stored source -- bytes the tool's own limits would
+    have trimmed before the model ever saw them -- and systematically overstate
+    savings. The headline counts the verified half; the rest is reported
+    separately as an unverifiable historical estimate.
+    """
+    bucket = empty_savings_bucket(include_hidden=True)
+    verified = empty_savings_bucket(include_hidden=True)
+    unverified = empty_savings_bucket(include_hidden=True)
+    aggregated = aggregate_windowing_savings(
+        window_path, estimate_tokens_fn=lambda b: estimate_tokens("x" * b), plan_key=plan_key
+    )
+    for row in aggregated["per_result"]:
+        is_v2 = row.get("measurement_quality") == "v2_measured"
+        row_quality = TOKEN_QUALITY_MEASURED if is_v2 else TOKEN_QUALITY_LEGACY
+        for target in (bucket, verified if is_v2 else unverified):
+            accumulate_savings_event(
+                target,
+                pre_bytes=row["original_bytes"],
+                post_bytes=row["net_post_bytes"],
+                pre_tokens=row["original_tokens"],
+                post_tokens=row["net_post_tokens"],
+                token_cap_trigger=bool(row["token_cap_triggered"]),
+                hidden_from_context=True,
+                token_quality=row_quality,
+            )
+    for entry in aggregated["legacy_events"]:
+        for target in (bucket, unverified):
+            accumulate_savings_event(
+                target,
+                pre_bytes=entry["original_bytes"],
+                post_bytes=entry["returned_bytes"],
+                pre_tokens=entry["original_tokens"],
+                post_tokens=entry["returned_tokens"],
+                token_cap_trigger=bool(entry["token_cap"]),
+                token_quality=TOKEN_QUALITY_LEGACY,
+                hidden_from_context=True,
+            )
+
+    finalize_savings_bucket(bucket)
+    finalize_savings_bucket(verified)
+    finalize_savings_bucket(unverified)
+    for prefix, source in (("verified", verified), ("unverified", unverified)):
+        for field in (
+            "pre_optimization_bytes",
+            "post_optimization_bytes",
+            "saved_bytes",
+            "pre_optimization_tokens",
+            "post_optimization_tokens",
+            "saved_tokens",
+            "count",
+        ):
+            bucket[f"{prefix}_{field}"] = source[field]
+    return bucket
+
+
 def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[str, dict[str, int | float]]:
     """Aggregate byte and estimated-token savings telemetry by optimization path."""
     savings_by_path: dict[str, dict[str, int | float]] = {
@@ -292,41 +367,9 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
 
     window_path = os.path.join(state_dir, "result-windowing.jsonl")
     if os.path.isfile(window_path):
-        window_bucket = savings_by_path["result_windowing"]
-        # Result windowing savings must reflect what the agent actually consumed.
-        # The shared aggregate_windowing_savings module handles per-resultId
-        # netting (preview + readback capped at original bytes/tokens) and legacy
-        # per-line records without resultId.
-        aggregated = aggregate_windowing_savings(
-            window_path, estimate_tokens_fn=lambda b: estimate_tokens("x" * b), plan_key=plan_key
+        savings_by_path["result_windowing"] = build_result_windowing_bucket(
+            window_path, plan_key=plan_key
         )
-        for row in aggregated["per_result"]:
-            row_quality = (
-                TOKEN_QUALITY_MEASURED
-                if row.get("measurement_quality") == "v2_measured"
-                else TOKEN_QUALITY_LEGACY
-            )
-            accumulate_savings_event(
-                window_bucket,
-                pre_bytes=row["original_bytes"],
-                post_bytes=row["net_post_bytes"],
-                pre_tokens=row["original_tokens"],
-                post_tokens=row["net_post_tokens"],
-                token_cap_trigger=bool(row["token_cap_triggered"]),
-                hidden_from_context=True,
-                token_quality=row_quality,
-            )
-        for entry in aggregated["legacy_events"]:
-            accumulate_savings_event(
-                window_bucket,
-                pre_bytes=entry["original_bytes"],
-                post_bytes=entry["returned_bytes"],
-                pre_tokens=entry["original_tokens"],
-                post_tokens=entry["returned_tokens"],
-                token_cap_trigger=bool(entry["token_cap"]),
-                token_quality=TOKEN_QUALITY_LEGACY,
-                hidden_from_context=True,
-            )
 
     for path_name in SAVINGS_PATH_NAMES:
         finalize_savings_bucket(savings_by_path[path_name])

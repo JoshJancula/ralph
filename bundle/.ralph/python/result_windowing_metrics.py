@@ -54,6 +54,27 @@ def _estimate_tokens(bytes_count: int) -> int:
     return max(1, (bytes_count + 3) // 4)
 
 
+def net_consumed(delivered: int, readback: int) -> int:
+    """Units the model actually consumed for one stored result.
+
+    Deliberately unclamped. Windowing can consume more than the inline
+    candidate would have: the envelope scaffolding is itself a cost, and
+    readbacks stack on top of the preview already delivered.
+    """
+    return delivered + readback
+
+
+def net_saved(inline_candidate: int, consumed: int) -> int:
+    """Units saved against the do-nothing baseline. Negative when windowing lost.
+
+    The baseline is the inline candidate -- what would have reached the model
+    had the result been inlined verbatim -- not the stored source. A negative
+    return is a real result, not an error: it means the envelope plus any
+    readbacks cost more context than inlining would have.
+    """
+    return inline_candidate - consumed
+
+
 def _parse_envelope(record: Mapping[str, Any]) -> Dict[str, int] | None:
     result_id = str(record.get("resultId") or "").strip()
     if not result_id:
@@ -252,20 +273,8 @@ def analyze_result_windowing_log(
             if readback["result_id"] == result_id:
                 extra_bytes += readback["returned_bytes"]
                 extra_tokens += readback["returned_tokens"]
-        original_bytes = envelope["original_bytes"]
-        original_tokens = envelope["original_tokens"]
-        consumed_bytes = envelope["returned_bytes"] + extra_bytes
-        consumed_tokens = envelope["returned_tokens"] + extra_tokens
-        net_post_bytes = (
-            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
-        )
-        net_post_tokens = (
-            min(original_tokens, consumed_tokens)
-            if original_tokens > 0
-            else consumed_tokens
-        )
-        net_consumed_bytes += net_post_bytes
-        net_consumed_tokens += net_post_tokens
+        net_consumed_bytes += net_consumed(envelope["returned_bytes"], extra_bytes)
+        net_consumed_tokens += net_consumed(envelope["returned_tokens"], extra_tokens)
 
     readback_count = raw_count + compacted_count
     raw_share = round(raw_count / readback_count, 4) if readback_count else 0.0
@@ -400,16 +409,8 @@ def aggregate_windowing_savings(
         )
         original_bytes = envelope["original_bytes"]
         original_tokens = envelope["original_tokens"]
-        consumed_bytes = envelope["returned_bytes"] + extra["bytes"]
-        consumed_tokens = envelope["returned_tokens"] + extra["tokens"]
-        net_post_bytes = (
-            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
-        )
-        net_post_tokens = (
-            min(original_tokens, consumed_tokens)
-            if original_tokens > 0
-            else consumed_tokens
-        )
+        net_post_bytes = net_consumed(envelope["returned_bytes"], extra["bytes"])
+        net_post_tokens = net_consumed(envelope["returned_tokens"], extra["tokens"])
         per_result.append(
             {
                 "result_id": result_id,
@@ -475,7 +476,8 @@ def aggregate_windowing_by_source_tool(
     """Aggregate v2 result-windowing records by surfaced source tool.
 
     Per tool: events, inlineCandidateBytes (gross), deliveredBytes (gross),
-    netConsumedBytes (post readback, capped at inline candidate), netSavedBytes,
+    netConsumedBytes (post readback, uncapped), netSavedBytes (negative when the
+    envelope plus readbacks cost more than inlining would have),
     sourceCappedCount, and a measurementQuality label ("v2_measured",
     "legacy_storage_counterfactual", or "mixed"). Never treats stored/source
     capture bytes as the hypothetical model input -- inline candidate is the
@@ -509,8 +511,8 @@ def aggregate_windowing_by_source_tool(
         bucket["_qualities"].add(str(row.get("measurement_quality") or "legacy_storage_counterfactual"))
 
     for bucket in by_tool.values():
-        bucket["net_saved_bytes"] = max(
-            0, bucket["inline_candidate_bytes"] - bucket["net_consumed_bytes"]
+        bucket["net_saved_bytes"] = net_saved(
+            bucket["inline_candidate_bytes"], bucket["net_consumed_bytes"]
         )
         qualities = bucket.pop("_qualities")
         if qualities == {"v2_measured"}:
@@ -671,16 +673,8 @@ def aggregate_windowing_savings_by_channel(
         extra_tokens = sum(item["returned_tokens"] for item in result_readbacks)
         original_bytes = envelope["original_bytes"]
         original_tokens = envelope["original_tokens"]
-        consumed_bytes = envelope["returned_bytes"] + extra_bytes
-        consumed_tokens = envelope["returned_tokens"] + extra_tokens
-        net_post_bytes = (
-            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
-        )
-        net_post_tokens = (
-            min(original_tokens, consumed_tokens)
-            if original_tokens > 0
-            else consumed_tokens
-        )
+        net_post_bytes = net_consumed(envelope["returned_bytes"], extra_bytes)
+        net_post_tokens = net_consumed(envelope["returned_tokens"], extra_tokens)
         channel_name, attribution = _resolve_result_channel_target(
             envelope, result_readbacks
         )

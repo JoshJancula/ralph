@@ -126,14 +126,21 @@ def _partition_channels(
 
 
 def _channel_metric(value: Any) -> str:
+    """Render a channel metric. "-" means absent data, never a measured zero.
+
+    Negative values are rendered as-is: a channel whose scaffolding cost more
+    context than it saved must read as a loss, not as a blank.
+    """
     if value is None:
         return "-"
     try:
         numeric = int(value)
     except (TypeError, ValueError):
         return "-"
-    if numeric <= 0:
+    if numeric == 0:
         return "-"
+    if numeric < 0:
+        return "-" + fmt_int(abs(numeric))
     return fmt_int(numeric)
 
 
@@ -344,16 +351,34 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Ralph Savings Report")
     lines.append("")
-    lines.append(
-        f"Across {run_count} plan run{'s' if run_count != 1 else ''}, Ralph's tool-output "
-        f"optimizations netted **{fmt_int(net_savings_bytes)} bytes** "
-        f"(~{fmt_int(net_savings_tokens)} tokens) after stored-result readbacks."
-    )
-    lines.append("")
-    lines.append(
-        f"Of the tool output Ralph inspected, it trimmed {fmt_pct(net_savings_pct)} "
-        "before the AI read it (net of stored-result readbacks)."
-    )
+    run_label = f"{run_count} plan run{'s' if run_count != 1 else ''}"
+    if _as_int(net_savings_bytes) < 0:
+        # Net loss: Ralph's own scaffolding cost more context than it saved.
+        # Say so plainly rather than dressing a negative up as a saving.
+        lines.append(
+            f"Across {run_label}, Ralph's tool-output optimizations **cost "
+            f"{fmt_int(abs(_as_int(net_savings_bytes)))} bytes** "
+            f"(~{fmt_int(abs(_as_int(net_savings_tokens)))} tokens) more than they saved, "
+            "after stored-result readbacks."
+        )
+        lines.append("")
+        lines.append(
+            "Of the tool output Ralph inspected, it **added** "
+            f"{fmt_pct(abs(float(net_savings_pct or 0)))} before the AI read it "
+            "(net of stored-result readbacks). See the per-channel table below for which "
+            "channel is responsible."
+        )
+    else:
+        lines.append(
+            f"Across {run_label}, Ralph's tool-output "
+            f"optimizations netted **{fmt_int(net_savings_bytes)} bytes** "
+            f"(~{fmt_int(net_savings_tokens)} tokens) after stored-result readbacks."
+        )
+        lines.append("")
+        lines.append(
+            f"Of the tool output Ralph inspected, it trimmed {fmt_pct(net_savings_pct)} "
+            "before the AI read it (net of stored-result readbacks)."
+        )
     lines.append("")
     token_quality = str(tool_output.get("token_quality") or "legacy_or_mixed")
     if token_quality == "measured":
@@ -433,6 +458,30 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"**Measured but not applied:** {fmt_int(not_applied)} bytes of compaction savings "
                 "were measured but unavailable in this runtime mode (for example, native-mode runs "
                 "without Ralph proxy)."
+            )
+        lines.append("")
+
+        unverified_bytes = _as_int(tool_output.get("unverified_savings_bytes"))
+        unverified_events = _as_int(tool_output.get("unverified_event_count"))
+        if unverified_bytes or unverified_events:
+            lines.append("## Unverified historical estimate")
+            lines.append("")
+            lines.append(
+                f"A further **{fmt_int(unverified_bytes)} bytes** "
+                f"(~{fmt_int(_as_int(tool_output.get('unverified_savings_tokens')))} tokens) "
+                f"across {fmt_int(unverified_events)} event(s) were recorded by legacy telemetry "
+                "that predates the inline-candidate baseline. **These are excluded from the "
+                "savings figures above and should not be quoted.**"
+            )
+            lines.append("")
+            lines.append(
+                "Legacy records measure savings against the full stored source rather than "
+                "against what would actually have been inlined. Tool-level limits (grep's "
+                "`head_limit`, read's `maxReadBytes`, the result byte caps) would have trimmed "
+                "most of that source before the model ever saw it, so crediting all of it as "
+                "\"saved\" systematically overstates the benefit. The true baseline is not "
+                "recoverable from these records -- which is why the v2 measurement exists. The "
+                "number is shown to make the gap visible, not to be added to the headline."
             )
         lines.append("")
 

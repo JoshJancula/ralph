@@ -1496,33 +1496,62 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   inline_candidate_bytes="${#preview_text}"
   inline_candidate_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$preview_text" 2>/dev/null || true)"
 
-  local needs_envelope=0
+  # Two independent questions, deliberately kept apart:
+  #
+  #   needs_store - is the full source worth keeping for later readback?
+  #   can_slim    - does the inline candidate already fit, on a tool whose
+  #                 envelope carries no irreplaceable affordances?
+  #
+  # Collapsing these is what made windowing a net context loss: a grep whose
+  # head_limit had already reduced the output to well under the cap still got the
+  # full ~1,155-byte envelope purely because the stored source was big, so the
+  # scaffolding cost more than inlining the (already small) output would have.
+  #
+  # Note truncated_flag is hardcoded to 1 by most callers, so it means "store
+  # this", not "this was truncated". It cannot drive the envelope decision.
+  local needs_store=0 needs_envelope=1 can_slim=0
   if [[ "$truncated_flag" == "1" ]]; then
-    needs_envelope=1
+    needs_store=1
   elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
-    needs_envelope=1
+    needs_store=1
   elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "$original_bytes" -gt "$byte_cap" ]]; then
-    needs_envelope=1
+    needs_store=1
   elif [[ "$token_cap" =~ ^[0-9]+$ ]] && [[ "$token_cap" -gt 0 ]] \
     && declare -F ralph_mcp_proxy_result_text_exceeds_token_cap >/dev/null 2>&1 \
     && ralph_mcp_proxy_result_text_exceeds_token_cap "$preview_text" "$token_cap"; then
-    needs_envelope=1
+    needs_store=1
   elif [[ "$token_cap" =~ ^[0-9]+$ ]] && [[ "$token_cap" -gt 0 ]] \
     && declare -F ralph_mcp_proxy_result_text_exceeds_token_cap >/dev/null 2>&1 \
     && ralph_mcp_proxy_result_text_exceeds_token_cap "$storage_text" "$token_cap"; then
-    needs_envelope=1
+    needs_store=1
   fi
+
+  # The slim envelope applies only when the caller-supplied preview would have
+  # been delivered whole anyway -- nothing is being windowed away, so there is
+  # nothing for breakpoints or nextActions to page through.
+  if declare -F ralph_mcp_proxy_result_tool_supports_slim_envelope >/dev/null 2>&1 \
+    && ralph_mcp_proxy_result_tool_supports_slim_envelope "$tool_name"; then
+    can_slim=1
+    if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
+      can_slim=0
+    elif [[ "$token_cap" =~ ^[0-9]+$ ]] && [[ "$token_cap" -gt 0 ]] \
+      && declare -F ralph_mcp_proxy_result_text_exceeds_token_cap >/dev/null 2>&1 \
+      && ralph_mcp_proxy_result_text_exceeds_token_cap "$preview_text" "$token_cap"; then
+      can_slim=0
+    fi
+  fi
+  [[ "$can_slim" -eq 1 ]] && needs_envelope=0
 
   RALPH_MCP_PROXY_LAST_RESULT_ID=""
   RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=0
   export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
 
-  if [[ "$needs_envelope" -eq 0 ]]; then
+  if [[ "$needs_store" -eq 0 ]]; then
     ralph_mcp_proxy_tool_success_json "$preview_text"
     return 0
   fi
 
-  RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=1
+  RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE="$needs_envelope"
   export RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
 
   plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
@@ -1550,6 +1579,67 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
 
   RALPH_MCP_PROXY_LAST_RESULT_ID="$result_id"
   export RALPH_MCP_PROXY_LAST_RESULT_ID
+
+  # Source-cap state, when present, travels in extra_envelope_json (set by
+  # callers like ralph_mcp_proxy_owned_tool_grep). Parse it once here; both the
+  # footer path and the envelope path below need it.
+  local source_capped="" source_cap_reason="" source_cap_limit_bytes=""
+  local source_cap_limit_lines="" source_cap_limit_per_line_bytes=""
+  if [[ -n "$extra_envelope_json" ]] && jq -e '.sourceCapped == true' <<<"$extra_envelope_json" >/dev/null 2>&1; then
+    source_capped="true"
+    source_cap_reason="$(jq -r '.sourceCapReason // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_bytes="$(jq -r '.sourceCapLimitBytes // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_lines="$(jq -r '.sourceCapLimitLines // empty' <<<"$extra_envelope_json")"
+    source_cap_limit_per_line_bytes="$(jq -r '.sourceCapLimitPerLineBytes // empty' <<<"$extra_envelope_json")"
+  fi
+
+  # The inline candidate already fits, so the result is stored for readback but
+  # delivered in a slim envelope: same JSON contract, none of the retrieval
+  # scaffolding. Building the full envelope here would deliver more bytes than
+  # inlining the preview did, which is the defect this path exists to fix.
+  if [[ "$needs_envelope" -eq 0 ]]; then
+    local slim_json delivered_text delivered_bytes delivered_tokens
+    original_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$storage_text" 2>/dev/null || true)"
+    returned_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$preview_text" 2>/dev/null || true)"
+
+    slim_json="$(ralph_mcp_proxy_result_slim_envelope_build_json \
+      "$preview_text" "$original_bytes" "${#preview_text}" "$result_id" \
+      "$original_tokens" "$returned_tokens" "$extra_envelope_json" 2>/dev/null || true)"
+    if [[ -z "$slim_json" ]]; then
+      ralph_mcp_proxy_tool_success_json "$preview_text"
+      return 0
+    fi
+    delivered_text="$slim_json"
+
+    if declare -F ralph_hook_telemetry_utf8_byte_count >/dev/null 2>&1; then
+      delivered_bytes="$(ralph_hook_telemetry_utf8_byte_count "$delivered_text" 2>/dev/null || true)"
+    fi
+    if [[ -z "$delivered_bytes" ]]; then
+      delivered_bytes="$(printf '%s' "$delivered_text" | wc -c | tr -d ' ')"
+    fi
+    delivered_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$delivered_text" 2>/dev/null || true)"
+
+    ralph_mcp_proxy_append_windowing_telemetry \
+      "$workspace" \
+      "$tool_name" \
+      "$original_bytes" \
+      "${#preview_text}" \
+      "$original_tokens" \
+      "$returned_tokens" \
+      "$byte_cap" \
+      "$result_id" \
+      "$inline_candidate_bytes" \
+      "$inline_candidate_tokens" \
+      "$delivered_bytes" \
+      "$delivered_tokens" \
+      "$source_capped" \
+      "$source_cap_reason" \
+      "$source_cap_limit_bytes" \
+      "$source_cap_limit_lines" \
+      "$source_cap_limit_per_line_bytes"
+    ralph_mcp_proxy_tool_success_json "$delivered_text"
+    return 0
+  fi
 
   preview="$preview_text"
   returned_bytes=${#preview_text}
@@ -1627,19 +1717,6 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
     delivered_bytes="$(printf '%s' "$compact_text" | wc -c | tr -d ' ')"
   fi
   delivered_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$compact_text" 2>/dev/null || true)"
-
-  # Source-cap state, when present, travels in extra_envelope_json (set by
-  # callers like ralph_mcp_proxy_owned_tool_grep). Reuse it here rather than
-  # threading yet more positional args through this function.
-  local source_capped="" source_cap_reason="" source_cap_limit_bytes=""
-  local source_cap_limit_lines="" source_cap_limit_per_line_bytes=""
-  if [[ -n "$extra_envelope_json" ]] && jq -e '.sourceCapped == true' <<<"$extra_envelope_json" >/dev/null 2>&1; then
-    source_capped="true"
-    source_cap_reason="$(jq -r '.sourceCapReason // empty' <<<"$extra_envelope_json")"
-    source_cap_limit_bytes="$(jq -r '.sourceCapLimitBytes // empty' <<<"$extra_envelope_json")"
-    source_cap_limit_lines="$(jq -r '.sourceCapLimitLines // empty' <<<"$extra_envelope_json")"
-    source_cap_limit_per_line_bytes="$(jq -r '.sourceCapLimitPerLineBytes // empty' <<<"$extra_envelope_json")"
-  fi
 
   ralph_mcp_proxy_append_windowing_telemetry \
     "$workspace" \

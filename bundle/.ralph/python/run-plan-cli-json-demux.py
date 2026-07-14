@@ -810,6 +810,20 @@ def _write_lines(fd: Any, lines: List[str]) -> None:
         fd.write(line + "\n")
 
 
+def _persist_session_id(path: str, sid: str) -> None:
+    # Write through immediately rather than only at stream close: if this
+    # process is killed (e.g. the runner's process-group teardown on an
+    # invocation timeout) before EOF, a session id captured earlier in the
+    # stream must not be lost with it -- losing it silently degrades the
+    # next invocation's resume attempt to a from-scratch fresh run.
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(sid + "\n")
+    except OSError:
+        pass
+
+
 def _raw_output_log_path(compact_log_path: str) -> str:
     explicit_path = os.environ.get("RALPH_PLAN_RAW_OUTPUT_LOG_PATH", "").strip()
     if explicit_path:
@@ -855,6 +869,7 @@ def main() -> None:
     output_log_path = sys.argv[4] if len(sys.argv) > 4 else ""
     pretty = len(sys.argv) > 5 and sys.argv[5] == "1"
     sid: Optional[str] = None
+    sid_written = False
     output_log = None
     raw_output_log = None
     renderer = None
@@ -1001,6 +1016,9 @@ def main() -> None:
             # Suppress this metadata line so resumed plan logs are less noisy.
             if sid is None and path:
                 sid = session_id_from(o, mode)
+                if sid and not sid_written:
+                    _persist_session_id(path, sid)
+                    sid_written = True
             extract_usage(o, mode, usage_acc)
             extract_tool_calls(o, mode, usage_acc)
             continue
@@ -1011,6 +1029,9 @@ def main() -> None:
                 pass
         if sid is None and path:
             sid = session_id_from(o, mode)
+            if sid and not sid_written:
+                _persist_session_id(path, sid)
+                sid_written = True
         extract_usage(o, mode, usage_acc)
         extract_tool_calls(o, mode, usage_acc)
         texts = extract_text(o, mode)
@@ -1065,13 +1086,8 @@ def main() -> None:
         raw_output_log.close()
     if opencode_usage_log is not None:
         opencode_usage_log.close()
-    if sid and path:
-        try:
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(sid + "\n")
-        except OSError:
-            pass
+    if sid and path and not sid_written:
+        _persist_session_id(path, sid)
     finalize_usage(usage_acc, mode)
     cache_read_per_turn, cache_read_per_call = compute_cache_read_ratios(usage_acc)
     usage_acc["cache_read_per_tool_turn"] = cache_read_per_turn

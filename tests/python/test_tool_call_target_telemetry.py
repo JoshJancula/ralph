@@ -309,13 +309,13 @@ class TestToolCallTargetTelemetry(unittest.TestCase):
         self.assertEqual(stats["envelope_count"], 1)
         self.assertEqual(stats["readback_count"], 1)
 
-    def test_readback_negation_rate_can_exceed_one_but_net_savings_zero(self) -> None:
-        """Gross readback can exceed original, but net savings is capped at zero.
+    def test_readback_negation_rate_can_exceed_one_and_net_savings_goes_negative(self) -> None:
+        """Gross readback can exceed original, driving net savings below zero.
 
         With per-resultId netting, preview bytes plus follow-up readback bytes
-        are capped at the original envelope bytes before savings are computed.
-        Gross readback/original can therefore exceed 1.0 while the effective
-        windowing savings rate is exactly 0.
+        are summed uncapped: the agent really did consume all of them. When that
+        total exceeds the inline baseline, windowing was a net context loss and
+        the effective savings rate is negative.
         """
         lines = [
             {
@@ -347,8 +347,10 @@ class TestToolCallTargetTelemetry(unittest.TestCase):
             Path(path).unlink(missing_ok=True)
 
         self.assertGreater(stats["gross_readback_bytes"] / stats["envelope_original_bytes"], 1.0)
-        self.assertEqual(stats["net_consumed_bytes"], 1000)
-        self.assertEqual(stats["effective_windowing_savings_rate"], 0.0)
+        # 100 preview + 600 compacted + 800 raw = 1500 consumed for a 1000-byte
+        # baseline: a 500-byte loss, or -50%.
+        self.assertEqual(stats["net_consumed_bytes"], 1500)
+        self.assertEqual(stats["effective_windowing_savings_rate"], -0.5)
 
     def test_shell_status_poll_count_zero_when_no_tool_calls_by_tool(self) -> None:
         self.assertEqual(_shell_status_poll_count({}), 0)

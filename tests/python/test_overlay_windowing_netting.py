@@ -57,7 +57,7 @@ class TestWindowingNetting(unittest.TestCase):
         self.assertEqual(bucket["saved_bytes"], 950)
         self.assertEqual(bucket["count"], 1)
 
-    def test_raw_escalation_collapses_savings(self) -> None:
+    def test_raw_escalation_makes_savings_negative(self) -> None:
         self._write_window_log(
             [
                 {
@@ -79,9 +79,11 @@ class TestWindowingNetting(unittest.TestCase):
         )
         bucket = self._windowing_bucket()
         self.assertEqual(bucket["pre_optimization_bytes"], 1000)
-        # consumed = 50 preview + 1000 raw, capped at original 1000 -> saved 0.
-        self.assertEqual(bucket["saved_bytes"], 0)
-        self.assertEqual(bucket["saved_tokens"], 0)
+        # The agent consumed the 50-byte preview AND then read the full 1000-byte
+        # raw source: 1050 against a 1000-byte inline baseline. Windowing lost 50
+        # bytes here, and the bucket must report the loss rather than floor at 0.
+        self.assertEqual(bucket["saved_bytes"], -50)
+        self.assertEqual(bucket["saved_tokens"], -12)
 
     def test_partial_readback_nets_proportionally(self) -> None:
         self._write_window_log(

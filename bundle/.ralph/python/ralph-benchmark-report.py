@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from ralph_overlay_usage_fields import (
     aggregate_byte_savings_by_channel,
     aggregate_telemetry_unattributed,
+    build_result_windowing_bucket,
 )
 from result_windowing_metrics import (
     WINDOWING_CHANNEL_NAMES,
@@ -27,6 +28,8 @@ from result_windowing_metrics import (
     aggregate_source_cap_operational_summary,
     aggregate_windowing_by_source_tool,
     aggregate_windowing_savings,
+    net_consumed,
+    net_saved,
 )
 from token_estimate import estimate_tokens
 from tool_call_classification import (
@@ -98,7 +101,15 @@ def _empty_paths() -> dict[str, dict[str, int | float]]:
 
 
 def _merge_bucket(target: dict[str, int | float], source: Mapping[str, Any]) -> None:
-    for key in target:
+    # The verified_/unverified_ measurement-quality split is not part of the
+    # empty-bucket template, so it must be merged explicitly or it is dropped and
+    # the headline silently falls back to counting legacy savings. Build the key
+    # set once: merging in two passes double-counts these fields on the second
+    # call, once the first call has added them to target.
+    keys = set(target) | {
+        key for key in source if key.startswith(("verified_", "unverified_"))
+    }
+    for key in keys:
         if key in source:
             target[key] = _as_int(target.get(key)) + _as_int(source.get(key))
 
@@ -368,20 +379,10 @@ def _windowing_readback_by_channel(
         result_readbacks = grouped_readbacks.get(result_id, [])
         extra_bytes = sum(_as_int(item.get("returned_bytes")) for item in result_readbacks)
         extra_tokens = sum(_as_int(item.get("returned_tokens")) for item in result_readbacks)
-        original_bytes = _as_int(envelope.get("original_bytes"))
-        original_tokens = _as_int(envelope.get("original_tokens"))
         preview_bytes = _as_int(envelope.get("returned_bytes"))
         preview_tokens = _as_int(envelope.get("returned_tokens"))
-        consumed_bytes = preview_bytes + extra_bytes
-        consumed_tokens = preview_tokens + extra_tokens
-        net_post_bytes = (
-            min(original_bytes, consumed_bytes) if original_bytes > 0 else consumed_bytes
-        )
-        net_post_tokens = (
-            min(original_tokens, consumed_tokens)
-            if original_tokens > 0
-            else consumed_tokens
-        )
+        net_post_bytes = net_consumed(preview_bytes, extra_bytes)
+        net_post_tokens = net_consumed(preview_tokens, extra_tokens)
         channel_name, _attribution = _resolve_result_channel_target(envelope, result_readbacks)
         if channel_name not in stats:
             continue
@@ -597,7 +598,6 @@ def _enrich_path_diagnostics(
 
 def _build_tool_output_counterfactual(
     per_path: Mapping[str, Mapping[str, Any]],
-    windowing_totals: Mapping[str, int],
     compaction_measured_not_applied_bytes: int,
 ) -> dict[str, Any]:
     """Compute with-vs-without-Ralph byte/token counterfactuals.
@@ -607,55 +607,58 @@ def _build_tool_output_counterfactual(
     the post-optimization tool output plus the net bytes agents re-consumed via
     stored-result readbacks, because those readbacks are real tool-output bytes
     consumed even with Ralph present.
+
+    Only verified savings reach the headline. A bucket exposing verified_* fields
+    (today: result_windowing) contributes only its v2-measured half, because
+    legacy windowing records have no inlineCandidateBytes baseline -- they credit
+    the entire stored source as "saved" when the tool's own limits would have
+    trimmed it long before the model saw it. The legacy remainder is returned as
+    unverified_* and reported separately rather than counted.
+
+    Compaction paths have no such split: they compare real command output against
+    the compacted output actually delivered, which is already the true baseline.
     """
     hypothetical_without_ralph_bytes = 0
     actual_with_ralph_bytes = 0
     hypothetical_without_ralph_tokens = 0
     actual_with_ralph_tokens = 0
+    unverified_savings_bytes = 0
+    unverified_savings_tokens = 0
+    unverified_event_count = 0
     any_legacy_token_quality = False
     for path_name in SAVINGS_PATH_NAMES:
         bucket = per_path.get(path_name) or {}
-        pre = _as_int(bucket.get("pre_optimization_bytes"))
-        post = _as_int(bucket.get("post_optimization_bytes"))
+        has_split = bucket.get("verified_pre_optimization_bytes") is not None
+        if has_split:
+            pre = _as_int(bucket.get("verified_pre_optimization_bytes"))
+            post = _as_int(bucket.get("verified_post_optimization_bytes"))
+            pre_tokens = _as_int(bucket.get("verified_pre_optimization_tokens"))
+            post_tokens = _as_int(bucket.get("verified_post_optimization_tokens"))
+            unverified_savings_bytes += _as_int(bucket.get("unverified_saved_bytes"))
+            unverified_savings_tokens += _as_int(bucket.get("unverified_saved_tokens"))
+            unverified_event_count += _as_int(bucket.get("unverified_count"))
+        else:
+            pre = _as_int(bucket.get("pre_optimization_bytes"))
+            post = _as_int(bucket.get("post_optimization_bytes"))
+            # Use the same per-path token totals shown in run details -- these
+            # come from Ralph's dependency-free estimator run over the actual
+            # text (or, for legacy records, a bytes/4 fallback already baked into
+            # the bucket) -- rather than re-deriving tokens from summed bytes.
+            pre_tokens = _as_int(bucket.get("pre_optimization_tokens"))
+            post_tokens = _as_int(bucket.get("post_optimization_tokens"))
         hypothetical_without_ralph_bytes += pre
         actual_with_ralph_bytes += post
-        # Use the same per-path token totals shown in run details -- these
-        # come from Ralph's dependency-free estimator run over the actual
-        # text (or, for legacy records, a bytes/4 fallback already baked into
-        # the bucket) -- rather than re-deriving tokens from summed bytes.
-        hypothetical_without_ralph_tokens += _as_int(bucket.get("pre_optimization_tokens"))
-        actual_with_ralph_tokens += _as_int(bucket.get("post_optimization_tokens"))
+        hypothetical_without_ralph_tokens += pre_tokens
+        actual_with_ralph_tokens += post_tokens
         if str(bucket.get("token_quality") or "") in ("legacy_bytes_div4", "mixed"):
             any_legacy_token_quality = True
 
-    # Result-windowing buckets already reflect net post in saved_bytes, but we
-    # can derive a cleaner counterfactual from the explicit summary windowing
-    # totals when they exist. Fall back to per_path post when missing.
-    window_original = _as_int(windowing_totals.get("original_bytes"))
-    window_returned = _as_int(windowing_totals.get("returned_bytes"))
-    window_original_tokens = _as_int(windowing_totals.get("original_tokens"))
-    window_returned_tokens = _as_int(windowing_totals.get("returned_tokens"))
-    if window_original > 0:
-        hypothetical_without_ralph_bytes += window_original - _as_int(
-            per_path.get("result_windowing", {}).get("pre_optimization_bytes", 0)
-        )
-        actual_with_ralph_bytes += window_returned - _as_int(
-            per_path.get("result_windowing", {}).get("post_optimization_bytes", 0)
-        )
-        hypothetical_without_ralph_tokens += window_original_tokens - _as_int(
-            per_path.get("result_windowing", {}).get("pre_optimization_tokens", 0)
-        )
-        actual_with_ralph_tokens += window_returned_tokens - _as_int(
-            per_path.get("result_windowing", {}).get("post_optimization_tokens", 0)
-        )
-    # When the summary does not include explicit original/returned windowing
-    # totals, reconcile the per-path windowing bucket with net readback cost so
-    # actual_with_ralph includes bytes agents re-consumed via readbacks.
-    elif per_path.get("result_windowing", {}).get("pre_optimization_bytes", 0) > 0:
-        rw = per_path["result_windowing"]
-        net_readback_cost = _as_int(rw.get("net_readback_cost_bytes"))
-        actual_with_ralph_bytes += max(0, net_readback_cost)
-        actual_with_ralph_tokens += _estimate_tokens_from_bytes(max(0, net_readback_cost))
+    # The result_windowing bucket is recomputed from result-windowing.jsonl and
+    # its post_optimization_bytes is already net consumed -- delivered envelope
+    # plus every readback the agent made against it. The loop above therefore
+    # has the whole story. Earlier builds preferred the summary's explicit
+    # windowing totals here, but those count only the delivered preview and omit
+    # readbacks entirely, which understates what the model actually consumed.
 
     actual_with_ralph_bytes = max(actual_with_ralph_bytes, 0)
     hypothetical_without_ralph_bytes = max(hypothetical_without_ralph_bytes, 0)
@@ -674,8 +677,15 @@ def _build_tool_output_counterfactual(
         actual_with_ralph_tokens = _estimate_tokens_from_bytes(actual_with_ralph_bytes)
         any_legacy_token_quality = True
 
-    net_savings_bytes = max(0, hypothetical_without_ralph_bytes - actual_with_ralph_bytes)
-    net_savings_tokens = max(0, hypothetical_without_ralph_tokens - actual_with_ralph_tokens)
+    # Unclamped on purpose. When Ralph's own scaffolding costs more context than
+    # it saves, the report has to be able to say so; flooring at zero turns a
+    # measured loss into a silent wash.
+    net_savings_bytes = net_saved(
+        hypothetical_without_ralph_bytes, actual_with_ralph_bytes
+    )
+    net_savings_tokens = net_saved(
+        hypothetical_without_ralph_tokens, actual_with_ralph_tokens
+    )
 
     # Include compaction savings that were measured but could not be applied in
     # this run mode (e.g. native-mode runs without proxy) as additional counter-
@@ -703,6 +713,12 @@ def _build_tool_output_counterfactual(
         "compaction_measured_not_applied_bytes": counterfactual_opportunity_bytes,
         "compaction_measured_not_applied_tokens": counterfactual_opportunity_tokens,
         "token_quality": "legacy_or_mixed" if any_legacy_token_quality else "measured",
+        # Recorded by legacy telemetry with no inline-candidate baseline. Not
+        # counted in net_savings_* above; surfaced so the figure is visible
+        # rather than silently folded into a number it cannot support.
+        "unverified_savings_bytes": unverified_savings_bytes,
+        "unverified_savings_tokens": unverified_savings_tokens,
+        "unverified_event_count": unverified_event_count,
     }
 
 
@@ -887,6 +903,13 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         windowing_log = _windowing_log_for_summary(path)
         plan_key = _summary_plan_key(summary, path)
         if windowing_log is not None:
+            # The summary's stored result_windowing bucket is a cache written at
+            # run time. The jsonl is ground truth, so recompute from it: summaries
+            # baked by an older build floored savings at zero and would otherwise
+            # keep reporting a loss as a wash.
+            summary_paths["result_windowing"] = build_result_windowing_bucket(
+                str(windowing_log), plan_key=plan_key
+            )
             readback_stats = analyze_result_windowing_log(
                 windowing_log, plan_key=plan_key
             )
@@ -925,13 +948,15 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
                 windowing_log, estimate_tokens_fn=_estimate_tokens_from_bytes, plan_key=plan_key
             )
             for row in run_windowing_full["per_result"]:
-                net_saved = max(
-                    0, _as_int(row.get("original_bytes")) - _as_int(row.get("net_post_bytes"))
+                # Dominance measures concentration of savings, so only positive
+                # events are candidates; a net-negative event cannot dominate.
+                event_net_saved = net_saved(
+                    _as_int(row.get("original_bytes")), _as_int(row.get("net_post_bytes"))
                 )
-                if net_saved > 0:
+                if event_net_saved > 0:
                     dominance_events.append(
                         {
-                            "net_saved_bytes": net_saved,
+                            "net_saved_bytes": event_net_saved,
                             "surfaced_tool": row.get("surfaced_tool", "unknown"),
                             "measurement_quality": row.get(
                                 "measurement_quality", "legacy_storage_counterfactual"
@@ -1006,7 +1031,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
         )
         _enrich_channel_diagnostics(run_channels, run_readback_by_channel)
         run_tool_output = _build_tool_output_counterfactual(
-            summary_paths, run_windowing_totals, _as_int(summary.get("compaction_measured_not_applied_bytes"))
+            summary_paths, _as_int(summary.get("compaction_measured_not_applied_bytes"))
         )
         runs.append(
             {
@@ -1131,7 +1156,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
     )
 
     tool_output_counterfactual = _build_tool_output_counterfactual(
-        per_path, aggregate_windowing_totals, could_have_saved_bytes
+        per_path, could_have_saved_bytes
     )
 
     savings_percent = round((saved_bytes / pre_optimization_bytes) * 100, 1) if pre_optimization_bytes > 0 else 0
@@ -1206,7 +1231,9 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
 
     windowing_by_source_tool_final: dict[str, dict[str, Any]] = {}
     for tool_name, bucket in windowing_by_source_tool.items():
-        net_saved = max(0, bucket["inline_candidate_bytes"] - bucket["net_consumed_bytes"])
+        tool_net_saved = net_saved(
+            bucket["inline_candidate_bytes"], bucket["net_consumed_bytes"]
+        )
         qualities = bucket["_qualities"]
         if qualities == {"v2_measured"}:
             quality = "v2_measured"
@@ -1219,7 +1246,7 @@ def build_report(paths: Sequence[str]) -> dict[str, Any]:
             "inline_candidate_bytes": bucket["inline_candidate_bytes"],
             "delivered_bytes": bucket["delivered_bytes"],
             "net_consumed_bytes": bucket["net_consumed_bytes"],
-            "net_saved_bytes": net_saved,
+            "net_saved_bytes": tool_net_saved,
             "source_capped_count": bucket["source_capped_count"],
             "measurement_quality": quality,
         }

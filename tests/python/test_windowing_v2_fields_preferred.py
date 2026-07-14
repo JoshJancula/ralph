@@ -68,7 +68,7 @@ class TestWindowingV2FieldsPreferred(unittest.TestCase):
         self.assertEqual(row["returned_bytes"], 4900)
         self.assertGreater(row["returned_bytes"], 4000)
 
-    def test_readbacks_still_reduce_net_savings_for_v2_records(self) -> None:
+    def test_readbacks_drive_v2_net_savings_negative(self) -> None:
         path = self._write([
             {
                 "event": "envelope", "toolName": "Read", "resultId": "c" * 16,
@@ -84,9 +84,15 @@ class TestWindowingV2FieldsPreferred(unittest.TestCase):
         ])
         result = METRICS.aggregate_windowing_savings(path)
         row = result["per_result"][0]
-        # Net post bytes capped at original (inline-candidate) bytes: full
-        # raw readback should collapse net savings toward zero.
-        self.assertEqual(row["net_post_bytes"], row["original_bytes"])
+        # The agent paid for the 4,900-byte envelope and then read the full
+        # 48,000-byte raw source anyway: 52,900 consumed against a 48,000-byte
+        # inline baseline. Windowing cost 4,900 bytes -- exactly the envelope
+        # scaffolding -- and net_post_bytes is not capped at the baseline.
+        self.assertEqual(row["original_bytes"], 48000)
+        self.assertEqual(row["net_post_bytes"], 52900)
+        self.assertEqual(
+            result["total"]["saved_bytes"], -4900
+        )
 
     def test_legacy_record_retains_old_numeric_output_with_quality_label(self) -> None:
         path = self._write([

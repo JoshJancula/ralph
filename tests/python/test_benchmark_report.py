@@ -477,7 +477,7 @@ class TestSavingsReport(unittest.TestCase):
         self.assertEqual(session["prompt_bytes"], 360)
         self.assertEqual(session["tool_calls_total"], 15)
 
-    def test_multi_readback_gross_exceeds_one_but_net_savings_is_zero(self) -> None:
+    def test_multi_readback_gross_exceeds_one_and_net_savings_is_negative(self) -> None:
         """Gross readback can exceed 100%; the report reports net savings as primary."""
         from tool_call_target_telemetry import analyze_result_windowing_log
 
@@ -537,10 +537,15 @@ class TestSavingsReport(unittest.TestCase):
         runtime_config_dir = self.tmp_dir.resolve() / "runtime-config" / plan_key
         runtime_config_dir.mkdir(parents=True, exist_ok=True)
         log_path = runtime_config_dir / "result-windowing.jsonl"
+        # v2-measured, so the loss is verifiable and reaches the headline. A
+        # legacy record would be quarantined as an unverified estimate instead
+        # (see test_legacy_windowing_is_excluded_from_the_headline).
         with log_path.open("w", encoding="utf-8") as handle:
             for record in [
-                {"event": "envelope", "resultId": "r1",
-                 "originalBytes": 1000, "returnedBytes": 100},
+                {"event": "envelope", "resultId": "r1", "measurementVersion": 2,
+                 "originalBytes": 5000, "returnedBytes": 100,
+                 "inlineCandidateBytes": 1000, "inlineCandidateTokens": 250,
+                 "deliveredBytes": 100, "deliveredTokens": 25},
                 {"event": "readback", "resultId": "r1", "view": "compacted",
                  "returnedBytes": 600},
                 {"event": "readback", "resultId": "r1", "view": "raw",
@@ -555,24 +560,71 @@ class TestSavingsReport(unittest.TestCase):
         stats = analyze_result_windowing_log(str(log_path))
         self.assertGreater(stats["readback_negation_rate"], 1.0)
 
-        # The benchmark report surfaces effective_windowing_savings_rate as the
-        # primary signal and caps net consumed bytes at original bytes.
-        self.assertEqual(report["per_path"]["result_windowing"]["saved_bytes"], 0)
+        # The agent consumed the 100-byte preview plus 600 + 800 bytes of readback
+        # against a 1000-byte inline baseline: 1500 consumed for 1000 of value.
+        # Net consumed is not capped at the baseline, so the 500-byte loss is
+        # reported as a loss rather than floored to a wash.
+        self.assertEqual(report["per_path"]["result_windowing"]["saved_bytes"], -500)
         self.assertEqual(
             report["per_path"]["result_windowing"]["status"], "negated"
         )
-        self.assertEqual(report["saved_bytes"], 0)
+        self.assertEqual(report["saved_bytes"], -500)
         readback = report["readback_summary"]
         self.assertGreater(readback["readback_negation_rate"], 1.0)
-        self.assertEqual(readback["effective_windowing_savings_rate"], 0.0)
-        self.assertEqual(readback["net_consumed_bytes"], 1000)
+        self.assertEqual(readback["effective_windowing_savings_rate"], -0.5)
+        self.assertEqual(readback["net_consumed_bytes"], 1500)
         self.assertEqual(readback["gross_readback_bytes"], 1400)
         self.assertEqual(
-            report["tool_output_counterfactual"]["net_savings_bytes"], 0
+            report["tool_output_counterfactual"]["net_savings_bytes"], -500
         )
         self.assertEqual(
-            report["tool_output_counterfactual"]["net_savings_percent"], 0.0
+            report["tool_output_counterfactual"]["net_savings_percent"], -50.0
         )
+        # A v2-measured loss is verifiable, so nothing is quarantined.
+        self.assertEqual(
+            report["tool_output_counterfactual"]["unverified_savings_bytes"], 0
+        )
+
+    def test_legacy_windowing_is_excluded_from_the_headline(self) -> None:
+        """Legacy records credit the whole stored source as saved. Quarantine them.
+
+        A legacy envelope has no inlineCandidateBytes, so its baseline is the full
+        captured source -- bytes the tool's own limits would have trimmed before
+        the model saw them. Counting that as savings is what produced Ralph's
+        1.12 GB / 99.7% headline. The headline must ignore it and say so.
+        """
+        run_dir = self.tmp_dir / "logs" / "legacy-plan"
+        summary = {
+            "plan_key": "legacy-plan",
+            "invocations": 1,
+            "started_at": "2026-05-02T00:00:00Z",
+            "ended_at": "2026-05-02T01:00:00Z",
+        }
+        summary_path = self._write_summary(run_dir, summary)
+
+        runtime_config_dir = self.tmp_dir.resolve() / "runtime-config" / "legacy-plan"
+        runtime_config_dir.mkdir(parents=True, exist_ok=True)
+        log_path = runtime_config_dir / "result-windowing.jsonl"
+        with log_path.open("w", encoding="utf-8") as handle:
+            # 5 MB stored source, 500-byte preview. Legacy math calls that a
+            # 4,999,500-byte saving; in truth the tool would never have inlined
+            # 5 MB, and no field here records what it would have inlined.
+            handle.write(json.dumps({
+                "event": "envelope", "resultId": "r1",
+                "originalBytes": 5_000_000, "returnedBytes": 500,
+            }) + "\n")
+
+        report = self.report_module.build_report([str(summary_path)])
+        counterfactual = report["tool_output_counterfactual"]
+
+        self.assertEqual(counterfactual["net_savings_bytes"], 0)
+        self.assertEqual(counterfactual["net_savings_percent"], 0.0)
+        self.assertEqual(counterfactual["unverified_savings_bytes"], 4_999_500)
+        self.assertEqual(counterfactual["unverified_event_count"], 1)
+
+        bucket = report["per_path"]["result_windowing"]
+        self.assertEqual(bucket["verified_count"], 0)
+        self.assertEqual(bucket["unverified_count"], 1)
 
     def test_build_report_scopes_windowing_log_to_matching_plan_key(self) -> None:
         run_dir = self.tmp_dir / "logs" / "plan-a"
@@ -1175,7 +1227,11 @@ class TestSavingsReport(unittest.TestCase):
         expected = {
             "schema_version": 2,
             "run_count": 2,
-            "saved_bytes": 1180,
+            # Windowing is recomputed from the log, not read from the summary's
+            # stored bucket: 1000 baseline against 200 delivered + 150 readback
+            # = 650 saved, not the 800 the summary claims by ignoring readbacks.
+            # 200 + 100 + 80 (compaction) + 650 = 1030.
+            "saved_bytes": 1030,
             "session_usage": {
                 "input_tokens": 800,
                 "output_tokens": 100,
@@ -1187,12 +1243,17 @@ class TestSavingsReport(unittest.TestCase):
                 "total_input_tokens": 1000,
                 "cache_efficiency_ratio": 0.15,
             },
+            # The windowing records in this fixture are legacy (no
+            # measurementVersion), so they are excluded from the counterfactual
+            # entirely: hypothetical drops the 1,000-byte windowing baseline and
+            # actual drops its 350 net-consumed bytes, leaving compaction only.
             "tool_output_counterfactual": {
-                "hypothetical_without_ralph_bytes": 1900,
-                "actual_with_ralph_bytes": 870,
-                "net_savings_bytes": 1180,
-                "net_savings_percent": 62.1,
+                "hypothetical_without_ralph_bytes": 900,
+                "actual_with_ralph_bytes": 520,
+                "net_savings_bytes": 380,
+                "net_savings_percent": 42.2,
                 "compaction_measured_not_applied_bytes": 64,
+                "unverified_savings_bytes": 650,
             },
             "readback_summary": {
                 "envelope_count": 1,
@@ -1224,12 +1285,15 @@ class TestSavingsReport(unittest.TestCase):
             counterfactual["hypothetical_without_ralph_bytes"],
             expected["tool_output_counterfactual"]["hypothetical_without_ralph_bytes"],
         )
-        # The aggregate report uses explicit windowing totals (original=1000,
-        # returned=200) for the counterfactual, so the readback cost is already
-        # folded into returned_bytes and actual_with_ralph stays at 720.
-        self.assertEqual(counterfactual["actual_with_ralph_bytes"], 720)
-        self.assertEqual(counterfactual["net_savings_bytes"], 1180)
-        self.assertEqual(counterfactual["net_savings_percent"], 62.1)
+        # The windowing records here are legacy, so they are quarantined: the
+        # headline counts compaction only, and the 650 bytes of legacy windowing
+        # "savings" are reported separately as an unverifiable estimate.
+        self.assertEqual(counterfactual["actual_with_ralph_bytes"], 520)
+        self.assertEqual(counterfactual["net_savings_bytes"], 380)
+        self.assertEqual(counterfactual["net_savings_percent"], 42.2)
+        self.assertEqual(counterfactual["unverified_savings_bytes"], 650)
+        # per_path still reports the full picture; only the headline is gated.
+        self.assertEqual(report["per_path"]["result_windowing"]["saved_bytes"], 650)
         self.assertEqual(
             counterfactual["compaction_measured_not_applied_bytes"], 64
         )

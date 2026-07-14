@@ -174,7 +174,9 @@ class TestCompactArtifactRetrieval(unittest.TestCase):
             Path(path).unlink(missing_ok=True)
 
         self.assertEqual(stats["raw_readback_count"], 1)
-        self.assertEqual(stats["net_consumed_bytes"], 500)
+        # 100-byte preview plus a 500-byte raw readback: the agent consumed 600
+        # against a 500-byte baseline, so windowing cost 100 bytes net.
+        self.assertEqual(stats["net_consumed_bytes"], 600)
 
     def test_stored_result_readback_guidance_with_high_rereads(self) -> None:
         text = stored_result_readback_guidance(
