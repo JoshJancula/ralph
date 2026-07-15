@@ -382,6 +382,12 @@ markdown="$(printf '%s' "$report_json" | python3 "$SCRIPT_DIR/python/render-benc
 printf '%s\n' "$markdown"
 
 if [[ "$write_doc" -eq 1 ]]; then
+  # If --output points at an existing directory (or a trailing-slash path),
+  # write the default report filename inside it instead of failing on the
+  # redirect with "Is a directory".
+  if [[ -d "$output" || "$output" == */ ]]; then
+    output="${output%/}/$(basename "$REPO_DOCS_DEFAULT")"
+  fi
   mkdir -p "$(dirname "$output")"
   printf '%s\n' "$markdown" >"$output"
   echo "Wrote benchmark report to $output" >&2

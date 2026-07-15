@@ -523,9 +523,31 @@ def cmd_frontmatter(path: str) -> None:
         print(json.dumps(entry, separators=(',', ':')))
 
 
+def cmd_config_servers(path: str) -> None:
+    """Emit normalized mcp_servers declared in an agent config.json.
+
+    Dual-file agents carry mcp_servers in config.json rather than in the
+    generated native session .md frontmatter. Output matches --frontmatter
+    (one compact, non-redacted JSON entry per line) so callers can consume
+    either source identically. Non-redacted on purpose: the resolver needs the
+    real command/args/env references to launch the server.
+    """
+    data = _load_config_json(path)
+    items = data.get("mcp_servers")
+    if not items:
+        return
+    try:
+        normalized = _validate_mcp_servers(items)
+    except ValueError as e:
+        _fail(str(e))
+    _warn_unresolved_mcp_servers(normalized)
+    for entry in normalized:
+        print(json.dumps(entry, separators=(',', ':')))
+
+
 def main(argv: list[str]) -> None:
     if len(argv) < 2:
-        _fail("Usage: agent-config-mcp.py {--validate-config|--redact-config|--frontmatter} <path>")
+        _fail("Usage: agent-config-mcp.py {--validate-config|--redact-config|--frontmatter|--config-servers} <path>")
     cmd = argv[0]
     path = argv[1]
     if cmd == '--validate-config':
@@ -534,6 +556,8 @@ def main(argv: list[str]) -> None:
         cmd_redact_config(path)
     elif cmd == '--frontmatter':
         cmd_frontmatter(path)
+    elif cmd == '--config-servers':
+        cmd_config_servers(path)
     else:
         _fail(f"unknown command: {cmd}")
 

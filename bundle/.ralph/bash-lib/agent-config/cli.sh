@@ -129,7 +129,10 @@ read_mcp_servers() {
     fi
   done
 
-  [[ -n "$agent_md" ]] || { echo '[]'; return 0; }
+  local agent_config="$agents_root/$agent_id/config.json"
+
+  # Nothing to read from if neither a canonical frontmatter file nor a config.json exists.
+  [[ -n "$agent_md" || -f "$agent_config" ]] || { echo '[]'; return 0; }
 
   local mcp_script
   mcp_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/python/agent-config-mcp.py"
@@ -140,27 +143,31 @@ read_mcp_servers() {
   export RALPH_AGENT_ID="$agent_id"
   export RALPH_RESOLVED_MCP_SERVERS_JSON="$available_names_json"
 
-  local declared_lines declared_array
+  local declared_lines=""
   # Capture stdout (machine-readable list). Any WARN lines from agent-config-mcp.py
   # go to stderr and are intentionally not captured here.
-  declared_lines="$(python3 "$mcp_script" --frontmatter "$agent_md" || true)"
+  #
+  # ralph-native agents declare mcp_servers in the canonical frontmatter, while
+  # dual-file (per-runtime) agents carry them in the generated config.json - the
+  # native session .md rendered by sync-runtime-assets.sh does not include the
+  # mcp_servers frontmatter. Prefer frontmatter, then fall back to config.json so
+  # both agent layouts resolve identically.
+  if [[ -n "$agent_md" ]]; then
+    declared_lines="$(python3 "$mcp_script" --frontmatter "$agent_md" || true)"
+  fi
+  if [[ -z "$declared_lines" && -f "$agent_config" ]]; then
+    declared_lines="$(python3 "$mcp_script" --config-servers "$agent_config" || true)"
+  fi
   if [[ -z "$declared_lines" ]]; then
     echo '[]'
     return 0
   fi
 
-  declared_array="$(printf '%s\n' "$declared_lines" | jq -s '.')"
-
-  # Filter reference entries to only those present in the runtime ambient catalog.
-  # Non-reference (custom definition) entries are passed through unchanged.
-  jq --argjson available "$available_names_json" '
-    [ .[] as $e
-      | if (($e.reference? != true) or (($available | index($e.name)) != null))
-        then $e
-        else empty
-        end
-    ]
-  ' <<<"$declared_array"
+  # Emit every declared entry, including references to servers that are not in the
+  # ambient catalog. Availability and fail-closed handling of missing references is
+  # owned by the runtime MCP resolver, which must see the full declared set to fail
+  # the preflight when a referenced ambient server is absent.
+  printf '%s\n' "$declared_lines" | jq -s '.'
 }
 
 usage() {

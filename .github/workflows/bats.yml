@@ -21,6 +21,8 @@ jobs:
 
       - name: Set up Bats
         uses: bats-core/bats-action@4.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install GNU parallel and ripgrep
         run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
