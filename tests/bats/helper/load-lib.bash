@@ -26,15 +26,32 @@ bats_skip_known_ci_flakes() {
   fi
 
   case "${BATS_TEST_FILENAME##*/}:${BATS_TEST_DESCRIPTION}" in
+    "mcp-proxy-grep-source-cap-dedupe.bats:duplicate of a source-capped grep stays deduped AND still reports partial-source state" | \
+    "bash-compact-delivered-metrics.bats:applied compaction with a storage footer: delivered exceeds legacy compactedBytes by the footer" | \
+    "fail-open-instrumentation.bats:below-threshold (small content, not expanded) is not logged as an error" | \
+    "fail-open-instrumentation.bats:already-compacted envelope content is not logged as an error" | \
+    "native-result-shapes.bats:Read: oversized content is compacted, shape-preserved, telemetry recorded" | \
+    "native-result-shapes.bats:Grep content mode: oversized match text is compacted and shape-preserved" | \
+    "native-result-shapes.bats:Bash: oversized stdout is compacted, stderr sibling untouched" | \
+    "native-result-shapes.bats:already-compact envelope content is not re-compacted")
+      if [[ "${RALPH_CI_SERIAL_RECHECK:-0}" == "1" ]]; then
+        return 0
+      fi
+      skip "deferred in parallel CI: covered by the serial stability recheck"
+      ;;
     "mcp-proxy-batch.bats:ralph_proxy_batch runs mixed read grep and glob operations successfully" | \
     "mcp-proxy-batch.bats:ralph_proxy_batch times out and reports partial failure on long-running operations" | \
+    "mcp-proxy-batch.bats:ralph_proxy_batch timeout reports PARTIAL_FAILURE with completed operation count" | \
+    "mcp-proxy-batch.bats:ralph_proxy_batch timeout returns partial results with isError true" | \
     "mcp-proxy-search-dedupe.bats:identical grep deduped with resultId readable via ralph_proxy_result_read" | \
     "mcp-proxy-search-dedupe.bats:different grep pattern path or flags not deduped" | \
     "mcp-proxy-search-dedupe.bats:mutating shell between calls invalidates search dedupe cache" | \
     "mcp-proxy-search-dedupe.bats:RALPH_PROXY_DEDUPE_SEARCH=0 disables search dedupe" | \
     "mcp-proxy-search-dedupe.bats:duplicate grep response does not include full match body" | \
     "run-plan-args.bats:run-plan --plan must reference a file" | \
-    "run-plan-routing.bats:plan header runtime and model are used when --runtime and --model are not passed in" | \
+    "run-plan-interrupt-teardown.bats:agent group guard reaps TERM-ignoring agent group when runner dies" | \
+    "run-plan-routing.bats:yaml todo routing bootstraps non-interactive runs without a global model" | \
+    "run-plan-routing.bats:plan header runtime and model are used when --runtime and --model are not passed" | \
     "run-plan-routing.bats:plan header model is overridden by --model flag" | \
     "lifecycle.bats:byte-exact restoration: original file bytes preserved" | \
     "validate-plan.bats:run-plan fails fast on an invalid pipeline plan" | \

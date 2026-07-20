@@ -16,6 +16,7 @@ setup() {
   export RALPH_NATIVE_RESULT_COMPACT=1
   export RALPH_PLAN_KEY="native-result-shapes-bats"
   export RALPH_RESULT_WINDOWING_LOG="$_tmp/windowing.jsonl"
+  bats_skip_known_ci_flakes
 }
 
 teardown() {
@@ -144,9 +145,9 @@ _expand_fixture() {
   local envelope_text
   envelope_text="$(echo "$output" | jq -c '.hookSpecificOutput.updatedToolOutput.content[0].text // .hookSpecificOutput.updatedToolOutput.file.content')"
 
-  local f2="$_tmp/read_already_compact.json"
-  jq --argjson t "$envelope_text" '.tool_response.file.content = ($t | fromjson? // $t)' "$f" \
-    | jq --arg raw "$envelope_text" '.tool_response.file.content = ($raw | fromjson)' > "$f2"
+  local envelope_file="$_tmp/envelope.json" f2="$_tmp/read_already_compact.json"
+  printf '%s' "$envelope_text" >"$envelope_file"
+  jq --rawfile raw "$envelope_file" '.tool_response.file.content = ($raw | fromjson)' "$f" >"$f2"
 
   run bash -c "cat '$f2' | bash '$HOOK'"
   [ "$status" -eq 0 ]

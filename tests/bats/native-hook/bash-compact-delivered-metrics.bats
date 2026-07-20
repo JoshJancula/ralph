@@ -15,6 +15,7 @@ setup() {
   export RALPH_BASH_COMPACT=1
   export RALPH_PLAN_KEY="bash-delivered-metrics-bats"
   export RALPH_BASH_COMPACT_LOG="$_tmp/compact.jsonl"
+  bats_skip_known_ci_flakes
 }
 
 teardown() {
@@ -22,12 +23,15 @@ teardown() {
   unset WORKSPACE CLAUDE_PROJECT_DIR RALPH_BASH_COMPACT RALPH_PLAN_KEY RALPH_BASH_COMPACT_LOG
 }
 
-_bash_hook_input() {
-  local stdout="$1" stderr="${2:-}"
-  jq -n --arg stdout "$stdout" --arg stderr "$stderr" \
+_bash_hook_input_file() {
+  local stdout="$1" stderr="${2:-}" out="$3"
+  local stdout_file="$_tmp/hook-stdout" stderr_file="$_tmp/hook-stderr"
+  printf '%s' "$stdout" >"$stdout_file"
+  printf '%s' "$stderr" >"$stderr_file"
+  jq -n --rawfile stdout "$stdout_file" --rawfile stderr "$stderr_file" \
     '{hook_event_name:"PostToolUse", tool_name:"Bash",
       tool_input:{command:"printf big"},
-      tool_response:{stdout:$stdout, stderr:$stderr, interrupted:false, isImage:false}}'
+      tool_response:{stdout:$stdout, stderr:$stderr, interrupted:false, isImage:false}}' >"$out"
 }
 
 @test "applied compaction with a storage footer: delivered exceeds legacy compactedBytes by the footer" {
@@ -36,10 +40,10 @@ _bash_hook_input() {
 for i in range(4000):
     print(f'line {i} of repeated build output filler text here')
 ")"
-  local input
-  input="$(_bash_hook_input "$big" "")"
+  local input="$_tmp/input.json"
+  _bash_hook_input_file "$big" "" "$input"
 
-  run bash -c "printf '%s' '$input' | bash '$HOOK'"
+  run bash -c "bash '$HOOK' < '$input'"
   [ "$status" -eq 0 ]
 
   [ -f "$RALPH_BASH_COMPACT_LOG" ]
@@ -57,10 +61,10 @@ for i in range(4000):
 }
 
 @test "skipped compaction: delivered metrics equal original combined bytes, not stored bytes" {
-  local input
-  input="$(_bash_hook_input "small output" "")"
+  local input="$_tmp/input.json"
+  _bash_hook_input_file "small output" "" "$input"
 
-  run bash -c "printf '%s' '$input' | bash '$HOOK'"
+  run bash -c "bash '$HOOK' < '$input'"
   [ "$status" -eq 0 ]
 
   [ -f "$RALPH_BASH_COMPACT_LOG" ]
@@ -78,10 +82,10 @@ for i in range(4000):
 @test "stderr-only output: delivered metrics still recorded correctly" {
   local big_stderr
   big_stderr="$(python3 -c "print('err ' * 4000)")"
-  local input
-  input="$(_bash_hook_input "" "$big_stderr")"
+  local input="$_tmp/input.json"
+  _bash_hook_input_file "" "$big_stderr" "$input"
 
-  run bash -c "printf '%s' '$input' | bash '$HOOK'"
+  run bash -c "bash '$HOOK' < '$input'"
   [ "$status" -eq 0 ]
 
   [ -f "$RALPH_BASH_COMPACT_LOG" ]
@@ -94,10 +98,10 @@ for i in range(4000):
 @test "multibyte content: delivered byte accounting does not error and stays non-negative" {
   local multibyte
   multibyte="$(python3 -c "print(('café 日本語 \U0001f680 ' * 2000))")"
-  local input
-  input="$(_bash_hook_input "$multibyte" "")"
+  local input="$_tmp/input.json"
+  _bash_hook_input_file "$multibyte" "" "$input"
 
-  run bash -c "printf '%s' '$input' | bash '$HOOK'"
+  run bash -c "bash '$HOOK' < '$input'"
   [ "$status" -eq 0 ]
 
   [ -f "$RALPH_BASH_COMPACT_LOG" ]

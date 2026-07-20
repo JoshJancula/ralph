@@ -93,8 +93,13 @@ invoke_grep_to_file() {
   result_id="$(jq -r '.content[0].text' "$out" | jq -r '.resultId')"
   [ -n "$result_id" ]
 
-  local meta_file
-  meta_file="$(find "$WS" -path "*result-store*" -name "*.json" 2>/dev/null | xargs grep -l "$result_id" 2>/dev/null | head -1)"
+  local candidate meta_file=""
+  while IFS= read -r candidate; do
+    if grep -q -- "$result_id" "$candidate"; then
+      meta_file="$candidate"
+      break
+    fi
+  done < <(find "$WS" -path "*result-store*" -name "*.json" -type f 2>/dev/null)
   if [[ -n "$meta_file" ]]; then
     run jq -e '.storageLayout == "full"' "$meta_file"
     [ "$status" -ne 0 ]

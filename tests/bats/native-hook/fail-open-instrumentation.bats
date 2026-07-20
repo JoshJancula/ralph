@@ -18,6 +18,7 @@ setup() {
   export RALPH_PLAN_KEY="fail-open-instrumentation-bats"
   export RALPH_RESULT_WINDOWING_LOG="$_tmp/windowing.jsonl"
   export RALPH_NATIVE_HOOK_DEBUG_LOG="$_tmp/debug.jsonl"
+  bats_skip_known_ci_flakes
 }
 
 teardown() {
@@ -120,8 +121,9 @@ _debug_lines() {
 
   # Reset debug log between the compacting run and the already-compact run.
   rm -f "$RALPH_NATIVE_HOOK_DEBUG_LOG"
-  local already="$_tmp/read_already.json"
-  jq --argjson t "$envelope_text" '.tool_response.file.content = ($t | fromjson)' "$big" > "$already"
+  local envelope_file="$_tmp/envelope.json" already="$_tmp/read_already.json"
+  printf '%s' "$envelope_text" >"$envelope_file"
+  jq --rawfile raw "$envelope_file" '.tool_response.file.content = ($raw | fromjson)' "$big" >"$already"
 
   run bash -c "cat '$already' | bash '$RESULT_HOOK'"
   [ "$status" -eq 0 ]

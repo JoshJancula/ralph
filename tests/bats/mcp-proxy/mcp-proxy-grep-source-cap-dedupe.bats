@@ -13,6 +13,7 @@ UPSTREAM_SCRIPT="$REPO_ROOT/bundle/.ralph/mcp-server.sh"
 setup() {
   WS="$(mktemp -d)"
   export RALPH_MCP_WORKSPACE="$WS"
+  bats_skip_known_ci_flakes
 }
 
 teardown() {

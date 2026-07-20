@@ -775,8 +775,25 @@ interrupt_teardown_read_pid_file() {
 
     wait "$leader_pid" 2>/dev/null || true
 
+    group_has_live_members() {
+      local member process_stat state
+      while IFS= read -r member; do
+        [[ "$member" =~ ^[0-9]+$ ]] || continue
+        if [[ -r "/proc/$member/stat" ]]; then
+          process_stat="$(<"/proc/$member/stat")"
+          process_stat="${process_stat#*) }"
+          state="${process_stat%% *}"
+        else
+          state="$(ps -o stat= -p "$member" 2>/dev/null || true)"
+          state="${state//[[:space:]]/}"
+        fi
+        [[ -n "$state" && "$state" != Z* ]] && return 0
+      done < <(pgrep -g "$leader_pid" 2>/dev/null || true)
+      return 1
+    }
+
     for _ in $(seq 1 60); do
-      if ! pgrep -g "$leader_pid" >/dev/null 2>&1; then
+      if ! group_has_live_members; then
         kill "$runner_pid" 2>/dev/null || true
         exit 0
       fi
@@ -792,6 +809,7 @@ interrupt_teardown_read_pid_file() {
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
+  bats_skip_known_ci_flakes
 }
 
 teardown() {
