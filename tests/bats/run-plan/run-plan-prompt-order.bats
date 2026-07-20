@@ -295,3 +295,42 @@ Widget rule body.'
   apply_merge "cursor" "$PROMPT" "$PROMPT_STATIC"
   [[ "$PROMPT" == "STATIC tier1 metadata"$'\n\n'"$volatile"$'\n\n'"$todo_prompt" ]]
 }
+
+# Coverage for ralph_mode_prompt_guidance_ralph_failure_footer: agents must
+# cut over to native tools on a Ralph tooling failure when native fallback is
+# available (hybrid / non-strict ralph), and only pause for the operator when
+# strict proxy forbids native fallback. Regression guard against agents getting
+# stuck asking the operator to "restore the Ralph MCP connection".
+@test "hybrid failure footer tells agents to cut over to native tools" {
+  run ralph_mode_prompt_guidance claude hybrid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cut over to the native runtime tools"* ]]
+  [[ "$output" == *"do not stop to ask the operator"* ]]
+  [[ "$output" != *"write one structured human-request record to pending-human.txt and stop"* ]]
+}
+
+@test "non-strict ralph failure footer cuts over to available native tools" {
+  RALPH_STRICT_PROXY=0 RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=0 run ralph_mode_prompt_guidance claude ralph
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cut over to the native runtime tools that remain available"* ]]
+  [[ "$output" != *"write one structured human-request record to pending-human.txt and stop"* ]]
+}
+
+@test "strict ralph failure footer keeps the pending-human pause" {
+  RALPH_STRICT_PROXY=1 run ralph_mode_prompt_guidance claude ralph
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"write one structured human-request record to pending-human.txt and stop"* ]]
+  [[ "$output" != *"cut over to the native runtime tools"* ]]
+}
+
+@test "failure footer variants select correct guidance" {
+  run ralph_mode_prompt_guidance_ralph_failure_footer full
+  [[ "$output" == *"Immediately cut over to the native runtime tools"* ]]
+  run ralph_mode_prompt_guidance_ralph_failure_footer partial
+  [[ "$output" == *"complete as much of the TODO as they cover"* ]]
+  run ralph_mode_prompt_guidance_ralph_failure_footer none
+  [[ "$output" == *"write one structured human-request record to pending-human.txt and stop"* ]]
+  # Default (no arg) is the conservative pause.
+  run ralph_mode_prompt_guidance_ralph_failure_footer
+  [[ "$output" == *"write one structured human-request record to pending-human.txt and stop"* ]]
+}

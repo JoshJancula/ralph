@@ -744,6 +744,94 @@ PY
   rm -rf "$workspace"
 }
 
+@test "generic CLI failure is not labeled a strict proxy violation" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Generic failure
+- [ ] TODO that fails without any policy violation
+EOF
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+echo "unexpected internal failure while contacting model backend"
+exit 3
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$5"
+    export STUB_PLAN_PATH="$4"
+    export CURSOR_PLAN_MAX_ITER=1
+    "$3" --runtime cursor --plan PLAN.md --non-interactive --model stub-model
+  ' _ "$workspace" "$bin_dir" "$RUN_PLAN_SH" "$plan_file" "$session_home"
+
+  plan_status=$status
+  plan_output="$output"
+  [ "$plan_status" -ne 0 ]
+  [[ "$plan_output" != *"Strict proxy policy violation"* ]]
+  [[ "$plan_output" == *"Runtime CLI failed; stopping plan run."* ]]
+  [[ "$plan_output" == *"Exit code: 3"* ]]
+
+  rm -rf "$workspace"
+}
+
+@test "MCP transport death is classified in the failure report" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat <<'EOF' > "$plan_file"
+# Transport failure
+- [ ] TODO that loses the ralph MCP server
+EOF
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+echo "Error: No such tool available: mcp__ralph__ralph_proxy_shell"
+exit 1
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$5"
+    export STUB_PLAN_PATH="$4"
+    export CURSOR_PLAN_MAX_ITER=1
+    "$3" --runtime cursor --plan PLAN.md --non-interactive --model stub-model
+  ' _ "$workspace" "$bin_dir" "$RUN_PLAN_SH" "$plan_file" "$session_home"
+
+  plan_status=$status
+  plan_output="$output"
+  [ "$plan_status" -ne 0 ]
+  [[ "$plan_output" != *"Strict proxy policy violation"* ]]
+  [[ "$plan_output" == *"Ralph MCP transport failed during the invocation"* ]]
+  [[ "$plan_output" == *"No such tool available: mcp__ralph__ralph_proxy_shell"* ]]
+
+  rm -rf "$workspace"
+}
+
 @test "run-plan accepts manual ack for a final manual TODO" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

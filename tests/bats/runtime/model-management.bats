@@ -126,7 +126,7 @@ source_model_store() {
   rm -rf "$temp_home"
 }
 
-@test "claude selector prompts for manual entry when no saved models exist" {
+@test "claude selector offers default alias menu when no saved models exist" {
   run bash -c '
     set -euo pipefail
     export RALPH_CONFIG_HOME="$1"
@@ -135,6 +135,31 @@ source_model_store() {
     source "$2"
     # shellcheck source=/dev/null
     source "$3"
+    choices_file="$RALPH_CONFIG_HOME/menu-choices"
+    ralph_menu_select() {
+      shift 4
+      shift
+      printf "%s" "$*" >"$choices_file"
+      printf "opus"
+    }
+    export choices_file
+    select_model_claude --interactive 2>/dev/null
+    [ "$(cat "$choices_file")" = "sonnet opus haiku Enter custom model id" ]
+  ' _ "$RALPH_CONFIG_HOME" "$SELECT_MODEL_COMMON" "$SELECT_MODEL_CLAUDE"
+  [ "$status" -eq 0 ]
+  [ "$output" = "opus" ]
+}
+
+@test "claude selector prompts for manual entry via custom placeholder when no saved models exist" {
+  run bash -c '
+    set -euo pipefail
+    export RALPH_CONFIG_HOME="$1"
+    mkdir -p "$RALPH_CONFIG_HOME"
+    # shellcheck source=/dev/null
+    source "$2"
+    # shellcheck source=/dev/null
+    source "$3"
+    ralph_menu_select() { printf "Enter custom model id"; }
     _select_model_read_rp() {
       local _var="$2"
       read -r "$_var"

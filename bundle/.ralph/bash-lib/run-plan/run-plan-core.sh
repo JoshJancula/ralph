@@ -126,10 +126,37 @@ If the TODO already names exact commands or files, start there before rereading 
 EOF
 }
 
+# Guidance for what an agent should do when Ralph tooling (MCP transport,
+# proxy shell, etc.) fails mid-run. The correct behavior depends on whether
+# native runtime tools are available as a fallback:
+#   full    - hybrid mode: native read/search/shell/edit all available.
+#             Cut over to native tools; do not stop to ask the operator.
+#   partial - non-strict ralph mode: native Read/Edit/Write available but
+#             native shell/search are not. Use native tools for what they
+#             cover; only escalate to the operator when the remaining work
+#             genuinely needs shell/search that no native tool can provide.
+#   none    - strict proxy: native fallback is forbidden by policy, so the
+#             only recourse is a structured human-request record.
+# Arg $1 selects the variant (default: none, the conservative choice).
 ralph_mode_prompt_guidance_ralph_failure_footer() {
-  cat <<'EOF'
+  local native_fallback="${1:-none}"
+  case "$native_fallback" in
+    full)
+      cat <<'EOF'
+Do not loop on WaitForMcpServers. If Ralph tooling fails mid-run (MCP timeout, "Connection closed", "MCP error -32000/-32001", or `mcp__ralph__*` tools disappearing), do not stop to ask the operator and do not write pending-human.txt for the tooling failure itself. Immediately cut over to the native runtime tools (Read, Edit, Write, Bash, and native search) and finish the TODO with them. Only write pending-human.txt if the TODO needs a decision or input that no tool — Ralph or native — can supply.
+EOF
+      ;;
+    partial)
+      cat <<'EOF'
+Do not loop on WaitForMcpServers. If Ralph tooling fails mid-run (MCP timeout, "Connection closed", "MCP error -32000/-32001", or `mcp__ralph__*` tools disappearing), do not stop to ask the operator for the tooling failure itself. Cut over to the native runtime tools that remain available (native Read, Edit, and Write) and complete as much of the TODO as they cover. Only write one structured human-request record to pending-human.txt when the remaining work requires shell or search that no available tool can provide.
+EOF
+      ;;
+    *)
+      cat <<'EOF'
 Do not loop on WaitForMcpServers. If Ralph tooling fails mid-run, write one structured human-request record to pending-human.txt and stop without retrying the same blocked call.
 EOF
+      ;;
+  esac
 }
 
 ralph_mode_prompt_guidance_tool_batch_footer() {
@@ -360,7 +387,14 @@ ralph_mode_prompt_guidance_ralph() {
   fi
   ralph_mode_prompt_guidance_tool_batch_footer
   ralph_mode_prompt_guidance_common_footer
-  ralph_mode_prompt_guidance_ralph_failure_footer
+  # Non-strict ralph mode keeps native Read/Edit/Write available (only native
+  # Bash/search are withheld), so tooling failures can partially cut over to
+  # native tools. Strict proxy forbids any native fallback.
+  if [[ "${RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY:-0}" == "1" ]] || [[ "${RALPH_STRICT_PROXY:-0}" == "1" ]]; then
+    ralph_mode_prompt_guidance_ralph_failure_footer none
+  else
+    ralph_mode_prompt_guidance_ralph_failure_footer partial
+  fi
 }
 
 ralph_mode_prompt_guidance_hybrid() {
@@ -387,7 +421,9 @@ EOF
   fi
   ralph_mode_prompt_guidance_tool_batch_footer
   ralph_mode_prompt_guidance_common_footer
-  ralph_mode_prompt_guidance_ralph_failure_footer
+  # Hybrid mode has native tools (read/search/shell/edit) fully available as a
+  # fallback, so a tooling failure should cut over to native rather than pause.
+  ralph_mode_prompt_guidance_ralph_failure_footer full
 }
 
 ralph_mode_prompt_guidance() {
@@ -3786,6 +3822,50 @@ ralph_plan_manual_ack_path() {
   printf '%s\n' "$RALPH_SESSION_DIR/manual-ack.txt"
 }
 
+# Classify a nonzero CLI exit from the invocation's output segment so the
+# operator sees the real stop reason instead of a generic label. Prints one
+# token on stdout and returns 0 when a known signature matches:
+#   mcp_transport - the Ralph MCP server transport died or requests timed out
+#                   (agents lose mcp__ralph__* tools mid-session and flail)
+#   auth          - the runtime CLI reported a login/authentication problem
+# Returns 1 when nothing recognizable matched.
+ralph_run_plan_classify_cli_failure() {
+  local text="${1:-}"
+  [[ -n "$text" ]] || return 1
+  case "$text" in
+    *"MCP error -32001"* | *"MCP error -32000"* | \
+    *"No such tool available: mcp__"* | \
+    *'not found on server "ralph"'* | \
+    *"Connection closed"*)
+      printf 'mcp_transport\n'
+      return 0
+      ;;
+    *"Not logged in"* | *"Please run /login"* | *"authentication_error"*)
+      printf 'auth\n'
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Print the last few non-empty error-looking lines of the invocation output
+# segment to stderr so the terminal shows *why* the runtime failed without the
+# operator having to open the output log.
+ralph_run_plan_print_failure_tail() {
+  local text="${1:-}" max_lines="${2:-5}"
+  [[ -n "$text" ]] || return 0
+  local tail_lines
+  tail_lines="$(printf '%s\n' "$text" | grep -iE 'error|exception|timed out|timeout|denied|no such tool|not found on server' | tail -n "$max_lines")"
+  if [[ -z "$tail_lines" ]]; then
+    tail_lines="$(printf '%s\n' "$text" | grep -vE '^[[:space:]]*$' | tail -n "$max_lines")"
+  fi
+  [[ -n "$tail_lines" ]] || return 0
+  echo -e "${C_DIM}Last runtime output:${C_RST}" >&2
+  while IFS= read -r _fail_line; do
+    echo -e "${C_DIM}  ${_fail_line:0:200}${C_RST}" >&2
+  done <<< "$tail_lines"
+}
+
 # Terminate orphaned ralph-run-plan processes that were left behind when a
 # previous parent shell/terminal died without running cleanup. Only targets
 # processes reparented to init (ppid 1) that share the same --plan path.
@@ -4761,9 +4841,14 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
 
     wait "$AGENT_PID" 2>/dev/null || true
     ralph_run_plan_agent_teardown
+    # 125 is the runner's own sentinel for "the invocation wrapper never wrote
+    # an exit code" (killed mid-flight, wrapper crashed). Track that so the
+    # failure report does not present it as a real CLI exit code.
     exit_code=125
+    _exit_code_synthetic=1
     if [[ -f "$EXIT_CODE_FILE" ]]; then
       exit_code="$(cat "$EXIT_CODE_FILE")"
+      _exit_code_synthetic=0
       rm -f "$EXIT_CODE_FILE"
     fi
     set -e
@@ -4783,6 +4868,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     fi
     _permission_pause_pending=0
     _permission_block_type="none"
+    _proxy_violation_flagged=0
     # Permission denials can surface as explicit runtime output even when the
     # CLI exits 0, so classify the output segment independently of exit code.
     #
@@ -5113,6 +5199,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       if declare -F ralph_run_plan_log_tool_access_breakdown >/dev/null 2>&1; then
         if ! ralph_run_plan_log_tool_access_breakdown "$USAGE_FILE"; then
           exit_code=1
+          _proxy_violation_flagged=1
           _inv_todo_completed=0
           _inv_plan_complete=0
           ralph_run_plan_log "ERROR: Tool access policy violation (RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1)"
@@ -5240,22 +5327,58 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     echo "" >>"$OUTPUT_LOG"
     echo "--- End invocation $iteration ---" >>"$OUTPUT_LOG"
 
-    # Check for strict proxy violations before completion reporting
+    # Report nonzero CLI exits before completion reporting. Only label the
+    # stop a proxy policy violation when one was actually recorded this
+    # invocation; a generic runtime failure (crash, MCP transport death,
+    # auth problem) must be reported as what it is, with enough context in
+    # the terminal to explain why the runner stopped.
     if [[ "$exit_code" -ne 0 ]] && [[ "${_permission_pause_pending:-0}" != "1" ]]; then
       read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+      _failure_headline="Runtime CLI failed; stopping plan run."
+      _failure_log_marker="Runtime CLI failure"
+      _failure_detail=""
+      if [[ "${_proxy_violation_flagged:-0}" == "1" ]]; then
+        _failure_headline="Strict proxy policy violation detected; stopping plan run."
+        _failure_log_marker="Strict proxy policy violation detected"
+        _failure_detail="The agent used native tools while RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1."
+      else
+        _failure_class="$(ralph_run_plan_classify_cli_failure "$_inv_output_segment" 2>/dev/null || true)"
+        case "$_failure_class" in
+          mcp_transport)
+            _failure_headline="Ralph MCP transport failed during the invocation; stopping plan run."
+            _failure_log_marker="MCP transport failure"
+            _failure_detail="The runtime lost the ralph MCP server mid-session (request timeout or connection closed), so proxy tools became unavailable to the agent."
+            ;;
+          auth)
+            _failure_headline="Runtime CLI reported an authentication problem; stopping plan run."
+            _failure_log_marker="Runtime authentication failure"
+            _failure_detail="Log in to the runtime CLI and re-run the plan."
+            ;;
+        esac
+      fi
       echo "" >&2
-      echo -e "${C_R}${C_BOLD}Strict proxy policy violation detected; stopping plan run.${C_RST}" >&2
+      echo -e "${C_R}${C_BOLD}${_failure_headline}${C_RST}" >&2
+      if [[ "${_exit_code_synthetic:-0}" == "1" ]]; then
+        echo -e "${C_DIM}Exit code: unknown (invocation wrapper never reported one; runner sentinel $exit_code)${C_RST}" >&2
+      else
+        echo -e "${C_DIM}Exit code: $exit_code (runtime=$_inv_effective_runtime)${C_RST}" >&2
+      fi
+      if [[ -n "$_failure_detail" ]]; then
+        echo -e "${C_DIM}${_failure_detail}${C_RST}" >&2
+      fi
       echo -e "${C_DIM}Plan: $PLAN_PATH  Line $line_num${C_RST}" >&2
+      ralph_run_plan_print_failure_tail "$_inv_output_segment" 5
       _ralph_write_plan_usage_summary "$done_count" "$total_count"
       echo -e "${C_DIM}Output log: $OUTPUT_LOG${C_RST}" >&2
+      ralph_run_plan_log "invocation failed: marker=${_failure_log_marker} exit=$exit_code synthetic=${_exit_code_synthetic:-0} runtime=$_inv_effective_runtime line=$line_num"
       {
         echo ""
         echo "################################################################################"
-        echo "# Strict proxy policy violation detected - $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "# ${_failure_log_marker} (exit=$exit_code) - $(date '+%Y-%m-%d %H:%M:%S')"
         echo "################################################################################"
       } >>"$OUTPUT_LOG"
       if [[ -n "${GIT_STATUS_AT_END:-}" ]]; then
-        ralph_run_plan_log "strict proxy violation - git status snapshot:"
+        ralph_run_plan_log "${_failure_log_marker} - git status snapshot:"
         while IFS= read -r git_line; do
           ralph_run_plan_log "  $git_line"
         done <<< "$GIT_STATUS_AT_END"

@@ -1020,6 +1020,28 @@ ralph_run_plan_invoke_codex() {
       args+=(--dangerously-bypass-approvals-and-sandbox)
     fi
 
+    # Codex refuses to start when the working root is not inside a git repo,
+    # unless --skip-git-repo-check is passed. Ralph workspaces are frequently a
+    # parent dir holding several sibling repos (a lib, an API, client apps)
+    # rather than a repo itself, which trips this guard before the agent runs a
+    # single turn ("Not inside a trusted directory and --skip-git-repo-check was
+    # not specified."). Auto-add the flag when WORKSPACE is not inside a work
+    # tree. CODEX_PLAN_SKIP_GIT_REPO_CHECK=1 forces it on, =0 forces it off.
+    # Accepted on both plain `exec` and `exec resume`.
+    case "${CODEX_PLAN_SKIP_GIT_REPO_CHECK:-auto}" in
+      1)
+        args+=(--skip-git-repo-check)
+        ;;
+      0)
+        :
+        ;;
+      *)
+        if ! git -C "$WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          args+=(--skip-git-repo-check)
+        fi
+        ;;
+    esac
+
     _run_plan_invoke_codex_append_add_dirs args "${CODEX_PLAN_EXTRA_ADD_DIRS:-}"
 
     if [[ -n "$codex_mcp_config_path" ]]; then

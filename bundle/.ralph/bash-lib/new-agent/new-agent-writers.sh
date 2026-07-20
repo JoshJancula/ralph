@@ -163,7 +163,7 @@ runtime_default_model() {
   local runtime="$1"
   case "$runtime" in
     cursor) echo "gpt-5.1-codex-mini" ;;
-    claude) echo "claude-sonnet-4-6" ;;
+    claude) echo "sonnet" ;;
     codex) echo "gpt-5-nano" ;;
     opencode) echo "opencode/nemotron-3-super-free" ;;
     antigravity) echo "auto" ;;

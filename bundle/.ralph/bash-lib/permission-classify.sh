@@ -1124,7 +1124,7 @@ What to try next (OpenCode):
           cx_detail="$(ralph_codex_denial_detail "$denial_excerpt" 2>/dev/null || true)"
           printf 'Codex rejected access outside the writable workspace roots (external directory rejection).
 
-Primary unblock category: writable-path / workspace boundary. Add the needed directory with codex exec --add-dir (Ralph forwards extra dirs from bundle/.ralph/bash-lib/run-plan-invoke-codex-exec.sh when configured), or copy artifacts into the workspace tree so Codex only touches paths inside the sandbox.
+Primary unblock category: writable-path / workspace boundary. Add the needed directory with codex exec --add-dir (Ralph forwards extra dirs from CODEX_PLAN_EXTRA_ADD_DIRS via bundle/.ralph/bash-lib/run-plan/run-plan-invoke-codex.sh when configured), or copy artifacts into the workspace tree so Codex only touches paths inside the sandbox.
 
 If you already added the directory but still see this message, check CODEX_PLAN_SANDBOX (read-only cannot write even allowed paths) and whether a host wrapper blocked the mount.
 

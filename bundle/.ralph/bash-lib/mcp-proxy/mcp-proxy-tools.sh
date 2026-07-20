@@ -302,6 +302,49 @@ ralph_mcp_proxy_core_tool_names_json() {
   printf '%s\n' "${names[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
 }
 
+# Rewrite nextActions entries that reference proxy tools hidden by the
+# compact tool catalog. Hidden tools are absent from the client's tools/list,
+# so a direct call fails client-side ("No such tool available" / "not found
+# on server") before it ever reaches this server. Route those entries through
+# ralph_proxy_tool_search action=invoke, which is always in the compact
+# catalog and dispatches hidden tools server-side with full policy
+# enforcement. No-op when the compact catalog is inactive.
+ralph_mcp_proxy_next_actions_catalog_safe_json() {
+  local actions_json="${1:-[]}"
+  [[ -n "$actions_json" ]] || actions_json='[]'
+  if ! ralph_mcp_proxy_compact_tool_catalog_active; then
+    printf '%s\n' "$actions_json"
+    return 0
+  fi
+  local core_names
+  core_names="$(ralph_mcp_proxy_core_tool_names_json)"
+  jq -c --argjson core "$core_names" '
+    map(
+      if ((.tool // "") as $t
+          | ($t | startswith("ralph_proxy_")) and (($core | index($t)) == null))
+      then {tool: "ralph_proxy_tool_search",
+            args: {action: "invoke", tool: .tool, arguments: (.args // {})}}
+      else .
+      end
+    )
+  ' <<<"$actions_json"
+}
+
+# Apply ralph_mcp_proxy_next_actions_catalog_safe_json to the .nextActions
+# field of a response object, leaving objects without nextActions untouched.
+ralph_mcp_proxy_object_next_actions_catalog_safe_json() {
+  local obj_json="${1:-}"
+  [[ -n "$obj_json" ]] || obj_json='{}'
+  local actions_json
+  actions_json="$(jq -c '.nextActions // empty' <<<"$obj_json" 2>/dev/null)"
+  if [[ -z "$actions_json" ]]; then
+    printf '%s\n' "$obj_json"
+    return 0
+  fi
+  actions_json="$(ralph_mcp_proxy_next_actions_catalog_safe_json "$actions_json")"
+  jq -c --argjson nextActions "$actions_json" '.nextActions = $nextActions' <<<"$obj_json"
+}
+
 ralph_mcp_proxy_owned_tool_meta_tool_search_schema_json() {
   jq -n -c '
     {
@@ -4720,13 +4763,15 @@ ralph_mcp_proxy_owned_tool_shell_start() {
   fi
   running_json="${RALPH_MCP_PROXY_SHELL_JOB_START_JSON:-}"
 
-  ralph_mcp_proxy_tool_success_json "$(
+  local start_response_json
+  start_response_json="$(
     jq -c \
       --arg nextWait "ralph_proxy_shell_wait" \
       --arg nextRead "ralph_proxy_shell_read" \
       '. + {nextActions:[{tool:$nextWait,args:{jobId:.jobId}},{tool:$nextRead,args:{jobId:.jobId,stream:"combined",tailBytes:8192}}]}' \
       <<<"$running_json"
   )"
+  ralph_mcp_proxy_tool_success_json "$(ralph_mcp_proxy_object_next_actions_catalog_safe_json "$start_response_json")"
 }
 
 ralph_mcp_proxy_owned_tool_shell_status() {
@@ -4839,6 +4884,7 @@ ralph_mcp_proxy_owned_tool_shell_wait() {
     --argjson waitSeconds "$wait_seconds" \
     '[{tool:"ralph_proxy_shell_wait",args:{jobId:$jobId,tailBytes:$tailBytes,waitSeconds:$waitSeconds}},{tool:"ralph_proxy_shell_read",args:{jobId:$jobId,stream:"combined",tailBytes:$tailBytes}}]'
   )"
+  next_actions="$(ralph_mcp_proxy_next_actions_catalog_safe_json "$next_actions")"
   response_json="$(jq --argjson waitTimedOut true --argjson nextActions "$next_actions" '. + {waitTimedOut:$waitTimedOut,nextActions:$nextActions}' <<< "$response_json")"
   ralph_mcp_proxy_tool_success_json "$response_json"
 }
@@ -4967,7 +5013,8 @@ ralph_mcp_proxy_owned_tool_shell_handoff_json() {
   [[ "$reused" == "true" || "$reused" == "1" ]] && reused_json=true
   [[ "$created" == "true" || "$created" == "1" ]] && created_json=true
 
-  jq -nc \
+  local handoff_json
+  handoff_json="$(jq -nc \
     --arg command "$command" \
     --arg timeoutSeconds "$timeout_seconds" \
     --arg handoffMessage "$handoff_message" \
@@ -4992,7 +5039,8 @@ ralph_mcp_proxy_owned_tool_shell_handoff_json() {
         {tool: $statusTool, args: {jobId: ($job.jobId // "<jobId>")}},
         {tool: $readTool, args: {jobId: ($job.jobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
       ]
-    }'
+    }')"
+  ralph_mcp_proxy_object_next_actions_catalog_safe_json "$handoff_json"
 }
 
 ralph_mcp_proxy_shell_request_record_json() {
@@ -5080,7 +5128,8 @@ ralph_mcp_proxy_shell_retry_breaker_error_json() {
   local command="${1:-}" command_hash="${2:-}" state_json="${3:-}" job_json="${4:-}"
   [[ -n "$state_json" ]] || state_json='{}'
   [[ -n "$job_json" ]] || job_json='{}'
-  jq -nc \
+  local breaker_json
+  breaker_json="$(jq -nc \
     --arg command "$command" \
     --arg normalizedCommandHash "$command_hash" \
     --argjson state "$state_json" \
@@ -5096,7 +5145,8 @@ ralph_mcp_proxy_shell_retry_breaker_error_json() {
         {tool: "ralph_proxy_shell_status", args: {jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // "<jobId>")}},
         {tool: "ralph_proxy_shell_read", args: {jobId: ($job.jobId // $state.activeJobId // $state.lastJobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
       ]
-    }'
+    }')"
+  ralph_mcp_proxy_object_next_actions_catalog_safe_json "$breaker_json"
 }
 
 ralph_mcp_proxy_shell_trim_spaces() {
@@ -5215,7 +5265,8 @@ ralph_mcp_proxy_shell_long_verification_guidance_json() {
   local created_json=false
   [[ "$reused" == "true" || "$reused" == "1" ]] && reused_json=true
   [[ "$created" == "true" || "$created" == "1" ]] && created_json=true
-  jq -nc \
+  local guidance_json
+  guidance_json="$(jq -nc \
     --arg command "$command" \
     --arg normalizedCommandHash "$command_hash" \
     --arg startTool "ralph_proxy_shell_start" \
@@ -5238,7 +5289,8 @@ ralph_mcp_proxy_shell_long_verification_guidance_json() {
         {tool: $statusTool, args: {jobId: ($job.jobId // "<jobId>")}},
         {tool: $readTool, args: {jobId: ($job.jobId // "<jobId>"), stream: "combined", tailBytes: 8192}}
       ]
-    }'
+    }')"
+  ralph_mcp_proxy_object_next_actions_catalog_safe_json "$guidance_json"
 }
 
 ralph_mcp_proxy_shell_verify_steer_enabled() {
@@ -5426,7 +5478,7 @@ ralph_mcp_proxy_owned_tool_batch() {
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
   local max_ops op_count i=0 report_lines=() report preview op_json op_tool op_args op_result op_text op_is_error op_status
   local op_result_tmp batch_timeout_sec start_epoch current_epoch elapsed_sec
-  local has_timeout_error=0
+  local has_timeout_error=0 completed_ops=0
 
   max_ops="$(ralph_mcp_proxy_batch_max_operations)"
   batch_timeout_sec="$(ralph_mcp_proxy_batch_timeout_sec)"
@@ -5480,9 +5532,63 @@ ralph_mcp_proxy_owned_tool_batch() {
     RALPH_MCP_PROXY_FATAL_TOOL=""
     RALPH_MCP_PROXY_FATAL_REASON=""
     op_result_tmp="$(mktemp)"
-    ralph_mcp_proxy_call_owned_tool "$workspace" "$op_tool" "$op_args" >"$op_result_tmp"
+    # Enforce the remaining batch budget on each operation, not just between
+    # operations. A single slow grep/read can otherwise block the stdio loop
+    # past the host MCP request timeout and kill the transport. Run the
+    # operation in a subshell, persist any fatal-violation state to a sidecar
+    # file (shell variables do not survive the fork), and kill it if the
+    # remaining budget expires.
+    local op_remaining_sec op_fatal_tmp op_pid op_waited_ticks op_timed_out
+    op_remaining_sec=$((batch_timeout_sec - elapsed_sec))
+    op_fatal_tmp="$(mktemp)"
+    rm -f "$op_fatal_tmp"
+    (
+      ralph_mcp_proxy_call_owned_tool "$workspace" "$op_tool" "$op_args" >"$op_result_tmp"
+      if [[ "${RALPH_MCP_PROXY_FATAL_VIOLATION:-0}" == "1" ]]; then
+        jq -nc \
+          --arg tool "${RALPH_MCP_PROXY_FATAL_TOOL:-}" \
+          --arg reason "${RALPH_MCP_PROXY_FATAL_REASON:-}" \
+          --arg arguments "${RALPH_MCP_PROXY_FATAL_ARGUMENTS:-}" \
+          --arg category "${RALPH_MCP_PROXY_FATAL_CATEGORY:-}" \
+          '{tool:$tool,reason:$reason,arguments:$arguments,category:$category}' >"$op_fatal_tmp"
+      fi
+    ) &
+    op_pid=$!
+    op_timed_out=0
+    op_waited_ticks=0
+    while kill -0 "$op_pid" 2>/dev/null; do
+      if (( op_waited_ticks >= op_remaining_sec * 10 )); then
+        op_timed_out=1
+        if declare -F ralph_kill_tree >/dev/null 2>&1; then
+          ralph_kill_tree "$op_pid"
+        else
+          kill -TERM "$op_pid" 2>/dev/null || true
+          sleep 0.2
+          kill -KILL "$op_pid" 2>/dev/null || true
+        fi
+        break
+      fi
+      sleep 0.1
+      ((op_waited_ticks++)) || true
+    done
+    wait "$op_pid" 2>/dev/null || true
+    if [[ -s "$op_fatal_tmp" ]]; then
+      RALPH_MCP_PROXY_FATAL_VIOLATION=1
+      RALPH_MCP_PROXY_FATAL_TOOL="$(jq -r '.tool // ""' <"$op_fatal_tmp")"
+      RALPH_MCP_PROXY_FATAL_REASON="$(jq -r '.reason // ""' <"$op_fatal_tmp")"
+      RALPH_MCP_PROXY_FATAL_ARGUMENTS="$(jq -r '.arguments // ""' <"$op_fatal_tmp")"
+      RALPH_MCP_PROXY_FATAL_CATEGORY="$(jq -r '.category // ""' <"$op_fatal_tmp")"
+    fi
+    rm -f "$op_fatal_tmp"
+    if [[ "$op_timed_out" == "1" ]]; then
+      has_timeout_error=1
+      report_lines+=("$i. $op_tool: timeout | operation exceeded remaining batch budget (${batch_timeout_sec}s total)")
+      rm -f "$op_result_tmp"
+      continue
+    fi
     op_result="$(<"$op_result_tmp")"
     rm -f "$op_result_tmp"
+    completed_ops=$((completed_ops + 1))
     op_is_error="$(jq -r '.isError // false' <<< "$op_result")"
     op_text="$(jq -r '.content[0].text // empty' <<< "$op_result")"
     if jq -e 'type == "object" and has("preview")' <<<"$op_text" >/dev/null 2>&1; then
@@ -5511,7 +5617,7 @@ ralph_mcp_proxy_owned_tool_batch() {
 
   report="$(printf '%s\n' "${report_lines[@]}")"
   if [[ "$has_timeout_error" == "1" ]]; then
-    report+=$'\n'"PARTIAL_FAILURE: batch timeout (completed $i/$op_count operations)"
+    report+=$'\n'"PARTIAL_FAILURE: batch timeout (completed $completed_ops/$op_count operations)"
     ralph_mcp_proxy_tool_error_json "$report"
   else
     ralph_mcp_proxy_tool_success_json "$report"

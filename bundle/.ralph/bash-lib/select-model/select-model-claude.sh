@@ -11,13 +11,18 @@ if [[ -r "$_select_model_common" ]]; then
   source "$_select_model_common"
 fi
 
+_CLAUDE_DEFAULT_MODELS=("sonnet" "opus" "haiku")
+
 _claude_select_model_interactive() {
   _select_model_saved_runtime_interactive \
     "claude" \
     "--- Claude (.claude/agents) ---" \
-    "Pick a model for the Claude Code CLI (saved models when available, else enter one)." \
+    "Pick a model for the Claude Code CLI (saved models when available, else defaults)." \
     "Model for Claude Code agent" \
-    "${C_Y:-}${C_BOLD:-}Enter custom model id${C_RST:-}: "
+    "${C_Y:-}${C_BOLD:-}Enter custom model id${C_RST:-}: " \
+    "Enter custom model id" \
+    "_CLAUDE_DEFAULT_MODELS" \
+    1
 }
 
 select_model_claude() {

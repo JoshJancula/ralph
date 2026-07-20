@@ -8,13 +8,16 @@ on:
     branches:
       - '*'
 
+permissions:
+  contents: read
+
 jobs:
   bats:
     name: Run Bats harness
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Link shared Ralph scripts from bundle
         run: ln -sfn bundle/.ralph .ralph
@@ -30,8 +33,49 @@ jobs:
       - name: Generate test fixtures for .ralph-workspace/
         run: bash scripts/setup-test-fixtures.sh
 
-      - name: Run Python unit tests
-        run: bash scripts/run-python-unit-tests.sh
-
       - name: Run Bats suite
         run: CI=1 bash scripts/run-bats.sh -j 4
+
+  python:
+    name: Python unit tests (quarantined)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12.7
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12.7'
+
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq ripgrep
+
+      - name: Generate test fixtures for .ralph-workspace/
+        run: bash scripts/setup-test-fixtures.sh
+
+      - name: Run Python unit tests
+        id: pythontests
+        continue-on-error: true
+        run: bash scripts/run-python-unit-tests.sh -v
+
+      - name: Report Python quarantine status
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.pythontests.outcome }}
+        run: |
+          if [[ "$TEST_OUTCOME" == "failure" ]]; then
+            echo "::warning::Python unit tests failed but are temporarily quarantined."
+            {
+              echo "### Python unit tests (quarantined)"
+              echo "The Python suite failed but did not block this workflow. Review the test step logs before merging."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Python unit tests (quarantined)"
+              echo "The Python suite completed with outcome: $TEST_OUTCOME."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -76,8 +76,11 @@ _select_model_read_manual_id() {
 
 # Saved-model-driven interactive picker for Claude/Codex.
 # When saved models exist: menu of saved ids plus custom entry.
-# When none exist: prompt directly for manual entry.
+# When none exist but a default list was passed: menu of defaults plus custom entry.
+# When neither exist: prompt directly for manual entry.
 # Newly entered models may be saved for future use.
+# $7 (optional): name of an array variable holding default menu choices.
+# $8 (optional): 1-based index into that array to preselect (default 1).
 _select_model_saved_runtime_interactive() {
   local runtime="$1"
   local header_title="$2"
@@ -85,6 +88,8 @@ _select_model_saved_runtime_interactive() {
   local menu_prompt="$4"
   local manual_prompt="$5"
   local custom_placeholder="${6:-Enter custom model id}"
+  local defaults_var="${7:-}"
+  local defaults_default_index="${8:-1}"
 
   echo "" >&2
   echo -e "${C_C:-}${C_BOLD:-}${header_title}${C_RST:-}" >&2
@@ -93,7 +98,15 @@ _select_model_saved_runtime_interactive() {
   local saved=()
   _select_model_load_saved_models "$runtime" saved
 
-  if [[ ${#saved[@]} -eq 0 ]]; then
+  local menu_choices=("${saved[@]}")
+  local default_index=1
+  if [[ ${#menu_choices[@]} -eq 0 && -n "$defaults_var" ]]; then
+    local -n _defaults_ref="$defaults_var"
+    menu_choices=("${_defaults_ref[@]}")
+    default_index="$defaults_default_index"
+  fi
+
+  if [[ ${#menu_choices[@]} -eq 0 ]]; then
     local custom_model=""
     while true; do
       if ! _select_model_read_manual_id "$manual_prompt" custom_model; then
@@ -112,7 +125,7 @@ _select_model_saved_runtime_interactive() {
 
   local selection custom_model
   while true; do
-    selection="$(ralph_menu_select --prompt "$menu_prompt" --default 1 -- "${saved[@]}" "$custom_placeholder")"
+    selection="$(ralph_menu_select --prompt "$menu_prompt" --default "$default_index" -- "${menu_choices[@]}" "$custom_placeholder")"
     if [[ -z "$selection" ]]; then
       echo ""
       return 0

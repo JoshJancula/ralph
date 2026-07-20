@@ -208,7 +208,29 @@ ralph_native_shell_launch_process_group() {
   fi
 
   if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    if [[ "$isolated" == "true" ]]; then
+      # setsid()/os.setsid() runs in the child after fork, so reading the
+      # pgid immediately can race it and capture the launcher's own process
+      # group. A later timeout group-kill on that pgid would take down this
+      # process (and, inside the MCP server, the stdio transport with it).
+      # Poll briefly until the child detaches into its own group.
+      local _launch_self_pgid _launch_waited=0
+      _launch_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+      while (( _launch_waited < 40 )); do
+        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+        [[ -n "$pgid" ]] || break
+        [[ -z "$_launch_self_pgid" || "$pgid" != "$_launch_self_pgid" ]] && break
+        sleep 0.05
+        ((_launch_waited++)) || true
+      done
+      if [[ -n "$pgid" && -n "$_launch_self_pgid" && "$pgid" == "$_launch_self_pgid" ]]; then
+        # Never treat a job that shares our process group as isolated;
+        # terminate must use the pid tree, not a group kill.
+        isolated="false"
+      fi
+    else
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    fi
     sid="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
   fi
   [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="$pid"
@@ -235,6 +257,20 @@ ralph_native_shell_launch_process_group_json() {
 ralph_native_shell_terminate_spawned_job() {
   local pid="${1:-}" pgid="${2:-}" isolated="${3:-false}" max_wait="${4:-1}"
   local escalated=0
+
+  # Last-line guard against the setsid race: re-read the job's live pgid and
+  # refuse to group-kill our own process group. Killing it would terminate
+  # this process too -- inside the MCP server that means the stdio transport
+  # dies and the client drops every ralph tool mid-session.
+  if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
+    local _term_self_pgid _term_live_pgid
+    _term_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+    _term_live_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    [[ -n "$_term_live_pgid" ]] && pgid="$_term_live_pgid"
+    if [[ -n "$_term_self_pgid" && "$pgid" == "$_term_self_pgid" ]]; then
+      isolated="false"
+    fi
+  fi
 
   if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
     if [[ "$pgid" =~ ^[0-9]+$ ]]; then
