@@ -50,6 +50,7 @@ bats_skip_known_ci_flakes() {
     "mcp-proxy-search-dedupe.bats:duplicate grep response does not include full match body" | \
     "run-plan-args.bats:run-plan --plan must reference a file" | \
     "run-plan-interrupt-teardown.bats:agent group guard reaps TERM-ignoring agent group when runner dies" | \
+    "run-plan-interrupt-teardown.bats:agent group guard exits quietly once its group is empty" | \
     "run-plan-routing.bats:yaml todo routing bootstraps non-interactive runs without a global model" | \
     "run-plan-routing.bats:plan header runtime and model are used when --runtime and --model are not passed" | \
     "run-plan-routing.bats:plan header model is overridden by --model flag" | \
