@@ -1095,11 +1095,7 @@ ralph_run_plan_invoke_codex() {
     cd "$WORKSPACE" || {
       return 1
     }
-    local cli_pid
-    "$cli" "${args[@]}" &
-    cli_pid=$!
-    run_plan_invoke_common_record_cli_pid "$cli_pid"
-    wait "$cli_pid"
+    run_plan_invoke_common_launch_cli codex "$cli" "${args[@]}"
   }
 
   run_plan_invoke_common_execute \

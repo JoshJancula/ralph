@@ -42,6 +42,7 @@ setup_orchestrator_mcp_workspace() {
   cp "$RALPH_DIR/bash-lib/runtime-resolve.sh" "$workspace/.ralph/bash-lib/"
   cp "$RALPH_DIR/bash-lib/runtime-normalize.sh" "$workspace/.ralph/bash-lib/"
   cp "$RALPH_DIR/bash-lib/ralph-process-teardown.sh" "$workspace/.ralph/bash-lib/"
+  cp "$RALPH_DIR/bash-lib/ralph-process-supervisor.sh" "$workspace/.ralph/bash-lib/"
   cp -R "$RALPH_DIR/bash-lib/mcp" "$workspace/.ralph/bash-lib/"
   cp "$RALPH_DIR/bash-lib/artifacts.sh" "$workspace/.ralph/bash-lib/"
   cp "$RALPH_DIR/bash-lib/orchestrator/orchestrator-logging.sh" "$workspace/.ralph/bash-lib/orchestrator/"

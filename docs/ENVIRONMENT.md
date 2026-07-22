@@ -16,6 +16,32 @@ Ralph distinguishes three roots (see also [AGENTS.md](../AGENTS.md#three-root-mo
 
 `RALPH_MCP_WORKSPACE` is the project root passed to the MCP server. Plan-run injection also forwards `RALPH_PROJECT_ROOT`, `RALPH_AGENT_WORKSPACE`, and `RALPH_PLAN_WORKSPACE_ROOT` when set. Standalone servers that set only `RALPH_MCP_WORKSPACE` keep backward-compatible behavior.
 
+## Process lifecycle and orphan prevention
+
+Python 3 is required for plan and orchestration execution. Ralph starts a detached guardian for each run and launches every runtime, orchestration stage, verification command, and speculative cache-warm command in a recorded OS session. Active state lives under `.ralph-workspace/processes/active/<run-id>/`; lifecycle events are appended to `process-lifecycle.jsonl`. Records contain process identity and routing metadata, never prompts, command output, or credentials.
+
+On interruption or owner death, Ralph stops the recorded scope root first, sends `TERM`, rescans for late children during the grace period, sends `KILL` to verified survivors, and performs a final rescan. Session identity and a random per-scope environment token cover descendants that create another process group or session. A canonical plan lease rejects a second active runner for the same plan.
+
+| Variable | Purpose |
+|----------|---------|
+| `RALPH_PROCESS_MAX_SCOPE_LIVE` | Maximum live processes in one managed scope before Ralph aborts it. Default `128`. |
+| `RALPH_PROCESS_MAX_RUN_LIVE` | Maximum unique live processes across a run before Ralph aborts all scopes. Default `256`. |
+| `RALPH_PROCESS_TERM_GRACE_SECONDS` | Rescanning `TERM` grace period. Default `5`. |
+| `RALPH_PROCESS_KILL_GRACE_SECONDS` | Final `KILL` and survivor-check period. Default `2`. |
+| `RALPH_PROCESS_SCAN_INTERVAL_SECONDS` | Interval for the guardian's session-only runaway-limit sample. Default `10`; normal child waiting is event-driven and escaped-session token discovery runs only during teardown. |
+| `RALPH_ALLOW_NESTED_RUNS` | Nested Ralph runs are rejected by default. Set `1` only for intentional nesting. Orchestrator-to-stage attachment is allowed automatically. |
+| `RALPH_PROCESS_MAX_NESTED_DEPTH` | Maximum intentional nested-run depth when nesting is enabled. Default `1`. |
+
+Process-limit aborts exit `78`; verified survivors after escalation exit `79`. Inspect or stop runs with:
+
+```bash
+ralph process list --workspace .
+ralph process list --workspace-root /path/to/state --json
+ralph process stop --run <run-id> --workspace .
+ralph process stop --plan PLAN.md --workspace .
+ralph process stop --all --workspace . --force
+```
+
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_PLAN_RUNTIME` | Default CLI runtime when `--runtime` is omitted (`cursor`, `claude`, `codex`, `opencode`, `antigravity`). |

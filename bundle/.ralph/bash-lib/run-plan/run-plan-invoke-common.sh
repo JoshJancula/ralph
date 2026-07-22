@@ -69,6 +69,7 @@ source "$_ralph_invoke_common_dir/run-plan-structured-output.sh"
 #   run_plan_invoke_common_add_resume_args -- dispatch session vs bare resume argv builders.
 #   run_plan_invoke_common_add_cli_resume_flags -- append runtime-specific JSON/resume flags when python3 exists.
 #   run_plan_invoke_common_record_cli_pid -- record live runtime CLI PID to sidecar file.
+#   run_plan_invoke_common_launch_cli -- launch through the durable scope supervisor.
 #   run_plan_invoke_common_execute -- pipe CLI through demux+tee or plain tee; writes EXIT_CODE_FILE.
 
 run_plan_invoke_common_add_model_flag() {
@@ -118,6 +119,23 @@ run_plan_invoke_common_record_cli_pid() {
   if [[ -n "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" ]]; then
     printf '%s\n' "$cli_pid" > "$RALPH_PLAN_INVOCATION_CLI_PID_FILE" 2>/dev/null || true
   fi
+}
+
+run_plan_invoke_common_launch_cli() {
+  local runtime="$1"
+  shift
+  if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+    ralph_process_scope_exec runtime "$runtime" "$@"
+    return $?
+  fi
+
+  # Direct helper tests and third-party callers may source an invoker outside
+  # run-plan. Preserve that API while the actual Ralph runner always initializes
+  # the required supervisor before reaching this function.
+  "$@" &
+  local cli_pid=$!
+  run_plan_invoke_common_record_cli_pid "$cli_pid"
+  wait "$cli_pid"
 }
 
 run_plan_invoke_common_execute() {

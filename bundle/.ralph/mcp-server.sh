@@ -679,6 +679,18 @@ handle_run_plan() {
   local id_present="$2"
   local id_raw="$3"
   local workspace_arg plan_arg runtime_arg agent_arg non_interactive_arg tool_access_arg
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" != "1" ]]; then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph runs are disabled for managed runtime sessions (set RALPH_ALLOW_NESTED_RUNS=1 to opt in)"
+    return
+  fi
+  local process_depth="${RALPH_PROCESS_RUN_DEPTH:-0}" process_max_depth="${RALPH_PROCESS_MAX_NESTED_DEPTH:-1}"
+  [[ "$process_depth" =~ ^[0-9]+$ ]] || process_depth=0
+  [[ "$process_max_depth" =~ ^[0-9]+$ ]] || process_max_depth=1
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" == "1" ]] \
+    && (( process_depth >= process_max_depth )); then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph run depth limit reached"
+    return
+  fi
   workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
   plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
   runtime_arg="$(echo "$args_json" | jq -r '.runtime // empty')"
@@ -861,6 +873,18 @@ handle_orchestrator_run() {
   local id_present="$2"
   local id_raw="$3"
   local workspace_arg orchestration_arg dry_run_arg
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" != "1" ]]; then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph runs are disabled for managed runtime sessions (set RALPH_ALLOW_NESTED_RUNS=1 to opt in)"
+    return
+  fi
+  local process_depth="${RALPH_PROCESS_RUN_DEPTH:-0}" process_max_depth="${RALPH_PROCESS_MAX_NESTED_DEPTH:-1}"
+  [[ "$process_depth" =~ ^[0-9]+$ ]] || process_depth=0
+  [[ "$process_max_depth" =~ ^[0-9]+$ ]] || process_max_depth=1
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" == "1" ]] \
+    && (( process_depth >= process_max_depth )); then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph run depth limit reached"
+    return
+  fi
   workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
   orchestration_arg="$(echo "$args_json" | jq -r '.orchestration_path // empty')"
   dry_run_arg="$(echo "$args_json" | jq -r '.dry_run // false')"

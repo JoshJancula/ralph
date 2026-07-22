@@ -83,6 +83,10 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
   [ "$status" -eq 0 ]
   [[ "$output" == *"No workspaces registered."* ]]
 
+  run env HOME="$temp_home" RALPH_HOME="$ralph_home" "$shim" process list --workspace "$temp_home"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No active Ralph process runs."* ]]
+
   run env HOME="$temp_home" RALPH_HOME="$ralph_home" XDG_CONFIG_HOME="$xdg_config" XDG_STATE_HOME="$xdg_state" \
     bash "$REPO_ROOT/install.sh" --global --silent --no-dashboard
 

@@ -546,13 +546,9 @@ ralph_run_plan_invoke_claude() {
 
   run_plan_invoke_claude_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
-    local cli_pid
     printf '%s' "$PROMPT" | (
       cd "$agent_ws" || exit 1
-      "$cli" "${args[@]}" &
-      cli_pid=$!
-      run_plan_invoke_common_record_cli_pid "$cli_pid"
-      wait "$cli_pid"
+      run_plan_invoke_common_launch_cli claude "$cli" "${args[@]}"
     )
   }
 

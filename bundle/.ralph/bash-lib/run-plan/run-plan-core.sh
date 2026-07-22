@@ -1277,6 +1277,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-post-verify.sh"
 source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-policy.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/ralph-process-teardown.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/ralph-process-supervisor.sh"
 
 ralph_plan_hint_feed_forward_enabled() {
   local raw="${RALPH_PLAN_HINT_FEED_FORWARD:-1}"
@@ -1685,6 +1687,12 @@ export RALPH_PROJECT_ROOT="$WORKSPACE"
 export RALPH_PLAN_WORKSPACE_ROOT
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
 unset RALPH_MCP_PROXY_LOG_FILE
+
+# Acquire the canonical plan lease and start (or structurally attach to) the
+# detached process guardian before any runtime overlays or model processes are
+# created. Python 3 is a required dependency because safe cross-platform
+# session discovery cannot be implemented reliably in portable shell.
+ralph_process_run_init "$RALPH_PLAN_WORKSPACE_ROOT" "$WORKSPACE" "$PLAN_PATH" plan || exit $?
 
 RALPH_PLAN_HINT_FEED_FORWARD="${RALPH_PLAN_HINT_FEED_FORWARD:-1}"
 export RALPH_PLAN_HINT_FEED_FORWARD
@@ -4850,6 +4858,10 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       exit_code="$(cat "$EXIT_CODE_FILE")"
       _exit_code_synthetic=0
       rm -f "$EXIT_CODE_FILE"
+    fi
+    if ! ralph_process_check_abort; then
+      exit_code=78
+      _exit_code_synthetic=0
     fi
     set -e
     ralph_run_plan_abort_if_kill_switch

@@ -43,6 +43,7 @@ ralph_run_plan_exit_trap_handler() {
     _ralph_finalize_plan_usage_on_exit
   fi
   ralph_run_plan_process_teardown_on_exit
+  ralph_process_run_close "run-plan-exit" || true
   prompt_cleanup_on_exit
 }
 
@@ -70,6 +71,7 @@ ralph_run_plan_interrupt_trap_handler() {
   # Kill the agent process group before any bookkeeping so a slow or failing
   # usage finalization can never leave the agent tree running.
   ralph_run_plan_process_teardown_on_exit
+  ralph_process_run_close "run-plan-signal-${signal}" || true
   printf '[%s] Agent process tree terminated.\n' "$(date '+%H:%M:%S')" >&2
 
   if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then

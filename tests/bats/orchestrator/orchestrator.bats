@@ -5,7 +5,7 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 setup_orchestrator_workspace() {
   local workspace
   workspace="$(mktemp -d)"
-  mkdir -p "$workspace/.ralph/bash-lib/orchestrator"
+  mkdir -p "$workspace/.ralph/bash-lib/orchestrator" "$workspace/.ralph/python"
   cp "$REPO_ROOT/.ralph/ralph-env-safety.sh" "$workspace/.ralph/"
   cp "$REPO_ROOT/.ralph/bash-lib/error-handling.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/runtime-resolve.sh" "$workspace/.ralph/bash-lib/"
@@ -21,6 +21,8 @@ setup_orchestrator_workspace() {
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/review-status.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-teardown.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-supervisor.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/python/ralph_process_supervisor.py" "$workspace/.ralph/python/"
   cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1668,7 +1670,6 @@ ctrlc_expected_log() {
 }
 
 @test "orchestrator teardown stops sequential run-plan and descendant processes on SIGTERM" {
-  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
   local workspace output_dir orch_file log_file
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"
@@ -1677,6 +1678,7 @@ ctrlc_expected_log() {
   log_file="$(ctrlc_expected_log "$output_dir" "stages/ctrlc.plan.md")"
 
   env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    RALPH_PROCESS_TERM_GRACE_SECONDS=0.2 RALPH_PROCESS_KILL_GRACE_SECONDS=0.2 \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
@@ -1684,8 +1686,8 @@ ctrlc_expected_log() {
   sleep 0.2
 
   kill -TERM "$orch_pid"
-  wait "$orch_pid" 2>/dev/null || true
-  local rc=$?
+  local rc=0
+  wait "$orch_pid" 2>/dev/null || rc=$?
 
   sleep 0.5
 
@@ -1773,7 +1775,6 @@ ctrlc_expected_log() {
 }
 
 @test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGTERM" {
-  skip "signal-driven process-group teardown is environment-dependent and flaky in CI; unit-level teardown coverage remains active"
   local workspace output_dir orch_file log_a log_b
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"
@@ -1783,6 +1784,7 @@ ctrlc_expected_log() {
   log_b="$(ctrlc_expected_log "$output_dir" "stages/ctrlc-beta.plan.md")"
 
   env CTRLC_OUTPUT_DIR="$output_dir" ORCHESTRATOR_RUNNER_TO_CONSOLE=0 \
+    RALPH_PROCESS_TERM_GRACE_SECONDS=0.2 RALPH_PROCESS_KILL_GRACE_SECONDS=0.2 \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
@@ -1791,8 +1793,8 @@ ctrlc_expected_log() {
   sleep 0.2
 
   kill -TERM "$orch_pid"
-  wait "$orch_pid" 2>/dev/null || true
-  local rc=$?
+  local rc=0
+  wait "$orch_pid" 2>/dev/null || rc=$?
 
   sleep 0.5
 

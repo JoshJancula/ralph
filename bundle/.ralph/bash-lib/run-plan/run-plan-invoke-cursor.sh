@@ -245,11 +245,7 @@ ralph_run_plan_invoke_cursor() {
   args+=("$PROMPT")
 
   run_plan_invoke_cursor_cli() {
-    local cli_pid
-    "$cli" "${args[@]}" &
-    cli_pid=$!
-    run_plan_invoke_common_record_cli_pid "$cli_pid"
-    wait "$cli_pid"
+    run_plan_invoke_common_launch_cli cursor "$cli" "${args[@]}"
   }
 
   local invoke_status=0

@@ -7,6 +7,8 @@ There are two ways to install Ralph:
 
 Start with the global install unless your team needs Ralph's files checked into the repository.
 
+Ralph plan execution requires Python 3. The process guardian uses only the Python standard library; no Python packages are installed.
+
 ## Global install (recommended)
 
 ```bash
@@ -50,6 +52,8 @@ ralph dashboard                                                # start the dashb
 ralph workspaces list                                          # list registered projects
 ralph config killswitch init                                   # add per-project killswitch config
 ralph config killswitch                                        # show active killswitch source and paths
+ralph process list --workspace .                               # inspect managed runtime/stage processes
+ralph process stop --all --workspace .                         # stop active Ralph runs safely
 ralph setup --runtime claude --runtime-dir ~/.claude --hooks   # durable Claude compaction hooks in your user runtime
 ralph setup --runtime claude --hooks --mcp                     # project-local hooks + MCP for a runtime
 ralph install ...                                              # re-run the installer

@@ -175,6 +175,7 @@ Commands:
   setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
   config       Manage Ralph configuration (see: ralph config --help)
   agent        Manage agent profiles (see: ralph agent --help)
+  process      List or stop managed Ralph process runs (see: ralph process --help)
 
 Options:
   --bundle-path  Print the bundled .ralph directory (for scripts)
@@ -228,6 +229,16 @@ Subcommands:
           --workspace <path>       Workspace directory (default: current directory).
 
         For a multi-stage orchestration, use: ralph create orc
+USAGE
+}
+
+ralph_process_usage() {
+  cat <<'USAGE'
+Usage: ralph process <subcommand> [options]
+
+Subcommands:
+  list [--workspace PATH] [--workspace-root PATH] [--json]
+  stop (--run ID|--plan PATH|--all) [--workspace PATH] [--workspace-root PATH] [--force]
 USAGE
 }
 
@@ -485,6 +496,68 @@ case "$cmd" in
       exit 1
     fi
     exec bash "$agent_cli" "$@"
+    ;;
+  process)
+    sub="${1:-}"
+    if [[ -z "$sub" || "$sub" == "-h" || "$sub" == "--help" ]]; then
+      ralph_process_usage
+      [[ -z "$sub" ]] && exit 1 || exit 0
+    fi
+    shift
+    process_workspace="$PWD"
+    process_state_root=""
+    process_plan=""
+    process_args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --workspace)
+          [[ -n "${2:-}" ]] || { echo "Error: --workspace requires a path" >&2; exit 1; }
+          process_workspace="$2"
+          shift 2
+          ;;
+        --workspace-root)
+          [[ -n "${2:-}" ]] || { echo "Error: --workspace-root requires a path" >&2; exit 1; }
+          process_state_root="$2"
+          shift 2
+          ;;
+        --plan)
+          [[ -n "${2:-}" ]] || { echo "Error: --plan requires a path" >&2; exit 1; }
+          process_plan="$2"
+          shift 2
+          ;;
+        *)
+          process_args+=("$1")
+          shift
+          ;;
+      esac
+    done
+    if [[ -n "$process_plan" ]]; then
+      if [[ "$process_plan" == /* ]]; then
+        process_args+=(--plan "$process_plan")
+      else
+        process_args+=(--plan "$process_workspace/$process_plan")
+      fi
+    fi
+    [[ -n "$process_state_root" ]] || process_state_root="$process_workspace/.ralph-workspace"
+    process_script="$RALPH_HOME/bundle/.ralph/python/ralph_process_supervisor.py"
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "Error: ralph process requires Python 3." >&2
+      exit 2
+    fi
+    if [[ ! -f "$process_script" ]]; then
+      echo "Error: process supervisor not found: $process_script" >&2
+      exit 1
+    fi
+    case "$sub" in
+      list|stop)
+        exec python3 "$process_script" "$sub" --state-root "$process_state_root" "${process_args[@]}"
+        ;;
+      *)
+        echo "Error: unknown ralph process subcommand: $sub" >&2
+        ralph_process_usage >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "Error: unknown ralph command: $cmd" >&2

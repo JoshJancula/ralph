@@ -72,7 +72,13 @@ _ralph_exec_verification_watchdog() {
   tmp="$(mktemp 2>/dev/null || printf '/tmp/ralph-verify-%s.out' "$$")"
   RALPH_VERIFY_EXEC_TIMED_OUT=0
 
-  ( cd "$workspace" && env -i HOME="$HOME" PATH="$PATH" bash -c "$cmd" </dev/null >"$tmp" 2>&1 ) &
+  if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+    ralph_process_scope_exec verify shell bash -c \
+      'cd "$1" && exec env -i HOME="$HOME" PATH="$PATH" RALPH_PROCESS_SCOPE_TOKEN="$RALPH_PROCESS_SCOPE_TOKEN" bash -c "$2"' \
+      _ "$workspace" "$cmd" </dev/null >"$tmp" 2>&1 &
+  else
+    ( cd "$workspace" && env -i HOME="$HOME" PATH="$PATH" bash -c "$cmd" </dev/null >"$tmp" 2>&1 ) &
+  fi
   local cmd_pid=$!
 
   local waited=0
@@ -128,7 +134,13 @@ _ralph_exec_verification_command() {
   if [[ -n "$timeout_bin" ]]; then
     local out exit_code
     set +e
-    out="$(cd "$workspace" && env -i HOME="$HOME" PATH="$PATH" "$timeout_bin" "$secs" bash -c "$cmd" </dev/null 2>&1)"
+    if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+      out="$(ralph_process_scope_exec verify shell bash -c \
+        'cd "$1" && exec env -i HOME="$HOME" PATH="$PATH" RALPH_PROCESS_SCOPE_TOKEN="$RALPH_PROCESS_SCOPE_TOKEN" "$2" "$3" bash -c "$4"' \
+        _ "$workspace" "$timeout_bin" "$secs" "$cmd" </dev/null 2>&1)"
+    else
+      out="$(cd "$workspace" && env -i HOME="$HOME" PATH="$PATH" "$timeout_bin" "$secs" bash -c "$cmd" </dev/null 2>&1)"
+    fi
     exit_code=$?
     set -e
     RALPH_VERIFY_EXEC_OUTPUT="$out"

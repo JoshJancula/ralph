@@ -215,6 +215,8 @@ Ralph preserves each runtime's native user, project, and local/private configura
 
 All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
 
+Runtime processes are separately protected by the detached process guardian. Each launch is recorded under `.ralph-workspace/processes/active/` and isolated in an OS session before Ralph waits for it. This lets cleanup find runtime children even after nested shells create sibling process groups or the main runner is killed. See [ENVIRONMENT.md](ENVIRONMENT.md#process-lifecycle-and-orphan-prevention) for limits and operator commands.
+
 ### Claude
 
 Ralph reads `<workspace>/.claude/settings.json`. If the Ralph hook entries are already installed (`block-env-reads.sh`, `rewrite-bash-command.sh`, `compact-bash-output.sh`), it leaves the file alone; otherwise it merges the hook groups in and restores the file on exit.

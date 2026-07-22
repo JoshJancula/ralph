@@ -246,6 +246,13 @@ fi
 # Shared process teardown helpers: kill process trees, process groups, and reap.
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/ralph-process-teardown.sh"
+# shellcheck source=/dev/null
+source "$RALPH_ACTIVE_DIR/bash-lib/ralph-process-supervisor.sh"
+
+# The orchestration guardian owns every sequential and parallel stage. Stage
+# run-plan processes attach structurally to this registry, so runtime sessions
+# remain visible even though output pipelines create additional process groups.
+ralph_process_run_init "$RALPH_PLAN_WORKSPACE_ROOT" "$WORKSPACE" "$ORCH_FILE" orchestrator || exit $?
 
 # ---------------------------------------------------------------------------
 # Process tracking and signal handling for sequential + parallel stages.
@@ -295,6 +302,10 @@ orch_interrupt_teardown() {
 
   ralph_orchestrator_log "orchestrator received signal ${signal}; tearing down tracked processes"
 
+  # Registry-backed sessions are authoritative. This includes runtime CLIs
+  # that called setsid beneath a stage and therefore escaped its pipeline PGID.
+  ralph_process_stop_active "orchestrator-signal-${signal}" || true
+
   # Stop the active sequential runner and reap it.
   if [[ "$ORCH_RUNNER_PID" =~ ^[0-9]+$ ]] && kill -0 "$ORCH_RUNNER_PID" 2>/dev/null; then
     ralph_kill_tree_and_reap "$ORCH_RUNNER_PID" 2>/dev/null || true
@@ -317,12 +328,9 @@ orch_interrupt_teardown() {
 
 orch_signal_handler() {
   local signal="$1"
-  # Reset trap to default so a second signal kills us immediately.
-  case "$signal" in
-    INT)  trap - INT ;;
-    TERM) trap - TERM ;;
-    HUP)  trap - HUP ;;
-  esac
+  # Repeated signals stay ignored until registry teardown finishes. Restoring
+  # defaults here could kill the orchestrator between TERM and KILL passes.
+  trap '' INT TERM HUP
   orch_interrupt_teardown "$signal"
 }
 
@@ -408,7 +416,7 @@ orch_single_stage_write_report() {
 # EXIT trap for single-stage mode: if the stage terminated before a report was
 # written (runner failure, artifact failure, or a signal), emit a failed or
 # cancelled report using the process exit code, without masking it.
-orch_single_stage_exit_trap() {
+orch_exit_trap() {
   local ec=$?
   if [[ "${SINGLE_STAGE_MODE:-0}" == "1" && "${SINGLE_STAGE_REPORT_WRITTEN:-0}" != "1" ]]; then
     local outcome="failed" reason="stage terminated before completion"
@@ -418,12 +426,11 @@ orch_single_stage_exit_trap() {
     fi
     orch_single_stage_write_report "$outcome" "$ec" "$reason" || true
   fi
+  ralph_process_run_close "orchestrator-exit" || true
   return "$ec"
 }
 
-if [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]]; then
-  trap 'orch_single_stage_exit_trap' EXIT
-fi
+trap 'orch_exit_trap' EXIT
 
 # Inlined here (not only bash-lib/orchestrator-verify.sh) so this script stays self-contained for operators.
 artifact_remediation_text() {
@@ -1256,7 +1263,8 @@ orch_stage_run_runner() {
     _runner_pidfile="$(mktemp)" || _runner_pidfile="/dev/null"
     _runner_exitfile="$(mktemp)" || _runner_exitfile="/dev/null"
     {
-      env "$@" bash "$runner" "${_runner_args[@]}" 2>&1
+      ralph_process_scope_exec stage orchestrator \
+        env "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" 2>&1
       printf '%s' "$?" > "$_runner_exitfile" 2>/dev/null || true
     } | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$LOG_FILE") &
     _child_pid=$!
@@ -1276,7 +1284,8 @@ orch_stage_run_runner() {
     orch_clear_runner_pid
     return "$_exit_status"
   fi
-  env "$@" bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1 &
+  ralph_process_scope_exec stage orchestrator \
+    env "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1 &
   _child_pid=$!
   orch_record_runner_pid "$_child_pid"
   wait "$_child_pid"

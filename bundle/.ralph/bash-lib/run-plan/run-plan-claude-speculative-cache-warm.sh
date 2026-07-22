@@ -259,7 +259,7 @@ ralph_claude_speculative_cache_warm_maybe_start() {
 
   (
     cd "$agent_ws" || exit 1
-    printf '%s' "." | "$cli_name" \
+    printf '%s' "." | ralph_process_scope_exec cache-warm claude "$cli_name" \
       --system-prompt "$PROMPT_STATIC" \
       --cache-control break \
       --max-output-tokens 1 \

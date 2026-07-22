@@ -21,6 +21,11 @@ _killswitch_get_descendants() {
 # then send SIGKILL to any processes that are still alive.
 killswitch_kill_process_tree() {
   local root_pid="$1"
+
+  if declare -F ralph_process_stop_active >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+    ralph_process_stop_active "killswitch" || true
+    return 0
+  fi
   local -a all_pids=()
   local desc
 
@@ -30,7 +35,10 @@ killswitch_kill_process_tree() {
   all_pids+=("$root_pid")
 
   local pid
+  # Stop the root first so it cannot replace descendants after this snapshot.
+  kill -TERM "$root_pid" 2>/dev/null || true
   for pid in "${all_pids[@]}"; do
+    [[ "$pid" == "$root_pid" ]] && continue
     kill -TERM "$pid" 2>/dev/null || true
   done
 

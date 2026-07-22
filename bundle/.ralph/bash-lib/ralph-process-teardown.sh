@@ -187,7 +187,12 @@ ralph_run_plan_agent_group_guard() {
 # Args: $1 = invoke function name
 ralph_run_plan_invoke_with_group_guard() {
   local invoke_fn="$1"
-  ralph_run_plan_agent_group_guard "$$" "$BASHPID"
+  # Managed runs use the detached session guardian, which sees sibling process
+  # groups and escaped sessions. Keep the PGID guard only for direct legacy
+  # callers that source an invoker without initializing a process run.
+  if [[ -z "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+    ralph_run_plan_agent_group_guard "$$" "$BASHPID"
+  fi
   "$invoke_fn"
 }
 
@@ -264,6 +269,13 @@ ralph_run_plan_agent_teardown() {
     return 0
   fi
   RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE=1
+
+  # The durable registry owns runtime processes. Stop its verified sessions
+  # before touching the legacy shell wrapper group so a live runtime cannot
+  # replace children while teardown walks a stale snapshot.
+  if declare -F ralph_process_stop_active >/dev/null 2>&1; then
+    ralph_process_stop_active "agent-teardown" || true
+  fi
 
   if [[ "$watchdog_pid" =~ ^[0-9]+$ ]]; then
     kill "$watchdog_pid" 2>/dev/null || true

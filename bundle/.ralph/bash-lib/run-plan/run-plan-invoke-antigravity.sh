@@ -217,11 +217,7 @@ ralph_run_plan_invoke_antigravity() {
   args+=(--print "$PROMPT")
 
   run_plan_invoke_antigravity_cli() {
-    local cli_pid
-    "$cli" "${args[@]}" &
-    cli_pid=$!
-    run_plan_invoke_common_record_cli_pid "$cli_pid"
-    wait "$cli_pid"
+    run_plan_invoke_common_launch_cli antigravity "$cli" "${args[@]}"
   }
 
   run_plan_invoke_common_execute \

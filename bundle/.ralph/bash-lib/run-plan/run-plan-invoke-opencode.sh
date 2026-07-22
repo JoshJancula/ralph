@@ -866,22 +866,15 @@ ralph_run_plan_invoke_opencode() {
 
   run_plan_invoke_opencode_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
-    local cli_pid
     if [[ -n "$opencode_config_path" ]]; then
       (
         cd "$agent_ws" || exit 1
-        OPENCODE_CONFIG="$opencode_config_path" "$cli" "${args[@]}" &
-        cli_pid=$!
-        run_plan_invoke_common_record_cli_pid "$cli_pid"
-        wait "$cli_pid"
+        run_plan_invoke_common_launch_cli opencode env OPENCODE_CONFIG="$opencode_config_path" "$cli" "${args[@]}"
       )
     else
       (
         cd "$agent_ws" || exit 1
-        "$cli" "${args[@]}" &
-        cli_pid=$!
-        run_plan_invoke_common_record_cli_pid "$cli_pid"
-        wait "$cli_pid"
+        run_plan_invoke_common_launch_cli opencode "$cli" "${args[@]}"
       )
     fi
   }

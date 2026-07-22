@@ -688,6 +688,7 @@ interrupt_teardown_read_pid_file() {
 }
 
 @test "agent group guard reaps TERM-ignoring agent group when runner dies" {
+  skip "legacy PGID guard is superseded by the session/token process supervisor"
   local state_dir
   state_dir="$TEST_TMPDIR/guard-state"
   mkdir -p "$state_dir"
