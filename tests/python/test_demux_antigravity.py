@@ -31,20 +31,34 @@ SAMPLE_LINES = [
 
 
 def _run_demux(lines: list[str]) -> dict:
+    return _run_demux_capture(lines)[0]
+
+
+def _run_demux_capture(lines: list[str], *, raw: bool = False) -> tuple[dict, str]:
+    """Run the demux over antigravity lines; return (usage doc, captured stdout).
+
+    When raw is True the lines are fed verbatim (they may embed CR/ANSI); when
+    False they are joined with newlines the way NDJSON-style callers do.
+    """
     with tempfile.TemporaryDirectory() as td:
         usage_path = str(Path(td) / "usage.json")
         sid_path = str(Path(td) / "sid.txt")
+        payload = "".join(lines) if raw else "\n".join(lines) + "\n"
         old_argv = sys.argv
         old_stdin = sys.stdin
+        old_stdout = sys.stdout
+        captured = io.StringIO()
         try:
             sys.argv = ["run-plan-cli-json-demux.py", "antigravity", sid_path, usage_path, ""]
-            sys.stdin = io.StringIO("\n".join(lines) + "\n")
+            sys.stdin = io.StringIO(payload)
+            sys.stdout = captured
             DEMUX.main()
         finally:
             sys.argv = old_argv
             sys.stdin = old_stdin
+            sys.stdout = old_stdout
         with open(usage_path, encoding="utf-8") as fh:
-            return json.load(fh)
+            return json.load(fh), captured.getvalue()
 
 
 class TestAntigravityPlainToolCallExtraction(unittest.TestCase):
@@ -67,6 +81,38 @@ class TestAntigravityPlainToolCallExtraction(unittest.TestCase):
         )
         self.assertEqual(doc["tool_calls_total"], 2)
         self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_read"), 2)
+
+
+class TestAntigravityStreamSanitizing(unittest.TestCase):
+    def test_ansi_escapes_stripped_from_stdout(self) -> None:
+        _, out = _run_demux_capture(["\x1b[32mThe answer is 42.\x1b[0m"])
+        self.assertNotIn("\x1b", out)
+        self.assertIn("The answer is 42.", out)
+
+    def test_carriage_return_redraw_keeps_final_frame(self) -> None:
+        # A spinner animation redraws in place via CR with no newline until the
+        # final result frame; only that final frame should survive.
+        _, out = _run_demux_capture(
+            ["\r- Working\r\\ Working\r| Working\rDone: result ready\n"], raw=True
+        )
+        self.assertIn("Done: result ready", out)
+        self.assertNotIn("Working", out)
+        self.assertNotIn("\r", out)
+
+    def test_pure_control_line_is_dropped(self) -> None:
+        # A line that is only cursor-control escapes collapses to nothing and
+        # must not emit a blank passthrough line.
+        _, out = _run_demux_capture(["\x1b[2K\x1b[1G", "Real content."])
+        self.assertEqual(out.strip(), "Real content.")
+
+    def test_tool_call_still_detected_after_ansi_prefix(self) -> None:
+        doc, _ = _run_demux_capture(["\x1b[36m* ralph_proxy_read(a.py)\x1b[0m"])
+        self.assertEqual(doc["tool_calls_total"], 1)
+        self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_read"), 1)
+
+    def test_clean_line_passes_through_unchanged(self) -> None:
+        _, out = _run_demux_capture(["Plain unstyled sentence."])
+        self.assertIn("Plain unstyled sentence.", out)
 
 
 class TestAntigravityUsageUnsupported(unittest.TestCase):

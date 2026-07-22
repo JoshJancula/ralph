@@ -253,6 +253,8 @@ Saved `ralph models` entries do not apply to Antigravity.
 
 `agy` emits no JSON stream, so resume does not parse stdout. After each TODO, Ralph reads the conversation id agy recorded in `${RALPH_GEMINI_HOME:-~/.gemini}/antigravity-cli/cache/last_conversations.json` and stores it at `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.antigravity.txt`. The next TODO resumes that conversation with `agy --conversation <id>`, keeping agy's session-tied prompt cache warm.
 
+Because `agy` is a TUI-first CLI, its piped stdout still carries ANSI cursor-control escapes and animated spinner/progress frames (redrawn in place with carriage returns). Ralph sanitizes antigravity output before it reaches the TUI and the compact plan log: escape sequences and stray control characters are stripped, and carriage-return redraws collapse to their final frame so only settled text is shown. The verbatim stream is still preserved when `RALPH_PLAN_RAW_OUTPUT_LOG=1` is set. Token/cache usage remains unavailable for antigravity (`usage_unsupported`) because `agy` reports none.
+
 ## Orchestrator
 
 | Variable | Purpose |

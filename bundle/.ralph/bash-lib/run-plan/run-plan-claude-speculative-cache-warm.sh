@@ -259,12 +259,21 @@ ralph_claude_speculative_cache_warm_maybe_start() {
 
   (
     cd "$agent_ws" || exit 1
-    printf '%s' "." | ralph_process_scope_exec cache-warm claude "$cli_name" \
-      --system-prompt "$PROMPT_STATIC" \
-      --cache-control break \
-      --max-output-tokens 1 \
-      --output-format stream-json \
-      >"$log_file" 2>&1
+    if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
+      printf '%s' "." | ralph_process_scope_exec cache-warm claude "$cli_name" \
+        --system-prompt "$PROMPT_STATIC" \
+        --cache-control break \
+        --max-output-tokens 1 \
+        --output-format stream-json \
+        >"$log_file" 2>&1
+    else
+      printf '%s' "." | "$cli_name" \
+        --system-prompt "$PROMPT_STATIC" \
+        --cache-control break \
+        --max-output-tokens 1 \
+        --output-format stream-json \
+        >"$log_file" 2>&1
+    fi
   ) &
   warm_pid=$!
   printf '%s\n' "$warm_pid" >"$sidecar"

@@ -118,12 +118,14 @@ ralph_process_scope_exec() {
 ralph_process_stop_active() {
   local reason="${1:-runner-teardown}"
   [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]] || return 0
-  local -a owner_args=()
-  if [[ "${RALPH_PROCESS_RUN_OWNED:-0}" != "1" ]]; then
-    owner_args=(--owner-pid "$$")
+  if [[ "${RALPH_PROCESS_RUN_OWNED:-0}" == "1" ]]; then
+    python3 "$(ralph_process_python)" stop-active \
+      --run-dir "$RALPH_PROCESS_RUN_DIR" --reason "$reason" >/dev/null 2>&1 || return $?
+  else
+    python3 "$(ralph_process_python)" stop-active \
+      --run-dir "$RALPH_PROCESS_RUN_DIR" --reason "$reason" \
+      --owner-pid "$$" >/dev/null 2>&1 || return $?
   fi
-  python3 "$(ralph_process_python)" stop-active \
-    --run-dir "$RALPH_PROCESS_RUN_DIR" --reason "$reason" "${owner_args[@]}" >/dev/null 2>&1 || return $?
 }
 
 ralph_process_check_abort() {

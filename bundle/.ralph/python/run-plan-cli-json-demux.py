@@ -102,6 +102,30 @@ def _merge_tool_call(
 
 _ANTIGRAVITY_TOOL_CALL_RE = re.compile(r"^\*\s+([\w.]+)\(")
 
+# ANSI/VT escape sequences agy's TUI emits even when its stdout is piped to a
+# non-TTY: CSI (colors, cursor moves, line erases), OSC (title/hyperlinks), and
+# the two-byte single escapes (e.g. ESC c reset, ESC = / ESC >).
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"  # CSI ... final byte
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+    r"|\x1b[@-Z\\-_]"  # two-byte escapes
+)
+
+
+def _sanitize_antigravity_line(line: str) -> str:
+    """Collapse carriage-return redraws and strip ANSI/control noise from an agy
+    TUI line so piped output reads as clean text.
+
+    agy is a TUI-first CLI; piped to a non-TTY it still emits cursor-control
+    escapes and animated spinner/progress frames separated by carriage returns
+    (no newline). A terminal shows only the final frame of such a redraw, so we
+    keep the text after the last CR, remove escape sequences, and drop any
+    remaining C0 control characters (tab preserved for downstream wrapping)."""
+    if "\r" in line:
+        line = line.split("\r")[-1]
+    line = _ANSI_ESCAPE_RE.sub("", line)
+    return "".join(ch for ch in line if ch == "\t" or ch >= " ")
+
 
 def _extract_antigravity_plain_tool_call(line: str, acc: Dict[str, Any]) -> None:
     """Recognize agy's plain-text tool-call bullet convention (`* toolname(args)`)."""
@@ -979,9 +1003,16 @@ def main() -> None:
         try:
             o = json.loads(line)
         except json.JSONDecodeError:
-            plain_lines = [line]
             if mode == "antigravity":
+                # agy emits no JSON stream; sanitize its TUI noise before the
+                # line reaches the log, the pretty renderer, or tool-call
+                # detection. The raw stream is still preserved verbatim in
+                # raw_output_log above.
+                line = _sanitize_antigravity_line(line)
+                if not line.strip():
+                    continue
                 _extract_antigravity_plain_tool_call(line, usage_acc)
+            plain_lines = [line]
             completion_sentinel_seen = _note_completion_sentinel(
                 plain_lines, completion_sentinel_seen
             )

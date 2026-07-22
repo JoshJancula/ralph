@@ -2,6 +2,15 @@
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
+teardown() {
+  # Safety net for the ctrl-c teardown tests: their stub run-plan.sh ignores
+  # INT/TERM/HUP by design, so a failed assertion or an interrupted run can
+  # leave immortal spinners behind (they reparent to init and burn CPU forever).
+  # Force-kill any surviving stub family by marker. pkill exits non-zero when
+  # nothing matches, which is the normal case, so swallow that.
+  pkill -9 -f 'run-plan\.sh.*ctrlc.*\.plan\.md' 2>/dev/null || true
+}
+
 setup_orchestrator_workspace() {
   local workspace
   workspace="$(mktemp -d)"
@@ -1513,19 +1522,28 @@ ORCH
   rm -rf "$workspace"
 }
 
-# Generate a stub run-plan that ignores SIGINT and spawns descendants.# Generate a stub run-plan that ignores SIGINT/SIGTERM/SIGHUP and spawns descendants.
+# Generate a stub run-plan that ignores SIGINT/SIGTERM/SIGHUP and spawns descendants.
 # Usage: build_ctrlc_stub > "$workspace/.ralph/run-plan.sh"
 build_ctrlc_stub() {
   cat <<'CTRLC_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 plan_path=""
+workspace_dir=""
 while (($# > 0)); do
   case "$1" in
     --plan) plan_path="${2:-}"; shift 2 ;;
+    --workspace) workspace_dir="${2:-}"; shift 2 ;;
     *) shift ;;
   esac
 done
+# Liveness anchor: if the workspace is torn down out from under us, self-destruct.
+# Prevents immortal orphans spinning on a deleted workspace when a teardown test
+# fails an assertion or is interrupted before the orchestrator force-kills us.
+if [[ -z "$workspace_dir" ]]; then
+  _stub_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
+  workspace_dir="$(dirname "$_stub_dir")"
+fi
 plan_tag="${plan_path##*/}"
 plan_tag="${plan_tag%.*}"
 plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
@@ -1542,10 +1560,22 @@ trap '' INT TERM HUP
   done
 ) &
 descendant_pid=$!
+# Hard lifetime cap: even if every reaper fails, self-destruct. Real teardown
+# fires in well under a second, so this only ever catches a wedged/orphaned stub.
+runner_pid=$$
+(
+  sleep "${RALPH_CTRLC_STUB_MAX_LIFETIME:-120}"
+  kill -9 "$runner_pid" "$descendant_pid" 2>/dev/null || true
+) &
+watchdog_pid=$!
 printf 'descendant-pid=%s\n' "$descendant_pid" >> "$output_log"
 printf 'runner-pid=%s\n' "$$" >> "$output_log"
-# Keep the runner alive until killed.
+# Keep the runner alive until killed, but self-destruct if the workspace is gone.
 while true; do
+  if [[ -n "$workspace_dir" && ! -d "$workspace_dir" ]]; then
+    kill -9 "$descendant_pid" "$watchdog_pid" 2>/dev/null || true
+    exit 137
+  fi
   printf 'runner-alive %s\n' "$plan_tag" >> "$output_log"
   sleep 0.05
 done
