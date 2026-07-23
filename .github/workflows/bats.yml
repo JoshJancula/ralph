@@ -114,10 +114,9 @@ jobs:
   process-lifecycle:
     name: Process lifecycle (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # macOS process-lifecycle tests are kept for signal but do not block merges:
-    # they exercise pgrep/setsid/signal semantics that differ from Linux and have
-    # historically been flaky on macOS runners. The Linux leg still blocks.
-    continue-on-error: ${{ matrix.os == 'macos-15' }}
+    # The process-supervisor suite is portable and remains blocking on both OSes.
+    # The orchestration fixture below depends on process-group/session behavior
+    # that is stable on Linux but does not start reliably on macOS runners.
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +138,8 @@ jobs:
           bin/bats -T
           tests/bats/run-plan/run-plan-process-supervisor.bats
 
-      - name: Run blocking orchestration TERM teardown tests
+      - name: Run Linux orchestration TERM teardown tests
+        if: matrix.os == 'ubuntu-24.04'
         run: >-
           bin/bats -T tests/bats/orchestrator/orchestrator.bats
           --filter 'orchestrator teardown stops .* on SIGTERM'
