@@ -5,6 +5,14 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 TEARDOWN_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/ralph-process-teardown.sh"
 CLEANUP_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-cleanup.sh"
 
+setup_file() {
+  # Teardown tests spawn real process groups and this file's teardown() does a
+  # child-scoped pkill; running them concurrently races their process cleanup and
+  # can drop a test from the parallel run. Serialize within this file; other files
+  # still parallelize.
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+}
+
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
   export WORKSPACE="$TEST_TMPDIR/workspace"

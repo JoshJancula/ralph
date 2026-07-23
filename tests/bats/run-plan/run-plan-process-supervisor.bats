@@ -5,6 +5,14 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 SUPERVISOR_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/ralph-process-supervisor.sh"
 SUPERVISOR_PY="$REPO_ROOT/bundle/.ralph/python/ralph_process_supervisor.py"
 
+setup_file() {
+  # Process-supervisor tests start and reap real managed processes. Running them
+  # concurrently within this file races their state dirs and reaping and can drop
+  # a test from the parallel run. Serialize within this file; other files still
+  # parallelize.
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+}
+
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
   STATE_ROOT="$TEST_TMPDIR/state"

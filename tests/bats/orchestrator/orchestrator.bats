@@ -2,6 +2,15 @@
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
+setup_file() {
+  # These signal-driven tests spawn real process groups, and teardown() below
+  # force-kills survivors by a global pattern. Running two of them concurrently
+  # lets one test's teardown reap another's still-running stub, which can drop a
+  # test from the parallel run (Bats reports "Executed N instead of expected N+1").
+  # Serialize within this file; other files still parallelize.
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+}
+
 teardown() {
   # Safety net for the ctrl-c teardown tests: their stub run-plan.sh ignores
   # INT/TERM/HUP by design, so a failed assertion or an interrupted run can

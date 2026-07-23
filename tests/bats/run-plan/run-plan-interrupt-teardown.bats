@@ -16,6 +16,14 @@ RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
 TEARDOWN_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/ralph-process-teardown.sh"
 CLEANUP_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-cleanup.sh"
 
+setup_file() {
+  # Interrupt/teardown tests spawn real, signal-ignoring process groups. Running
+  # them concurrently within this file races their kill/cleanup logic and can drop
+  # a test from the parallel run. Serialize within this file; other files still
+  # parallelize.
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+}
+
 interrupt_teardown_setup_workspace() {
   local workspace="$1"
   local select_model_dir="$workspace/.cursor/ralph"

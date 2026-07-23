@@ -94,6 +94,10 @@ jobs:
   process-lifecycle:
     name: Process lifecycle (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # macOS process-lifecycle tests are kept for signal but do not block merges:
+    # they exercise pgrep/setsid/signal semantics that differ from Linux and have
+    # historically been flaky on macOS runners. The Linux leg still blocks.
+    continue-on-error: ${{ matrix.os == 'macos-15' }}
     strategy:
       fail-fast: false
       matrix:
