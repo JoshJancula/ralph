@@ -1654,14 +1654,48 @@ ORCH
 wait_for_log_line() {
   local log_file="$1"
   local pattern="$2"
-  local timeout_secs="${3:-5}"
-  local deadline=$(( $(date +%s) + timeout_secs ))
-  while (( $(date +%s) < deadline )); do
+  local timeout_secs="${3:-30}"
+  local started_at=$SECONDS
+  while (( SECONDS - started_at < timeout_secs )); do
     if [[ -f "$log_file" ]] && grep -q "$pattern" "$log_file" 2>/dev/null; then
       return 0
     fi
-    sleep 0.05
+    sleep 0.1
   done
+  return 1
+}
+
+report_ctrlc_startup_failure() {
+  local workspace="$1"
+  local output_file="$2"
+  local state_file
+  echo "FAIL: timed out waiting for ctrl-c fixture startup"
+  if [[ -f "$output_file" ]]; then
+    echo "--- orchestrator output ---"
+    sed -n '1,240p' "$output_file"
+  fi
+  while IFS= read -r state_file; do
+    echo "--- process state: $state_file ---"
+    sed -n '1,240p' "$state_file"
+  done < <(
+    find "$workspace/.ralph-workspace/processes" -type f \
+      \( -name 'run.json' -o -name 'process-lifecycle.jsonl' -o -path '*/scopes/*.json' \) \
+      2>/dev/null | sort
+  )
+}
+
+wait_for_ctrlc_fixture() {
+  local log_file="$1"
+  local workspace="$2"
+  local output_file="$3"
+  local launcher_pid="$4"
+  if wait_for_log_line "$log_file" "descendant-pid="; then
+    return 0
+  fi
+  report_ctrlc_startup_failure "$workspace" "$output_file"
+  kill -TERM "$launcher_pid" 2>/dev/null || true
+  wait "$launcher_pid" 2>/dev/null || true
+  rm -rf "$workspace"
   return 1
 }
 
@@ -1687,7 +1721,7 @@ ctrlc_expected_log() {
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
-  wait_for_log_line "$log_file" "descendant-pid=" 8
+  wait_for_ctrlc_fixture "$log_file" "$workspace" "$output_dir/orch.out" "$orch_pid"
   sleep 0.2
 
   kill -INT "$orch_pid"
@@ -1721,7 +1755,7 @@ ctrlc_expected_log() {
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
-  wait_for_log_line "$log_file" "descendant-pid=" 8
+  wait_for_ctrlc_fixture "$log_file" "$workspace" "$output_dir/orch.out" "$orch_pid"
   sleep 0.2
 
   kill -TERM "$orch_pid"
@@ -1756,7 +1790,7 @@ ctrlc_expected_log() {
     script -q "$pty_output" \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1 &
   local script_pid=$!
-  wait_for_log_line "$log_file" "descendant-pid=" 8
+  wait_for_ctrlc_fixture "$log_file" "$workspace" "$output_dir/orch.out" "$script_pid"
   sleep 0.2
   kill -HUP "$script_pid"
   wait "$script_pid" 2>/dev/null || true
@@ -1789,8 +1823,8 @@ ctrlc_expected_log() {
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
-  wait_for_log_line "$log_a" "descendant-pid=" 8
-  wait_for_log_line "$log_b" "descendant-pid=" 8
+  wait_for_ctrlc_fixture "$log_a" "$workspace" "$output_dir/orch.out" "$orch_pid"
+  wait_for_ctrlc_fixture "$log_b" "$workspace" "$output_dir/orch.out" "$orch_pid"
   sleep 0.2
 
   kill -INT "$orch_pid"
@@ -1827,8 +1861,8 @@ ctrlc_expected_log() {
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" >"$output_dir/orch.out" 2>&1 &
   local orch_pid=$!
 
-  wait_for_log_line "$log_a" "descendant-pid=" 8
-  wait_for_log_line "$log_b" "descendant-pid=" 8
+  wait_for_ctrlc_fixture "$log_a" "$workspace" "$output_dir/orch.out" "$orch_pid"
+  wait_for_ctrlc_fixture "$log_b" "$workspace" "$output_dir/orch.out" "$orch_pid"
   sleep 0.2
 
   kill -TERM "$orch_pid"

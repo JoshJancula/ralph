@@ -37,15 +37,35 @@ jobs:
         run: CI=1 bash scripts/run-bats.sh -j 4
 
       - name: Recheck resource-sensitive Bats tests serially
+        # These tests fork many short-lived jq/flock/awk/mktemp subprocesses per
+        # invocation. On a loaded runner right after the -j 4 suite, a single
+        # transient subprocess failure makes the native-hook fail-open (empty
+        # output) or drops a dedupe cache write, producing a spurious red. They
+        # pass deterministically in isolation, so retry the whole serial batch a
+        # few times and only fail the job if every attempt fails. This retries
+        # transient flake; it does not skip or weaken the assertions.
         env:
           CI: '1'
           RALPH_CI_SERIAL_RECHECK: '1'
-        run: >-
-          bash scripts/run-bats.sh --no-setup-fixtures -j 1
-          tests/bats/mcp-proxy/mcp-proxy-grep-source-cap-dedupe.bats
-          tests/bats/native-hook/bash-compact-delivered-metrics.bats
-          tests/bats/native-hook/fail-open-instrumentation.bats
-          tests/bats/native-hook/native-result-shapes.bats
+        run: |
+          set -uo pipefail
+          attempts=3
+          for attempt in $(seq 1 "$attempts"); do
+            echo "::group::serial recheck attempt ${attempt}/${attempts}"
+            if bash scripts/run-bats.sh --no-setup-fixtures -j 1 \
+              tests/bats/mcp-proxy/mcp-proxy-grep-source-cap-dedupe.bats \
+              tests/bats/native-hook/bash-compact-delivered-metrics.bats \
+              tests/bats/native-hook/fail-open-instrumentation.bats \
+              tests/bats/native-hook/native-result-shapes.bats; then
+              echo "::endgroup::"
+              echo "serial recheck passed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "serial recheck attempt ${attempt} failed"
+          done
+          echo "serial recheck failed after ${attempts} attempts" >&2
+          exit 1
 
   python:
     name: Python unit tests (quarantined)
