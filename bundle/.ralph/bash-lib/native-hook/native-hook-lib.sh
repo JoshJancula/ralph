@@ -52,12 +52,21 @@ ralph_native_hook_resolve_bash_lib() {
 
 # Resolve the bash-lib directory for a workspace.
 ralph_native_hook_resolve_bash_lib_dir() {
-  local workspace="${1:-}" ralph_home dir
+  local workspace="${1:-}" ralph_home dir project_root
 
   if [[ -n "$workspace" && -d "$workspace/.ralph/bash-lib" ]]; then
     printf '%s\n' "$workspace/.ralph/bash-lib"
     return 0
   fi
+
+  # The agent workspace can intentionally differ from the Ralph project root.
+  # Native hooks still load their libraries from the project-local install.
+  for project_root in "${RALPH_PROJECT_ROOT:-}" "${CLAUDE_PROJECT_DIR:-}"; do
+    if [[ -n "$project_root" && -d "$project_root/.ralph/bash-lib" ]]; then
+      printf '%s\n' "$project_root/.ralph/bash-lib"
+      return 0
+    fi
+  done
 
   if [[ "${RALPH_DISABLE_GLOBAL_FALLBACK:-0}" == "1" ]]; then
     return 1
