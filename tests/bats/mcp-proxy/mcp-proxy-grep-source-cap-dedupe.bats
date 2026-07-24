@@ -46,7 +46,9 @@ invoke_grep_pair_to_files() {
 
 @test "duplicate of a source-capped grep stays deduped AND still reports partial-source state" {
   mkdir -p "$WS/corpus"
-  awk 'BEGIN { for (i = 0; i < 100000; i++) printf "line %d NEEDLE marker filler text\n", i }' > "$WS/corpus/big.txt"
+  # Keep the source comfortably above the 64 KiB cap without creating a
+  # multi-megabyte fixture on constrained CI runners.
+  awk 'BEGIN { for (i = 0; i < 20000; i++) printf "line %d NEEDLE marker filler text\n", i }' > "$WS/corpus/big.txt"
   local args out1="$WS/out1.json" out2="$WS/out2.json"
   args="$(jq -nc --arg p "NEEDLE" --arg path "corpus" '{pattern:$p, path:$path}')"
 
