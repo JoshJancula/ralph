@@ -37,13 +37,18 @@ ralph_shell_output_compact_py() {
 ralph_compact_shell_output() {
   local command="${1-}"
   local exit_status="${2:-0}"
-  local py_script payload
+  local py_script
+
+  # Large captured streams must not remain exported while helper processes
+  # start. Linux counts exported values against execve(2)'s argument/environment
+  # limit, which can make even dirname or jq fail with E2BIG.
+  export -n RALPH_COMPACT_STDOUT RALPH_COMPACT_STDERR 2>/dev/null || true
 
   if ! command -v python3 >/dev/null 2>&1; then
     jq -n \
-      --arg command "$command" \
-      --arg stdout "${RALPH_COMPACT_STDOUT-}" \
-      --arg stderr "${RALPH_COMPACT_STDERR-}" \
+      --rawfile command <(printf '%s' "$command") \
+      --rawfile stdout <(printf '%s' "${RALPH_COMPACT_STDOUT-}") \
+      --rawfile stderr <(printf '%s' "${RALPH_COMPACT_STDERR-}") \
       --argjson exit_status "$exit_status" \
       '{
         stdout: $stdout,
@@ -55,17 +60,18 @@ ralph_compact_shell_output() {
         status: "not compacted",
         exit_status: $exit_status
       }'
-    return 0
+    return $?
   fi
 
   py_script="$(ralph_shell_output_compact_py)"
-  payload="$(jq -n \
-    --arg command "$command" \
-    --arg stdout "${RALPH_COMPACT_STDOUT-}" \
-    --arg stderr "${RALPH_COMPACT_STDERR-}" \
+  jq -n \
+    --rawfile command <(printf '%s' "$command") \
+    --rawfile stdout <(printf '%s' "${RALPH_COMPACT_STDOUT-}") \
+    --rawfile stderr <(printf '%s' "${RALPH_COMPACT_STDERR-}") \
     --argjson exit_status "$exit_status" \
-    '{command: $command, stdout: $stdout, stderr: $stderr, exit_status: $exit_status}')"
-  printf '%s\n' "$payload" | python3 "$py_script" compact
+    '{command: $command, stdout: $stdout, stderr: $stderr, exit_status: $exit_status}' \
+    | python3 "$py_script" compact
+  return $?
 }
 
 # Return 0 when compaction applied, 1 when status is "not compacted".

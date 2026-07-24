@@ -21,7 +21,8 @@ ralph_hook_windowing_telemetry_enabled() {
 ralph_hook_telemetry_sha256() {
   local text="${1-}"
   if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$text"
+    printf '%s' "$text" \
+      | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
     return 0
   fi
   if command -v sha256sum >/dev/null 2>&1; then
@@ -42,7 +43,7 @@ ralph_hook_telemetry_sha256() {
 ralph_hook_telemetry_utf8_byte_count() {
   local text="${1-}"
   if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys; print(len(sys.argv[1].encode("utf-8")))' "$text"
+    printf '%s' "$text" | python3 -c 'import sys; print(len(sys.stdin.buffer.read()))'
     return 0
   fi
   printf '%s' "$text" | wc -c | tr -d ' '

@@ -2056,16 +2056,21 @@ ralph_mcp_proxy_search_dedupe_store() {
   local truncated="${4:-0}"
   local metadata_json="${5:-}"
   local result_id="${6:-}"
-  local entry_json
+  local entry_json storage_file
 
   ralph_mcp_proxy_search_dedupe_enabled || return 0
   [[ -n "$cache_key" ]] || return 0
   [[ "$mutation_counter" =~ ^[0-9]+$ ]] || mutation_counter=0
 
+  storage_file="$(mktemp "${TMPDIR:-/tmp}/ralph-search-dedupe.XXXXXX")" || return 1
+  printf '%s' "$storage_text" >"$storage_file" || {
+    rm -f "$storage_file"
+    return 1
+  }
   entry_json="$(
     jq -nc \
       --argjson mutationCounter "$mutation_counter" \
-      --arg storageText "$storage_text" \
+      --rawfile storageText "$storage_file" \
       --argjson truncated "$truncated" \
       --arg metadataJson "$metadata_json" \
       --arg resultId "$result_id" \
@@ -2076,7 +2081,11 @@ ralph_mcp_proxy_search_dedupe_store() {
         metadataJson: $metadataJson,
         resultId: $resultId
       }'
-  )" || return 1
+  )" || {
+    rm -f "$storage_file"
+    return 1
+  }
+  rm -f "$storage_file"
   [[ -n "$entry_json" ]] || return 1
   _RALPH_PROXY_SEARCH_DEDUPE_CACHE["$cache_key"]="$entry_json"
 }

@@ -375,8 +375,10 @@ ralph_native_shell_compact_pipeline_json() {
   local compacted_applied preview_text storage_text raw_combined
   local original_bytes returned_bytes plan_key result_id result_path store_needed=0 byte_cap
 
-  export RALPH_COMPACT_STDOUT="$stdout"
-  export RALPH_COMPACT_STDERR="$stderr"
+  # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
+  RALPH_COMPACT_STDOUT="$stdout"
+  # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
+  RALPH_COMPACT_STDERR="$stderr"
   compact_json="$(ralph_compact_shell_output "$command" "$exit_code")"
   compact_stdout="$(jq -r '.stdout // ""' <<<"$compact_json")"
   compact_stderr="$(jq -r '.stderr // ""' <<<"$compact_json")"

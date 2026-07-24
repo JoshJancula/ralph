@@ -148,33 +148,38 @@ ralph_native_hook_extract_cursor_tool_output_text() {
 
 ralph_native_hook_emit_claude_exploration_updated_output() {
   local compact_text="${1:-}" original_json="${2:-}"
-  if jq -e 'type == "object"' <<<"$original_json" >/dev/null 2>&1; then
-    if jq -e '.content | type == "string"' <<<"$original_json" >/dev/null 2>&1; then
-      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .content = $text)}}'
-      return 0
+  local original_file rendered
+  original_file="$(mktemp "${TMPDIR:-/tmp}/ralph-native-output.XXXXXX")" || return 1
+  printf '%s' "$original_json" >"$original_file" || {
+    rm -f "$original_file"
+    return 1
+  }
+
+  if jq -e 'type == "object"' "$original_file" >/dev/null 2>&1; then
+    if jq -e '.content | type == "string"' "$original_file" >/dev/null 2>&1; then
+      rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: (($orig | fromjson) | .content = $text)}}')"
+    elif jq -e '.content | type == "array"' "$original_file" >/dev/null 2>&1; then
+      rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: (($orig | fromjson) | .content = [{type: "text", text: $text}])}}')"
+    elif jq -e '.file.content | type == "string"' "$original_file" >/dev/null 2>&1; then
+      rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: (($orig | fromjson) | .file.content = $text)}}')"
+    elif jq -e 'has("stdout")' "$original_file" >/dev/null 2>&1; then
+      rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: (($orig | fromjson) | .stdout = $text)}}')"
+    else
+      rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: (($orig | fromjson) + {content: $text})}}')"
     fi
-    if jq -e '.content | type == "array"' <<<"$original_json" >/dev/null 2>&1; then
-      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .content = [{type: "text", text: $text}])}}'
-      return 0
-    fi
-    if jq -e '.file.content | type == "string"' <<<"$original_json" >/dev/null 2>&1; then
-      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .file.content = $text)}}'
-      return 0
-    fi
-    if jq -e 'has("stdout")' <<<"$original_json" >/dev/null 2>&1; then
-      jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-        '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig | .stdout = $text)}}'
-      return 0
-    fi
-    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-      '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: ($orig + {content: $text})}}'
-    return 0
+  else
+    rendered="$(jq -nc --arg text "$compact_text" \
+      '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: $text}}')"
   fi
-  jq -nc --arg text "$compact_text" \
-    '{hookSpecificOutput: {hookEventName: "PostToolUse", updatedToolOutput: $text}}'
+  local rc=$?
+  rm -f "$original_file"
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  printf '%s\n' "$rendered"
 }
 
 ralph_native_hook_emit_post_tool_compact_output() {
@@ -359,27 +364,32 @@ ralph_native_hook_native_result_compact_cli_main() {
 
 ralph_native_hook_emit_cursor_updated_tool_output() {
   local compact_text="${1:-}" original_json="${2:-}"
-  if jq -e '.success.content' <<<"$original_json" >/dev/null 2>&1; then
-    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-      '{updated_tool_output: ($orig | .success.content = $text)}'
-    return 0
+  local original_file rendered
+  original_file="$(mktemp "${TMPDIR:-/tmp}/ralph-native-output.XXXXXX")" || return 1
+  printf '%s' "$original_json" >"$original_file" || {
+    rm -f "$original_file"
+    return 1
+  }
+
+  if jq -e '.success.content' "$original_file" >/dev/null 2>&1; then
+    rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+      '{updated_tool_output: (($orig | fromjson) | .success.content = $text)}')"
+  elif jq -e '.content[0].text' "$original_file" >/dev/null 2>&1; then
+    rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+      '{updated_tool_output: (($orig | fromjson) | .content[0].text = $text)}')"
+  elif jq -e '.file.content | type == "string"' "$original_file" >/dev/null 2>&1; then
+    rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+      '{updated_tool_output: (($orig | fromjson) | .file.content = $text)}')"
+  elif jq -e 'has("stdout")' "$original_file" >/dev/null 2>&1; then
+    rendered="$(jq -nc --arg text "$compact_text" --rawfile orig "$original_file" \
+      '{updated_tool_output: (($orig | fromjson) | .stdout = $text)}')"
+  else
+    rendered="$(jq -nc --arg text "$compact_text" '{updated_tool_output: {content: $text}}')"
   fi
-  if jq -e '.content[0].text' <<<"$original_json" >/dev/null 2>&1; then
-    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-      '{updated_tool_output: ($orig | .content[0].text = $text)}'
-    return 0
-  fi
-  if jq -e '.file.content | type == "string"' <<<"$original_json" >/dev/null 2>&1; then
-    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-      '{updated_tool_output: ($orig | .file.content = $text)}'
-    return 0
-  fi
-  if jq -e 'has("stdout")' <<<"$original_json" >/dev/null 2>&1; then
-    jq -nc --arg text "$compact_text" --argjson orig "$original_json" \
-      '{updated_tool_output: ($orig | .stdout = $text)}'
-    return 0
-  fi
-  jq -nc --arg text "$compact_text" '{updated_tool_output: {content: $text}}'
+  local rc=$?
+  rm -f "$original_file"
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  printf '%s\n' "$rendered"
 }
 
 ralph_native_hook_search_compaction_enabled() {
@@ -497,8 +507,6 @@ ${window_text}"
         }
       }'
   )"
-  export RALPH_NATIVE_PREP_STORAGE_TEXT RALPH_NATIVE_PREP_PREVIEW_TEXT RALPH_NATIVE_PREP_TRUNCATED
-  export RALPH_NATIVE_PREP_MATCH_METADATA_JSON RALPH_NATIVE_PREP_PATTERN_OR_QUERY RALPH_NATIVE_PREP_METADATA_JSON
 }
 
 ralph_native_hook_prepare_grep_envelope() {
@@ -539,8 +547,6 @@ ralph_native_hook_prepare_grep_envelope() {
   RALPH_NATIVE_PREP_MATCH_METADATA_JSON="$cluster_metadata_json"
   RALPH_NATIVE_PREP_PATTERN_OR_QUERY="$pattern"
   RALPH_NATIVE_PREP_METADATA_JSON='{"storageLayout":"full"}'
-  export RALPH_NATIVE_PREP_STORAGE_TEXT RALPH_NATIVE_PREP_PREVIEW_TEXT RALPH_NATIVE_PREP_TRUNCATED
-  export RALPH_NATIVE_PREP_MATCH_METADATA_JSON RALPH_NATIVE_PREP_PATTERN_OR_QUERY RALPH_NATIVE_PREP_METADATA_JSON
 }
 
 ralph_native_hook_prepare_glob_envelope() {
@@ -575,8 +581,6 @@ ${preview_text}"
   RALPH_NATIVE_PREP_MATCH_METADATA_JSON='[]'
   RALPH_NATIVE_PREP_PATTERN_OR_QUERY="$glob_pattern"
   RALPH_NATIVE_PREP_METADATA_JSON='{"storageLayout":"full"}'
-  export RALPH_NATIVE_PREP_STORAGE_TEXT RALPH_NATIVE_PREP_PREVIEW_TEXT RALPH_NATIVE_PREP_TRUNCATED
-  export RALPH_NATIVE_PREP_MATCH_METADATA_JSON RALPH_NATIVE_PREP_PATTERN_OR_QUERY RALPH_NATIVE_PREP_METADATA_JSON
 }
 
 ralph_native_hook_prepare_search_envelope() {
@@ -656,8 +660,6 @@ PYTHON
   RALPH_NATIVE_PREP_MATCH_METADATA_JSON="$cluster_metadata_json"
   RALPH_NATIVE_PREP_PATTERN_OR_QUERY="$query"
   RALPH_NATIVE_PREP_METADATA_JSON='{"storageLayout":"full"}'
-  export RALPH_NATIVE_PREP_STORAGE_TEXT RALPH_NATIVE_PREP_PREVIEW_TEXT RALPH_NATIVE_PREP_TRUNCATED
-  export RALPH_NATIVE_PREP_MATCH_METADATA_JSON RALPH_NATIVE_PREP_PATTERN_OR_QUERY RALPH_NATIVE_PREP_METADATA_JSON
 }
 
 ralph_native_hook_prepare_exploration_envelope() {
@@ -684,8 +686,6 @@ ralph_native_hook_prepare_exploration_envelope() {
       RALPH_NATIVE_PREP_MATCH_METADATA_JSON='[]'
       RALPH_NATIVE_PREP_PATTERN_OR_QUERY=""
       RALPH_NATIVE_PREP_METADATA_JSON='{}'
-      export RALPH_NATIVE_PREP_STORAGE_TEXT RALPH_NATIVE_PREP_PREVIEW_TEXT RALPH_NATIVE_PREP_TRUNCATED
-      export RALPH_NATIVE_PREP_MATCH_METADATA_JSON RALPH_NATIVE_PREP_PATTERN_OR_QUERY RALPH_NATIVE_PREP_METADATA_JSON
       ;;
   esac
 }

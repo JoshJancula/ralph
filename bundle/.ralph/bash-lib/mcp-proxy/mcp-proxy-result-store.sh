@@ -237,13 +237,8 @@ ralph_mcp_proxy_result_store_hash_content() {
   elif command -v shasum >/dev/null 2>&1; then
     hash="$(printf '%s' "$content" | shasum -a 256 | awk '{print $1}')"
   elif command -v python3 >/dev/null 2>&1; then
-    hash="$(python3 - "$content" <<'PYTHON'
-import hashlib
-import sys
-
-print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())
-PYTHON
-)"
+    hash="$(printf '%s' "$content" | python3 -c \
+      'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
   elif command -v openssl >/dev/null 2>&1; then
     hash="$(printf '%s' "$content" | openssl dgst -sha256 | awk '{print $NF}')"
   else
@@ -522,15 +517,14 @@ ralph_mcp_proxy_result_store_match_metadata_from_grep_output() {
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$grep_output" <<'PYTHON'
+    printf '%s' "$grep_output" | python3 -c '
 import json
 import re
 import sys
 
-text = sys.argv[1]
 lines = []
 seen = set()
-for raw_line in text.splitlines():
+for raw_line in sys.stdin.read().splitlines():
     match = re.match(r"^(?:[^:]+:)?(\d+):", raw_line)
     if not match:
         continue
@@ -542,7 +536,7 @@ for raw_line in text.splitlines():
 
 lines.sort(key=lambda item: item["line"])
 print(json.dumps(lines, separators=(",", ":")))
-PYTHON
+'
     return $?
   fi
 

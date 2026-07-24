@@ -634,7 +634,7 @@ function mergeChannelBucket(target: ChannelBucket, source: Record<string, unknow
       const current = key === 'hidden_from_context' || key === 'hidden_from_context_tokens'
         ? (target[key] ?? 0)
         : (target[key as keyof ChannelBucket] as number);
-      (target as Record<string, number>)[key] = toInt(current) + toInt(source[key]);
+      (target as unknown as Record<string, number>)[key] = toInt(current) + toInt(source[key]);
     }
   }
   const sourceAttribution = String(source['attribution'] ?? 'exact');
@@ -1301,8 +1301,8 @@ function loadWindowingRecords(path: string): Record<string, unknown>[] {
 }
 
 function recordMatchesPlanKey(record: Record<string, unknown>, planKey: string): boolean {
-  const recordPlanKey = recordPlanKey(record);
-  if (planKey && recordPlanKey && recordPlanKey !== planKey) {
+  const planKeyForRecord = recordPlanKey(record);
+  if (planKey && planKeyForRecord && planKeyForRecord !== planKey) {
     return false;
   }
   return true;

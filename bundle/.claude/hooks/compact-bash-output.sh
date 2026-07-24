@@ -56,8 +56,10 @@ ralph_bash_compact_main() {
   # shellcheck source=/dev/null
   source "$compactors_lib"
 
-  export RALPH_COMPACT_STDOUT="$stdout"
-  export RALPH_COMPACT_STDERR="$stderr"
+  # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
+  RALPH_COMPACT_STDOUT="$stdout"
+  # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
+  RALPH_COMPACT_STDERR="$stderr"
   local compact_json compact_stdout compact_stderr
   local plan_key workspace result_path footer storage_text preview_max
 

@@ -209,9 +209,9 @@ ralph_native_hook_cap_stream_pair() {
 ralph_native_hook_original_storage_json() {
   local command="${1-}" stdout="${2-}" stderr="${3-}" exit_code="${4:-0}"
   jq -nc \
-    --arg command "$command" \
-    --arg stdout "$stdout" \
-    --arg stderr "$stderr" \
+    --rawfile command <(printf '%s' "$command") \
+    --rawfile stdout <(printf '%s' "$stdout") \
+    --rawfile stderr <(printf '%s' "$stderr") \
     --argjson exitCode "$exit_code" \
     '{
       command: $command,
