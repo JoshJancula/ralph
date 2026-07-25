@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Unit tests for antigravity plain-text handling in run-plan-cli-json-demux.py.
+
+Antigravity (`agy --print`) emits plain text, not NDJSON, so every line falls
+into the demux script's generic plain-text passthrough branch. These tests
+verify the fix that recovers tool-call counts from agy's own bullet
+convention (`* toolname(args)`) and marks the record `usage_unsupported`
+since agy never reports token/cache usage anywhere accessible.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from ralph_script_loader import load_ralph_script
+
+DEMUX = load_ralph_script("run-plan-cli-json-demux")
+
+SAMPLE_LINES = [
+    "* ralph_proxy_glob(bundle)",
+    "- ... +212 more lines",
+    "I'll search for the relevant files now.",
+    "* ralph_proxy_read(bundle/.ralph/python/foo.py)",
+    "Done reviewing the file.",
+]
+
+
+def _run_demux(lines: list[str]) -> dict:
+    return _run_demux_capture(lines)[0]
+
+
+def _run_demux_capture(lines: list[str], *, raw: bool = False) -> tuple[dict, str]:
+    """Run the demux over antigravity lines; return (usage doc, captured stdout).
+
+    When raw is True the lines are fed verbatim (they may embed CR/ANSI); when
+    False they are joined with newlines the way NDJSON-style callers do.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        usage_path = str(Path(td) / "usage.json")
+        sid_path = str(Path(td) / "sid.txt")
+        payload = "".join(lines) if raw else "\n".join(lines) + "\n"
+        old_argv = sys.argv
+        old_stdin = sys.stdin
+        old_stdout = sys.stdout
+        captured = io.StringIO()
+        try:
+            sys.argv = ["run-plan-cli-json-demux.py", "antigravity", sid_path, usage_path, ""]
+            sys.stdin = io.StringIO(payload)
+            sys.stdout = captured
+            DEMUX.main()
+        finally:
+            sys.argv = old_argv
+            sys.stdin = old_stdin
+            sys.stdout = old_stdout
+        with open(usage_path, encoding="utf-8") as fh:
+            return json.load(fh), captured.getvalue()
+
+
+class TestAntigravityPlainToolCallExtraction(unittest.TestCase):
+    def test_tool_calls_extracted_from_plain_bullets(self) -> None:
+        doc = _run_demux(SAMPLE_LINES)
+        self.assertEqual(doc["tool_calls_total"], 2)
+        self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_glob"), 1)
+        self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_read"), 1)
+
+    def test_non_bullet_lines_are_not_counted_as_tool_calls(self) -> None:
+        doc = _run_demux(["I'll search for the relevant files now.", "- ... +212 more lines"])
+        self.assertEqual(doc["tool_calls_total"], 0)
+
+    def test_repeated_tool_calls_each_counted(self) -> None:
+        doc = _run_demux(
+            [
+                "* ralph_proxy_read(a.py)",
+                "* ralph_proxy_read(b.py)",
+            ]
+        )
+        self.assertEqual(doc["tool_calls_total"], 2)
+        self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_read"), 2)
+
+
+class TestAntigravityStreamSanitizing(unittest.TestCase):
+    def test_ansi_escapes_stripped_from_stdout(self) -> None:
+        _, out = _run_demux_capture(["\x1b[32mThe answer is 42.\x1b[0m"])
+        self.assertNotIn("\x1b", out)
+        self.assertIn("The answer is 42.", out)
+
+    def test_carriage_return_redraw_keeps_final_frame(self) -> None:
+        # A spinner animation redraws in place via CR with no newline until the
+        # final result frame; only that final frame should survive.
+        _, out = _run_demux_capture(
+            ["\r- Working\r\\ Working\r| Working\rDone: result ready\n"], raw=True
+        )
+        self.assertIn("Done: result ready", out)
+        self.assertNotIn("Working", out)
+        self.assertNotIn("\r", out)
+
+    def test_pure_control_line_is_dropped(self) -> None:
+        # A line that is only cursor-control escapes collapses to nothing and
+        # must not emit a blank passthrough line.
+        _, out = _run_demux_capture(["\x1b[2K\x1b[1G", "Real content."])
+        self.assertEqual(out.strip(), "Real content.")
+
+    def test_tool_call_still_detected_after_ansi_prefix(self) -> None:
+        doc, _ = _run_demux_capture(["\x1b[36m* ralph_proxy_read(a.py)\x1b[0m"])
+        self.assertEqual(doc["tool_calls_total"], 1)
+        self.assertEqual(doc["tool_calls_by_tool"].get("ralph_proxy_read"), 1)
+
+    def test_clean_line_passes_through_unchanged(self) -> None:
+        _, out = _run_demux_capture(["Plain unstyled sentence."])
+        self.assertIn("Plain unstyled sentence.", out)
+
+
+class TestAntigravityUsageUnsupported(unittest.TestCase):
+    def test_usage_unsupported_flag_set(self) -> None:
+        doc = _run_demux(SAMPLE_LINES)
+        self.assertTrue(doc["usage_unsupported"])
+
+    def test_other_modes_unaffected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            usage_path = str(Path(td) / "usage.json")
+            sid_path = str(Path(td) / "sid.txt")
+            old_argv = sys.argv
+            old_stdin = sys.stdin
+            try:
+                sys.argv = ["run-plan-cli-json-demux.py", "claude", sid_path, usage_path, ""]
+                sys.stdin = io.StringIO("plain line, no json here\n")
+                DEMUX.main()
+            finally:
+                sys.argv = old_argv
+                sys.stdin = old_stdin
+            with open(usage_path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        self.assertNotIn("usage_unsupported", doc)
+
+
+if __name__ == "__main__":
+    unittest.main()

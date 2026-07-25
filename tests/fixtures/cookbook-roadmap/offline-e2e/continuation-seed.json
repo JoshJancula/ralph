@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "summary_generation_version": 1,
+  "plan_key": "offline-e2e",
+  "plan_path": "PLAN.md",
+  "plan_fingerprint": "offline-e2e-seed",
+  "completed_todos": [
+    {
+      "todo_line": 2,
+      "todo_ordinal": 1,
+      "content_excerpt": "Scaffold handler module",
+      "completion_summary": "TODO_COMPLETION: COMPLETE",
+      "completed_at": "2026-06-23T12:00:00+00:00",
+      "stage_id": ""
+    }
+  ],
+  "verification_outcomes": [],
+  "verification_errors": [],
+  "human_decisions": [],
+  "artifacts_written": [],
+  "next_todo": {
+    "todo_line": 3,
+    "content_excerpt": "Wire the handler"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "stdout": "git diff (exit 0): 1 file(s) changed for: git diff\n a.txt",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "git_diff",
+  "status": "compacted",
+  "exit_status": 0
+}

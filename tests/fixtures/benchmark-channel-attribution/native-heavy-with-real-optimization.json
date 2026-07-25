@@ -1,0 +1,68 @@
+{
+  "kind": "native_heavy_with_real_optimization",
+  "plan_key": "native-heavy-opt",
+  "description": "High native read share triggers heavy_native aggregate findings even when hook, proxy-shell, and result_windowing savings exist.",
+  "invocations": [
+    {
+      "plan_key": "native-heavy-opt",
+      "iteration": 1,
+      "runtime": "cursor",
+      "agent_tool_access": "native",
+      "tool_calls_total": 12,
+      "native_read_like_calls": 8,
+      "ralph_proxy_calls": 2,
+      "native_write_like_calls": 1,
+      "other_mcp_calls": 1,
+      "byte_savings_by_path": {
+        "hook_compaction": {
+          "pre_optimization_bytes": 4000,
+          "post_optimization_bytes": 1200,
+          "saved_bytes": 2800,
+          "pre_optimization_tokens": 1000,
+          "post_optimization_tokens": 300,
+          "saved_tokens": 700,
+          "count": 2,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 2800,
+          "hidden_from_context_tokens": 700
+        },
+        "proxy_shell_compaction": {
+          "pre_optimization_bytes": 8000,
+          "post_optimization_bytes": 2000,
+          "saved_bytes": 6000,
+          "pre_optimization_tokens": 2000,
+          "post_optimization_tokens": 500,
+          "saved_tokens": 1500,
+          "count": 1,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 6000,
+          "hidden_from_context_tokens": 1500
+        },
+        "result_windowing": {
+          "pre_optimization_bytes": 12000,
+          "post_optimization_bytes": 3000,
+          "saved_bytes": 9000,
+          "pre_optimization_tokens": 3000,
+          "post_optimization_tokens": 750,
+          "saved_tokens": 2250,
+          "count": 3,
+          "token_cap_triggers": 1,
+          "hidden_from_context": 9000,
+          "hidden_from_context_tokens": 2250
+        }
+      }
+    }
+  ],
+  "expected_baseline": {
+    "aggregate_finding_pattern_id": "heavy_native_read_vs_proxy",
+    "native_read_share_min": 0.7,
+    "result_windowing_saved_bytes_min": 9000,
+    "hook_compaction_saved_bytes_min": 2800,
+    "proxy_shell_compaction_saved_bytes_min": 6000
+  },
+  "later_todo_assertions": [
+    "heavy_native aggregate findings must not populate missed_compaction_opportunities",
+    "discover must expose separate tool_adoption vs optimization_evidence sections",
+    "result_windowing savings must split into proxy_read_windowing, proxy_search_windowing, and stored_result_readback channels"
+  ]
+}

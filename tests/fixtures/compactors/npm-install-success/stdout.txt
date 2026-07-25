@@ -1,0 +1,7 @@
+npm notice created a lockfile as package-lock.json, you should commit this file
+npm notice packages in node_modules: 842
+npm notice packages in lockfile: 842
+npm notice audit: submitted 842 packages at 2024-06-15T10:30:45.123Z, received report: 0 vulnerabilities
+npm notice
+npm notice found 0 vulnerabilities
+npm notice added 48 packages, and removed 2 packages in 3.456s

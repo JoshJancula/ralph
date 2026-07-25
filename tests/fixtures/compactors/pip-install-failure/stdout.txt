@@ -1,0 +1,11 @@
+Collecting numpy
+  Using cached numpy-1.24.3-cp311-cp311-macosx_10_9_x86_64.whl (14.6 MB)
+Collecting blas>=1.0.0 (from numpy)
+  Using cached blas-1.0-py3-none-any.whl
+  Downloading package from PyPI...
+  Building wheels for collected packages: cmake
+  Running setup.py build for cmake
+  ERROR: Could not build wheels for cmake which use PEP 517 and cannot be installed directly
+  error: command 'clang' failed with exit code 1
+  error: There was an issue with the cached files (exit code 1)
+ERROR: Could not install packages due to an error resolving dependencies:

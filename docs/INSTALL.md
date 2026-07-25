@@ -1,136 +1,289 @@
-# Installation and setup
+# Installing Ralph
 
-This guide covers how to get Ralph into **your** application or library repository: vendoring (submodule or subtree), a one-time copy, what the installer puts on disk, flags, and removal.
+There are two ways to install Ralph:
 
-Unless noted, run commands from **your project root** (the directory that will contain **`.ralph/`** after install).
+1. **Global install (recommended).** Install Ralph once on your machine. You get a `ralph` command that works in any project.
+2. **In-repo install.** Copy Ralph's files into one project so they are committed and reviewed with the rest of that repo.
 
-## Submodule (easy updates)
+Start with the global install unless your team needs Ralph's files checked into the repository.
 
-The examples use the main Ralph repository; if you use a fork, substitute its URL in **`git submodule add`**.
+Ralph plan execution requires Python 3. The process guardian uses only the Python standard library; no Python packages are installed.
+
+## Global install (recommended)
 
 ```bash
-# Go to your project repository (the app or library you are wiring up).
+git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
+/tmp/ralph/install.sh --global
+rm -rf /tmp/ralph
+```
+
+This does four things:
+
+- Copies Ralph's scripts, docs, and dashboard to `~/.ralph/` (override with `RALPH_HOME`)
+- Puts a `ralph` command at `~/.local/bin/ralph`
+- Creates `~/.config/ralph/` for settings (workspace registry, saved models) and `~/.local/state/ralph/` for session state
+- Creates `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, and `~/.agents/` if they do not exist yet, so you can keep shared agents, rules, and skills there. Existing directories are left alone (pass `--force-global-runtime` to overwrite them with Ralph's defaults)
+
+Global install never writes files into the project you ran it from. `--global` and a project directory argument cannot be combined.
+
+### Put `ralph` on your PATH
+
+The `ralph` command lives at `~/.local/bin/ralph`. If your shell cannot find it, add that directory to `PATH`:
+
+```bash
+# bash
+printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> ~/.bashrc && source ~/.bashrc
+
+# zsh
+printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> ~/.zshrc && source ~/.zshrc
+```
+
+If the shell still cannot find `ralph` afterward, run `hash -r`.
+
+### Using the `ralph` command
+
+From any project directory:
+
+```bash
+ralph run-plan --runtime cursor --plan PLAN.md --workspace .   # run a plan
+ralph run --plan path/to/pipeline.plan.md                      # run a multi-stage pipeline
+ralph models add claude claude-sonnet-4-6                      # save a model id
+ralph dashboard                                                # start the dashboard UI
+ralph workspaces list                                          # list registered projects
+ralph config killswitch init                                   # add per-project killswitch config
+ralph config killswitch                                        # show active killswitch source and paths
+ralph process list --workspace .                               # inspect managed runtime/stage processes
+ralph process stop --all --workspace .                         # stop active Ralph runs safely
+ralph setup --runtime claude --runtime-dir ~/.claude --hooks   # durable Claude compaction hooks in your user runtime
+ralph setup --runtime claude --hooks --mcp                     # project-local hooks + MCP for a runtime
+ralph install ...                                              # re-run the installer
+```
+
+Each command dispatches to the matching script under `$RALPH_HOME` (for example, `ralph run-plan` runs `$RALPH_HOME/bundle/.ralph/run-plan.sh`).
+
+### Runtime setup (`ralph setup`)
+
+Use `ralph setup` to install durable Ralph compaction hooks and MCP configuration into a runtime directory so they are available in normal IDE sessions, not only during `ralph run-plan`. Use `--hooks` when you want Ralph's compaction behavior outside Ralph runs. The installer copies the assets; `ralph setup` is the durable, repeatable activation command.
+
+```bash
+ralph setup --runtime <claude|cursor|codex|opencode|antigravity> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--dry-run] [--yes]
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--runtime` | Required. One of `claude`, `cursor`, `codex`, `opencode`, `antigravity`. |
+| `--runtime-dir` | Runtime directory to configure. Default: `$PWD/.$runtime` (for example `$PWD/.cursor`). Use `~/.claude`, `~/.cursor`, `~/.codex`, `~/.opencode`, or `~/.agents` for user-home installs. |
+| `--hooks` | Copy durable compaction/native hook scripts and merge Ralph hook config into the runtime directory. |
+| `--mcp` | Merge a durable Ralph MCP server entry (`RALPH_MODE=hybrid`). |
+| `--all` | Both `--hooks` and `--mcp`. |
+| `--dry-run` | Print targets without writing. |
+| `--yes` | Skip prompts, including when `--runtime-dir` basename does not match the runtime (for example `.cursor` with `--runtime cursor`). |
+
+At least one of `--hooks`, `--mcp`, or `--all` is required. Project root is inferred as the parent of `--runtime-dir`.
+
+Examples:
+
+```bash
+# Claude: durable hooks in your user runtime
+ralph setup --runtime claude --runtime-dir ~/.claude --hooks
+
+# Cursor: durable hooks in your user runtime
+ralph setup --runtime cursor --runtime-dir ~/.cursor --hooks
+
+# Claude: project-local hooks under .claude/ and MCP at project-root .mcp.json (not inside .claude/)
+ralph setup --runtime claude --hooks --mcp
+
+# Cursor: explicit project runtime directory; --all installs hooks and MCP
+ralph setup --runtime cursor --runtime-dir /path/to/project/.cursor --all
+
+# Codex: user-home durable hooks
+ralph setup --runtime codex --runtime-dir ~/.codex --hooks
+
+# Codex: project-local hooks + MCP in .codex/config.toml (see trusted-project caveat in docs/MCP.md)
+ralph setup --runtime codex --runtime-dir /path/to/project/.codex --all
+
+# Preview only
+ralph setup --runtime opencode --all --dry-run
+
+# Antigravity: hooks + MCP in .agents/mcp_config.json
+ralph setup --runtime antigravity --all
+```
+
+MCP and hook file paths differ by runtime; see [MCP.md](MCP.md#durable-mcp-setup-ralph-setup---mcp) and [TOOLING.md](TOOLING.md#durable-hooks-and-mcp-ralph-setup).
+
+### Saved models
+
+Ralph does not ship default model lists for Claude or Codex. Add the models you use:
+
+```bash
+ralph models add claude claude-sonnet-4-6
+ralph models list codex
+ralph models remove claude claude-sonnet-4-6
+```
+
+Antigravity does not use the saved-model store. Ralph lists available models via `agy models` and invokes `agy --model "<exact model string from agy models>"`, preserving the exact display string returned by `agy models`. Set `ANTIGRAVITY_PLAN_MODEL` for non-interactive runs.
+
+Saved models live in `~/.config/ralph/models.json` (override the directory with `RALPH_CONFIG_HOME`). The first saved model per runtime is the default when a plan run has no `--model` flag, env override, or agent-config model. You can also set `CLAUDE_PLAN_MODEL`, `CODEX_PLAN_MODEL`, or `ANTIGRAVITY_PLAN_MODEL` directly. Full resolution order: [ENVIRONMENT.md](ENVIRONMENT.md#models).
+
+### Where things live
+
+| Purpose | Default path | Override |
+|---------|--------------|----------|
+| Install root (scripts, docs, dashboard) | `~/.ralph/` | `RALPH_HOME` |
+| The `ralph` command | `~/.local/bin/ralph` | -- |
+| Settings (workspace registry, models) | `~/.config/ralph/` | `XDG_CONFIG_HOME`, `RALPH_CONFIG_HOME` |
+| Global session state | `~/.local/state/ralph/` | `XDG_STATE_HOME` |
+| Shared runtime configs (optional) | `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, `~/.agents/` | `RALPH_GLOBAL_RUNTIME_HOME` |
+
+Plan logs and artifacts always stay in each project's own `.ralph-workspace/` directory unless you move them with `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`. When a project has no local `.ralph/`, session state defaults to `~/.local/state/ralph/sessions/` instead (an explicit `RALPH_PLAN_SESSION_HOME` always wins).
+
+### How runtime config is resolved
+
+For each runtime (Cursor, Claude, Codex, OpenCode, Antigravity), Ralph looks for agents, rules, and skills in this order. The first tier that exists wins:
+
+1. **Project-local:** `<workspace>/.claude/` (and so on) -- always takes precedence
+2. **User-level:** `~/.claude/` (or under `RALPH_GLOBAL_RUNTIME_HOME`)
+3. **Bundled defaults:** `$RALPH_HOME/bundle/.claude/`
+
+Set `RALPH_DISABLE_GLOBAL_FALLBACK=1` to use only the project-local tier (useful in strict or sandboxed environments). The global `ralph` command always runs framework scripts from `$RALPH_HOME/bundle/.ralph/`, even if the workspace still has a leftover `.ralph/` directory from an older local install.
+
+Codex note: when a run uses a user-level runtime root, add only that resolved directory to the Codex sandbox, not all of `$HOME`.
+
+### Workspace registry
+
+Global mode tracks the projects you run plans in (`~/.config/ralph/workspaces.json`, capped at the 100 most recent). The registry powers `ralph workspaces list` and lets the global dashboard aggregate metrics across projects. A registry write failure warns but never fails a plan run.
+
+### Migrating a project from local to global
+
+If a project already has its own `.ralph/` and runtime directories, you can switch it to the global install:
+
+```bash
+bash "$RALPH_HOME/bundle/.ralph/migrate-to-global.sh" --dry-run /path/to/project   # preview
+bash "$RALPH_HOME/bundle/.ralph/migrate-to-global.sh" /path/to/project             # confirm each removal
+bash "$RALPH_HOME/bundle/.ralph/migrate-to-global.sh" --yes /path/to/project       # no prompts
+```
+
+The script registers the project in the workspace registry and, with confirmation (or `--yes`), removes the project-local Ralph directories. The project keeps working through the global install, and any runtime configs you leave in place still take precedence over global defaults.
+
+## In-repo install (alternative)
+
+Use this when Ralph should live inside the repository: committed, reviewable `.ralph/` and runtime directories that every teammate gets with `git clone`. Run `install.sh` from a Ralph checkout against your project root.
+
+### One-time copy (simplest)
+
+```bash
+git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
+/tmp/ralph/install.sh /path/to/your-repo
+rm -rf /tmp/ralph
+```
+
+To upgrade later, clone again and re-run `install.sh`.
+
+### Submodule (easy updates)
+
+```bash
 cd /path/to/your-repo
 
-# Register Ralph as a submodule and fetch it.
 git submodule add https://github.com/JoshJancula/ralph.git vendor/ralph
 git submodule update --init
 
-# Copy Ralph runners, agents, and .ralph/ into this repo (from vendor/ralph).
 ./vendor/ralph/install.sh
 
-# Stage the new files, then commit.
 git add .ralph \
   .cursor/ralph .cursor/rules .cursor/skills .cursor/agents \
   .claude/ralph .claude/rules .claude/skills .claude/agents \
   .codex/ralph .codex/rules .codex/skills .codex/agents \
-  .opencode/ralph .opencode/rules .opencode/skills .opencode/agents
+  .opencode/ralph .opencode/rules .opencode/skills .opencode/agents \
+  .agents/agents.md .agents/ralph .agents/rules .agents/skills .agents/agents
 git commit -m "Add Ralph agent workflows"
 ```
 
-Teammates: after **`git clone`**, run **`git submodule update --init`** and, if the Ralph bundle changed, **`./vendor/ralph/install.sh`** again.
+Teammates: after `git clone`, run `git submodule update --init` and, if the Ralph bundle changed, `./vendor/ralph/install.sh` again.
 
-## One-time copy (no vendor directory)
-
-```bash
-# Clone Ralph to a throwaway directory (not inside your project).
-git clone https://github.com/JoshJancula/ralph.git /tmp/ralph
-
-# Install from that clone into your project root; adjust the path as needed.
-/tmp/ralph/install.sh /path/to/your-repo
-
-# Remove the temporary clone when finished.
-rm -rf /tmp/ralph
-```
-
-Reinstall or upgrade by cloning again and re-running **`install.sh`** against your repo.
-
-## Subtree
+### Subtree
 
 ```bash
-# From your project repository: merge Ralph history under vendor/ralph.
 git subtree add --prefix vendor/ralph https://github.com/JoshJancula/ralph.git main --squash
-
-# Copy Ralph into .ralph/, .cursor/, .claude/, .codex/ at your repo root.
 ./vendor/ralph/install.sh
-
-# The installer removes vendor/ralph from disk when it is not a Git checkout (typical subtree).
-# Commit the new project-root files and the vendor/ removal.
 git add -A
 git commit -m "Add Ralph at repo root"
 ```
 
-## Vendored package layout
+### About the vendor directory
 
-The committed Ralph tree uses **`vendor/ralph/bundle/`** (for example **`bundle/.ralph`**). There is no **`vendor/ralph/.ralph`** inside the Ralph package until you run **`install.sh`**, which copies the shared scripts into **your** project root as **`.ralph/`**.
+The Ralph package keeps its installable files under `vendor/ralph/bundle/`. Always run `vendor/ralph/install.sh` (the script at the root of the vendored tree); the installer copies shared scripts into your project root as `.ralph/`.
 
-Always run **`vendor/ralph/install.sh`** (the script at the root of the vendored tree), not a path under **`bundle/.ralph/`**.
-
-### After install: vendor directory
-
-When **`install.sh`** lives under your project (for example **`./vendor/ralph/install.sh`**) and that folder is **not** its own Git checkout (no **`vendor/ralph/.git`**), the installer **removes the vendored tree after a successful install** so you commit only **`.ralph/`** and the runtime dirs at the repo root. That matches a typical **git subtree** copy.
-
-If **`vendor/ralph/.git`** exists (Git submodule gitlink or a full clone), the vendor tree is **kept** so you can update with **`git submodule`** or **`git pull`** inside **`vendor/ralph`**. To remove it anyway, set **`RALPH_INSTALL_REMOVE_VENDOR=1`**. To always keep vendor even without **`.git`**, set **`RALPH_INSTALL_KEEP_VENDOR=1`**.
+After a successful install, the installer removes `vendor/ralph` when it is not its own Git checkout (the typical subtree case), so you commit only `.ralph/` and the runtime directories. If `vendor/ralph/.git` exists (submodule or full clone), the vendor tree is kept so you can update it with Git. Override with `RALPH_INSTALL_REMOVE_VENDOR=1` (always remove) or `RALPH_INSTALL_KEEP_VENDOR=1` (always keep).
 
 ## Installer options
 
-With **no flags**, **`install.sh`** installs the full stack (same as **`--all`**): shared **`.ralph/`**, Cursor, Claude, Codex, and Opencode pieces, plus the dashboard under **`.ralph/ralph-dashboard/`**.
+These flags work in both modes: `install.sh --global` updates `$RALPH_HOME`, and `install.sh /path/to/project` copies into a project. With no flags you get the full stack: shared `.ralph/`, all five runtimes, and the dashboard.
 
 ```text
-./install.sh                      # full install (default)
-./install.sh --all                # same as default
-./install.sh --cursor             # Cursor runner + rules/skills/agents (combine with --shared if you need .ralph)
+./install.sh                      # full install (default, same as --all)
+./install.sh --global             # install to $RALPH_HOME instead of a project
+./install.sh --cursor             # Cursor pieces only (rules, skills, agents)
 ./install.sh --codex --claude     # Codex and Claude only
-./install.sh --opencode           # Opencode only
-./install.sh --shared             # only .ralph/ (orchestrator, templates, runners, docs)
-./install.sh --no-dashboard       # skip .ralph/ralph-dashboard/
-./install.sh -n /path/to/repo     # dry-run: print actions only
+./install.sh --opencode           # OpenCode only
+./install.sh --antigravity        # Antigravity only
+./install.sh --shared             # only .ralph/ (runner, orchestrator, templates, docs)
+./install.sh --no-dashboard       # skip the dashboard copy
+./install.sh -n /path/to/repo     # dry run: print actions without copying
 ```
 
-You can combine **`--cursor`**, **`--claude`**, **`--codex`**, **`--opencode`**, and **`--shared`** to trim what is copied.
+Combine `--cursor`, `--claude`, `--codex`, `--opencode`, `--antigravity`, and `--shared` to trim what is copied.
 
-### Partial installs
+**Partial installs:** a runtime flag alone (for example `--cursor`) does not install the shared `.ralph/` scripts. Add `--shared` when you need the runner, orchestrator, and templates -- the Claude and Codex runners also expect `.ralph/agent-config-tool.sh` when you use `--agent`. A default install still copies the dashboard into `.ralph/ralph-dashboard/`, so a `.ralph/` directory may exist that only contains the dashboard until you add `--shared`.
 
-**`--cursor`** alone does **not** install shared **`.ralph/`** scripts (unified runner, orchestrator, plan template, in-tree docs). A default install still copies the dashboard into **`.ralph/ralph-dashboard/`**, which may create a **`.ralph/`** directory that only contains the dashboard until you add **`--shared`**. Add **`--shared`** (or do a full install) when you need the rest of **`.ralph/`**.
+## Uninstall
 
-The Claude and Codex runners expect **`.ralph/agent-config-tool.sh`** when you use **`--agent`**; use **`./install.sh --claude --shared`**, **`./install.sh --codex --shared`**, or a full install.
-
-## Uninstall and manual vendor removal
-
-**`--uninstall`** (alias **`--remove-installed`**) removes only **files that ship in this Ralph package** (same manifest as install, including **`ralph-dashboard/`** when that applies), then prunes empty directories. Your own files next to Ralph rules, skills, or agents stay. Stack flags work like install (for example **`--uninstall --shared`** only touches **`.ralph/`**).
-
-**`--cleanup`** is the same as **`--remove-vendor`**: delete the vendored Ralph directory under the project when it still exists (for example you used **`RALPH_INSTALL_KEEP_VENDOR=1`** or a submodule). Normal installs already drop subtree-style **`vendor/ralph`** when safe; you usually do not need **`--cleanup`**.
-
-**`--purge`** runs a full **`--uninstall`** for all stacks plus **`--remove-vendor`**.
+| Command | What it removes |
+|---------|-----------------|
+| `--uninstall` | Files that ship in the Ralph package (your own files next to them stay). Combine with stack flags, for example `--uninstall --shared`. |
+| `--cleanup` | The vendored Ralph directory under the project, when one still exists. |
+| `--purge` | Both: full uninstall for all stacks plus vendor removal. |
 
 ```bash
-./vendor/ralph/install.sh --uninstall -n              # dry-run: sample file list
-./vendor/ralph/install.sh --uninstall --silent      # no prompts (CI)
-./vendor/ralph/install.sh --cleanup -n               # dry-run: rm vendored tree
-./vendor/ralph/install.sh --purge --silent         # full strip + vendor
+./vendor/ralph/install.sh --uninstall -n         # dry run: show what would be removed
+./vendor/ralph/install.sh --uninstall --silent   # no prompts (CI)
+./vendor/ralph/install.sh --purge --silent       # full strip including vendor tree
 ```
 
-You still need normal Git steps for submodules (**`git submodule deinit`**, **`git rm`**) or subtree history; the installer only removes files on disk.
+Git bookkeeping for submodules (`git submodule deinit`, `git rm`) or subtree history is still on you; the installer only removes files on disk.
 
-## What gets installed (summary)
+To remove a **global** install, delete `$RALPH_HOME` and the `~/.local/bin/ralph` shim. Use `migrate-to-global.sh` (above) when you only want to drop a project's local copies while keeping the project registered.
 
-After **`install.sh`** runs, typical paths at your project root include:
+**Stale directories from old installs:** projects installed long ago may have `.cursor/ralph/`, `.claude/ralph/`, `.codex/ralph/`, `.opencode/ralph/`, or `.agents/ralph/` directories. Those scripts moved to `.ralph/` and the installer no longer touches the old locations -- the uninstaller warns when it sees them. Remove them by hand:
 
-- **`.ralph/`** -- **`run-plan.sh`**, orchestrator, templates, MCP server, **`.ralph/docs/`**, optional **`.ralph/ralph-dashboard/`**
-- **`.cursor/`**, **`.claude/`**, **`.codex/`**, **`.opencode/`** -- per-runtime **`ralph/`** runners plus rules, skills, and agents (depending on flags)
+```bash
+rm -rf .cursor/ralph .claude/ralph .codex/ralph .opencode/ralph .agents/ralph
+```
 
-See the main repository **README** for a compact table and **repo-context** notes.
+## Global vs in-repo: which should I pick?
+
+| Topic | Global install | In-repo install |
+|-------|----------------|-----------------|
+| Setup cost | Install once, run `ralph` anywhere | Copy files into every repo |
+| Upgrades | One upgrade covers all projects | Upgrade each repo separately |
+| Team consistency | Each user manages their own Ralph version | Files are committed and reviewed together |
+| Customization | Project-local or user-level overrides | Edit the committed files directly |
+| Sandboxing | Some files live under `$HOME` | Everything stays inside the workspace |
+
+Short version: use global for personal workflows and lots of small repos; use in-repo when a team wants Ralph's exact behavior committed and reviewed.
 
 ## Dashboard (optional UI)
 
-From your project root (after **`install.sh`** has copied **`.ralph/ralph-dashboard/`**):
-
 ```bash
+# Global install, from any directory
+ralph dashboard
+
+# In-repo install, from the project root
 cd .ralph/ralph-dashboard && npm install && npm run build && PORT=8124 npm start
 ```
 
 ## See also
 
 - [Documentation index](README.md)
-- [Agent workflow](AGENT-WORKFLOW.md)
-- [MCP](MCP.md) (optional MCP server configuration after install)
+- [Agent workflow](AGENT-WORKFLOW.md) -- how the plan loop works
+- [Tooling](TOOLING.md) -- optional Ralph mode, compaction, native adapters
+- [MCP](MCP.md) -- optional MCP server configuration after install

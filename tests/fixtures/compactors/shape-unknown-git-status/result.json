@@ -1,0 +1,10 @@
+{
+  "stdout": "git status (exit 0): branch main...origin/main [ahead 2]: 1 added; 1 changed; 1 deleted; 1 modified\n M modified_file.txt\nA  added_file.txt\nD  deleted_file.txt\n?? untracked.txt",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "git_status",
+  "status": "compacted",
+  "exit_status": 0
+}

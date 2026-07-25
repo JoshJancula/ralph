@@ -1,0 +1,8 @@
+tests/test_main.py F
+tests/test_utils.py .....
+tests/test_helpers.py .E
+
+FAILED tests/test_main.py::test_main_function - AssertionError: expected True
+ERROR tests/test_helpers.py::test_error - RuntimeError: critical error
+
+============ 2 failed, 1 error, 5 passed in 0.34s ============

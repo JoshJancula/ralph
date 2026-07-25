@@ -1,0 +1,9 @@
+{"type":"tool_call","subtype":"started","call_id":"mcp_read","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","path":"/some/file.txt"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_read","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_read","path":"/some/file.txt"},"result":{"success":{"content":"alpha\nbeta\ngamma\ndelta\nepsilon"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_grep","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","pattern":"needle"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_grep","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_grep","pattern":"needle"},"result":{"success":{"matches":[]}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_glob","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_glob","globPattern":"**/*.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_glob","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_glob","globPattern":"**/*.md"},"result":{"success":{"files":["a.md","b.md"]}}}}}
+{"type":"tool_call","subtype":"started","call_id":"mcp_status","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_shell_status","jobId":"job-1"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"mcp_status","tool_call":{"mcpToolCall":{"args":{"toolName":"ralph_proxy_shell_status","jobId":"job-1"},"result":{"success":{"status":"running","elapsedSeconds":7,"combinedBytes":1536,"preview":"line 1\nline 2\nline 3\nline 4\nline 5"}}}}}
+{"type":"result","duration_ms":8000,"is_error":false}

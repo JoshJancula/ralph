@@ -1,131 +1,19 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code), Cursor (cursor-agent), Codex and any AI agents when working with code in this repository.
+**Audience:** This file is the agent contract for Claude Code, Cursor, Codex, OpenCode, Antigravity, and other AI assistants working in this repository. **Human operators** should use [README.md](README.md) and [docs/](docs/README.md). Open a docs page only when this file points you there.
 
 ## Overview
 
-Ralph is a framework for organizing AI coding assistant workflows. It provides:
-- **Plan-first loop:** Markdown todo lists executed by AI assistants (Cursor, Claude Code, or Codex)
-- **Orchestration:** Multi-stage pipelines (research → design → implementation → review) with artifact handoffs
+Ralph is a framework for organizing AI coding assistant workflows. It supports the Cursor, Claude, Codex, OpenCode, and Antigravity runtimes. It provides:
+
+- **Plan-first loop:** `ralph create plan` is the main entry point. `--format classic` is the zero-dependency markdown checklist path; `--format yaml` is the YAML-frontmatter TODO queue path. For staged multi-agent work, use `ralph create orc`. Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) are still accepted as aliases for `yaml`.
+- **Orchestration:** Pipeline orchestration routes TODOs and stages by runtime, agent, and model across the supported runtimes (Cursor, Claude, Codex, OpenCode, Antigravity). It shares context through `produces` / `requires` artifact declarations and explicit artifact paths in TODO content so required inputs surface automatically in each stage's prompt.
 - **Agents:** Prebuilt agent profiles for specialized work (research, architect, implementation, code-review, qa, security)
 - **Dashboard:** Optional Node UI for monitoring plan execution and artifact generation
 
-Ralph is installed into projects via `./install.sh`. The installer copies shared scripts to `.ralph/`, runtime-specific runners to `.cursor/ralph`, `.claude/ralph`, `.codex/ralph`, `.opencode/ralph`, and agents/rules/skills to `.cursor/agents`, `.claude/agents`, `.opencode/agents`, etc.
+Ralph is installed into projects via `./install.sh`. See Reference map → [docs/INSTALL.md](docs/INSTALL.md).
 
-> **Symlink note (this repo only):** `.cursor`, `.claude`, `.codex`, and `.opencode` at the repo root are symlinks to `bundle/.cursor`, `bundle/.claude`, `bundle/.codex`, and `bundle/.opencode`. Editing files under `bundle/.cursor/` (or `bundle/.claude/`, `bundle/.codex/`, `bundle/.opencode/`) automatically updates the symlinked paths — no manual copy or sync is needed. Similarly, `.ralph/` files are hardlinked to `bundle/.ralph/`, so edits there are also immediately reflected.
-
-## Key Commands
-
-### Run tests (Bats shell test suite)
-
-```bash
-# Full test suite
-bash scripts/setup-test-fixtures.sh
-bats tests/bats/*.bats
-
-# Run a specific test file
-bats tests/bats/run-plan-invoke.bats
-
-# Set required env var for all runs (suppresses usage risk prompt)
-RALPH_USAGE_RISKS_ACKNOWLEDGED=1 bats tests/bats/run-plan-unified.bats
-```
-
-The test suite uses Bats (Bash Automated Testing System). Tests live in `tests/bats/` and cover:
-- Installation and setup (`install.bats`, `install-lib.bats`)
-- Plan execution (`run-plan-*.bats`)
-- Orchestration (`orchestration-*.bats`)
-- Human interaction (`human-interaction.bats`)
-- MCP server (`mcp-server.bats`)
-- Agent scaffolding (`new-agent.bats`, `bundle-new-agent-scripts.bats`)
-
-### Run the installer
-
-```bash
-# Full install (all runtimes + dashboard)
-./install.sh
-
-# Install to a specific target repo
-./install.sh /path/to/repo
-
-# Claude and shared scripts only (no Cursor/Codex)
-./install.sh --claude --shared
-
-# Dry-run (print what would be copied)
-./install.sh -n
-```
-
-Submodule, subtree, partial installs, and cleanup: [docs/INSTALL.md](docs/INSTALL.md).
-
-### Run a plan (`run-plan.sh`)
-
-Invoke **`.ralph/run-plan.sh`** with **`--plan`** (required). Pass **`--runtime`** unless **`RALPH_PLAN_RUNTIME`** is set or you rely on the interactive runtime prompt (TTY). Pass **`--workspace <path>`** for an explicit repo root; if omitted, the workspace defaults to the current working directory. The parser in `bundle/.ralph/bash-lib/run-plan-args.sh` rejects unknown arguments and does not accept positional workspace or plan paths. See [README.md](README.md) for typical commands and canonical examples.
-
-### Ralph Dashboard (Node UI)
-
-In this repository, develop and test from **`ralph-dashboard/`** at the repo root:
-
-```bash
-cd ralph-dashboard
-npm install
-npm run build
-npm start
-```
-
-Use **`PORT=8124 npm start`** instead of **`npm start`** when you need a different port.
-
-After **`install.sh`** copies Ralph into another project, the dashboard lives at **`.ralph/ralph-dashboard/`**. From that project root run **`cd .ralph/ralph-dashboard && npm install`**, then **`npm run build`** and **`npm start`** (use **`PORT=8124 npm start`** to override the port).
-
-The dashboard reads plan state, logs, and artifacts from `.ralph-workspace/` and provides a UI for monitoring orchestration runs.
-
-### Validate orchestration schema
-
-```bash
-bash scripts/validate-orchestration-schema.sh <orchestration-file.orch.json>
-```
-
-## Recommended optional tools
-
-- `fzf` - Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf). Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
-- `python3` - Required for CLI session resume functionality (captures session IDs from tool output).
-
-## Global install mode
-
-Ralph supports two installation modes:
-
-**Local install (default):** Project-specific Ralph installation via `./install.sh`. Copies `bundle/.ralph/`, runtime configs, and agents into `<project>/.ralph/`, `<project>/.claude/`, etc. Best for repositories requiring committed, reviewable Ralph behavior.
-
-**Global install:** Single machine-wide installation via `./install.sh --global`. Installs Ralph once to `${RALPH_HOME:-$HOME/.ralph}/`, provides a `ralph` command on `PATH`, and shares runtime configs and agents across all projects using global install. Best for personal workflows or managing many projects with consistent tooling.
-
-### Directory layout
-
-- **Install root:** `${RALPH_HOME:-$HOME/.ralph}/` contains the Ralph scripts and dashboard
-- **Config root:** `${XDG_CONFIG_HOME:-$HOME/.config}/ralph/` contains the workspace registry and user defaults
-- **State root:** `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/` stores session state for global mode
-- **User runtime configs:** `${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.<runtime>/` optional shared agent/rule/skill configs
-- **Shim binary:** `~/.local/bin/ralph` dispatches commands to the global install
-
-See [docs/GLOBAL-INSTALL.md](../docs/GLOBAL-INSTALL.md) for the complete design spec.
-
-### Resolution order (runtime configs)
-
-When looking for agent configs or runtime rules, Ralph checks in order:
-1. `<workspace>/.<runtime>/` (project-local, always wins)
-2. `${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.<runtime>/` (user-level, used as fallback in global mode)
-3. `${RALPH_HOME:-$HOME/.ralph}/bundle/.<runtime>/` (bundled defaults)
-
-Set `RALPH_DISABLE_GLOBAL_FALLBACK=1` to use only project-local tier (preserves pre-global behavior for strict environments).
-
-### Workspace registry
-
-Global mode tracks recently used projects in `${XDG_CONFIG_HOME:-$HOME/.config}/ralph/workspaces.json`. Each plan run automatically updates the registry; older entries are pruned. Use `ralph workspaces list` to view registered projects or `ralph workspaces add <path>` for manual registration. The migration helper `bash $RALPH_HOME/bundle/.ralph/migrate-to-global.sh` converts projects with local installs to use global mode.
-
-### Session storage
-
-Local installs store session state under `<workspace>/.ralph-workspace/sessions/`. Global installs store session state under `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions/` by default. Override with `RALPH_PLAN_SESSION_HOME` for both modes.
-
-### Dashboard in global mode
-
-`ralph dashboard` starts the global dashboard when `RALPH_DASHBOARD_GLOBAL=1` or when `$RALPH_HOME` is set and the current directory lacks a project `.ralph-workspace/`. The global dashboard reads the workspace registry and aggregates metrics across all registered projects. The UI includes a workspace switcher and per-workspace filtering.
+> **Runtime roots (this repo):** `.cursor`, `.claude`, `.codex`, `.opencode`, and `.agents` at the repo root are **project-owned** directories for Ralph's own development workflow. `bundle/.cursor/`, `bundle/.claude/`, `bundle/.codex/`, `bundle/.opencode/`, and `bundle/.agents/` are installable framework defaults and templates for downstream projects; editing bundle paths does not change repo-root runtime config. `.ralph/` at the repo root is a symlink to `bundle/.ralph/` (shared scripts); edits under `bundle/.ralph/` are reflected there.
 
 ## Architecture
 
@@ -134,303 +22,255 @@ Local installs store session state under `<workspace>/.ralph-workspace/sessions/
 ```
 bundle/
   .ralph/              # Shared across all runtimes
-    run-plan.sh       # Unified plan executor (required by all)
-    orchestrator.sh   # Multi-stage orchestration runner
+    run-plan.sh        # Unified plan executor
+    orchestrator.sh    # Multi-stage orchestration runner
     orchestration-wizard.sh
     cleanup-plan.sh
     new-agent.sh
-    bash-lib/         # Helpers: plan-todo, run-plan-env, run-plan-invoke-*.sh, install-ops.sh, etc.
-    mcp-server.sh     # Bash MCP server
+    bash-lib/          # plan-todo, run-plan-env, run-plan-invoke-*.sh, install-ops.sh, ...
+    mcp-server.sh
     agent-config-tool.sh
-  .cursor/
-    ralph/            # Cursor-specific runner thin wrapper
-    agents/           # Cursor agent profiles
-      research/
-      architect/
-      implementation/
-      code-review/
-      qa/
-      security/
-  .claude/
-    ralph/            # Claude Code-specific runner thin wrapper
-    agents/           # Claude agent profiles (same 6 agents)
-    rules/
-      no-emoji.md
-    skills/
-      repo-context/SKILL.md
-  .codex/
-    ralph/            # Codex-specific runner thin wrapper
-    agents/           # Codex agent profiles (same 6 agents)
-  .opencode/
-    ralph/            # Opencode-specific runner thin wrapper
-    agents/           # Opencode agent profiles (same 6 agents)
-    rules/
-      no-emoji.md
-    skills/
-      repo-context/SKILL.md
+  .cursor/agents/      # research, architect, implementation, code-review, qa, security
+  .claude/agents/      # Same six agents; config.json plus agent markdown
+  .codex/agents/
+  .opencode/agents/    # Same six agents; config.json plus agent markdown
+  .agents/agents.md # Antigravity-native team/persona registry
+  .agents/agents/ # Ralph-internal prebuilt agent metadata for Antigravity; config.json plus agent markdown; model contract: `agy models` lists models and Ralph invokes `agy --model "<exact model string from agy models>"`
 ```
 
-### Agent configuration
+Runtime state (logs, artifacts, sessions) lives under `.ralph-workspace/` at the **state root** (default: `<project-root>/.ralph-workspace`). The **agent workspace** defaults to the directory that invoked `run-plan.sh` and may differ from both the project and state roots. Orchestration plans often sit under `.ralph-workspace/orchestration-plans/`.
 
-Each prebuilt agent (research, architect, implementation, code-review, qa, security) is defined by:
-- `<agent-id>/config.json` -- Ralph/orchestrator uses this (fields: name, model, description, rules, skills, allowed_tools, output_artifacts)
-- `<agent-id>/<agent-id>.md` -- Claude Code native sessions use this (YAML frontmatter + instructions)
+### Agent configuration and source resolver
 
-Both must be kept in sync. Agents declare:
-- **model:** The model id used when running with that agent
-- **rules:** Paths to constraint files (e.g., `.claude/rules/no-emoji.md` prevents emoji in code/logs)
-- **skills:** Paths to skill definitions (e.g., `.claude/skills/repo-context/SKILL.md` teaches the agent about the project structure)
-- **allowed_tools:** (Claude headless only) Comma-separated tool names or JSON array
-- **output_artifacts:** Default deliverable paths (supports `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` templates). These are only used as a fallback when the orchestration stage does not define its own `artifacts` or `outputArtifacts`. When the stage declares its own required artifacts, the agent config `output_artifacts` are ignored entirely for that run.
+Ralph agents are resolved by the **agent source resolver** at runtime, supporting two paths:
 
-Validation schema is in `bundle/.claude/agents/README.md` (applies to all runtimes).
+**Single-file canonical path (Ralph-native, default):** Use `ralph agent new <id>` to scaffold a single `.ralph/agents/<agent-id>.md` file. The resolver normalizes it without requiring `scripts/sync-runtime-assets.sh`. Probe order: `.ralph-workspace/agents/<name>.md` (override), `.ralph/agents/<name>.md` (install), native runtime `.md`, then classic `config.json`. Set `RALPH_AGENT_SOURCE_ORDER` to reorder probes or `RALPH_AGENT_SOURCE` to force an explicit path.
 
-### Cost defaults for Claude
+**Dual-file bundled-default path (with --all):** Use `ralph agent new <id> --all` to generate the full per-runtime artifact set. Then run `scripts/sync-runtime-assets.sh` to materialize:
+- Canonical source: `agents/agents/<agent-id>.md` (Ralph-dev) or `bundle/.ralph/agents/<agent-id>.md` (downstream)
+- Generated runtime metadata: `.<runtime>/agents/<agent-id>/config.json`
+- Generated runtime native sessions: `.<runtime>/agents/<agent-id>/<agent-id>.md` or `.<runtime>/agents/<agent-id>/<agent-id>.toml`
 
-To reduce token consumption and keep subscription users on the auth-safe path, Ralph defaults to `CLAUDE_PLAN_BARE=0` and `CLAUDE_PLAN_MINIMAL=1`. `CLAUDE_PLAN_BARE=1` remains an opt-in mode for API-key workflows, while minimal mode composes `--disable-slash-commands`, `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, `--setting-sources project,local`, and `--tools ...` so Claude starts with a narrower, safer surface without relying on keychain-backed auth. During reset-command invocations, Ralph omits `--disable-slash-commands` so the reset command can execute. Set `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0` or pass `--claude-allow-mcp` to keep minimal mode but allow project MCP servers (for example Playwright MCP on a QA stage).
+**Claude native passthrough:** When `RALPH_AGENT_NATIVE_PASSTHROUGH=on` (auto-default) and a resolved agent is native-md for claude, the runner passes `--agent <name>` directly to the claude CLI instead of synthesizing a context block. Set `RALPH_AGENT_NATIVE_PASSTHROUGH=off` to force fallback to inlined context (useful when claude --agent support is unavailable or causes conflicts).
 
-Session rotation caps cache growth: `RALPH_PLAN_SESSION_MAX_TURNS` defaults to `8` for Claude, rotating the CLI session after this many invocations. Set to `0` to disable rotation. Other runtimes are unaffected.
+**CLI tools:** `ralph agent list` enumerates all agents across sources with shadowing annotations; `ralph agent show <id>` prints the resolved normalized profile. Schema: Reference map → [bundle/.claude/agents/README.md](bundle/.claude/agents/README.md).
+
+Antigravity uses the same split: `.agents/agents.md` is generated from the canonical descriptions, while `.agents/agents/<agent-id>/config.json` is Ralph metadata used by `run-plan.sh --agent`, orchestration, MCP catalogs, output artifact validation, and model resolution.
 
 ### How plans and orchestration work
 
-1. **Single plan:** User writes a `.md` file with tasks like `- [ ] Do this` and `- [x] Done`. The runner picks the next open task, invokes the CLI assistant (Cursor/Claude/Codex), updates the plan, repeats until done.
+**Single plan:** A `.md` file with tasks like `- [ ] Do this` and `- [x] Done`. `.ralph/run-plan.sh --plan <path>` picks the next open task, invokes the CLI assistant, updates the plan, and repeats until done. **`--plan` is required.** The parser in `bundle/.ralph/bash-lib/run-plan/run-plan-args.sh` rejects unknown arguments and does not accept positional workspace or plan paths.
 
-### Todo granularity and consolidation
+**Orchestration:** `ralph create orc` scaffolds a pipeline plan with a `pipeline:` block. Each stage declares `id`, `runtime` (`cursor` | `claude` | `codex` | `opencode` | `antigravity`), `agent`, and either inline todos or a `planFile:`. Common optional fields: `inputArtifacts`, `outputArtifacts`, `model`, `sessionResume`, `loopControl`. Stages run in order; the orchestrator verifies required artifacts exist and are non-empty before advancing. If a stage declares no `artifacts` and no `outputArtifacts`, agent `output_artifacts` are used as fallback.
 
-Plan templates and architect/implementation agents should produce todos at the level of one logical, independently verifiable unit of work, not one edit or keystroke. Typical feature plans should land around 8-30 todos; if three consecutive todos can be completed without re-reading a different file, they should usually be one todo.
+Optional **`parallelStages`** groups stages into parallel waves with a sequential tail for unlisted stages. Wave syntax, failure semantics, and examples: [docs/orchestrated-ralph-example.md](docs/orchestrated-ralph-example.md).
 
-Set `RALPH_PLAN_CONSOLIDATE=1` to run a plan-load consolidation pass once at run start. The pass collapses adjacent unchecked todos that share the same obvious verb and target, leaves checked todos alone, and does not merge across markdown headings or blank-line separators. It is off by default.
+**Session resume:** `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1` reuses CLI context via `session-id.<runtime>.txt` under `.ralph-workspace/sessions/<plan-key>/`. See Reference map → [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) and [docs/README.md](docs/README.md#cli-session-resume).
 
-For long plans, the runner emits one stderr hint suggesting `RALPH_PLAN_CLI_RESUME=1` when unchecked todos exceed `${RALPH_PLAN_RESUME_HINT_THRESHOLD:-25}` and resume is off. Set `RALPH_PLAN_RESUME_HINT=0` to suppress the hint. If Python 3 or PyYAML is unavailable, consolidation no-ops with a warning and the plan run continues.
+**Outputs:** Plan logs under `.ralph-workspace/logs/`; generated files under `.ralph-workspace/artifacts/`. Path templates support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` (see table below).
 
-2. **Orchestration:** A `.orch.json` file defines stages (research → architect → implementation → code-review → qa → security or custom). Each stage has:
-   - `id`: stage identifier
-   - `runtime`: "cursor" | "claude" | "codex" | "opencode"
-   - `agent`: agent name to load
-   - `plan`: path to that stage's plan file
-   - `artifacts`: required outputs for this stage (array of `{ "path": "...", "required": true }`). This is the primary artifact declaration and overrides the agent config's `output_artifacts` entirely. Paths support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` tokens.
-   - `outputArtifacts`: alternative/additional artifact declarations (same format; merged with `artifacts`). Wizard-generated files use `artifacts`; use `outputArtifacts` for documentation or legacy compatibility.
-   - `inputArtifacts`: paths to artifacts from earlier stages that this stage should read (not verified, only provided as context). Array of `{ "path": "..." }`.
-   - `model`: optional model override for this stage; sets `CURSOR_PLAN_MODEL` / `CLAUDE_PLAN_MODEL` / `CODEX_PLAN_MODEL` for the runner invocation.
-   - `sessionResume`: boolean; forwards `--cli-resume` or `--no-cli-resume` to `run-plan.sh`.
+## Key commands
 
-   The orchestrator runs stages sequentially, verifying artifacts exist before advancing. If a stage defines no `artifacts` and no `outputArtifacts`, the agent config's `output_artifacts` are used as a fallback.
+```bash
+# Tests (default suite — what CI runs)
+bash scripts/run-bats.sh
+bash scripts/run-bats.sh -j 8
 
-   `parallelStages` is optional and changes the execution model from sequential to wave-based parallel runs followed by an optional sequential tail. Assumptions:
-   - When `parallelStages` is absent, existing sequential orchestration behavior is preserved.
-   - When `parallelStages` is present, stages are grouped into waves (arrays of stage IDs). Each wave executes in parallel; waves run sequentially.
-   - Partial `parallelStages` coverage is supported: stages not listed in any wave run sequentially (in `stages[].id` declaration order) after all waves complete. This sequential tail preserves the declaration order from the orchestration JSON.
-   - Deterministic failure semantics: the orchestrator completes the active parallel wave (waits for all stages in the wave), then fails with per-stage status if any stage in that wave fails. Remaining waves and the sequential tail do not run.
-   
-   When `parallelStages` is present, each wave is a comma-separated string of stage IDs. All stage IDs in waves must exist in `stages[].id`, and no stage ID may appear more than once across all waves. Stages not listed in `parallelStages` run sequentially after all waves, in `stages[]` declaration order. A stage in a parallel wave may declare `loopControl` to loop back to any earlier stage; the loop cycles at the end of the wave.
+# Install
+./install.sh                          # see docs/INSTALL.md
 
-#### Handoffs
+# Plan and orchestration
+.ralph/run-plan.sh --runtime cursor --plan PLAN.md
+ralph run --plan path/to/pipeline.plan.md
+```
 
-Handoff declarations live on `artifacts` or `outputArtifacts` entries. Use `kind: "handoff"` together with `to: "<target-stage-id>"` to mark a file that should be handed to a later stage. The `to` value must match a declared stage id. In sequential orchestration the target stage must run after the producer in `stages[]` order. With `parallelStages` (including partial coverage with a sequential tail), the target stage must run after the producer in execution order: waves run in order, and stages within the same wave cannot have handoffs between them (same rank); stages in the sequential tail run after all waves, in `stages[]` declaration order.
+Bats harness tiers, parallelism, and fixtures: [tests/README.md](tests/README.md). Dashboard development in this repo: `ralph-dashboard/` (after install: `.ralph/ralph-dashboard/`).
 
-Non-handoff artifact entries may still set `kind` to `design`, `review`, `research`, or `notes`. Leave `kind` and `to` off ordinary artifact declarations.
+Recommended optional tools: `fzf` (interactive menus; `RALPH_SKIP_FZF_HINT=1` silences install hint), `python3` (CLI session resume / plan format helpers).
 
-Handoff markdown files should follow `bundle/.ralph/handoff.template.md`:
-- `# Handoff: <FROM_STAGE> -> <TO_STAGE>`
-- `<!-- HANDOFF_META: START -->` / `<!-- HANDOFF_META: END -->` with `from`, `to`, and `iteration`
-- `## Tasks` containing unchecked `- [ ]` items for work that should be injected into the next stage plan
-- `## Context` and `## Acceptance` for background and success criteria
+## Non-obvious patterns / gotchas
 
-Before each stage runs, the orchestrator scans incoming handoffs for that stage, resolves template tokens in the artifact path, extracts unchecked tasks from `## Tasks`, and injects them into the stage plan inside guarded `RALPH_HANDOFF` blocks. Identical blocks are skipped, same-iteration content changes replace the stale block, and missing or malformed handoff files are logged as warnings instead of failing the run. Injection is enabled by default with `RALPH_HANDOFFS_ENABLED=1`; set it to `0` to disable the behavior.
+Rules that are easy to miss when skimming — read before running or editing Ralph.
 
-3. **Session resume:** With `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1`, the runner stores a runtime-specific `session-id.<runtime>.txt` (and related human-interaction files) under `RALPH_PLAN_SESSION_HOME/<RALPH_PLAN_KEY>/` and reuses the same CLI session on future runs (skips context setup, continues where the assistant left off). When `RALPH_PLAN_SESSION_HOME` is unset, the session root is `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (see `bundle/.ralph/bash-lib/run-plan-session.sh`), so files resolve under `<workspace>/.ralph-workspace/sessions/<plan-key>` by default. Set `RALPH_PLAN_SESSION_HOME` explicitly to use a different directory.
+### `run-plan.sh` CLI
 
-### Plan format modes
+- **Do** pass `--plan <path>` on every invocation; it is required.
+- **Do** use only documented flags (`--runtime`, `--workspace`, `--workspace-root`, `--agent-workspace`, …).
+- **Don't** pass positional plan or workspace paths. The parser in `bundle/.ralph/bash-lib/run-plan/run-plan-args.sh` rejects unknown arguments and does not accept positional paths.
 
-The runner supports two plan file formats:
+### Three-root model
 
-1. **Default (markdown checkbox):** Standard Ralph format with lines like `- [ ] Task` and `- [x] Done`. Detected when the file does not start with `---` or lacks a `todos:` array in frontmatter.
+Ralph separates three directory roots. Do not conflate them.
 
-2. **Cursor frontmatter:** YAML frontmatter format with a `todos` array:
-   ```yaml
-   ---
-   todos:
-     - id: "1"
-       content: "Task description"
-       status: pending
-     - id: "2"
-       content: "Another task"
-       status: completed
-   ---
-   # Plan content follows
-   ```
-   Valid status values: `pending`, `in_progress`, `completed`. The runner updates the frontmatter when completing tasks.
+| Root | Flag / env | Default | Resolves |
+|------|------------|---------|----------|
+| **Project root** | `--workspace` / `--project-root`; `RALPH_PROJECT_ROOT` (exported) | Current directory when cwd is the project | `.ralph/`, runtime agent configs, project-relative plan paths |
+| **State root** | `--workspace-root`; `RALPH_PLAN_WORKSPACE_ROOT` | `<project-root>/.ralph-workspace` | Logs, artifacts, sessions, tool-results, security sentinels under `.ralph-workspace/` |
+| **Agent workspace** | `--agent-workspace`; `RALPH_AGENT_WORKSPACE` | Directory that invoked `run-plan.sh` | Sandboxed work tree where the assistant reads/writes project files; runtime CLIs use this root |
 
-**Format selection:**
-- **Auto-detect (default):** The runner examines the file for `---` frontmatter markers and a `todos:` array.
-- **Override:** Set `RALPH_PLAN_FORMAT=cursor` or `RALPH_PLAN_FORMAT=default` to force a specific format regardless of content.
+- **Do** pass `--workspace <path>` (alias `--project-root`) when the shell cwd is not the project root.
+- **Do** pass `--workspace-root <path>` (or set `RALPH_PLAN_WORKSPACE_ROOT`) when `.ralph-workspace/` must live outside the project folder.
+- **Do** pass `--agent-workspace <path>` (or set `RALPH_AGENT_WORKSPACE`) when the model should work in a different tree than the invocation directory (for example a sibling checkout or monorepo package).
+- **Don't** assume `--workspace` sets the agent sandbox; it only sets the Ralph project root.
 
-**Implementation:** Format detection and manipulation are handled in `bundle/.ralph/bash-lib/plan-todo.sh` using Python 3 with PyYAML when available.
+**Compatibility:** `--workspace` and `--project-root` still mean the project root. `RALPH_MCP_WORKSPACE` remains the project root for MCP server startup; configs that set only `RALPH_MCP_WORKSPACE` (without the newer root env vars) continue to work.
 
-### Key environment variables
+**External plan directories:** `$HOME/.cursor/plans` and `$HOME/.claude/plans` are built-in read-only roots for Ralph MCP proxy read/search tools so agents can reference original plan files. Writes to those paths are rejected.
 
-- `RALPH_USAGE_RISKS_ACKNOWLEDGED=1` -- Skip the one-time usage risk prompt (set in CI)
-- `RALPH_PLAN_WORKSPACE_ROOT` -- Override `.ralph-workspace/` location
-- `RALPH_PLAN_CLI_RESUME=1` -- Enable CLI session resume
-- `RALPH_PLAN_CONSOLIDATE=1` -- Collapse adjacent unchecked todos once at run start; off by default and safe to leave unset.
-- `RALPH_ARTIFACT_NS` -- Override artifact namespace (defaults to plan file basename)
-- `RALPH_PLAN_KEY` -- Explicit plan namespace (defaults to plan file basename)
-- `RALPH_PLAN_SESSION_HOME` -- Directory that holds `session-id.<runtime>.txt`, `pending-human.txt`, and the rest of the session artifacts. When unset, defaults to `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions` (workspace-local). Set explicitly to override (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions` if you prefer the user config area).
-- `RALPH_HUMAN_POLL_INTERVAL=2` -- Poll interval (seconds) when waiting for offline human input
-- `ORCHESTRATOR_VERBOSE=1` -- Log each orchestrator step to stderr
-- `ORCHESTRATOR_DRY_RUN=1` -- Print orchestration steps without running
-- `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` -- Allow CLI resume without an existing session-id.<runtime>.txt; use only in isolated environments to avoid session mix-ups.
-- `RALPH_MCP_AUTH_TOKEN` -- When set, the MCP server rejects JSON-RPC tool calls missing the matching `authToken` field (code `-32001`).
-- `RALPH_MCP_ALLOWLIST` -- Comma-separated workspace/orchestration path prefixes that the MCP server will accept; requests referencing other locations are rejected.
-- `RALPH_PLAN_FORMAT` -- Force plan format: `default` (markdown checkbox) or `cursor` (frontmatter with `todos[]` array). When unset, auto-detects based on file content.
+**Examples:**
 
-### Human interaction flow
+```bash
+# State root outside the project (logs/artifacts on a fast disk)
+.ralph/run-plan.sh --runtime cursor --plan PLAN.md \
+  --workspace /path/to/myproject \
+  --workspace-root /fast-disk/ralph-state/myproject
 
-When the runner needs human input:
-- **TTY attached:** Prompt interactively on `/dev/tty` and continue
-- **Non-TTY (orchestrator, CI):** Write `pending-human.txt` under `${RALPH_PLAN_SESSION_HOME}/${RALPH_PLAN_KEY}/` (when `RALPH_PLAN_SESSION_HOME` is unset, this is under `<workspace>/.ralph-workspace/sessions/<RALPH_PLAN_KEY>` by default), poll until the operator edits `operator-response.txt`, then continue
+# Agent workspace is a package inside a monorepo; project root is the monorepo root
+cd /path/to/monorepo/packages/api
+.ralph/run-plan.sh --runtime cursor --plan ../../PLAN.md \
+  --workspace /path/to/monorepo \
+  --agent-workspace /path/to/monorepo/packages/api
+```
 
-All Q&A is logged to `human-replies.md` in the session directory for auditing.
+### Plan checkbox syntax
 
-### Session storage choices
-- **Default location — local install:** When `RALPH_PLAN_SESSION_HOME` is unset and running from a local project install, Ralph stores `session-id.<runtime>.txt`, `pending-human.txt`, `operator-response.txt`, and `human-replies.md` under `${RALPH_PLAN_WORKSPACE_ROOT:-<workspace>/.ralph-workspace}/sessions/<plan-key>`. Keeping the default under `.ralph-workspace/sessions/` makes session files reachable from Codex and other sandboxes without relying on home-directory access.
-- **Default location — global install:** When running from a global install (indicated by `RALPH_HOME` being set AND no project-local `.ralph/` directory existing), the default session home becomes `${XDG_STATE_HOME:-$HOME/.local/state}/ralph/sessions/<plan-key>`. This centralizes session state under the user's home directory rather than inside each workspace tree.
-- **Python 3 dependency:** CLI resume relies on the JSON demux helper which is written in Python; if Python 3 is missing the runtime logs `Warning: RALPH_PLAN_CLI_RESUME needs python3 ... running without it.` (see `bundle/.ralph/bash-lib/run-plan-invoke-*.sh`) and continues without resuming the previous session.
-- **Override:** Set `RALPH_PLAN_SESSION_HOME` to a directory of your choice (for example `${XDG_STATE_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/ralph/sessions`) when you want session files in a different location. An explicit `RALPH_PLAN_SESSION_HOME` always takes precedence over the default, regardless of install mode. If you use Codex with a custom session home, ensure the sandbox can read that path.
-- **Codex-specific note:** `bundle/.codex/ralph/codex-exec-prompt.sh` invokes `codex exec --full-auto` with `--sandbox workspace-write` and, for non-resume runs, `--add-dir` on the workspace `.ralph-workspace/` directory so material under that tree (including `.ralph-workspace/sessions/` in local mode) is visible. Resume invocations use `codex exec resume` (with a stored session id, or `--last` when `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` and bare resume applies) and do not add that extra directory flag; prefer a workspace-visible `RALPH_PLAN_SESSION_HOME` if the resume flow must read session files from inside the Codex process.
+- **Do** write open tasks as `- [ ]` (space before `]`).
+- **Do** mark completed tasks as `- [x]`.
+- **Don't** use `- []` (no space) — the runner ignores it, so the plan can stall while lines still look like todos.
 
-### Runtime outputs
+### Agent metadata
 
-Generated plan and orchestration outputs live under `.ralph-workspace/` so runners, dashboards, and automated checks can find them consistently.
+- **Single-file path:** Edit only `.ralph/agents/<agent-id>.md` (or `.ralph-workspace/agents/` for per-run overrides). Do not run sync; the source resolver adapts at runtime.
+- **Dual-file path:** Edit the canonical frontmatter in `agents/agents/<agent-id>.md` or `bundle/.ralph/agents/<agent-id>.md`, then run `scripts/sync-runtime-assets.sh`.
+- **Don't** hand-edit generated `config.json`, runtime agent markdown/toml, or `.agents/agents.md` (unless you are using single-file resolved agents, in which case these do not exist).
+- **Do** keep `agents/agents/<agent-id>.md` and `bundle/.ralph/agents/<agent-id>.md` aligned if you are using the dual-file path for your dev/generic agent split.
 
-- Plan runs write logs under `.ralph-workspace/logs/` and generated artifacts under `.ralph-workspace/artifacts/`.
-- Orchestration runs may also write stage-specific files beneath `.ralph-workspace/orchestration-plans/` and read summary data from `.ralph-workspace/logs/`.
-- Agent configs that declare `output_artifacts` should treat those paths as fallback deliverables only; orchestration-stage `artifacts` and `outputArtifacts` take precedence when present.
+### Claude cost and session defaults
 
-### Interpreting invocation-usage.json
+- **Defaults:** `CLAUDE_PLAN_BARE=0`, `CLAUDE_PLAN_MINIMAL=1` (auth-safe minimal flags for typical subscription use).
+- **Do** set `CLAUDE_PLAN_BARE=1` only for opt-in API-key workflows that need full Claude discovery.
+- **Do** expect Claude CLI session rotation after `RALPH_PLAN_SESSION_MAX_TURNS` invocations (default `8`); set `0` to disable. Other runtimes are unaffected.
+- **Don't** assume bare mode or minimal mode interact with hooks/MCP the way a normal Claude session does — see Reference map → [docs/TOOLING.md](docs/TOOLING.md).
 
-Every plan run appends a record to `.ralph-workspace/logs/<PLAN_KEY>/invocation-usage.json` and writes a final rollup to `plan-usage-summary.json`. The same files are served by the Ralph dashboard under Metrics.
+### Naming and style
 
-#### Per-runtime token field semantics
+- **Do** name agents with lowercase and hyphens (e.g. `code-review`).
+- **Don't** use underscores, spaces, or emoji in agent ids, code, comments, logs, or docs — see `.claude/rules/no-emoji.md` (also under `.cursor`, `.codex`, `.opencode`, `.agents`).
 
-| Runtime | `input_tokens` | `output_tokens` | `cache_creation_input_tokens` | `cache_read_input_tokens` |
-|---------|---------------|-----------------|-------------------------------|--------------------------|
-| claude  | uncached input tokens | output tokens | tokens written to the Anthropic prompt cache | tokens read from the cache |
-| cursor  | full input tokens (no cache) | output tokens | 0 | 0 |
-| codex   | `input_tokens - cached_input_tokens` from the final `token_count` event | `output_tokens + reasoning_output_tokens` | 0 (Codex does not distinguish creation) | `cached_input_tokens` |
-| opencode | sum of `tokens.input` across steps | sum of `tokens.output + tokens.reasoning` | sum of `tokens.cache.write` | sum of `tokens.cache.read` |
+### Antigravity model contract
 
-#### Additional fields
+- **Do** list available models with `agy models` and pass the chosen exact display string unchanged to `agy --model "<exact model string from agy models>"`.
+- **Don't** normalize, remap, or sort Antigravity model ids — Ralph preserves the CLI output verbatim.
+- **Do** set `ANTIGRAVITY_PLAN_MODEL` or pass `--model` for non-interactive runs; saved `ralph models` entries apply only to Claude and Codex.
 
-- `max_turn_total_tokens` -- peak single-turn total token count during the invocation (Codex only, derived from `last_token_usage.total_tokens`; 0 for all other runtimes). High values indicate a context-heavy turn and predict slow or failed runs.
-- `cache_hit_ratio` -- `cache_read_input_tokens / (input_tokens + cache_read_input_tokens + cache_creation_input_tokens)`. Values near 1 mean the prompt cache absorbed almost all input cost. Values near 0 on Claude indicate cold starts (no active session) or that session resume is not enabled.
+### Native runtime configuration preservation
 
-Both fields are shown in the Ralph dashboard as "Cache hit" and "Peak turn" columns in the Plan Metrics and Orchestration Metrics tables, and in the per-plan-folder metric strip on plan cards.
+Ralph preserves each runtime's native user, project, and local/private configuration chain. Runtime configurations are discovered from the Ralph project root, not the state root or agent workspace.
 
-### Dashboard metrics
+| Runtime | Native config sources (precedence order) | Ralph additions |
+|---------|------------------------------------------|-----------------|
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server in `ralph`/`hybrid` mode |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
+| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` (if project trusted) | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
+| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
 
-The Ralph dashboard provides a web UI for monitoring plan execution and token usage:
+All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
 
-**Metrics sections:**
+### Agent MCP servers
 
-1. **Overall metrics:** Aggregated statistics across all plans
-   - Total elapsed time, input/output tokens, cache hit ratio
-   - Per-runtime breakdowns
+Agents may declare optional `mcp_servers` in canonical frontmatter. The field accepts:
+- **String references**: Names of ambient MCP servers to include (e.g., `playwright`, `github`)
+- **Portable definitions**: Inline server definitions with `name`, `transport` (`stdio` or `http`), and transport-specific fields
 
-2. **Per-plan metrics:** Individual plan statistics
-   - Each plan folder shows: elapsed time, tokens, cache hit ratio, peak turn
-   - Sortable and filterable by runtime, date, status
+**Precedence**: Native ambient > Agent definitions > Ralph's protected `ralph` server. Agent definitions with the same name as ambient servers override the ambient definition.
 
-3. **Per-orchestration metrics:** Stage-level breakdowns for multi-stage pipelines
-   - Shows each stage's contribution to total tokens/time
-   - Identifies which stages consumed the most resources
+**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
 
-**Access:** The dashboard runs at `http://127.0.0.1:8123` by default (use `PORT=8124 npm start` to override). It reads from `.ralph-workspace/logs/` and `.ralph-workspace/artifacts/`.
+**Supported transports**:
+- `stdio`: `command` (required), `args` (optional array), `env` (optional map with `${ENV_VAR}` references)
+- `http`: `url` (required), `headers` (optional map with `${ENV_VAR}` references)
 
-**API endpoints:**
-- `GET /api/metrics/summary` -- Overall aggregated metrics
-- `GET /api/metrics/plan/:planKey` -- Per-plan metrics
-- `GET /api/metrics/orchestration/:namespace` -- Per-orchestration stage metrics
+**Secret policy**: Credential values must use `${ENV_VAR}` references. Literal secrets (values matching credential patterns) are rejected at validation. Secrets are resolved at invocation time and never written to disk longer than necessary.
+
+**Failure behavior**: Unresolved references, invalid definitions, missing environment variables, or attempts to use the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, missing server/env name, and searched source paths.
+
+See [docs/MCP.md](docs/MCP.md) for full syntax, portable examples, and troubleshooting. See [bundle/.claude/agents/README.md](bundle/.claude/agents/README.md) for the agent `config.json` schema including `mcp_servers`.
+
+## Reference map (progressive disclosure)
+
+Open these only when the task requires detail beyond this file.
+
+| Read this | Only when |
+|-----------|-----------|
+| [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Env vars, session/resume flags, runtime `*_PLAN_*` chains, orchestrator knobs, agent source control (`RALPH_AGENT_SOURCE_ORDER`, `RALPH_AGENT_SOURCE`, `RALPH_AGENT_NATIVE_PASSTHROUGH`) |
+| [docs/TOOLING.md](docs/TOOLING.md) | Ralph mode (`--ralph-mode`, `RALPH_MODE`), MCP proxy tools, shell compaction policy, native adapters, overlay journals and cleanup |
+| [docs/MCP.md](docs/MCP.md) | Standalone Ralph MCP server, host wiring, third-party MCP for plan agents |
+| [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Plan loop operator flow, human input, handoffs, orchestration prompts |
+| [docs/INSTALL.md](docs/INSTALL.md) | Global and in-repo install, `install.sh` flags, workspace registry, uninstall |
+| [bundle/.claude/agents/README.md](bundle/.claude/agents/README.md) | Agent `config.json` schema and validation rules (all runtimes) |
+| [bundle/.agents/agents/README.md](bundle/.agents/agents/README.md) | Ralph-internal Antigravity agent metadata and model contract |
 
 ## Important patterns
 
 ### Adding a new agent
 
-Run `bash .ralph/new-agent.sh` to scaffold a new agent (prompts for name, model, description, rules, skills). This creates:
-- `.<runtime>/agents/<agent-id>/config.json`
-- `.<runtime>/agents/<agent-id>/<agent-id>.md`
-- Rule and skill skeleton directories
+- **Single-file (Ralph-native, default):** `ralph agent new my-agent` creates only `.ralph/agents/my-agent.md` with canonical frontmatter. Use `ralph agent show my-agent` to inspect the resolved profile.
+- **Dual-file (bundled):** `ralph agent new my-agent --all` scaffolds all runtime variants and runs sync automatically. For Antigravity, this updates both Ralph metadata under `.agents/agents/<agent-id>/` and the native `.agents/agents.md` registry.
 
-Keep config.json and the .md file in sync when editing agent metadata.
+Use `ralph agent list` to enumerate all agents across sources.
 
 ### Artifact namespace placeholders
 
-Use these tokens in `artifacts`, `outputArtifacts`, and agent `output_artifacts` paths:
-
 | Token | Env var | Example value | Typical use |
 |-------|---------|---------------|-------------|
-| `{{ARTIFACT_NS}}` | `RALPH_ARTIFACT_NS` | `code-review` | Namespace from the orchestration JSON or plan basename |
-| `{{PLAN_KEY}}` | `RALPH_PLAN_KEY` | `code-review-01-cr1` | Plan namespace from `RALPH_PLAN_KEY` (falls back to `{{ARTIFACT_NS}}` when unset) |
-| `{{STAGE_ID}}` | `RALPH_STAGE_ID` | `cr1` | Sanitized stage `id` from the orchestration JSON |
+| `{{ARTIFACT_NS}}` | `RALPH_ARTIFACT_NS` | `code-review` | Namespace from orchestration JSON or plan basename |
+| `{{PLAN_KEY}}` | `RALPH_PLAN_KEY` | `code-review-01-cr1` | Plan namespace (falls back to `{{ARTIFACT_NS}}` when unset) |
+| `{{STAGE_ID}}` | `RALPH_STAGE_ID` | `cr1` | Sanitized stage `id` from orchestration JSON |
 
 Examples:
-- `".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md"` → `".ralph-workspace/artifacts/my-feature/architecture.md"`
-- `".ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{STAGE_ID}}.md"` → `".ralph-workspace/artifacts/code-review/cr1.md"` (when run as stage `cr1`)
+
+- `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md` → `.ralph-workspace/artifacts/my-feature/architecture.md`
+- `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{STAGE_ID}}.md` → `.ralph-workspace/artifacts/code-review/cr1.md` (stage `cr1`)
+
+### Ralph proxy batching (ralph/hybrid mode)
+
+When Ralph MCP owned tools are active, batch two or more independent read/search/glob/result operations with `ralph_proxy_batch` instead of serial proxy calls. The tool accepts up to **8 read-only operations per call** (override with `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS`). Allowed operations: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`. Shell, async shell, edit, write, and repomap calls must stay outside the batch. After an invocation with consecutive native reads or grep-then-read sequences, the runner may feed forward a telemetry hint recommending batching on the next prompt.
 
 ### MCP server
-
-The Bash MCP server (`bash .ralph/mcp-server.sh`) exposes plan state and orchestration history as resources, allowing Claude, Cursor, or other MCP clients to query Ralph state without direct file access.
 
 ```bash
 RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh
 ```
 
-Requires `jq` for JSON parsing.
+Requires `jq`. Plan-run injection and overlays: see Reference map above.
 
 ### Validation and error handling
 
-Key scripts to understand:
-- `.ralph/bash-lib/install-ops.sh` -- Installer flag parsing and validation
-- `.ralph/agent-config-tool.sh` -- Agent config validation and schema checking
-- `scripts/validate-orchestration-schema.sh` -- Validates `.orch.json` format
-
-The agent-config-tool is called by all runtimes to verify agents before starting a plan run.
+- `.ralph/bash-lib/install/install-ops.sh` — installer flag parsing
+- `.ralph/agent-config-tool.sh` — agent config validation (all runtimes call this before plan runs)
+- `scripts/validate-orchestration-schema.sh` — pipeline plan schema checks
 
 ## Testing notes
 
-- **Bats framework:** Each `.bats` file is a standalone test; use `load 'test_helper'` to share helpers
-- **Setup/teardown:** Bats provides `setup()` and `teardown()` functions per test
-- **Test fixtures:** `scripts/setup-test-fixtures.sh` generates `.ralph-workspace/` stubs for offline testing
-- **CI:** GitHub Actions runs `bats tests/bats/*.bats` with `RALPH_USAGE_RISKS_ACKNOWLEDGED=1`
-
-### Running specific tests
-
-```bash
-# Run tests matching a pattern
-bats tests/bats/run-plan*.bats
-
-# Run one test function
-bats tests/bats/orchestration-integration.bats --filter "integration test for multi-stage"
-```
+- **Framework:** Bats in `tests/bats/`; each file is standalone; use `load 'test_helper'`
+- **Fixtures:** `scripts/setup-test-fixtures.sh` creates `.ralph-workspace/` stubs
+- **CI:** GitHub Actions runs `bash scripts/run-bats.sh` (`bin/bats` adds `-T` for per-test durations)
+- **Filter:** `bats tests/bats/run-plan/*.bats --filter "pattern"`
 
 ## Quick file reference
 
 | File | Purpose |
 |------|---------|
-| `.ralph/run-plan.sh` | Main plan executor (unified across Cursor/Claude/Codex) |
+| `.ralph/run-plan.sh` | Main plan executor (unified across runtimes) |
 | `.ralph/orchestrator.sh` | Multi-stage orchestration runner |
-| `.ralph/bash-lib/run-plan-invoke-*.sh` | Runtime-specific invoke logic (cursor, claude, codex, opencode) |
+| `.ralph/bash-lib/run-plan/run-plan-invoke-*.sh` | Runtime-specific invoke logic |
 | `.ralph/agent-config-tool.sh` | Agent config validation and context building |
-| `.ralph/orchestration.template.json` | Starter orchestration plan template |
-| `.ralph/plan.template` | Starter plan template |
-| `.claude/agents/README.md` | Agent configuration schema documentation |
-| `.ralph/ralph-dashboard/` (installed) or `ralph-dashboard/` (this repo) | Dashboard package; `cd` there, then `npm install`, `npm run build`, and `npm start` |
-| `scripts/setup-test-fixtures.sh` | Test fixture generator (creates `.ralph-workspace/`) |
+| `.ralph/orchestration.template.json` | Starter orchestration template |
+| `.ralph/plan-templates/classic.plan.template.md` | Starter classic plan template |
+| `bundle/.claude/agents/README.md` | Agent configuration schema |
+| `bundle/.agents/agents.md` | Antigravity-native team/persona registry |
+| `bundle/.agents/agents/README.md` | Ralph-internal Antigravity agent metadata and model contract |
+| `.ralph/ralph-dashboard/` (installed) or `ralph-dashboard/` (this repo) | Dashboard package |
+| `scripts/run-bats.sh` | Bats runner (fixtures + `bin/bats` with `-T`) |
 | `tests/bats/*.bats` | Bats test files |
-
-## Rules and conventions
-
-- **Agent naming:** Lowercase with hyphens (e.g., `code-review`), no underscores or spaces
-- **No emojis:** The `.claude/rules/no-emoji.md` rule (and equivalents in `.cursor`, `.codex`, `.opencode`) forbids emoji in code, comments, and logs
-- **Output artifacts:** Every agent should declare at least one output artifact so orchestration can verify completion
-- **Session resumption:** Safe only in isolated environments; bare resume (without stored session ID) requires `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` to prevent session mix-up on shared machines

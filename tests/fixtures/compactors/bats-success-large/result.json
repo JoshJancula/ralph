@@ -1,0 +1,10 @@
+{
+  "stdout": "1..30\nbats: 30 test(s) passed (exit 0)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "bats",
+  "status": "compacted",
+  "exit_status": 0
+}

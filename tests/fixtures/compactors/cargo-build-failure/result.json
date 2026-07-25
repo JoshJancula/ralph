@@ -1,0 +1,1 @@
+{"stdout": "cargo build errors (exit 101) for: cargo build\nerror: could not compile `mylib` (lib target for profile `dev`)\n(2 warning(s) omitted)", "stderr": "", "compacted": true, "stdout_compacted": true, "stderr_compacted": false, "family": "cargo_build", "status": "compacted", "exit_status": 101}

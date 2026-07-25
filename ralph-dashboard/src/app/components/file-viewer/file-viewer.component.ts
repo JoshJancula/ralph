@@ -152,7 +152,12 @@ export class FileViewerComponent implements OnInit {
 
   isJson(): boolean {
     const path = this.filePathSignal();
-    return path.endsWith('.json') || path.endsWith('.orch.json');
+    return (
+      path.endsWith('.json') ||
+      path.endsWith('.orch.json') ||
+      path.endsWith('.ndjson') ||
+      path.endsWith('.jsonl')
+    );
   }
 
   formatSeconds(value: number): string {
@@ -188,6 +193,10 @@ export class FileViewerComponent implements OnInit {
   }
 
   formatJson(): string {
+    if (this.isStructuredJsonStream()) {
+      return this.formatStructuredJsonStream(this.content());
+    }
+
     try {
       return JSON.stringify(JSON.parse(this.content()), null, 2);
     } catch {
@@ -294,6 +303,140 @@ export class FileViewerComponent implements OnInit {
 
   private isMarkdownPath(path: string): boolean {
     return path.endsWith('.md') || path.endsWith('.mdc');
+  }
+
+  private isStructuredJsonStream(): boolean {
+    const path = this.filePathSignal();
+    return path.endsWith('.ndjson') || path.endsWith('.jsonl');
+  }
+
+  private formatStructuredJsonStream(source: string): string {
+    return source
+      .split(/\r?\n/)
+      .map((line) => this.formatStructuredJsonLine(line))
+      .join('\n');
+  }
+
+  private formatStructuredJsonLine(line: string): string {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return trimmed;
+      }
+
+      return this.formatStructuredJsonRecord(parsed as Record<string, unknown>);
+    } catch {
+      return line;
+    }
+  }
+
+  private formatStructuredJsonRecord(record: Record<string, unknown>): string {
+    const type = this.readStringField(record, 'type');
+    const subtype = this.readStringField(record, 'subtype');
+    const headline = this.formatStreamHeadline(type, subtype);
+    const details = this.formatStreamDetails(record, ['type', 'subtype']);
+
+    if (!headline) {
+      return details || JSON.stringify(record);
+    }
+
+    return details ? `${headline} (${details})` : headline;
+  }
+
+  private formatStreamHeadline(type?: string, subtype?: string): string {
+    if (!type) {
+      return '';
+    }
+
+    const normalizedType = this.humanizeStreamToken(type);
+    if (!subtype) {
+      return normalizedType;
+    }
+
+    return `${normalizedType} ${this.humanizeStreamToken(subtype)}`;
+  }
+
+  private formatStreamDetails(record: Record<string, unknown>, excludedKeys: string[]): string {
+    const details: string[] = [];
+    const excluded = new Set(excludedKeys);
+
+    for (const [key, value] of Object.entries(record)) {
+      if (excluded.has(key) || value === undefined || value === null) {
+        continue;
+      }
+
+      if (key === 'timestamp_ms' && typeof value === 'number' && Number.isFinite(value)) {
+        details.push(`timestamp=${this.formatStreamTimestamp(value)}`);
+        continue;
+      }
+
+      if (key === 'session_id' || key === 'attempt' || key === 'checkpoint_turn_count') {
+        details.push(`${this.humanizeStreamToken(key)}=${this.formatStreamValue(value)}`);
+        continue;
+      }
+
+      if (key === 'is_resume' && value === true) {
+        details.push('is_resume=true');
+        continue;
+      }
+
+      if (key === 'duration_ms' || key === 'is_error') {
+        details.push(`${this.humanizeStreamToken(key)}=${this.formatStreamValue(value)}`);
+      }
+    }
+
+    return details.join(', ');
+  }
+
+  private formatStreamTimestamp(value: number): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    try {
+      return date.toISOString();
+    } catch {
+      return String(value);
+    }
+  }
+
+  private formatStreamValue(value: unknown): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+      return String(value);
+    }
+
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => this.formatStreamValue(item)).join(', ')}]`;
+    }
+
+    if (value && typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return '[object]';
+      }
+    }
+
+    return String(value);
+  }
+
+  private readStringField(record: Record<string, unknown>, key: string): string | undefined {
+    const value = record[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private humanizeStreamToken(value: string): string {
+    return value.replace(/[_-]+/g, ' ').trim();
   }
 
   private syncPlanMetrics(): void {

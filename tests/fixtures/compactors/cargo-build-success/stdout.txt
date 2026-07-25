@@ -1,0 +1,5 @@
+   Compiling mylib v0.1.0 (/Users/dev/mylib)
+    Compiling dep1 v0.2.0
+    Compiling dep2 v0.3.0
+    Compiling dep3 v0.4.0
+    Finished release [optimized] target(s) in 42.15s

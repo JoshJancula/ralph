@@ -1,13 +1,16 @@
 {
   "name": "research",
-  "model": "auto",
-  "description": "Explores the codebase and docs, summarizes findings, and produces research.md for downstream agents. Read-heavy; avoids large refactors or implementation.",
-  "rules": [".cursor/rules/no-emoji.mdc"],
-  "skills": [".cursor/skills/repo-context/SKILL.md"],
+  "_generated": "GENERATED from bundle/.ralph/agents/research.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "gpt-5.1-codex-mini",
+  "description": "Explores relevant docs and code paths, then summarizes findings for downstream agents.",
+  "rules": [
+    "bundle/.cursor/rules/no-emoji.mdc",
+    "bundle/.cursor/rules/efficient-tool-usage.mdc"
+  ],
+  "skills": [
+    "bundle/.cursor/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-      "required": true
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md", "required": true, "kind": "research"}
   ]
 }

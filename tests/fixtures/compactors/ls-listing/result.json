@@ -1,0 +1,10 @@
+{
+  "stdout": "total 48\ndrwxr-xr-x   5 user  staff   160 Jun  3 10:00 .\ndrwxr-xr-x  12 user  staff   384 Jun  2 15:30 ..\n-rw-r--r--   1 user  staff  1024 Jun  3 09:45 file1.txt\n-rw-r--r--   1 user  staff  2048 Jun  3 09:40 file2.txt\n-rw-r--r--   1 user  staff  1536 Jun  3 09:35 file3.txt\ndrwxr-xr-x   3 user  staff    96 Jun  3 09:30 subdir1\n-rw-r--r--   1 user  staff  4096 Jun  3 09:25 file4.txt\nlrwxr-xr-x   1 user  staff    10 Jun  3 09:20 link1 -> file1.txt\n-rw-r--r--   1 user  staff   512 Jun  3 09:15 file5.txt\n-rw-r--r--   1 user  staff  2560 Jun  3 09:10 file6.txt\ndrwxr-xr-x   2 user  staff   128 Jun  3 09:05 subdir2\n-rw-r--r--   1 user  staff  1024 Jun  3 09:00 file7.txt\n-rw-r--r--   1 user  staff  3072 Jun  3 08:55 file8.txt\n-rw-r--r--   1 user  staff  2048 Jun  3 08:50 file9.txt\n-rw-r--r--   1 user  staff  1536 Jun  3 08:45 file10.txt\n-rw-r--r--   1 user  staff  4096 Jun  3 08:40 file11.txt\n-rw-r--r--   1 user  staff   512 Jun  3 08:35 file12.txt\n-rw-r--r--   1 user  staff  2048 Jun  3 08:30 file13.txt\ndrwxr-xr-x   4 user  staff   160 Jun  3 08:25 subdir3\n-rw-r--r--   1 user  staff  1024 Jun  3 08:20 file14.txt\n-rw-r--r--   1 user  staff  3072 Jun  3 08:15 file15.txt\n-rw-r--r--   1 user  staff  2560 Jun  3 08:10 file16.txt",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

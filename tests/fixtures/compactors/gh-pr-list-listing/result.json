@@ -1,0 +1,10 @@
+{
+  "stdout": "gh pr list (exit 0): 21 PR(s), 3 draft(s), 17 open\nShowing 20 of 87 open pull requests in user/repo\nID      TITLE                                                STATE   AUTHOR\n123     Implement feature X with improved performance        OPEN    john-doe\n124     Add database migration script                        OPEN    jane-smith\n125     DRAFT: Experimental refactor of core module         DRAFT   bob-wilson\n126     Fix memory leak in cache layer                       OPEN    alice-turner\n127     Update dependencies to latest versions               OPEN    charlie-brown\n128     Add API documentation endpoint                       OPEN    diana-prince\n129     DRAFT: Performance profiling improvements            DRAFT   evan-davis\n130     Fix typo in README                                   OPEN    fiona-green\n131     Implement OAuth integration                          OPEN    george-harris\n132     Refactor test suite for clarity                      OPEN    helen-white\n133     Add CI/CD pipeline configuration                     OPEN    ivan-ivan\n134     Security audit: patch SQL injection risk             OPEN    jackie-jones\n135     Update visual styling for mobile                     OPEN    karl-king\n136     Add internationalization support                     OPEN    lucy-lewis\n137     Implement caching strategy                           OPEN    michael-martin\n138     DRAFT: Investigate new storage backend               DRAFT   nancy-nelson\n139     Fix regression in user authentication                OPEN    oscar-oliver\n140     Performance optimization: query batching             OPEN    patricia-park\n... and 2 more",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "gh_pr_list",
+  "status": "compacted",
+  "exit_status": 0
+}

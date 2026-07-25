@@ -1,0 +1,10 @@
+{
+  "stdout": "vitest: 4 test(s) passed (exit 0)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "vitest",
+  "status": "compacted",
+  "exit_status": 0
+}

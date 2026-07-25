@@ -1,0 +1,10 @@
+{
+  "stdout": "tsc errors (exit 1) for: tsc\nsrc/main.ts(5,10): error TS2322: Type 'string' is not assignable to type 'number'.\nsrc/utils.ts(12,5): error TS2345: Argument of type '{}' is not assignable to parameter of type 'string'.",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "tsc",
+  "status": "compacted",
+  "exit_status": 1
+}

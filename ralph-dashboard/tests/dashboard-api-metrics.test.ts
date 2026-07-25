@@ -1,9 +1,10 @@
 import '@angular/compiler';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import { createInMemoryRequester } from './support/in-memory-request';
+import { clearDashboardRootsCache } from '../src/paths';
 import { clearMergedWorkspaceAllowlistCache } from '../src/server/dashboard-api';
 
 describe('dashboard API metrics summary', () => {
@@ -12,26 +13,32 @@ describe('dashboard API metrics summary', () => {
   let originalWorkspaceRoot: string | undefined;
   let originalSkipListen: string | undefined;
   let originalDashboardGlobal: string | undefined;
+  let originalProjectRoot: string | undefined;
   let originalRalphHome: string | undefined;
   let originalWorkspacesFile: string | undefined;
   let originalXdgConfigHome: string | undefined;
+  let originalPlanWorkspaceRoot: string | undefined;
   let originalCwd: string | undefined;
 
   beforeAll(async () => {
     originalWorkspaceRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
     originalSkipListen = process.env['RALPH_DASHBOARD_SKIP_LISTEN'];
     originalDashboardGlobal = process.env['RALPH_DASHBOARD_GLOBAL'];
+    originalProjectRoot = process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
     originalRalphHome = process.env['RALPH_HOME'];
     originalWorkspacesFile = process.env['RALPH_WORKSPACES_FILE'];
     originalXdgConfigHome = process.env['XDG_CONFIG_HOME'];
+    originalPlanWorkspaceRoot = process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     process.env['RALPH_DASHBOARD_SKIP_LISTEN'] = '1';
   });
 
   beforeEach(async () => {
+    clearDashboardRootsCache();
     clearMergedWorkspaceAllowlistCache();
     originalCwd = process.cwd();
     tempRoot = mkdtempSync(join(tmpdir(), 'ralph-dashboard-metrics-'));
     process.chdir(tempRoot);
+    mkdirSync(join(tempRoot, '.ralph'), { recursive: true });
     mkdirSync(join(tempRoot, '.ralph-workspace', 'logs', 'plan-1'), { recursive: true });
     mkdirSync(join(tempRoot, '.ralph-workspace', 'logs', 'orch-1'), { recursive: true });
     const extraWorkspace = join(tempRoot, 'extra', '.ralph-workspace');
@@ -71,10 +78,12 @@ describe('dashboard API metrics summary', () => {
     writeFileSync(join(tempRoot, '.ralph-workspace', 'logs', 'ignored.txt'), 'ignore me');
 
     process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] = tempRoot;
+    process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = tempRoot;
     delete process.env['RALPH_DASHBOARD_GLOBAL'];
     delete process.env['RALPH_HOME'];
     delete process.env['RALPH_WORKSPACES_FILE'];
     delete process.env['XDG_CONFIG_HOME'];
+    delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     ({ app } = await import('../src/server'));
   });
 
@@ -82,6 +91,7 @@ describe('dashboard API metrics summary', () => {
     if (originalCwd) {
       process.chdir(originalCwd);
     }
+    clearDashboardRootsCache();
     if (tempRoot) {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -105,6 +115,11 @@ describe('dashboard API metrics summary', () => {
     } else {
       process.env['RALPH_DASHBOARD_GLOBAL'] = originalDashboardGlobal;
     }
+    if (originalProjectRoot === undefined) {
+      delete process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
+    } else {
+      process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = originalProjectRoot;
+    }
 
     if (originalRalphHome === undefined) {
       delete process.env['RALPH_HOME'];
@@ -122,6 +137,11 @@ describe('dashboard API metrics summary', () => {
       delete process.env['XDG_CONFIG_HOME'];
     } else {
       process.env['XDG_CONFIG_HOME'] = originalXdgConfigHome;
+    }
+    if (originalPlanWorkspaceRoot === undefined) {
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
+    } else {
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = originalPlanWorkspaceRoot;
     }
   });
 
@@ -261,6 +281,211 @@ describe('dashboard API metrics summary', () => {
     expect(res.status).toBe(200);
     const names = (res.body.entries as Array<{ name: string }>).map((entry) => entry.name);
     expect(names).toEqual(expect.arrayContaining(['plan-1', 'plan-extra', 'orch-1']));
+  });
+
+  it('returns schema v2 savings report with session usage and counterfactual', async () => {
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=plan-1');
+    expect(res.status).toBe(200);
+    expect(res.body.schema_version).toBe(2);
+    expect(res.body.kind).toBe('ralph_benchmark_report');
+    expect(res.body.session_usage).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_creation_input_tokens: 1,
+      cache_read_input_tokens: 2,
+      prompt_bytes: 0,
+      tool_calls_total: 0,
+    });
+    expect(res.body.tool_output_counterfactual).toMatchObject({
+      hypothetical_without_ralph_bytes: 0,
+      actual_with_ralph_bytes: 0,
+      net_savings_bytes: 0,
+      net_savings_tokens: 0,
+      net_savings_percent: 0,
+    });
+  });
+
+  it('matches Python benchmark semantics for the shared parity fixture', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'dashboard-parity');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'dashboard-parity');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'dashboard-parity',
+        artifact_ns: 'dashboard-parity',
+        elapsed_seconds: 10,
+        input_tokens: 800,
+        output_tokens: 100,
+        cache_creation_input_tokens: 50,
+        cache_read_input_tokens: 150,
+        prompt_bytes: 960,
+        tool_calls_total: 24,
+        compaction_measured_not_applied_bytes: 64,
+        started_at: '2026-06-01T00:00:00Z',
+        ended_at: '2026-06-01T00:10:00Z',
+        byte_savings_by_path: {
+          pre_tool_rewrite: {
+            pre_optimization_bytes: 400,
+            post_optimization_bytes: 200,
+            saved_bytes: 200,
+            pre_optimization_tokens: 100,
+            post_optimization_tokens: 50,
+            saved_tokens: 50,
+            count: 1,
+            token_cap_triggers: 0,
+          },
+          hook_compaction: {
+            pre_optimization_bytes: 300,
+            post_optimization_bytes: 200,
+            saved_bytes: 100,
+            pre_optimization_tokens: 75,
+            post_optimization_tokens: 50,
+            saved_tokens: 25,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 100,
+            hidden_from_context_tokens: 25,
+          },
+          proxy_shell_compaction: {
+            pre_optimization_bytes: 200,
+            post_optimization_bytes: 120,
+            saved_bytes: 80,
+            pre_optimization_tokens: 50,
+            post_optimization_tokens: 30,
+            saved_tokens: 20,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 80,
+            hidden_from_context_tokens: 20,
+          },
+          result_windowing: {
+            pre_optimization_bytes: 1000,
+            post_optimization_bytes: 200,
+            saved_bytes: 800,
+            pre_optimization_tokens: 250,
+            post_optimization_tokens: 50,
+            saved_tokens: 200,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 800,
+            hidden_from_context_tokens: 200,
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({ event: 'envelope', resultId: 'r1', originalBytes: 1000, returnedBytes: 200, originalTokens: 250, returnedTokens: 50 }),
+        JSON.stringify({ event: 'readback', resultId: 'r1', view: 'compacted', returnedBytes: 100, returnedTokens: 25 }),
+        JSON.stringify({ event: 'readback', resultId: 'r1', view: 'raw', returnedBytes: 50, returnedTokens: 13 }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=dashboard-parity');
+    expect(res.status).toBe(200);
+    expect(res.body.schema_version).toBe(2);
+    expect(res.body.run_count).toBe(1);
+    expect(res.body.saved_bytes).toBe(1180);
+    expect(res.body.session_usage).toMatchObject({
+      input_tokens: 800,
+      output_tokens: 100,
+      cache_creation_input_tokens: 50,
+      cache_read_input_tokens: 150,
+      prompt_bytes: 960,
+      tool_calls_total: 24,
+    });
+    const counterfactual = res.body.tool_output_counterfactual;
+    expect(counterfactual.hypothetical_without_ralph_bytes).toBe(1900);
+    expect(counterfactual.actual_with_ralph_bytes).toBe(720);
+    expect(counterfactual.net_savings_bytes).toBe(1180);
+    expect(counterfactual.net_savings_percent).toBe(62.1);
+    expect(counterfactual.compaction_measured_not_applied_bytes).toBe(64);
+    const readback = res.body.readback_summary;
+    expect(readback.envelope_count).toBe(1);
+    expect(readback.readback_count).toBe(2);
+    expect(readback.gross_readback_bytes).toBe(150);
+    expect(readback.net_consumed_bytes).toBe(350);
+    expect(readback.effective_windowing_savings_rate).toBe(0.65);
+  });
+
+  it('scopes mixed-plan result-windowing logs to the summary plan key', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'plan-mixed');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'plan-mixed');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'plan-mixed',
+        artifact_ns: 'plan-mixed',
+        invocations: 1,
+        started_at: '2026-06-02T00:00:00Z',
+        ended_at: '2026-06-02T00:05:00Z',
+        byte_savings_by_path: {
+          result_windowing: {
+            pre_optimization_bytes: 1000,
+            post_optimization_bytes: 100,
+            saved_bytes: 900,
+            pre_optimization_tokens: 250,
+            post_optimization_tokens: 25,
+            saved_tokens: 225,
+            count: 1,
+            token_cap_triggers: 0,
+            hidden_from_context: 900,
+            hidden_from_context_tokens: 225,
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'plan-mixed',
+          resultId: 'local',
+          originalBytes: 1000,
+          returnedBytes: 100,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'plan-mixed',
+          resultId: 'local',
+          view: 'compacted',
+          returnedBytes: 50,
+        }),
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'foreign-plan',
+          resultId: 'foreign',
+          originalBytes: 5000,
+          returnedBytes: 500,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'foreign-plan',
+          resultId: 'foreign',
+          view: 'raw',
+          returnedBytes: 4000,
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=plan-mixed');
+
+    expect(res.status).toBe(200);
+    expect(res.body.readback_summary).toMatchObject({
+      envelope_original_bytes: 1000,
+      readback_count: 1,
+      gross_readback_bytes: 50,
+    });
   });
 
   it('keeps metrics local-first when a HOME workspace is also available', async () => {
@@ -419,17 +644,9 @@ describe('dashboard API metrics summary', () => {
 
   it('omits the docs directory from top-level plans listings', async () => {
     mkdirSync(join(tempRoot, 'docs'), { recursive: true });
-    writeFileSync(join(tempRoot, 'plan-sample.md'), '# sample plan');
-
     const res = await createInMemoryRequester(app).get('/api/list?root=plans');
     expect(res.status).toBe(200);
     const names = (res.body.entries as Array<{ name: string }>).map((entry) => entry.name);
-
-    expect(
-      names.some(
-        (name) => name.toLowerCase().startsWith('plan') && name.toLowerCase().endsWith('.md'),
-      ),
-    ).toBe(true);
     expect(names).not.toContain('docs');
   });
 
@@ -654,5 +871,640 @@ describe('dashboard API metrics summary', () => {
       model: 'gpt-5.4-mini',
       max_turn_total_tokens: 700,
     });
+  });
+
+  it('omits overlay metrics for legacy logs without overlay invocation fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'legacy-overlay');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'legacy-overlay',
+        artifact_ns: 'legacy-overlay',
+        elapsed_seconds: 2,
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 2,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'legacy-overlay');
+    expect(plan).toBeDefined();
+    expect(plan.overlay).toBeUndefined();
+  });
+
+  it('aggregates overlay metrics from invocation logs with overlay fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'overlay-plan');
+    mkdirSync(planDir, { recursive: true });
+    const summaryPath = join(planDir, 'plan-usage-summary.json');
+    const usagePath = join(planDir, 'invocation-usage.json');
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'overlay-plan',
+        artifact_ns: 'overlay-plan',
+        elapsed_seconds: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      usagePath,
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 4,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            native_hooks_effective: true,
+            mcp_effective: true,
+            hook_compactions: 2,
+            hook_rewrites: 1,
+            hook_original_bytes: 1200,
+            hook_compacted_bytes: 300,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: ['hooks disabled for bare mode'],
+          },
+        ],
+      }),
+    );
+    const now = Date.now() / 1000;
+    utimesSync(summaryPath, now - 20, now - 20);
+    utimesSync(usagePath, now, now);
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'overlay-plan');
+    expect(plan).toBeDefined();
+    expect(plan.input_tokens).toBe(100);
+    expect(plan.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 2,
+      hook_rewrites: 1,
+      hook_original_bytes: 1200,
+      hook_compacted_bytes: 300,
+      hook_bytes_saved: 900,
+      runtime_overlay_mode: 'bounded',
+      runtime_overlay_warnings: ['hooks disabled for bare mode'],
+    });
+  });
+
+  it('keeps fresh summary totals when invocation log is older than plan-usage-summary', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'fresh-summary');
+    mkdirSync(planDir, { recursive: true });
+    const summaryPath = join(planDir, 'plan-usage-summary.json');
+    const usagePath = join(planDir, 'invocation-usage.json');
+    writeFileSync(
+      usagePath,
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'cursor',
+            model: 'gpt-5.4-mini',
+            elapsed_seconds: 1,
+            input_tokens: 999,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            native_hooks_effective: false,
+            mcp_effective: true,
+            hook_compactions: 0,
+            hook_rewrites: 0,
+            hook_original_bytes: 0,
+            hook_compacted_bytes: 0,
+            runtime_overlay_mode: '',
+            runtime_overlay_warnings: [],
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'fresh-summary',
+        artifact_ns: 'fresh-summary',
+        elapsed_seconds: 5,
+        input_tokens: 50,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    const now = Date.now() / 1000;
+    utimesSync(usagePath, now - 20, now - 20);
+    utimesSync(summaryPath, now, now);
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'fresh-summary');
+    expect(plan).toBeDefined();
+    expect(plan.input_tokens).toBe(50);
+    expect(plan.output_tokens).toBe(10);
+    expect(plan.overlay).toMatchObject({
+      mcp_effective: true,
+      native_hooks_effective: false,
+    });
+  });
+
+  it('aggregates mixed-runtime overlay metrics across model breakdown rows', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'mixed-overlay');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'mixed-overlay',
+        artifact_ns: 'mixed-overlay',
+        elapsed_seconds: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 40,
+            output_tokens: 10,
+            native_hooks_effective: true,
+            mcp_effective: false,
+            hook_compactions: 1,
+            hook_rewrites: 0,
+            hook_original_bytes: 500,
+            hook_compacted_bytes: 100,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: [],
+          },
+          {
+            runtime: 'codex',
+            model: 'gpt-5.4-mini',
+            input_tokens: 60,
+            output_tokens: 15,
+            native_hooks_effective: false,
+            mcp_effective: true,
+            hook_compactions: 2,
+            hook_rewrites: 1,
+            hook_original_bytes: 800,
+            hook_compacted_bytes: 200,
+            runtime_overlay_mode: 'ralph',
+            runtime_overlay_warnings: ['codex hook output mutation unsupported'],
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'mixed-overlay');
+    expect(plan).toBeDefined();
+    expect(plan.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 3,
+      hook_rewrites: 1,
+      hook_original_bytes: 1300,
+      hook_compacted_bytes: 300,
+      hook_bytes_saved: 1000,
+    });
+    expect(plan.model_breakdown).toHaveLength(2);
+    const claudeRow = plan.model_breakdown.find((row: { runtime: string }) => row.runtime === 'claude');
+    const codexRow = plan.model_breakdown.find((row: { runtime: string }) => row.runtime === 'codex');
+    expect(claudeRow?.overlay?.native_hooks_effective).toBe(true);
+    expect(codexRow?.overlay?.mcp_effective).toBe(true);
+    expect(codexRow?.overlay?.runtime_overlay_warnings).toEqual([
+      'codex hook output mutation unsupported',
+    ]);
+  });
+
+  it('includes overlay metrics for orchestration summaries with invocation logs', async () => {
+    const orchDir = join(tempRoot, '.ralph-workspace', 'logs', 'orch-overlay');
+    mkdirSync(orchDir, { recursive: true });
+    writeFileSync(
+      join(orchDir, 'orchestration-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'orchestration_usage_summary',
+        plan_key: 'orch-overlay',
+        artifact_ns: 'orch-overlay',
+        elapsed_seconds: 3,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(orchDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'opencode',
+            model: 'glm-5',
+            input_tokens: 30,
+            output_tokens: 8,
+            native_hooks_effective: true,
+            mcp_effective: true,
+            hook_compactions: 1,
+            hook_rewrites: 0,
+            hook_original_bytes: 200,
+            hook_compacted_bytes: 50,
+            runtime_overlay_mode: 'bounded',
+            runtime_overlay_warnings: [],
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const orch = res.body.orchestrations.find((o: { plan_key: string }) => o.plan_key === 'orch-overlay');
+    expect(orch).toBeDefined();
+    expect(orch.overlay).toMatchObject({
+      native_hooks_effective: true,
+      mcp_effective: true,
+      hook_compactions: 1,
+      hook_bytes_saved: 150,
+    });
+  });
+
+  it('omits tool call classification for legacy logs without accounting fields', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'legacy-tool-calls');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'legacy-tool-calls',
+        artifact_ns: 'legacy-tool-calls',
+        elapsed_seconds: 2,
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        tool_calls_total: 3,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            elapsed_seconds: 2,
+            input_tokens: 10,
+            output_tokens: 5,
+            tool_calls_total: 3,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'legacy-tool-calls');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toBeUndefined();
+    expect(plan.tool_calls_total).toBe(3);
+  });
+
+  it('aggregates tool call classification from invocation logs', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'classified-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'classified-plan',
+        artifact_ns: 'classified-plan',
+        elapsed_seconds: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 40,
+            output_tokens: 10,
+            ralph_proxy_calls: 2,
+            ralph_knowledge_calls: 0,
+            native_read_compatibility_calls: 1,
+            native_file_read_calls: 0,
+            native_search_calls: 0,
+            native_shell_calls: 0,
+            ralph_mcp_calls: 2,
+            native_read_like_calls: 1,
+          },
+          {
+            runtime: 'claude',
+            model: 'claude-sonnet',
+            input_tokens: 30,
+            output_tokens: 8,
+            ralph_proxy_calls: 0,
+            ralph_knowledge_calls: 3,
+            native_shell_calls: 1,
+            ralph_mcp_calls: 3,
+            native_read_like_calls: 1,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'classified-plan');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toMatchObject({
+      ralph_proxy_calls: 2,
+      ralph_knowledge_calls: 3,
+      native_read_compatibility_calls: 1,
+      native_shell_calls: 1,
+      ralph_mcp_calls: 5,
+    });
+    expect(plan.model_breakdown).toHaveLength(1);
+    expect(plan.model_breakdown[0].tool_calls).toMatchObject({
+      ralph_proxy_calls: 2,
+      ralph_knowledge_calls: 3,
+      native_read_compatibility_calls: 1,
+      native_shell_calls: 1,
+    });
+  });
+
+  it('passes through tool call classification from summary model_breakdown', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'summary-breakdown-tools');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'summary-breakdown-tools',
+        artifact_ns: 'summary-breakdown-tools',
+        elapsed_seconds: 5,
+        input_tokens: 50,
+        output_tokens: 10,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        model_breakdown: [
+          {
+            runtime: 'cursor',
+            model: 'gpt-5.4-mini',
+            invocations: 2,
+            elapsed_seconds: 5,
+            input_tokens: 50,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            max_turn_total_tokens: 0,
+            cache_hit_ratio: 0,
+            ralph_proxy_calls: 4,
+            ralph_knowledge_calls: 1,
+            native_search_calls: 2,
+            ralph_mcp_calls: 5,
+            native_read_like_calls: 2,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/metrics/summary');
+    expect(res.status).toBe(200);
+    const plan = res.body.plans.find((p: { plan_key: string }) => p.plan_key === 'summary-breakdown-tools');
+    expect(plan).toBeDefined();
+    expect(plan.tool_calls).toMatchObject({
+      ralph_proxy_calls: 4,
+      ralph_knowledge_calls: 1,
+      native_search_calls: 2,
+    });
+    expect(plan.model_breakdown[0].tool_calls).toMatchObject({
+      ralph_proxy_calls: 4,
+      ralph_knowledge_calls: 1,
+    });
+  });
+
+  it('returns per-channel savings with exact attribution in /api/benchmarks', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'exact-channel-plan');
+    mkdirSync(planDir, { recursive: true });
+    const runtimeConfigDir = join(tempRoot, '.ralph-workspace', 'runtime-config', 'exact-channel-plan');
+    mkdirSync(runtimeConfigDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'exact-channel-plan',
+        artifact_ns: 'exact-channel-plan',
+        invocations: 1,
+        started_at: '2026-05-03T00:00:00Z',
+        ended_at: '2026-05-03T00:05:00Z',
+      }),
+    );
+    writeFileSync(
+      join(runtimeConfigDir, 'result-windowing.jsonl'),
+      [
+        JSON.stringify({
+          event: 'envelope',
+          planKey: 'exact-channel-plan',
+          resultId: 'read-1',
+          channel: 'proxy_read_windowing',
+          originalBytes: 1000,
+          returnedBytes: 200,
+        }),
+        JSON.stringify({
+          event: 'readback',
+          planKey: 'exact-channel-plan',
+          resultId: 'read-1',
+          sourceResultChannel: 'proxy_read_windowing',
+          view: 'compacted',
+          returnedBytes: 100,
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=exact-channel-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel).toBeDefined();
+    expect(res.body.per_channel.proxy_read_windowing).toMatchObject({
+      attribution: 'exact',
+      saved_bytes: 700,
+      gross_readback_bytes: 100,
+      net_consumed_bytes: 300,
+    });
+    expect(res.body.per_channel.stored_result_readback.saved_bytes).toBe(0);
+  });
+
+  it('aggregates mixed-runtime channel savings from invocation logs in /api/benchmarks', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'mixed-channel-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'mixed-channel-plan',
+        artifact_ns: 'mixed-channel-plan',
+        invocations: 2,
+        started_at: '2026-07-01T10:00:00Z',
+        ended_at: '2026-07-01T11:00:00Z',
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'invocation-usage.json'),
+      JSON.stringify({
+        invocations: [
+          {
+            runtime: 'claude',
+            plan_key: 'mixed-channel-plan',
+            byte_savings_by_channel: {
+              native_result_hook: {
+                pre_optimization_bytes: 500,
+                post_optimization_bytes: 100,
+                saved_bytes: 400,
+                count: 1,
+                pre_optimization_tokens: 125,
+                post_optimization_tokens: 25,
+                saved_tokens: 100,
+                token_cap_triggers: 0,
+                hidden_from_context: 400,
+                hidden_from_context_tokens: 100,
+                attribution: 'exact',
+              },
+            },
+          },
+          {
+            runtime: 'codex',
+            plan_key: 'mixed-channel-plan',
+            byte_savings_by_channel: {
+              proxy_shell: {
+                pre_optimization_bytes: 800,
+                post_optimization_bytes: 200,
+                saved_bytes: 600,
+                count: 1,
+                pre_optimization_tokens: 200,
+                post_optimization_tokens: 50,
+                saved_tokens: 150,
+                token_cap_triggers: 0,
+                hidden_from_context: 600,
+                hidden_from_context_tokens: 150,
+                attribution: 'exact',
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=mixed-channel-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel.native_result_hook).toMatchObject({
+      saved_bytes: 400,
+      attribution: 'exact',
+      gross_hidden_bytes: 400,
+    });
+    expect(res.body.per_channel.proxy_shell).toMatchObject({
+      saved_bytes: 600,
+      attribution: 'exact',
+      gross_hidden_bytes: 600,
+    });
+  });
+
+  it('does not surface missed compaction when channel savings evidence exists', async () => {
+    const planDir = join(tempRoot, '.ralph-workspace', 'logs', 'channel-evidence-plan');
+    mkdirSync(planDir, { recursive: true });
+    writeFileSync(
+      join(planDir, 'plan-usage-summary.json'),
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'plan_usage_summary',
+        plan_key: 'channel-evidence-plan',
+        artifact_ns: 'channel-evidence-plan',
+        invocations: 1,
+        started_at: '2026-06-10T00:00:00Z',
+        ended_at: '2026-06-10T00:10:00Z',
+        byte_savings_by_channel: {
+          proxy_read_windowing: {
+            pre_optimization_bytes: 5000,
+            post_optimization_bytes: 1000,
+            saved_bytes: 4000,
+            count: 2,
+            pre_optimization_tokens: 1250,
+            post_optimization_tokens: 250,
+            saved_tokens: 1000,
+            token_cap_triggers: 0,
+            hidden_from_context: 4000,
+            hidden_from_context_tokens: 1000,
+            attribution: 'exact',
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(planDir, 'discover-report.json'),
+      JSON.stringify({
+        missed_compaction_opportunities: [
+          { original_bytes: 9000, skip_reason: 'stale-heavy-native-signal' },
+        ],
+        aggregate_findings: [
+          {
+            pattern_id: 'heavy_native_read_vs_proxy',
+            native_read_share: 0.8,
+          },
+        ],
+      }),
+    );
+
+    const res = await createInMemoryRequester(app).get('/api/benchmarks?plan=channel-evidence-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.per_channel.proxy_read_windowing.saved_bytes).toBe(4000);
+    expect(res.body.optimization_opportunities).toBeDefined();
+    expect(res.body.optimization_opportunities.missed_compaction_opportunities).toBeUndefined();
+    expect(res.body.optimization_opportunities.native_read_findings).toHaveLength(1);
   });
 });

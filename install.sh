@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./install.sh [OPTIONS] [TARGET_DIR]          (local install)
-#   ./install.sh --global [OPTIONS]              (global install; see docs/GLOBAL-INSTALL.md)
+#   ./install.sh --global [OPTIONS]              (global install; see docs/INSTALL.md)
 #
 # TARGET_DIR defaults to the current directory (your repo root). Mutually exclusive with --global.
 #
@@ -12,15 +12,17 @@
 #   --global    Install once under ${RALPH_HOME:-$HOME/.ralph}/ for use across many projects
 #               Writes config to ${XDG_CONFIG_HOME:-$HOME/.config}/ralph/ and state to
 #               ${XDG_STATE_HOME:-$HOME/.local/state}/ralph/. Creates ~/.local/bin/ralph shim.
-#               See docs/GLOBAL-INSTALL.md for rationale, layout, and runtime config precedence.
+#               See docs/INSTALL.md for rationale, layout, and runtime config precedence.
 #               Copies this repository's docs/ directory to $RALPH_HOME/docs/ when present (framework docs for the dashboard).
 #   --force-global-runtime   With --global, overwrite/update existing $HOME/.<runtime>/ configs
 #               (without this flag, existing user runtime configs are preserved)
-#   --shared    Only .ralph/ (orchestrator, cleanup, plan.template, docs -> .ralph/docs/)
-#   --cursor    .cursor/ralph + rules/skills/agents (no-emoji, repo-context)
-#   --codex     .codex/ralph + rules/skills/agents (same)
-#   --claude    .claude/ralph + rules/skills/agents (same)
-#   --opencode  .opencode/ralph + rules/skills/agents (same)
+#   --shared    Only .ralph/ (orchestrator, cleanup, plan-templates/, docs -> .ralph/docs/)
+#   --cursor    .cursor/ agents/rules/skills (no-emoji rule, repo-context skill)
+#   --codex     .codex/ agents/rules/skills + hooks/ (native hook scripts)
+#   --claude    .claude/ agents/rules/skills + hooks/ (native hook scripts)
+#   --opencode  .opencode/ agents/rules/skills + plugins/ (Ralph runtime plugin)
+#   --antigravity  .agents/ agents/rules/skills (Antigravity agy runtime; reads .agents/)
+#   --shared    .ralph/ including bash-lib helpers used by runtime hooks (command-rewriter, compactors, etc.)
 #   --no-dashboard   Skip copying the dashboard (local: TARGET/.ralph/ralph-dashboard/, global: $RALPH_HOME/ralph-dashboard/)
 #   -s, --silent   Run without interactive prompts (skip conflicts, configure MCP, skip removal prompts)
 #   -y, --yes      Assume "yes" for the "already installed, overwrite?" prompt (overwrites existing files)
@@ -41,6 +43,7 @@
 #   git submodule add https://github.com/you/ralph.git vendor/ralph
 #   ./vendor/ralph/install.sh                                    (local: copy into current project)
 #   ./vendor/ralph/install.sh --cursor /path/to/other-repo      (local: copy into another project)
+#   ./vendor/ralph/install.sh --antigravity /path/to/other-repo (local: copy antigravity runtime)
 #   ./install.sh --global                                        (global: install once for all projects)
 #   ./vendor/ralph/install.sh --cleanup -n
 #   ./vendor/ralph/install.sh --purge --silent
@@ -59,8 +62,8 @@ usage() {
   exit "${1:-0}"
 }
 
-source "$RALPH_BASH_LIB/install-ops.sh"
-source "$RALPH_BASH_LIB/install-mcp.sh"
+source "$RALPH_BASH_LIB/install/install-ops.sh"
+source "$RALPH_BASH_LIB/install/install-mcp.sh"
 
 install_ops_reset_state
 
@@ -155,16 +158,36 @@ ralph_usage() {
 Usage: ralph <command> [args]
 
 Commands:
-  run-plan     Run a Ralph plan
+  run          Run a plan (--plan <path>; auto-detects classic, standard, or orchestration)
+  create       Create scaffolding (subcommands: orc, plan)
+  run-plan     Run a Ralph plan (legacy; prefer: ralph run --plan)
   split-plan   Preview or apply executable TODO normalization
-  orchestrate  Run a Ralph orchestration
+  orchestrate  Run a Ralph orchestration directly (advanced; prefer: ralph run --plan)
   mcp          Manage the Ralph MCP server (see: ralph mcp --help)
+  models       Manage saved Claude/Codex models (see: ralph models --help)
   usage        Show token-usage report (delegates to usage-report.sh)
+  benchmark    Build the token/compaction benchmark report (delegates to benchmark-report.sh)
   dashboard    Start the Ralph dashboard (global). Options: --yes|-y (skip prompts),
                --rebuild (clean dist + npm run build), --update-deps (fresh npm ci).
                Use -- before args for npm start.
   install      Run the global Ralph installer
   workspaces   Manage the Ralph workspace registry
+  setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
+  config       Manage Ralph configuration (see: ralph config --help)
+  agent        Manage agent profiles (see: ralph agent --help)
+  process      List or stop managed Ralph process runs (see: ralph process --help)
+
+Options:
+  --bundle-path  Print the bundled .ralph directory (for scripts)
+USAGE
+}
+
+ralph_config_usage() {
+  cat <<'USAGE'
+Usage: ralph config <subcommand> [args]
+
+Subcommands:
+  killswitch   Manage killswitch.json (see: ralph config killswitch --help)
 USAGE
 }
 
@@ -178,6 +201,52 @@ Subcommands:
 USAGE
 }
 
+ralph_run_usage() {
+  cat <<'USAGE'
+Usage: ralph run --plan <path> [options]
+
+  --plan  Run a plan file. The format is auto-detected:
+            classic markdown checklist or flat yaml-frontmatter plan -> run-plan.sh
+            orchestration plan (pipeline frontmatter) or .orch.json -> orchestrator.sh
+          Remaining options are forwarded to the selected runner.
+USAGE
+}
+
+ralph_create_usage() {
+  cat <<'USAGE'
+Usage: ralph create <subcommand> [args]
+
+Subcommands:
+  orc   Launch the orchestration wizard for a multi-stage pipeline plan.
+  plan  Create a flat plan file (delegates to create-plan.sh).
+        Options:
+          --name <name>            Plan name (default: auto-generated PLAN1, PLAN2, ...).
+          --format <classic|yaml>
+                                   Plan template format (default: classic).
+                                   classic: zero-dependency markdown checklist.
+                                   yaml: YAML-frontmatter flat TODO queue.
+                                   (standard, structured, pipeline, orchestration, and cursor are accepted as silent aliases for yaml.)
+          --workspace <path>       Workspace directory (default: current directory).
+
+        For a multi-stage orchestration, use: ralph create orc
+USAGE
+}
+
+ralph_process_usage() {
+  cat <<'USAGE'
+Usage: ralph process <subcommand> [options]
+
+Subcommands:
+  list [--workspace PATH] [--workspace-root PATH] [--json]
+  stop (--run ID|--plan PATH|--all) [--workspace PATH] [--workspace-root PATH] [--force]
+USAGE
+}
+
+if [[ "${1:-}" == "--bundle-path" ]]; then
+  printf '%s/bundle/.ralph\n' "$RALPH_HOME"
+  exit 0
+fi
+
 cmd="${1:-}"
 if [[ -z "$cmd" || "$cmd" == "-h" || "$cmd" == "--help" ]]; then
   ralph_usage
@@ -186,6 +255,57 @@ fi
 shift
 
 case "$cmd" in
+  run)
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      ralph_run_usage
+      exit 0
+    fi
+    run_plan_path=""
+    run_args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -h|--help)
+          ralph_run_usage
+          exit 0
+          ;;
+        --plan)
+          if [[ -z "${2:-}" ]]; then
+            echo "Error: --plan requires a path" >&2
+            exit 1
+          fi
+          run_plan_path="$2"
+          shift 2
+          ;;
+        *)
+          run_args+=("$1")
+          shift
+          ;;
+      esac
+    done
+    if [[ -z "$run_plan_path" ]]; then
+      echo "Error: ralph run requires --plan <path>" >&2
+      ralph_run_usage >&2
+      exit 1
+    fi
+    # Route by file content: orchestration plans (pipeline frontmatter) and legacy
+    # .orch.json go to the orchestrator; classic/standard plans go to run-plan.sh.
+    ralph_run_is_orchestration() {
+      local path="$1"
+      [[ "$path" == *.json ]] && return 0
+      [[ -f "$path" ]] || return 1
+      awk '
+        NR == 1 { if ($0 != "---") exit 1; in_fm = 1; next }
+        in_fm && $0 == "---" { in_fm = 0 }
+        in_fm && /^[[:space:]]*pipeline:[[:space:]]*/ { found = 1 }
+        in_fm && /^execution:[[:space:]]*orchestration/ { found = 1 }
+        END { exit (found ? 0 : 1) }
+      ' "$path"
+    }
+    if ralph_run_is_orchestration "$run_plan_path"; then
+      exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" --orchestration "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+    fi
+    exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --plan "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+    ;;
   run-plan)
     exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" "$@"
     ;;
@@ -216,6 +336,12 @@ case "$cmd" in
     ;;
   usage)
     exec bash "$RALPH_HOME/bundle/.ralph/usage-report.sh" "$@"
+    ;;
+  benchmark)
+    exec bash "$RALPH_HOME/bundle/.ralph/benchmark-report.sh" "$@"
+    ;;
+  models)
+    exec bash "$RALPH_HOME/bundle/.ralph/models.sh" "$@"
     ;;
   dashboard)
     dashboard_dir="$RALPH_HOME/ralph-dashboard"
@@ -303,6 +429,14 @@ case "$cmd" in
   install)
     exec bash "$RALPH_HOME/install.sh" "$@"
     ;;
+  setup)
+    setup_script="$RALPH_HOME/bundle/.ralph/setup-runtime.sh"
+    if [[ ! -f "$setup_script" ]]; then
+      echo "Error: setup script not found at $setup_script" >&2
+      exit 1
+    fi
+    exec bash "$setup_script" "$@"
+    ;;
   workspaces)
     workspaces_cli="$RALPH_HOME/bundle/.ralph/bash-lib/workspaces-cli.sh"
     if [[ ! -f "$workspaces_cli" ]]; then
@@ -310,6 +444,120 @@ case "$cmd" in
       exit 1
     fi
     exec bash "$workspaces_cli" "$@"
+    ;;
+  config)
+    sub="${1:-}"
+    if [[ -z "$sub" || "$sub" == "-h" || "$sub" == "--help" ]]; then
+      ralph_config_usage
+      [[ -z "$sub" ]] && exit 1 || exit 0
+    fi
+    shift
+    case "$sub" in
+      killswitch)
+        killswitch_cli="$RALPH_HOME/bundle/.ralph/bash-lib/config/killswitch-cli.sh"
+        if [[ ! -f "$killswitch_cli" ]]; then
+          echo "Error: killswitch config CLI is not installed yet: $killswitch_cli" >&2
+          exit 1
+        fi
+        exec bash "$killswitch_cli" "$@"
+        ;;
+      *)
+        echo "Error: unknown ralph config subcommand: $sub" >&2
+        ralph_config_usage >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  create)
+    sub="${1:-}"
+    if [[ -z "$sub" || "$sub" == "-h" || "$sub" == "--help" ]]; then
+      ralph_create_usage
+      [[ -z "$sub" ]] && exit 1 || exit 0
+    fi
+    shift
+    case "$sub" in
+      orc)
+        exec bash "$RALPH_HOME/bundle/.ralph/orchestration-wizard.sh" "$@"
+        ;;
+      plan)
+        exec bash "$RALPH_HOME/bundle/.ralph/create-plan.sh" "$@"
+        ;;
+      *)
+        echo "Error: unknown ralph create subcommand: $sub" >&2
+        ralph_create_usage >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  agent)
+    agent_cli="$RALPH_HOME/bundle/.ralph/agent.sh"
+    if [[ ! -f "$agent_cli" ]]; then
+      echo "Error: agent CLI is not installed yet: $agent_cli" >&2
+      exit 1
+    fi
+    exec bash "$agent_cli" "$@"
+    ;;
+  process)
+    sub="${1:-}"
+    if [[ -z "$sub" || "$sub" == "-h" || "$sub" == "--help" ]]; then
+      ralph_process_usage
+      [[ -z "$sub" ]] && exit 1 || exit 0
+    fi
+    shift
+    process_workspace="$PWD"
+    process_state_root=""
+    process_plan=""
+    process_args=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --workspace)
+          [[ -n "${2:-}" ]] || { echo "Error: --workspace requires a path" >&2; exit 1; }
+          process_workspace="$2"
+          shift 2
+          ;;
+        --workspace-root)
+          [[ -n "${2:-}" ]] || { echo "Error: --workspace-root requires a path" >&2; exit 1; }
+          process_state_root="$2"
+          shift 2
+          ;;
+        --plan)
+          [[ -n "${2:-}" ]] || { echo "Error: --plan requires a path" >&2; exit 1; }
+          process_plan="$2"
+          shift 2
+          ;;
+        *)
+          process_args+=("$1")
+          shift
+          ;;
+      esac
+    done
+    if [[ -n "$process_plan" ]]; then
+      if [[ "$process_plan" == /* ]]; then
+        process_args+=(--plan "$process_plan")
+      else
+        process_args+=(--plan "$process_workspace/$process_plan")
+      fi
+    fi
+    [[ -n "$process_state_root" ]] || process_state_root="$process_workspace/.ralph-workspace"
+    process_script="$RALPH_HOME/bundle/.ralph/python/ralph_process_supervisor.py"
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "Error: ralph process requires Python 3." >&2
+      exit 2
+    fi
+    if [[ ! -f "$process_script" ]]; then
+      echo "Error: process supervisor not found: $process_script" >&2
+      exit 1
+    fi
+    case "$sub" in
+      list|stop)
+        exec python3 "$process_script" "$sub" --state-root "$process_state_root" "${process_args[@]}"
+        ;;
+      *)
+        echo "Error: unknown ralph process subcommand: $sub" >&2
+        ralph_process_usage >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "Error: unknown ralph command: $cmd" >&2
@@ -455,6 +703,11 @@ if [[ "${GLOBAL_INSTALL:-0}" -ne 1 ]]; then
   install_ops_auto_remove_vendor_after_install "$TARGET" "$SCRIPT_DIR"
 fi
 
+# Warn about stale runtime ralph directories from pre-PLAN26 installs
+if [[ "$DRY_RUN" -eq 0 && "${GLOBAL_INSTALL:-0}" -ne 1 ]]; then
+  install_ops_stale_runtime_ralph_notice "$TARGET"
+fi
+
 if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
   printf '\n'
   install_log_divider "----------------------------------------------------------------------"
@@ -462,12 +715,15 @@ if [[ "$DRY_RUN" -eq 0 ]] && install_ops_has_any_stack; then
   install_log_divider "----------------------------------------------------------------------"
   if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
     install_log_next_line "Command: ensure ~/.local/bin is on PATH, then run ralph --help"
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir ~/.claude --hooks"
     install_log_next_line "Plans: run ralph run-plan --plan PLAN.md --runtime <runtime> from a project"
   elif [[ -d "$TARGET/.ralph/ralph-dashboard" ]]; then
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir \"$TARGET/.claude\" --hooks"
     install_log_next_line "Dashboard: cd .ralph/ralph-dashboard && npm install && npm run build && npm start"
-    install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"
+    install_log_next_line "Plans: copy .ralph/plan-templates/classic.plan.template.md to something like PLAN.md and pass --plan to run-plan.sh"
   else
-    install_log_next_line "Plans: copy .ralph/plan.template to something like PLAN.md and pass --plan to run-plan.sh"
+    install_log_next_line "Compaction hooks: ralph setup --runtime claude --runtime-dir \"$TARGET/.claude\" --hooks"
+    install_log_next_line "Plans: copy .ralph/plan-templates/classic.plan.template.md to something like PLAN.md and pass --plan to run-plan.sh"
   fi
   if [[ "${GLOBAL_INSTALL:-0}" -ne 1 ]]; then
     install_log_next_line "MCP (optional): RALPH_MCP_WORKSPACE=\$PWD bash .ralph/mcp-server.sh (needs jq)"

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Ralph wrapper: always pass -T so each test prints its duration (pretty or tap).
+# Put repo bin/ on PATH (see .envrc) so plain `bats tests/bats/*.bats` shows timings.
+
+set -euo pipefail
+
+ralph_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+find_system_bats() {
+  local IFS=':'
+  local dir
+  local -a path_parts=()
+  for dir in $PATH; do
+    [[ -z "$dir" || "$dir" == "$ralph_bin" ]] && continue
+    path_parts+=("$dir")
+  done
+  PATH="${path_parts[*]}"
+  unset IFS
+  command -v bats
+}
+
+args=()
+enable_timing=1
+for arg in "$@"; do
+  case "$arg" in
+    -T | --timing)
+      enable_timing=1
+      args+=("$arg")
+      ;;
+    --no-timing)
+      enable_timing=0
+      ;;
+    *)
+      args+=("$arg")
+      ;;
+  esac
+done
+
+system_bats="$(find_system_bats || true)"
+if [[ -z "$system_bats" ]]; then
+  echo "bin/bats: system bats not found on PATH (install bats-core)" >&2
+  exit 127
+fi
+
+if [[ "$enable_timing" -eq 1 ]]; then
+  exec "$system_bats" -T "${args[@]}"
+fi
+
+exec "$system_bats" "${args[@]}"

@@ -159,6 +159,35 @@ describe('FileViewerComponent', () => {
     expect(pre?.textContent).toBe(JSON.stringify(JSON.parse(raw), null, 2));
   });
 
+  it('.ndjson file: structured stream events are rendered as readable lines', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '{"type":"connection","subtype":"reconnecting","session_id":"9ba7461a-b0fb-4b0d-aefc-cc4e87333456","timestamp_ms":1781579430435,"attempt":1}',
+      '[23:10:30] Agent still working (invocation 21m 5s, run 21m 8s).',
+      '{"type":"retry","subtype":"starting","session_id":"9ba7461a-b0fb-4b0d-aefc-cc4e87333456","timestamp_ms":1781579432637,"attempt":1,"is_resume":true}',
+      '{"type":"retry","subtype":"resuming","session_id":"9ba7461a-b0fb-4b0d-aefc-cc4e87333456","timestamp_ms":1781579432637,"checkpoint_turn_count":1,"attempt":1}',
+      '{"type":"connection","subtype":"reconnected","session_id":"9ba7461a-b0fb-4b0d-aefc-cc4e87333456","timestamp_ms":1781579433013}',
+    ].join('\n');
+    fixture.componentInstance.filePath = 'PLAN2/stream.ndjson';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+
+    flushWorkspaceAndFile('logs', 'PLAN2/stream.ndjson', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toContain('connection reconnecting');
+    expect(pre?.textContent).toContain('retry starting');
+    expect(pre?.textContent).toContain('retry resuming');
+    expect(pre?.textContent).toContain('connection reconnected');
+    expect(pre?.textContent).toContain('[23:10:30] Agent still working (invocation 21m 5s, run 21m 8s).');
+    expect(pre?.textContent).toContain('session id=9ba7461a-b0fb-4b0d-aefc-cc4e87333456');
+    expect(pre?.textContent).toContain('attempt=1');
+    expect(pre?.textContent).toContain('timestamp=2026-06-16T03:10:30.435Z');
+    expect(pre?.textContent).toContain('is_resume=true');
+  });
+
   it('non-markdown, non-JSON file: content is shown as raw text in a <pre>', async () => {
     const fixture = TestBed.createComponent(FileViewerComponent);
     const raw = 'plain line\nsecond line';

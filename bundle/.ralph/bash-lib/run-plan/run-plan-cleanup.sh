@@ -1,0 +1,85 @@
+# Exit trap: optional interactive cleanup after run-plan (sourced from run-plan-core).
+#
+# Public interface:
+#   ralph_run_plan_process_teardown_on_exit -- kill agent tree and launcher watchdog
+#   ralph_run_plan_exit_trap_handler -- EXIT trap: finalize usage, teardown, prompt_cleanup_on_exit
+#   ralph_run_plan_interrupt_trap_handler -- INT/TERM/HUP trap: teardown first, then finalize usage and overlay cleanup
+#   prompt_cleanup_on_exit -- may run cleanup-plan.sh or print the command
+
+# Prompt the user for optional cleanup output when the runner exits.
+# Args: none
+# Returns: 0 after handling cleanup prompt, non-zero on error
+prompt_cleanup_on_exit() {
+  trap - EXIT
+  [[ "${ALLOW_CLEANUP_PROMPT:-0}" == "1" ]] || return 0
+  [[ "$NON_INTERACTIVE_FLAG" == "1" ]] && return 0
+  echo ""
+  if [[ "$EXIT_STATUS" == "complete" ]]; then
+    echo -e "${C_DIM}All TODOs are complete. Logs and artifacts available at:${C_RST}"
+    echo -e "  ${C_B}Logs directory:${C_RST} $RALPH_LOG_DIR"
+    echo -e "  ${C_B}Output log:${C_RST} $OUTPUT_LOG"
+    echo -e "  ${C_B}Plan log:${C_RST} $LOG_FILE"
+    echo ""
+    echo -e "${C_DIM}To clean up logs and temporary files, run:${C_RST}"
+    echo -e "  ${C_C}.ralph/cleanup-plan.sh ${RALPH_ARTIFACT_NS:-<artifact-namespace>} ${WORKSPACE}${C_RST}"
+    return 0
+  fi
+  if [[ -t 0 && -t 1 ]]; then
+    local ans
+    echo -e "${C_C}${C_BOLD}Cleanup${C_RST}" >&2
+    printf '%s' "${C_Y}${C_BOLD}Run cleanup now?${C_RST}${C_DIM} [y/N]${C_RST}: " >&2
+    read -r ans </dev/tty 2>/dev/null || ans=""
+    ans="$(echo "$ans" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$ans" == "y" || "$ans" == "yes" ]]; then
+      "$CLEANUP_SCRIPT" "${RALPH_ARTIFACT_NS:-}" "$WORKSPACE"
+      return 0
+    fi
+  fi
+  echo -e "${C_DIM}Cleanup command:${C_RST} ${C_C}.ralph/cleanup-plan.sh ${RALPH_ARTIFACT_NS:-<artifact-namespace>} ${WORKSPACE}${C_RST}"
+}
+
+ralph_run_plan_exit_trap_handler() {
+  if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
+    _ralph_finalize_plan_usage_on_exit
+  fi
+  ralph_run_plan_process_teardown_on_exit
+  ralph_process_run_close "run-plan-exit" || true
+  prompt_cleanup_on_exit
+}
+
+ralph_run_plan_interrupt_trap_handler() {
+  local signal="${1:-INT}"
+  local exit_code=130
+
+  case "$signal" in
+    TERM) exit_code=143 ;;
+    HUP) exit_code=129 ;;
+  esac
+
+  # Ignore repeated signals instead of restoring default dispositions: a
+  # second Ctrl-C must not kill the runner mid-teardown, which would orphan
+  # the agent process group (it runs in its own group and never receives
+  # terminal SIGINT). The EXIT trap stays armed as a safety net; teardown
+  # and usage finalization are both idempotent.
+  trap '' INT TERM HUP
+  ALLOW_CLEANUP_PROMPT=0
+  EXIT_STATUS="interrupted"
+
+  printf '\n[%s] Interrupt (SIG%s) received; terminating agent process tree (PID %s)...\n' \
+    "$(date '+%H:%M:%S')" "$signal" "${AGENT_PID:-none}" >&2
+
+  # Kill the agent process group before any bookkeeping so a slow or failing
+  # usage finalization can never leave the agent tree running.
+  ralph_run_plan_process_teardown_on_exit
+  ralph_process_run_close "run-plan-signal-${signal}" || true
+  printf '[%s] Agent process tree terminated.\n' "$(date '+%H:%M:%S')" >&2
+
+  if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
+    _ralph_finalize_plan_usage_on_exit || true
+  fi
+  if declare -F ralph_runtime_overlay_signal_trap_handler >/dev/null 2>&1; then
+    ralph_runtime_overlay_signal_trap_handler || true
+  fi
+  trap - EXIT
+  exit "$exit_code"
+}

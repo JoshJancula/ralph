@@ -1,0 +1,372 @@
+{
+  "aggregate": {
+    "catalog_failure_tasks": 4,
+    "completion_rate": 0.789474,
+    "mean_accuracy": 1.0,
+    "mean_duration_ms": 982.631579,
+    "mean_tool_calls": 1.631579,
+    "task_count": 19,
+    "total_batchable_serial_calls": 4,
+    "total_duplicate_reads": 3
+  },
+  "kind": "tool_eval_baseline",
+  "per_task": {
+    "artifact-lookup": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "artifact_lookup",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 640,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_read": 640
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "artifact-lookup",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "batch-read-grep": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "batching",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 700,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_batch": 700
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "batch-read-grep",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "catalog-missing": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [
+        "missing_tool_catalog"
+      ],
+      "category": "catalog_failure",
+      "completed": false,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 50,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {},
+      "scoring_method": "detection_only",
+      "task_id": "catalog-missing",
+      "tool_calls": 0,
+      "within_tool_call_budget": true
+    },
+    "discovery-dispatch-fail": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [
+        "failed_discovery_dispatch"
+      ],
+      "category": "catalog_failure",
+      "completed": false,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 300,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_tool_search": 300
+      },
+      "scoring_method": "detection_only",
+      "task_id": "discovery-dispatch-fail",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "duplicate-read-penalty": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 2,
+      "catalog_discovery_failures": [],
+      "category": "read",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 2,
+      "duration_ms": 1500,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_read": 1500
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "duplicate-read-penalty",
+      "tool_calls": 3,
+      "within_tool_call_budget": true
+    },
+    "glob-py": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "glob",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 540,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_glob": 540
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "glob-py",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "grep-symbol": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "grep",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 620,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_grep": 620
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "grep-symbol",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "lexical-search": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "lexical_search",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 1100,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_search": 1100
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "lexical-search",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "next-cursor-null": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [
+        "next_cursor_null_tool_drop",
+        "missing_required_tool:ralph_proxy_grep",
+        "missing_required_tool:ralph_proxy_glob",
+        "missing_required_tool:ralph_proxy_shell",
+        "missing_required_tool:ralph_proxy_search",
+        "missing_required_tool:ralph_proxy_batch"
+      ],
+      "category": "catalog_failure",
+      "completed": false,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 40,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {},
+      "scoring_method": "detection_only",
+      "task_id": "next-cursor-null",
+      "tool_calls": 0,
+      "within_tool_call_budget": true
+    },
+    "permission-deny-fallback": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "permission_denial",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 1,
+      "duration_ms": 880,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "Read": 120,
+        "ralph_proxy_read": 760
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "permission-deny-fallback",
+      "tool_calls": 2,
+      "within_tool_call_budget": true
+    },
+    "read-basic": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "read",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 850,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_read": 850
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "read-basic",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "repomap": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "repomap",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 900,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_repomap": 900
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "repomap",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "result-page": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "stored_result",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 780,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_result_read": 380,
+        "ralph_proxy_shell": 400
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "result-page",
+      "tool_calls": 2,
+      "within_tool_call_budget": true
+    },
+    "result-search-first": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 1,
+      "catalog_discovery_failures": [],
+      "category": "stored_result",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 820,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_result_read": 520,
+        "ralph_proxy_result_search": 300
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "result-search-first",
+      "tool_calls": 2,
+      "within_tool_call_budget": true
+    },
+    "serial-batch-opportunity": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 1,
+      "catalog_discovery_failures": [],
+      "category": "batching",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 1300,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_read": 1300
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "serial-batch-opportunity",
+      "tool_calls": 2,
+      "within_tool_call_budget": true
+    },
+    "shell-compact": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "shell_compaction",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 1200,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_shell": 1200
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "shell-compact",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "shell-status-polling": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [
+        "excessive_shell_status_polling"
+      ],
+      "category": "catalog_failure",
+      "completed": false,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 5000,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_shell_start": 200,
+        "ralph_proxy_shell_status": 4800
+      },
+      "scoring_method": "detection_only",
+      "task_id": "shell-status-polling",
+      "tool_calls": 8,
+      "within_tool_call_budget": true
+    },
+    "tool-search-discover": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "tool_search",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 500,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_tool_search": 500
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "tool-search-discover",
+      "tool_calls": 1,
+      "within_tool_call_budget": true
+    },
+    "tool-search-invoke": {
+      "accuracy": 1.0,
+      "batchable_serial_calls": 0,
+      "catalog_discovery_failures": [],
+      "category": "tool_search",
+      "completed": true,
+      "discover_pattern_ids": [],
+      "duplicate_reads": 0,
+      "duration_ms": 950,
+      "ergonomics_valid": null,
+      "per_tool_duration_ms": {
+        "ralph_proxy_grep": 500,
+        "ralph_proxy_tool_search": 450
+      },
+      "scoring_method": "deterministic_match",
+      "task_id": "tool-search-invoke",
+      "tool_calls": 2,
+      "within_tool_call_budget": true
+    }
+  },
+  "schema_version": 1
+}

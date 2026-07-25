@@ -1,0 +1,5 @@
+## main...origin/main [ahead 2]
+ M modified_file.txt
+A  added_file.txt
+D  deleted_file.txt
+?? untracked.txt

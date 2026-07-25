@@ -1,24 +1,18 @@
 {
   "name": "implementation",
-  "model": "anthropic/claude-sonnet-4-6",
+  "_generated": "GENERATED from bundle/.ralph/agents/implementation.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "ollama-cloud/kimi-k2.5",
   "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
-  "rules": [".opencode/rules/no-emoji.md"],
-  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "rules": [
+    "bundle/.opencode/rules/no-emoji.md",
+    "bundle/.opencode/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.opencode/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
-      "required": true,
-      "kind": "notes"
-    },
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
-      "required": false
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "qa"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md", "required": true, "kind": "notes"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md", "required": false, "kind": "handoff", "to": "qa"}
   ]
 }

@@ -10,7 +10,7 @@
 MAX_DESCRIPTION_WARN=2000
 
 module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/agent-config/parse-json.sh
+# shellcheck source=bash-lib/agent-config/parse-json.sh
 source "$module_dir/parse-json.sh"
 
 is_env_secret_basename() {
@@ -41,7 +41,7 @@ validate_config() {
 
   local ok=1
   local key
-  for key in name model description rules skills output_artifacts; do
+  for key in name model description rules skills; do
     grep -Eq "^[[:space:]]*\"$key\"[[:space:]]*:" "$cfg" || { echo "missing required key: $key" >&2; ok=0; }
   done
 
@@ -52,7 +52,6 @@ validate_config() {
 
   valid_agent_name "$name" || { echo "name must match schema (lowercase, digits, hyphens; see agents README)" >&2; ok=0; }
   [[ "$name" == "$agent_id" ]] || { echo "name \"$name\" must match directory name \"$agent_id\"" >&2; ok=0; }
-  [[ -n "$model" ]] || { echo "model must be a non-empty string" >&2; ok=0; }
   [[ -n "$desc" ]] || { echo "description must be a non-empty string" >&2; ok=0; }
   if (( ${#desc} > MAX_DESCRIPTION_WARN )); then
     echo "warning: description length ${#desc} exceeds recommended $MAX_DESCRIPTION_WARN" >&2
@@ -61,10 +60,8 @@ validate_config() {
   local rules skills arts
   rules="$(array_block "$cfg" "rules" || true)"
   skills="$(array_block "$cfg" "skills" || true)"
-  arts="$(array_block "$cfg" "output_artifacts" || true)"
   [[ -n "$rules" ]] || { echo "rules must be an array" >&2; ok=0; }
   [[ -n "$skills" ]] || { echo "skills must be an array" >&2; ok=0; }
-  [[ -n "$arts" ]] || { echo "output_artifacts must be an array" >&2; ok=0; }
 
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*\"([^\"]+)\"[[:space:]]*,?[[:space:]]*$ ]] || continue
@@ -78,11 +75,38 @@ validate_config() {
     rel_path_targets_env_secret "$rel" && { echo "skills entry must not reference a .env* path (blocked for security)" >&2; ok=0; }
   done <<< "$skills"
 
-  while IFS= read -r line; do
-    [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] || continue
-    rel="${BASH_REMATCH[1]}"
-    rel_path_targets_env_secret "$rel" && { echo "output_artifacts path must not be .env* (blocked)" >&2; ok=0; }
-  done <<< "$arts"
+  if grep -Eq "^[[:space:]]*\"output_artifacts\"[[:space:]]*:" "$cfg"; then
+    arts="$(array_block "$cfg" "output_artifacts" || true)"
+    [[ -n "$arts" ]] || { echo "output_artifacts must be an array when present" >&2; ok=0; }
+    while IFS= read -r line; do
+      [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] || continue
+      rel="${BASH_REMATCH[1]}"
+      rel_path_targets_env_secret "$rel" && { echo "output_artifacts path must not be .env* (blocked)" >&2; ok=0; }
+    done <<< "${arts:-}"
+  fi
+
+  if grep -Eq '^[[:space:]]*"mcp_proxy_policy"[[:space:]]*:' "$cfg"; then
+    local proxy_policy
+    proxy_policy="$(json_string_value "$cfg" "mcp_proxy_policy")"
+    [[ -n "$proxy_policy" ]] || { echo "mcp_proxy_policy must be a non-empty string" >&2; ok=0; }
+  fi
+
+  if grep -Eq '^[[:space:]]*"reasoning_effort"[[:space:]]*:' "$cfg"; then
+    local reasoning_effort
+    reasoning_effort="$(json_string_value "$cfg" "reasoning_effort")"
+    if [[ -n "$reasoning_effort" ]]; then
+      case "$reasoning_effort" in
+        low|medium|high|xhigh|max|inherit) ;;
+        *)
+          echo "reasoning_effort must be one of: low, medium, high, xhigh, max, inherit" >&2
+          ok=0
+          ;;
+      esac
+    else
+      echo "reasoning_effort must be a non-empty string when present" >&2
+      ok=0
+    fi
+  fi
 
   if grep -q '"allowed_tools"' "$cfg" 2>/dev/null; then
     if command -v python3 &>/dev/null; then
@@ -102,6 +126,57 @@ sys.exit(1)
 " "$cfg" 2>/dev/null || { echo "allowed_tools must be a non-empty string or a non-empty array of non-empty strings (see agents README)" >&2; ok=0; }
     else
       echo "allowed_tools in config requires python3 for validation" >&2
+      ok=0
+    fi
+  fi
+
+  if grep -q '"mcp_servers"' "$cfg" 2>/dev/null; then
+    if command -v python3 &>/dev/null; then
+      local mcp_script=""
+      if [[ -n "${script_dir:-}" && -f "${script_dir}/python/agent-config-mcp.py" ]]; then
+        mcp_script="${script_dir}/python/agent-config-mcp.py"
+      else
+        mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)/python/agent-config-mcp.py"
+        [[ -f "$mcp_script" ]] || mcp_script="$(cd "$(dirname "${BASH_SOURCE[1]}")/../../.." && pwd)/python/agent-config-mcp.py"
+      fi
+      [[ -f "$mcp_script" ]] || { echo "mcp_servers validation requires agent-config-mcp.py" >&2; ok=0; }
+      if [[ -f "$mcp_script" ]]; then
+        python3 "$mcp_script" --validate-config "$cfg" 2>/dev/null || { echo "mcp_servers validation failed" >&2; ok=0; }
+      fi
+    else
+      echo "mcp_servers in config requires python3 for validation" >&2
+      ok=0
+    fi
+  fi
+
+  if grep -Eq '^[[:space:]]*"version"[[:space:]]*:' "$cfg"; then
+    if command -v python3 &>/dev/null; then
+      local skill_py=""
+      if [[ -n "${script_dir:-}" && -f "${script_dir}/python/skill_package.py" ]]; then
+        skill_py="${script_dir}/python/skill_package.py"
+      else
+        skill_py="$(cd "$(dirname "${BASH_SOURCE[1]}")/../.." && pwd)/python/skill_package.py"
+        [[ -f "$skill_py" ]] || skill_py="$(cd "$(dirname "${BASH_SOURCE[1]}")/../../.." && pwd)/python/skill_package.py"
+      fi
+      if [[ -f "$skill_py" ]]; then
+        python3 -c "
+import json, re, sys
+semver = re.compile(
+    r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    r'(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
+    r'(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+)
+with open(sys.argv[1]) as handle:
+    cfg = json.load(handle)
+version = cfg.get('version')
+if version is None:
+    sys.exit(0)
+if not isinstance(version, str) or not semver.fullmatch(version.strip()):
+    sys.exit(1)
+" "$cfg" 2>/dev/null || { echo "version must use semantic-version syntax" >&2; ok=0; }
+      fi
+    else
+      echo "version in config requires python3 for validation" >&2
       ok=0
     fi
   fi

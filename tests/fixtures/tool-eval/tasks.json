@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "kind": "tool_eval_tasks",
+  "fixture_root": "tests/fixtures/tool-eval/workspace",
+  "tasks": [
+    {
+      "id": "read-basic",
+      "category": "read",
+      "prompt": "Read config.py and report the VERSION constant value.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py"],
+        "symbols": ["VERSION"],
+        "output_contains": ["1.0.0"],
+        "tools": ["ralph_proxy_read"]
+      },
+      "max_tool_calls": 3,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "grep-symbol",
+      "category": "grep",
+      "prompt": "Use grep to find where VERSION is defined.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py"],
+        "symbols": ["VERSION"],
+        "tools": ["ralph_proxy_grep"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "glob-py",
+      "category": "glob",
+      "prompt": "Glob all Python files under the workspace.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py", "lib/utils.py"],
+        "tools": ["ralph_proxy_glob"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "lexical-search",
+      "category": "lexical_search",
+      "prompt": "Lexically search for helper_sum in the repository.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["lib/utils.py"],
+        "symbols": ["helper_sum"],
+        "tools": ["ralph_proxy_search"]
+      },
+      "max_tool_calls": 5,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "repomap",
+      "category": "repomap",
+      "prompt": "Use the repo map to locate helper_sum.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["lib/utils.py"],
+        "symbols": ["helper_sum"],
+        "tools": ["ralph_proxy_repomap"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "result-page",
+      "category": "stored_result",
+      "prompt": "Page a stored shell result with compacted view byte ranges.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "tools": ["ralph_proxy_result_read"]
+      },
+      "max_tool_calls": 6,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "batch-read-grep",
+      "category": "batching",
+      "prompt": "Batch a read of config.py and a grep for VERSION in one call.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py"],
+        "symbols": ["VERSION"],
+        "tools": ["ralph_proxy_batch"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "shell-compact",
+      "category": "shell_compaction",
+      "prompt": "Run an allowlisted shell command and rely on compacted output.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "tools": ["ralph_proxy_shell"],
+        "output_contains": ["config.py"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 60,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "tool-search-discover",
+      "category": "tool_search",
+      "prompt": "Discover the grep proxy tool via tool_search.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "tools": ["ralph_proxy_tool_search"]
+      },
+      "max_tool_calls": 5,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "tool-search-invoke",
+      "category": "tool_search",
+      "prompt": "Discover then invoke ralph_proxy_grep through tool_search dispatch.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "tools": ["ralph_proxy_tool_search", "ralph_proxy_grep"],
+        "symbols": ["VERSION"]
+      },
+      "max_tool_calls": 6,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "permission-deny-fallback",
+      "category": "permission_denial",
+      "prompt": "When native read is denied, fall back to ralph_proxy_read.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py"],
+        "tools": ["ralph_proxy_read"]
+      },
+      "max_tool_calls": 5,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "artifact-lookup",
+      "category": "artifact_lookup",
+      "prompt": "Read the demo artifact under .ralph-workspace/artifacts/demo/result.txt.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": [".ralph-workspace/artifacts/demo/result.txt"],
+        "output_contains": ["artifact lookup success"],
+        "tools": ["ralph_proxy_read"]
+      },
+      "max_tool_calls": 4,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "result-search-first",
+      "category": "stored_result",
+      "prompt": "Search a stored result before paging it with result_read.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "tools": ["ralph_proxy_result_search", "ralph_proxy_result_read"]
+      },
+      "max_tool_calls": 6,
+      "timeout_seconds": 45,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "duplicate-read-penalty",
+      "category": "read",
+      "prompt": "Read config.py once; duplicate reads should be scored as waste.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py"],
+        "tools": ["ralph_proxy_read"]
+      },
+      "max_tool_calls": 5,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "serial-batch-opportunity",
+      "category": "batching",
+      "prompt": "Two independent reads issued serially should flag a batching opportunity.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {
+        "files": ["config.py", "lib/utils.py"],
+        "tools": ["ralph_proxy_read"]
+      },
+      "max_tool_calls": 6,
+      "timeout_seconds": 30,
+      "scoring_method": "deterministic_match",
+      "mutation_permitted": false
+    },
+    {
+      "id": "catalog-missing",
+      "category": "catalog_failure",
+      "prompt": "Detect an empty MCP tools/list catalog.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {},
+      "expected_failures": ["missing_tool_catalog"],
+      "max_tool_calls": 1,
+      "timeout_seconds": 10,
+      "scoring_method": "detection_only",
+      "mutation_permitted": false
+    },
+    {
+      "id": "next-cursor-null",
+      "category": "catalog_failure",
+      "prompt": "Detect a null nextCursor that drops the tool catalog.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {},
+      "expected_failures": ["next_cursor_null_tool_drop"],
+      "max_tool_calls": 1,
+      "timeout_seconds": 10,
+      "scoring_method": "detection_only",
+      "mutation_permitted": false
+    },
+    {
+      "id": "shell-status-polling",
+      "category": "catalog_failure",
+      "prompt": "Detect excessive ralph_proxy_shell_status polling.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {},
+      "expected_failures": ["excessive_shell_status_polling"],
+      "max_tool_calls": 10,
+      "timeout_seconds": 60,
+      "scoring_method": "detection_only",
+      "mutation_permitted": false
+    },
+    {
+      "id": "discovery-dispatch-fail",
+      "category": "catalog_failure",
+      "prompt": "Detect a failed tool_search dispatch to a missing tool.",
+      "fixture": "tests/fixtures/tool-eval/workspace",
+      "expected": {},
+      "expected_failures": ["failed_discovery_dispatch"],
+      "max_tool_calls": 4,
+      "timeout_seconds": 30,
+      "scoring_method": "detection_only",
+      "mutation_permitted": false
+    }
+  ]
+}

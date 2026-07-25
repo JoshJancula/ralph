@@ -1,0 +1,3 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool_read", "name": "Read"}, {"type": "tool_use", "id": "tool_bash", "name": "Bash"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool_proxy_read", "name": "ralph_proxy_read"}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool_proxy_shell", "name": "ralph_proxy_shell"}]}}

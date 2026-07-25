@@ -1,24 +1,18 @@
 {
   "name": "architect",
-  "model": "auto",
+  "_generated": "GENERATED from bundle/.ralph/agents/architect.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "gpt-5.1-codex-mini",
   "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
-  "rules": [".cursor/rules/no-emoji.mdc"],
-  "skills": [".cursor/skills/repo-context/SKILL.md"],
+  "rules": [
+    "bundle/.cursor/rules/no-emoji.mdc",
+    "bundle/.cursor/rules/efficient-tool-usage.mdc"
+  ],
+  "skills": [
+    "bundle/.cursor/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
-      "required": true,
-      "kind": "design"
-    },
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-      "required": false
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": true, "kind": "design"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }

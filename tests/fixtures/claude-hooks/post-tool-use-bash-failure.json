@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"false"},"error":"exit code 1","cwd":"/workspace"}

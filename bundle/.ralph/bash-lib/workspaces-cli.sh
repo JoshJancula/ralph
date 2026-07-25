@@ -3,7 +3,7 @@ set -euo pipefail
 
 _workspaces_cli_dir="${BASH_SOURCE[0]%/*}"
 [[ "$_workspaces_cli_dir" == "${BASH_SOURCE[0]}" ]] && _workspaces_cli_dir="."
-_workspaces_registry_py="$_workspaces_cli_dir/workspace-registry.py"
+_workspaces_registry_py="$_workspaces_cli_dir/../python/workspace-registry.py"
 
 workspaces_usage() {
   cat <<'USAGE'

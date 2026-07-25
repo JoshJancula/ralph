@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "feedback"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["approved", "changes-required"]
+    },
+    "feedback": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

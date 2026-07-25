@@ -127,10 +127,12 @@ describe('findAllWorkspaceRoots', () => {
   const originalDashboardWorkspaceRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
   const originalWorkspacesFile = process.env['RALPH_WORKSPACES_FILE'];
   const originalHome = process.env['HOME'];
+  const originalPlanWorkspaceRoot = process.env['RALPH_PLAN_WORKSPACE_ROOT'];
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'ralph-full-roots-'));
     clearWorkspaceRootsCache();
+    delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
   });
 
   afterEach(() => {
@@ -171,6 +173,12 @@ describe('findAllWorkspaceRoots', () => {
       delete process.env['HOME'];
     } else {
       process.env['HOME'] = originalHome;
+    }
+
+    if (originalPlanWorkspaceRoot === undefined) {
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
+    } else {
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = originalPlanWorkspaceRoot;
     }
   });
 

@@ -1,0 +1,10 @@
+{"type":"tool_call","subtype":"started","call_id":"tool_1","tool_call":{"globToolCall":{"args":{"globPattern":"**/*.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_1","tool_call":{"globToolCall":{"args":{"globPattern":"**/*.md"},"result":{"success":{"files":["./file.md"]}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_2","tool_call":{"grepToolCall":{"args":{"pattern":"test","path":"/tmp","glob":"**/*.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_2","tool_call":{"grepToolCall":{"args":{"pattern":"test","path":"/tmp","glob":"**/*.md"},"result":{"success":{"pattern":"test"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_3","tool_call":{"readToolCall":{"args":{"path":"/tmp/file.md"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_3","tool_call":{"readToolCall":{"args":{"path":"/tmp/file.md"},"result":{"success":{"content":"file content"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_4","tool_call":{"mcp__ralph__ralph_proxy_read":{"args":{"path":"fixture.txt"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_4","tool_call":{"mcp__ralph__ralph_proxy_read":{"result":{"success":{"content":"proxy content"}}}}}
+{"type":"tool_call","subtype":"started","call_id":"tool_6","tool_call":{"mcp__custom__tool":{"args":{"param":"value"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"tool_6","tool_call":{"mcp__custom__tool":{"result":{"success":{}}}}}

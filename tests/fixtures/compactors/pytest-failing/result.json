@@ -1,0 +1,10 @@
+{
+  "stdout": "pytest failures (exit 1) for: pytest tests/\nFAILED tests/test_main.py::test_main_function - AssertionError: expected True\nERROR tests/test_helpers.py::test_error - RuntimeError: critical error",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "pytest",
+  "status": "compacted",
+  "exit_status": 1
+}

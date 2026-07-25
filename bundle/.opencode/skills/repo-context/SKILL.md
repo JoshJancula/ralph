@@ -7,10 +7,11 @@ description: Discover repository layout, stack, and how to build, test, and run.
 
 ## How to orient in this repo
 
-1. Read **README.md** at the repo root (and any linked docs).
-2. If present, read **AGENTS.md** or **CONTRIBUTING.md** for project conventions.
-3. Inspect **package.json**, **pyproject.toml**, **go.mod**, **Cargo.toml**, or similar for scripts and stack.
-4. Map top-level directories before editing across boundaries.
+1. Reuse repo context you already gathered in this run; do not restart orientation on every TODO.
+2. If the user request or plan already names exact files or commands, read those first.
+3. Read **README.md** and **AGENTS.md** or **CONTRIBUTING.md** only when they are needed to answer missing build/test/run or repo-convention questions.
+4. Inspect **package.json**, **pyproject.toml**, **go.mod**, **Cargo.toml**, or similar only when the task depends on stack or script details not already known.
+5. Map top-level directories before editing across boundaries, not for single-file or verification-only follow-ups.
 
 ## Customize this skill
 
@@ -45,3 +46,4 @@ Replace or extend the sections below with your project's specifics so agents do 
 - Before refactors that span multiple top-level areas.
 - When the user asks how to run, test, or build.
 - When artifact paths should use Ralph placeholders like `artifacts/{{ARTIFACT_NS}}/...`
+- Skip broad repo re-orientation for verification-only todos or follow-up todos that already provide the exact command or file set.

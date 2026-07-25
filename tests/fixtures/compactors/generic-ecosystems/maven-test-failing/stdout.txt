@@ -1,0 +1,462 @@
+[INFO] Scanning for projects...
+[INFO] Building app 1.0-SNAPSHOT
+[INFO] Downloading from central: org.example lib0 1.0
+[INFO] Downloaded org.example lib0 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 1 source files to target classes
+[INFO] Downloading from central: org.example lib1 1.0
+[INFO] Downloaded org.example lib1 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 2 source files to target classes
+[INFO] Downloading from central: org.example lib2 1.0
+[INFO] Downloaded org.example lib2 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 3 source files to target classes
+[INFO] Downloading from central: org.example lib3 1.0
+[INFO] Downloaded org.example lib3 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 4 source files to target classes
+[INFO] Downloading from central: org.example lib4 1.0
+[INFO] Downloaded org.example lib4 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 5 source files to target classes
+[INFO] Downloading from central: org.example lib5 1.0
+[INFO] Downloaded org.example lib5 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 6 source files to target classes
+[INFO] Downloading from central: org.example lib6 1.0
+[INFO] Downloaded org.example lib6 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 7 source files to target classes
+[INFO] Downloading from central: org.example lib7 1.0
+[INFO] Downloaded org.example lib7 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 8 source files to target classes
+[INFO] Downloading from central: org.example lib8 1.0
+[INFO] Downloaded org.example lib8 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 9 source files to target classes
+[INFO] Downloading from central: org.example lib9 1.0
+[INFO] Downloaded org.example lib9 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 10 source files to target classes
+[INFO] Downloading from central: org.example lib10 1.0
+[INFO] Downloaded org.example lib10 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 11 source files to target classes
+[INFO] Downloading from central: org.example lib11 1.0
+[INFO] Downloaded org.example lib11 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 12 source files to target classes
+[INFO] Downloading from central: org.example lib12 1.0
+[INFO] Downloaded org.example lib12 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 13 source files to target classes
+[INFO] Downloading from central: org.example lib13 1.0
+[INFO] Downloaded org.example lib13 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 14 source files to target classes
+[INFO] Downloading from central: org.example lib14 1.0
+[INFO] Downloaded org.example lib14 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 15 source files to target classes
+[INFO] Downloading from central: org.example lib15 1.0
+[INFO] Downloaded org.example lib15 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 16 source files to target classes
+[INFO] Downloading from central: org.example lib16 1.0
+[INFO] Downloaded org.example lib16 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 17 source files to target classes
+[INFO] Downloading from central: org.example lib17 1.0
+[INFO] Downloaded org.example lib17 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 18 source files to target classes
+[INFO] Downloading from central: org.example lib18 1.0
+[INFO] Downloaded org.example lib18 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 19 source files to target classes
+[INFO] Downloading from central: org.example lib19 1.0
+[INFO] Downloaded org.example lib19 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 20 source files to target classes
+[INFO] Downloading from central: org.example lib20 1.0
+[INFO] Downloaded org.example lib20 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 21 source files to target classes
+[INFO] Downloading from central: org.example lib21 1.0
+[INFO] Downloaded org.example lib21 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 22 source files to target classes
+[INFO] Downloading from central: org.example lib22 1.0
+[INFO] Downloaded org.example lib22 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 23 source files to target classes
+[INFO] Downloading from central: org.example lib23 1.0
+[INFO] Downloaded org.example lib23 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 24 source files to target classes
+[INFO] Downloading from central: org.example lib24 1.0
+[INFO] Downloaded org.example lib24 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 25 source files to target classes
+[INFO] Downloading from central: org.example lib25 1.0
+[INFO] Downloaded org.example lib25 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 26 source files to target classes
+[INFO] Downloading from central: org.example lib26 1.0
+[INFO] Downloaded org.example lib26 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 27 source files to target classes
+[INFO] Downloading from central: org.example lib27 1.0
+[INFO] Downloaded org.example lib27 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 28 source files to target classes
+[INFO] Downloading from central: org.example lib28 1.0
+[INFO] Downloaded org.example lib28 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 29 source files to target classes
+[INFO] Downloading from central: org.example lib29 1.0
+[INFO] Downloaded org.example lib29 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 30 source files to target classes
+[INFO] Downloading from central: org.example lib30 1.0
+[INFO] Downloaded org.example lib30 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 31 source files to target classes
+[INFO] Downloading from central: org.example lib31 1.0
+[INFO] Downloaded org.example lib31 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 32 source files to target classes
+[INFO] Downloading from central: org.example lib32 1.0
+[INFO] Downloaded org.example lib32 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 33 source files to target classes
+[INFO] Downloading from central: org.example lib33 1.0
+[INFO] Downloaded org.example lib33 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 34 source files to target classes
+[INFO] Downloading from central: org.example lib34 1.0
+[INFO] Downloaded org.example lib34 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 35 source files to target classes
+[INFO] Downloading from central: org.example lib35 1.0
+[INFO] Downloaded org.example lib35 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 36 source files to target classes
+[INFO] Downloading from central: org.example lib36 1.0
+[INFO] Downloaded org.example lib36 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 37 source files to target classes
+[INFO] Downloading from central: org.example lib37 1.0
+[INFO] Downloaded org.example lib37 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 38 source files to target classes
+[INFO] Downloading from central: org.example lib38 1.0
+[INFO] Downloaded org.example lib38 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 39 source files to target classes
+[INFO] Downloading from central: org.example lib39 1.0
+[INFO] Downloaded org.example lib39 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 40 source files to target classes
+[INFO] Downloading from central: org.example lib40 1.0
+[INFO] Downloaded org.example lib40 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 41 source files to target classes
+[INFO] Downloading from central: org.example lib41 1.0
+[INFO] Downloaded org.example lib41 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 42 source files to target classes
+[INFO] Downloading from central: org.example lib42 1.0
+[INFO] Downloaded org.example lib42 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 43 source files to target classes
+[INFO] Downloading from central: org.example lib43 1.0
+[INFO] Downloaded org.example lib43 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 44 source files to target classes
+[INFO] Downloading from central: org.example lib44 1.0
+[INFO] Downloaded org.example lib44 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 45 source files to target classes
+[INFO] Downloading from central: org.example lib45 1.0
+[INFO] Downloaded org.example lib45 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 46 source files to target classes
+[INFO] Downloading from central: org.example lib46 1.0
+[INFO] Downloaded org.example lib46 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 47 source files to target classes
+[INFO] Downloading from central: org.example lib47 1.0
+[INFO] Downloaded org.example lib47 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 48 source files to target classes
+[INFO] Downloading from central: org.example lib48 1.0
+[INFO] Downloaded org.example lib48 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 49 source files to target classes
+[INFO] Downloading from central: org.example lib49 1.0
+[INFO] Downloaded org.example lib49 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 50 source files to target classes
+[INFO] Downloading from central: org.example lib50 1.0
+[INFO] Downloaded org.example lib50 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 51 source files to target classes
+[INFO] Downloading from central: org.example lib51 1.0
+[INFO] Downloaded org.example lib51 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 52 source files to target classes
+[INFO] Downloading from central: org.example lib52 1.0
+[INFO] Downloaded org.example lib52 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 53 source files to target classes
+[INFO] Downloading from central: org.example lib53 1.0
+[INFO] Downloaded org.example lib53 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 54 source files to target classes
+[INFO] Downloading from central: org.example lib54 1.0
+[INFO] Downloaded org.example lib54 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 55 source files to target classes
+[INFO] Downloading from central: org.example lib55 1.0
+[INFO] Downloaded org.example lib55 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 56 source files to target classes
+[INFO] Downloading from central: org.example lib56 1.0
+[INFO] Downloaded org.example lib56 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 57 source files to target classes
+[INFO] Downloading from central: org.example lib57 1.0
+[INFO] Downloaded org.example lib57 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 58 source files to target classes
+[INFO] Downloading from central: org.example lib58 1.0
+[INFO] Downloaded org.example lib58 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 59 source files to target classes
+[INFO] Downloading from central: org.example lib59 1.0
+[INFO] Downloaded org.example lib59 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 60 source files to target classes
+[INFO] Downloading from central: org.example lib60 1.0
+[INFO] Downloaded org.example lib60 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 61 source files to target classes
+[INFO] Downloading from central: org.example lib61 1.0
+[INFO] Downloaded org.example lib61 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 62 source files to target classes
+[INFO] Downloading from central: org.example lib62 1.0
+[INFO] Downloaded org.example lib62 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 63 source files to target classes
+[INFO] Downloading from central: org.example lib63 1.0
+[INFO] Downloaded org.example lib63 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 64 source files to target classes
+[INFO] Downloading from central: org.example lib64 1.0
+[INFO] Downloaded org.example lib64 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 65 source files to target classes
+[INFO] Downloading from central: org.example lib65 1.0
+[INFO] Downloaded org.example lib65 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 66 source files to target classes
+[INFO] Downloading from central: org.example lib66 1.0
+[INFO] Downloaded org.example lib66 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 67 source files to target classes
+[INFO] Downloading from central: org.example lib67 1.0
+[INFO] Downloaded org.example lib67 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 68 source files to target classes
+[INFO] Downloading from central: org.example lib68 1.0
+[INFO] Downloaded org.example lib68 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 69 source files to target classes
+[INFO] Downloading from central: org.example lib69 1.0
+[INFO] Downloaded org.example lib69 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 70 source files to target classes
+[INFO] Downloading from central: org.example lib70 1.0
+[INFO] Downloaded org.example lib70 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 71 source files to target classes
+[INFO] Downloading from central: org.example lib71 1.0
+[INFO] Downloaded org.example lib71 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 72 source files to target classes
+[INFO] Downloading from central: org.example lib72 1.0
+[INFO] Downloaded org.example lib72 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 73 source files to target classes
+[INFO] Downloading from central: org.example lib73 1.0
+[INFO] Downloaded org.example lib73 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 74 source files to target classes
+[INFO] Downloading from central: org.example lib74 1.0
+[INFO] Downloaded org.example lib74 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 75 source files to target classes
+[INFO] Downloading from central: org.example lib75 1.0
+[INFO] Downloaded org.example lib75 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 76 source files to target classes
+[INFO] Downloading from central: org.example lib76 1.0
+[INFO] Downloaded org.example lib76 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 77 source files to target classes
+[INFO] Downloading from central: org.example lib77 1.0
+[INFO] Downloaded org.example lib77 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 78 source files to target classes
+[INFO] Downloading from central: org.example lib78 1.0
+[INFO] Downloaded org.example lib78 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 79 source files to target classes
+[INFO] Downloading from central: org.example lib79 1.0
+[INFO] Downloaded org.example lib79 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 80 source files to target classes
+[INFO] Downloading from central: org.example lib80 1.0
+[INFO] Downloaded org.example lib80 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 81 source files to target classes
+[INFO] Downloading from central: org.example lib81 1.0
+[INFO] Downloaded org.example lib81 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 82 source files to target classes
+[INFO] Downloading from central: org.example lib82 1.0
+[INFO] Downloaded org.example lib82 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 83 source files to target classes
+[INFO] Downloading from central: org.example lib83 1.0
+[INFO] Downloaded org.example lib83 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 84 source files to target classes
+[INFO] Downloading from central: org.example lib84 1.0
+[INFO] Downloaded org.example lib84 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 85 source files to target classes
+[INFO] Downloading from central: org.example lib85 1.0
+[INFO] Downloaded org.example lib85 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 86 source files to target classes
+[INFO] Downloading from central: org.example lib86 1.0
+[INFO] Downloaded org.example lib86 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 87 source files to target classes
+[INFO] Downloading from central: org.example lib87 1.0
+[INFO] Downloaded org.example lib87 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 88 source files to target classes
+[INFO] Downloading from central: org.example lib88 1.0
+[INFO] Downloaded org.example lib88 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 89 source files to target classes
+[INFO] Downloading from central: org.example lib89 1.0
+[INFO] Downloaded org.example lib89 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 90 source files to target classes
+[INFO] Downloading from central: org.example lib90 1.0
+[INFO] Downloaded org.example lib90 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 91 source files to target classes
+[INFO] Downloading from central: org.example lib91 1.0
+[INFO] Downloaded org.example lib91 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 92 source files to target classes
+[INFO] Downloading from central: org.example lib92 1.0
+[INFO] Downloaded org.example lib92 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 93 source files to target classes
+[INFO] Downloading from central: org.example lib93 1.0
+[INFO] Downloaded org.example lib93 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 94 source files to target classes
+[INFO] Downloading from central: org.example lib94 1.0
+[INFO] Downloaded org.example lib94 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 95 source files to target classes
+[INFO] Downloading from central: org.example lib95 1.0
+[INFO] Downloaded org.example lib95 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 96 source files to target classes
+[INFO] Downloading from central: org.example lib96 1.0
+[INFO] Downloaded org.example lib96 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 97 source files to target classes
+[INFO] Downloading from central: org.example lib97 1.0
+[INFO] Downloaded org.example lib97 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 98 source files to target classes
+[INFO] Downloading from central: org.example lib98 1.0
+[INFO] Downloaded org.example lib98 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 99 source files to target classes
+[INFO] Downloading from central: org.example lib99 1.0
+[INFO] Downloaded org.example lib99 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 100 source files to target classes
+[INFO] Downloading from central: org.example lib100 1.0
+[INFO] Downloaded org.example lib100 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 101 source files to target classes
+[INFO] Downloading from central: org.example lib101 1.0
+[INFO] Downloaded org.example lib101 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 102 source files to target classes
+[INFO] Downloading from central: org.example lib102 1.0
+[INFO] Downloaded org.example lib102 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 103 source files to target classes
+[INFO] Downloading from central: org.example lib103 1.0
+[INFO] Downloaded org.example lib103 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 104 source files to target classes
+[INFO] Downloading from central: org.example lib104 1.0
+[INFO] Downloaded org.example lib104 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 105 source files to target classes
+[INFO] Downloading from central: org.example lib105 1.0
+[INFO] Downloaded org.example lib105 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 106 source files to target classes
+[INFO] Downloading from central: org.example lib106 1.0
+[INFO] Downloaded org.example lib106 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 107 source files to target classes
+[INFO] Downloading from central: org.example lib107 1.0
+[INFO] Downloaded org.example lib107 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 108 source files to target classes
+[INFO] Downloading from central: org.example lib108 1.0
+[INFO] Downloaded org.example lib108 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 109 source files to target classes
+[INFO] Downloading from central: org.example lib109 1.0
+[INFO] Downloaded org.example lib109 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 110 source files to target classes
+[INFO] Downloading from central: org.example lib110 1.0
+[INFO] Downloaded org.example lib110 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 111 source files to target classes
+[INFO] Downloading from central: org.example lib111 1.0
+[INFO] Downloaded org.example lib111 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 112 source files to target classes
+[INFO] Downloading from central: org.example lib112 1.0
+[INFO] Downloaded org.example lib112 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 113 source files to target classes
+[INFO] Downloading from central: org.example lib113 1.0
+[INFO] Downloaded org.example lib113 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 114 source files to target classes
+[INFO] Downloading from central: org.example lib114 1.0
+[INFO] Downloaded org.example lib114 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 115 source files to target classes
+[INFO] Downloading from central: org.example lib115 1.0
+[INFO] Downloaded org.example lib115 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 116 source files to target classes
+[INFO] Downloading from central: org.example lib116 1.0
+[INFO] Downloaded org.example lib116 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 117 source files to target classes
+[INFO] Downloading from central: org.example lib117 1.0
+[INFO] Downloaded org.example lib117 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 118 source files to target classes
+[INFO] Downloading from central: org.example lib118 1.0
+[INFO] Downloaded org.example lib118 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 119 source files to target classes
+[INFO] Downloading from central: org.example lib119 1.0
+[INFO] Downloaded org.example lib119 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 120 source files to target classes
+[INFO] Downloading from central: org.example lib120 1.0
+[INFO] Downloaded org.example lib120 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 121 source files to target classes
+[INFO] Downloading from central: org.example lib121 1.0
+[INFO] Downloaded org.example lib121 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 122 source files to target classes
+[INFO] Downloading from central: org.example lib122 1.0
+[INFO] Downloaded org.example lib122 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 123 source files to target classes
+[INFO] Downloading from central: org.example lib123 1.0
+[INFO] Downloaded org.example lib123 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 124 source files to target classes
+[INFO] Downloading from central: org.example lib124 1.0
+[INFO] Downloaded org.example lib124 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 125 source files to target classes
+[INFO] Downloading from central: org.example lib125 1.0
+[INFO] Downloaded org.example lib125 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 126 source files to target classes
+[INFO] Downloading from central: org.example lib126 1.0
+[INFO] Downloaded org.example lib126 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 127 source files to target classes
+[INFO] Downloading from central: org.example lib127 1.0
+[INFO] Downloaded org.example lib127 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 128 source files to target classes
+[INFO] Downloading from central: org.example lib128 1.0
+[INFO] Downloaded org.example lib128 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 129 source files to target classes
+[INFO] Downloading from central: org.example lib129 1.0
+[INFO] Downloaded org.example lib129 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 130 source files to target classes
+[INFO] Downloading from central: org.example lib130 1.0
+[INFO] Downloaded org.example lib130 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 131 source files to target classes
+[INFO] Downloading from central: org.example lib131 1.0
+[INFO] Downloaded org.example lib131 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 132 source files to target classes
+[INFO] Downloading from central: org.example lib132 1.0
+[INFO] Downloaded org.example lib132 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 133 source files to target classes
+[INFO] Downloading from central: org.example lib133 1.0
+[INFO] Downloaded org.example lib133 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 134 source files to target classes
+[INFO] Downloading from central: org.example lib134 1.0
+[INFO] Downloaded org.example lib134 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 135 source files to target classes
+[INFO] Downloading from central: org.example lib135 1.0
+[INFO] Downloaded org.example lib135 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 136 source files to target classes
+[INFO] Downloading from central: org.example lib136 1.0
+[INFO] Downloaded org.example lib136 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 137 source files to target classes
+[INFO] Downloading from central: org.example lib137 1.0
+[INFO] Downloaded org.example lib137 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 138 source files to target classes
+[INFO] Downloading from central: org.example lib138 1.0
+[INFO] Downloaded org.example lib138 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 139 source files to target classes
+[INFO] Downloading from central: org.example lib139 1.0
+[INFO] Downloaded org.example lib139 1.0 (256 kB at 1.2 MB/s)
+[INFO] Compiling 140 source files to target classes
+[WARNING] compiler:warning: unchecked call in Module0.java
+[WARNING] compiler:warning: unchecked call in Module1.java
+[WARNING] compiler:warning: unchecked call in Module2.java
+[WARNING] compiler:warning: unchecked call in Module3.java
+[WARNING] compiler:warning: unchecked call in Module4.java
+[WARNING] compiler:warning: unchecked call in Module5.java
+[WARNING] compiler:warning: unchecked call in Module6.java
+[WARNING] compiler:warning: unchecked call in Module7.java
+[WARNING] compiler:warning: unchecked call in Module8.java
+[WARNING] compiler:warning: unchecked call in Module9.java
+[WARNING] compiler:warning: unchecked call in Module10.java
+[WARNING] compiler:warning: unchecked call in Module11.java
+[WARNING] compiler:warning: unchecked call in Module12.java
+[WARNING] compiler:warning: unchecked call in Module13.java
+[WARNING] compiler:warning: unchecked call in Module14.java
+[WARNING] compiler:warning: unchecked call in Module15.java
+[WARNING] compiler:warning: unchecked call in Module16.java
+[WARNING] compiler:warning: unchecked call in Module17.java
+[WARNING] compiler:warning: unchecked call in Module18.java
+[WARNING] compiler:warning: unchecked call in Module19.java
+[WARNING] compiler:warning: unchecked call in Module20.java
+[WARNING] compiler:warning: unchecked call in Module21.java
+[WARNING] compiler:warning: unchecked call in Module22.java
+[WARNING] compiler:warning: unchecked call in Module23.java
+[WARNING] compiler:warning: unchecked call in Module24.java
+[WARNING] compiler:warning: unchecked call in Module25.java
+[WARNING] compiler:warning: unchecked call in Module26.java
+[WARNING] compiler:warning: unchecked call in Module27.java
+[WARNING] compiler:warning: unchecked call in Module28.java
+[WARNING] compiler:warning: unchecked call in Module29.java
+[WARNING] compiler:warning: unchecked call in Module30.java
+[WARNING] compiler:warning: unchecked call in Module31.java
+[WARNING] compiler:warning: unchecked call in Module32.java
+[WARNING] compiler:warning: unchecked call in Module33.java
+[WARNING] compiler:warning: unchecked call in Module34.java
+[ERROR] Tests run: 42, Failures: 2, Errors: 1, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.0.0:test
+[INFO] BUILD FAILURE
+[INFO] Total time:  01:12 min
+[INFO] Finished at: 2026-06-10T00:00:00Z

@@ -1,0 +1,10 @@
+{
+  "stdout": "cargo test: 3 test(s) passed (exit 0)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "cargo_test",
+  "status": "compacted",
+  "exit_status": 0
+}

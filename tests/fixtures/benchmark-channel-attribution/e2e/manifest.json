@@ -1,0 +1,269 @@
+{
+  "kind": "benchmark_channel_attribution_e2e_fixture",
+  "plan_key": "channel-attribution-e2e",
+  "description": "Synthetic future-run with cursor (native-heavy) and opencode (ralph hybrid) under one plan_key. Exercises proxy read/search windowing, stored-result readback, and native hook compaction with exact channel ids.",
+  "runtime_config": {
+    "bash_compact_records": [
+      {
+        "planKey": "channel-attribution-e2e",
+        "runtime": "cursor",
+        "originalBytes": 4000,
+        "compactedBytes": 1000
+      }
+    ],
+    "proxy_shell_compact_records": [
+      {
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "originalBytes": 5000,
+        "compactedBytes": 1000
+      }
+    ],
+    "result_windowing_records": [
+      {
+        "event": "envelope",
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "resultId": "read-1",
+        "channel": "proxy_read_windowing",
+        "toolName": "ralph_proxy_read",
+        "originalBytes": 10000,
+        "returnedBytes": 1000
+      },
+      {
+        "event": "readback",
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "resultId": "read-1",
+        "channel": "stored_result_readback",
+        "sourceResultChannel": "proxy_read_windowing",
+        "view": "compacted",
+        "returnedBytes": 300
+      },
+      {
+        "event": "envelope",
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "resultId": "search-1",
+        "channel": "proxy_search_windowing",
+        "toolName": "ralph_proxy_grep",
+        "originalBytes": 8000,
+        "returnedBytes": 800
+      },
+      {
+        "event": "envelope",
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "resultId": "stored-1",
+        "channel": "stored_result_readback",
+        "toolName": "ralph_proxy_result_read",
+        "originalBytes": 6000,
+        "returnedBytes": 600
+      },
+      {
+        "event": "readback",
+        "planKey": "channel-attribution-e2e",
+        "runtime": "opencode",
+        "resultId": "stored-1",
+        "channel": "stored_result_readback",
+        "sourceResultChannel": "stored_result_readback",
+        "view": "raw",
+        "returnedBytes": 2000
+      }
+    ],
+    "per_runtime_summaries": {
+      "cursor": {
+        "runtime": "cursor",
+        "plan_key": "channel-attribution-e2e",
+        "tool_access_mode": "native",
+        "native_hooks_effective": "true",
+        "mcp_effective": "false",
+        "overlay_mode": "bounded",
+        "native_optimization_proven_channels": ["native_result_hook"],
+        "fallback_channels_active": [],
+        "updated_at": "2026-07-04T10:00:00Z"
+      },
+      "opencode": {
+        "runtime": "opencode",
+        "plan_key": "channel-attribution-e2e",
+        "tool_access_mode": "hybrid",
+        "native_hooks_effective": "false",
+        "mcp_effective": "true",
+        "overlay_mode": "hybrid",
+        "native_shell_compaction_authoritative": "mcp_proxy_compaction",
+        "native_optimization_proven_channels": [
+          "proxy_shell",
+          "proxy_read_windowing",
+          "proxy_search_windowing",
+          "stored_result_readback"
+        ],
+        "fallback_channels_active": ["native_result_hook"],
+        "updated_at": "2026-07-04T11:00:00Z"
+      }
+    }
+  },
+  "plan_usage_summary": {
+    "schema_version": 1,
+    "kind": "plan_usage_summary",
+    "plan_key": "channel-attribution-e2e",
+    "artifact_ns": "channel-attribution-e2e",
+    "invocations": 2,
+    "input_tokens": 2400,
+    "output_tokens": 320,
+    "cache_creation_input_tokens": 100,
+    "cache_read_input_tokens": 600,
+    "prompt_bytes": 2880,
+    "tool_calls_total": 36,
+    "started_at": "2026-07-04T10:00:00Z",
+    "ended_at": "2026-07-04T11:30:00Z"
+  },
+  "invocations": [
+    {
+      "plan_key": "channel-attribution-e2e",
+      "iteration": 1,
+      "runtime": "cursor",
+      "agent_tool_access": "native",
+      "tool_calls_total": 12,
+      "native_read_like_calls": 8,
+      "ralph_proxy_calls": 2,
+      "native_write_like_calls": 1,
+      "other_mcp_calls": 1,
+      "native_optimization_proven_channels": ["native_result_hook"],
+      "fallback_channels_active": [],
+      "byte_savings_by_channel": {
+        "native_result_hook": {
+          "pre_optimization_bytes": 4000,
+          "post_optimization_bytes": 1000,
+          "saved_bytes": 3000,
+          "count": 1,
+          "pre_optimization_tokens": 1000,
+          "post_optimization_tokens": 250,
+          "saved_tokens": 750,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 3000,
+          "hidden_from_context_tokens": 750,
+          "attribution": "exact"
+        }
+      }
+    },
+    {
+      "plan_key": "channel-attribution-e2e",
+      "iteration": 2,
+      "runtime": "opencode",
+      "agent_tool_access": "hybrid",
+      "tool_calls_total": 24,
+      "native_read_like_calls": 6,
+      "ralph_proxy_calls": 14,
+      "native_optimization_proven_channels": [
+        "proxy_shell",
+        "proxy_read_windowing",
+        "proxy_search_windowing",
+        "stored_result_readback"
+      ],
+      "fallback_channels_active": ["native_result_hook"],
+      "byte_savings_by_channel": {
+        "proxy_shell": {
+          "pre_optimization_bytes": 5000,
+          "post_optimization_bytes": 1000,
+          "saved_bytes": 4000,
+          "count": 1,
+          "pre_optimization_tokens": 1250,
+          "post_optimization_tokens": 250,
+          "saved_tokens": 1000,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 4000,
+          "hidden_from_context_tokens": 1000,
+          "attribution": "exact"
+        },
+        "proxy_read_windowing": {
+          "pre_optimization_bytes": 10000,
+          "post_optimization_bytes": 1300,
+          "saved_bytes": 8700,
+          "count": 1,
+          "pre_optimization_tokens": 2500,
+          "post_optimization_tokens": 325,
+          "saved_tokens": 2175,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 8700,
+          "hidden_from_context_tokens": 2175,
+          "attribution": "exact"
+        },
+        "proxy_search_windowing": {
+          "pre_optimization_bytes": 8000,
+          "post_optimization_bytes": 800,
+          "saved_bytes": 7200,
+          "count": 1,
+          "pre_optimization_tokens": 2000,
+          "post_optimization_tokens": 200,
+          "saved_tokens": 1800,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 7200,
+          "hidden_from_context_tokens": 1800,
+          "attribution": "exact"
+        },
+        "stored_result_readback": {
+          "pre_optimization_bytes": 6000,
+          "post_optimization_bytes": 2600,
+          "saved_bytes": 3400,
+          "count": 1,
+          "pre_optimization_tokens": 1500,
+          "post_optimization_tokens": 650,
+          "saved_tokens": 850,
+          "token_cap_triggers": 0,
+          "hidden_from_context": 3400,
+          "hidden_from_context_tokens": 850,
+          "attribution": "exact"
+        }
+      }
+    }
+  ],
+  "expected_per_channel": {
+    "native_shell_hook": {
+      "saved_bytes": 0,
+      "attribution": "exact"
+    },
+    "proxy_shell": {
+      "saved_bytes": 4000,
+      "attribution": "exact"
+    },
+    "native_result_hook": {
+      "saved_bytes": 3000,
+      "attribution": "exact"
+    },
+    "native_result_mcp_fallback": {
+      "saved_bytes": 0,
+      "attribution": "exact"
+    },
+    "proxy_read_windowing": {
+      "saved_bytes": 8700,
+      "attribution": "exact",
+      "gross_readback_bytes": 300,
+      "net_consumed_bytes": 1300
+    },
+    "proxy_search_windowing": {
+      "saved_bytes": 7200,
+      "attribution": "exact"
+    },
+    "stored_result_readback": {
+      "saved_bytes": 3400,
+      "attribution": "exact",
+      "gross_readback_bytes": 2000,
+      "net_consumed_bytes": 2600
+    }
+  },
+  "expected_discover": {
+    "missed_compaction_opportunities_empty": true,
+    "has_meaningful_savings": true,
+    "cursor_heavy_native_read_mix": true,
+    "cursor_heavy_native_pattern_id": "heavy_native_read_vs_proxy"
+  },
+  "expected_markdown_contains": [
+    "## Optimization by channel",
+    "### Exact attribution",
+    "| Proxy read windowing | exact | 8,700 | 2,175 | 300 | 1,300 |",
+    "| Proxy search windowing | exact | 7,200 | 1,800 | - | 800 |",
+    "| Stored result readback | exact | 3,400 | 850 | 2,000 | 2,600 |",
+    "| Native result hook compaction | exact | 3,000 | 750 | - | - |",
+    "| Proxy shell compaction | exact | 4,000 | 1,000 | - | - |"
+  ]
+}

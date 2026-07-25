@@ -12,12 +12,14 @@ describe('dashboard API aggregated logs scope', () => {
   let originalWorkspaceRoot: string | undefined;
   let originalSkipListen: string | undefined;
   let originalDashboardGlobal: string | undefined;
+  let originalPlanWorkspaceRoot: string | undefined;
   let originalCwd: string | undefined;
 
   beforeAll(async () => {
     originalWorkspaceRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'];
     originalSkipListen = process.env['RALPH_DASHBOARD_SKIP_LISTEN'];
     originalDashboardGlobal = process.env['RALPH_DASHBOARD_GLOBAL'];
+    originalPlanWorkspaceRoot = process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     process.env['RALPH_DASHBOARD_SKIP_LISTEN'] = '1';
   });
 
@@ -38,6 +40,7 @@ describe('dashboard API aggregated logs scope', () => {
     process.env['RALPH_DASHBOARD_PROJECT_ROOT'] = tempRoot;
     process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] = tempRoot;
     delete process.env['RALPH_DASHBOARD_GLOBAL'];
+    delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
     ({ app } = await import('../src/server'));
   });
 
@@ -65,6 +68,11 @@ describe('dashboard API aggregated logs scope', () => {
       delete process.env['RALPH_DASHBOARD_GLOBAL'];
     } else {
       process.env['RALPH_DASHBOARD_GLOBAL'] = originalDashboardGlobal;
+    }
+    if (originalPlanWorkspaceRoot === undefined) {
+      delete process.env['RALPH_PLAN_WORKSPACE_ROOT'];
+    } else {
+      process.env['RALPH_PLAN_WORKSPACE_ROOT'] = originalPlanWorkspaceRoot;
     }
     delete process.env['RALPH_DASHBOARD_PROJECT_ROOT'];
   });

@@ -108,3 +108,30 @@ load_enabled_runtimes  # include list via RALPH_E2E_RUNTIMES, then subtract RALP
   require_runtime codex
   run_codex_smoke
 }
+
+@test "Codex MCP config workspaces can include Ralph servers" {
+  require_runtime codex
+
+  local workspace codex_bin codex_bin_dir config_dir
+  workspace="$(pwd)"
+  codex_bin="$(command -v codex)"
+  [ -n "$codex_bin" ] || fail "codex binary not found"
+  codex_bin_dir="$(dirname "$codex_bin")"
+  config_dir="$BATS_TEST_TMPDIR/codex-ralph-mcp"
+  mkdir -p "$config_dir"
+
+  cat <<EOF >"$config_dir/config.toml"
+[mcp_servers.ralph]
+command = "bash"
+args = ["$workspace/.ralph/mcp-server.sh"]
+
+[mcp_servers.ralph.env]
+PATH = "$codex_bin_dir:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+RALPH_MCP_WORKSPACE = "$workspace"
+EOF
+
+  run env "PATH=$codex_bin_dir:$PATH" "CODEX_HOME=$config_dir" codex mcp list
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ralph"* ]]
+}

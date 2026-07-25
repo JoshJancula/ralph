@@ -1,0 +1,10 @@
+{
+  "stdout": "npm test failures (exit 1) for: npm test\n(9 test(s) passing omitted)\n FAIL  src/component.test.js\n FAIL  src/utils.test.js",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "npm_test",
+  "status": "compacted",
+  "exit_status": 1
+}

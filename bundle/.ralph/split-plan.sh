@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/plan-todo.sh
+# shellcheck source=bash-lib/plan-todo.sh
 source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
 
 usage() {

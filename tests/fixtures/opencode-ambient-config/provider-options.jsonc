@@ -1,0 +1,14 @@
+{
+  // Documented default config should still be preserved.
+  "provider": "ollama",
+  "model": "ollama-mini",
+  "options": {
+    "setCacheKey": true,
+    "source": "jsonc",
+  },
+  "permission": {
+    "bash": {
+      "*": "ask"
+    }
+  }
+}

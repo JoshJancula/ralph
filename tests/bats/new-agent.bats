@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
-source "$RALPH_LIB_ROOT/new-agent.sh"
+source "$RALPH_LIB_ROOT/new-agent/new-agent.sh"
 
 @test "valid agent id passes validation" {
   run new_agent_is_valid_id "ralph-agent"
@@ -36,24 +36,33 @@ source "$RALPH_LIB_ROOT/new-agent.sh"
 @test "new-agent --no-interactive scaffolds cursor agent inside temp repo" {
   repo="$(mktemp -d)"
   bundle_root="$repo/bundle"
-  mkdir -p "$bundle_root/.cursor/ralph" "$bundle_root/.claude/ralph" "$bundle_root/.codex/ralph" "$bundle_root/.ralph"
-  ln -s "$REPO_ROOT/bundle/.cursor/ralph/select-model.sh" "$bundle_root/.cursor/ralph/select-model.sh"
-  ln -s "$REPO_ROOT/bundle/.claude/ralph/select-model.sh" "$bundle_root/.claude/ralph/select-model.sh"
-  ln -s "$REPO_ROOT/bundle/.codex/ralph/select-model.sh" "$bundle_root/.codex/ralph/select-model.sh"
-  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib" "$bundle_root/.ralph/bash-lib"
+  mkdir -p "$bundle_root/.cursor/agents" "$bundle_root/.claude/agents" "$bundle_root/.codex/agents" "$bundle_root/.ralph/bash-lib/select-model" "$bundle_root/.ralph/bash-lib/new-agent" "$bundle_root/.ralph/bash-lib/agent-source"
+  mkdir -p "$bundle_root/scripts"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-common.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-common.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-normalize.sh" "$bundle_root/.ralph/bash-lib/runtime-normalize.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/agent-source/frontmatter.sh" "$bundle_root/.ralph/bash-lib/agent-source/frontmatter.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-cursor.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-cursor.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-claude.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-claude.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-codex.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-codex.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-opencode.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-opencode.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/select-model/select-model-antigravity.sh" "$bundle_root/.ralph/bash-lib/select-model/select-model-antigravity.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/new-agent/new-agent.sh" "$bundle_root/.ralph/bash-lib/new-agent/new-agent.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/new-agent/new-agent-writers.sh" "$bundle_root/.ralph/bash-lib/new-agent/new-agent-writers.sh"
+  ln -s "$REPO_ROOT/bundle/.ralph/bash-lib/new-agent/new-agent-helpers.sh" "$bundle_root/.ralph/bash-lib/new-agent/new-agent-helpers.sh"
   ln -s "$REPO_ROOT/bundle/.ralph/new-agent.sh" "$bundle_root/.ralph/new-agent.sh"
+  ln -s "$REPO_ROOT/scripts/sync-runtime-assets.sh" "$bundle_root/scripts/sync-runtime-assets.sh"
 
-  run bash -c "cd '$bundle_root' && printf 'test-agent\nTest agent description\n' | CURSOR_PLAN_MODEL='gpt-5.1' bash '.ralph/new-agent.sh' --no-interactive"
+  run bash -c 'cd "$1" && printf "%s\n%s\n" test-agent "Test agent description" | CURSOR_PLAN_MODEL=gpt-5.1 bash .ralph/new-agent.sh --no-interactive' bash "$bundle_root"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Created agent 'test-agent' at:"* ]]
 
-  config_file="$bundle_root/.cursor/agents/test-agent/config.json"
+  config_file="$bundle_root/bundle/.cursor/agents/test-agent/config.json"
   [ -f "$config_file" ]
   grep -q '"model": "gpt-5.1"' "$config_file"
-  [ -f "$bundle_root/.cursor/agents/test-agent/rules/README.md" ]
-  [ -f "$bundle_root/.cursor/agents/test-agent/skills/README.md" ]
-  grep -q 'This scaffold is inert until a rules file is referenced from `config.json`.' "$bundle_root/.cursor/agents/test-agent/rules/README.md"
-  grep -q 'This scaffold is inert until a skill file is referenced from `config.json`.' "$bundle_root/.cursor/agents/test-agent/skills/README.md"
+  [ ! -e "$bundle_root/bundle/.cursor/agents/test-agent/rules" ]
+  [ ! -e "$bundle_root/bundle/.cursor/agents/test-agent/skills" ]
+  [ -f "$bundle_root/bundle/.ralph/agents/test-agent.md" ]
+  grep -q '^mcp_servers: \[\]$' "$bundle_root/bundle/.ralph/agents/test-agent.md"
 
   rm -rf "$repo"
 }

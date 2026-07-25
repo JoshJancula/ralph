@@ -1,0 +1,20 @@
+   Compiling mylib v0.1.0
+    Finished test [unoptimized + debuginfo] target(s) in 1.12s
+     Running unittests src/lib.rs
+
+test basic_test ... ok
+test math_add ... FAILED
+test string_concat ... ok
+
+failures:
+
+---- math_add stdout ----
+thread 'math_add' panicked at src/lib.rs:42:5:
+assertion `left == right` failed
+  left: 3
+ right: 4
+
+failures:
+    math_add
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out

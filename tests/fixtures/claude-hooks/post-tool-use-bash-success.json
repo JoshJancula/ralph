@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"bats tests/foo.bats"},"tool_response":{"stdout":"1..3\nok 1 test one\nok 2 test two\nok 3 test three","stderr":"","interrupted":false,"isImage":false},"cwd":"/workspace"}

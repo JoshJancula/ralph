@@ -71,6 +71,39 @@ CONFIG
   rm -rf "$agents_root"
 }
 
+@test "mcp_proxy_policy validation rejects an empty string" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="proxy-policy-empty"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "proxy-policy-empty",
+  "model": "gpt-test",
+  "description": "Agent with invalid proxy policy",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ],
+  "output_artifacts": [
+    {
+      "path": "artifacts/proxy-policy-empty.txt",
+      "required": true
+    }
+  ],
+  "mcp_proxy_policy": ""
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mcp_proxy_policy must be a non-empty string"* ]]
+  rm -rf "$agents_root"
+}
+
 @test "allowed_tools validation rejects an empty string" {
   local agents_root agent_id cfg
   agents_root="$(mktemp -d)"
@@ -101,5 +134,93 @@ CONFIG
   run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
   [ "$status" -ne 0 ]
   [[ "$output" == *"allowed_tools must be a non-empty string or a non-empty array"* ]]
+  rm -rf "$agents_root"
+}
+
+@test "validate passes for a config without output_artifacts" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="no-artifacts"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "no-artifacts",
+  "model": "gpt-test",
+  "description": "Agent with no output artifacts declared.",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ]
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  rm -rf "$agents_root"
+}
+
+@test "validate passes for a config with output_artifacts present (backward compat)" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="with-artifacts"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "with-artifacts",
+  "model": "gpt-test",
+  "description": "Agent with output artifacts declared.",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ],
+  "output_artifacts": [
+    {
+      "path": "artifacts/with-artifacts.txt",
+      "required": true
+    }
+  ]
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  rm -rf "$agents_root"
+}
+
+@test "validate rejects output_artifacts with .env path when field is present" {
+  local agents_root agent_id cfg
+  agents_root="$(mktemp -d)"
+  agent_id="env-artifact"
+  cfg="$agents_root/$agent_id/config.json"
+  mkdir -p "$agents_root/$agent_id"
+  cat <<CONFIG > "$cfg"
+{
+  "name": "env-artifact",
+  "model": "gpt-test",
+  "description": "Agent with dangerous artifact path.",
+  "rules": [
+    "rule-ok"
+  ],
+  "skills": [
+    "skill-ok"
+  ],
+  "output_artifacts": [
+    {
+      "path": ".env.secret",
+      "required": false
+    }
+  ]
+}
+CONFIG
+
+  run bash "$(agent_config_tool_path)" validate "$agents_root" "$agent_id" "$REPO_ROOT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"output_artifacts path must not be .env"* ]]
   rm -rf "$agents_root"
 }

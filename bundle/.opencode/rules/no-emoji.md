@@ -1,12 +1,10 @@
 ---
 name: no-emoji
 description: Do not use emojis in comments, logs, READMEs, or any code. Keep all project text plain (ASCII).
-globs:
-  - "**/*"
+globs: ["**/*"]
 alwaysApply: true
-paths:
-  - "**/*"
 ---
+<!-- GENERATED from bundle/.ralph/rules/no-emoji.md by scripts/sync-runtime-assets.sh - edit the canonical file -->
 
 # No emojis
 

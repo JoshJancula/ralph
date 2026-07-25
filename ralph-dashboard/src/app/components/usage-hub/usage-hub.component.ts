@@ -9,7 +9,22 @@ import {
 } from '@angular/core';
 import { IonCard, IonCardContent, IonCardHeader, IonCardSubtitle, IonCardTitle, IonSpinner } from '@ionic/angular/standalone';
 
-import { ApiService, MetricsSummary, MetricsSummaryItem, ModelBreakdownItem } from '../../services/api.service';
+import { forkJoin, of } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+
+import {
+  ApiService,
+  DiscoverPatternSummary,
+  MetricsSummary,
+  MetricsSummaryItem,
+  ModelBreakdownItem,
+  RuntimeOverlayMetrics,
+  SavingsBucket,
+  SavingsPathName,
+  SavingsReport,
+  WorkspaceRegistry,
+  ToolCallClassificationMetrics,
+} from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 import { formatElapsedSeconds } from '../../utils/format-elapsed';
@@ -78,6 +93,47 @@ interface StatItem {
   label: string;
   value: string;
 }
+
+interface DiscoverPlanEntry {
+  plan_key: string;
+  patterns: DiscoverPatternSummary[];
+  limitations: string[];
+}
+
+interface OverlayRunRow {
+  kind: Exclude<UsageKind, 'all'>;
+  plan_key: string;
+  stage_id?: string;
+  runtime?: string;
+  overlay: RuntimeOverlayMetrics;
+}
+
+interface ToolCallRunRow {
+  kind: Exclude<UsageKind, 'all'>;
+  plan_key: string;
+  stage_id?: string;
+  runtime?: string;
+  tool_calls: ToolCallClassificationMetrics;
+}
+
+interface SavingsPathEntry {
+  name: SavingsPathName;
+  label: string;
+  saved_tokens: number;
+  saved_bytes: number;
+  count: number;
+  pre_optimization_bytes: number;
+  post_optimization_bytes: number;
+  savings_percent?: number;
+  status_label: string;
+}
+
+const SAVINGS_PATH_ORDER: SavingsPathName[] = [
+  'pre_tool_rewrite',
+  'hook_compaction',
+  'proxy_shell_compaction',
+  'result_windowing',
+];
 
 type UsageKind = 'all' | 'plan' | 'orchestration';
 
@@ -170,6 +226,184 @@ interface UsageRunRecord {
                 <div class="metric-value">{{ stat.value }}</div>
               </ion-card-content>
             </ion-card>
+          }
+        </section>
+
+        <section class="savings-panel" aria-label="Benchmark overview">
+          <div class="savings-panel-header">
+            <h3>Benchmark</h3>
+            @if (savingsReport?.run_count; as runCount) {
+              <span class="savings-panel-meta">
+                Measured across {{ runCount }} runs
+                @if (formatSavingsDateRange(savingsReport?.date_range); as savingsDateRange) {
+                  <span> • {{ savingsDateRange }}</span>
+                }
+              </span>
+            }
+          </div>
+          @if (savingsLoading) {
+            <div class="loading">Loading benchmark data...</div>
+          } @else if (savingsError) {
+            <div class="error">{{ savingsError }}</div>
+          } @else if (savingsReport) {
+            <div class="savings-headline-grid">
+              <ion-card>
+                <ion-card-content>
+                  <div class="metric-label">Session usage</div>
+                  <div class="metric-value">
+                    {{ formatNumber(savingsReport.session_usage.input_tokens +
+                       savingsReport.session_usage.cache_creation_input_tokens +
+                       savingsReport.session_usage.cache_read_input_tokens) }} tokens in
+                  </div>
+                  <p class="savings-sentence">
+                    {{ formatNumber(savingsReport.session_usage.input_tokens) }} input /
+                    {{ formatNumber(savingsReport.session_usage.cache_creation_input_tokens) }} cache created /
+                    {{ formatNumber(savingsReport.session_usage.cache_read_input_tokens) }} cache read /
+                    {{ formatNumber(savingsReport.session_usage.output_tokens) }} output
+                  </p>
+                </ion-card-content>
+              </ion-card>
+              <ion-card>
+                <ion-card-content>
+                  <div class="metric-label">Tool output counterfactual</div>
+                  <div class="metric-value">
+                    {{ formatNumber(savingsReport.tool_output_counterfactual.net_savings_bytes) }} bytes saved
+                  </div>
+                  <p class="savings-sentence">
+                    Without Ralph: ~{{ formatNumber(savingsReport.tool_output_counterfactual.hypothetical_without_ralph_tokens) }} tokens;
+                    with Ralph: ~{{ formatNumber(savingsReport.tool_output_counterfactual.actual_with_ralph_tokens) }} tokens
+                    ({{ savingsReport.tool_output_counterfactual.net_savings_percent }}%)
+                  </p>
+                </ion-card-content>
+              </ion-card>
+              <ion-card>
+                <ion-card-content>
+                  <div class="metric-label">Kept out of model context</div>
+                  <div class="metric-value">
+                    ~{{ formatNumber(savingsReport.saved_tokens) }} tokens /
+                    ~{{ formatNumber(savingsReport.saved_bytes) }} bytes
+                  </div>
+                  <p class="savings-sentence">
+                    Kept ~{{ formatNumber(savingsReport.saved_tokens) }} tokens (~{{ formatNumber(savingsReport.saved_bytes) }} bytes)
+                    out of model context
+                  </p>
+                </ion-card-content>
+              </ion-card>
+            </div>
+            <div class="savings-breakdown-grid">
+              @for (pathEntry of savingsPathEntries; track pathEntry.name) {
+                <ion-card>
+                  <ion-card-header>
+                    <ion-card-title>{{ pathEntry.label }}</ion-card-title>
+                    <ion-card-subtitle>{{ pathEntry.status_label }}</ion-card-subtitle>
+                  </ion-card-header>
+                  <ion-card-content>
+                    <div class="metric-line">
+                      <span>Pre bytes</span>
+                      <span>{{ formatNumber(pathEntry.pre_optimization_bytes) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Post bytes</span>
+                      <span>{{ formatNumber(pathEntry.post_optimization_bytes) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Tokens</span>
+                      <span>{{ formatNumber(pathEntry.saved_tokens) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Bytes</span>
+                      <span>{{ formatNumber(pathEntry.saved_bytes) }}</span>
+                    </div>
+                    @if (pathEntry.count > 0) {
+                      <div class="metric-line">
+                        <span>Events</span>
+                        <span>{{ pathEntry.count }}</span>
+                      </div>
+                    }
+                    @if (pathEntry.savings_percent && pathEntry.savings_percent > 0) {
+                      <div class="metric-line">
+                        <span>Savings</span>
+                        <span>{{ pathEntry.savings_percent }}%</span>
+                      </div>
+                    }
+                  </ion-card-content>
+                </ion-card>
+              }
+            </div>
+            @if (savingsReport.could_have_saved.compaction_measured_not_applied_bytes > 0 ||
+                savingsReport.tool_output_counterfactual.compaction_measured_not_applied_bytes > 0) {
+              <div class="savings-context-efficiency">
+                <ion-card>
+                  <ion-card-content>
+                    <div class="metric-label">Could have saved</div>
+                    <div class="metric-value">
+                      {{ formatNumber(savingsReport.tool_output_counterfactual.compaction_measured_not_applied_bytes) }} bytes
+                    </div>
+                    <p class="savings-sentence">
+                      Compaction was measured on native hooks but not applied in this run mode.
+                    </p>
+                  </ion-card-content>
+                </ion-card>
+              </div>
+            }
+            @if (savingsReport.readback_summary && savingsReport.readback_summary.readback_count > 0) {
+              <div class="savings-context-efficiency">
+                <ion-card>
+                  <ion-card-content>
+                    <div class="metric-label">Stored result follow-ups</div>
+                    <div class="metric-line">
+                      <span>Readbacks</span>
+                      <span>{{ formatNumber(savingsReport.readback_summary.readback_count) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Raw share</span>
+                      <span>{{ formatPercent(savingsReport.readback_summary.raw_readback_share) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Effective windowing savings</span>
+                      <span>{{ formatPercent(savingsReport.readback_summary.effective_windowing_savings_rate) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Negation rate</span>
+                      <span>{{ formatPercent(savingsReport.readback_summary.readback_negation_rate) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Net consumed</span>
+                      <span>{{ formatNumber(savingsReport.readback_summary.net_consumed_bytes) }} bytes</span>
+                    </div>
+                  </ion-card-content>
+                </ion-card>
+              </div>
+            }
+            @if (discoverEntries.length > 0 && savingsReport.tool_output_counterfactual.net_savings_percent <= 0) {
+              <div class="savings-context-efficiency">
+                <ion-card>
+                  <ion-card-content>
+                    <div class="metric-label">Top discover opportunities</div>
+                    @for (entry of discoverEntries.slice(0, 3); track entry.plan_key) {
+                      <div class="metric-line opportunity">
+                        <span>{{ entry.plan_key }}</span>
+                        <span>{{ entry.patterns.slice(0, 2).map((p) => p.pattern_id).join(', ') }}</span>
+                      </div>
+                    }
+                  </ion-card-content>
+                </ion-card>
+              </div>
+            }
+            <div class="savings-context-efficiency">
+              <ion-card>
+                <ion-card-content>
+                  <div class="metric-label">Context efficiency</div>
+                  <div class="metric-value">{{ formatPercent(savingsReport.cache.cache_hit_ratio) }}</div>
+                  <div class="metric-line">
+                    <span>Cache reads</span>
+                    <span>{{ formatNumber(savingsReport.cache.cache_read_tokens) }} tokens</span>
+                  </div>
+                </ion-card-content>
+              </ion-card>
+            </div>
+          } @else {
+            <div class="empty">Benchmark data unavailable.</div>
           }
         </section>
 
@@ -357,6 +591,121 @@ interface UsageRunRecord {
             </ion-card>
           }
 
+          @if (overlayRunRows.length > 0) {
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>Runtime overlay effectiveness</ion-card-title>
+                <ion-card-subtitle>{{ overlayRunRows.length }} runs with overlay telemetry</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="usage-table">
+                  <div class="usage-row usage-header overlay-columns">
+                    <span>Kind</span>
+                    <span>Plan key</span>
+                    <span>Stage</span>
+                    <span>Native hooks</span>
+                    <span>MCP</span>
+                    <span>Compactions</span>
+                    <span>Rewrites</span>
+                    <span>Bytes saved</span>
+                    <span>Mode</span>
+                    <span>Warnings</span>
+                  </div>
+                  @for (row of overlayRunRows; track row.kind + row.plan_key + (row.stage_id ?? '')) {
+                    <div class="usage-row overlay-columns">
+                      <span>{{ row.kind }}</span>
+                      <span class="mono cell-clip" [title]="row.plan_key">{{ row.plan_key }}</span>
+                      <span class="mono cell-clip" [title]="row.stage_id || '(root)'">{{ row.stage_id || '(root)' }}</span>
+                      <span>{{ formatOverlayEffective(row.overlay.native_hooks_effective) }}</span>
+                      <span>{{ formatOverlayEffective(row.overlay.mcp_effective) }}</span>
+                      <span>{{ formatNumber(row.overlay.hook_compactions) }}</span>
+                      <span>{{ formatNumber(row.overlay.hook_rewrites) }}</span>
+                      <span>{{ formatNumber(row.overlay.hook_bytes_saved) }}</span>
+                      <span class="mono cell-clip" [title]="row.overlay.runtime_overlay_mode || '(none)'">{{
+                        row.overlay.runtime_overlay_mode || '(none)'
+                      }}</span>
+                      <span class="cell-clip" [title]="formatOverlayWarnings(row.overlay)">{{
+                        formatOverlayWarnings(row.overlay)
+                      }}</span>
+                    </div>
+                  }
+                </div>
+              </ion-card-content>
+            </ion-card>
+          }
+
+          @if (toolCallRunRows.length > 0) {
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>Tool call classification</ion-card-title>
+                <ion-card-subtitle>{{ toolCallRunRows.length }} runs with classified tool-call counters</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="usage-table">
+                  <div class="usage-row usage-header tool-call-columns">
+                    <span>Kind</span>
+                    <span>Plan key</span>
+                    <span>Stage</span>
+                    <span>Proxy</span>
+                    <span>Knowledge</span>
+                    <span>Compat read</span>
+                    <span>Native read</span>
+                    <span>Search</span>
+                    <span>Shell</span>
+                    <span>Hook rewrite</span>
+                    <span>Hook compact</span>
+                  </div>
+                  @for (row of toolCallRunRows; track row.kind + row.plan_key + (row.stage_id ?? '')) {
+                    <div class="usage-row tool-call-columns">
+                      <span>{{ row.kind }}</span>
+                      <span class="mono cell-clip" [title]="row.plan_key">{{ row.plan_key }}</span>
+                      <span class="mono cell-clip" [title]="row.stage_id || '(root)'">{{ row.stage_id || '(root)' }}</span>
+                      <span>{{ formatNumber(row.tool_calls.ralph_proxy_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.ralph_knowledge_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.native_read_compatibility_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.native_file_read_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.native_search_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.native_shell_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.runtime_hook_rewrite_calls) }}</span>
+                      <span>{{ formatNumber(row.tool_calls.runtime_hook_compaction_calls) }}</span>
+                    </div>
+                  }
+                </div>
+              </ion-card-content>
+            </ion-card>
+          }
+
+          @if (discoverEntries.length > 0) {
+            <ion-card>
+              <ion-card-header>
+                <ion-card-title>Discover patterns</ion-card-title>
+                <ion-card-subtitle>Sequence and usage patterns from invocation logs (no whole-file-read detection)</ion-card-subtitle>
+              </ion-card-header>
+              <ion-card-content>
+                @for (entry of discoverEntries; track entry.plan_key) {
+                  <div class="discover-plan-block">
+                    <div class="discover-plan-title mono">{{ entry.plan_key }}</div>
+                    @if (entry.patterns.length === 0) {
+                      <div class="empty">No sequence-level patterns detected.</div>
+                    } @else {
+                      <ul class="discover-pattern-list">
+                        @for (pattern of entry.patterns; track pattern.pattern_id) {
+                          <li>
+                            <span class="mono">{{ pattern.pattern_id }}</span>
+                            <span> ({{ pattern.count }})</span>
+                            @if (pattern.description) {
+                              <span class="discover-desc"> — {{ pattern.description }}</span>
+                            }
+                          </li>
+                        }
+                      </ul>
+                    }
+                  </div>
+                }
+              </ion-card-content>
+            </ion-card>
+          }
+
           @if (isShowingAllWorkspaces() && summary.orchestrations.length > 0) {
             <ion-card>
               <ion-card-header>
@@ -492,6 +841,59 @@ interface UsageRunRecord {
       grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 1rem;
     }
+    .savings-panel {
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      display: grid;
+      gap: 0.8rem;
+    }
+    .savings-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .savings-panel-header h3 {
+      margin: 0;
+      font-size: 1.25rem;
+    }
+    .savings-panel-meta {
+      color: var(--text-muted);
+      font-size: 0.86rem;
+    }
+    .savings-headline,
+    .savings-headline-grid,
+    .savings-context-efficiency {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+    .savings-breakdown-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.8rem;
+    }
+    .savings-sentence {
+      margin-top: 0.4rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .metric-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.4rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .metric-line span:last-child {
+      color: var(--text-primary);
+    }
+    .metric-line.opportunity {
+      font-weight: 500;
+    }
     .project-rollups {
       display: grid;
       gap: 0.75rem;
@@ -612,6 +1014,12 @@ interface UsageRunRecord {
     .orch-columns {
       grid-template-columns: 1fr 1.2fr 0.9fr 0.9fr 1.2fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr;
     }
+    .overlay-columns {
+      grid-template-columns: 0.7fr 1.1fr 0.7fr 0.7fr 0.5fr 0.7fr 0.7fr 0.8fr 0.7fr 1.4fr;
+    }
+    .tool-call-columns {
+      grid-template-columns: 0.7fr 1.1fr 0.7fr 0.6fr 0.7fr 0.7fr 0.7fr 0.6fr 0.6fr 0.7fr 0.7fr;
+    }
     .usage-header {
       font-size: 0.78rem;
       text-transform: uppercase;
@@ -667,12 +1075,36 @@ interface UsageRunRecord {
     .btn-secondary:hover {
       background: var(--border);
     }
+    .discover-plan-block + .discover-plan-block {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .discover-plan-title {
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+    .discover-pattern-list {
+      margin: 0;
+      padding-left: 1.25rem;
+      font-size: 0.9rem;
+    }
+    .discover-desc {
+      color: var(--text-muted);
+    }
   `,
 })
 export class UsageHubComponent implements OnInit {
   loading = false;
   error = '';
   summary: MetricsSummary | null = null;
+  discoverEntries: DiscoverPlanEntry[] = [];
+  overlayRunRows: OverlayRunRow[] = [];
+  toolCallRunRows: ToolCallRunRow[] = [];
+  savingsReport: SavingsReport | null = null;
+  savingsPathEntries: SavingsPathEntry[] = [];
+  savingsLoading = false;
+  savingsError = '';
   statRows: StatItem[] = [];
   runtimeRows: UsageRuntimeRow[] = [];
   modelRows: UsageModelRow[] = [];
@@ -728,6 +1160,13 @@ export class UsageHubComponent implements OnInit {
     this.filteredRunCount = 0;
     this.runtimeOptions = [];
     this.modelOptions = [];
+    this.discoverEntries = [];
+    this.overlayRunRows = [];
+    this.toolCallRunRows = [];
+    this.savingsReport = null;
+    this.savingsPathEntries = [];
+    this.savingsLoading = false;
+    this.savingsError = '';
     this.cdr.markForCheck();
 
     this.apiService.fetchMetricsSummary().subscribe({
@@ -737,6 +1176,8 @@ export class UsageHubComponent implements OnInit {
         this.recomputeRuntimeOptions(summary);
         this.recomputeModelOptions(summary);
         this.applyFilters(summary);
+        this.loadDiscoverReports(this.getFilteredPlans(summary));
+        this.loadSavings();
         this.loading = false;
         this.cdr.markForCheck();
       },
@@ -744,6 +1185,9 @@ export class UsageHubComponent implements OnInit {
         this.loading = false;
         this.error = err.error?.error || 'Failed to load usage metrics';
         this.summary = null;
+        this.discoverEntries = [];
+        this.overlayRunRows = [];
+        this.toolCallRunRows = [];
         this.statRows = [];
         this.runtimeRows = [];
         this.modelRows = [];
@@ -758,11 +1202,150 @@ export class UsageHubComponent implements OnInit {
     });
   }
 
+  private getFilteredPlans(summary: MetricsSummary | null): MetricsSummaryItem[] {
+    if (!summary) {
+      return [];
+    }
+    return summary.plans.filter((plan) =>
+      this.passesWorkspaceScopeFilter({
+        kind: 'plan',
+        item: plan,
+        breakdown: [],
+        hasDetailedBreakdown: false,
+        startedAtMs: null,
+      }),
+    );
+  }
+
+  private loadDiscoverReports(plans: MetricsSummaryItem[]): void {
+    const targets = plans.slice(0, 8);
+    if (targets.length === 0) {
+      this.discoverEntries = [];
+      return;
+    }
+    forkJoin(
+      targets.map((plan) =>
+        this.apiService.fetchDiscoverReport(plan.plan_key, plan.workspace_root).pipe(
+          catchError(() => of(null)),
+        ),
+      ),
+    ).subscribe((responses) => {
+      this.discoverEntries = responses
+        .filter((response): response is NonNullable<typeof response> => response !== null)
+        .map((response) => ({
+          plan_key: response.plan_key,
+          patterns: response.report.sequence_patterns ?? [],
+          limitations: response.report.limitations ?? [],
+        }))
+        .filter(
+          (entry) =>
+            entry.patterns.length > 0 ||
+            entry.limitations.some((line) => line.includes('whole_file_reads')),
+        );
+      this.cdr.markForCheck();
+    });
+  }
+
+  private loadSavings(): void {
+    const filters = this.buildSavingsFilters();
+    this.savingsLoading = true;
+    this.savingsError = '';
+    this.savingsReport = null;
+    this.savingsPathEntries = [];
+    this.apiService.fetchSavings(filters).subscribe({
+      next: (report) => {
+        this.savingsReport = report;
+        this.savingsPathEntries = this.buildSavingsPathEntries(report);
+        this.savingsLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.savingsError = err.error?.error || 'Failed to load savings data';
+        this.savingsLoading = false;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private buildSavingsFilters(): {
+    workspaceRoot?: string;
+    runtime?: string;
+    model?: string;
+    plan?: string;
+  } {
+    const filters: {
+      workspaceRoot?: string;
+      runtime?: string;
+      model?: string;
+      plan?: string;
+    } = {};
+    const workspace = this.getSelectedWorkspaceEntry();
+    if (workspace?.workspaceRoot) {
+      filters.workspaceRoot = workspace.workspaceRoot;
+    }
+    if (this.filterRuntime !== 'all') {
+      filters.runtime = this.filterRuntime;
+    }
+    if (this.filterModel !== 'all') {
+      filters.model = this.filterModel;
+    }
+    if (workspace?.planKey) {
+      filters.plan = workspace.planKey;
+    }
+    return filters;
+  }
+
+  private buildSavingsPathEntries(report: SavingsReport): SavingsPathEntry[] {
+    const perPath = report.per_path ?? {};
+    return SAVINGS_PATH_ORDER.map((pathName) => {
+      const bucket: SavingsBucket = perPath[pathName] ?? {
+        pre_optimization_bytes: 0,
+        post_optimization_bytes: 0,
+        saved_bytes: 0,
+        count: 0,
+        pre_optimization_tokens: 0,
+        post_optimization_tokens: 0,
+        saved_tokens: 0,
+        token_cap_triggers: 0,
+      };
+      return {
+        name: pathName,
+        label: this.formatSavingsPathLabel(pathName),
+        saved_tokens: bucket.saved_tokens,
+        saved_bytes: bucket.saved_bytes,
+        count: bucket.count,
+        pre_optimization_bytes: bucket.pre_optimization_bytes,
+        post_optimization_bytes: bucket.post_optimization_bytes,
+        savings_percent: bucket.savings_percent,
+        status_label: bucket.status_label || bucket.status || 'inactive',
+      };
+    });
+  }
+
+  private getSelectedWorkspaceEntry(): WorkspaceRegistry | undefined {
+    const selected = this.workspaceSelectorService.selectedWorkspacePath();
+    if (!selected) {
+      return undefined;
+    }
+    return this.workspaceSelectorService.workspaces().find((ws) => ws.path === selected);
+  }
+
+  private formatSavingsPathLabel(pathName: SavingsPathName): string {
+    return pathName
+      .split('_')
+      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+      .join(' ');
+  }
+
   setFilterKind(value: string): void {
     this.filterKind = this.normalizeKindFilter(value);
     this.recomputeRuntimeOptions(this.summary);
     this.recomputeModelOptions(this.summary);
     this.applyFilters();
+    if (this.summary) {
+      this.loadDiscoverReports(this.getFilteredPlans(this.summary));
+    }
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
@@ -770,12 +1353,14 @@ export class UsageHubComponent implements OnInit {
     this.filterRuntime = this.normalizeSelection(value);
     this.recomputeModelOptions(this.summary);
     this.applyFilters();
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
   setFilterModel(value: string): void {
     this.filterModel = this.normalizeSelection(value);
     this.applyFilters();
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
@@ -784,6 +1369,7 @@ export class UsageHubComponent implements OnInit {
     this.recomputeRuntimeOptions(this.summary);
     this.recomputeModelOptions(this.summary);
     this.applyFilters();
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
@@ -792,6 +1378,7 @@ export class UsageHubComponent implements OnInit {
     this.recomputeRuntimeOptions(this.summary);
     this.recomputeModelOptions(this.summary);
     this.applyFilters();
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
@@ -804,6 +1391,7 @@ export class UsageHubComponent implements OnInit {
     this.recomputeRuntimeOptions(this.summary);
     this.recomputeModelOptions(this.summary);
     this.applyFilters();
+    this.loadSavings();
     this.cdr.markForCheck();
   }
 
@@ -825,11 +1413,34 @@ export class UsageHubComponent implements OnInit {
     return `${(ratio * 100).toFixed(1)}%`;
   }
 
+  formatSavingsDateRange(range: { started_at: string | null; ended_at: string | null } | null | undefined): string {
+    if (!range) {
+      return '';
+    }
+    const started = range.started_at ? range.started_at.split('T')[0] : '';
+    const ended = range.ended_at ? range.ended_at.split('T')[0] : '';
+    if (started && ended) {
+      return `${started} → ${ended}`;
+    }
+    return started || ended || '';
+  }
+
   formatPeakTurn(tokens: number): string {
     if (!Number.isFinite(tokens) || tokens <= 0) {
       return '--';
     }
     return this.formatNumber(tokens);
+  }
+
+  formatOverlayEffective(effective: boolean): string {
+    return effective ? 'yes' : 'no';
+  }
+
+  formatOverlayWarnings(overlay: RuntimeOverlayMetrics): string {
+    if (!overlay.runtime_overlay_warnings.length) {
+      return '--';
+    }
+    return overlay.runtime_overlay_warnings.join('; ');
   }
 
   private applyFilters(summary = this.summary): void {
@@ -841,6 +1452,8 @@ export class UsageHubComponent implements OnInit {
       this.filteredRunCount = 0;
       this.detailedBreakdownRuns = 0;
       this.inferredBreakdownRuns = 0;
+      this.overlayRunRows = [];
+      this.toolCallRunRows = [];
       return;
     }
 
@@ -849,9 +1462,10 @@ export class UsageHubComponent implements OnInit {
     this.totalRunCount = records.length;
     const fromMs = this.parseDateStartMs(this.filterDateFrom);
     const toMs = this.parseDateEndMs(this.filterDateTo);
-    const filtered = records
+    const scopedRuns = records
       .filter((record) => this.passesKindFilter(record))
-      .filter((record) => this.passesDateFilter(record.startedAtMs, fromMs, toMs))
+      .filter((record) => this.passesDateFilter(record.startedAtMs, fromMs, toMs));
+    const filtered = scopedRuns
       .map((record) => ({
         run: record,
         entries: record.breakdown.filter((entry) => this.matchesRuntimeModel(entry)),
@@ -861,6 +1475,27 @@ export class UsageHubComponent implements OnInit {
     this.filteredRunCount = filtered.length;
     this.detailedBreakdownRuns = filtered.filter((match) => match.run.hasDetailedBreakdown).length;
     this.inferredBreakdownRuns = filtered.length - this.detailedBreakdownRuns;
+    this.overlayRunRows = scopedRuns
+      .filter((run) => run.item.overlay !== undefined)
+      .map((run) => ({
+        kind: run.kind,
+        plan_key: run.item.plan_key,
+        stage_id: run.item.stage_id,
+        runtime: run.item.runtime,
+        overlay: run.item.overlay as RuntimeOverlayMetrics,
+      }))
+      .sort((a, b) => a.plan_key.localeCompare(b.plan_key) || (a.stage_id ?? '').localeCompare(b.stage_id ?? ''));
+
+    this.toolCallRunRows = scopedRuns
+      .filter((run) => run.item.tool_calls !== undefined)
+      .map((run) => ({
+        kind: run.kind,
+        plan_key: run.item.plan_key,
+        stage_id: run.item.stage_id,
+        runtime: run.item.runtime,
+        tool_calls: run.item.tool_calls as ToolCallClassificationMetrics,
+      }))
+      .sort((a, b) => a.plan_key.localeCompare(b.plan_key) || (a.stage_id ?? '').localeCompare(b.stage_id ?? ''));
 
     this.buildBreakdowns(filtered);
   }

@@ -1,24 +1,18 @@
 {
   "name": "architect",
-  "model": "anthropic/claude-sonnet-4-6",
-  "description": "Turns research into system and module design, outlines boundaries, flows, and risks, and aligns other agents on execution plans. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
-  "rules": [".opencode/rules/no-emoji.md"],
-  "skills": [".opencode/skills/repo-context/SKILL.md"],
+  "_generated": "GENERATED from bundle/.ralph/agents/architect.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "ollama-cloud/kimi-k2.5",
+  "description": "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
+  "rules": [
+    "bundle/.opencode/rules/no-emoji.md",
+    "bundle/.opencode/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.opencode/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
-      "required": true,
-      "kind": "design"
-    },
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-      "required": false
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": true, "kind": "design"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/architect-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }

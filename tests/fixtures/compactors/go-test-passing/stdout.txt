@@ -1,0 +1,4 @@
+ok  	mylib/pkg1	0.123s
+ok  	mylib/pkg2	0.456s
+ok  	mylib/pkg3	0.789s
+ok  	mylib	1.368s	coverage: 85.2% of statements

@@ -4,44 +4,46 @@ set -euo pipefail
 workspace="$(pwd)"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bundle_root="$(cd "$script_dir/.." && pwd)"
-plan_template="$script_dir/plan.template"
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/error-handling.sh
+SCRIPT_DIR="$script_dir"
+export SCRIPT_DIR
+
+# shellcheck source=bash-lib/error-handling.sh
 source "$bundle_root/.ralph/bash-lib/error-handling.sh"
 
-if [[ ! -f "$plan_template" ]]; then
-  ralph_die "plan template not found at $plan_template"
+_wizard_bash_lib="$script_dir/bash-lib/select-model"
+if [[ -f "$_wizard_bash_lib/select-model-cursor.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_wizard_bash_lib/select-model-cursor.sh"
 fi
+if [[ -f "$_wizard_bash_lib/select-model-claude.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_wizard_bash_lib/select-model-claude.sh"
+fi
+if [[ -f "$_wizard_bash_lib/select-model-codex.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_wizard_bash_lib/select-model-codex.sh"
+fi
+if [[ -f "$_wizard_bash_lib/select-model-opencode.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_wizard_bash_lib/select-model-opencode.sh"
+fi
+if [[ -f "$_wizard_bash_lib/select-model-antigravity.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_wizard_bash_lib/select-model-antigravity.sh"
+fi
+unset _wizard_bash_lib
 
-if [[ -f "$bundle_root/.cursor/ralph/select-model.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "$bundle_root/.cursor/ralph/select-model.sh"
-fi
-if [[ -f "$bundle_root/.claude/ralph/select-model.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "$bundle_root/.claude/ralph/select-model.sh"
-fi
-if [[ -f "$bundle_root/.codex/ralph/select-model.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "$bundle_root/.codex/ralph/select-model.sh"
-fi
-if [[ -f "$bundle_root/.opencode/ralph/select-model.sh" ]]; then
-  # shellcheck source=/dev/null
-  source "$bundle_root/.opencode/ralph/select-model.sh"
-fi
-
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/ui-prompt.sh
+# shellcheck source=bash-lib/ui-prompt.sh
 source "$bundle_root/.ralph/bash-lib/ui-prompt.sh"
+# shellcheck source=bash-lib/wizard/wizard-prompts.sh
+source "$bundle_root/.ralph/bash-lib/wizard/wizard-prompts.sh"
+# shellcheck source=bash-lib/wizard/wizard-templates.sh
+source "$bundle_root/.ralph/bash-lib/wizard/wizard-templates.sh"
+# shellcheck source=bash-lib/wizard/wizard-validation.sh
+source "$bundle_root/.ralph/bash-lib/wizard/wizard-validation.sh"
+# shellcheck source=bash-lib/wizard/wizard-pipeline-plan.sh
+source "$bundle_root/.ralph/bash-lib/wizard/wizard-pipeline-plan.sh"
 
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/wizard-prompts.sh
-source "$bundle_root/.ralph/bash-lib/wizard-prompts.sh"
-
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/wizard-templates.sh
-source "$bundle_root/.ralph/bash-lib/wizard-templates.sh"
-
-# shellcheck source=/Users/joshuajancula/Documents/projects/ralph/bundle/.ralph/bash-lib/wizard-validation.sh
-source "$bundle_root/.ralph/bash-lib/wizard-validation.sh"
-
-# Print fzf hint at startup if fzf is not installed
 if [[ -z "${RALPH_SKIP_FZF_HINT:-}" ]] && ! command -v fzf >/dev/null 2>&1; then
   if [[ -t 2 ]] && [[ -z "${NO_COLOR:-}" ]]; then
     echo -e "\033[2mtip: install fzf for arrow-key menus (brew install fzf / apt install fzf). set RALPH_SKIP_FZF_HINT=1 to silence.\033[0m" >&2
@@ -50,199 +52,203 @@ if [[ -z "${RALPH_SKIP_FZF_HINT:-}" ]] && ! command -v fzf >/dev/null 2>&1; then
   fi
 fi
 
-echo "Note: this wizard copies .ralph/plan.template and scaffolds .ralph-workspace/orchestration-plans/<namespace> plus artifacts."
-
-print_step "1/7" "Pipeline metadata"
-print_hint "- Pick a short name we can use in file paths."
+print_step "1/5" "Plan metadata"
+print_hint "- Pick a short name for this orchestration plan."
 read_pipeline_info
 
-print_step "2/7" "Stage list"
-print_hint "- List stages with commas or spaces: preset names (research, architecture, ...), 1-based indexes (1,2,3), or custom ids (letters, digits, hyphens; example: r1,plan-a)."
-print_hint "- Press Enter for the default stage list."
-read_stages
-stages=()
-if [[ ${#selected_stages[@]} -gt 0 ]]; then
-  stages=("${selected_stages[@]}")
+plan_name="${namespace:-orchestration}"
+plan_overview="${pipeline_description:-Multi-stage orchestration for $plan_name}"
+if [[ -z "$pipeline_name" ]]; then
+  pipeline_name="$plan_name"
 fi
 
-if [[ ${#stages[@]} -eq 0 ]]; then
+plans_dir="$workspace/.ralph-workspace/plans"
+dest="$plans_dir/${plan_name}.plan.md"
+if [[ -e "$dest" ]]; then
+  ralph_die "plan already exists: $dest"
+fi
+
+instructions_line="instructions: Execute one TODO at a time."
+template_path="$script_dir/plan-templates/pipeline-simple.plan.template.md"
+if [[ -f "$template_path" ]]; then
+  _il="$(awk '/^instructions:/{print; exit}' "$template_path")"
+  [[ -n "$_il" ]] && instructions_line="$_il"
+fi
+
+print_step "2/5" "Stage list"
+print_hint "- Preset names: research, architecture, implementation, code-review, qa, security."
+print_hint "- Or custom ids (letters, digits, hyphens). Separate with commas or spaces."
+read_stages
+
+selected_stage_ids=()
+for _s in "${selected_stages[@]}"; do
+  _sid="$(ralph_internal_wizard_sanitize "$_s")"
+  [[ -n "$_sid" ]] || ralph_die "Stage \"$_s\" sanitizes to empty"
+  selected_stage_ids+=("$_sid")
+done
+
+if ((${#selected_stage_ids[@]} == 0)); then
   ralph_die "No stages configured"
 fi
 
-stage_runtimes=()
-stage_agents=()
-stage_agent_sources=()
-stage_descriptions=()
-stage_models=()
-stage_session_strategy=()
-stage_context_budgets=()
-stage_input_sources=()
-stage_handoff_targets=()
-stage_handoff_kinds=()
+cp_stages=()
+cp_stage_runtimes=()
+cp_stage_agents=()
+cp_stage_models=()
+cp_stage_session=()
+cp_stage_context=()
+cp_stage_plan_files=()
+cp_stage_inline_content=()
+cp_stage_inline_verification=()
+cp_artifact_entries=()
+cp_parallel_waves=()
+cp_loop_sources=()
+cp_loop_targets=()
+cp_loop_max_iters=()
+cp_loop_check_paths=()
 
-print_step "3/7" "Configure each stage"
-print_hint "- For each stage, pick where it runs and which helper agent to use."
-print_hint "- Pick 'custom' if you want to choose a model yourself."
-for stage in "${stages[@]}"; do
-  stage_id="$(ralph_internal_wizard_sanitize "$stage")"
-  [[ -n "$stage_id" ]] || ralph_die "Stage \"$stage\" sanitizes to empty; skip"
+print_step "3/5" "Configure each stage"
+print_hint "- For each stage: pick runtime, agent/model, then choose inline content or a separate plan file."
+
+for stage_id in "${selected_stage_ids[@]}"; do
+  cp_stages+=("$stage_id")
   print_info "Configuring stage \"$stage_id\""
-  runtime="$(select_runtime "$stage_id")"
-  agent_selection="$(select_agent "$runtime" "$stage_id")"
-  IFS=$'\t' read -r agent agent_is_custom custom_model_from_picker <<< "$agent_selection"
-  stage_desc="$(ralph_prompt_text "Describe \"$stage_id\" stage (optional)" "")"
-  if [[ "${agent_is_custom:-0}" == "1" ]]; then
-    stage_agent_source="custom"
-    stage_model="$custom_model_from_picker"
-  else
-    stage_agent_source="prebuilt"
-    model_default="$(agent_model_default "$runtime" "$agent" | tr -d '\n')"
-    stage_model="$(select_model_override "$runtime" "$agent" "$model_default")"
-  fi
-  stage_runtimes+=("$runtime")
-  stage_agents+=("$agent")
-  stage_agent_sources+=("$stage_agent_source")
-  stage_descriptions+=("$stage_desc")
-  stage_models+=("$stage_model")
-  if [[ "$pipeline_session_strategy_all_stages" == "true" ]]; then
-    stage_session_strategy+=("$pipeline_session_strategy_default")
-  else
-    _stage_strategy_default_index=1
-    case "${pipeline_session_strategy_default:-fresh}" in
-      resume) _stage_strategy_default_index=2 ;;
-      reset) _stage_strategy_default_index=3 ;;
-    esac
-    if [[ "$runtime" == "claude" ]]; then
-      print_hint "Claude often benefits from resume/reset because prompt-cache reuse is stronger."
+
+  use_plan_file="$(ralph_menu_select --prompt "Stage \"$stage_id\": inline content or separate plan file?" --default 1 -- "inline" "plan file")"
+
+  if [[ "$use_plan_file" == "plan file" ]]; then
+    plan_file_default=".ralph-workspace/plans/${plan_name}-${stage_id}.plan.md"
+    plan_file_path="$(ralph_prompt_text "Plan file path for \"$stage_id\"" "$plan_file_default")"
+    [[ -n "$plan_file_path" ]] || ralph_die "plan file path required for stage \"$stage_id\""
+    cp_stage_plan_files+=("$plan_file_path")
+    cp_stage_inline_content+=("")
+    cp_stage_inline_verification+=("")
+    cp_stage_runtimes+=("")
+    cp_stage_agents+=("")
+    cp_stage_models+=("")
+
+    create_stub="$(ralph_prompt_yesno "Create a stub plan file at $plan_file_path" "y")"
+    if [[ "$create_stub" == "y" ]]; then
+      stub_dir="$(dirname "$workspace/$plan_file_path")"
+      mkdir -p "$stub_dir"
+      stub_dest="$workspace/$plan_file_path"
+      if [[ ! -e "$stub_dest" ]]; then
+        stage_plan_name="$(basename "$plan_file_path" .plan.md)"
+        printf '%s\n' \
+          "---" \
+          "name: ${stage_plan_name}" \
+          "overview: Stage plan for ${stage_id} in ${plan_name}" \
+          "execution: standard" \
+          "instructions: Execute one TODO at a time." \
+          "" \
+          "todos:" \
+          "  - id: ${stage_id}-task-1" \
+          "    content: |" \
+          "      Describe the task for this stage here." \
+          "    verification: |" \
+          "      Confirm the task is complete." \
+          "    status: pending" \
+          "isProject: false" \
+          "---" \
+          > "$stub_dest"
+        print_info "Created stub plan: $plan_file_path"
+      else
+        print_info "Plan file already exists, skipping stub creation."
+      fi
     fi
-    _stage_strategy="$(ralph_menu_select --prompt "Session strategy for \"$stage_id\"" --default "$_stage_strategy_default_index" -- "fresh" "resume" "reset")"
-    stage_session_strategy+=("${_stage_strategy:-fresh}")
+  else
+    cp_stage_plan_files+=("")
+    runtime="$(select_runtime "$stage_id")"
+    agent_selection="$(select_agent "$runtime" "$stage_id")"
+    IFS=$'\t' read -r agent agent_is_custom custom_model <<< "$agent_selection"
+    if [[ "${agent_is_custom:-0}" == "1" ]]; then
+      stage_model="$custom_model"
+      [[ -n "$stage_model" ]] || ralph_die "Model is required for custom $runtime stage \"$stage_id\"."
+      cp_stage_agents+=("")
+      cp_stage_models+=("$stage_model")
+    else
+      model_default="$(agent_model_default "$runtime" "$agent" | tr -d '\n')"
+      stage_model="$(select_model_override "$runtime" "$agent" "$model_default")"
+      cp_stage_agents+=("$agent")
+      cp_stage_models+=("$stage_model")
+    fi
+    cp_stage_runtimes+=("$runtime")
+
+    inline_content="$(ralph_prompt_text "Content/instructions for \"$stage_id\" todo (optional)" "")"
+    inline_verification="$(ralph_prompt_text "Verification steps for \"$stage_id\" todo (optional)" "")"
+    cp_stage_inline_content+=("$inline_content")
+    cp_stage_inline_verification+=("$inline_verification")
   fi
-  cb_input="$(ralph_menu_select --prompt "Context budget for \"$stage_id\"" --default 2 -- "full" "standard" "lean")"
-  stage_context_budgets+=("$cb_input")
+
+  if [[ "${pipeline_session_strategy_all_stages:-true}" == "true" ]]; then
+    session="${pipeline_session_strategy_default:-fresh}"
+  else
+    session="$(select_session_strategy "$stage_id" "${pipeline_session_strategy_default:-fresh}")"
+  fi
+  context="$(select_context_budget "$stage_id")"
+  cp_stage_session+=("$session")
+  cp_stage_context+=("$context")
 done
 
-orch_session_resume_enabled="true"
-for ss in "${stage_session_strategy[@]}"; do
-  [[ "$ss" == "resume" ]] || orch_session_resume_enabled="false"
+print_step "4/5" "Artifacts, parallel stages, and loop rules (optional)"
+
+for stage_id in "${cp_stages[@]}"; do
+  _plan_file_idx=0
+  for _ci in "${!cp_stages[@]}"; do
+    [[ "${cp_stages[$_ci]}" == "$stage_id" ]] && { _plan_file_idx=$_ci; break; }
+  done
+  if [[ -n "${cp_stage_plan_files[$_plan_file_idx]:-}" ]]; then
+    continue
+  fi
+  artifact_default=".ralph-workspace/artifacts/{{ARTIFACT_NS}}/$(artifact_file_for_stage "$stage_id")"
+  produces_input="$(ralph_prompt_text "Output artifact path for \"$stage_id\" (optional)" "")"
+  if [[ -n "$produces_input" ]]; then
+    wizard_create_plan_append_artifact "$stage_id" "$produces_input" "true" "produces"
+  fi
+  requires_input="$(ralph_prompt_text "Required input artifact for \"$stage_id\" (optional)" "")"
+  if [[ -n "$requires_input" ]]; then
+    wizard_create_plan_append_artifact "$stage_id" "$requires_input" "true" "requires"
+  fi
 done
 
-description="${pipeline_description:-Multi-stage pipeline for $pipeline_name}"
-if [[ -z "$pipeline_name" ]]; then
-  pipeline_name="$namespace"
-fi
-if [[ -z "$namespace" ]]; then
-  namespace="$(ralph_internal_wizard_sanitize "$pipeline_name")"
-fi
-
-stage_ids=()
-for stage in "${stages[@]}"; do
-  stage_ids+=("$(ralph_internal_wizard_sanitize "$stage")")
-done
-
+stage_ids=("${cp_stages[@]}")
 configure_parallel_stages
-
-configure_stage_input_dependencies
+cp_parallel_waves=("${parallel_stage_waves[@]}")
 
 configure_loop_rules
-
-configure_handoff_declarations
-
-print_step "7/7" "Generate orchestration files"
-plan_dir="$workspace/.ralph-workspace/orchestration-plans/$namespace"
-artifact_dir="$workspace/.ralph-workspace/artifacts/$namespace"
-orch_file="$plan_dir/$namespace.orch.json"
-
-# Build stage entries (without creating files yet)
-stage_entries=()
-generated_plan_paths=()
-total_steps=${#stages[@]}
-
-for idx in "${!stages[@]}"; do
-  step_number=$(printf "%02d" $((idx + 1)))
-  stage_label="$(ralph_internal_wizard_sanitize "${stages[$idx]}")"
-  runtime="${stage_runtimes[$idx]}"
-  agent="${stage_agents[$idx]}"
-  agent_source="${stage_agent_sources[$idx]}"
-
-  plan_rel_path=".ralph-workspace/orchestration-plans/$namespace/${namespace}-${step_number}-${stage_label}.plan.md"
-  plan_abs_path="$workspace/$plan_rel_path"
-  generated_plan_paths+=("$plan_rel_path")
-  artifact_base="$(artifact_file_for_stage "$stage_label")"
-  artifact_path=".ralph-workspace/artifacts/$namespace/$artifact_base"
-
-  stage_desc="${stage_descriptions[$idx]}"
-  stage_model="${stage_models[$idx]}"
-  stage_session_strategy_value="${stage_session_strategy[$idx]}"
-  stage_input_list="${stage_input_sources[$idx]}"
-
-  # Only build the entry, don't write files yet
-  stage_entries+=("$(
-    wizard_build_stage_entry \
-      "$namespace" "$stage_label" "$runtime" "$agent" "$agent_source" "$plan_rel_path" "$artifact_path" \
-      "$stage_desc" "$stage_model" "$stage_session_strategy_value" "$stage_input_list" \
-      "${stage_context_budgets[$idx]:-}"
-  )")
+for loop_idx in "${!loop_sources[@]}"; do
+  loop_source="${loop_sources[$loop_idx]}"
+  loop_target="${loop_targets[$loop_idx]}"
+  loop_max="${loop_max_iterations[$loop_idx]}"
+  artifact_default=".ralph-workspace/artifacts/{{ARTIFACT_NS}}/${loop_source}-loop-check.md"
+  wizard_create_plan_set_loop "$loop_source" "$loop_target" "$loop_max" \
+    "$(ralph_prompt_text "Loop check artifact path for \"$loop_source\"" "$artifact_default")"
+  wizard_create_plan_append_artifact "$loop_source" "$(wizard_create_plan_loop_check "$loop_source")" "true" "produces"
 done
 
-# Render summary for user confirmation
-wizard_render_summary \
-  "$pipeline_name" "$namespace" "$description" "$orch_session_resume_enabled" \
-  "${stage_entries[@]}"
+print_step "5/5" "Generate plan"
+echo ""
+echo "Plan: $dest"
+echo "Stages: ${cp_stages[*]}"
+echo ""
 
-# Ask for confirmation
-confirm_write="$(ralph_prompt_yesno "Write these files" "y")"
+confirm_write="$(ralph_prompt_yesno "Write this plan" "y")"
 if [[ "$confirm_write" == "n" ]]; then
   echo "aborted; no files created"
   exit 0
 fi
 
-# Create directories and write files after confirmation
-mkdir -p "$plan_dir" "$artifact_dir"
+mkdir -p "$plans_dir"
 
-# Write stage plan files
-for idx in "${!stages[@]}"; do
-  step_number=$(printf "%02d" $((idx + 1)))
-  stage_label="$(ralph_internal_wizard_sanitize "${stages[$idx]}")"
-  runtime="${stage_runtimes[$idx]}"
-  agent="${stage_agents[$idx]}"
+tmp_dest="$(mktemp "${TMPDIR:-/tmp}/ralph-orc-wizard.XXXXXX")"
+trap 'rm -f "$tmp_dest"' EXIT
 
-  plan_rel_path="${generated_plan_paths[$idx]}"
-  plan_abs_path="$workspace/$plan_rel_path"
-  stage_desc="${stage_descriptions[$idx]}"
-  stage_model="${stage_models[$idx]}"
-  stage_input_list="${stage_input_sources[$idx]}"
+wizard_render_pipeline_orchestration_plan "$plan_name" "$plan_overview" "$instructions_line" > "$tmp_dest"
 
-  wizard_render_plan_template \
-    "$plan_template" "$plan_abs_path" "$plan_rel_path" "$namespace" "$stage_label" "$pipeline_name" "$runtime" "$agent" \
-    "$stage_desc" "$stage_input_list" "$stage_model"
-done
+mv "$tmp_dest" "$dest"
+trap - EXIT
 
-wizard_write_orchestration_file \
-  "$orch_file" "$pipeline_name" "$namespace" "$description" "$orch_session_resume_enabled" \
-  "${stage_entries[@]}"
-
-print_info "Created orchestration $orch_file with ${total_steps} stage(s)."
-echo "Edit the plans under $plan_dir, add TODOs, and run:"
-echo ".ralph/orchestrator.sh --orchestration $orch_file"
+echo "Created orchestration plan: .ralph-workspace/plans/${plan_name}.plan.md"
 echo ""
-print_hint "Generated prompt for creating TODOs in stage plans:"
-echo "-----"
-echo "Create actionable TODO checklists for this orchestration pipeline using .ralph/plan.template as the checklist style reference."
-echo ""
-echo "Namespace: $namespace"
-echo "Orchestration JSON: $orch_file"
-echo "Artifact directory: .ralph-workspace/artifacts/$namespace/"
-echo ""
-echo "Fill these stage plan files with concrete TODOs (- [ ] / - [x]), files to edit, validation commands, and expected artifacts:"
-for p in "${generated_plan_paths[@]}"; do
-  echo "- $p"
-done
-echo ""
-echo "Each stage plan should include:"
-echo "- Implementation steps tied to real files or modules"
-echo "- Verification commands (lint/tests/build as applicable)"
-echo "- Clear handoff expectations for the next stage"
-echo "- Artifact expectations under .ralph-workspace/artifacts/$namespace/"
-echo "-----"
-offer_prompt_execution
+echo "Run with:"
+echo "  ralph run --plan $dest"

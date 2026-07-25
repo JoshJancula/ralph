@@ -176,6 +176,33 @@ describe('NavService', () => {
     expect(router.parseUrl(router.url).queryParams['projectRoot']).toBe('/tmp/other-project');
   });
 
+  it('parses segmented routes with path and file markers', async () => {
+    const service = TestBed.inject(NavService);
+
+    await router.navigateByUrl('/alpha/path/beta/file/gamma.txt/extra');
+
+    expect(service.activeRoot()).toBe('alpha');
+    expect(service.activePath()).toBe('beta');
+    expect(service.activeFile()).toBe('gamma.txt');
+    expect(service.activeProjectRoot()).toBeNull();
+    expect(service.mode()).toBe('file');
+  });
+
+  it('logs when navigate throws synchronously', () => {
+    const service = TestBed.inject(NavService);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(router, 'navigateByUrl').mockImplementationOnce(() => {
+      throw new Error('Synchronous failure');
+    });
+
+    service.navigate('plans', 'dir', 'file.txt');
+
+    expect(consoleSpy).toHaveBeenCalled();
+    const loggedMessage = consoleSpy.mock.calls[0]?.[0] ?? '';
+    expect(loggedMessage).toContain('Navigation to /plans');
+    expect(loggedMessage).toContain('Synchronous failure');
+  });
+
   it('decodeSegment returns original segment when decodeURIComponent fails', () => {
     const service = TestBed.inject(NavService);
     const decodeSegment = (service as any).decodeSegment;

@@ -1,0 +1,3 @@
+{"type": "assistant", "tool_calls": [{"id": "call_proxy_read", "function": {"name": "mcp__ralph__ralph_proxy_read"}}]}
+{"type": "assistant", "tool_calls": [{"id": "call_proxy_grep", "function": {"name": "mcp__ralph__ralph_proxy_grep"}}]}
+{"type": "tool_call", "callID": "call_other_mcp", "name": "mcp__custom__lookup"}

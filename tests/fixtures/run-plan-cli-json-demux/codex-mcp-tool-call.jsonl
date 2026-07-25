@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"fixture-codex-mcp-tool-call"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"mcp_read","type":"mcp_tool_call","name":"ralph_proxy_read","status":"failed","error":"user cancelled MCP tool call"}}
+{"type":"item.completed","item":{"id":"mcp_shell","type":"mcp_tool_call","name":"ralph_proxy_shell","status":"failed","error":"user cancelled MCP tool call"}}
+{"type":"item.completed","item":{"id":"native_exec","type":"command_execution","name":"command_execution","command":"grep -r mcp_tool_call bundle/"}}
+{"type":"turn.completed","usage":{"input_tokens":5000,"cached_input_tokens":256,"output_tokens":120}}

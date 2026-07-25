@@ -12,6 +12,35 @@
             "command": ".claude/hooks/block-env-reads.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/rewrite-bash-command.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "RALPH_BASH_COMPACT=1 .claude/hooks/compact-bash-output.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "RALPH_NATIVE_RESULT_COMPACT=1 .claude/hooks/native-result-compact.sh"
+          }
+        ]
       }
     ]
   }

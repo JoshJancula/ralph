@@ -1,0 +1,10 @@
+{
+  "stdout": "find (exit 0): 12 path(s) in 1 director(ies) for: find . -type f\n  ./dir/: 12 path(s)",
+  "stderr": "",
+  "compacted": true,
+  "stdout_compacted": true,
+  "stderr_compacted": false,
+  "family": "find",
+  "status": "compacted",
+  "exit_status": 0
+}

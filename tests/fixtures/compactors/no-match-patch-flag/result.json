@@ -1,0 +1,10 @@
+{
+  "stdout": "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old\n+new",
+  "stderr": "",
+  "compacted": false,
+  "stdout_compacted": false,
+  "stderr_compacted": false,
+  "family": null,
+  "status": "not compacted",
+  "exit_status": 0
+}

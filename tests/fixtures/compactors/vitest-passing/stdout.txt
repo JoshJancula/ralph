@@ -1,0 +1,15 @@
+ test/utils.test.ts
+   units
+     add
+       ✓ should add two numbers (2ms)
+     subtract
+       ✓ should subtract two numbers (1ms)
+
+ test/main.test.ts
+   main
+     ✓ should load config (5ms)
+     ✓ should process data (8ms)
+
+Test Files  1 passed (1)
+     Tests  4 passed (4)
+  Durations  18ms

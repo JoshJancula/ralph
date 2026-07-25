@@ -39,6 +39,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 | Field | Type | Purpose |
 |-------|------|---------|
 | `allowed_tools` | string or array of strings | **Claude headless only** (same as `.claude/agents` README). Cursor/Codex ignore this key. |
+| `reasoning_effort` | string | Portable reasoning budget: `low`, `medium`, `high`, `xhigh`, `max`, or `inherit`. Orchestration stage `reasoning_effort` and runtime env overrides take precedence over agent config. Mapped to Claude `--effort` when capability-detected; other runtimes use `inherit` unless their adapter exposes a supported control. |
 
 ## Field details and validation rules
 
@@ -54,12 +55,13 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 
 ### `model`
 
-- **Required:** yes.
+- **Required:** yes (key must be present).
 - **Type:** string.
 - **Rules:**
-  - Non-empty after trim.
-  - No line breaks or control characters.
-  - Tooling may further restrict to an allowlist per runtime; schema validation only enforces presence and basic string hygiene.
+  - May be an empty string for Ralph prebuilt Claude/Codex agents (no bundled default). When empty, `run-plan` resolves the model from saved models (`ralph models add`), env vars, or an interactive prompt.
+  - When non-empty: no line breaks or control characters.
+  - User-authored agents may set an explicit model id; orchestration stage `model` overrides agent config for that stage.
+  - Ralph no longer ships or validates against bundled default model lists for Claude/Codex.
 
 ### `description`
 
@@ -92,7 +94,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 - **Rules:**
   - Each entry must be either:
     - a non-empty string (file path or glob relative to repo root), or
-    - an object with at least `path` (string) and optionally `required` (boolean, default true).
+    - an object with at least `path` (string) and optionally `required` (boolean, default true), `schema` (project-root-relative JSON Schema path), and `provenance` (`required`, `optional`, or `none`; default `optional`).
   - Path templates may include `{{ARTIFACT_NS}}` and `{{PLAN_KEY}}`.
     - `{{ARTIFACT_NS}}` resolves from `RALPH_ARTIFACT_NS` (or plan key fallback).
     - `{{PLAN_KEY}}` resolves from `RALPH_PLAN_KEY`.

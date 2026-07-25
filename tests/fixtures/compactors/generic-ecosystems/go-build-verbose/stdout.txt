@@ -1,0 +1,1135 @@
+go: downloading example.com lib v1.2.3
+example.com pkg0
+example.com pkg0 sub
+# example.com pkg0 sub
+example.com pkg0 sub file.go
+example.com pkg0 sub other.go
+example.com pkg1
+example.com pkg1 sub
+# example.com pkg1 sub
+example.com pkg1 sub file.go
+example.com pkg1 sub other.go
+example.com pkg2
+example.com pkg2 sub
+# example.com pkg2 sub
+example.com pkg2 sub file.go
+example.com pkg2 sub other.go
+example.com pkg3
+example.com pkg3 sub
+# example.com pkg3 sub
+example.com pkg3 sub file.go
+example.com pkg3 sub other.go
+example.com pkg4
+example.com pkg4 sub
+# example.com pkg4 sub
+example.com pkg4 sub file.go
+example.com pkg4 sub other.go
+example.com pkg5
+example.com pkg5 sub
+# example.com pkg5 sub
+example.com pkg5 sub file.go
+example.com pkg5 sub other.go
+example.com pkg6
+example.com pkg6 sub
+# example.com pkg6 sub
+example.com pkg6 sub file.go
+example.com pkg6 sub other.go
+example.com pkg7
+example.com pkg7 sub
+# example.com pkg7 sub
+example.com pkg7 sub file.go
+example.com pkg7 sub other.go
+example.com pkg8
+example.com pkg8 sub
+# example.com pkg8 sub
+example.com pkg8 sub file.go
+example.com pkg8 sub other.go
+example.com pkg9
+example.com pkg9 sub
+# example.com pkg9 sub
+example.com pkg9 sub file.go
+example.com pkg9 sub other.go
+example.com pkg10
+example.com pkg10 sub
+# example.com pkg10 sub
+example.com pkg10 sub file.go
+example.com pkg10 sub other.go
+example.com pkg11
+example.com pkg11 sub
+# example.com pkg11 sub
+example.com pkg11 sub file.go
+example.com pkg11 sub other.go
+example.com pkg12
+example.com pkg12 sub
+# example.com pkg12 sub
+example.com pkg12 sub file.go
+example.com pkg12 sub other.go
+example.com pkg13
+example.com pkg13 sub
+# example.com pkg13 sub
+example.com pkg13 sub file.go
+example.com pkg13 sub other.go
+example.com pkg14
+example.com pkg14 sub
+# example.com pkg14 sub
+example.com pkg14 sub file.go
+example.com pkg14 sub other.go
+example.com pkg15
+example.com pkg15 sub
+# example.com pkg15 sub
+example.com pkg15 sub file.go
+example.com pkg15 sub other.go
+example.com pkg16
+example.com pkg16 sub
+# example.com pkg16 sub
+example.com pkg16 sub file.go
+example.com pkg16 sub other.go
+example.com pkg17
+example.com pkg17 sub
+# example.com pkg17 sub
+example.com pkg17 sub file.go
+example.com pkg17 sub other.go
+example.com pkg18
+example.com pkg18 sub
+# example.com pkg18 sub
+example.com pkg18 sub file.go
+example.com pkg18 sub other.go
+example.com pkg19
+example.com pkg19 sub
+# example.com pkg19 sub
+example.com pkg19 sub file.go
+example.com pkg19 sub other.go
+example.com pkg20
+example.com pkg20 sub
+# example.com pkg20 sub
+example.com pkg20 sub file.go
+example.com pkg20 sub other.go
+example.com pkg21
+example.com pkg21 sub
+# example.com pkg21 sub
+example.com pkg21 sub file.go
+example.com pkg21 sub other.go
+example.com pkg22
+example.com pkg22 sub
+# example.com pkg22 sub
+example.com pkg22 sub file.go
+example.com pkg22 sub other.go
+example.com pkg23
+example.com pkg23 sub
+# example.com pkg23 sub
+example.com pkg23 sub file.go
+example.com pkg23 sub other.go
+example.com pkg24
+example.com pkg24 sub
+# example.com pkg24 sub
+example.com pkg24 sub file.go
+example.com pkg24 sub other.go
+example.com pkg25
+example.com pkg25 sub
+# example.com pkg25 sub
+example.com pkg25 sub file.go
+example.com pkg25 sub other.go
+example.com pkg26
+example.com pkg26 sub
+# example.com pkg26 sub
+example.com pkg26 sub file.go
+example.com pkg26 sub other.go
+example.com pkg27
+example.com pkg27 sub
+# example.com pkg27 sub
+example.com pkg27 sub file.go
+example.com pkg27 sub other.go
+example.com pkg28
+example.com pkg28 sub
+# example.com pkg28 sub
+example.com pkg28 sub file.go
+example.com pkg28 sub other.go
+example.com pkg29
+example.com pkg29 sub
+# example.com pkg29 sub
+example.com pkg29 sub file.go
+example.com pkg29 sub other.go
+example.com pkg30
+example.com pkg30 sub
+# example.com pkg30 sub
+example.com pkg30 sub file.go
+example.com pkg30 sub other.go
+example.com pkg31
+example.com pkg31 sub
+# example.com pkg31 sub
+example.com pkg31 sub file.go
+example.com pkg31 sub other.go
+example.com pkg32
+example.com pkg32 sub
+# example.com pkg32 sub
+example.com pkg32 sub file.go
+example.com pkg32 sub other.go
+example.com pkg33
+example.com pkg33 sub
+# example.com pkg33 sub
+example.com pkg33 sub file.go
+example.com pkg33 sub other.go
+example.com pkg34
+example.com pkg34 sub
+# example.com pkg34 sub
+example.com pkg34 sub file.go
+example.com pkg34 sub other.go
+example.com pkg35
+example.com pkg35 sub
+# example.com pkg35 sub
+example.com pkg35 sub file.go
+example.com pkg35 sub other.go
+example.com pkg36
+example.com pkg36 sub
+# example.com pkg36 sub
+example.com pkg36 sub file.go
+example.com pkg36 sub other.go
+example.com pkg37
+example.com pkg37 sub
+# example.com pkg37 sub
+example.com pkg37 sub file.go
+example.com pkg37 sub other.go
+example.com pkg38
+example.com pkg38 sub
+# example.com pkg38 sub
+example.com pkg38 sub file.go
+example.com pkg38 sub other.go
+example.com pkg39
+example.com pkg39 sub
+# example.com pkg39 sub
+example.com pkg39 sub file.go
+example.com pkg39 sub other.go
+example.com pkg40
+example.com pkg40 sub
+# example.com pkg40 sub
+example.com pkg40 sub file.go
+example.com pkg40 sub other.go
+example.com pkg41
+example.com pkg41 sub
+# example.com pkg41 sub
+example.com pkg41 sub file.go
+example.com pkg41 sub other.go
+example.com pkg42
+example.com pkg42 sub
+# example.com pkg42 sub
+example.com pkg42 sub file.go
+example.com pkg42 sub other.go
+example.com pkg43
+example.com pkg43 sub
+# example.com pkg43 sub
+example.com pkg43 sub file.go
+example.com pkg43 sub other.go
+example.com pkg44
+example.com pkg44 sub
+# example.com pkg44 sub
+example.com pkg44 sub file.go
+example.com pkg44 sub other.go
+example.com pkg45
+example.com pkg45 sub
+# example.com pkg45 sub
+example.com pkg45 sub file.go
+example.com pkg45 sub other.go
+example.com pkg46
+example.com pkg46 sub
+# example.com pkg46 sub
+example.com pkg46 sub file.go
+example.com pkg46 sub other.go
+example.com pkg47
+example.com pkg47 sub
+# example.com pkg47 sub
+example.com pkg47 sub file.go
+example.com pkg47 sub other.go
+example.com pkg48
+example.com pkg48 sub
+# example.com pkg48 sub
+example.com pkg48 sub file.go
+example.com pkg48 sub other.go
+example.com pkg49
+example.com pkg49 sub
+# example.com pkg49 sub
+example.com pkg49 sub file.go
+example.com pkg49 sub other.go
+example.com pkg50
+example.com pkg50 sub
+# example.com pkg50 sub
+example.com pkg50 sub file.go
+example.com pkg50 sub other.go
+example.com pkg51
+example.com pkg51 sub
+# example.com pkg51 sub
+example.com pkg51 sub file.go
+example.com pkg51 sub other.go
+example.com pkg52
+example.com pkg52 sub
+# example.com pkg52 sub
+example.com pkg52 sub file.go
+example.com pkg52 sub other.go
+example.com pkg53
+example.com pkg53 sub
+# example.com pkg53 sub
+example.com pkg53 sub file.go
+example.com pkg53 sub other.go
+example.com pkg54
+example.com pkg54 sub
+# example.com pkg54 sub
+example.com pkg54 sub file.go
+example.com pkg54 sub other.go
+example.com pkg55
+example.com pkg55 sub
+# example.com pkg55 sub
+example.com pkg55 sub file.go
+example.com pkg55 sub other.go
+example.com pkg56
+example.com pkg56 sub
+# example.com pkg56 sub
+example.com pkg56 sub file.go
+example.com pkg56 sub other.go
+example.com pkg57
+example.com pkg57 sub
+# example.com pkg57 sub
+example.com pkg57 sub file.go
+example.com pkg57 sub other.go
+example.com pkg58
+example.com pkg58 sub
+# example.com pkg58 sub
+example.com pkg58 sub file.go
+example.com pkg58 sub other.go
+example.com pkg59
+example.com pkg59 sub
+# example.com pkg59 sub
+example.com pkg59 sub file.go
+example.com pkg59 sub other.go
+example.com pkg60
+example.com pkg60 sub
+# example.com pkg60 sub
+example.com pkg60 sub file.go
+example.com pkg60 sub other.go
+example.com pkg61
+example.com pkg61 sub
+# example.com pkg61 sub
+example.com pkg61 sub file.go
+example.com pkg61 sub other.go
+example.com pkg62
+example.com pkg62 sub
+# example.com pkg62 sub
+example.com pkg62 sub file.go
+example.com pkg62 sub other.go
+example.com pkg63
+example.com pkg63 sub
+# example.com pkg63 sub
+example.com pkg63 sub file.go
+example.com pkg63 sub other.go
+example.com pkg64
+example.com pkg64 sub
+# example.com pkg64 sub
+example.com pkg64 sub file.go
+example.com pkg64 sub other.go
+example.com pkg65
+example.com pkg65 sub
+# example.com pkg65 sub
+example.com pkg65 sub file.go
+example.com pkg65 sub other.go
+example.com pkg66
+example.com pkg66 sub
+# example.com pkg66 sub
+example.com pkg66 sub file.go
+example.com pkg66 sub other.go
+example.com pkg67
+example.com pkg67 sub
+# example.com pkg67 sub
+example.com pkg67 sub file.go
+example.com pkg67 sub other.go
+example.com pkg68
+example.com pkg68 sub
+# example.com pkg68 sub
+example.com pkg68 sub file.go
+example.com pkg68 sub other.go
+example.com pkg69
+example.com pkg69 sub
+# example.com pkg69 sub
+example.com pkg69 sub file.go
+example.com pkg69 sub other.go
+example.com pkg70
+example.com pkg70 sub
+# example.com pkg70 sub
+example.com pkg70 sub file.go
+example.com pkg70 sub other.go
+example.com pkg71
+example.com pkg71 sub
+# example.com pkg71 sub
+example.com pkg71 sub file.go
+example.com pkg71 sub other.go
+example.com pkg72
+example.com pkg72 sub
+# example.com pkg72 sub
+example.com pkg72 sub file.go
+example.com pkg72 sub other.go
+example.com pkg73
+example.com pkg73 sub
+# example.com pkg73 sub
+example.com pkg73 sub file.go
+example.com pkg73 sub other.go
+example.com pkg74
+example.com pkg74 sub
+# example.com pkg74 sub
+example.com pkg74 sub file.go
+example.com pkg74 sub other.go
+example.com pkg75
+example.com pkg75 sub
+# example.com pkg75 sub
+example.com pkg75 sub file.go
+example.com pkg75 sub other.go
+example.com pkg76
+example.com pkg76 sub
+# example.com pkg76 sub
+example.com pkg76 sub file.go
+example.com pkg76 sub other.go
+example.com pkg77
+example.com pkg77 sub
+# example.com pkg77 sub
+example.com pkg77 sub file.go
+example.com pkg77 sub other.go
+example.com pkg78
+example.com pkg78 sub
+# example.com pkg78 sub
+example.com pkg78 sub file.go
+example.com pkg78 sub other.go
+example.com pkg79
+example.com pkg79 sub
+# example.com pkg79 sub
+example.com pkg79 sub file.go
+example.com pkg79 sub other.go
+example.com pkg80
+example.com pkg80 sub
+# example.com pkg80 sub
+example.com pkg80 sub file.go
+example.com pkg80 sub other.go
+example.com pkg81
+example.com pkg81 sub
+# example.com pkg81 sub
+example.com pkg81 sub file.go
+example.com pkg81 sub other.go
+example.com pkg82
+example.com pkg82 sub
+# example.com pkg82 sub
+example.com pkg82 sub file.go
+example.com pkg82 sub other.go
+example.com pkg83
+example.com pkg83 sub
+# example.com pkg83 sub
+example.com pkg83 sub file.go
+example.com pkg83 sub other.go
+example.com pkg84
+example.com pkg84 sub
+# example.com pkg84 sub
+example.com pkg84 sub file.go
+example.com pkg84 sub other.go
+example.com pkg85
+example.com pkg85 sub
+# example.com pkg85 sub
+example.com pkg85 sub file.go
+example.com pkg85 sub other.go
+example.com pkg86
+example.com pkg86 sub
+# example.com pkg86 sub
+example.com pkg86 sub file.go
+example.com pkg86 sub other.go
+example.com pkg87
+example.com pkg87 sub
+# example.com pkg87 sub
+example.com pkg87 sub file.go
+example.com pkg87 sub other.go
+example.com pkg88
+example.com pkg88 sub
+# example.com pkg88 sub
+example.com pkg88 sub file.go
+example.com pkg88 sub other.go
+example.com pkg89
+example.com pkg89 sub
+# example.com pkg89 sub
+example.com pkg89 sub file.go
+example.com pkg89 sub other.go
+example.com pkg90
+example.com pkg90 sub
+# example.com pkg90 sub
+example.com pkg90 sub file.go
+example.com pkg90 sub other.go
+example.com pkg91
+example.com pkg91 sub
+# example.com pkg91 sub
+example.com pkg91 sub file.go
+example.com pkg91 sub other.go
+example.com pkg92
+example.com pkg92 sub
+# example.com pkg92 sub
+example.com pkg92 sub file.go
+example.com pkg92 sub other.go
+example.com pkg93
+example.com pkg93 sub
+# example.com pkg93 sub
+example.com pkg93 sub file.go
+example.com pkg93 sub other.go
+example.com pkg94
+example.com pkg94 sub
+# example.com pkg94 sub
+example.com pkg94 sub file.go
+example.com pkg94 sub other.go
+example.com pkg95
+example.com pkg95 sub
+# example.com pkg95 sub
+example.com pkg95 sub file.go
+example.com pkg95 sub other.go
+example.com pkg96
+example.com pkg96 sub
+# example.com pkg96 sub
+example.com pkg96 sub file.go
+example.com pkg96 sub other.go
+example.com pkg97
+example.com pkg97 sub
+# example.com pkg97 sub
+example.com pkg97 sub file.go
+example.com pkg97 sub other.go
+example.com pkg98
+example.com pkg98 sub
+# example.com pkg98 sub
+example.com pkg98 sub file.go
+example.com pkg98 sub other.go
+example.com pkg99
+example.com pkg99 sub
+# example.com pkg99 sub
+example.com pkg99 sub file.go
+example.com pkg99 sub other.go
+example.com pkg100
+example.com pkg100 sub
+# example.com pkg100 sub
+example.com pkg100 sub file.go
+example.com pkg100 sub other.go
+example.com pkg101
+example.com pkg101 sub
+# example.com pkg101 sub
+example.com pkg101 sub file.go
+example.com pkg101 sub other.go
+example.com pkg102
+example.com pkg102 sub
+# example.com pkg102 sub
+example.com pkg102 sub file.go
+example.com pkg102 sub other.go
+example.com pkg103
+example.com pkg103 sub
+# example.com pkg103 sub
+example.com pkg103 sub file.go
+example.com pkg103 sub other.go
+example.com pkg104
+example.com pkg104 sub
+# example.com pkg104 sub
+example.com pkg104 sub file.go
+example.com pkg104 sub other.go
+example.com pkg105
+example.com pkg105 sub
+# example.com pkg105 sub
+example.com pkg105 sub file.go
+example.com pkg105 sub other.go
+example.com pkg106
+example.com pkg106 sub
+# example.com pkg106 sub
+example.com pkg106 sub file.go
+example.com pkg106 sub other.go
+example.com pkg107
+example.com pkg107 sub
+# example.com pkg107 sub
+example.com pkg107 sub file.go
+example.com pkg107 sub other.go
+example.com pkg108
+example.com pkg108 sub
+# example.com pkg108 sub
+example.com pkg108 sub file.go
+example.com pkg108 sub other.go
+example.com pkg109
+example.com pkg109 sub
+# example.com pkg109 sub
+example.com pkg109 sub file.go
+example.com pkg109 sub other.go
+example.com pkg110
+example.com pkg110 sub
+# example.com pkg110 sub
+example.com pkg110 sub file.go
+example.com pkg110 sub other.go
+example.com pkg111
+example.com pkg111 sub
+# example.com pkg111 sub
+example.com pkg111 sub file.go
+example.com pkg111 sub other.go
+example.com pkg112
+example.com pkg112 sub
+# example.com pkg112 sub
+example.com pkg112 sub file.go
+example.com pkg112 sub other.go
+example.com pkg113
+example.com pkg113 sub
+# example.com pkg113 sub
+example.com pkg113 sub file.go
+example.com pkg113 sub other.go
+example.com pkg114
+example.com pkg114 sub
+# example.com pkg114 sub
+example.com pkg114 sub file.go
+example.com pkg114 sub other.go
+example.com pkg115
+example.com pkg115 sub
+# example.com pkg115 sub
+example.com pkg115 sub file.go
+example.com pkg115 sub other.go
+example.com pkg116
+example.com pkg116 sub
+# example.com pkg116 sub
+example.com pkg116 sub file.go
+example.com pkg116 sub other.go
+example.com pkg117
+example.com pkg117 sub
+# example.com pkg117 sub
+example.com pkg117 sub file.go
+example.com pkg117 sub other.go
+example.com pkg118
+example.com pkg118 sub
+# example.com pkg118 sub
+example.com pkg118 sub file.go
+example.com pkg118 sub other.go
+example.com pkg119
+example.com pkg119 sub
+# example.com pkg119 sub
+example.com pkg119 sub file.go
+example.com pkg119 sub other.go
+example.com pkg120
+example.com pkg120 sub
+# example.com pkg120 sub
+example.com pkg120 sub file.go
+example.com pkg120 sub other.go
+example.com pkg121
+example.com pkg121 sub
+# example.com pkg121 sub
+example.com pkg121 sub file.go
+example.com pkg121 sub other.go
+example.com pkg122
+example.com pkg122 sub
+# example.com pkg122 sub
+example.com pkg122 sub file.go
+example.com pkg122 sub other.go
+example.com pkg123
+example.com pkg123 sub
+# example.com pkg123 sub
+example.com pkg123 sub file.go
+example.com pkg123 sub other.go
+example.com pkg124
+example.com pkg124 sub
+# example.com pkg124 sub
+example.com pkg124 sub file.go
+example.com pkg124 sub other.go
+example.com pkg125
+example.com pkg125 sub
+# example.com pkg125 sub
+example.com pkg125 sub file.go
+example.com pkg125 sub other.go
+example.com pkg126
+example.com pkg126 sub
+# example.com pkg126 sub
+example.com pkg126 sub file.go
+example.com pkg126 sub other.go
+example.com pkg127
+example.com pkg127 sub
+# example.com pkg127 sub
+example.com pkg127 sub file.go
+example.com pkg127 sub other.go
+example.com pkg128
+example.com pkg128 sub
+# example.com pkg128 sub
+example.com pkg128 sub file.go
+example.com pkg128 sub other.go
+example.com pkg129
+example.com pkg129 sub
+# example.com pkg129 sub
+example.com pkg129 sub file.go
+example.com pkg129 sub other.go
+example.com pkg130
+example.com pkg130 sub
+# example.com pkg130 sub
+example.com pkg130 sub file.go
+example.com pkg130 sub other.go
+example.com pkg131
+example.com pkg131 sub
+# example.com pkg131 sub
+example.com pkg131 sub file.go
+example.com pkg131 sub other.go
+example.com pkg132
+example.com pkg132 sub
+# example.com pkg132 sub
+example.com pkg132 sub file.go
+example.com pkg132 sub other.go
+example.com pkg133
+example.com pkg133 sub
+# example.com pkg133 sub
+example.com pkg133 sub file.go
+example.com pkg133 sub other.go
+example.com pkg134
+example.com pkg134 sub
+# example.com pkg134 sub
+example.com pkg134 sub file.go
+example.com pkg134 sub other.go
+example.com pkg135
+example.com pkg135 sub
+# example.com pkg135 sub
+example.com pkg135 sub file.go
+example.com pkg135 sub other.go
+example.com pkg136
+example.com pkg136 sub
+# example.com pkg136 sub
+example.com pkg136 sub file.go
+example.com pkg136 sub other.go
+example.com pkg137
+example.com pkg137 sub
+# example.com pkg137 sub
+example.com pkg137 sub file.go
+example.com pkg137 sub other.go
+example.com pkg138
+example.com pkg138 sub
+# example.com pkg138 sub
+example.com pkg138 sub file.go
+example.com pkg138 sub other.go
+example.com pkg139
+example.com pkg139 sub
+# example.com pkg139 sub
+example.com pkg139 sub file.go
+example.com pkg139 sub other.go
+example.com pkg140
+example.com pkg140 sub
+# example.com pkg140 sub
+example.com pkg140 sub file.go
+example.com pkg140 sub other.go
+example.com pkg141
+example.com pkg141 sub
+# example.com pkg141 sub
+example.com pkg141 sub file.go
+example.com pkg141 sub other.go
+example.com pkg142
+example.com pkg142 sub
+# example.com pkg142 sub
+example.com pkg142 sub file.go
+example.com pkg142 sub other.go
+example.com pkg143
+example.com pkg143 sub
+# example.com pkg143 sub
+example.com pkg143 sub file.go
+example.com pkg143 sub other.go
+example.com pkg144
+example.com pkg144 sub
+# example.com pkg144 sub
+example.com pkg144 sub file.go
+example.com pkg144 sub other.go
+example.com pkg145
+example.com pkg145 sub
+# example.com pkg145 sub
+example.com pkg145 sub file.go
+example.com pkg145 sub other.go
+example.com pkg146
+example.com pkg146 sub
+# example.com pkg146 sub
+example.com pkg146 sub file.go
+example.com pkg146 sub other.go
+example.com pkg147
+example.com pkg147 sub
+# example.com pkg147 sub
+example.com pkg147 sub file.go
+example.com pkg147 sub other.go
+example.com pkg148
+example.com pkg148 sub
+# example.com pkg148 sub
+example.com pkg148 sub file.go
+example.com pkg148 sub other.go
+example.com pkg149
+example.com pkg149 sub
+# example.com pkg149 sub
+example.com pkg149 sub file.go
+example.com pkg149 sub other.go
+example.com pkg150
+example.com pkg150 sub
+# example.com pkg150 sub
+example.com pkg150 sub file.go
+example.com pkg150 sub other.go
+example.com pkg151
+example.com pkg151 sub
+# example.com pkg151 sub
+example.com pkg151 sub file.go
+example.com pkg151 sub other.go
+example.com pkg152
+example.com pkg152 sub
+# example.com pkg152 sub
+example.com pkg152 sub file.go
+example.com pkg152 sub other.go
+example.com pkg153
+example.com pkg153 sub
+# example.com pkg153 sub
+example.com pkg153 sub file.go
+example.com pkg153 sub other.go
+example.com pkg154
+example.com pkg154 sub
+# example.com pkg154 sub
+example.com pkg154 sub file.go
+example.com pkg154 sub other.go
+example.com pkg155
+example.com pkg155 sub
+# example.com pkg155 sub
+example.com pkg155 sub file.go
+example.com pkg155 sub other.go
+example.com pkg156
+example.com pkg156 sub
+# example.com pkg156 sub
+example.com pkg156 sub file.go
+example.com pkg156 sub other.go
+example.com pkg157
+example.com pkg157 sub
+# example.com pkg157 sub
+example.com pkg157 sub file.go
+example.com pkg157 sub other.go
+example.com pkg158
+example.com pkg158 sub
+# example.com pkg158 sub
+example.com pkg158 sub file.go
+example.com pkg158 sub other.go
+example.com pkg159
+example.com pkg159 sub
+# example.com pkg159 sub
+example.com pkg159 sub file.go
+example.com pkg159 sub other.go
+example.com pkg160
+example.com pkg160 sub
+# example.com pkg160 sub
+example.com pkg160 sub file.go
+example.com pkg160 sub other.go
+example.com pkg161
+example.com pkg161 sub
+# example.com pkg161 sub
+example.com pkg161 sub file.go
+example.com pkg161 sub other.go
+example.com pkg162
+example.com pkg162 sub
+# example.com pkg162 sub
+example.com pkg162 sub file.go
+example.com pkg162 sub other.go
+example.com pkg163
+example.com pkg163 sub
+# example.com pkg163 sub
+example.com pkg163 sub file.go
+example.com pkg163 sub other.go
+example.com pkg164
+example.com pkg164 sub
+# example.com pkg164 sub
+example.com pkg164 sub file.go
+example.com pkg164 sub other.go
+example.com pkg165
+example.com pkg165 sub
+# example.com pkg165 sub
+example.com pkg165 sub file.go
+example.com pkg165 sub other.go
+example.com pkg166
+example.com pkg166 sub
+# example.com pkg166 sub
+example.com pkg166 sub file.go
+example.com pkg166 sub other.go
+example.com pkg167
+example.com pkg167 sub
+# example.com pkg167 sub
+example.com pkg167 sub file.go
+example.com pkg167 sub other.go
+example.com pkg168
+example.com pkg168 sub
+# example.com pkg168 sub
+example.com pkg168 sub file.go
+example.com pkg168 sub other.go
+example.com pkg169
+example.com pkg169 sub
+# example.com pkg169 sub
+example.com pkg169 sub file.go
+example.com pkg169 sub other.go
+example.com pkg170
+example.com pkg170 sub
+# example.com pkg170 sub
+example.com pkg170 sub file.go
+example.com pkg170 sub other.go
+example.com pkg171
+example.com pkg171 sub
+# example.com pkg171 sub
+example.com pkg171 sub file.go
+example.com pkg171 sub other.go
+example.com pkg172
+example.com pkg172 sub
+# example.com pkg172 sub
+example.com pkg172 sub file.go
+example.com pkg172 sub other.go
+example.com pkg173
+example.com pkg173 sub
+# example.com pkg173 sub
+example.com pkg173 sub file.go
+example.com pkg173 sub other.go
+example.com pkg174
+example.com pkg174 sub
+# example.com pkg174 sub
+example.com pkg174 sub file.go
+example.com pkg174 sub other.go
+example.com pkg175
+example.com pkg175 sub
+# example.com pkg175 sub
+example.com pkg175 sub file.go
+example.com pkg175 sub other.go
+example.com pkg176
+example.com pkg176 sub
+# example.com pkg176 sub
+example.com pkg176 sub file.go
+example.com pkg176 sub other.go
+example.com pkg177
+example.com pkg177 sub
+# example.com pkg177 sub
+example.com pkg177 sub file.go
+example.com pkg177 sub other.go
+example.com pkg178
+example.com pkg178 sub
+# example.com pkg178 sub
+example.com pkg178 sub file.go
+example.com pkg178 sub other.go
+example.com pkg179
+example.com pkg179 sub
+# example.com pkg179 sub
+example.com pkg179 sub file.go
+example.com pkg179 sub other.go
+example.com pkg180
+example.com pkg180 sub
+# example.com pkg180 sub
+example.com pkg180 sub file.go
+example.com pkg180 sub other.go
+example.com pkg181
+example.com pkg181 sub
+# example.com pkg181 sub
+example.com pkg181 sub file.go
+example.com pkg181 sub other.go
+example.com pkg182
+example.com pkg182 sub
+# example.com pkg182 sub
+example.com pkg182 sub file.go
+example.com pkg182 sub other.go
+example.com pkg183
+example.com pkg183 sub
+# example.com pkg183 sub
+example.com pkg183 sub file.go
+example.com pkg183 sub other.go
+example.com pkg184
+example.com pkg184 sub
+# example.com pkg184 sub
+example.com pkg184 sub file.go
+example.com pkg184 sub other.go
+example.com pkg185
+example.com pkg185 sub
+# example.com pkg185 sub
+example.com pkg185 sub file.go
+example.com pkg185 sub other.go
+example.com pkg186
+example.com pkg186 sub
+# example.com pkg186 sub
+example.com pkg186 sub file.go
+example.com pkg186 sub other.go
+example.com pkg187
+example.com pkg187 sub
+# example.com pkg187 sub
+example.com pkg187 sub file.go
+example.com pkg187 sub other.go
+example.com pkg188
+example.com pkg188 sub
+# example.com pkg188 sub
+example.com pkg188 sub file.go
+example.com pkg188 sub other.go
+example.com pkg189
+example.com pkg189 sub
+# example.com pkg189 sub
+example.com pkg189 sub file.go
+example.com pkg189 sub other.go
+example.com pkg190
+example.com pkg190 sub
+# example.com pkg190 sub
+example.com pkg190 sub file.go
+example.com pkg190 sub other.go
+example.com pkg191
+example.com pkg191 sub
+# example.com pkg191 sub
+example.com pkg191 sub file.go
+example.com pkg191 sub other.go
+example.com pkg192
+example.com pkg192 sub
+# example.com pkg192 sub
+example.com pkg192 sub file.go
+example.com pkg192 sub other.go
+example.com pkg193
+example.com pkg193 sub
+# example.com pkg193 sub
+example.com pkg193 sub file.go
+example.com pkg193 sub other.go
+example.com pkg194
+example.com pkg194 sub
+# example.com pkg194 sub
+example.com pkg194 sub file.go
+example.com pkg194 sub other.go
+example.com pkg195
+example.com pkg195 sub
+# example.com pkg195 sub
+example.com pkg195 sub file.go
+example.com pkg195 sub other.go
+example.com pkg196
+example.com pkg196 sub
+# example.com pkg196 sub
+example.com pkg196 sub file.go
+example.com pkg196 sub other.go
+example.com pkg197
+example.com pkg197 sub
+# example.com pkg197 sub
+example.com pkg197 sub file.go
+example.com pkg197 sub other.go
+example.com pkg198
+example.com pkg198 sub
+# example.com pkg198 sub
+example.com pkg198 sub file.go
+example.com pkg198 sub other.go
+example.com pkg199
+example.com pkg199 sub
+# example.com pkg199 sub
+example.com pkg199 sub file.go
+example.com pkg199 sub other.go
+example.com pkg200
+example.com pkg200 sub
+# example.com pkg200 sub
+example.com pkg200 sub file.go
+example.com pkg200 sub other.go
+example.com pkg201
+example.com pkg201 sub
+# example.com pkg201 sub
+example.com pkg201 sub file.go
+example.com pkg201 sub other.go
+example.com pkg202
+example.com pkg202 sub
+# example.com pkg202 sub
+example.com pkg202 sub file.go
+example.com pkg202 sub other.go
+example.com pkg203
+example.com pkg203 sub
+# example.com pkg203 sub
+example.com pkg203 sub file.go
+example.com pkg203 sub other.go
+example.com pkg204
+example.com pkg204 sub
+# example.com pkg204 sub
+example.com pkg204 sub file.go
+example.com pkg204 sub other.go
+example.com pkg205
+example.com pkg205 sub
+# example.com pkg205 sub
+example.com pkg205 sub file.go
+example.com pkg205 sub other.go
+example.com pkg206
+example.com pkg206 sub
+# example.com pkg206 sub
+example.com pkg206 sub file.go
+example.com pkg206 sub other.go
+example.com pkg207
+example.com pkg207 sub
+# example.com pkg207 sub
+example.com pkg207 sub file.go
+example.com pkg207 sub other.go
+example.com pkg208
+example.com pkg208 sub
+# example.com pkg208 sub
+example.com pkg208 sub file.go
+example.com pkg208 sub other.go
+example.com pkg209
+example.com pkg209 sub
+# example.com pkg209 sub
+example.com pkg209 sub file.go
+example.com pkg209 sub other.go
+example.com pkg210
+example.com pkg210 sub
+# example.com pkg210 sub
+example.com pkg210 sub file.go
+example.com pkg210 sub other.go
+example.com pkg211
+example.com pkg211 sub
+# example.com pkg211 sub
+example.com pkg211 sub file.go
+example.com pkg211 sub other.go
+example.com pkg212
+example.com pkg212 sub
+# example.com pkg212 sub
+example.com pkg212 sub file.go
+example.com pkg212 sub other.go
+example.com pkg213
+example.com pkg213 sub
+# example.com pkg213 sub
+example.com pkg213 sub file.go
+example.com pkg213 sub other.go
+example.com pkg214
+example.com pkg214 sub
+# example.com pkg214 sub
+example.com pkg214 sub file.go
+example.com pkg214 sub other.go
+example.com pkg215
+example.com pkg215 sub
+# example.com pkg215 sub
+example.com pkg215 sub file.go
+example.com pkg215 sub other.go
+example.com pkg216
+example.com pkg216 sub
+# example.com pkg216 sub
+example.com pkg216 sub file.go
+example.com pkg216 sub other.go
+example.com pkg217
+example.com pkg217 sub
+# example.com pkg217 sub
+example.com pkg217 sub file.go
+example.com pkg217 sub other.go
+example.com pkg218
+example.com pkg218 sub
+# example.com pkg218 sub
+example.com pkg218 sub file.go
+example.com pkg218 sub other.go
+example.com pkg219
+example.com pkg219 sub
+# example.com pkg219 sub
+example.com pkg219 sub file.go
+example.com pkg219 sub other.go
+warning: deprecated API used in module0 api.go
+warning: deprecated API used in module1 api.go
+warning: deprecated API used in module2 api.go
+warning: deprecated API used in module3 api.go
+warning: deprecated API used in module4 api.go
+warning: deprecated API used in module5 api.go
+warning: deprecated API used in module6 api.go
+warning: deprecated API used in module7 api.go
+warning: deprecated API used in module8 api.go
+warning: deprecated API used in module9 api.go
+warning: deprecated API used in module10 api.go
+warning: deprecated API used in module11 api.go
+warning: deprecated API used in module12 api.go
+warning: deprecated API used in module13 api.go
+warning: deprecated API used in module14 api.go
+warning: deprecated API used in module15 api.go
+warning: deprecated API used in module16 api.go
+warning: deprecated API used in module17 api.go
+warning: deprecated API used in module18 api.go
+warning: deprecated API used in module19 api.go
+warning: deprecated API used in module20 api.go
+warning: deprecated API used in module21 api.go
+warning: deprecated API used in module22 api.go
+warning: deprecated API used in module23 api.go
+warning: deprecated API used in module24 api.go
+warning: deprecated API used in module25 api.go
+warning: deprecated API used in module26 api.go
+warning: deprecated API used in module27 api.go
+warning: deprecated API used in module28 api.go
+warning: deprecated API used in module29 api.go
+# example.com broken
+FAIL example.com broken [build failed]
+ok  example.com core 0.412s
+FAIL

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "kind": "tool_call_telemetry_baseline",
+  "sample_sequence": [
+    "ralph_proxy_read",
+    "ralph_proxy_grep",
+    "ralph_proxy_result_read",
+    "ralph_proxy_result_read",
+    "ralph_proxy_shell_status"
+  ],
+  "tool_calls_by_tool": {
+    "ralph_proxy_read": 1,
+    "ralph_proxy_grep": 1,
+    "ralph_proxy_result_read": 2,
+    "ralph_proxy_shell_status": 1
+  },
+  "classification": {
+    "native_file_read_calls": 0,
+    "native_read_compatibility_calls": 0,
+    "native_read_like_calls": 0,
+    "native_search_calls": 0,
+    "native_shell_calls": 0,
+    "native_write_like_calls": 0,
+    "other_mcp_calls": 0,
+    "ralph_mcp_calls": 5,
+    "ralph_proxy_calls": 5,
+    "runtime_hook_compaction_calls": 0,
+    "runtime_hook_rewrite_calls": 0,
+    "unknown_tool_calls": 0
+  },
+  "optimization_hint": "HINT: 2 result_read(s) without prior result_search, 1 repeated result_read call(s)"
+}

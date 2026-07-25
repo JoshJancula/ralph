@@ -1,0 +1,29 @@
+title: Implement feature X with improved performance
+state: OPEN
+author: john-doe
+url: https://github.com/user/repo/pull/123
+
+body:
+This PR implements feature X with significant performance improvements.
+
+Changes:
+- Added new caching layer
+- Optimized database queries
+- Refactored API endpoints
+
+Tests:
+- Added 15 new unit tests
+- Updated integration tests
+- Performance benchmarks improved by 40%
+
+Reviewers: jane-smith, bob-wilson
+Labels: enhancement, performance, review-in-progress
+
+Commits: 12
+Additions: 450
+Deletions: 120
+
+Files changed:
+  src/core.js
+  src/utils.js
+  tests/unit.test.js

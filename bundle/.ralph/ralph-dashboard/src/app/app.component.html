@@ -1,0 +1,44 @@
+<ion-app>
+  <ion-header [translucent]="false" class="app-header">
+    <ion-toolbar>
+      <ion-buttons slot="start">
+        <ion-menu-button menu="workspace-menu"></ion-menu-button>
+      </ion-buttons>
+      <ion-title class="app-title">{{ headerTitle() }}</ion-title>
+      <app-workspace-switcher></app-workspace-switcher>
+      <ion-buttons slot="end">
+        <ion-button
+          (click)="openUsage()"
+          fill="clear"
+          aria-label="Usage metrics"
+          [class.usage-route-active]="isUsageRoute()"
+          title="Usage: tokens and tool calls"
+        >
+          <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
+        </ion-button>
+        <ion-button (click)="refresh()" fill="clear" aria-label="Refresh">
+          <ion-icon slot="icon-only" name="refresh-outline"></ion-icon>
+        </ion-button>
+        <ion-button (click)="toggleTheme()" fill="clear" aria-label="Toggle theme">
+          <ion-icon slot="icon-only" [name]="isLightTheme() ? 'moon-outline' : 'sunny-outline'"></ion-icon>
+        </ion-button>
+      </ion-buttons>
+    </ion-toolbar>
+  </ion-header>
+
+  <ion-split-pane contentId="main-content">
+    <ion-menu menuId="workspace-menu" contentId="main-content" side="start" class="app-menu">
+      <ion-content [forceOverscroll]="false">
+        <app-workspace-sidebar></app-workspace-sidebar>
+      </ion-content>
+    </ion-menu>
+
+    <div class="ion-page main-shell" id="main-content">
+      <ion-content class="main-content" [forceOverscroll]="false" [scrollY]="false">
+        <div class="content-wrapper">
+          <router-outlet></router-outlet>
+        </div>
+      </ion-content>
+    </div>
+  </ion-split-pane>
+</ion-app>

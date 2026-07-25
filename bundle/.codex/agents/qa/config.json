@@ -1,20 +1,18 @@
 {
   "name": "qa",
-  "description": "Tests code changes and reports back if the changes indeed do what the task asked for.",
-  "model": "gpt-5.1-codex-mini",
-  "rules": [".codex/rules/no-emoji.md"],
-  "skills": [".codex/skills/repo-context/SKILL.md"],
+  "_generated": "GENERATED from bundle/.ralph/agents/qa.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "model": "",
+  "description": "Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria",
+  "rules": [
+    "bundle/.codex/rules/no-emoji.md",
+    "bundle/.codex/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    "bundle/.codex/skills/repo-context/SKILL.md"
+  ],
   "output_artifacts": [
-    {
-      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/code-review.md",
-      "required": true,
-      "kind": "review"
-    },
-    {
-      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/qa-to-implementation.md",
-      "required": false,
-      "kind": "handoff",
-      "to": "implementation"
-    }
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-handoff.md", "required": true, "kind": "review"},
+    {"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md", "required": false},
+    {"path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/qa-to-implementation.md", "required": false, "kind": "handoff", "to": "implementation"}
   ]
 }
