@@ -39,6 +39,7 @@ Every agent `config.json` **must** include all of the following keys. Missing ke
 | Field | Type | Purpose |
 |-------|------|---------|
 | `allowed_tools` | string or array of strings | **Claude headless only** (same as `.claude/agents` README). Cursor/Codex ignore this key. |
+| `max_budget_usd` | string | **Claude headless only, opt-in.** Positive USD budget passed to `claude -p --max-budget-usd`. Bundled agents omit this field so Ralph does not stop large tasks at a default cost ceiling. |
 | `reasoning_effort` | string | Portable reasoning budget: `low`, `medium`, `high`, `xhigh`, `max`, or `inherit`. Orchestration stage `reasoning_effort` and runtime env overrides take precedence over agent config. Mapped to Claude `--effort` when capability-detected; other runtimes use `inherit` unless their adapter exposes a supported control. |
 
 ## Field details and validation rules

@@ -27,8 +27,7 @@ agent_config_tool_path() {
           "path": "artifacts/{{ARTIFACT_NS}}/current/output.txt"
         }
       ],
-      "plan": "plans/downstream.md",
-      "planTemplate": "templates/downstream.tpl"
+      "plan": "plans/downstream.md"
     },
     {
       "id": "skip-stage",
@@ -46,7 +45,7 @@ JSON
   run env RALPH_ARTIFACT_NS="feature-123" bash "$(agent_config_tool_path)" downstream-stages "$orch_file" "current-stage"
   [ "$status" -eq 0 ]
   trimmed="${output%$'\n'}"
-  [ "$trimmed" = $'---\nSTAGE_ID=downstream-stage\nPLAN_PATH=plans/downstream.md\nPLAN_TEMPLATE=templates/downstream.tpl' ]
+  [ "$trimmed" = $'---\nSTAGE_ID=downstream-stage\nPLAN_PATH=plans/downstream.md' ]
   rm -f "$orch_file"
 }
 
@@ -80,6 +79,6 @@ JSON
   run env RALPH_ARTIFACT_NS= RALPH_PLAN_KEY="plan-key" bash "$(agent_config_tool_path)" downstream-stages "$orch_file" "one"
   [ "$status" -eq 0 ]
   trimmed="${output%$'\n'}"
-  [ "$trimmed" = $'---\nSTAGE_ID=two\nPLAN_PATH=plans/two.md\nPLAN_TEMPLATE=' ]
+  [ "$trimmed" = $'---\nSTAGE_ID=two\nPLAN_PATH=plans/two.md' ]
   rm -f "$orch_file"
 }
