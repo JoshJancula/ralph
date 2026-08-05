@@ -54,6 +54,16 @@ EOF
   grep -Fxq -- "antigravity-test-prompt" "$record"
 }
 
+@test "antigravity invoke helper requests live stream-json output" {
+  local record="$TEST_TMPDIR/agy-stream.args"
+  write_agy_stub "$record"
+
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--output-format" "$record"
+  grep -Fxq -- "stream-json" "$record"
+}
+
 @test "antigravity invoke helper never passes removed flags" {
   local record="$TEST_TMPDIR/agy-noflags.args"
   write_agy_stub "$record"

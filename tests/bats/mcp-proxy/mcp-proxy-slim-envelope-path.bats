@@ -133,7 +133,9 @@ payload() {
   [ "$status" -eq 0 ]
 
   # The stored source holds matches far beyond the 20 the preview inlined.
-  jq -r '.content[0].text' "$read_out" | grep -q "NEEDLE"
+  local stored_text
+  stored_text="$(jq -r '.content[0].text' "$read_out")"
+  [[ "$stored_text" == *"NEEDLE"* ]]
 }
 
 @test "source-capped grep keeps its honesty signal in the slim envelope" {

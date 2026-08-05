@@ -19,7 +19,6 @@ dashboard_orch_json_generator() {
       "id": "research",
       "agent": "research",
       "runtime": "cursor",
-      "planTemplate": ".ralph/plan-templates/classic.plan.template.md",
       "plan": "docs/orchestration-plans/dashboard-01-requirements.plan.md",
       "inputArtifacts": [],
       "outputArtifacts": [
@@ -40,7 +39,6 @@ dashboard_orch_json_generator() {
       "id": "implementation",
       "agent": "implementation",
       "runtime": "codex",
-      "planTemplate": ".ralph/plan-templates/classic.plan.template.md",
       "plan": "docs/orchestration-plans/dashboard-02-implementation.plan.md",
       "inputArtifacts": [
         {
@@ -65,7 +63,6 @@ dashboard_orch_json_generator() {
       "id": "review",
       "agent": "code-review",
       "runtime": "claude",
-      "planTemplate": ".ralph/plan-templates/classic.plan.template.md",
       "plan": "docs/orchestration-plans/dashboard-03-review.plan.md",
       "inputArtifacts": [
         {

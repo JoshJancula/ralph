@@ -4563,29 +4563,26 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
           _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
           if [[ -n "$_downstream_raw" ]]; then
             PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
-            PROMPT+=$'\n'"The downstream stages below rely on you to populate their templates before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
+            PROMPT+=$'\n'"The downstream stages below rely on you to create their plan files before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
             _ds_stage_entries=()
             _ds_stage_id=""
             _ds_plan_path=""
-            _ds_plan_template=""
             while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
               if [[ "$_ds_line" == "---" ]]; then
-                if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
-                  _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
+                if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" ]]; then
+                  _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path")
                   _ds_stage_id=""
                   _ds_plan_path=""
-                  _ds_plan_template=""
                 fi
                 continue
               fi
               case "$_ds_line" in
                 STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
                 PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
-                PLAN_TEMPLATE=*) _ds_plan_template="${_ds_line#PLAN_TEMPLATE=}";;
               esac
             done <<< "$_downstream_raw"
-            if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" || -n "$_ds_plan_template" ]]; then
-              _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path|$_ds_plan_template")
+            if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" ]]; then
+              _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path")
             fi
             if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
               _ds_stage_list=""
@@ -4599,10 +4596,8 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
                   break
                 fi
                 _ds_stage_id="${_ds_entry%%|*}"
-                _ds_rest="${_ds_entry#*|}"
-                _ds_plan_path="${_ds_rest%%|*}"
-                _ds_plan_template="${_ds_rest#*|}"
-                PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}, template path: ${_ds_plan_template:-none}"
+                _ds_plan_path="${_ds_entry#*|}"
+                PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}"
                 _ds_stage_list+="${_ds_stage_id:-unknown}, "
                 _ds_stage_count=$(( _ds_stage_count + 1 ))
               done

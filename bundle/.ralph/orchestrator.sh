@@ -17,7 +17,6 @@
 #         "runtime": "cursor", "claude", "codex", "opencode", or "antigravity" (optional, default: cursor),
 #         "plan": "path/to/stage-plan.md",
 #         "mcpProxyPolicy": "readonly" (optional; forwarded to RALPH_MCP_PROXY_POLICY for that stage),
-#         "planTemplate": "path/to/stage-plan.template.md (optional)",
 #         "sessionStrategy": "fresh" | "resume" | "reset" (optional; preferred),
 #         "sessionResume": true or false (optional legacy fallback; mapped to session strategy resume/fresh),
 #         "inputArtifacts": ["path/to/{{ARTIFACT_NS}}/input.md"],
@@ -669,12 +668,11 @@ orch_stage_execute() {
   local agent_source="$7"
   local stage_model="$8"
   local agent_source_raw="$9"
-  local planTemplate="${10}"
-  local stage_id="${11}"
-  local stage_iter="${12}"
-  local step_status_var="${13}"
-  local stage_usage_file="${14:-}"
-  local stage_index="${15:-0}"
+  local stage_id="${10}"
+  local stage_iter="${11}"
+  local step_status_var="${12}"
+  local stage_usage_file="${13:-}"
+  local stage_index="${14:-0}"
   local stage_context_budget=""
   local stage_mcp_proxy_policy=""
   local stage_mcp_proxy_policy_type=""
@@ -722,20 +720,11 @@ orch_stage_execute() {
     plan_dir="$(dirname "$plan_abs_file")"
     mkdir -p "$plan_dir"
     template_to_use=""
-    if [[ -n "$planTemplate" ]]; then
-      if [[ "$planTemplate" != /* ]]; then
-        template_to_use="$WORKSPACE/$planTemplate"
-      else
-        template_to_use="$planTemplate"
-      fi
-    fi
-    if [[ -z "$template_to_use" ]] || [[ ! -f "$template_to_use" ]]; then
-      agent_template_dir="${ralph_plan_templates_dir:-$RALPH_ACTIVE_DIR/plan-templates}"
-      if [[ -n "$agent_template_dir" && -f "$agent_template_dir/$agent.plan.template.md" ]]; then
-        template_to_use="$agent_template_dir/$agent.plan.template.md"
-      elif [[ -f "$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md" ]]; then
-        template_to_use="$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md"
-      fi
+    agent_template_dir="${ralph_plan_templates_dir:-$RALPH_ACTIVE_DIR/plan-templates}"
+    if [[ -n "$agent_template_dir" && -f "$agent_template_dir/$agent.plan.template.md" ]]; then
+      template_to_use="$agent_template_dir/$agent.plan.template.md"
+    elif [[ -f "$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md" ]]; then
+      template_to_use="$RALPH_ACTIVE_DIR/plan-templates/classic.plan.template.md"
     fi
     if [[ -f "$template_to_use" ]]; then
       cp "$template_to_use" "$plan_abs_file"
@@ -1526,14 +1515,13 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
     [[ -z "$agent_source" ]] && agent_source="prebuilt"
     plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
-    planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
     step_index=$((step_index + 1))
     plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
     step_rc=0
     # orch_stage_execute exits directly on runner/artifact failure; the EXIT trap
     # then records the failed/cancelled report with the real exit code. Non-zero
     # returns (validation without exit) are handled explicitly here.
-    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" step_rc "$ss_idx"; then
+    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$ss_idx"; then
       orch_single_stage_write_report "failed" "${step_rc:-1}" "stage execution failed" || true
       exit "${step_rc:-1}"
     fi
@@ -1594,7 +1582,6 @@ if [[ "$ORCH_FILE" == *.json ]]; then
         agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
         [[ -z "$agent_source" ]] && agent_source="prebuilt"
         plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
-        planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
         step_index=$((step_index + 1))
         plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
         plan_tag="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
@@ -1607,10 +1594,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           mkdir -p "$(dirname "$stage_file")"
           if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
             (
-              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
             ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
           else
-            ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx" ) &
+            ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx" ) &
           fi
           wave_pid=$!
           orch_register_parallel_pid "$wave_pid"
@@ -1621,12 +1608,12 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           mkdir -p "$(dirname "$stage_file")"
           if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
             (
-              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
               echo "$?" > "$stage_file"
             ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
           else
             (
-              orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
               echo "$?" > "$stage_file"
             ) &
           fi
@@ -1724,10 +1711,9 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
       [[ -z "$agent_source" ]] && agent_source="prebuilt"
       plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
-      planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
       step_index=$((step_index + 1))
       plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
-      if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" step_rc "$idx"; then
+      if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
         exit 1
       fi
       if [[ "${step_rc:-0}" -gt 0 ]]; then
@@ -1758,10 +1744,9 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
           [[ -z "$agent_source" ]] && agent_source="prebuilt"
           plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
-          planTemplate="$(echo "$stage" | jq -r '.planTemplate // ""' 2>/dev/null)" || planTemplate=""
           step_index=$((step_index + 1))
           plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
-          if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$planTemplate" "$stage_id" "$stage_iter" step_rc "$idx"; then
+          if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
             exit 1
           fi
           if [[ "${step_rc:-0}" -gt 0 ]]; then

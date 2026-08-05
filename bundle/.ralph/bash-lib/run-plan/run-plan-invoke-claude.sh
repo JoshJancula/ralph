@@ -368,16 +368,6 @@ ralph_run_plan_invoke_claude() {
     budget="$RALPH_CLAUDE_MAX_BUDGET_USD"
   elif [[ -n "${RALPH_AGENT_MAX_BUDGET:-}" ]]; then
     budget="$RALPH_AGENT_MAX_BUDGET"
-  else
-    case "${PREBUILT_AGENT:-}" in
-      research)     budget="0.50" ;;
-      code-review)  budget="1.00" ;;
-      security)     budget="1.00" ;;
-      architect)    budget="2.00" ;;
-      qa)           budget="2.00" ;;
-      implementation) budget="5.00" ;;
-      *)            budget="3.00" ;;
-    esac
   fi
   if [[ -n "$budget" ]]; then
     args+=(--max-budget-usd "$budget")

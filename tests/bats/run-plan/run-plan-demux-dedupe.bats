@@ -6,6 +6,51 @@ fixture_path() {
   printf '%s\n' "$REPO_ROOT/tests/bats/fixtures/stream-json/$1"
 }
 
+@test "demux renders Antigravity stream-json live text and captures session and usage" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local tmpdir stream usage_file session_file output_file
+  tmpdir="$(mktemp -d)"
+  stream="$tmpdir/antigravity.ndjson"
+  usage_file="$tmpdir/usage.json"
+  session_file="$tmpdir/session.txt"
+  output_file="$tmpdir/output.log"
+
+  cat >"$stream" <<'STREAM'
+{"event":"init","conversation_id":"agy-conversation-1","init":{"model":"gemini-3.1-pro-low"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conversation-1","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"Working"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conversation-1","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":" now","usage":{"input_tokens":100,"output_tokens":20,"thinking_tokens":10,"cache_read_tokens":40,"total_tokens":120}}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conversation-1","step_index":4,"state":"DONE","step_type":"checkpoint","usage":{"input_tokens":5,"output_tokens":2,"thinking_tokens":0,"cache_read_tokens":3,"total_tokens":7}}}
+{"event":"result","result":{"conversation_id":"agy-conversation-1","status":"SUCCESS","response":"Working now","usage":{"input_tokens":105,"output_tokens":22,"thinking_tokens":10,"cache_read_tokens":43,"total_tokens":127}}}
+STREAM
+
+  run python3 "$REPO_ROOT/bundle/.ralph/python/run-plan-cli-json-demux.py" antigravity "$session_file" "$usage_file" "$output_file" 0 <"$stream"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = $'Working\nnow' ]
+  grep -Fxq -- "agy-conversation-1" "$session_file"
+  grep -Fxq -- "Working" "$output_file"
+  grep -Fxq -- "now" "$output_file"
+  ! grep -Fq -- '"event"' "$output_file"
+
+  run python3 - "$usage_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    usage = json.load(fh)
+
+assert usage["input_tokens"] == 105, usage
+assert usage["output_tokens"] == 22, usage
+assert usage["cache_read_input_tokens"] == 43, usage
+assert usage["max_turn_total_tokens"] == 120, usage
+assert usage["usage_unsupported"] is False, usage
+PY
+  [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
 assert_telemetry_usage_json() {
   local usage_file="$1"
   local large_blob_marker="$2"

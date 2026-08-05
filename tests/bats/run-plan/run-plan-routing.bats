@@ -56,8 +56,7 @@ write_orch_fixture() {
           "required": true
         }
       ],
-      "plan": "alpha.plan.md",
-      "planTemplate": "alpha.template.md"
+      "plan": "alpha.plan.md"
     },
     {
       "id": "beta",
@@ -73,8 +72,7 @@ write_orch_fixture() {
           "required": true
         }
       ],
-      "plan": "beta.plan.md",
-      "planTemplate": "beta.template.md"
+      "plan": "beta.plan.md"
     }
   ]
 }

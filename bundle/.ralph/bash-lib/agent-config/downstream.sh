@@ -83,13 +83,11 @@ downstream_stages() {
       continue
     fi
 
-    local plan_path plan_template
+    local plan_path
     plan_path="$("$jq_bin" -r '.plan // ""' <<< "$stage_json")"
-    plan_template="$("$jq_bin" -r '.planTemplate // ""' <<< "$stage_json")"
 
     echo "---"
     echo "STAGE_ID=$stage_id"
     echo "PLAN_PATH=$plan_path"
-    echo "PLAN_TEMPLATE=$plan_template"
   done < <("$jq_bin" -c '.stages[]' "$orch_file")
 }

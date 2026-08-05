@@ -41,8 +41,9 @@ unless absolute.
 - **JSON stages** (`.ralph/orchestrator.sh`): each stage is an entry in
   the `stages` array and should include the agent ID, plan path, and optionally
   any `artifacts` or `outputArtifacts` that must exist after the stage completes.
-  (`planTemplate` points to `.ralph/plan-templates/classic.plan.template.md` unless you override it
-  per-stage.)
+  If a stage plan file is missing at bootstrap, the orchestrator copies from
+  `.ralph/plan-templates/<agent>.plan.template.md` or
+  `.ralph/plan-templates/classic.plan.template.md`.
 
 `PATH_TO_STAGE_PLAN` is the Ralph task plan (markdown with `- [ ]` TODOs). Use one
 small plan per stage, for example under `docs/orchestration-plans/` so plans stay in version control.

@@ -16,8 +16,9 @@ RALPH_RUN_PLAN_INVOKE_ANTIGRAVITY_LOADED=1
 #   is passed unchanged to `agy --model "<exact model string from agy models>" ...`.
 #   The model id is never normalized or remapped.
 #
-# agy invocation contract (verified against agy 1.0.8):
-#   - Headless prompt:   `agy --print "<prompt>"` (no JSON streaming output exists).
+# agy invocation contract (verified against agy 1.1.9):
+#   - Headless prompt:   `agy --print "<prompt>"`.
+#   - Streaming output:  `agy --output-format stream-json`.
 #   - Resume by id:      `agy --conversation "<id>"`.
 #   - Resume most recent:`agy --continue`.
 #   - Model:             `agy --model "<display string>"`.
@@ -211,10 +212,11 @@ ralph_run_plan_invoke_antigravity() {
     args+=(--print-timeout "${RALPH_PLAN_INVOCATION_TIMEOUT_SECONDS}s")
   fi
 
-  # Headless prompt entry point. agy has no JSON streaming output, so we do not
-  # add JSON/usage flags here; usage is best-effort and the conversation id is
-  # captured from agy's store after the run (see capture_conversation below).
-  args+=(--print "$PROMPT")
+  # Text output is held until the final response, which makes a long-running
+  # headless run appear idle. agy 1.1.9 emits live step events in stream-json
+  # mode; the common demuxer renders those events and captures its session and
+  # usage data as they arrive.
+  args+=(--output-format stream-json --print "$PROMPT")
 
   run_plan_invoke_antigravity_cli() {
     run_plan_invoke_common_launch_cli antigravity "$cli" "${args[@]}"
@@ -223,7 +225,7 @@ ralph_run_plan_invoke_antigravity() {
   run_plan_invoke_common_execute \
     run_plan_invoke_antigravity_cli \
     antigravity \
-    "Warning: RALPH_PLAN_CLI_RESUME is set, but agy emits no JSON to parse; relying on agy's conversation store for resume."
+    ""
 
   # Record the conversation id agy used so the next TODO can resume it.
   run_plan_invoke_antigravity_capture_conversation

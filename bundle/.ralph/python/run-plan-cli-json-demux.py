@@ -2,7 +2,7 @@
 """Read newline-delimited JSON from stdin; print human-readable text lines; write first session id to file.
 
 Argv: <mode> <session_id_file> [<usage_file> [<output_log> [<pretty 0|1>]]]
-mode: claude | cursor | codex | opencode
+mode: claude | cursor | codex | opencode | antigravity
 usage_file: optional path; written with JSON token usage summary at EOF
 """
 import json
@@ -133,6 +133,29 @@ def _extract_antigravity_plain_tool_call(line: str, acc: Dict[str, Any]) -> None
     if not match:
         return
     _merge_tool_call(acc, match.group(1))
+
+
+def _antigravity_step(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return agy's stream-json step-update payload, if present."""
+    if obj.get("event") != "step_update":
+        return None
+    step = obj.get("step_update")
+    return step if isinstance(step, dict) else None
+
+
+def _extract_antigravity_tool_call(obj: Dict[str, Any], acc: Dict[str, Any]) -> None:
+    """Record an agy tool step once, using its conversation/step index as id."""
+    step = _antigravity_step(obj)
+    if not step:
+        return
+    step_type = str(step.get("step_type") or "").lower()
+    if "tool" not in step_type and "command" not in step_type:
+        return
+    name = _pick_tool_label(step, fallback=step_type or "tool")
+    conversation_id = str(step.get("conversation_id") or "")
+    step_index = step.get("step_index")
+    call_id = f"{conversation_id}:{step_index}" if conversation_id and step_index is not None else None
+    _merge_tool_call(acc, name, call_id, extract_tool_input(step))
 
 
 def _codex_item_tool_name(item: Dict[str, Any]) -> Optional[str]:
@@ -329,6 +352,9 @@ def extract_tool_calls(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
     if mode == "cursor":
         _walk_cursor_tool_calls(obj, acc)
         return
+    if mode == "antigravity":
+        _extract_antigravity_tool_call(obj, acc)
+        return
     _walk_generic_tool_calls(obj, acc)
 
 
@@ -476,6 +502,16 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
                     n = session_id_from(obj.get(k), mode)
                     if n:
                         return n
+        elif mode == "antigravity":
+            for k in ("conversation_id", "conversationId"):
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            for k in ("init", "step_update", "result", "payload", "data"):
+                if k in obj:
+                    n = session_id_from(obj.get(k), mode)
+                    if n:
+                        return n
         else:
             for k in ("session_id", "sessionId", "sessionID", "chat_id", "id"):
                 v = obj.get(k)
@@ -526,6 +562,39 @@ def _opencode_cache_key_injected_from_env() -> bool:
 def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
     """Accumulate token usage fields from a JSON event into acc."""
     if not isinstance(obj, dict):
+        return
+    if mode == "antigravity":
+        # agy 1.1.9 emits per-step deltas under step_update.usage; its result
+        # event is cumulative, so use it only when an interrupted stream never
+        # supplied a completed step.
+        step = _antigravity_step(obj)
+        usage: Any = step.get("usage") if step else None
+        is_result = obj.get("event") == "result"
+        if is_result:
+            result = obj.get("result")
+            usage = result.get("usage") if isinstance(result, dict) else None
+        if not isinstance(usage, dict):
+            return
+        fields = {
+            "input_tokens": _coerce_nonneg_int(usage.get("input_tokens")),
+            "output_tokens": _coerce_nonneg_int(usage.get("output_tokens")),
+            "cache_read_input_tokens": _coerce_nonneg_int(usage.get("cache_read_tokens")),
+        }
+        if is_result and acc.get("_antigravity_step_usage_seen"):
+            return
+        if is_result:
+            for key, value in fields.items():
+                acc[key] = value
+            acc["_antigravity_step_usage_seen"] = True
+        else:
+            acc["_antigravity_step_usage_seen"] = True
+            for key, value in fields.items():
+                acc[key] += value
+            if step and str(step.get("state") or "").upper() == "DONE":
+                acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
+        total = _coerce_nonneg_int(usage.get("total_tokens"))
+        if total > acc.get("max_turn_total_tokens", 0):
+            acc["max_turn_total_tokens"] = total
         return
     if mode == "codex":
         # Codex emits repeated token_count events. Each carries:
@@ -741,9 +810,7 @@ def compute_cache_read_ratios(acc: Dict[str, Any]) -> Tuple[float, float]:
 def finalize_usage(acc: Dict[str, Any], mode: str) -> None:
     """Apply end-of-stream usage fixups that depend on the full event sequence."""
     if mode == "antigravity":
-        # agy never reports token/cache usage anywhere accessible; this is a
-        # permanent limitation of the runtime, not a transient miss.
-        acc["usage_unsupported"] = True
+        acc["usage_unsupported"] = not bool(acc.get("_antigravity_step_usage_seen"))
     if mode == "claude" and not acc.get("_claude_turn_usage_seen"):
         # No per-turn assistant usage was observed (e.g. a stream that only produced a
         # result event); fall back to whatever the result event reported.
@@ -770,6 +837,23 @@ def finalize_usage(acc: Dict[str, Any], mode: str) -> None:
 def extract_text(obj: Any, mode: str) -> List[str]:
     out: List[str] = []
     if isinstance(obj, dict):
+        if mode == "antigravity":
+            step = _antigravity_step(obj)
+            if step:
+                delta = step.get("text_delta")
+                if isinstance(delta, str) and delta:
+                    return [delta]
+                step_type = str(step.get("step_type") or "").lower()
+                if "tool" in step_type or "command" in step_type:
+                    label = _pick_tool_label(step, fallback=step_type or "tool")
+                    state = str(step.get("state") or "active").lower()
+                    return [f"[agy] {label} ({state})"]
+                return []
+            if obj.get("event") == "result":
+                result = obj.get("result")
+                response = result.get("response") if isinstance(result, dict) else None
+                return [response] if isinstance(response, str) and response else []
+            return []
         # Codex item.completed: emit one meaningful plain line per item type
         # so raw JSON fragments never leak into the log / non-pretty output.
         if mode == "codex" and obj.get("type") == "item.completed":
@@ -900,6 +984,7 @@ def main() -> None:
     log_renderer = None
     stdout_broken = False
     completion_sentinel_seen = False
+    antigravity_text_streamed = False
     usage_acc: Dict[str, Any] = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -1066,6 +1151,13 @@ def main() -> None:
         extract_usage(o, mode, usage_acc)
         extract_tool_calls(o, mode, usage_acc)
         texts = extract_text(o, mode)
+        if mode == "antigravity" and isinstance(o, dict):
+            step = _antigravity_step(o)
+            if step and isinstance(step.get("text_delta"), str) and step.get("text_delta"):
+                antigravity_text_streamed = True
+            elif o.get("event") == "result" and antigravity_text_streamed:
+                # result.response repeats the already-rendered text deltas.
+                texts = []
         plain_lines = []
         if texts:
             for t in texts:
@@ -1073,7 +1165,10 @@ def main() -> None:
                 if t:
                     plain_lines.append(t)
         else:
-            plain_lines = [line]
+            # Antigravity stream-json has metadata-only init, checkpoint, and
+            # result envelopes. Do not leak those raw JSON objects into the
+            # console or compact output log.
+            plain_lines = [] if mode == "antigravity" else [line]
         try:
             from completion_sentinel import object_has_assistant_completion_sentinel
         except ImportError:
@@ -1085,15 +1180,15 @@ def main() -> None:
             completion_sentinel_seen = _note_completion_sentinel(
                 plain_lines, completion_sentinel_seen
             )
-        if output_log is not None:
+        if output_log is not None and plain_lines:
             _write_output_log(output_log, log_renderer, o, plain_lines)
-        if pretty and renderer is not None:
+        if pretty and renderer is not None and plain_lines:
             try:
                 rendered = renderer.render_event(o)
             except Exception:
                 rendered = None
             write_stdout(rendered if rendered is not None else plain_lines)
-        else:
+        elif plain_lines:
             write_stdout(plain_lines)
     if pretty and renderer is not None:
         # Streamed text deltas without a trailing newline stay buffered in the
