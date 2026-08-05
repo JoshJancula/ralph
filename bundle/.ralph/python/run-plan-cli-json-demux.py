@@ -500,8 +500,8 @@ def session_id_from(obj: Any, mode: str) -> Optional[str]:
             for k in ("payload", "result", "data"):
                 if k in obj:
                     n = session_id_from(obj.get(k), mode)
-                if n:
-                    return n
+                    if n:
+                        return n
         elif mode == "antigravity":
             for k in ("conversation_id", "conversationId"):
                 v = obj.get(k)
