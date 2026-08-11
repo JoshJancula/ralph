@@ -108,9 +108,13 @@ _runtime_overlay_state_root() {
   if [[ -z "$plan_key" ]]; then
     runtime_overlay_die "Runtime overlay requires RALPH_PLAN_KEY to establish state."
   fi
-  local project_root
-  project_root="$(_runtime_overlay_project_root)"
-  printf '%s/.ralph-workspace/runtime-config/%s' "$project_root" "$plan_key"
+  local state_root
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="$(_runtime_overlay_workspace_root)"
+  else
+    state_root="$(_runtime_overlay_project_root)/.ralph-workspace"
+  fi
+  printf '%s/runtime-config/%s' "$state_root" "$plan_key"
 }
 
 _runtime_overlay_abs_path() {
@@ -126,8 +130,28 @@ PY
 
 _runtime_overlay_require_workspace_bound() {
   local target="$1"
-  local workspace_root="$(_runtime_overlay_project_root)"
-  if ! python3 - "$workspace_root" "$target" <<'PY'
+  local workspace_root
+  workspace_root="$(_runtime_overlay_mutation_root_for_target "$target" 2>/dev/null || true)"
+  if [[ -z "$workspace_root" ]]; then
+    runtime_overlay_die "Overlay mutation rejected: $target is outside the project and agent workspaces."
+  fi
+}
+
+# Runtime-native config normally belongs to the project root, while a graph
+# snapshot may also need a temporary runtime plugin/package overlay inside the
+# isolated agent workspace. Resolve the narrowest authorized root for a target
+# without treating the state root as mutable project space.
+_runtime_overlay_mutation_root_for_target() {
+  local target="$1"
+  local project_root agent_root candidate
+  project_root="$(_runtime_overlay_project_root)"
+  agent_root="${RALPH_AGENT_WORKSPACE:-}"
+  for candidate in "$project_root" "$agent_root"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -d "$candidate" ]]; then
+      candidate="$(cd "$candidate" && pwd)"
+    fi
+    if python3 - "$candidate" "$target" <<'PY'
 import os, sys
 workspace = os.path.abspath(sys.argv[1])
 target = os.path.abspath(sys.argv[2])
@@ -137,9 +161,12 @@ common = os.path.commonpath([workspace, target])
 if common != workspace and target != workspace:
     sys.exit(2)
 PY
-  then
-    runtime_overlay_die "Overlay mutation rejected: $target is outside $workspace_root."
-  fi
+    then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 _runtime_overlay_journal_path() {
@@ -819,16 +846,23 @@ runtime_overlay_record_original_file() {
   fi
   local abs
   abs="$(_runtime_overlay_abs_path "$target")"
-  _runtime_overlay_require_workspace_bound "$abs"
+  local mutation_root
+  mutation_root="$(_runtime_overlay_mutation_root_for_target "$abs" 2>/dev/null || true)"
+  if [[ -z "$mutation_root" ]]; then
+    runtime_overlay_die "Overlay mutation rejected: $abs is outside the project and agent workspaces."
+  fi
   RUNTIME_OVERLAY_MUTATED_FILES+=("$abs")
   local rel
-  rel="$(python3 - "$(_runtime_overlay_project_root)" "$abs" <<'PY'
+  rel="$(python3 - "$mutation_root" "$abs" <<'PY'
 import os, sys
 workspace = os.path.abspath(sys.argv[1])
 target = os.path.abspath(sys.argv[2])
 print(os.path.relpath(target, workspace))
 PY
 )"
+  if [[ "$mutation_root" != "$(_runtime_overlay_project_root)" ]]; then
+    rel="agent-workspace/$rel"
+  fi
   local backup="$RUNTIME_OVERLAY_ORIGINALS_DIR/$rel"
   mkdir -p "$(dirname "$backup")"
   runtime_overlay_journal_add_mutated_file "$abs" "$backup"

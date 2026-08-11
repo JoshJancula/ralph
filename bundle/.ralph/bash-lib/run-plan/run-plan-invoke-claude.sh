@@ -250,6 +250,12 @@ ralph_run_plan_invoke_claude_completion_tool_names() {
   printf '%s\n' "${_ns}ralph_complete_todo"
 }
 
+ralph_run_plan_invoke_claude_delegation_tool_names() {
+  [[ "${RALPH_MCP_SCOPE:-operator}" == graph-node ]] || return 0
+  local _ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
+  printf '%s' "${_ns}ralph_delegate_start,${_ns}ralph_delegate_status,${_ns}ralph_delegate_wait,${_ns}ralph_delegate_result,${_ns}ralph_delegate_cancel"
+}
+
 ralph_run_plan_invoke_claude_allowed_tools_list() {
   local tools_use="${1:-}"
   local strip_native_read_tools="${2:-0}"
@@ -315,6 +321,17 @@ ralph_run_plan_invoke_claude_allowed_tools_list() {
     IFS="$_old_ifs"
   fi
 
+  tools_use="$(ralph_run_plan_invoke_claude_delegation_tool_names)"
+  if [[ -n "$tools_use" ]]; then
+    IFS=','
+    for tool in $tools_use; do
+      IFS="$_old_ifs"
+      tools_list+=("$tool")
+      IFS=','
+    done
+    IFS="$_old_ifs"
+  fi
+
   IFS=','
   printf '%s' "${tools_list[*]}"
   IFS="$_old_ifs"
@@ -338,6 +355,12 @@ run_plan_invoke_claude_permission_mode_validate() {
 
 ralph_run_plan_invoke_claude() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract claude || return 1
+  ralph_run_plan_subagents_require_runtime_capability claude || return 1
+  # Fail before model invocation when native subagent mode is active but runtime is unproven.
+  ralph_run_plan_native_subagent_verify_runtime claude || return 1
+  # Inject the native subagent prompt contract into PROMPT_STATIC when mode is read-only.
+  ralph_run_plan_native_subagent_append_contract || return 1
   # Paths and flags the Python demux / tee pipeline expects in the environment.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
@@ -401,6 +424,23 @@ ralph_run_plan_invoke_claude() {
   else
     tools_use="Bash,Read,Edit,Write"
   fi
+
+  # `Agent` is Claude's native dispatch tool.  Do this only from the resolved
+  # runner contract: inherit deliberately leaves the historical argv untouched.
+  local subagents_mode
+  subagents_mode="$(ralph_run_plan_subagents_mode)" || return 1
+  case "$subagents_mode" in
+    on)
+      case ",$tools_use," in
+        *,Agent,*) ;;
+        *) tools_use="${tools_use:+$tools_use,}Agent" ;;
+      esac
+      ;;
+    off)
+      # A deny flag is needed even when an ambient/native agent profile adds
+      # Agent after Ralph selected its normal allowed-tools list.
+      ;;
+  esac
 
   local mcp_config_path=""
   local mcp_overlay_effective=0
@@ -497,6 +537,9 @@ ralph_run_plan_invoke_claude() {
 
   if [[ -n "$tools_use" ]]; then
     args+=(--allowedTools "$tools_use")
+  fi
+  if [[ "$subagents_mode" == "off" ]]; then
+    args+=(--disallowedTools Agent)
   fi
 
   run_plan_invoke_common_add_resume_args \

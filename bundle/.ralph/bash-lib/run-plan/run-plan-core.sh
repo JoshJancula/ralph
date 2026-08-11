@@ -56,6 +56,9 @@ source "$SCRIPT_DIR/bash-lib/permission-classify.sh"
 source "$SCRIPT_DIR/bash-lib/human-interaction.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/ui-prompt.sh"
+# Loaded for graph nodes only at the claim gate below; the helper itself is
+# inert unless scheduler identity variables are present.
+source "$SCRIPT_DIR/bash-lib/graph/graph-delegation-completion.sh"
 
 # The main runner sources run-plan-args.sh before this file. Some tests source
 # run-plan-core.sh directly, so tolerate that load order and skip argument
@@ -1024,6 +1027,32 @@ run_plan_mark_and_confirm() {
   return 0
 }
 
+# Graph mutating nodes provide a scheduler-owned baseline and scope policy.
+# Validate the workspace before a TODO checkbox can advance, so an out-of-scope
+# edit cannot be hidden by a later correction or a successful node exit.
+ralph_graph_write_scope_verify_todo() {
+  local todo_key="$1" safe_key output
+  [[ -n "${RALPH_GRAPH_CHANGESET_BASELINE:-}" ]] || return 0
+  [[ -n "${RALPH_GRAPH_CHANGESET_HELPER:-}" && -f "$RALPH_GRAPH_CHANGESET_HELPER" ]] || {
+    ralph_run_plan_log "ERROR: graph changeset helper missing"
+    return 1
+  }
+  safe_key="$(printf '%s' "$todo_key" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  output="$RALPH_PLAN_WORKSPACE_ROOT/artifacts/${RALPH_ARTIFACT_NS:-graph}/changeset-checkpoints/${RALPH_GRAPH_NODE_ID}/${RALPH_GRAPH_ATTEMPT_ID}/${safe_key}.json"
+  python3 "$RALPH_GRAPH_CHANGESET_HELPER" capture \
+    --workspace "${RALPH_AGENT_WORKSPACE:-$WORKSPACE}" \
+    --baseline "$RALPH_GRAPH_CHANGESET_BASELINE" \
+    --output "$output" \
+    --node-id "$RALPH_GRAPH_NODE_ID" \
+    --attempt-id "$RALPH_GRAPH_ATTEMPT_ID" \
+    --workspace-mode "$RALPH_GRAPH_WORKSPACE_MODE" \
+    --base-identity "$RALPH_GRAPH_BASE_IDENTITY" \
+    --write-scopes-json "$RALPH_GRAPH_WRITE_SCOPES_JSON" >/dev/null || {
+      ralph_run_plan_log "ERROR: graph write-scope verification failed before TODO completion: $todo_key"
+      return 1
+    }
+}
+
 ralph_run_plan_artifact_abs_path() {
   local artifact_path="$1"
   if [[ "$artifact_path" == /* ]]; then
@@ -1066,7 +1095,7 @@ ralph_run_plan_seed_yaml_bootstrap_context() {
   local plan_path="$1"
   local plan_format next line_num todo_id todo_target _seed_next_rest
   local eff_stage="" eff_runtime="" eff_agent="" eff_model=""
-  local eff_session_strategy="" eff_context_budget="" eff_plan_file=""
+  local eff_session_strategy="" eff_context_budget="" eff_subagents="inherit" eff_plan_file=""
 
   plan_format="$(plan_detect_format "$plan_path" 2>/dev/null || printf 'default')"
   if ! plan_format_is_yaml "$plan_format"; then
@@ -1087,7 +1116,7 @@ ralph_run_plan_seed_yaml_bootstrap_context() {
   todo_id="${_seed_next_rest%%|*}"
   todo_target="${todo_id:-$line_num}"
 
-  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_plan_file <<< "$(
+  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_subagents eff_plan_file <<< "$(
     ralph_run_plan_routing_effective_metadata_fields "$plan_path" "$todo_target"
   )"; then
     return 1
@@ -1102,6 +1131,8 @@ ralph_run_plan_seed_yaml_bootstrap_context() {
   if [[ -z "${PLAN_MODEL_CLI:-}" && -n "$eff_model" ]]; then
     PLAN_MODEL_CLI="$eff_model"
   fi
+  RALPH_PLAN_SUBAGENTS="$eff_subagents"
+  export RALPH_PLAN_SUBAGENTS
 }
 
 ralph_run_plan_pipeline_input_artifacts_prepare() {
@@ -1685,7 +1716,14 @@ fi
 RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORKSPACE_ROOT}"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 export RALPH_PLAN_WORKSPACE_ROOT
-RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+# Graph scheduler sets RALPH_GRAPH_NODE_ID so concurrent nodes keep a shared
+# RALPH_ARTIFACT_NS (edge handoffs) while writing plan-usage-summary.json under
+# a per-node log directory (avoids the parallel-wave race).
+if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS/nodes/$RALPH_GRAPH_NODE_ID"
+else
+  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+fi
 unset RALPH_MCP_PROXY_LOG_FILE
 
 # Acquire the canonical plan lease and start (or structurally attach to) the
@@ -2519,7 +2557,9 @@ if ralph_try_consume_human_response; then
     echo "" >&2
     echo -e "${C_R}${C_BOLD}Permission request was denied by the operator; stopping plan run.${C_RST}" >&2
     echo -e "${C_DIM}Plan: $PLAN_PATH${C_RST}" >&2
-    _ralph_write_plan_usage_summary "$done_count" "$total_count"
+    if declare -F _ralph_write_plan_usage_summary >/dev/null 2>&1; then
+      _ralph_write_plan_usage_summary "$done_count" "$total_count"
+    fi
     ralph_runtime_overlay_cleanup_if_needed
     exit 1
   fi
@@ -3911,7 +3951,7 @@ ralph_run_plan_cleanup_orphans() {
         kill -KILL "$pid" 2>/dev/null || true
       fi
     fi
-  done < <(ps -eo pid=,ppid=,args= | awk '$2 == 1 && $0 ~ /ralph-run-plan/ {print $1, substr($0, index($0,$3))}')
+  done < <(ps -eo pid=,ppid=,args= 2>/dev/null | awk '$2 == 1 && $0 ~ /ralph-run-plan/ {print $1, substr($0, index($0,$3))}')
 }
 
 if [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
@@ -4149,6 +4189,10 @@ while true; do
           exit 1
         fi
       fi
+      if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+        ralph_runtime_overlay_cleanup_if_needed
+        exit 1
+      fi
       if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
         ralph_run_plan_log "planFile stage completed: todo=$todo_target planFile=$_nested_plan_file"
         ralph_run_plan_routing_restore_baseline
@@ -4199,6 +4243,10 @@ while true; do
               ralph_runtime_overlay_cleanup_if_needed
               exit 1
             fi
+          fi
+          if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+            ralph_runtime_overlay_cleanup_if_needed
+            exit 1
           fi
           if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
             _direct_completed=1
@@ -5137,6 +5185,33 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       fi
 
       if [[ "$_claim_complete" == "1" ]]; then
+        if [[ -n "${RALPH_GRAPH_NAMESPACE:-}" && -n "${RALPH_GRAPH_RUN_ID:-}" && -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_GRAPH_ATTEMPT_ID:-}" ]]; then
+          _delegation_gate_dir="$RALPH_PLAN_WORKSPACE_ROOT/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-plan}}/delegations/${RALPH_GRAPH_NODE_ID}/${RALPH_GRAPH_ATTEMPT_ID}"
+          if graph_delegation_completion_gate "$WORKSPACE" "$RALPH_GRAPH_NAMESPACE" "$RALPH_GRAPH_RUN_ID" "$RALPH_GRAPH_NODE_ID" "$RALPH_GRAPH_ATTEMPT_ID" "$_delegation_gate_dir"; then
+            _delegation_gate_rc=0
+          else
+            _delegation_gate_rc=$?
+          fi
+          case "$_delegation_gate_rc" in
+            0)
+              [[ -z "${GRAPH_DELEGATION_GATE_INPUT_ARTIFACTS:-}" ]] || export RALPH_DELEGATION_INPUT_ARTIFACTS="$GRAPH_DELEGATION_GATE_INPUT_ARTIFACTS"
+              [[ -z "${GRAPH_DELEGATION_GATE_INTEGRATION_INPUTS:-}" ]] || export RALPH_DELEGATION_INTEGRATION_INPUTS="$GRAPH_DELEGATION_GATE_INTEGRATION_INPUTS"
+              ;;
+            10|11|12)
+              _inv_todo_completed=0; _inv_plan_complete=0
+              POST_VERIFICATION_FAILURE_REASON="delegation_completion_gate"
+              POST_VERIFICATION_FAILURE_SUMMARY="${GRAPH_DELEGATION_GATE_EVIDENCE:-delegated child has not reached a completion-safe state}"
+              if [[ "$_delegation_gate_rc" == "12" ]]; then
+                ralph_write_human_action_file "Delegated child retry budget exhausted for graph node ${RALPH_GRAPH_NODE_ID}. ${POST_VERIFICATION_FAILURE_SUMMARY}" || true
+                ralph_run_plan_log "delegation completion gate escalated to pending human for line=$line_num"
+              else
+                ralph_run_plan_log "delegation completion gate blocked line=$line_num: ${POST_VERIFICATION_FAILURE_SUMMARY}"
+              fi
+              continue
+              ;;
+            *) ralph_run_plan_log "ERROR: delegation completion gate failed rc=$_delegation_gate_rc"; ralph_runtime_overlay_cleanup_if_needed; exit 1 ;;
+          esac
+        fi
         if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
           if ! ralph_run_plan_pipeline_output_artifacts_verify "$PLAN_PATH" "$todo_target" "$line_num"; then
             read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
@@ -5152,6 +5227,12 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
             ralph_runtime_overlay_cleanup_if_needed
             exit 1
           fi
+        fi
+        if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+          read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+          _ralph_write_plan_usage_summary "$done_count" "$total_count"
+          ralph_runtime_overlay_cleanup_if_needed
+          exit 1
         fi
         if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
           ralph_run_plan_log "runner marked TODO complete for line=$line_num"

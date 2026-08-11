@@ -37,6 +37,25 @@ if [[ ! -f "$plan_path" ]]; then
   exit 1
 fi
 
+execution="$(awk '
+  BEGIN { in_frontmatter = 0; seen_open = 0 }
+  NR == 1 && $0 == "---" { in_frontmatter = 1; seen_open = 1; next }
+  in_frontmatter && $0 == "---" { exit }
+  in_frontmatter && $1 == "execution:" { print $2; exit }
+' "$plan_path" 2>/dev/null || true)"
+
+if [[ "$execution" == "graph" ]]; then
+  graph_tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph.XXXXXX.json")"
+  trap 'rm -f "$graph_tmp"' EXIT
+  if ! plan_pipeline_graph_json "$plan_path" >"$graph_tmp"; then
+    exit 1
+  fi
+  if ! bash "$bundle_root/../scripts/validate-graph-schema.sh" "$graph_tmp"; then
+    exit 1
+  fi
+  exit 0
+fi
+
 if ! plan_pipeline_validate_plan "$plan_path"; then
   exit 1
 fi

@@ -1527,6 +1527,36 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   local original_tokens="" returned_tokens="" token_args=()
   local inline_candidate_bytes inline_candidate_tokens=""
 
+  # Exploration tools return the exact window they gathered. Their callers can
+  # request a narrower path, offset, limit, or query; replacing complete results
+  # with a stored-result envelope hides the source the agent explicitly asked
+  # to inspect. A source-capped search is different: the incompleteness marker
+  # and narrowing guidance in its envelope are correctness data, so it must not
+  # take this direct-result fast path.
+  case "$tool_name" in
+    ralph_proxy_shell|ralph_proxy_result_reduce)
+      ;;
+    *)
+      case "${RALPH_MCP_EXPLORATION_RESULT_COMPACT:-0}" in
+        1|true|yes|on)
+          # Compatibility escape hatch for callers that explicitly need the
+          # former stored-envelope behavior.
+          ;;
+        *)
+          if [[ "$source_capped_flag" != "1" ]] \
+            && ! { [[ -n "$extra_envelope_json" ]] \
+              && jq -e '.sourceCapped == true' <<<"$extra_envelope_json" >/dev/null 2>&1; }; then
+            RALPH_MCP_PROXY_LAST_RESULT_ID=""
+            RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=0
+            export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
+            ralph_mcp_proxy_tool_success_json "$preview_text"
+            return 0
+          fi
+          ;;
+      esac
+      ;;
+  esac
+
   original_bytes=${#storage_text}
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "$tool_name")"
   token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$tool_name")"

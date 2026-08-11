@@ -18,7 +18,7 @@ setup() {
     "no:proxy_shell_compact:off:unset_default_off"
     "no:bash_rewrite:off:unset_default_off"
     "native:bash_compact:on:mode_default"
-    "native:native_result_compact:on:mode_default"
+    "native:native_result_compact:off:unset_default_off"
     "native:proxy_shell_compact:off:unset_default_off"
     "native:bash_rewrite:off:unset_default_off"
     "ralph:bash_compact:off:unset_default_off"
@@ -26,7 +26,7 @@ setup() {
     "ralph:proxy_shell_compact:on:mode_default"
     "ralph:bash_rewrite:off:unset_default_off"
     "hybrid:bash_compact:on:mode_default"
-    "hybrid:native_result_compact:on:mode_default"
+    "hybrid:native_result_compact:off:unset_default_off"
     "hybrid:proxy_shell_compact:on:mode_default"
     "hybrid:bash_rewrite:off:unset_default_off"
   )

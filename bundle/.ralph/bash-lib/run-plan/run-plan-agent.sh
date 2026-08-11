@@ -71,7 +71,7 @@ _ralph_resolve_agent_to_config_json() {
     return 1
   fi
 
-  local cache_dir="$ws/.ralph-workspace/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache"
+  local cache_dir="${RALPH_PLAN_WORKSPACE_ROOT:-$ws/.ralph-workspace}/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache/$runtime"
   mkdir -p "$cache_dir"
 
   case "$resolved_kind" in
@@ -314,7 +314,7 @@ validate_prebuilt_agent_config() {
         echo "Error: agent source not readable: $resolved_path" >&2
         return 1
       fi
-      local cache_dir="$ws/.ralph-workspace/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache"
+      local cache_dir="${RALPH_PLAN_WORKSPACE_ROOT:-$ws/.ralph-workspace}/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache/$runtime"
       local layer="bundle"
       if [[ "$resolved_kind" == "ralph-workspace" || "$resolved_kind" == "ralph-install" ]]; then
         if [[ "$resolved_path" == "$ws/.ralph/"* || "$resolved_path" == "$ws/.ralph-workspace/"* ]]; then
@@ -473,7 +473,7 @@ format_prebuilt_agent_context_block() {
   local resolved_kind="${resolve_out%%	*}"
   local resolved_path="${resolve_out#*	}"
 
-  local cache_dir="$ws/.ralph-workspace/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache"
+  local cache_dir="${RALPH_PLAN_WORKSPACE_ROOT:-$ws/.ralph-workspace}/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-agent}}/agent-cache/$runtime"
 
   case "$resolved_kind" in
     classic-config)

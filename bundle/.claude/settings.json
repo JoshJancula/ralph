@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "RALPH_NATIVE_RESULT_COMPACT=1 .claude/hooks/native-result-compact.sh"
+            "command": ".claude/hooks/native-result-compact.sh"
           }
         ]
       }

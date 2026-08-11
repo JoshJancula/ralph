@@ -795,6 +795,53 @@ EOF
   rm -rf "$tmp_dir"
 }
 
+@test "operator-denial exit path does not crash when _ralph_write_plan_usage_summary is not yet defined" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  # run-plan-core.sh is sourced top-to-bottom: the deny branch runs long
+  # before the file reaches the _ralph_write_plan_usage_summary function
+  # definition further down, so this block must guard the call the same way
+  # its sibling branch a few lines above already does, or every operator
+  # denial crashes with "command not found" instead of exiting cleanly.
+  local run_plan_core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  local helper tmp_dir plan_file
+  helper="$(mktemp)"
+  tmp_dir="$(mktemp -d)"
+  plan_file="$tmp_dir/PLAN.md"
+  printf '%s\n' '- [x] done' '- [ ] pending' >"$plan_file"
+
+  cat <<'EOF' > "$helper"
+C_R=""; C_BOLD=""; C_RST=""; C_DIM=""
+ralph_try_consume_human_response() {
+  RALPH_PERMISSION_RESPONSE_DECISION="deny"
+  export RALPH_PERMISSION_RESPONSE_DECISION
+  return 0
+}
+count_todos() { printf '1 2\n'; }
+ralph_runtime_overlay_cleanup_if_needed() { :; }
+# Deliberately do NOT define _ralph_write_plan_usage_summary, reproducing
+# the forward-reference gap this test guards against.
+EOF
+  sed -n '/^RALPH_PERMISSION_RESPONSE_DECISION=""$/,/^ralph_sync_human_action_file_state$/p' "$run_plan_core_lib" \
+    | sed '$d' >> "$helper"
+
+  # The extracted block is top-level script code that runs immediately on
+  # `source` (this file is sourced, not invoked as a function), so PLAN_PATH
+  # must already be set before sourcing -- not after.
+  run bash -c '
+    set -euo pipefail
+    PLAN_PATH="$2"
+    source "$1"
+  ' _ "$helper" "$plan_file"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Permission request was denied by the operator"* ]]
+  [[ "$output" != *"command not found"* ]]
+
+  rm -f "$helper"
+  rm -rf "$tmp_dir"
+}
+
 @test "ralph_human_pause_for_operator_offline exits 4 when no TTY decision was made" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

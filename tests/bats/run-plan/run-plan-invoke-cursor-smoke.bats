@@ -34,3 +34,23 @@ teardown() {
   [[ "$captured" == *"cursor-smoke-prompt"* ]]
 }
 
+@test "cursor refuses subagents on before native argv" {
+  local record="$TEST_TMPDIR/cursor-subagents.args"
+  run_plan_invoke_test_write_stub "cursor-agent" "$record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsupported for runtime cursor"* ]]
+  [ ! -e "$record" ]
+}
+
+@test "cursor accepts the portable subagents off contract" {
+  local record="$TEST_TMPDIR/cursor-subagents-off.args"
+  run_plan_invoke_test_write_stub "cursor-agent" "$record"
+  export RALPH_PLAN_SUBAGENTS=off
+  export PROMPT="cursor-subagents-off"
+  export RALPH_MODE=native
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+}

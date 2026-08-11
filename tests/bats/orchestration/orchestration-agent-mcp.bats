@@ -58,6 +58,7 @@ setup_orchestrator_mcp_workspace() {
   cp -R "$RALPH_DIR/bash-lib/runtime-config" "$workspace/.ralph/bash-lib/"
   cp -R "$RALPH_DIR/python" "$workspace/.ralph/"
   cp "$RALPH_DIR/bash-lib/review-status.sh" "$workspace/.ralph/bash-lib/"
+  cp "$RALPH_DIR/bash-lib/atomic-json.sh" "$workspace/.ralph/bash-lib/"
   cat <<STUB >"$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
 set -euo pipefail

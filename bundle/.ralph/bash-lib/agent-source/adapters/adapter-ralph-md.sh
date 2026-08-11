@@ -3,7 +3,8 @@
 # Ralph canonical .md adapter -- parses a canonical agent .md, resolves
 # models.<runtime> to a scalar model string, maps bare rule tokens to
 # runtime rule paths, and renders a normalized config.json into a per-run
-# cache under .ralph-workspace/artifacts/<ns>/agent-cache/<name>.config.json.
+# runtime-scoped cache under
+# .ralph-workspace/artifacts/<ns>/agent-cache/<runtime>/<name>.config.json.
 #
 # The rendered config.json is byte-identical to what sync-runtime-assets.sh
 # compiles for the same agent+runtime+layer combination.

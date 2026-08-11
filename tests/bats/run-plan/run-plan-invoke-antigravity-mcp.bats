@@ -84,6 +84,7 @@ EOF
   command -v jq >/dev/null 2>&1 || skip "jq required"
 
   write_agy_stub "$TEST_TMPDIR/record2"
+  ambient_before="$(shasum -a 256 "$WORKSPACE/.agents/mcp_config.json" | awk '{print $1}')"
 
   # Agent adds a server that overrides ambient1.
   export RALPH_MODE=ralph
@@ -105,6 +106,7 @@ EOF
 
   # After completion, cleanup removes the temp file.
   [ ! -f "$config_path" ]
+  [ "$(shasum -a 256 "$WORKSPACE/.agents/mcp_config.json" | awk '{print $1}')" = "$ambient_before" ]
 }
 
 @test "antigravity overlay collision preserves agent override in merged config" {
@@ -168,4 +170,3 @@ EOF
   run bash -c 'ralph_run_plan_invoke_antigravity || true; [[ -z "${ANTIGRAVITY_CONFIG:-}" ]]'
   [ "$status" -eq 0 ]
 }
-

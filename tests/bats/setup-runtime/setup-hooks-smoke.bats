@@ -39,7 +39,7 @@ teardown() {
   [ -x "$runtime_dir/hooks/native-result-compact.sh" ]
   jq -e '.env.CUSTOM_FLAG == "keep-me"' "$runtime_dir/settings.json"
   jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[] | select(.command == "RALPH_BASH_COMPACT=1 .claude/hooks/compact-bash-output.sh")' "$runtime_dir/settings.json"
-  jq -e '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[] | select(.command == "RALPH_NATIVE_RESULT_COMPACT=1 .claude/hooks/native-result-compact.sh")' "$runtime_dir/settings.json"
+  jq -e '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[] | select(.command == ".claude/hooks/native-result-compact.sh")' "$runtime_dir/settings.json"
 }
 
 @test "setup_hooks_cursor copies hook scripts and preserves existing hooks.json" {

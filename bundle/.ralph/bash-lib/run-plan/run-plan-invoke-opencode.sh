@@ -497,6 +497,7 @@ run_plan_invoke_opencode_config_prepare() {
   local need_mcp=0
   local need_hooks=0
   local want_cache_key=0
+  local plan_external_pattern=""
   local config_modified=0
 
   RALPH_OPENCODE_CACHE_KEY_INJECTED="0"
@@ -519,6 +520,12 @@ run_plan_invoke_opencode_config_prepare() {
   if [[ "${OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE:-0}" == "1" ]]; then
     need_hooks=1
   fi
+  if [[ -n "${PLAN_PATH:-}" && -n "$workspace" ]]; then
+    case "$PLAN_PATH" in
+      "$workspace"/*) ;;
+      *) plan_external_pattern="$(dirname "$PLAN_PATH")/**" ;;
+    esac
+  fi
 
   local provider_id
   provider_id="$(ralph_opencode_provider_id_from_selected_model "$selected_model")"
@@ -530,7 +537,7 @@ run_plan_invoke_opencode_config_prepare() {
     ralph_run_plan_log "OpenCode config prepare: selected_model=${selected_model:-none} provider_id=${provider_id:-none} want_cache_key=${want_cache_key} need_mcp=${need_mcp} need_hooks=${need_hooks}"
   fi
 
-  if [[ "$need_mcp" -eq 0 && "$need_hooks" -eq 0 && "$want_cache_key" -eq 0 ]]; then
+  if [[ "$need_mcp" -eq 0 && "$need_hooks" -eq 0 && "$want_cache_key" -eq 0 && -z "$plan_external_pattern" ]]; then
     return 0
   fi
 
@@ -581,6 +588,31 @@ run_plan_invoke_opencode_config_prepare() {
     config_modified=1
     if declare -F ralph_run_plan_log >/dev/null 2>&1; then
       ralph_run_plan_log "OpenCode permission overlay merged successfully"
+    fi
+  fi
+
+  if [[ -n "$plan_external_pattern" ]]; then
+    local control_permission_overlay
+    control_permission_overlay="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-control-permission-XXXXXX")"
+    if ! jq -c --arg pattern "$plan_external_pattern" '
+      .permission = (if ((.permission // {}) | type) == "object" then (.permission // {}) else {} end)
+      | .permission.external_directory =
+          (if ((.permission.external_directory // {}) | type) == "object"
+           then ((.permission.external_directory // {}) + {($pattern): "allow"})
+           else {($pattern): "allow"}
+           end)
+    ' "$working_config" >"$control_permission_overlay"; then
+      ralph_mcp_cleanup_config "$control_permission_overlay"
+      ralph_mcp_cleanup_config "$working_config"
+      echo "Error: failed to authorize Ralph-owned OpenCode control-plan reads." >&2
+      return 1
+    fi
+    ralph_mcp_cleanup_config "$working_config"
+    working_config="$control_permission_overlay"
+    ralph_mcp_overlay_record_temp_file "$working_config"
+    config_modified=1
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode permission overlay: allowed Ralph-owned control path $plan_external_pattern"
     fi
   fi
 
@@ -770,6 +802,9 @@ run_plan_invoke_opencode_mcp_config_prepare() {
 
 ralph_run_plan_invoke_opencode() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract opencode || return 1
+  ralph_run_plan_subagents_require_runtime_capability opencode || return 1
+  ralph_run_plan_native_subagent_verify_runtime opencode || return 1
   RALPH_OPENCODE_CONFIG_SOURCE_DESC=""
   RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS="0"
   RALPH_OPENCODE_FINAL_CACHE_SETTINGS="0"
@@ -819,6 +854,10 @@ ralph_run_plan_invoke_opencode() {
     export RALPH_PLAN_KEY
   fi
 
+  run_plan_invoke_opencode_package_metadata_prepare || return 1
+  if declare -F ralph_mcp_overlay_register_runtime_cleanup >/dev/null 2>&1; then
+    ralph_mcp_overlay_register_runtime_cleanup run_plan_invoke_opencode_package_metadata_cleanup
+  fi
   run_plan_invoke_opencode_native_hooks_prepare
 
   local opencode_config_path=""

@@ -23,6 +23,7 @@ setup() {
 
   unset SELECTED_MODEL ANTIGRAVITY_PLAN_CLI ANTIGRAVITY_CLI
   unset RALPH_PLAN_ALLOW_UNSAFE_RESUME RALPH_RUN_PLAN_RESUME_BARE
+  unset RALPH_PLAN_SUBAGENTS
   unset RALPH_PLAN_CLI_RESUME RALPH_RUN_PLAN_RESUME_SESSION_ID
   unset RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESET_COMMAND_USED
   unset RALPH_MODE RALPH_PLAN_PRETTY RALPH_PLAN_NO_COLOR NO_COLOR
@@ -52,6 +53,16 @@ EOF
   [ -s "$record" ]
   grep -Fxq -- "--print" "$record"
   grep -Fxq -- "antigravity-test-prompt" "$record"
+}
+
+@test "antigravity refuses non-inherit subagents before native argv" {
+  local record="$TEST_TMPDIR/agy-subagents.args"
+  write_agy_stub "$record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsupported for runtime antigravity"* ]]
+  [ ! -e "$record" ]
 }
 
 @test "antigravity invoke helper requests live stream-json output" {

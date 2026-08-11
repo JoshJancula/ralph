@@ -30,6 +30,36 @@ teardown() {
   [ "$(cat "$stdin_capture")" = "claude-smoke-prompt" ]
 }
 
+@test "claude subagents contract preserves inherit and controls Agent argv" {
+  local inherit_record on_record off_record
+  inherit_record="$TEST_TMPDIR/inherit.args"
+  on_record="$TEST_TMPDIR/on.args"
+  off_record="$TEST_TMPDIR/off.args"
+  export PROMPT="subagents-contract"
+  export RALPH_MODE=native
+
+  run_plan_invoke_test_write_stub "claude" "$inherit_record"
+  export RALPH_PLAN_SUBAGENTS=inherit
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  ! grep -Fxq -- "--disallowedTools" "$inherit_record"
+  ! grep -Fxq -- "Agent" "$inherit_record"
+
+  run_plan_invoke_test_write_stub "claude" "$on_record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "Bash,Read,Edit,Write,Agent" "$on_record"
+
+  run_plan_invoke_test_write_stub "claude" "$off_record"
+  export CLAUDE_TOOLS_FROM_AGENT="Bash,Read,Agent"
+  export RALPH_PLAN_SUBAGENTS=off
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--disallowedTools" "$off_record"
+  grep -Fxq -- "Agent" "$off_record"
+}
+
 @test "claude invoke helper does not impose a default budget cap" {
   local record="$TEST_TMPDIR/claude-no-budget.args"
   run_plan_invoke_test_write_stub "claude" "$record"

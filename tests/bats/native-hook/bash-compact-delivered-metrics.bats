@@ -30,7 +30,7 @@ _bash_hook_input_file() {
   printf '%s' "$stderr" >"$stderr_file"
   jq -n --rawfile stdout "$stdout_file" --rawfile stderr "$stderr_file" \
     '{hook_event_name:"PostToolUse", tool_name:"Bash",
-      tool_input:{command:"printf big"},
+      tool_input:{command:""},
       tool_response:{stdout:$stdout, stderr:$stderr, interrupted:false, isImage:false}}' >"$out"
 }
 

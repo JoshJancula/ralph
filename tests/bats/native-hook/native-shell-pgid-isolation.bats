@@ -24,7 +24,7 @@ teardown() {
 
   run bash -c '
     source "$1"
-    my_pgid="$(ps -o pgid= -p $$ | tr -d " ")"
+    my_pgid="$(ralph_native_shell_process_pgid $$)"
     ralph_native_shell_launch_process_group "$2" "sleep 2" bash /dev/null /dev/null
     child_pgid="$RALPH_NATIVE_SHELL_LAUNCH_PGID"
     isolated="$RALPH_NATIVE_SHELL_LAUNCH_ISOLATED"
@@ -61,7 +61,7 @@ teardown() {
 @test "terminate_spawned_job refuses to group-kill the caller's own pgid" {
   run bash -c '
     source "$1"
-    my_pgid="$(ps -o pgid= -p $$ | tr -d " ")"
+    my_pgid="$(ralph_native_shell_process_pgid $$)"
     sleep 30 &
     job_pid=$!
     # Deliberately pass our own pgid with isolated=true, simulating the race.

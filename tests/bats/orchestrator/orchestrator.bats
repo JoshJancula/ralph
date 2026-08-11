@@ -38,6 +38,7 @@ setup_orchestrator_workspace() {
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-planner.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/review-status.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/atomic-json.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-teardown.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-supervisor.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/python/ralph_process_supervisor.py" "$workspace/.ralph/python/"
@@ -1743,6 +1744,7 @@ ctrlc_expected_log() {
 }
 
 @test "orchestrator teardown stops sequential run-plan and descendant processes on SIGTERM" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local workspace output_dir orch_file log_file
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"
@@ -1848,6 +1850,7 @@ ctrlc_expected_log() {
 }
 
 @test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGTERM" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local workspace output_dir orch_file log_a log_b
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"

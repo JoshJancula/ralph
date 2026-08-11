@@ -397,4 +397,5 @@ orchestration_flags() {
   [ -f "$REPO_ROOT/bundle/.ralph/plan-templates/classic.plan.template.md" ]
   [ -f "$REPO_ROOT/bundle/.ralph/plan-templates/pipeline-simple.plan.template.md" ]
   [ -f "$REPO_ROOT/bundle/.ralph/plan-templates/pipeline-orchestration.plan.template.md" ]
+  [ -f "$REPO_ROOT/bundle/.ralph/plan-templates/graph-parallel-implementation.plan.template.md" ]
 }

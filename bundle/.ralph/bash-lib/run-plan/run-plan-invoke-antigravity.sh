@@ -140,6 +140,9 @@ run_plan_invoke_antigravity_capture_conversation() {
 
 ralph_run_plan_invoke_antigravity() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract antigravity || return 1
+  ralph_run_plan_subagents_require_runtime_capability antigravity || return 1
+  ralph_run_plan_native_subagent_verify_runtime antigravity || return 1
   local project_root="${RALPH_PROJECT_ROOT:-${WORKSPACE:-$PWD}}"
 
   # Create and export ANTIGRAVITY_CONFIG only when the effective MCP catalog

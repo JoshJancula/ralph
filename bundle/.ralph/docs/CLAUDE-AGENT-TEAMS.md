@@ -15,6 +15,20 @@ Agent teams let you coordinate **multiple Claude Code instances** in a single wo
 
 Agent teams are **experimental** and must be enabled (see [Enable agent teams](#enable-agent-teams)). They require Claude Code v2.1.32 or later (`claude --version`).
 
+**Important:** Ralph's default tool surface omits the subagent dispatch tool (`Task`). The allowed-tools set defaults to `Bash`, `Read`, `Edit`, `Write` in `ralph_run_plan_invoke_claude_apply_minimal_flags`. A Claude Code session running under Ralph therefore cannot spawn subagents or teammates unless the tool is explicitly added. Following the patterns in this document under a Ralph-managed run will produce silence rather than delegation unless you opt in.
+
+To enable subagent dispatch for a specific pipeline stage, set the `subagents` field to `on` in the stage frontmatter:
+
+```yaml
+pipeline:
+  stages:
+    - id: my-stage
+      runtime: claude
+      subagents: on   # adds Task to the allowed tool surface for this stage only
+```
+
+The `subagents` field accepts `inherit` (default; no change to the tool surface), `on` (adds the dispatch tool), or `off` (removes it). The default `inherit` is exactly today's behavior: no subagent dispatch unless an agent profile adds `Task` through `CLAUDE_TOOLS_FROM_AGENT`. Setting `subagents: on` is the supported, per-node way to enable delegation under Ralph.
+
 ## Enable agent teams
 
 Set the environment variable in your Claude Code [settings](https://code.claude.com/docs/en/settings). In the project `.claude/settings.json`:

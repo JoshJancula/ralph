@@ -46,7 +46,7 @@ ralph_compaction_gate_provenance() {
 
   local mode_gate="off"
   case "$channel" in
-    bash_compact | native_result_compact)
+    bash_compact)
       case "$mode" in
         native | hybrid) mode_gate="on" ;;
       esac

@@ -34,6 +34,44 @@ teardown() {
   [[ "$captured" == *"codex-smoke-prompt"* ]]
 }
 
+@test "codex refuses subagents on before native argv" {
+  local record="$TEST_TMPDIR/codex-subagents.args"
+  run_plan_invoke_test_write_codex_stub "$record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_codex
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsupported for runtime codex"* ]]
+  [ ! -e "$record" ]
+}
+
+@test "codex accepts the portable off contract" {
+  local record="$TEST_TMPDIR/codex-delegated-child.args"
+  run_plan_invoke_test_write_codex_stub "$record"
+  export PROMPT="codex-delegated-child-prompt"
+  export RALPH_MODE=native
+  export RALPH_PLAN_SUBAGENTS=off
+  export CODEX_PLAN_NO_ADD_AGENTS_DIR=1
+
+  run ralph_run_plan_invoke_codex
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+}
+
+@test "codex grants an external state root without creating a shadow workspace root" {
+  local record="$TEST_TMPDIR/codex-external-state.args"
+  local state_root="$TEST_TMPDIR/external-state"
+  run_plan_invoke_test_write_codex_stub "$record"
+  mkdir -p "$state_root"
+  export PROMPT="codex-external-state"
+  export RALPH_MODE=native
+  export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
+
+  run ralph_run_plan_invoke_codex
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$record")" == *"--add-dir"*"$state_root"* ]]
+  [ ! -d "$WORKSPACE/.ralph-workspace" ]
+}
+
 
 # Regression: Codex refuses to start outside a git repo unless
 # --skip-git-repo-check is passed. Ralph workspaces are often a parent dir

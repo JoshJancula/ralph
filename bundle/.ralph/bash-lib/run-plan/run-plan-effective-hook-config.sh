@@ -84,22 +84,6 @@ ralph_effective_hook_config_resolve() {
   if [[ "$requested_gate" == "on" ]]; then
     enabled="true"
     enabled_reason="$requested_source"
-  elif [[ "$channel" == "native_result_compact" ]]; then
-    # Coupled legacy fallback: native_result_compact also activates when
-    # either legacy Bash or proxy-shell compaction is on, even if its own
-    # gate is off/unset (mirrors ralph_native_hook_result_compact_enabled).
-    local bash_prov proxy_prov bash_gate proxy_gate
-    bash_prov="$(ralph_compaction_gate_provenance "bash_compact" "$mode" "$mode_source")"
-    proxy_prov="$(ralph_compaction_gate_provenance "proxy_shell_compact" "$mode" "$mode_source")"
-    bash_gate="$(jq -r '.gate' <<<"$bash_prov")"
-    proxy_gate="$(jq -r '.gate' <<<"$proxy_prov")"
-    if [[ "$bash_gate" == "on" ]]; then
-      enabled="true"
-      enabled_reason="coupled_bash_compact"
-    elif [[ "$proxy_gate" == "on" ]]; then
-      enabled="true"
-      enabled_reason="coupled_proxy_shell_compact"
-    fi
   fi
 
   local capability

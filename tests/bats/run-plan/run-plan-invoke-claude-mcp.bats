@@ -261,6 +261,10 @@ EOF
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-cleanup.args"
+  local ambient="$WORKSPACE/.mcp.json"
+  local ambient_before
+  printf '%s\n' '{"mcpServers":{"ambient":{"command":"printf"}}}' >"$ambient"
+  ambient_before="$(shasum -a 256 "$ambient" | awk '{print $1}')"
   write_claude_stub "$record"
 
   PROMPT="claude-cleanup-prompt"
@@ -292,6 +296,7 @@ EOF
   ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE" "$TEST_TMPDIR" "$TEST_TMPDIR" "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-claude.sh"
 
   [ "$status" -eq 0 ]
+  [ "$(shasum -a 256 "$ambient" | awk '{print $1}')" = "$ambient_before" ]
 }
 
 @test "claude bare mode omits setting sources and MCP overlay flags" {

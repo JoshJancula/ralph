@@ -112,7 +112,7 @@ Single commands are classified into families; compound pipelines are not compact
 | Tests and builds | `bats`, `npm test`, `vitest`, `pytest`, `cargo test`, `go test`, `tsc`, `eslint` |
 | Operations | `docker ps`, `docker logs`, `kubectl`, `gh pr view`, `gh pr list` |
 
-Each family keeps what matters (failed test names, error lines, file paths, counts) and drops the noise. When no family matches, output larger than `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` (default `8192`) gets a generic head-plus-tail-plus-errors summary; smaller unknown output passes through raw. For stored results with no known command, Ralph also tries to classify output by shape (diff, grep matches, path lists, repeated log lines).
+Each family keeps what matters (failed test names, error lines, file paths, counts) and drops the noise. Source-bearing output such as `git diff`, `git show`, and `grep`/`rg` passes through unchanged. Unknown commands also pass through raw unless `RALPH_COMPACT_GENERIC_FALLBACK=1` explicitly enables the generic head-plus-tail-plus-errors fallback.
 
 Beyond the built-in Python compactors, simple pattern-based rules can be added as JSON ("DSL rules") via `RALPH_COMPACTOR_DSL_RULES_PATH`; the built-ins live in `bundle/.ralph/bash-lib/compactor-dsl-builtin-rules.json`. Both kinds go through the same safety gate.
 
@@ -120,7 +120,7 @@ When no command is known at all (for example a stored result with no attached co
 
 ### Bounded search source capture
 
-`ralph_proxy_search`'s owned grep path additionally bounds how much raw source it will read from the underlying command before summarizing (byte, line, and per-line-byte caps; see `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_*` in [ENVIRONMENT.md](ENVIRONMENT.md#grep-source-capture-caps-ralph_mcp_proxy_policy_owned_grep_source_)), independent of the result envelope's own size cap. When a cap is hit, the result is marked `truncated` and the envelope reports `sourceComplete: false` with a `capReason`; there is no way to retrieve the remainder of a capped source stream past the cap, so narrow the search and re-run instead of assuming the raw result is retrievable in full.
+`ralph_proxy_search`'s owned grep path additionally bounds how much raw source it will read from the underlying command (byte, line, and per-line-byte caps; see `RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_*` in [ENVIRONMENT.md](ENVIRONMENT.md#grep-source-capture-caps-ralph_mcp_proxy_policy_owned_grep_source_)). These safety caps apply even though the normal response is direct source output. The legacy `RALPH_MCP_EXPLORATION_RESULT_COMPACT=1` envelope reports `sourceComplete: false` with a `capReason` when a cap is hit; otherwise narrow the search and re-run rather than assuming a capped stream is complete.
 
 ### Retrieving the original
 
@@ -137,6 +137,7 @@ When no command is known at all (for example a stored result with no attached co
 | `--ralph-mode native` or `hybrid` | Claude native Bash compaction on by default (`RALPH_BASH_COMPACT=1` when unset) |
 | `RALPH_PROXY_SHELL_COMPACT=0` | Turn off MCP compaction even in `ralph`/`hybrid` |
 | `RALPH_BASH_COMPACT=0` | Turn off Claude native Bash compaction even in `native`/`hybrid` |
+| `RALPH_COMPACT_GENERIC_FALLBACK=1` | Opt into generic compaction for unknown large shell output |
 | `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=<n>` | Resize the generic fallback threshold |
 | `--ralph-mode no` | Everything off unless you set the variables yourself |
 
@@ -184,7 +185,7 @@ Default `--runtime-dir` is `$PWD/.$runtime`. At least one of `--hooks`, `--mcp`,
 
 **Codex trusted-project caveat:** project-scoped `.codex/config.toml` and `.codex/hooks.json` load only when Codex trusts the project. If hooks or MCP do not apply after `ralph setup`, add a trusted entry under `~/.codex/config.toml` (for example `[projects."/absolute/path/to/project"]` with `trust_level = "trusted"`) or trust the project in the Codex UI. User-level `~/.codex/config.toml` still loads when the project is untrusted, but project-local Ralph entries are skipped.
 
-**OpenCode MCP-first recommendation:** `ralph setup --hooks` copies the Ralph runtime plugin into `.opencode/plugins/`, but headless hook invocation is unproven. Prefer `ralph setup --mcp` (project-root `opencode.json`) or plan runs with `--ralph-mode hybrid` so Ralph MCP tools are injected and native exploration output is compacted through the shared Ralph result-windowing path (MCP-proxy compaction is authoritative unless revalidation records `headless_mutation_reaches_model: yes`). The setup command prints a note when installing OpenCode hooks.
+**OpenCode MCP-first recommendation:** `ralph setup --hooks` copies the Ralph runtime plugin into `.opencode/plugins/`, but headless hook invocation is unproven. Prefer `ralph setup --mcp` (project-root `opencode.json`) or plan runs with `--ralph-mode hybrid` so Ralph MCP tools are injected and noisy shell output can use MCP compaction. Native exploration output remains direct unless explicitly opted into legacy windowing. The setup command prints a note when installing OpenCode hooks.
 
 Durable MCP details and per-runtime file paths: [MCP.md](MCP.md#durable-mcp-setup-ralph-setup---mcp). Per-run overlay behavior below still applies when you use `--ralph-mode native` or `hybrid` on `ralph run-plan`.
 
@@ -197,7 +198,7 @@ Native adapters are merged for one run and restored afterward (see [Overlay stat
 | Claude | Proven | True PostToolUse:Bash output replacement (Claude Code 2.1.162). PreToolUse input rewrite also available. |
 | Cursor | Proven (wrapper) | PreToolUse input rewrite and wrapper-based shell compaction (Cursor Agent 2026.06.03). Direct Shell output replacement is not available; MCP compaction covers that. |
 | Codex | Proven (wrapper) | Wrapper-based shell compaction via PreToolUse (Codex CLI 0.136.0). PostToolUse output replacement not proven. |
-| OpenCode | Unproven (plugin hooks) | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; MCP-proxy native-result compaction is authoritative and the plugin hook path is best-effort until revalidation proves headless mutation reaches the model. |
+| OpenCode | Unproven (plugin hooks) | Plugin staging works, but headless `opencode run` hook invocation is unproven (1.14.35). In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; MCP-proxy shell compaction is authoritative for noisy command output and the plugin hook path is best-effort until revalidation proves headless mutation reaches the model. |
 
 "Wrapper-based" means the hook rewrites the command to run through a Ralph wrapper that captures, compacts, and stores the output -- same storage and retrieval as everything else.
 
@@ -252,9 +253,9 @@ Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` into the workspac
 
 **Hybrid tool access:** `--ralph-mode hybrid` injects Ralph MCP (`mcp.ralph.enabled=true`) and keeps native OpenCode exploration tools (`read`, `grep`, `glob`, `bash`) available. Ralph does not deny or hide native tools as a compaction strategy. Overlay summary records `tool_access_mode=hybrid` and capability `opencode-hybrid-native-and-ralph-mcp`.
 
-**Native exploration compaction:** Large native read/grep/glob/bash output is windowed through Ralph's shared `native-result-compact` path (same stored-result envelope and `ralph_proxy_result_*` retrieval as MCP proxy tools). Savings appear under `result_windowing` telemetry and `native_shell_compaction_authoritative` in overlay/usage records.
+**Native exploration compaction:** Native read/grep/glob/search results stay visible as returned. The legacy `RALPH_NATIVE_RESULT_COMPACT=1` path is an explicit opt-in only; it is not enabled by `native` or `hybrid` mode.
 
-**Authoritative compaction path:** By default, **MCP-proxy compaction** (`RALPH_NATIVE_RESULT_COMPACT=1`, `RALPH_PROXY_SHELL_COMPACT=1`, `native-result-compact-cli.sh`) is authoritative for OpenCode plan runs. Ralph checks `.ralph-workspace/artifacts/PLAN13/opencode-hook-revalidation.md` when present; only when that artifact records `headless_mutation_reaches_model: yes` does Ralph treat the **plugin-hook mutation** path (`tool.execute.after` in `ralph-runtime-hooks.ts`) as authoritative instead. Without that revalidation verdict, the staged plugin remains best-effort/conditional and runs record `native_hooks_effective=false`.
+**Authoritative compaction path:** `ralph_proxy_shell` with `RALPH_PROXY_SHELL_COMPACT=1` is the authoritative OpenCode path for noisy shell output. Native exploration results are not compacted by default; the staged plugin remains best-effort/conditional and runs record `native_hooks_effective=false` until revalidation proves agent-visible mutation.
 
 **Cache-read reporting:** Provider cache-read token fields (`cache_read_input_tokens`, `cache_read_per_tool_turn`) are model/provider dependent and are **telemetry only**. They inform optimization hints (for example `RALPH_CACHE_READ_PER_TURN_WARN`) but are not Ralph's primary context-control mechanism; bounded tool output and result windowing are.
 

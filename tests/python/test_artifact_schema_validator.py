@@ -116,6 +116,16 @@ class ArtifactSchemaDocumentTests(unittest.TestCase):
             validate_json_text(json.dumps({"status": "ok", "extra": 1}), schema)
         self.assertEqual(ctx.exception.json_path, "$/extra")
 
+    def test_schema_valued_additional_properties_validates_dynamic_keys(self) -> None:
+        schema = {
+            "type": "object",
+            "additionalProperties": {"type": "array", "items": {"type": "integer"}},
+        }
+        validate_instance({"lane-a": [0, 2]}, schema)
+        with self.assertRaises(SchemaValidationError) as ctx:
+            validate_instance({"lane-a": ["wrong"]}, schema)
+        self.assertEqual(ctx.exception.json_path, "$/lane-a/0")
+
     def test_malformed_json_fails(self) -> None:
         schema = {"type": "object"}
         with self.assertRaises(SchemaValidationError) as ctx:
@@ -142,6 +152,14 @@ class ArtifactSchemaDocumentTests(unittest.TestCase):
         )
         with self.assertRaises(SchemaValidationError):
             validate_instance({"id": "ABC", "score": 0.5, "tags": ["one"]}, schema)
+
+    def test_string_length_bounds(self) -> None:
+        schema = {"type": "string", "minLength": 2, "maxLength": 4}
+        validate_instance("okay", schema)
+        with self.assertRaises(SchemaValidationError):
+            validate_instance("x", schema)
+        with self.assertRaises(SchemaValidationError):
+            validate_instance("excess", schema)
 
 
 class ArtifactSchemaOrchestrationTests(unittest.TestCase):

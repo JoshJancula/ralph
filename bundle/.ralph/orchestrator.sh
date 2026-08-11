@@ -168,7 +168,12 @@ if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
 fi
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 RALPH_ACTIVE_DIR="$RALPH_DIR"
-if [[ -f "$WORKSPACE/.ralph/run-plan.sh" && -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
+if [[ -n "${RALPH_GRAPH_TOOLING_ROOT:-}" ]]; then
+  RALPH_ACTIVE_DIR="$(cd "$RALPH_GRAPH_TOOLING_ROOT" 2>/dev/null && pwd -P)" || {
+    echo "Orchestrator error: invalid frozen graph tooling root." >&2
+    exit 1
+  }
+elif [[ -f "$WORKSPACE/.ralph/run-plan.sh" && -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
   RALPH_ACTIVE_DIR="$WORKSPACE/.ralph"
 fi
 if [[ ! -f "$RALPH_ACTIVE_DIR/ralph-env-safety.sh" ]]; then
@@ -225,6 +230,8 @@ source "$RALPH_ACTIVE_DIR/bash-lib/ralph-format-elapsed.sh"
 source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-handoffs.sh"
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/review-status.sh"
+# shellcheck source=bash-lib/atomic-json.sh
+source "$RALPH_ACTIVE_DIR/bash-lib/atomic-json.sh"
 if [[ -f "$RALPH_ACTIVE_DIR/bash-lib/rubric-grader.sh" ]]; then
   # shellcheck source=/dev/null
   source "$RALPH_ACTIVE_DIR/bash-lib/rubric-grader.sh"
@@ -355,24 +362,10 @@ orch_single_stage_report_path() {
 
 # Best-effort durable flush of a single file. Prefers a real per-file fsync via
 # python3; falls back to sync(1) when present. Never fails the caller.
+# Thin wrapper around the shared ralph_fsync_path from atomic-json.sh; kept
+# for any in-tree callers that still reference the orch_ name.
 orch_fsync_path() {
-  local target="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$target" <<'PY' 2>/dev/null || true
-import os, sys
-p = sys.argv[1]
-try:
-    fd = os.open(p, os.O_RDONLY)
-except OSError:
-    sys.exit(0)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
-  elif command -v sync >/dev/null 2>&1; then
-    sync 2>/dev/null || true
-  fi
+  ralph_fsync_path "$1"
 }
 
 orch_single_stage_write_report() {
@@ -380,13 +373,14 @@ orch_single_stage_write_report() {
   [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 1
   [[ "$exit_code" =~ ^-?[0-9]+$ ]] || exit_code=1
-  local report_path report_dir tmp_file finished_at
+  local report_path report_dir finished_at
   report_path="$(orch_single_stage_report_path)" || return 1
   report_dir="$(dirname "$report_path")"
   mkdir -p "$report_dir" 2>/dev/null || return 1
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  tmp_file="$(mktemp "$report_dir/.stage-outcome-XXXXXX" 2>/dev/null)" || return 1
-  if ! jq -n \
+  if ! ralph_atomic_write_json "$report_path" \
+    '{schemaVersion: $schemaVersion, runId: $runId, stageId: $stageId, attemptId: $attemptId, outcome: $outcome, exitCode: $exitCode, startedAt: $startedAt, finishedAt: $finishedAt}
+       + (if $reason == "" then {} else {reason: $reason} end)' \
     --argjson schemaVersion 1 \
     --arg runId "$SINGLE_STAGE_RUN_ID" \
     --arg stageId "$SINGLE_STAGE_ID" \
@@ -395,19 +389,9 @@ orch_single_stage_write_report() {
     --argjson exitCode "$exit_code" \
     --arg startedAt "${SINGLE_STAGE_STARTED_AT:-$finished_at}" \
     --arg finishedAt "$finished_at" \
-    --arg reason "$reason" \
-    '{schemaVersion: $schemaVersion, runId: $runId, stageId: $stageId, attemptId: $attemptId, outcome: $outcome, exitCode: $exitCode, startedAt: $startedAt, finishedAt: $finishedAt}
-       + (if $reason == "" then {} else {reason: $reason} end)' \
-    > "$tmp_file" 2>/dev/null; then
-    rm -f "$tmp_file" 2>/dev/null || true
+    --arg reason "$reason"; then
     return 1
   fi
-  orch_fsync_path "$tmp_file"
-  if ! mv -f "$tmp_file" "$report_path" 2>/dev/null; then
-    rm -f "$tmp_file" 2>/dev/null || true
-    return 1
-  fi
-  orch_fsync_path "$report_dir"
   SINGLE_STAGE_REPORT_WRITTEN=1
   return 0
 }
@@ -449,6 +433,8 @@ verify_step_artifacts() {
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
     if [[ "$ap" == /* ]]; then
       abs="$ap"
+    elif [[ "$ap" == .ralph-workspace/* && -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+      abs="${RALPH_PLAN_WORKSPACE_ROOT%/}/${ap#.ralph-workspace/}"
     else
       abs="$WORKSPACE/$ap"
     fi
@@ -674,9 +660,19 @@ orch_stage_execute() {
   local stage_usage_file="${13:-}"
   local stage_index="${14:-0}"
   local stage_context_budget=""
+  local stage_subagents=""
   local stage_mcp_proxy_policy=""
   local stage_mcp_proxy_policy_type=""
   stage_context_budget="$(echo "$stage" | jq -r '.contextBudget // ""' 2>/dev/null)" || stage_context_budget=""
+  stage_subagents="$(echo "$stage" | jq -r '.subagents // ""' 2>/dev/null)" || stage_subagents=""
+  case "$stage_subagents" in
+    ""|inherit|on|off) ;;
+    *)
+      ralph_orchestrator_log "FAIL step $step_n: subagents must be inherit, on, or off (got $stage_subagents)"
+      printf -v "$step_status_var" '%s' 1
+      return 1
+      ;;
+  esac
   local plan_abs_file="$plan_abs"
   local step_status=0
   local runner="$RALPH_RUN_PLAN"
@@ -898,11 +894,22 @@ orch_stage_execute() {
   fi
 
   set +e
+  # Graph scheduler injects RALPH_PLAN_KEY=<planKey>-<nodeId> plus
+  # RALPH_GRAPH_NODE_ID for session/log isolation while keeping a shared
+  # RALPH_ARTIFACT_NS. Preserve those when present; otherwise derive the plan
+  # key from the stage plan basename as before.
+  _runner_plan_key="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_PLAN_KEY:-}" ]]; then
+    _runner_plan_key="$RALPH_PLAN_KEY"
+  fi
   _runner_env=(
     RALPH_ARTIFACT_NS="$RALPH_ARTIFACT_NS"
-    RALPH_PLAN_KEY="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
+    RALPH_PLAN_KEY="$_runner_plan_key"
     RALPH_ORCH_FILE="$RALPH_ORCH_FILE"
   )
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+    _runner_env+=(RALPH_GRAPH_NODE_ID="$RALPH_GRAPH_NODE_ID")
+  fi
   if [[ -n "${CODEX_PLAN_SANDBOX:-}" ]]; then
     _runner_env+=(CODEX_PLAN_SANDBOX="$CODEX_PLAN_SANDBOX")
   fi
@@ -983,6 +990,9 @@ orch_stage_execute() {
   if [[ -n "$stage_context_budget" ]]; then
     _runner_env+=(RALPH_PLAN_CONTEXT_BUDGET="$stage_context_budget")
   fi
+  if [[ -n "$stage_subagents" ]]; then
+    _runner_env+=(RALPH_PLAN_SUBAGENTS="$stage_subagents")
+  fi
   if [[ "$_stage_grader" == "true" ]]; then
     _runner_env+=(RALPH_GRADER_STAGE=1 RALPH_RUBRIC_PATH="$_stage_rubric")
   else
@@ -1012,6 +1022,13 @@ orch_stage_execute() {
   _runner_args=(--non-interactive --runtime "$runtime" --workspace "$WORKSPACE" --plan "$plan_abs_file")
   if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
     _runner_args+=(--workspace-root "$WORKSPACE_ROOT_OVERRIDE")
+  fi
+  # Graph nodes have an explicit, isolated agent workspace.  run-plan's
+  # ordinary default is its process cwd, which is the scheduler's workspace
+  # here, so pass the root explicitly rather than losing the node boundary.
+  # Keep non-graph orchestration byte-compatible.
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_AGENT_WORKSPACE:-}" ]]; then
+    _runner_args+=(--agent-workspace "$RALPH_AGENT_WORKSPACE")
   fi
   if ((${#_session_strategy_cli[@]} > 0)); then
     _runner_args+=("${_session_strategy_cli[@]}")
@@ -1222,8 +1239,14 @@ orch_stage_execute() {
   fi
   fi
 
-  # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see run-plan-core.sh).
-  _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-usage-summary.json"
+  # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see
+  # run-plan-core.sh), or logs/<RALPH_ARTIFACT_NS>/nodes/<nodeId>/ when the graph
+  # scheduler set RALPH_GRAPH_NODE_ID for per-node log isolation.
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+    _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/nodes/$RALPH_GRAPH_NODE_ID/plan-usage-summary.json"
+  else
+    _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-usage-summary.json"
+  fi
   orch_stage_capture_usage "$step_n" "$agent" "$runtime" "$_stage_usage_file" "$stage_usage_file"
   ralph_orchestrator_log "step $step_n OK"
   echo -e "${C_G}Step $step_n completed.${C_RST}"
@@ -1521,7 +1544,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     # orch_stage_execute exits directly on runner/artifact failure; the EXIT trap
     # then records the failed/cancelled report with the real exit code. Non-zero
     # returns (validation without exit) are handled explicitly here.
-    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$ss_idx"; then
+    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "" "$ss_idx"; then
       orch_single_stage_write_report "failed" "${step_rc:-1}" "stage execution failed" || true
       exit "${step_rc:-1}"
     fi

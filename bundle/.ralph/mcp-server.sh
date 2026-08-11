@@ -49,6 +49,8 @@ load_server_libs() {
   source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
   # shellcheck source=bash-lib/mcp-proxy/mcp-proxy-approvals.sh
   source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-approvals.sh"
+  # shellcheck source=bash-lib/graph/graph-delegation-mcp.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-delegation-mcp.sh"
 }
 
 load_server_libs
@@ -270,6 +272,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 readonly ORCHESTRATOR_SCRIPT=".ralph/orchestrator.sh"
+readonly GRAPH_RUN_SCRIPT=".ralph/graph-run.sh"
 MCP_AUTH_TOKEN="${RALPH_MCP_AUTH_TOKEN:-}"
 
 WORKSPACE_ROOT=""
@@ -333,6 +336,46 @@ _BASE_TOOL_LIST_JSON=$(
           }
         },
         "required": ["workspace", "orchestration_path"]
+      }
+    },
+    {
+      "name": "ralph_graph_run",
+      "description": "Execute a graph-mode plan (execution: graph) using the multi-node DAG scheduler.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": { "type": "string", "description": "Workspace root path." },
+          "plan_path": { "type": "string", "description": "Graph plan file path (must have execution: graph)." },
+          "namespace": { "type": "string", "description": "Namespace for run artifacts (defaults to plan name)." },
+          "max_parallel": {
+            "type": "integer",
+            "description": "Maximum concurrent graph nodes (default 2).",
+            "minimum": 1
+          },
+          "env_overrides": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variable overrides."
+          }
+        },
+        "required": ["workspace", "plan_path"]
+      }
+    },
+    {
+      "name": "ralph_graph_status",
+      "description": "Report the status of a graph run from the run-state ledger.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": { "type": "string", "description": "Workspace root path." },
+          "plan_path": { "type": "string", "description": "Graph plan file path." },
+          "namespace": { "type": "string", "description": "Namespace for the graph run." },
+          "run": {
+            "type": "string",
+            "description": "Run id or the literal token 'latest' (default: latest)."
+          }
+        },
+        "required": ["workspace", "plan_path"]
       }
     },
     {
@@ -401,11 +444,14 @@ get_tool_list_result() {
         ;;
     esac
     result_tools_json="$(ralph_mcp_proxy_result_tools_json)"
+    local delegation_tools_json
+    delegation_tools_json="$(graph_delegation_mcp_tools_json)"
     TOOL_LIST_RESULT=$(
       jq -c \
         --argjson proxy "$proxy_json" \
         --argjson result "$result_tools_json" \
-        '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
+        --argjson delegation "$delegation_tools_json" \
+        '.tools += $proxy | .tools += $result | .tools += $delegation | .tools |= sort_by(.name)' \
         <<< "$_BASE_TOOL_LIST_JSON"
     )
     if ralph_mcp_proxy_compact_tool_catalog_active; then
@@ -416,13 +462,28 @@ get_tool_list_result() {
           .tools |= map(
             . as $tool
             | ($tool.name // "") as $n
-            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run") then .
+            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run" or $n == "ralph_graph_run" or $n == "ralph_graph_status" or $n == "ralph_delegate_start" or $n == "ralph_delegate_status" or $n == "ralph_delegate_wait" or $n == "ralph_delegate_result" or $n == "ralph_delegate_cancel") then .
               elif ($core | index($n)) != null then .
               else empty
               end
           )
           | .tools |= sort_by(.name)
         ' <<< "$TOOL_LIST_RESULT"
+      )
+    fi
+    # Scope-based catalog filtering.  This is a usability hint; handler-level
+    # enforcement is the actual security boundary.
+    local hidden_tools_json='[]'
+    local hidden_name
+    while IFS= read -r hidden_name; do
+      [[ -n "$hidden_name" ]] || continue
+      hidden_tools_json="$(jq -c --arg n "$hidden_name" '. + [$n]' <<<"$hidden_tools_json")"
+    done < <(graph_delegation_mcp_catalog_hidden_tools)
+    if [[ "$(jq 'length' <<<"$hidden_tools_json")" -gt 0 ]]; then
+      TOOL_LIST_RESULT=$(
+        jq -c --argjson hidden "$hidden_tools_json" \
+          '.tools |= map(select((.name // "") as $n | ($hidden | index($n)) == null))' \
+          <<< "$TOOL_LIST_RESULT"
       )
     fi
     tools_array="$(jq -c '.tools' <<<"$TOOL_LIST_RESULT")"
@@ -979,6 +1040,212 @@ handle_orchestrator_run() {
   send_result "$id_present" "$id_raw" "$result_json"
 }
 
+handle_graph_run() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local workspace_arg plan_arg namespace_arg max_parallel_arg
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" != "1" ]]; then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph runs are disabled for managed runtime sessions (set RALPH_ALLOW_NESTED_RUNS=1 to opt in)"
+    return
+  fi
+  local process_depth="${RALPH_PROCESS_RUN_DEPTH:-0}" process_max_depth="${RALPH_PROCESS_MAX_NESTED_DEPTH:-1}"
+  [[ "$process_depth" =~ ^[0-9]+$ ]] || process_depth=0
+  [[ "$process_max_depth" =~ ^[0-9]+$ ]] || process_max_depth=1
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" == "1" ]] \
+    && (( process_depth >= process_max_depth )); then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph run depth limit reached"
+    return
+  fi
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  namespace_arg="$(echo "$args_json" | jq -r '.namespace // empty')"
+  max_parallel_arg="$(echo "$args_json" | jq -r '.max_parallel // empty')"
+  if [[ -z "$workspace_arg" || -z "$plan_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace and plan_path are required"
+    return
+  fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$plan_arg" "plan_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$namespace_arg" ]] && ! ensure_safe_argument "$namespace_arg" "namespace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$max_parallel_arg" ]] && ! ensure_safe_argument "$max_parallel_arg" "max_parallel" "$id_present" "$id_raw"; then
+    return
+  fi
+  local workspace_path
+  if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+    return
+  fi
+  local plan_path
+  if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    return
+  fi
+  if [[ ! -f "$plan_path" ]]; then
+    send_error "$id_present" "$id_raw" "-32000" "Plan file not found: $plan_path"
+    return
+  fi
+  local graph_run_script="$workspace_path/$GRAPH_RUN_SCRIPT"
+  if [[ ! -f "$graph_run_script" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "graph-run.sh not found at $graph_run_script"
+    return
+  fi
+  local command=("bash" "$graph_run_script" "run" "$plan_path")
+  if [[ -n "$namespace_arg" ]]; then
+    command+=("--namespace" "$namespace_arg")
+  fi
+  if [[ -n "$max_parallel_arg" ]]; then
+    command+=("--max-parallel" "$max_parallel_arg")
+  fi
+  execute_tool_command "${command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
+  local command_text
+  command_text="$(printf '%s ' "${command[@]}")"
+  command_text="${command_text%" "}"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local summary="Graph run exit code $exit_code."
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$summary" \
+      --arg workspace "$workspace_path" \
+      --arg plan_path "$plan_path" \
+      --arg command "$command_text" \
+      --arg timestamp "$timestamp" \
+      --arg stdout_tail "$stdout_tail" \
+      --arg stderr_tail "$stderr_tail" \
+      --argjson exit_code "$exit_code" \
+      --argjson duration "$duration" \
+      --argjson stdout_truncated "$stdout_trunc" \
+      --argjson stderr_truncated "$stderr_trunc" \
+      --argjson timeout false \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{
+          workspace:$workspace,
+          plan_path:$plan_path,
+          exit_code:$exit_code,
+          timeout:$timeout,
+          duration_seconds:$duration,
+          stdout_tail:$stdout_tail,
+          stderr_tail:$stderr_tail,
+          stdout_truncated:$stdout_truncated,
+          stderr_truncated:$stderr_truncated,
+          command:$command,
+          timestamp:$timestamp
+        },
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+handle_graph_status() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local workspace_arg plan_arg namespace_arg run_arg
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  namespace_arg="$(echo "$args_json" | jq -r '.namespace // empty')"
+  run_arg="$(echo "$args_json" | jq -r '.run // "latest"')"
+  if [[ -z "$workspace_arg" || -z "$plan_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace and plan_path are required"
+    return
+  fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$plan_arg" "plan_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$namespace_arg" ]] && ! ensure_safe_argument "$namespace_arg" "namespace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$run_arg" "run" "$id_present" "$id_raw"; then
+    return
+  fi
+  local workspace_path
+  if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+    return
+  fi
+  local plan_path
+  if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    return
+  fi
+  local graph_run_script="$workspace_path/$GRAPH_RUN_SCRIPT"
+  if [[ ! -f "$graph_run_script" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "graph-run.sh not found at $graph_run_script"
+    return
+  fi
+  local command=("bash" "$graph_run_script" "status" "$plan_path")
+  if [[ -n "$namespace_arg" ]]; then
+    command+=("--namespace" "$namespace_arg")
+  fi
+  command+=("--run" "$run_arg")
+  execute_tool_command "${command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
+  local command_text
+  command_text="$(printf '%s ' "${command[@]}")"
+  command_text="${command_text%" "}"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local summary="Graph status exit code $exit_code."
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$summary" \
+      --arg workspace "$workspace_path" \
+      --arg plan_path "$plan_path" \
+      --arg command "$command_text" \
+      --arg timestamp "$timestamp" \
+      --arg stdout_tail "$stdout_tail" \
+      --arg stderr_tail "$stderr_tail" \
+      --argjson exit_code "$exit_code" \
+      --argjson duration "$duration" \
+      --argjson stdout_truncated "$stdout_trunc" \
+      --argjson stderr_truncated "$stderr_trunc" \
+      --argjson timeout false \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{
+          workspace:$workspace,
+          plan_path:$plan_path,
+          exit_code:$exit_code,
+          timeout:$timeout,
+          duration_seconds:$duration,
+          stdout_tail:$stdout_tail,
+          stderr_tail:$stderr_tail,
+          stdout_truncated:$stdout_truncated,
+          stderr_truncated:$stderr_truncated,
+          command:$command,
+          timestamp:$timestamp
+        },
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
 handle_list_tools() {
   local id_present="$1"
   local id_raw="$2"
@@ -1189,6 +1456,27 @@ handle_call_tool() {
       ;;
     ralph_orchestrator_run)
       handle_orchestrator_run "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_graph_run)
+      handle_graph_run "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_graph_status)
+      handle_graph_status "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegate_start)
+      handle_delegate_start "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegate_status)
+      handle_delegate_status "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegate_wait)
+      handle_delegate_wait "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegate_result)
+      handle_delegate_result "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegate_cancel)
+      handle_delegate_cancel "$args_json" "$id_present" "$id_raw"
       ;;
     ralph_complete_todo)
       handle_complete_todo "$args_json" "$id_present" "$id_raw"

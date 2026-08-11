@@ -60,7 +60,8 @@ _GENERIC_LARGE_MIN_LINES = 80
 _GENERIC_LARGE_HEAD_LINES = 30
 _GENERIC_LARGE_TAIL_LINES = 5
 
-# Size-triggered fallback when no family rule matches (RALPH_COMPACT_GENERIC_THRESHOLD_BYTES).
+# Optional size-triggered fallback when no family rule matches. It is off by
+# default because unknown shell output may be source data rather than noise.
 _GENERIC_FALLBACK_DEFAULT_THRESHOLD_BYTES = 8192
 _GENERIC_FALLBACK_MAX_ERROR_LINES = 40
 _GENERIC_FALLBACK_ERROR_RE = re.compile(r"error|fail|fatal|exception|not ok", re.IGNORECASE)
@@ -235,8 +236,8 @@ def compact_shell_output(
 
     Primary path: command-based classification.
     Fallback path: shape detection when command is unknown/incomplete.
-    Size-triggered generic compaction when no family rule matches and combined
-    output exceeds RALPH_COMPACT_GENERIC_THRESHOLD_BYTES.
+    Optional size-triggered generic compaction when no family rule matches and
+    combined output exceeds RALPH_COMPACT_GENERIC_THRESHOLD_BYTES.
     Failure-aware compaction on non-zero exit when family rules decline or
     output is below the generic threshold (RALPH_COMPACT_FAILURE=0 opts out).
     """
@@ -247,16 +248,15 @@ def compact_shell_output(
         return _not_compacted(command, stdout, stderr, exit_status)
 
     family_id = classify_command(command)
-    if family_id is None:
-        if _command_allows_shape_fallback(command):
-            family_id = detect_output_shape(combined_original)
-        elif _command_allows_generic_shape_fallback(command):
-            family_id = detect_output_shape_generic_only(combined_original)
-
     family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
+    if family_entry is None and _command_allows_shape_fallback(command):
+        family_id = detect_output_shape(combined_original)
+        family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
     if family_entry is None:
-        generic_result = _generic_size_fallback(
-            command, stdout, stderr, exit_status, combined_original
+        generic_result = (
+            _generic_size_fallback(command, stdout, stderr, exit_status, combined_original)
+            if _generic_fallback_enabled()
+            else _not_compacted(command, stdout, stderr, exit_status)
         )
         if generic_result.status == "compacted" or exit_status == 0:
             return generic_result
@@ -615,6 +615,16 @@ def _generic_fallback_threshold_bytes() -> int:
     if value < 0:
         return _GENERIC_FALLBACK_DEFAULT_THRESHOLD_BYTES
     return value
+
+
+def _generic_fallback_enabled() -> bool:
+    """Return True only when generic unknown-command compaction is requested."""
+    return os.environ.get("RALPH_COMPACT_GENERIC_FALLBACK", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _generic_size_fallback(
@@ -2438,27 +2448,9 @@ _CORE_FAMILY_REGISTRY: list[CompactorFamily] = [
         safety_metadata={"safe": True, "phase": "phase2"},
     ),
     CompactorFamily(
-        family_id=FAMILY_GIT_DIFF,
-        classifier=classifier_for_family(FAMILY_GIT_DIFF),
-        compactor=_compact_git_diff,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
-        family_id=FAMILY_GIT_SHOW,
-        classifier=classifier_for_family(FAMILY_GIT_SHOW),
-        compactor=_compact_git_diff,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
         family_id=FAMILY_GIT_LOG,
         classifier=classifier_for_family(FAMILY_GIT_LOG),
         compactor=_compact_generic_large,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
-        family_id=FAMILY_GREP,
-        classifier=classifier_for_family(FAMILY_GREP),
-        compactor=_compact_grep,
         safety_metadata={"safe": True, "phase": "phase2"},
     ),
     CompactorFamily(

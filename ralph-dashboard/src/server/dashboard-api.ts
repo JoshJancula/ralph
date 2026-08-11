@@ -4026,6 +4026,382 @@ export async function handleWorkspacesRequest(_req: Request, res: Response): Pro
   res.json(body);
 }
 
+export interface GraphRunSummary {
+  namespace: string;
+  runId: string;
+  isLatest: boolean;
+  status: string;
+  startedAt: string | null;
+  nodeCount: number;
+}
+
+export interface BrokeredChildState {
+  delegationId: string;
+  runtime?: string;
+  status: string;
+  task?: string;
+  resultArtifact?: string;
+  usage?: Record<string, number>;
+}
+
+export interface NativeSubagentEvent {
+  event: string;
+  timestamp?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface GraphUsageSummary {
+  parent: Record<string, number>;
+  brokeredChildren: Record<string, number>;
+  total: Record<string, number>;
+}
+
+export interface GraphNodeAttempt {
+  attemptId: string;
+  outcome: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  runtime?: string;
+  subagents?: string;
+  reason?: string;
+  /** V2 observability metadata recorded by the scheduler for this attempt. */
+  workspaceMode?: string;
+  workspacePath?: string;
+  writeScopes?: string[];
+  frozenBase?: string;
+  changesetBaseline?: string;
+  changesetHash?: string;
+  conflictArtifact?: string;
+  nativeSubagentMode?: string;
+  crossRuntimeMode?: string;
+  integrationInputs?: string[];
+  integrationResultIdentity?: string;
+  gateOutcome?: string;
+  gateResultPath?: string;
+  publishReadiness?: Record<string, unknown>;
+  changesetManifest?: string;
+  usageSnapshot?: Record<string, unknown>;
+  admissionSummary?: Record<string, unknown>;
+  repairEpoch?: string;
+}
+
+export interface GraphNodeState {
+  nodeId: string;
+  status: string;
+  attempts: GraphNodeAttempt[];
+  lastAttemptId?: string;
+  /** V2 observability metadata merged from the latest attempt. */
+  workspaceMode?: string;
+  workspacePath?: string;
+  writeScopes?: string[];
+  frozenBase?: string;
+  changesetBaseline?: string;
+  changesetHash?: string;
+  conflictArtifact?: string;
+  nativeSubagentMode?: string;
+  crossRuntimeMode?: string;
+  integrationInputs?: string[];
+  integrationResultIdentity?: string;
+  gateOutcome?: string;
+  gateResultPath?: string;
+  publishReadiness?: Record<string, unknown>;
+  changesetManifest?: string;
+  usageSnapshot?: Record<string, unknown>;
+  admissionSummary?: Record<string, unknown>;
+  repairEpoch?: string;
+  brokeredChildren?: BrokeredChildState[];
+  nativeSubagentEvents?: NativeSubagentEvent[];
+}
+
+export interface GraphRunDetail {
+  namespace: string;
+  runId: string;
+  run: Record<string, unknown>;
+  nodes: GraphNodeState[];
+  graph: Record<string, unknown>;
+  usage?: GraphUsageSummary;
+  concurrencyReductions?: string[];
+}
+
+function safeReadJson(filePath: string): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function addUsage(total: Record<string, number>, value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  for (const [key, candidate] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      total[key] = (total[key] ?? 0) + candidate;
+    }
+  }
+}
+
+function readJsonLines(filePath: string): Array<Record<string, unknown>> {
+  try {
+    return readFileSync(filePath, 'utf8').split('\n').flatMap((line) => {
+      try {
+        const value = JSON.parse(line) as unknown;
+        return value && typeof value === 'object' && !Array.isArray(value)
+          ? [value as Record<string, unknown>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+function concurrencyReduction(event: Record<string, unknown>): string | null {
+  if (event['event'] !== 'admission') return null;
+  if (event['workKind'] === 'broker-child' && event['decision'] === 'denied') return 'broker capacity';
+  if (event['subagents'] === 'on') return 'native subagent reservation';
+  if (event['sameRuntimeParallelSafe'] === false) return 'runtime overlays';
+  const reason = typeof event['reason'] === 'string' ? event['reason'] : '';
+  return /verification|resource/i.test(reason) ? 'verification resource class' : null;
+}
+
+function resolveGraphRunsRoot(workspaceRootQuery: string): string {
+  const { workspaceRoot } = findDashboardRoots();
+  const effective = workspaceRootQuery ? resolve(workspaceRootQuery) : workspaceRoot;
+  return join(effective, 'graph-runs');
+}
+
+export async function handleGraphRunsRequest(req: Request, res: Response): Promise<void> {
+  const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
+  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
+
+  if (!existsSync(graphRunsDir)) {
+    res.json({ runs: [] });
+    return;
+  }
+
+  const runs: GraphRunSummary[] = [];
+
+  try {
+    const nsEntries: Dirent[] = await fs.readdir(graphRunsDir, { withFileTypes: true });
+    for (const nsEnt of nsEntries) {
+      if (!nsEnt.isDirectory()) {
+        continue;
+      }
+      const namespace = nsEnt.name;
+      const nsDir = join(graphRunsDir, namespace);
+
+      let latestRunId: string | null = null;
+      const latestLink = join(nsDir, 'latest');
+      if (existsSync(latestLink)) {
+        try {
+          latestRunId = basename(realpathSync(latestLink));
+        } catch {
+          // symlink may be dangling
+        }
+      }
+
+      const runEntries: Dirent[] = await fs.readdir(nsDir, { withFileTypes: true });
+      for (const runEnt of runEntries) {
+        if (runEnt.name === 'latest') {
+          continue;
+        }
+        if (!runEnt.isDirectory()) {
+          continue;
+        }
+        const runId = runEnt.name;
+        const runJson = safeReadJson(join(nsDir, runId, 'run.json'));
+
+        let nodeCount = 0;
+        const nodesDir = join(nsDir, runId, 'nodes');
+        if (existsSync(nodesDir)) {
+          try {
+            const nodeFiles = await fs.readdir(nodesDir);
+            nodeCount = nodeFiles.filter((f) => f.endsWith('.json')).length;
+          } catch {
+            // ignore
+          }
+        }
+
+        runs.push({
+          namespace,
+          runId,
+          isLatest: runId === latestRunId,
+          status: typeof runJson['status'] === 'string' ? runJson['status'] : 'unknown',
+          startedAt: typeof runJson['startedAt'] === 'string' ? runJson['startedAt'] : null,
+          nodeCount,
+        });
+      }
+    }
+  } catch {
+    res.status(500).json({ error: 'Failed to read graph-runs directory' });
+    return;
+  }
+
+  runs.sort((a, b) => {
+    if (a.isLatest !== b.isLatest) {
+      return a.isLatest ? -1 : 1;
+    }
+    if (a.startedAt && b.startedAt) {
+      return b.startedAt.localeCompare(a.startedAt);
+    }
+    return 0;
+  });
+
+  res.json({ runs });
+}
+
+export async function handleGraphRunDetailRequest(req: Request, res: Response): Promise<void> {
+  const namespace = String(req.params['namespace'] ?? '').trim();
+  const runId = String(req.params['runId'] ?? '').trim();
+
+  if (!namespace || !runId || /[^A-Za-z0-9._-]/.test(namespace) || /[^A-Za-z0-9._-]/.test(runId)) {
+    res.status(400).json({ error: 'Invalid namespace or runId' });
+    return;
+  }
+
+  const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
+  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
+  const runDir = join(graphRunsDir, namespace, runId);
+
+  if (!existsSync(runDir)) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  const runJson = safeReadJson(join(runDir, 'run.json'));
+  const graphJson = safeReadJson(join(runDir, 'graph.json'));
+  const observabilityEvents = readJsonLines(join(runDir, 'observability.jsonl'));
+  const parentUsage: Record<string, number> = {};
+  const childUsage: Record<string, number> = {};
+
+  const nodeStates: GraphNodeState[] = [];
+  const nodesDir = join(runDir, 'nodes');
+  const V2_NODE_FIELDS = [
+    'workspaceMode',
+    'workspacePath',
+    'writeScopes',
+    'frozenBase',
+    'changesetBaseline',
+    'changesetHash',
+    'conflictArtifact',
+    'nativeSubagentMode',
+    'crossRuntimeMode',
+    'integrationInputs',
+    'integrationResultIdentity',
+    'gateOutcome',
+    'gateResultPath',
+    'publishReadiness',
+    'changesetManifest',
+    'usageSnapshot',
+    'admissionSummary',
+    'repairEpoch',
+  ] as const;
+
+  if (existsSync(nodesDir)) {
+    try {
+      const nodeFiles = await fs.readdir(nodesDir);
+      for (const file of nodeFiles.sort()) {
+        if (!file.endsWith('.json')) {
+          continue;
+        }
+        const raw = safeReadJson(join(nodesDir, file));
+        const state: GraphNodeState = {
+          nodeId: typeof raw['nodeId'] === 'string' ? raw['nodeId'] : file.replace(/\.json$/, ''),
+          status: typeof raw['status'] === 'string' ? raw['status'] : 'pending',
+          attempts: Array.isArray(raw['attempts'])
+            ? (raw['attempts'] as GraphNodeAttempt[])
+            : [],
+          lastAttemptId: typeof raw['lastAttemptId'] === 'string' ? raw['lastAttemptId'] : undefined,
+        };
+        // Surface v2 observability metadata from the node entry and from the
+        // latest attempt, with the node entry taking precedence.
+        const latestAttempt = state.attempts[state.attempts.length - 1] ?? {};
+        // A node summary is cumulative across its local Ralph loop; count only
+        // the latest snapshot, never every retry snapshot.
+        addUsage(parentUsage, latestAttempt.usageSnapshot);
+        for (const key of V2_NODE_FIELDS) {
+          const value = raw[key] ?? latestAttempt[key as keyof GraphNodeAttempt];
+          if (value !== undefined && value !== null) {
+            (state as unknown as Record<string, unknown>)[key] = value as unknown;
+          }
+        }
+        // Brokered children are durable ledger children under the parent node;
+        // they are never peer nodes in the frozen graph.
+        const nodeId = state.nodeId;
+        const delegationsDir = join(runDir, 'nodes', file.replace(/\.json$/, ''), 'delegations');
+        if (existsSync(delegationsDir)) {
+          try {
+            const childDirs = await fs.readdir(delegationsDir, { withFileTypes: true });
+            const brokeredChildren: BrokeredChildState[] = [];
+            for (const childEnt of childDirs) {
+              if (!childEnt.isDirectory() || !childEnt.name.startsWith('delegation-')) {
+                continue;
+              }
+              const childDir = join(delegationsDir, childEnt.name);
+              const request = safeReadJson(join(childDir, 'request.json'));
+              const status = safeReadJson(join(childDir, 'status.json'));
+              if (typeof request['delegationId'] !== 'string') {
+                continue;
+              }
+              brokeredChildren.push({
+                delegationId: request['delegationId'] as string,
+                runtime: typeof request['runtime'] === 'string' ? request['runtime'] : undefined,
+                status: typeof status['status'] === 'string' ? status['status'] : 'unknown',
+                task: typeof request['task'] === 'string' ? request['task'] : undefined,
+                resultArtifact: status['finalResult'] && typeof (status['finalResult'] as Record<string, unknown>)['resultArtifact'] === 'string'
+                  ? ((status['finalResult'] as Record<string, unknown>)['resultArtifact'] as string)
+                  : undefined,
+                usage: typeof status['usage'] === 'object' && status['usage'] !== null
+                  ? (status['usage'] as Record<string, number>)
+                  : undefined,
+              });
+              // Each brokered child owns its own ledger. Its aggregated usage
+              // is intentionally not included in the parent node snapshot.
+              addUsage(childUsage, status['usage']);
+            }
+            if (brokeredChildren.length > 0) {
+              state.brokeredChildren = brokeredChildren.sort((a, b) =>
+                a.delegationId.localeCompare(b.delegationId),
+              );
+            }
+          } catch {
+            // ignore; children are best-effort observability
+          }
+        }
+        const nativeSubagentEvents = observabilityEvents
+          .filter((event) => event['nodeId'] === state.nodeId
+            && typeof event['event'] === 'string'
+            && event['event'].startsWith('native-subagent'))
+          .map((event) => ({
+            event: event['event'] as string,
+            timestamp: typeof event['timestamp'] === 'string' ? event['timestamp'] : undefined,
+            details: event['details'] && typeof event['details'] === 'object'
+              ? event['details'] as Record<string, unknown>
+              : undefined,
+          }));
+        if (nativeSubagentEvents.length > 0) state.nativeSubagentEvents = nativeSubagentEvents;
+        nodeStates.push(state);
+      }
+    } catch {
+      // ignore; return empty nodes
+    }
+  }
+
+  const totalUsage: Record<string, number> = { ...parentUsage };
+  addUsage(totalUsage, childUsage);
+  const concurrencyReductions = [...new Set(observabilityEvents
+    .map(concurrencyReduction)
+    .filter((value): value is string => value !== null))];
+  res.json({
+    namespace, runId, run: runJson, nodes: nodeStates, graph: graphJson,
+    usage: { parent: parentUsage, brokeredChildren: childUsage, total: totalUsage },
+    concurrencyReductions,
+  });
+}
+
 export function registerDashboardApi(app: Express): void {
   app.get('/api/workspace', (_req: Request, res: Response) => {
     const root = findWorkspaceProjectRoot();
@@ -4053,4 +4429,6 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/benchmarks', handleSavingsRequest);
   app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);
   app.get('/api/workspaces', handleWorkspacesRequest);
+  app.get('/api/graph-runs', handleGraphRunsRequest);
+  app.get('/api/graph-runs/:namespace/:runId', handleGraphRunDetailRequest);
 }

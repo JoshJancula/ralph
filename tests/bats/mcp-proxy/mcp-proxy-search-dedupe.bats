@@ -149,6 +149,7 @@ setup() {
   cp "$GREP_FIXTURE" "$WS/grep-many-matches-alt.txt"
   cp -R "$GLOB_FIXTURE_DIR" "$WS/glob-many-files"
   export RALPH_MCP_WORKSPACE="$WS"
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   export RALPH_PLAN_KEY="plan-search-dedupe"
   unset RALPH_PLAN_WORKSPACE_ROOT
   export RALPH_COMPACTORS_LIB_DIR="$REPO_ROOT/bundle/.ralph/bash-lib"

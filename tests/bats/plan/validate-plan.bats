@@ -7,6 +7,7 @@ setup() {
   TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ralph-validate-plan.XXXXXX")"
   VALIDATE_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/validate-plan.sh"
   RUN_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/run-plan.sh"
+  VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../scripts/validate-graph-schema.sh"
 }
 
 teardown() {
@@ -49,9 +50,6 @@ pipeline:
     - id: research
       runtime: cursor
       agent: research
-      produces:
-        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
-          required: true
     - id: review
       runtime: codex
       agent: code-review
@@ -60,8 +58,6 @@ pipeline:
       loopCheck:
         path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
       produces:
-        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.md
-          required: true
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
           required: true
   parallelStages:
@@ -72,16 +68,40 @@ todos:
     stage: research
     content: research the change
     status: pending
-    produces:
-      - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
-        required: true
   - id: review-1
     stage: review
     content: review the change
     status: pending
-    produces:
-      - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
-        required: true
+---
+EOF
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan routes graph execution to graph validation" {
+  plan_file="$TEST_TMPDIR/graph.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-edges.plan.md" "$plan_file"
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan routes orchestration execution to orchestration validation" {
+  plan_file="$TEST_TMPDIR/orchestration.plan.md"
+  cat <<'EOF' >"$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+      agent: research
+todos:
+  - id: research-1
+    stage: research
+    content: research the change
+    status: pending
 ---
 EOF
 

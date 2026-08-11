@@ -814,6 +814,9 @@ run_plan_invoke_codex_mcp_config_prepare() {
 
 ralph_run_plan_invoke_codex() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract codex || return 1
+  ralph_run_plan_subagents_require_runtime_capability codex || return 1
+  ralph_run_plan_native_subagent_verify_runtime codex || return 1
   # Demux/tee inputs: combined output log, sidecar exit code, session id file path.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
   # Codex wrapper reads this to decide resume behavior and JSON parsing.
@@ -958,6 +961,8 @@ ralph_run_plan_invoke_codex() {
   run_plan_invoke_codex_cli() {
     local cli="${CODEX_PLAN_CLI:-${CURSOR_PLAN_CLI:-codex}}"
     local sandbox="${CODEX_PLAN_SANDBOX:-workspace-write}"
+    local agent_workspace="${RALPH_AGENT_WORKSPACE:-$WORKSPACE}"
+    local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$agent_workspace/.ralph-workspace}"
     local -a args=()
 
     case "$sandbox" in
@@ -1001,10 +1006,18 @@ ralph_run_plan_invoke_codex() {
     local user_runtime_root="${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.codex"
     if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
       if [[ "${CODEX_PLAN_NO_ADD_AGENTS_DIR:-0}" != "1" ]]; then
-        local _agent_ws_abs
-        _agent_ws_abs="$(cd "${RALPH_AGENT_WORKSPACE:-$WORKSPACE}" && pwd)"
-        mkdir -p "$_agent_ws_abs/.ralph-workspace"
-        args+=(--add-dir "$_agent_ws_abs/.ralph-workspace")
+        local _agent_ws_abs _state_root_abs
+        _agent_ws_abs="$(cd "$agent_workspace" && pwd)"
+        mkdir -p "$state_root"
+        _state_root_abs="$(cd "$state_root" && pwd)"
+        if [[ "$_state_root_abs" == "$_agent_ws_abs/.ralph-workspace" ]]; then
+          args+=(--add-dir "$_agent_ws_abs/.ralph-workspace")
+        else
+          # Three-root runs keep durable artifacts outside the model's project
+          # tree. Grant exactly that state root instead of creating a shadow
+          # .ralph-workspace under the agent workspace.
+          args+=(--add-dir "$_state_root_abs")
+        fi
       fi
       if [[ -n "${CODEX_GLOBAL_RUNTIME_ROOT:-}" ]] && [[ -d "$CODEX_GLOBAL_RUNTIME_ROOT" ]]; then
         global_runtime_root="$CODEX_GLOBAL_RUNTIME_ROOT"
@@ -1036,7 +1049,7 @@ ralph_run_plan_invoke_codex() {
         :
         ;;
       *)
-        if ! git -C "$WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        if ! git -C "$agent_workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
           args+=(--skip-git-repo-check)
         fi
         ;;
@@ -1092,7 +1105,7 @@ ralph_run_plan_invoke_codex() {
 
     args+=("$PROMPT")
 
-    cd "$WORKSPACE" || {
+    cd "$agent_workspace" || {
       return 1
     }
     run_plan_invoke_common_launch_cli codex "$cli" "${args[@]}"

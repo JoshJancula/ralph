@@ -20,8 +20,14 @@ workspace="$(pwd)"
 plan_name=""
 plan_format="classic"
 plan_execution=""
+plan_preset=""
 interactive="false"
 plan_overview=""
+parallel_lane_count="2"
+parallel_workspace_mode="snapshot"
+parallel_shared_risk_ack="false"
+parallel_publish_checkpoint="false"
+parallel_options_set="false"
 
 declare -a cp_stage_args=()
 declare -a cp_stage_runtime_args=()
@@ -42,6 +48,7 @@ create_plan_normalize_format() {
   case "$1" in
     legacy|classic) printf 'classic' ;;
     yaml|standard|structured|pipeline|orchestration|cursor) printf 'pipeline' ;;
+    graph) printf 'graph' ;;
     *) return 1 ;;
   esac
 }
@@ -52,9 +59,16 @@ Usage: bash .ralph/create-plan.sh [options]
 
 Options:
   --name <name>            Plan name (default: auto-generated PLAN1, PLAN2, ...).
-  --format <classic|yaml>  Plan template format (default: classic).
-                           classic: zero-dependency markdown checklist.
-                           yaml: YAML-frontmatter flat TODO queue.
+  --format <classic|yaml|graph>  Plan template format (default: classic).
+                                 classic: zero-dependency markdown checklist.
+                                 yaml: YAML-frontmatter flat TODO queue.
+                                 graph: YAML-frontmatter DAG plan (execution: graph).
+  --preset <name>          Graph preset: cross-provider-jury or parallel-implementation.
+  --lanes <2|3|4>          Implementation lane count for parallel-implementation (default: 2).
+  --workspace-mode <mode>  Lane mode: snapshot (default), worktree, or shared.
+  --acknowledge-shared-mutation-risk
+                           Required with --workspace-mode shared.
+  --publish-checkpoint     Add an optional human checkpoint after review.
   --workspace <path>       Workspace directory (default: current directory).
 
 For a multi-stage orchestration, use: ralph create orc
@@ -220,7 +234,7 @@ while [[ $# -gt 0 ]]; do
     --format)
       [[ $# -ge 2 ]] || ralph_die "missing value for --format"
       if ! plan_format="$(create_plan_normalize_format "$2")"; then
-        ralph_die "invalid --format: $2 (must be 'classic' or 'yaml')"
+        ralph_die "invalid --format: $2 (must be 'classic', 'yaml', or 'graph')"
       fi
       shift 2
       ;;
@@ -228,6 +242,33 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || ralph_die "missing value for --execution"
       plan_execution="$2"
       shift 2
+      ;;
+    --preset)
+      [[ $# -ge 2 ]] || ralph_die "missing value for --preset"
+      plan_preset="$2"
+      shift 2
+      ;;
+    --lanes|--lane-count)
+      [[ $# -ge 2 ]] || ralph_die "missing value for $1"
+      parallel_lane_count="$2"
+      parallel_options_set="true"
+      shift 2
+      ;;
+    --workspace-mode)
+      [[ $# -ge 2 ]] || ralph_die "missing value for --workspace-mode"
+      parallel_workspace_mode="$2"
+      parallel_options_set="true"
+      shift 2
+      ;;
+    --acknowledge-shared-mutation-risk)
+      parallel_shared_risk_ack="true"
+      parallel_options_set="true"
+      shift
+      ;;
+    --publish-checkpoint|--human-publish-checkpoint)
+      parallel_publish_checkpoint="true"
+      parallel_options_set="true"
+      shift
       ;;
     --interactive)
       interactive="true"
@@ -325,6 +366,23 @@ if [[ ! -d "$workspace" ]]; then
   ralph_die "workspace does not exist: $workspace"
 fi
 
+if [[ "$plan_preset" == "parallel-implementation" ]]; then
+  [[ "$plan_format" == "graph" ]] || ralph_die "--preset parallel-implementation requires --format graph"
+  [[ "$parallel_lane_count" =~ ^[234]$ ]] || ralph_die "--lanes must be 2, 3, or 4"
+  case "$parallel_workspace_mode" in
+    snapshot|worktree) ;;
+    shared)
+      [[ "$parallel_shared_risk_ack" == "true" ]] || ralph_die \
+        "shared parallel mutation is unsafe: repeat with --acknowledge-shared-mutation-risk"
+      printf '%s\n' \
+        "WARNING: shared parallel mutation can race and corrupt the caller workspace; risk explicitly acknowledged." >&2
+      ;;
+    *) ralph_die "--workspace-mode must be snapshot, worktree, or shared" ;;
+  esac
+elif [[ "$parallel_options_set" == "true" ]]; then
+  ralph_die "parallel lane options require --preset parallel-implementation"
+fi
+
 if [[ -n "$plan_execution" ]]; then
   case "$plan_execution" in
     standard|simple) plan_execution="standard" ;;
@@ -381,6 +439,14 @@ if [[ -e "$dest" ]]; then
   ralph_die "plan already exists: $dest"
 fi
 
+if [[ "$plan_format" == "graph" && "$plan_preset" == "parallel-implementation" ]]; then
+  parallel_plan_key="$(ralph_internal_wizard_sanitize "$plan_name")"
+  parallel_plans_dir="$plans_dir/${parallel_plan_key}-parallel"
+  if [[ -d "$parallel_plans_dir" ]] && find "$parallel_plans_dir" -mindepth 1 -print -quit | grep -q .; then
+    ralph_die "parallel implementation plan directory already exists and is not empty: $parallel_plans_dir"
+  fi
+fi
+
 tmp_dest="$(mktemp "${TMPDIR:-/tmp}/ralph-create-plan.XXXXXX")"
 trap 'rm -f "$tmp_dest"' EXIT
 
@@ -409,10 +475,38 @@ case "$plan_format" in
         ;;
     esac
     ;;
+  graph)
+    case "$plan_preset" in
+      cross-provider-jury)
+        wizard_render_graph_jury_preset "$plan_name" "$plan_overview" > "$tmp_dest"
+        ;;
+      parallel-implementation)
+        wizard_render_graph_parallel_implementation_preset \
+          "$plan_name" "$plan_overview" "$parallel_lane_count" \
+          "$parallel_workspace_mode" "$parallel_shared_risk_ack" \
+          "$parallel_publish_checkpoint" > "$tmp_dest"
+        ;;
+      "")
+        plan_template="$templates_dir/graph-consensus.plan.template.md"
+        [[ -f "$plan_template" ]] || ralph_die "graph template not found at $plan_template"
+        sed \
+          -e "s/GRAPH_PLAN_NAME_HERE/${plan_name}/g" \
+          -e "s/GRAPH_PLAN_NAMESPACE_HERE/${plan_name}/g" \
+          "$plan_template" > "$tmp_dest"
+        ;;
+      *)
+        ralph_die "unknown --preset for graph format: $plan_preset (supported: cross-provider-jury, parallel-implementation)"
+        ;;
+    esac
+    ;;
 esac
 
 mv "$tmp_dest" "$dest"
 trap - EXIT
+
+if [[ "$plan_format" == "graph" && "$plan_preset" == "parallel-implementation" ]]; then
+  wizard_write_graph_parallel_plan_files "$workspace" "$plan_name" "$parallel_lane_count"
+fi
 
 if [[ "$workspace" == "$(pwd)" ]]; then
   display_dest="./.ralph-workspace/plans/${plan_name}.plan.md"
@@ -423,4 +517,7 @@ fi
 printf 'Created plan: %s\n' "$display_dest"
 if [[ "$plan_format" == "pipeline" && "$plan_execution" == "standard" ]]; then
   printf 'Tip: add per-todo runtime:/model: overrides to any TODO; per-todo routing applies under fresh session management.\n'
+fi
+if [[ "$plan_format" == "graph" ]]; then
+  printf 'Tip: compile and lint with: ralph graph compile %s\n' "$display_dest"
 fi

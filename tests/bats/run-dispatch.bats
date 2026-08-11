@@ -18,7 +18,11 @@ EOF
 #!/usr/bin/env bash
 echo "RAN orchestrator.sh $*"
 EOF
-  chmod +x "$RH/bundle/.ralph/run-plan.sh" "$RH/bundle/.ralph/orchestrator.sh"
+  cat > "$RH/bundle/.ralph/graph-run.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "RAN graph-run.sh $*"
+EOF
+  chmod +x "$RH/bundle/.ralph/run-plan.sh" "$RH/bundle/.ralph/orchestrator.sh" "$RH/bundle/.ralph/graph-run.sh"
 
   # Extract the embedded SHIM heredoc from install.sh into a runnable script.
   SHIM="$RH/ralph"
@@ -31,6 +35,12 @@ EOF
   printf '%s\n' '---' 'name: Orc' 'execution: orchestration' 'pipeline:' '  stages:' '    - id: a' '      runtime: cursor' '      agent: research' '---' > "$FIX/orc.plan.md"
   printf '%s\n' '---' 'name: O2' 'execution: orchestration' '---' > "$FIX/execonly.plan.md"
   printf '{}' > "$FIX/legacy.orch.json"
+  # A plan with a pipeline: block but NO execution: field -- must route to orchestrator,
+  # not graph-run.sh. This is the "bare pipeline block" guarantee: no auto-upgrade to graph.
+  printf '%s\n' '---' 'name: BareP' 'pipeline:' '  stages:' '    - id: a' '      runtime: cursor' '      agent: research' '---' > "$FIX/bare-pipeline.plan.md"
+  # Graph fixtures
+  printf '%s\n' '---' 'name: Graph' 'execution: graph' 'pipeline:' '  stages:' '    - id: a' '      runtime: cursor' '      agent: research' '---' > "$FIX/mygraph.plan.md"
+  printf '{}' > "$FIX/mygraph.graph.json"
 }
 
 teardown() {
@@ -79,4 +89,90 @@ run_ralph() {
 @test "ralph run with no --plan errors" {
   run run_ralph run
   [ "$status" -ne 0 ]
+}
+
+# Graph routing tests
+
+@test "execution: graph routes to graph-run.sh even with pipeline block" {
+  run run_ralph run --plan "$FIX/mygraph.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+  [[ "$output" != *"RAN orchestrator.sh"* ]]
+}
+
+@test "execution: graph with pipeline block does not route to orchestrator.sh" {
+  run run_ralph run --plan "$FIX/mygraph.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"RAN orchestrator.sh"* ]]
+}
+
+@test ".graph.json routes to graph-run.sh" {
+  run run_ralph run --plan "$FIX/mygraph.graph.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+}
+
+@test ".orch.json still routes to orchestrator.sh" {
+  run run_ralph run --plan "$FIX/legacy.orch.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN orchestrator.sh"* ]]
+  [[ "$output" != *"RAN graph-run.sh"* ]]
+}
+
+@test "execution: orchestration still routes to orchestrator.sh" {
+  run run_ralph run --plan "$FIX/execonly.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN orchestrator.sh"* ]]
+}
+
+@test "bare pipeline block still routes to orchestrator.sh" {
+  run run_ralph run --plan "$FIX/orc.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN orchestrator.sh"* ]]
+}
+
+@test "pipeline block with no execution field routes to orchestrator not graph-run" {
+  # Guarantees no auto-upgrade: omitting execution: must never silently select graph mode.
+  run run_ralph run --plan "$FIX/bare-pipeline.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN orchestrator.sh"* ]]
+  [[ "$output" != *"RAN graph-run.sh"* ]]
+}
+
+@test "execution: standard still routes to run-plan.sh" {
+  run run_ralph run --plan "$FIX/flat.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN run-plan.sh"* ]]
+}
+
+# Graph subcommand verb dispatch tests
+
+@test "ralph graph compile dispatches to graph-run.sh" {
+  run run_ralph graph compile "$FIX/mygraph.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+}
+
+@test "ralph graph run dispatches to graph-run.sh" {
+  run run_ralph graph run "$FIX/mygraph.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+}
+
+@test "ralph graph resume dispatches to graph-run.sh" {
+  run run_ralph graph resume "$FIX/mygraph.plan.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+}
+
+@test "ralph graph status dispatches to graph-run.sh" {
+  run run_ralph graph status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
+}
+
+@test "ralph graph render dispatches to graph-run.sh" {
+  run run_ralph graph render
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RAN graph-run.sh"* ]]
 }

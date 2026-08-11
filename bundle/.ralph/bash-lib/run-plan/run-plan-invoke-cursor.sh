@@ -157,6 +157,9 @@ run_plan_invoke_cursor_mcp_config_prepare() {
 
 ralph_run_plan_invoke_cursor() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract cursor || return 1
+  ralph_run_plan_subagents_require_runtime_capability cursor || return 1
+  ralph_run_plan_native_subagent_verify_runtime cursor || return 1
   # Log path, exit-code sidecar, and session-id file for JSON demux and resume capture.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 

@@ -1,0 +1,217 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "ralphVersion",
+    "name",
+    "namespace",
+    "maxParallel",
+    "failurePolicy",
+    "nodes",
+    "edges"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "ralphVersion": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "maxParallel": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "failurePolicy": {
+      "type": "string",
+      "enum": [
+        "drain",
+        "cancel"
+      ]
+    },
+    "publishMode": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "on-verified"
+      ]
+    },
+    "verificationProfiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "steps"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "command"],
+              "properties": {
+                "name": {"type": "string", "pattern": "^.+$"},
+                "command": {"type": "string", "pattern": "^.+$"},
+                "timeout": {"type": "integer", "minimum": 1},
+                "resourceClass": {"type": "string", "pattern": "^.+$"},
+                "continueOnFailure": {"type": "boolean"},
+                "requiredArtifacts": {
+                  "type": "array",
+                  "items": {"type": "string", "pattern": "^.+$"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "dependsOn",
+          "derivedFrom",
+          "stage"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "stage",
+              "join",
+              "router",
+              "checkpoint",
+              "integrate",
+              "gate",
+              "consensus-voter",
+              "consensus-barrier"
+            ]
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^.+$"
+            }
+          },
+          "derivedFrom": {
+            "type": "string",
+            "enum": [
+              "stage",
+              "consensus",
+              "repair-epoch"
+            ]
+          },
+          "stage": {
+            "type": "object",
+            "properties": {
+              "subagents": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "on",
+                  "off"
+                ]
+              },
+              "workspaceMode": {
+                "type": "string",
+                "enum": ["shared", "snapshot", "worktree"]
+              },
+              "agentGitAccess": {
+                "type": "string",
+                "enum": ["inherit", "off", "on"]
+              },
+              "writeScopes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[^/].*$"
+                }
+              },
+              "parallelMutation": {
+                "type": "string",
+                "enum": ["allow", "deny"]
+              },
+              "acknowledgeSharedMutationRisk": {
+                "type": "boolean"
+              },
+              "profile": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "overlapOwner": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "ownershipRole": {
+                "type": "string",
+                "enum": ["integration", "repair"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to",
+          "reasons"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "reasons": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^.+$"
+            }
+          },
+          "condition": {
+            "type": "string",
+            "enum": ["passed", "changes-required", "error"]
+          }
+        }
+      }
+    }
+  }
+}

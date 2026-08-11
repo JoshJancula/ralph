@@ -416,6 +416,53 @@ AGENT
   rm -rf "$workspace"
 }
 
+@test "post-verification failure artifact honors an external state root" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
+
+  local workspace plan_file bin_dir session_home state_root
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  state_root="$workspace-external-state"
+  mkdir -p "$bin_dir" "$session_home" "$state_root"
+  setup_stub_run_plan_support "$workspace"
+
+  cat >"$workspace/verify.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'FAIL: external state root regression\n'
+exit 1
+SCRIPT
+  chmod +x "$workspace/verify.sh"
+  plan_file="$workspace/VERIFY-EXTERNAL-ROOT.plan.md"
+  cat >"$plan_file" <<'PLAN'
+---
+todos:
+  - id: verify-external-root
+    content: Exercise the external verification artifact root
+    verify: bash verify.sh
+    status: pending
+---
+PLAN
+  cat >"$bin_dir/cursor-agent" <<'AGENT'
+#!/usr/bin/env bash
+printf '%s\n' "AGENT_INVOCATION_COMPLETE"
+exit 0
+AGENT
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_PLAN_WORKSPACE_ROOT="$state_root" \
+    RALPH_PLAN_KEY=verify-external-root \
+    CURSOR_PLAN_MAX_ITER=2 \
+    CURSOR_PLAN_GUTTER_ITER=1
+
+  [ "$status" -ne 0 ]
+  [ "$(find "$state_root/artifacts/verify-external-root/verification" -type f | wc -l | tr -d ' ')" -ge 1 ]
+  [ ! -e "$workspace/.ralph-workspace/artifacts/verify-external-root/verification" ]
+  rm -rf "$workspace" "$state_root"
+}
+
 @test "agent TODO_VERIFICATION: FAIL reopens the TODO without running verify command" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"

@@ -138,8 +138,10 @@ ralph_normalize_ralph_mode() {
 # Args: $1 - resolved RALPH_MODE value (no, native, ralph, hybrid)
 # Sets RALPH_PROXY_SHELL_COMPACT=1 in ralph|hybrid when unset (MCP proxy shell path).
 # Sets RALPH_BASH_COMPACT=1 in native|hybrid when unset (Claude PostToolUse:Bash proven path).
-# Sets RALPH_NATIVE_RESULT_COMPACT=1 in native|hybrid when unset (native exploration result compaction path).
-# Explicit 0 (or any other value) opts out or overrides; unset-only defaults apply.
+# Native exploration result compaction is deliberately opt-in. It changes the
+# model-visible shape of source-bearing reads/searches, so it must never be
+# enabled merely by selecting a Ralph mode.
+# Explicit values are preserved for legacy callers.
 ralph_apply_mode_compaction_defaults() {
   local mode="${1:-no}"
 
@@ -161,14 +163,6 @@ ralph_apply_mode_compaction_defaults() {
     esac
   fi
 
-  if [[ -z "${RALPH_NATIVE_RESULT_COMPACT:-}" ]]; then
-    case "$mode" in
-      native|hybrid)
-        RALPH_NATIVE_RESULT_COMPACT=1
-        export RALPH_NATIVE_RESULT_COMPACT
-        ;;
-    esac
-  fi
 }
 
 # Apply transcript-eviction defaults for safe prompt pruning and continuation-summary compaction.

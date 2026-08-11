@@ -376,6 +376,60 @@ EOF
   rm -rf "$workspace"
 }
 
+@test "subagents routing resolves TODO over stage and restores baseline between TODOs" {
+  local plan_file
+  plan_file="$(mktemp)"
+  cat >"$plan_file" <<'EOF'
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      agent: code-review
+      subagents: off
+    - id: implement
+      runtime: codex
+      agent: implementation
+      subagents: off
+todos:
+  - id: review-1
+    stage: review
+    subagents: on
+    content: review
+    status: pending
+  - id: implement-1
+    stage: implement
+    content: implement
+    status: pending
+---
+EOF
+  run bash -c '
+    source "$1/bundle/.ralph/bash-lib/plan-todo.sh"
+    source "$1/bundle/.ralph/bash-lib/run-plan/run-plan-routing.sh"
+    fields="$(ralph_run_plan_routing_effective_metadata_fields "$2" review-1)"
+    IFS="$(printf "\\037")" read -r _ _ _ _ _ _ mode _ <<< "$fields"
+    [ "$mode" = on ]
+    ralph_run_plan_routing_resolve_current_context() { :; }
+    ralph_run_plan_routing_set_session_context() { :; }
+    ralph_run_plan_log() { :; }
+    RUNTIME=cursor
+    RALPH_PLAN_SUBAGENTS=inherit
+    ralph_run_plan_routing_capture_baseline
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 1 review-1 review-1
+    [ "$RUNTIME" = claude ]
+    [ "$RALPH_PLAN_SUBAGENTS" = on ]
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 2 implement-1 implement-1
+    [ "$RUNTIME" = codex ]
+    [ "$RALPH_PLAN_SUBAGENTS" = off ]
+    ralph_run_plan_routing_restore_baseline
+    [ "$RUNTIME" = cursor ]
+    [ "$RALPH_PLAN_SUBAGENTS" = inherit ]
+  ' _ "$REPO_ROOT" "$plan_file"
+  [ "$status" -eq 0 ]
+  rm "$plan_file"
+}
+
 @test "yaml todo routing bootstraps non-interactive runs without a global model" {
   local workspace bin_dir session_home plan_file cursor_log codex_log registry_file
   workspace="$(mktemp -d)"

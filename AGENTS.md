@@ -67,12 +67,27 @@ Optional **`parallelStages`** groups stages into parallel waves with a sequentia
 
 **Session resume:** `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1` reuses CLI context via `session-id.<runtime>.txt` under `.ralph-workspace/sessions/<plan-key>/`. See Reference map → [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) and [docs/README.md](docs/README.md#cli-session-resume).
 
+**Graph mode (opt-in):** An additive, optional execution mode for DAG-structured multi-node runs. It is reached only via `execution: graph` in plan frontmatter or the `ralph graph` subcommand. No existing plan changes behavior: a plan without `execution: graph` never enters graph mode, there is no auto-upgrade, and there is no auto-derived graph when the execution field is absent. Human-facing setup, authoring, operation, and recovery guidance lives in [docs/GRAPH.md](docs/GRAPH.md).
+
 **Outputs:** Plan logs under `.ralph-workspace/logs/`; generated files under `.ralph-workspace/artifacts/`. Path templates support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` (see table below).
+
+### Graph implementation invariants
+
+Keep these contracts intact when changing graph code. The operator-facing explanation and command reference are in [docs/GRAPH.md](docs/GRAPH.md).
+
+- Routing is explicit: only `execution: graph` or `ralph graph` enters graph mode. Standard plans, orchestration plans, and `.orch.json` files retain their existing paths.
+- An `agent` node with a `planFile` must continue to execute through the existing orchestrator stage and `run-plan.sh` loop. The graph controls work between nodes; the plan loop controls TODOs inside a node.
+- The compiled graph is frozen for a run. Graph progress belongs to the ledger, while plan checkboxes remain node-local loop state. Do not mutate the live topology.
+- A node is Ralph's resumable, attributable process boundary. Native runtime subagents are not ledger entries and cannot independently satisfy node completion; consensus voters always have subagent delegation disabled.
+- Runtime admission, workspace creation, changeset capture, integration, verification, and publication are supervisor responsibilities. Agents must not bypass those boundaries with direct Git or publish operations.
+- New graph presets select `snapshot` as the safe isolated default; omission must continue to mean `shared` for compatibility. `worktree` requires a proved sandbox boundary. Shared mutation must remain explicit, acknowledged, and serialized unless the graph declares the guarded parallel-mutation contract.
+- Success requires supervisor evidence: required artifacts, scoped changesets, completion checks, gate outcomes, and publish-readiness checks as applicable. Model claims alone are not completion evidence.
+- Delegation capability and threat-control details live in [bundle/.ralph/docs/DELEGATION.md](bundle/.ralph/docs/DELEGATION.md).
 
 ## Key commands
 
 ```bash
-# Tests (default suite — what CI runs)
+# Tests (default suite -- what CI runs)
 bash scripts/run-bats.sh
 bash scripts/run-bats.sh -j 8
 
@@ -207,7 +222,9 @@ Open these only when the task requires detail beyond this file.
 | [docs/TOOLING.md](docs/TOOLING.md) | Ralph mode (`--ralph-mode`, `RALPH_MODE`), MCP proxy tools, shell compaction policy, native adapters, overlay journals and cleanup |
 | [docs/MCP.md](docs/MCP.md) | Standalone Ralph MCP server, host wiring, third-party MCP for plan agents |
 | [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Plan loop operator flow, human input, handoffs, orchestration prompts |
+| [docs/GRAPH.md](docs/GRAPH.md) | Human-facing graph plan creation, authoring, execution, status, resume, checkpoints, isolation, and publishing |
 | [docs/INSTALL.md](docs/INSTALL.md) | Global and in-repo install, `install.sh` flags, workspace registry, uninstall |
+| [bundle/.ralph/docs/DELEGATION.md](bundle/.ralph/docs/DELEGATION.md) | Graph delegation capability model, brokered children, completion evidence, and threat controls |
 | [bundle/.claude/agents/README.md](bundle/.claude/agents/README.md) | Agent `config.json` schema and validation rules (all runtimes) |
 | [bundle/.agents/agents/README.md](bundle/.agents/agents/README.md) | Ralph-internal Antigravity agent metadata and model contract |
 

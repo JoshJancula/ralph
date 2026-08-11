@@ -141,6 +141,41 @@ MDEOF
   [ "$status" -eq 0 ]
 }
 
+@test "parallel runtimes use isolated canonical agent caches" {
+  cat >"$_ws/.ralph/agents/myagent.md" <<'MDEOF'
+---
+name: myagent
+description: concurrent agent
+models:
+  claude: claude-model
+  codex: codex-model
+rules: []
+skills: []
+output_artifacts: []
+---
+
+# Concurrent agent
+MDEOF
+  _load_agent_libs
+  AGENT_CONFIG_TOOL="$REPO_ROOT/.ralph/agent-config-tool.sh"
+  RALPH_ARTIFACT_NS=test
+  export RALPH_PLAN_WORKSPACE_ROOT="$_tmp/external-state"
+  mkdir -p "$RALPH_PLAN_WORKSPACE_ROOT"
+
+  (RUNTIME=claude format_prebuilt_agent_context_block "$_ws" myagent >"$_tmp/claude.context") &
+  claude_pid=$!
+  (RUNTIME=codex format_prebuilt_agent_context_block "$_ws" myagent >"$_tmp/codex.context") &
+  codex_pid=$!
+  wait "$claude_pid"
+  wait "$codex_pid"
+
+  [ -s "$_tmp/claude.context" ]
+  [ -s "$_tmp/codex.context" ]
+  [ "$(jq -r .model "$RALPH_PLAN_WORKSPACE_ROOT/artifacts/test/agent-cache/claude/myagent.config.json")" = claude-model ]
+  [ "$(jq -r .model "$RALPH_PLAN_WORKSPACE_ROOT/artifacts/test/agent-cache/codex/myagent.config.json")" = codex-model ]
+  unset RALPH_PLAN_WORKSPACE_ROOT
+}
+
 @test "classic-only install is unchanged when no .md exists" {
   cat > "$_ws/.claude/agents/myagent/config.json" <<'CFG'
 {

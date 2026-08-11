@@ -300,14 +300,6 @@ ralph_apply_shell_compact_defaults() {
     esac
   fi
 
-  if [[ -z "${RALPH_NATIVE_RESULT_COMPACT:-}" ]]; then
-    case "${RALPH_MODE:-no}" in
-      native|hybrid)
-        RALPH_NATIVE_RESULT_COMPACT=1
-        export RALPH_NATIVE_RESULT_COMPACT
-        ;;
-    esac
-  fi
 }
 
 ralph_apply_mode_transcript_eviction_defaults() {

@@ -187,6 +187,28 @@ ralph_native_shell_append_footer() {
   printf '%s%s' "$preview" "$footer"
 }
 
+ralph_native_shell_process_pgid() {
+  local pid="${1:-}" value=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  value="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import os, sys; print(os.getpgid(int(sys.argv[1])))' "$pid" 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+ralph_native_shell_process_sid() {
+  local pid="${1:-}" value=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  value="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import os, sys; print(os.getsid(int(sys.argv[1])))' "$pid" 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
 # Execute a shell command once in workspace; prints JSON with stdout, stderr, exitCode.
 ralph_native_shell_launch_process_group() {
   local workspace="${1:-}" command="${2:-}" shell_exe="${3:-bash}" stdout_path="${4:-}" stderr_path="${5:-}"
@@ -215,9 +237,9 @@ ralph_native_shell_launch_process_group() {
       # process (and, inside the MCP server, the stdio transport with it).
       # Poll briefly until the child detaches into its own group.
       local _launch_self_pgid _launch_waited=0
-      _launch_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+      _launch_self_pgid="$(ralph_native_shell_process_pgid $$ 2>/dev/null || true)"
       while (( _launch_waited < 40 )); do
-        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+        pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
         [[ -n "$pgid" ]] || break
         [[ -z "$_launch_self_pgid" || "$pgid" != "$_launch_self_pgid" ]] && break
         sleep 0.05
@@ -229,9 +251,9 @@ ralph_native_shell_launch_process_group() {
         isolated="false"
       fi
     else
-      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+      pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
     fi
-    sid="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    sid="$(ralph_native_shell_process_sid "$pid" 2>/dev/null || true)"
   fi
   [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="$pid"
   [[ "$sid" =~ ^[0-9]+$ ]] || sid="$pgid"
@@ -264,10 +286,14 @@ ralph_native_shell_terminate_spawned_job() {
   # dies and the client drops every ralph tool mid-session.
   if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
     local _term_self_pgid _term_live_pgid
-    _term_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
-    _term_live_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    _term_self_pgid="$(ralph_native_shell_process_pgid $$ 2>/dev/null || true)"
+    _term_live_pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
     [[ -n "$_term_live_pgid" ]] && pgid="$_term_live_pgid"
     if [[ -n "$_term_self_pgid" && "$pgid" == "$_term_self_pgid" ]]; then
+      isolated="false"
+    elif [[ -z "$_term_live_pgid" && "$pgid" != "$pid" ]]; then
+      # Without a live group identity, only pgid==pid is safe for a job Ralph
+      # itself launched with setsid. Never group-kill an unverified group.
       isolated="false"
     fi
   fi

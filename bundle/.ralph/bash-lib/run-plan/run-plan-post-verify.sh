@@ -313,12 +313,13 @@ _ralph_run_post_verification() {
     fi
 
     local _artifact_dir=""
+    local _verification_state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$workspace/.ralph-workspace}"
     if [[ -n "$plan_key" ]]; then
-      _artifact_dir="$workspace/.ralph-workspace/artifacts/$plan_key/verification"
+      _artifact_dir="$_verification_state_root/artifacts/$plan_key/verification"
     elif [[ -n "$artifact_ns" ]]; then
-      _artifact_dir="$workspace/.ralph-workspace/artifacts/$artifact_ns/verification"
+      _artifact_dir="$_verification_state_root/artifacts/$artifact_ns/verification"
     else
-      _artifact_dir="$workspace/.ralph-workspace/artifacts/verification"
+      _artifact_dir="$_verification_state_root/artifacts/verification"
     fi
 
     mkdir -p "$_artifact_dir"

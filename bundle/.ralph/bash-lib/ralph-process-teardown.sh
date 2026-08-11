@@ -193,7 +193,19 @@ ralph_run_plan_invoke_with_group_guard() {
   if [[ -z "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
     ralph_run_plan_agent_group_guard "$$" "$BASHPID"
   fi
-  "$invoke_fn"
+  local invoke_rc=0
+  if "$invoke_fn"; then
+    invoke_rc=0
+  else
+    invoke_rc=$?
+  fi
+  # The normal demux path writes this sidecar itself. Pre-invocation failures
+  # (capability/config checks) never reach that path, so preserve their real
+  # status instead of reporting the runner's synthetic 125 sentinel.
+  if [[ -n "${EXIT_CODE_FILE:-}" && ! -f "$EXIT_CODE_FILE" ]]; then
+    printf '%s\n' "$invoke_rc" >"$EXIT_CODE_FILE" 2>/dev/null || true
+  fi
+  return "$invoke_rc"
 }
 
 # Read a numeric runtime CLI PID from the per-invocation sidecar when present.

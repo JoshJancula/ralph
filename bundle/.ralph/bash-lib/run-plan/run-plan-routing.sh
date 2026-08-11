@@ -263,6 +263,7 @@ ralph_run_plan_routing_capture_baseline() {
   _RALPH_RP_BASE_SESSION_ID_FILE_LEGACY="${SESSION_ID_FILE_LEGACY:-}"
   _RALPH_RP_BASE_RALPH_PLAN_SESSION_STRATEGY="${RALPH_PLAN_SESSION_STRATEGY:-}"
   _RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET="${RALPH_PLAN_CONTEXT_BUDGET:-}"
+  _RALPH_RP_BASE_RALPH_PLAN_SUBAGENTS="${RALPH_PLAN_SUBAGENTS:-inherit}"
   _RALPH_RP_BASE_RALPH_PLAN_FILE_PATH="${RALPH_PLAN_FILE_PATH:-}"
   _RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME="${RALPH_PLAN_CLI_RESUME:-}"
   _RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH="${RALPH_CURRENT_PLAN_PATH:-}"
@@ -305,6 +306,7 @@ ralph_run_plan_routing_restore_baseline() {
   SESSION_ID_FILE_LEGACY="${_RALPH_RP_BASE_SESSION_ID_FILE_LEGACY:-}"
   RALPH_PLAN_SESSION_STRATEGY="${_RALPH_RP_BASE_RALPH_PLAN_SESSION_STRATEGY:-}"
   RALPH_PLAN_CONTEXT_BUDGET="${_RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET:-}"
+  RALPH_PLAN_SUBAGENTS="${_RALPH_RP_BASE_RALPH_PLAN_SUBAGENTS:-inherit}"
   RALPH_PLAN_FILE_PATH="${_RALPH_RP_BASE_RALPH_PLAN_FILE_PATH:-}"
   RALPH_PLAN_CLI_RESUME="${_RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME:-}"
   RALPH_CURRENT_PLAN_PATH="${_RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH:-}"
@@ -329,7 +331,7 @@ ralph_run_plan_routing_restore_baseline() {
   ANTIGRAVITY_PLAN_GUTTER_ITER="${_RALPH_RP_BASE_ANTIGRAVITY_PLAN_GUTTER_ITER:-}"
   RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY="${_RALPH_RP_BASE_RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY:-}"
   export RALPH_RUNTIME_ROOT SESSION_ID_FILE SESSION_ID_FILE_LEGACY RALPH_PLAN_SESSION_STRATEGY
-  export RALPH_PLAN_CONTEXT_BUDGET RALPH_PLAN_CLI_RESUME RALPH_INVOKED_CLI
+  export RALPH_PLAN_CONTEXT_BUDGET RALPH_PLAN_SUBAGENTS RALPH_PLAN_CLI_RESUME RALPH_INVOKED_CLI
   export RALPH_CURRENT_PLAN_PATH RALPH_CURRENT_TODO_LINE RALPH_CURRENT_TODO_ORDINAL
   export RALPH_CURRENT_TODO_ID RALPH_CURRENT_TODO_HASH
   export CLAUDE_CLI CURSOR_CLI CODEX_CLI OPENCODE_CLI ANTIGRAVITY_CLI
@@ -353,6 +355,7 @@ fields = [
     data.get("model", "") or "",
     data.get("sessionStrategy", "") or "",
     data.get("contextBudget", "") or "",
+    data.get("subagents", "") or "inherit",
     data.get("planFile", "") or "",
 ]
 # Use a non-whitespace delimiter so Bash preserves empty middle fields.
@@ -372,6 +375,7 @@ ralph_run_plan_routing_apply_effective_todo_context() {
   local eff_model=""
   local eff_session_strategy=""
   local eff_context_budget=""
+  local eff_subagents="inherit"
   local eff_plan_file=""
 
   ralph_run_plan_routing_restore_baseline
@@ -384,7 +388,7 @@ ralph_run_plan_routing_apply_effective_todo_context() {
     return 0
   fi
 
-  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_plan_file <<< "$(
+  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_subagents eff_plan_file <<< "$(
     ralph_run_plan_routing_effective_metadata_fields "$plan_path" "$todo_target"
   )"; then
     return 1
@@ -417,6 +421,8 @@ ralph_run_plan_routing_apply_effective_todo_context() {
   if [[ -n "$eff_context_budget" ]]; then
     RALPH_PLAN_CONTEXT_BUDGET="$eff_context_budget"
   fi
+  RALPH_PLAN_SUBAGENTS="$eff_subagents"
+  export RALPH_PLAN_SUBAGENTS
   RALPH_PLAN_FILE_PATH="$eff_plan_file"
   export RALPH_PLAN_FILE_PATH
 
@@ -434,6 +440,6 @@ ralph_run_plan_routing_apply_effective_todo_context() {
     fi
   fi
 
-  ralph_run_plan_log "TODO routing: line=$line_num id=${todo_id:-$todo_target} runtime=${RUNTIME:-} agent=${PREBUILT_AGENT:-} model=${SELECTED_MODEL:-} sessionStrategy=${RALPH_PLAN_SESSION_STRATEGY:-} contextBudget=${RALPH_PLAN_CONTEXT_BUDGET:-} planFile=${RALPH_PLAN_FILE_PATH:-}"
+  ralph_run_plan_log "TODO routing: line=$line_num id=${todo_id:-$todo_target} runtime=${RUNTIME:-} agent=${PREBUILT_AGENT:-} model=${SELECTED_MODEL:-} sessionStrategy=${RALPH_PLAN_SESSION_STRATEGY:-} contextBudget=${RALPH_PLAN_CONTEXT_BUDGET:-} subagents=${RALPH_PLAN_SUBAGENTS:-inherit} planFile=${RALPH_PLAN_FILE_PATH:-}"
   return 0
 }

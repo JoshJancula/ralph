@@ -37,6 +37,7 @@ invoke_grep() {
   env \
     RALPH_MCP_PROXY_POLICY_INLINE="$policy" \
     RALPH_RESULT_WINDOWING_LOG="$RALPH_RESULT_WINDOWING_LOG" \
+    RALPH_MCP_EXPLORATION_RESULT_COMPACT="${RALPH_MCP_EXPLORATION_RESULT_COMPACT:-0}" \
     bash -c '
       source "$1"
       source "$2"
@@ -84,7 +85,9 @@ invoke_grep() {
   run invoke_grep "$(policy_json 65536)" "$capped_args" "$WS/out1.json"
   [ "$status" -eq 0 ]
   # A tiny result byte cap forces the small, uncapped-source grep through the
-  # envelope path too, so it actually writes a second windowing record.
+  # envelope path too. Direct exploration results are the default now, so opt
+  # into compatibility windowing for this deliberately envelope-focused call.
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   run invoke_grep "$(policy_json 16)" "$small_args" "$WS/out2.json"
   [ "$status" -eq 0 ]
 

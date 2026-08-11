@@ -116,6 +116,8 @@ EOF
   command -v jq >/dev/null || skip "jq required"
 
   write_codex_mcp_stub_script
+  printf '%s\n' '[mcp_servers.ambient]' 'command = "printf"' >"$WORKSPACE/.codex/config.toml"
+  ambient_before="$(shasum -a 256 "$WORKSPACE/.codex/config.toml" | awk '{print $1}')"
   export CODEX_PLAN_CLI="$BIN_DIR/codex"
   export RALPH_MODE="ralph"
   export PROMPT="codex smoke prompt"
@@ -132,6 +134,7 @@ EOF
   [[ "$stub_output" == *"STRICT_CONFIG:1"* ]]
   [[ "$stub_output" == *"CONFIG:mcp_servers.ralph.enabled=true"* ]]
   [[ "$server_output" == *"SERVER_WORKSPACE:$WORKSPACE"* ]]
+  [ "$(shasum -a 256 "$WORKSPACE/.codex/config.toml" | awk '{print $1}')" = "$ambient_before" ]
 }
 
 @test "Codex invoke helper appends session-local extra add-dirs" {

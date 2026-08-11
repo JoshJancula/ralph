@@ -19,6 +19,8 @@ SUPPORTED_KEYWORDS = frozenset(
         "enum",
         "minItems",
         "maxItems",
+        "minLength",
+        "maxLength",
         "minimum",
         "maximum",
         "pattern",
@@ -144,6 +146,9 @@ def assert_supported_schema(schema: Any, schema_path: str = "$") -> None:
         elif key in {"minItems", "maxItems"}:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise SchemaValidationError(f"{key} must be an integer", schema_path)
+        elif key in {"minLength", "maxLength"}:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise SchemaValidationError(f"{key} must be a non-negative integer", schema_path)
         elif key in {"minimum", "maximum"}:
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise SchemaValidationError(f"{key} must be a number", schema_path)
@@ -154,8 +159,10 @@ def assert_supported_schema(schema: Any, schema_path: str = "$") -> None:
                 re.compile(value)
             except re.error as exc:
                 raise SchemaValidationError(f"invalid pattern: {exc}", schema_path) from exc
-        elif key == "additionalProperties" and not isinstance(value, bool):
-            raise SchemaValidationError("additionalProperties must be a boolean", schema_path)
+        elif key == "additionalProperties" and not isinstance(value, (bool, dict)):
+            raise SchemaValidationError(
+                "additionalProperties must be a boolean or schema", schema_path
+            )
 
     if "properties" in schema and isinstance(schema["properties"], dict):
         for prop_name, prop_schema in schema["properties"].items():
@@ -165,6 +172,11 @@ def assert_supported_schema(schema: Any, schema_path: str = "$") -> None:
             )
     if "items" in schema and isinstance(schema["items"], dict):
         assert_supported_schema(schema["items"], _schema_pointer(schema_path, "/items"))
+    if isinstance(schema.get("additionalProperties"), dict):
+        assert_supported_schema(
+            schema["additionalProperties"],
+            _schema_pointer(schema_path, "/additionalProperties"),
+        )
 
 
 def _instance_matches_type(instance: Any, type_name: str) -> bool:
@@ -213,8 +225,12 @@ def validate_instance(instance: Any, schema: dict[str, Any], json_path: str = "$
         if "maximum" in schema and instance > schema["maximum"]:
             raise SchemaValidationError("value is above maximum", json_path)
 
-    if isinstance(instance, str) and "pattern" in schema:
-        if re.fullmatch(schema["pattern"], instance) is None:
+    if isinstance(instance, str):
+        if "minLength" in schema and len(instance) < schema["minLength"]:
+            raise SchemaValidationError("string is too short", json_path)
+        if "maxLength" in schema and len(instance) > schema["maxLength"]:
+            raise SchemaValidationError("string is too long", json_path)
+        if "pattern" in schema and re.fullmatch(schema["pattern"], instance) is None:
             raise SchemaValidationError("value does not match pattern", json_path)
 
     if isinstance(instance, list):
@@ -241,6 +257,8 @@ def validate_instance(instance: Any, schema: dict[str, Any], json_path: str = "$
                 validate_instance(value, properties[key], child_path)
             elif additional is False:
                 raise SchemaValidationError(f"additional property not allowed: {key!r}", child_path)
+            elif isinstance(additional, dict):
+                validate_instance(value, additional, child_path)
 
 
 def validate_json_text(instance_text: str, schema: dict[str, Any]) -> None:

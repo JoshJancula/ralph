@@ -1,6 +1,6 @@
 # Ralph
 
-Ralph helps you work with AI coding assistants in an organized way. It supports Cursor, Claude, Codex, OpenCode, and Antigravity. The main entry point is `ralph create plan`: it can scaffold a zero-dependency `classic` markdown checklist or a `yaml` plan with YAML frontmatter. For staged, multi-agent workflows, use `ralph create orc`. When a job is too big for one pass, the orchestration path hands artifacts from one step to the next.
+Ralph helps you work with AI coding assistants in an organized way. It supports Cursor, Claude, Codex, OpenCode, and Antigravity. The main entry point is `ralph create plan`: it can scaffold a zero-dependency `classic` markdown checklist, a `yaml` plan with YAML frontmatter, or an opt-in `graph` plan for DAG execution. For staged, multi-agent workflows, use `ralph create orc`. When a job is too big for one pass, orchestration and graph modes hand artifacts from one step to the next.
 
 ## In short
 
@@ -9,6 +9,7 @@ Ralph helps you work with AI coding assistants in an organized way. It supports 
 | **Plan** | `ralph create plan --format classic` creates the zero-dependency markdown checklist path. `ralph create plan --format yaml` creates the YAML-frontmatter TODO queue path. `ralph create orc` creates the staged multi-agent path. |
 | **Runner** | Picks the next open task, runs your assistant, updates the plan, repeats. |
 | **Orchestrator** | Optional multi-stage pipelines with artifact checks between steps across Cursor, Claude, Codex, OpenCode, and Antigravity. |
+| **Graph** | Optional DAG execution for parallel, cross-provider, resumable nodes with isolated workspaces, verification gates, consensus, and controlled publication. |
 
 Logs and generated files land under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`**. Optional dashboard: **`.ralph/ralph-dashboard/`**.
 
@@ -73,10 +74,13 @@ See **[docs/INSTALL.md](docs/INSTALL.md)** (command reference) and **[docs/MCP.m
 2. `.ralph/run-plan.sh --workspace . --plan PLAN.md --runtime cursor` — **`--plan` is required**; use `cursor`, `claude`, `codex`, `opencode`, or `antigravity`.
 3. `ralph create plan --format yaml` — use this for the YAML-frontmatter TODO queue flow.
 4. `ralph create orc` — use this for staged work that routes TODOs and artifacts across multiple agents.
-5. Logs and artifacts appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`** as the runner completes each task. YAML-format runs use the normal plan-runner logs.
-6. Optional dashboard: `cd .ralph/ralph-dashboard && npm ci && npm run build && npm start` (default **http://127.0.0.1:8123**).
+5. `ralph create plan --format graph --name my-graph` — use this for independently schedulable and resumable DAG nodes. Lint it before running with `ralph graph compile <plan>`.
+6. Logs and artifacts appear under **`.ralph-workspace/logs/`** and **`.ralph-workspace/artifacts/`** as work completes.
+7. Optional dashboard: `cd .ralph/ralph-dashboard && npm ci && npm run build && npm start` (default **http://127.0.0.1:8123**).
 
 **Orchestration:** Multi-stage pipelines run with **`ralph run --plan path/to/pipeline.plan.md`**. Walkthrough: **[docs/orchestrated-ralph-example.md](docs/orchestrated-ralph-example.md)**. Plan loop, human input, and advanced flags: **[docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md)**.
+
+**Graph mode:** DAG plans run with **`ralph graph run path/to/graph.plan.md`** or the auto-detecting **`ralph run --plan path/to/graph.plan.md`**. Creation, isolation, consensus, checkpoints, resume, and publication: **[docs/GRAPH.md](docs/GRAPH.md)**.
 
 **Human input:** The runner uses an **interactive-first flow** -- TTY-attached sessions prompt inline; headless sessions pause and write files under **`.ralph-workspace/sessions/<plan-key>/`** until you provide an answer. Optional `RALPH_HUMAN_ACK_TOOL` lets external bridges intercept questions before the file-poll fallback kicks in.
 
@@ -87,6 +91,7 @@ See **[docs/INSTALL.md](docs/INSTALL.md)** (command reference) and **[docs/MCP.m
 | [Index](docs/README.md) | Map of all topics and quick reference |
 | [Installation](docs/INSTALL.md) | Global install (recommended), in-repo install, flags, uninstall |
 | [Agent workflow](docs/AGENT-WORKFLOW.md) | Plan loop, human input, orchestration, cleanup, agent profile management |
+| [Graph mode](docs/GRAPH.md) | DAG authoring, presets, isolated execution, gates, consensus, ledger, resume, and publication |
 | [MCP](docs/MCP.md) | Bash MCP server, host config, third-party MCP |
 | [Tooling (optional)](docs/TOOLING.md) | Ralph mode (`--ralph-mode`: `no`, `native`, `ralph`, `hybrid`; default `no`), shell output compaction, native adapters |
 | [Environment](docs/ENVIRONMENT.md) | Full environment variable reference, session/resume controls, models, feature gates |

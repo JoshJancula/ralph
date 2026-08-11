@@ -163,6 +163,7 @@ Commands:
   run-plan     Run a Ralph plan (legacy; prefer: ralph run --plan)
   split-plan   Preview or apply executable TODO normalization
   orchestrate  Run a Ralph orchestration directly (advanced; prefer: ralph run --plan)
+  graph        Compile/lint a graph-mode plan's artifact DAG (see: ralph graph --help)
   mcp          Manage the Ralph MCP server (see: ralph mcp --help)
   models       Manage saved Claude/Codex models (see: ralph models --help)
   usage        Show token-usage report (delegates to usage-report.sh)
@@ -179,6 +180,29 @@ Commands:
 
 Options:
   --bundle-path  Print the bundled .ralph directory (for scripts)
+USAGE
+}
+
+ralph_graph_usage() {
+  cat <<'USAGE'
+Usage: ralph graph <verb> [args]
+
+Verbs:
+  compile <plan-path> [--render mermaid|dot|ascii] [--out <path>] [--force]
+      Compile a graph-mode plan into .graph.json, validate it, and cache the
+      result beside the plan.
+
+  run <plan-path> [--namespace <ns>] [--max-parallel <n>]
+      Compile and run a graph plan to completion.
+
+  resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change]
+      Resume a graph run from the durable run-state ledger.
+
+  status
+      Not implemented yet; lands in a later phase of the GRAPH-MODE plan.
+
+  render
+      Not implemented yet; lands in a later phase of the GRAPH-MODE plan.
 USAGE
 }
 
@@ -208,6 +232,7 @@ Usage: ralph run --plan <path> [options]
   --plan  Run a plan file. The format is auto-detected:
             classic markdown checklist or flat yaml-frontmatter plan -> run-plan.sh
             orchestration plan (pipeline frontmatter) or .orch.json -> orchestrator.sh
+            graph plan (execution: graph frontmatter) or .graph.json -> graph-run.sh
           Remaining options are forwarded to the selected runner.
 USAGE
 }
@@ -287,24 +312,48 @@ case "$cmd" in
       ralph_run_usage >&2
       exit 1
     fi
-    # Route by file content: orchestration plans (pipeline frontmatter) and legacy
-    # .orch.json go to the orchestrator; classic/standard plans go to run-plan.sh.
-    ralph_run_is_orchestration() {
+    # Route by file content/name: graph plans (execution: graph or .graph.json)
+    # go to graph-run.sh; orchestration plans (pipeline frontmatter, .orch.json,
+    # execution: orchestration) go to orchestrator.sh; everything else goes to
+    # run-plan.sh. Match execution: graph before pipeline: because graph plans
+    # also carry a pipeline block and match order determines correctness.
+    ralph_run_plan_kind() {
       local path="$1"
-      [[ "$path" == *.json ]] && return 0
-      [[ -f "$path" ]] || return 1
+      # .graph.json -> graph runner
+      [[ "$path" == *.graph.json ]] && { echo "graph"; return 0; }
+      # other .json (legacy .orch.json) -> orchestrator
+      [[ "$path" == *.json ]] && { echo "orchestration"; return 0; }
+      [[ -f "$path" ]] || { echo "standard"; return 0; }
       awk '
-        NR == 1 { if ($0 != "---") exit 1; in_fm = 1; next }
+        NR == 1 { if ($0 != "---") { print "standard"; exit 0 } in_fm = 1; next }
         in_fm && $0 == "---" { in_fm = 0 }
-        in_fm && /^[[:space:]]*pipeline:[[:space:]]*/ { found = 1 }
-        in_fm && /^execution:[[:space:]]*orchestration/ { found = 1 }
-        END { exit (found ? 0 : 1) }
+        in_fm && /^execution:[[:space:]]*graph/ { is_graph = 1 }
+        in_fm && /^[[:space:]]*pipeline:[[:space:]]*/ { is_pipeline = 1 }
+        in_fm && /^execution:[[:space:]]*orchestration/ { is_orch = 1 }
+        END {
+          if (is_graph) { print "graph" }
+          else if (is_pipeline || is_orch) { print "orchestration" }
+          else { print "standard" }
+        }
       ' "$path"
     }
-    if ralph_run_is_orchestration "$run_plan_path"; then
-      exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" --orchestration "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
-    fi
-    exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --plan "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+    ralph_run_is_orchestration() {
+      local kind
+      kind="$(ralph_run_plan_kind "$1")"
+      [ "$kind" = "orchestration" ]
+    }
+    run_kind="$(ralph_run_plan_kind "$run_plan_path")"
+    case "$run_kind" in
+      graph)
+        exec bash "$RALPH_HOME/bundle/.ralph/graph-run.sh" run "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+        ;;
+      orchestration)
+        exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" --orchestration "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+        ;;
+      *)
+        exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --plan "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+        ;;
+    esac
     ;;
   run-plan)
     exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" "$@"
@@ -314,6 +363,18 @@ case "$cmd" in
     ;;
   orchestrate|orchestrator)
     exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" "$@"
+    ;;
+  graph)
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      ralph_graph_usage
+      exit 0
+    fi
+    graph_cli="$RALPH_HOME/bundle/.ralph/graph-run.sh"
+    if [[ ! -f "$graph_cli" ]]; then
+      echo "Error: graph CLI is not installed yet: $graph_cli" >&2
+      exit 1
+    fi
+    exec bash "$graph_cli" "$@"
     ;;
   mcp)
     sub="${1:-}"

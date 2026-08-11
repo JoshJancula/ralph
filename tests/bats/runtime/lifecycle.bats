@@ -166,7 +166,7 @@ assert data['cleanup_time'] is not None
   run runtime_overlay_restore_stale_runs "$workspace" "$RALPH_PLAN_KEY" 0
   [ "$status" -eq 0 ]
   run jq -r '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[0].command' "$workspace/.claude/settings.json"
-  [ "$output" = "RALPH_NATIVE_RESULT_COMPACT=1 .claude/hooks/native-result-compact.sh" ]
+  [ "$output" = ".claude/hooks/native-result-compact.sh" ]
 
   rm -rf "$workspace"
 }

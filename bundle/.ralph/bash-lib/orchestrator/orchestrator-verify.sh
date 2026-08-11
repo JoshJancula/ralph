@@ -26,6 +26,8 @@ verify_step_artifacts() {
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       if [[ "$ap" == /* ]]; then
         abs="$ap"
+      elif [[ "$ap" == .ralph-workspace/* && -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+        abs="${RALPH_PLAN_WORKSPACE_ROOT%/}/${ap#.ralph-workspace/}"
       else
         abs="$WORKSPACE/$ap"
       fi

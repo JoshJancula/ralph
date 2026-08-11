@@ -141,3 +141,171 @@ cleanup_plan_remove_human_action_file() {
     echo "Human action file not found: $human_file"
   fi
 }
+
+# --- Graph-run retention ---------------------------------------------------
+#
+# Terminal run statuses that are safe to prune:
+#   succeeded, failed, cancelled
+# Non-terminal run statuses that must never be pruned:
+#   running (scheduler is active), awaiting-ack (waiting on human checkpoint)
+#
+# Retention defaults (override via environment):
+#   RALPH_GRAPH_RUN_MAX_AGE_DAYS=30  Prune terminal runs older than 30 days.
+#   RALPH_GRAPH_RUN_MAX_COUNT=10     Keep at most 10 terminal runs per namespace.
+
+# cleanup_plan_graph_runs_namespace_dir <workspace_root> <namespace>
+# Prints the per-namespace graph-runs directory path.
+cleanup_plan_graph_runs_namespace_dir() {
+  local workspace_root="$1" namespace="$2"
+  printf '%s/.ralph-workspace/graph-runs/%s' "$workspace_root" "$namespace"
+}
+
+# cleanup_plan_stage_outcomes_dir <workspace_root> <namespace>
+# Prints the stage-outcomes directory path for the given namespace.
+cleanup_plan_stage_outcomes_dir() {
+  local workspace_root="$1" namespace="$2"
+  printf '%s/.ralph-workspace/artifacts/%s/stage-outcomes' "$workspace_root" "$namespace"
+}
+
+# cleanup_plan_graph_run_is_terminal <run_json_path>
+# Returns 0 when the run's status is succeeded, failed, or cancelled.
+# Returns 1 for non-terminal statuses (running, awaiting-ack) or unreadable JSON.
+cleanup_plan_graph_run_is_terminal() {
+  local run_json="$1"
+  [[ -f "$run_json" ]] || return 1
+  local status
+  status="$(jq -r '.status // empty' "$run_json" 2>/dev/null)" || return 1
+  case "$status" in
+    succeeded|failed|cancelled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# cleanup_plan_file_mtime <path>
+# Prints the mtime of <path> as a Unix epoch integer.
+# Tries macOS BSD stat first, then GNU stat.
+cleanup_plan_file_mtime() {
+  local path="$1"
+  stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null || echo 0
+}
+
+# cleanup_plan_epoch_days_ago <days>
+# Prints the Unix epoch N days in the past.
+# Tries GNU date first, then macOS BSD date.
+cleanup_plan_epoch_days_ago() {
+  local days="$1"
+  local epoch
+  if epoch="$(date -d "$days days ago" +%s 2>/dev/null)"; then
+    printf '%s' "$epoch"
+  elif epoch="$(date -v "-${days}d" +%s 2>/dev/null)"; then
+    printf '%s' "$epoch"
+  else
+    printf '0'
+  fi
+}
+
+# cleanup_plan_prune_stage_outcomes_for_run <stage_outcomes_dir> <run_id>
+# Removes stage-outcome JSON files whose name encodes <run_id>.
+# Attempt IDs have the form <node_id>__<run_id>__<attempt_number>, so files
+# are matched by the pattern *__<run_id>__*.json.
+cleanup_plan_prune_stage_outcomes_for_run() {
+  local stage_outcomes_dir="$1" run_id="$2"
+  [[ -d "$stage_outcomes_dir" ]] || return 0
+  local f removed=0
+  for f in "$stage_outcomes_dir"/*__"${run_id}"__*.json; do
+    [[ -f "$f" ]] || continue
+    rm -f "$f"
+    removed=$((removed + 1))
+  done
+  if [[ "$removed" -gt 0 ]]; then
+    echo "Pruned $removed stage-outcome file(s) for run $run_id"
+  fi
+}
+
+# cleanup_plan_prune_graph_runs <workspace_root> <namespace>
+# Prunes terminal graph runs by age and by run count for the given namespace.
+#
+# Rules enforced:
+#   - Never deletes the run pointed at by the latest symlink.
+#   - Never deletes a run whose status is non-terminal (running or awaiting-ack).
+#   - When a run is pruned, also removes its associated stage-outcome files.
+#
+# Retention defaults (override via environment):
+#   RALPH_GRAPH_RUN_MAX_AGE_DAYS=30  Prune terminal runs older than 30 days.
+#   RALPH_GRAPH_RUN_MAX_COUNT=10     Keep at most 10 terminal runs per namespace.
+cleanup_plan_prune_graph_runs() {
+  local workspace_root="$1" namespace="$2"
+  local max_age_days="${RALPH_GRAPH_RUN_MAX_AGE_DAYS:-30}"
+  local max_count="${RALPH_GRAPH_RUN_MAX_COUNT:-10}"
+
+  local ns_dir stage_outcomes_dir
+  ns_dir="$(cleanup_plan_graph_runs_namespace_dir "$workspace_root" "$namespace")"
+  stage_outcomes_dir="$(cleanup_plan_stage_outcomes_dir "$workspace_root" "$namespace")"
+
+  if [[ ! -d "$ns_dir" ]]; then
+    return 0
+  fi
+
+  # Resolve the latest symlink target (basename of the run_id only).
+  local latest_link="$ns_dir/latest"
+  local latest_run_id=""
+  if [[ -L "$latest_link" ]]; then
+    latest_run_id="$(basename "$(readlink "$latest_link")")" || true
+  fi
+
+  # Collect run directories sorted newest-first by mtime.
+  local run_ids=()
+  local entry
+  while IFS= read -r entry; do
+    [[ "$entry" == "latest" ]] && continue
+    [[ -d "$ns_dir/$entry" ]] || continue
+    run_ids+=("$entry")
+  done < <(ls -t1 "$ns_dir" 2>/dev/null || true)
+
+  if [[ "${#run_ids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  # Compute cutoff epoch for age-based pruning.
+  local cutoff_epoch
+  cutoff_epoch="$(cleanup_plan_epoch_days_ago "$max_age_days")"
+
+  local run_id run_json should_prune run_mtime kept_terminal=0
+
+  for run_id in "${run_ids[@]}"; do
+    run_json="$ns_dir/$run_id/run.json"
+
+    # Never prune the run pointed at by the latest symlink.
+    if [[ -n "$latest_run_id" && "$run_id" == "$latest_run_id" ]]; then
+      continue
+    fi
+
+    # Never prune non-terminal runs (running or awaiting-ack).
+    if ! cleanup_plan_graph_run_is_terminal "$run_json"; then
+      continue
+    fi
+
+    should_prune=0
+
+    # Age-based: prune if the run directory is older than the cutoff.
+    if [[ "$cutoff_epoch" -gt 0 ]]; then
+      run_mtime="$(cleanup_plan_file_mtime "$ns_dir/$run_id")"
+      if [[ "$run_mtime" -lt "$cutoff_epoch" ]]; then
+        should_prune=1
+      fi
+    fi
+
+    # Count-based: prune once we have retained max_count terminal runs.
+    if [[ "$should_prune" -eq 0 && "$kept_terminal" -ge "$max_count" ]]; then
+      should_prune=1
+    fi
+
+    if [[ "$should_prune" -eq 1 ]]; then
+      rm -rf "$ns_dir/$run_id"
+      echo "Pruned graph run: $run_id (namespace: $namespace)"
+      cleanup_plan_prune_stage_outcomes_for_run "$stage_outcomes_dir" "$run_id"
+    else
+      kept_terminal=$((kept_terminal + 1))
+    fi
+  done
+}
