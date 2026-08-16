@@ -806,3 +806,113 @@ assert_policy_validate_status() {
 
   [ "$status" -eq 0 ]
 }
+
+@test "MCP events are P10-shaped and evaluator output is unchanged" {
+  local workspace="$TEST_TMPDIR/mcp-eval-parity"
+  mkdir -p "$workspace/.ralph-workspace"
+  cat >"$workspace/.ralph-workspace/killswitch.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": true,
+  "banned_tools": [],
+  "toolDenylist": ["Bash"],
+  "deniedArgumentPatterns": [
+    {"tool": "ralph_proxy_read", "pattern": "/etc/passwd"}
+  ],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run env \
+    WORKSPACE="$workspace" \
+    RALPH_PROJECT_ROOT="$workspace" \
+    RALPH_AGENT_WORKSPACE="$workspace" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_PLAN_KEY="mcp-eval" \
+    RALPH_MCP_PROXY_RUNTIME="claude" \
+    bash -c '
+    source "$1"
+    benign="$(ralph_mcp_policy_event_json "ralph_plan_status" "PLAN.md" "status")"
+    jq -e ".schemaVersion == 1 and .source == \"mcp\" and .runtime == \"claude\" and .tool == \"ralph_plan_status\" and .action == \"execute\" and .effect == \"read\" and .resource == \"PLAN.md\"" <<< "$benign"
+    mcp_benign="$(ralph_mcp_policy_evaluate "$benign")"
+    ks_benign="$(killswitch_evaluate "$benign")"
+    [[ "$mcp_benign" == "$ks_benign" ]]
+    [[ "$mcp_benign" == "allow" ]]
+
+    denied="$(ralph_mcp_policy_event_json "Bash" "" "echo hi" "execute" "write")"
+    mcp_denied="$(ralph_mcp_policy_evaluate "$denied")"
+    ks_denied="$(killswitch_evaluate "$denied")"
+    [[ "$mcp_denied" == "$ks_denied" ]]
+    [[ "$mcp_denied" == "fatal" ]]
+
+    arg_event="$(ralph_mcp_policy_event_json "ralph_proxy_read" "/etc/passwd" "path=/etc/passwd")"
+    mcp_arg="$(ralph_mcp_policy_evaluate "$arg_event")"
+    ks_arg="$(killswitch_evaluate "$arg_event")"
+    [[ "$mcp_arg" == "$ks_arg" ]]
+    [[ "$mcp_arg" == "fatal" ]]
+  ' _ "$POLICY_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "proxy policy denylist is published to the canonical evaluator at load" {
+  local workspace="$TEST_TMPDIR/mcp-policy-publish"
+  mkdir -p "$workspace/.ralph-workspace"
+  cat >"$workspace/.ralph-workspace/killswitch.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": true,
+  "banned_tools": [],
+  "tool_denylist": [],
+  "denied_argument_patterns": [],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  local inline_policy
+  inline_policy='{"name":"deny-write","toolDenylist":["ralph_write_file"],"deniedArgumentPatterns":[{"tool":"ralph_run_plan","pattern":"/tmp/"}]}'
+
+  run env \
+    WORKSPACE="$workspace" \
+    RALPH_PROJECT_ROOT="$workspace" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace/.ralph-workspace" \
+    RALPH_MCP_PROXY_POLICY_INLINE="$inline_policy" \
+    bash -c '
+    source "$1"
+    source "$2"
+    ralph_mcp_proxy_load_policy "$3" "$4" || exit 1
+    event="$(ralph_mcp_policy_event_json "ralph_write_file" "out.md" "{}")"
+    decision="$(ralph_mcp_policy_evaluate "$event")"
+    [[ "$decision" == "fatal" ]]
+    if ralph_mcp_proxy_tool_allowed "ralph_write_file"; then
+      echo "denylisted tool still allowed"
+      exit 1
+    fi
+    if ! ralph_mcp_proxy_arguments_denied "ralph_run_plan" "plan_path=/tmp/evil.md"; then
+      echo "denied argument pattern not detected via evaluator"
+      exit 1
+    fi
+  ' _ "$RESULT_LIB" "$POLICY_LIB" "$workspace" "$UPSTREAM_SCRIPT"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "exactly one sentinel writer remains" {
+  local hits files
+  hits="$(grep -RIn --include='*.sh' '> "$sentinel_path"' \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/killswitch" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy" || true)"
+  [ -n "$hits" ]
+  files="$(printf '%s\n' "$hits" | awk -F: '{print $1}' | sort -u)"
+  [ "$(printf '%s\n' "$files" | wc -l | tr -d ' ')" = "1" ]
+  [[ "$files" == *"/killswitch/killswitch-killer.sh" ]]
+  if grep -n '> "$sentinel_path"' \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh" >/dev/null; then
+    echo "mcp-proxy-policy.sh still writes sentinel files"
+    return 1
+  fi
+}

@@ -1,7 +1,7 @@
 {
   "name": "qa",
   "_generated": "GENERATED from bundle/.ralph/agents/qa.md by scripts/sync-runtime-assets.sh - edit the canonical file",
-  "model": "ollama-cloud/kimi-k2.5",
+  "model": "ollama-cloud/kimi-k2.7-code",
   "description": "Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria",
   "rules": [
     "bundle/.opencode/rules/no-emoji.md",

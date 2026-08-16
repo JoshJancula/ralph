@@ -1,0 +1,26 @@
+{
+  "_generated": "GENERATED from .agents/agents/security.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "description": "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.",
+  "model": "auto",
+  "name": "security",
+  "output_artifacts": [
+    {
+      "kind": "review",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md",
+      "required": true
+    },
+    {
+      "kind": "handoff",
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/security-to-implementation.md",
+      "required": false,
+      "to": "implementation"
+    }
+  ],
+  "rules": [
+    ".agents/rules/no-emoji.md",
+    ".agents/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    ".agents/skills/repo-context/SKILL.md"
+  ]
+}

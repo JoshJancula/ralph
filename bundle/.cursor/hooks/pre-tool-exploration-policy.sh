@@ -96,6 +96,16 @@ ralph_cursor_exploration_emit_deny() {
   local workspace plan_key
   workspace="$(ralph_cursor_exploration_workspace)" || ralph_cursor_exploration_fail_open
   plan_key="$(ralph_native_hook_plan_key cursor-exploration)"
+  if [[ -n "${RALPH_KILLSWITCH_HOOK_RECORD:-}" ]] && command -v jq >/dev/null 2>&1; then
+    jq -nc \
+      --arg runtime "cursor" \
+      --arg tool "$tool_name" \
+      --arg decision "nudge" \
+      --argjson applied false \
+      --arg source "native-hook" \
+      '{runtime:$runtime,tool:$tool,decision:$decision,applied:$applied,source:$source}' \
+      >>"$RALPH_KILLSWITCH_HOOK_RECORD" 2>/dev/null || true
+  fi
   ralph_native_hook_append_nudge_log \
     "$workspace" \
     "$plan_key" \

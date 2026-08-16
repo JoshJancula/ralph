@@ -2,7 +2,7 @@
 name: security
 description: >-
   Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.
-model: ollama-cloud/kimi-k2.5
+model: ollama-cloud/kimi-k2.7
 tools:
   read: true
   edit: true

@@ -232,3 +232,32 @@ make_stage_outcome() {
   [ -f "$stage_outcomes_dir/node-X__run-A__0.json" ]
   [ -f "$stage_outcomes_dir/node-X__run-B__0.json" ]
 }
+
+@test "prune_graph_runs does not delete shared v1 namespace node logs" {
+  local workspace ns_dir state_root decoy v1_pruned
+  workspace="$(mktemp -d)"
+  ns_dir="$workspace/.ralph-workspace/graph-runs/myns"
+  state_root="$workspace/.ralph-workspace"
+  mkdir -p "$ns_dir/run-old/logs" "$ns_dir/run-kept/logs" \
+    "$state_root/logs/myns/nodes/shared"
+  make_run "$ns_dir" "run-old" "succeeded"
+  make_run "$ns_dir" "run-kept" "succeeded"
+  printf 'run-owned\n' >"$ns_dir/run-old/logs/supervisor.log"
+  decoy="$state_root/logs/myns/nodes/shared/attempt-1.log"
+  printf 'not-uniquely-owned\n' >"$decoy"
+  v1_pruned="$state_root/logs/myns/graph-schedule-run-old.log"
+  printf 'v1-old\n' >"$v1_pruned"
+  printf 'v1-kept\n' >"$state_root/logs/myns/graph-schedule-run-kept.log"
+  set_mtime_days_ago "$ns_dir/run-old" 60
+  ln -sfn "run-kept" "$ns_dir/latest"
+
+  RALPH_GRAPH_RUN_MAX_AGE_DAYS=30 RALPH_GRAPH_RUN_MAX_COUNT=9999 \
+    cleanup_plan_prune_graph_runs "$workspace" "myns"
+
+  [ ! -d "$ns_dir/run-old" ]
+  [ -d "$ns_dir/run-kept" ]
+  [ -f "$decoy" ]
+  [ "$(cat "$decoy")" = "not-uniquely-owned" ]
+  [ ! -f "$v1_pruned" ]
+  [ -f "$state_root/logs/myns/graph-schedule-run-kept.log" ]
+}

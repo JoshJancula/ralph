@@ -1,9 +1,141 @@
-import { Plugin } from "@opencode-ai/plugin";
+import type { Plugin } from "@opencode-ai/plugin";
 
 function truthy(value: string | undefined | null): boolean {
   if (value == null || value === "") return false;
   const normalized = String(value).trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function ralphModeOff(): boolean {
+  switch ((process.env.RALPH_MODE || "no").trim().toLowerCase()) {
+    case "no":
+    case "off":
+    case "false":
+    case "0":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isExecutionTool(tool: string): boolean {
+  const normalized = String(tool || "").trim().toLowerCase();
+  return normalized === "bash" || normalized === "shell" || normalized === "command_execution";
+}
+
+async function runProcess(
+  argv: string[],
+  options: { stdin?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ stdout: string; exitCode: number }> {
+  const env = options.env || process.env;
+  const bun = (globalThis as { Bun?: { spawn: Function } }).Bun;
+  if (bun && typeof bun.spawn === "function") {
+    const proc = bun.spawn(argv, {
+      stdin: options.stdin != null ? new Blob([options.stdin]) : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    const [stdout, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    return { stdout, exitCode: Number(exitCode) };
+  }
+  const { spawn } = await import("node:child_process");
+  return await new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), {
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.stderr.resume();
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ stdout: Buffer.concat(chunks).toString("utf8"), exitCode: code ?? 1 });
+    });
+    if (options.stdin != null) {
+      child.stdin.end(options.stdin);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+async function evaluateKillswitch(
+  libDir: string,
+  tool: string,
+  argumentsText: string,
+): Promise<{ decision: string; applied: boolean }> {
+  if (ralphModeOff()) {
+    await recordKillswitch(tool, "skip", false);
+    return { decision: "skip", applied: false };
+  }
+  if (!isExecutionTool(tool)) {
+    await recordKillswitch(tool, "nudge", false);
+    return { decision: "nudge", applied: false };
+  }
+  if (!libDir) {
+    return { decision: "allow", applied: false };
+  }
+  const core = `${libDir}/killswitch/killswitch-core.sh`;
+  const event = JSON.stringify({
+    schemaVersion: 1,
+    source: "native-hook",
+    runtime: "opencode",
+    tool,
+    action: "execute",
+    effect: "write",
+    resource: "",
+    arguments: argumentsText || "",
+  });
+  const script = [
+    'set -uo pipefail',
+    'core="$1"',
+    'event="$2"',
+    'record_path="${RALPH_KILLSWITCH_HOOK_RECORD:-}"',
+    'tool="$3"',
+    '[[ -f "$core" ]] || exit 0',
+    '# shellcheck source=/dev/null',
+    'source "$core"',
+    'killswitch_evaluate "$event" >/dev/null',
+    'decision="${KILLSWITCH_DECISION:-allow}"',
+    'applied=false',
+    'if [[ "$decision" == "fatal" ]]; then applied=true; fi',
+    'if [[ -n "$record_path" ]] && command -v jq >/dev/null 2>&1; then',
+    '  jq -nc --arg runtime opencode --arg tool "$tool" --arg decision "$decision" --argjson applied "$applied" --arg source native-hook \'{runtime:$runtime,tool:$tool,decision:$decision,applied:$applied,source:$source}\' >>"$record_path" 2>/dev/null || true',
+    'fi',
+    'printf "%s\\n" "$decision"',
+    'if [[ "$decision" == "fatal" ]]; then',
+    '  killswitch_apply_decision fatal',
+    'fi',
+  ].join("\n");
+  const result = await runProcess(["bash", "-c", script, "ralph-opencode-killswitch", core, event, tool], {
+    env: process.env,
+  });
+  const decision = result.stdout.trim().split("\n").pop() || "allow";
+  return { decision, applied: decision === "fatal" };
+}
+
+async function recordKillswitch(tool: string, decision: string, applied: boolean): Promise<void> {
+  const recordPath = process.env.RALPH_KILLSWITCH_HOOK_RECORD;
+  if (!recordPath) return;
+  const line =
+    JSON.stringify({
+      runtime: "opencode",
+      tool,
+      decision,
+      applied,
+      source: "native-hook",
+    }) + "\n";
+  const bun = (globalThis as { Bun?: { write: Function } }).Bun;
+  if (bun && typeof bun.write === "function") {
+    await bun.write(recordPath, line, { append: true }).catch(() => {});
+    return;
+  }
+  const { appendFile } = await import("node:fs/promises");
+  await appendFile(recordPath, line).catch(() => {});
 }
 
 function hookTelemetryEnabled(): boolean {
@@ -22,6 +154,10 @@ function bashLibDir(directory: string): string {
   const workspace = process.env.WORKSPACE || directory || "";
   if (workspace) {
     return `${workspace}/.ralph/bash-lib`;
+  }
+  const ralphHome = process.env.RALPH_HOME || "";
+  if (ralphHome) {
+    return `${ralphHome}/bundle/.ralph/bash-lib`;
   }
   return "";
 }
@@ -192,11 +328,26 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
   const libDir = bashLibDir(directory);
 
   return {
+    "permission.ask": async (input, output) => {
+      const tool = String(input?.type || input?.metadata?.tool || "");
+      const argumentsText = String(
+        input?.pattern || input?.title || input?.metadata?.command || "",
+      );
+      const result = await evaluateKillswitch(libDir, tool, argumentsText);
+      if (result.decision === "fatal") {
+        output.status = "deny";
+      }
+    },
+
     "tool.execute.before": async (input, output) => {
+      const command = typeof output.args?.command === "string" ? output.args.command : "";
+      const result = await evaluateKillswitch(libDir, input.tool, command);
+      if (result.decision === "fatal") {
+        throw new Error("Ralph killswitch denied this tool");
+      }
       if (input.tool !== "bash") return;
       if (!truthy(process.env.RALPH_BASH_REWRITE)) return;
       if (!libDir) return;
-      const command = output.args?.command;
       if (typeof command !== "string" || !command) return;
       output.args.command = await rewriteCommand(libDir, command);
     },

@@ -106,6 +106,55 @@ def in_scope(path: str, scopes: Sequence[str]) -> bool:
     return False
 
 
+def change_path_types(changes: Sequence[dict]) -> Dict[str, str]:
+    """Map every path referenced by a change (including rename sources) to
+    its entry type ("directory", "file", or "symlink")."""
+    types: Dict[str, str] = {}
+    for change in changes:
+        after = change.get("after")
+        before = change.get("before")
+        entry = after if isinstance(after, dict) else before
+        if isinstance(entry, dict):
+            types[str(change["path"])] = str(entry.get("type", "file"))
+        if change["operation"] == "renamed" and isinstance(before, dict):
+            types[str(change["fromPath"])] = str(before.get("type", "file"))
+    return types
+
+
+def is_ancestor_path(directory: str, other: str) -> bool:
+    return other != directory and other.startswith(directory.rstrip("/") + "/")
+
+
+def derived_ancestor_directories(changes: Sequence[dict]) -> set[str]:
+    """Newly added directories that exist purely to hold at least one real
+    changed leaf (a file or symlink), as opposed to an unrelated, empty
+    directory write.
+
+    These directories are never independently scope-checked or reported:
+    when every changed leaf beneath a derived ancestor directory is allowed
+    by writeScopes, the directory is implicitly permitted as the minimal
+    scaffolding a leaf write requires. When a leaf beneath it is not
+    allowed -- a sibling leaf, a control path, an escaping symlink -- that
+    leaf is reported directly by its own scope check; the ancestor
+    directory itself is simply omitted from the violation payload rather
+    than reported as a second, derivative violation. A directory that is
+    not an ancestor of any real changed leaf gets no special treatment and
+    must match writeScopes on its own, like any other path.
+    """
+    path_types = change_path_types(changes)
+    leaf_paths = [path for path, kind in path_types.items() if kind != "directory"]
+    added_dirs = [
+        str(change["path"])
+        for change in changes
+        if change["operation"] == "added" and path_types.get(str(change["path"])) == "directory"
+    ]
+    return {
+        directory
+        for directory in added_dirs
+        if any(is_ancestor_path(directory, leaf) for leaf in leaf_paths)
+    }
+
+
 def entry_map(manifest: dict) -> Dict[str, dict]:
     entries = manifest.get("entries")
     if not isinstance(entries, list):
@@ -216,6 +265,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
     control = []
     outside = []
     submodules = submodule_paths(workspace)
+    omit_from_outside = derived_ancestor_directories(changes)
     for change in changes:
         paths = [str(change["path"])]
         if change["operation"] == "renamed":
@@ -224,7 +274,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
             root = PurePosixPath(path).parts[0]
             if root in CONTROL_ROOTS or path.endswith(".plan.md"):
                 control.append(path)
-            if not in_scope(path, scopes):
+            if path not in omit_from_outside and not in_scope(path, scopes):
                 outside.append(path)
             if any(path == sub or path.startswith(sub + "/") for sub in submodules):
                 control.append(path)

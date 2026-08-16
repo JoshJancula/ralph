@@ -20,6 +20,10 @@ fi
 
 GRAPH_GATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if ! declare -F graph_ui_node >/dev/null 2>&1; then
+  # shellcheck source=graph-ui.sh
+  source "$GRAPH_GATE_SCRIPT_DIR/graph-ui.sh"
+fi
 if ! declare -F graph_state_now_iso >/dev/null 2>&1; then
   # shellcheck source=graph-state.sh
   source "$GRAPH_GATE_SCRIPT_DIR/graph-state.sh"
@@ -432,7 +436,7 @@ graph_gate_run() {
       '{name:$name,command:$command,resourceClass:$resourceClass,exitCode:$exitCode,timedOut:$timedOut,outcome:$stepOutcome,artifactPath:$artifactPath,reruns:$reruns}')"
     steps_json="$(jq -c --argjson e "$step_entry" '. + [$e]' <<<"$steps_json")"
 
-    echo "graph-gate: node=$node_id step=$step_name outcome=$step_outcome exit=$step_ec reruns=$step_reruns resource=$step_resource" >&2
+    graph_ui_detail "gate step $step_name: $step_outcome (exit=$step_ec reruns=$step_reruns resource=$step_resource)"
 
     # Stop after first failure unless continueOnFailure is true.
     if [[ "$step_outcome" != "passed" && "$step_continue" != "true" ]]; then
@@ -465,7 +469,8 @@ graph_gate_run() {
     return 1
   fi
 
-  echo "graph-gate: node=$node_id profile=$profile_name outcome=$outcome result=$result_path" >&2
+  graph_ui_node "$outcome" "$node_id" "gate profile=$profile_name"
+  graph_ui_detail "result: $result_path"
 
   case "$outcome" in
     passed) return 0 ;;

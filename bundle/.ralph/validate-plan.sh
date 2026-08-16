@@ -50,7 +50,7 @@ if [[ "$execution" == "graph" ]]; then
   if ! plan_pipeline_graph_json "$plan_path" >"$graph_tmp"; then
     exit 1
   fi
-  if ! bash "$bundle_root/../scripts/validate-graph-schema.sh" "$graph_tmp"; then
+  if ! bash "$bundle_root/.ralph/bash-lib/graph/validate-graph-schema.sh" "$graph_tmp"; then
     exit 1
   fi
   exit 0

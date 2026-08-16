@@ -1,10 +1,10 @@
 ---
 description: "Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria"
 models:
-  claude: "claude-haiku-4-5"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "haiku"
+  cursor: "composer-2.5"
+  codex: "gpt-5.6-luna"
+  opencode: "ollama-cloud/kimi-k2.7-code"
   antigravity: "auto"
 rules:
   - no-emoji

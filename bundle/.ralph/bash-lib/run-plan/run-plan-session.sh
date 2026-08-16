@@ -91,8 +91,11 @@ ralph_session_init() {
   HUMAN_INPUT_MD="$RALPH_SESSION_DIR/HUMAN-INPUT-REQUIRED.md"
   RALPH_MCP_ALLOWLIST_FILE="$RALPH_SESSION_DIR/mcp-allowlist.txt"
   PENDING_ABS="$PENDING_HUMAN"
+  PENDING_HUMAN_OWNER="$RALPH_SESSION_DIR/pending-human.owner"
   export HUMAN_REQUEST_FILE
   export RALPH_MCP_ALLOWLIST_FILE
+
+  ralph_session_discard_foreign_run_pause
 
   ralph_session_migrate_legacy "$workspace"
   ralph_session_load_mcp_allowlist
@@ -100,6 +103,38 @@ ralph_session_init() {
   if [[ -n "${RESUME_SESSION_ID_OVERRIDE:-}" ]]; then
     ralph_session_write_manual_resume "$RESUME_SESSION_ID_OVERRIDE"
   fi
+}
+
+# Discard a permission pause left behind by a different graph run.
+#
+# The session directory is keyed by namespace and node, not by run id, so it is
+# shared by every run of the same graph node. A pause records a question that
+# only the run that asked it can answer: its operator request lives under that
+# run's operator/requests directory, and the run-local response file it waits on
+# is written by that run alone. Once that run ends, the pause is unanswerable,
+# but the file survives -- so the next run sees a pending question at session
+# init and pauses again before invoking the agent at all, forever.
+#
+# Only graph runs are scoped this way. A plain `ralph run` deliberately inherits
+# a pending pause across invocations, because that is how an operator answers a
+# question and resumes: same session dir, next invocation.
+ralph_session_discard_foreign_run_pause() {
+  [[ -n "${RALPH_GRAPH_RUN_ID:-}" ]] || return 0
+  [[ -f "$PENDING_HUMAN" ]] || return 0
+
+  local owner=""
+  if [[ -f "$PENDING_HUMAN_OWNER" ]]; then
+    owner="$(<"$PENDING_HUMAN_OWNER")"
+  fi
+  if [[ "$owner" == "$RALPH_GRAPH_RUN_ID" ]]; then
+    return 0
+  fi
+
+  rm -f "$PENDING_HUMAN" "$PENDING_HUMAN_OWNER" "$OPERATOR_RESPONSE_FILE" \
+    "$HUMAN_REQUEST_FILE" "$HUMAN_INPUT_MD" \
+    "$RALPH_SESSION_DIR/permission-remediation.json"
+  : >"$HUMAN_CONTEXT"
+  ralph_run_plan_log "Discarded permission pause from ${owner:-an earlier run} (current graph run ${RALPH_GRAPH_RUN_ID}); it cannot be answered from this run"
 }
 
 # Migrate session data from legacy .ralph-workspace/sessions if it exists.

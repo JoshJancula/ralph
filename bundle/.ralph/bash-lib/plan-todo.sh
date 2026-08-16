@@ -494,6 +494,7 @@ target = sys.argv[2]
 mode = sys.argv[3]
 
 ALLOWED_RUNTIMES = {"cursor", "claude", "codex", "opencode"}
+RALPH_MODES = {"no", "native", "ralph", "hybrid"}
 ALLOWED_SESSION_STRATEGIES = {"fresh", "resume", "reset", "compact"}
 ALLOWED_CONTEXT_BUDGETS = {"full", "standard", "lean"}
 # subagents: inherit keeps today's tool surface (no Task/dispatch tool unless an
@@ -1066,6 +1067,12 @@ def parse_list_item(lines: list[str], start_idx: int, item_indent: int, kind: st
                 fail(f"{kind} delegation must use mapping syntax")
             value, next_idx = parse_delegation_block(lines, line_idx + 1, line_indent)
             return next_idx, value
+        if key == "ralphMode":
+            owner = item.get("id") or f"{kind} item"
+            fail(
+                f"ralphMode is not allowed on {kind} {owner}. Tool exposure applies "
+                "to the whole run -- declare pipeline.ralphMode once instead"
+            )
         if strict_keys_enabled(execution):
             owner = item.get("id") or f"{kind} item"
             fail(f"unknown {kind} field {key!r} on {owner}")
@@ -1362,6 +1369,20 @@ def parse_pipeline(lines: list[str], start_idx: int, parent_indent: int, executi
             continue
         if execution == "graph" and key == "strictEdges":
             pipeline["strictEdges"] = parse_bool_text(raw)
+            idx += 1
+            continue
+        # Tool exposure is a property of the whole run, not of one stage.
+        # Mixing modes across stages of a single run means the same repo is
+        # brokered two different ways at once, so this is deliberately not a
+        # per-stage field. See validate_stage, which rejects it there.
+        if key == "ralphMode":
+            value = parse_scalar_text(raw) or ""
+            if value not in RALPH_MODES:
+                fail(
+                    "invalid ralphMode value "
+                    f"{value!r} (expected one of: {', '.join(sorted(RALPH_MODES))})"
+                )
+            pipeline["ralphMode"] = value
             idx += 1
             continue
         if execution == "graph" and key == "verificationProfiles":
@@ -1874,6 +1895,11 @@ def validate_stage(stage: dict, ordinal: int) -> None:
     stage_type = as_text(stage.get("type", ""))
     if stage_type and stage_type not in {"agent", "consensus", "join", "router", "checkpoint", "gate", "integrate", "adjudicator"}:
         fail(f"{prefix} type: invalid stage type {stage_type!r}")
+    if "ralphMode" in stage:
+        fail(
+            f"{prefix} ralphMode: not allowed on a stage. Tool exposure applies to "
+            "the whole run -- declare pipeline.ralphMode once instead"
+        )
     plan_file = as_text(stage.get("planFile", ""))
     if plan_file:
         validate_artifact_path(f"{prefix} planFile", plan_file)
@@ -2649,7 +2675,7 @@ if mode == "orch":
             as_text(frontmatter["pipeline"].get("edgeDerivation", "both")) or "both",
             bool(frontmatter["pipeline"].get("strictEdges", False)),
         )
-    for key in ("maxParallel", "edgeDerivation", "failurePolicy", "publishMode", "strictEdges"):
+    for key in ("maxParallel", "edgeDerivation", "failurePolicy", "publishMode", "strictEdges", "ralphMode"):
         value = frontmatter["pipeline"].get(key)
         if value not in (None, ""):
             result[key] = value
@@ -3026,6 +3052,9 @@ if mode == "graph":
         "nodes": graph_nodes,
         "edges": rewritten_edges,
     }
+    ralph_mode = frontmatter["pipeline"].get("ralphMode", "")
+    if ralph_mode:
+        result["ralphMode"] = ralph_mode
     verification_profiles = frontmatter["pipeline"].get("verificationProfiles", [])
     if verification_profiles:
         result["verificationProfiles"] = verification_profiles

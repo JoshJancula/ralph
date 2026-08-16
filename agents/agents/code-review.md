@@ -1,10 +1,10 @@
 ---
 description: "Reviews changed code for correctness, security, and convention compliance before downstream delivery."
 models:
-  claude: "claude-haiku-4-5"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "sonnet"
+  cursor: "auto"
+  codex: "gpt-5.6-terra"
+  opencode: "ollama-cloud/kimi-k2.7-code"
   antigravity: "auto"
 rules:
   - no-emoji

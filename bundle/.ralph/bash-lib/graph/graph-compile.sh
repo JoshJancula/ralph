@@ -13,9 +13,7 @@ fi
 
 GRAPH_COMPILE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRAPH_COMPILE_RALPH_ROOT="$(cd "$GRAPH_COMPILE_SCRIPT_DIR/../.." && pwd)"
-GRAPH_COMPILE_BUNDLE_ROOT="$(cd "$GRAPH_COMPILE_RALPH_ROOT/.." && pwd)"
-GRAPH_COMPILE_REPO_ROOT="$(cd "$GRAPH_COMPILE_BUNDLE_ROOT/.." && pwd)"
-GRAPH_COMPILE_VALIDATE_SCHEMA_SH="$GRAPH_COMPILE_REPO_ROOT/scripts/validate-graph-schema.sh"
+GRAPH_COMPILE_VALIDATE_SCHEMA_SH="$GRAPH_COMPILE_SCRIPT_DIR/validate-graph-schema.sh"
 
 # plan-todo.sh guards its own re-sourcing (RALPH_PLAN_TODO_LIB_LOADED), so it
 # is safe to source unconditionally even when a caller (bats helpers,

@@ -2,7 +2,7 @@
 name: architect
 description: >-
   Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.
-model: claude-opus-4-5
+model: opus
 tools:
   - Read
   - Edit

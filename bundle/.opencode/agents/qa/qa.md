@@ -2,7 +2,7 @@
 name: qa
 description: >-
   Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria
-model: ollama-cloud/kimi-k2.5
+model: ollama-cloud/kimi-k2.7-code
 tools:
   read: true
   edit: true

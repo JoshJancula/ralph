@@ -50,6 +50,18 @@ _WRITE_TOOL_NAMES = frozenset(
         "multiedit",
     }
 )
+# Direct reads already identify their source in the preceding tool-call line
+# (for example, ``read(bundle/.ralph/...)``).  The pretty log should preserve
+# its compact preview without adding a second result-store navigation UI for
+# the same file.
+_DIRECT_SOURCE_READ_TOOL_NAMES = frozenset(
+    {
+        "read",
+        "read_file",
+        "ralph_proxy_read",
+        "resources/read",
+    }
+)
 # Pre-rendered patch text keys (codex apply_patch and similar).
 _PATCH_TEXT_KEYS = ("patch", "diff", "unified_diff", "unifiedDiff")
 _CHANGE_BLOCK_MAX_LINES = 20
@@ -1355,11 +1367,18 @@ class PrettyRenderer:
         if envelope is not None:
             link_source = _envelope_store_ref(envelope)
         out = self._break_text_run(flush_pending_tool=True)
+        direct_source_read = tool_name.lower() in _DIRECT_SOURCE_READ_TOOL_NAMES
         body_lines, overflow_stored = self._render_result_body(
             preview,
             is_error=is_error,
             store_text=store_text or None,
+            store_overflow=not direct_source_read,
         )
+        if direct_source_read:
+            # The source path is already in the tool-call line.  Do not create
+            # a duplicate raw/compacted result-store navigation trail merely
+            # to support the TUI preview.
+            return out + body_lines
         out.extend(body_lines)
         stored = None
         if _RESULT_STORE is not None:
@@ -1407,6 +1426,7 @@ class PrettyRenderer:
         *,
         is_error: bool,
         store_text: Optional[str] = None,
+        store_overflow: bool = True,
     ) -> Tuple[List[str], Optional[Tuple[str, str]]]:
         body_lines = body.splitlines() or [body]
         visible = [line.rstrip() for line in body_lines if line.rstrip()]
@@ -1442,8 +1462,11 @@ class PrettyRenderer:
             elif body_bytes > len(shown[0].encode("utf-8")):
                 hidden = 1
         if hidden > 0:
-            full_text = store_text if store_text is not None else body
-            pointer, stored_ref = self._overflow_pointer(hidden, full_text)
+            if store_overflow:
+                full_text = store_text if store_text is not None else body
+                pointer, stored_ref = self._overflow_pointer(hidden, full_text)
+            else:
+                pointer = f"... +{hidden} more lines (source path shown in read call)"
             out.append(f"{self.dim}{self.branch} {pointer}{self.reset}")
         return out, stored_ref
 

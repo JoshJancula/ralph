@@ -1,0 +1,17 @@
+{
+  "author": {
+    "name": "Ralph maintainers"
+  },
+  "description": "Plan, orchestrate, inspect, and safely run Ralph workflows from Cursor.",
+  "displayName": "Ralph Orchestrator",
+  "keywords": [
+    "ralph",
+    "planning",
+    "orchestration",
+    "graph",
+    "agents"
+  ],
+  "license": "MIT",
+  "name": "ralph-orchestrator",
+  "version": "0.1.0-beta.1"
+}

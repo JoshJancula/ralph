@@ -2,15 +2,21 @@
 # Graph status verb: read-only view of a live or completed graph run.
 #
 # graph_status_cli <--namespace <ns>> <--run <run-id|latest>> [--workspace <dir>]
+#   [--details] [--mermaid]
 #   Entry point from graph-run.sh.  Reads only the graph-runs directory so it is
 #   safe to call against a live in-progress run.
 #
-# graph_status_run <workspace> <namespace> <run_id>
-#   Core implementation.  Prints:
-#     1. A table: node, type, runtime, state, attempt count, duration.
-#     2. A mermaid flowchart with a classDef per state and live run-state classes
-#        applied per node.  Consensus voter nodes include per-voter provenance and
-#        confidence so "which provider dissented" is answerable in one command.
+# graph_status_run <workspace> <namespace> <run_id> [--details] [--mermaid]
+#   Core implementation.  By default prints only the run summary (usage,
+#   concurrency reductions) plus a table: node, type, runtime, state, unique
+#   attempt count, duration. With --details, also prints verbose per-node and
+#   per-attempt observability metadata (workspace mode, write scopes, gate
+#   outcome, changeset hash, consensus voter provenance and dissent,
+#   brokered children, native subagent events) plus efficiency signals
+#   (elapsed active/wait time, reliable usage or n/a, retry classification,
+#   repeated-tool-call hints). --json includes the same efficiency fields.
+#   With --mermaid, also prints a mermaid flowchart with a classDef per state
+#   and live run-state classes applied per node.
 #
 # This script never writes to the graph-runs directory.
 #
@@ -32,6 +38,29 @@ if ! declare -F graph_delegation_ledger_root >/dev/null 2>&1; then
   # shellcheck source=graph-delegation-ledger.sh
   source "$GRAPH_STATUS_SCRIPT_DIR/graph-delegation-ledger.sh"
 fi
+if ! declare -F graph_events_read_lines >/dev/null 2>&1; then
+  # shellcheck source=graph-events.sh
+  source "$GRAPH_STATUS_SCRIPT_DIR/graph-events.sh"
+fi
+if ! declare -F graph_heartbeat_classify_run >/dev/null 2>&1; then
+  # shellcheck source=graph-heartbeat.sh
+  source "$GRAPH_STATUS_SCRIPT_DIR/graph-heartbeat.sh"
+fi
+
+# _graph_status_now_epoch
+# Current Unix epoch for live wait/active math. Honors GRAPH_STATUS_NOW_EPOCH,
+# then GRAPH_HEARTBEAT_NOW_EPOCH, so tests can freeze time.
+_graph_status_now_epoch() {
+  if [[ -n "${GRAPH_STATUS_NOW_EPOCH:-}" && "${GRAPH_STATUS_NOW_EPOCH}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$GRAPH_STATUS_NOW_EPOCH"
+    return 0
+  fi
+  if [[ -n "${GRAPH_HEARTBEAT_NOW_EPOCH:-}" && "${GRAPH_HEARTBEAT_NOW_EPOCH}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$GRAPH_HEARTBEAT_NOW_EPOCH"
+    return 0
+  fi
+  date +%s
+}
 
 # _graph_status_iso_to_epoch <iso_timestamp>
 # Convert an ISO-8601 UTC timestamp (YYYY-MM-DDTHH:MM:SSZ) to Unix epoch
@@ -87,6 +116,47 @@ _graph_status_duration_fmt() {
   m=$(( (diff % 3600) / 60 ))
   sec=$(( diff % 60 ))
   printf '%02d:%02d:%02d' "$h" "$m" "$sec"
+}
+
+# _graph_status_interval_seconds <started_at> <finished_at>
+# Print nonnegative elapsed seconds, or return 1 when timestamps are missing
+# or unparseable.
+_graph_status_interval_seconds() {
+  local started="$1" finished="$2"
+  if [[ -z "$started" || -z "$finished" ]]; then
+    return 1
+  fi
+  local diff
+  if [[ "${started:0:10}" == "${finished:0:10}" && "${started:11:8}" =~ ^[0-9:]+$ && "${finished:11:8}" =~ ^[0-9:]+$ ]]; then
+    local sh sm ss fh fm fs
+    sh="${started:11:2}"; sm="${started:14:2}"; ss="${started:17:2}"
+    fh="${finished:11:2}"; fm="${finished:14:2}"; fs="${finished:17:2}"
+    diff=$(( (10#$fh * 3600 + 10#$fm * 60 + 10#$fs) - (10#$sh * 3600 + 10#$sm * 60 + 10#$ss) ))
+    [[ "$diff" -ge 0 ]] || diff=0
+    printf '%s\n' "$diff"
+    return 0
+  fi
+  local s f
+  s="$(_graph_status_iso_to_epoch "$started")" || return 1
+  f="$(_graph_status_iso_to_epoch "$finished")" || return 1
+  diff=$(( f - s ))
+  [[ "$diff" -ge 0 ]] || diff=0
+  printf '%s\n' "$diff"
+}
+
+# _graph_status_seconds_fmt <seconds>
+# Format a nonnegative integer as HH:MM:SS, or "-" when empty/unparseable.
+_graph_status_seconds_fmt() {
+  local sec="${1:-}"
+  if [[ ! "$sec" =~ ^[0-9]+$ ]]; then
+    printf '-'
+    return 0
+  fi
+  local h m s
+  h=$(( sec / 3600 ))
+  m=$(( (sec % 3600) / 60 ))
+  s=$(( sec % 60 ))
+  printf '%02d:%02d:%02d' "$h" "$m" "$s"
 }
 
 # _graph_status_table_row <node_id> <type> <runtime> <state> <attempts> <duration> [mode] [base] [scopes]
@@ -310,20 +380,42 @@ _graph_status_brokered_children() {
   done
 }
 
-# _graph_status_subagent_events <workspace> <namespace> <run_id> <node_id>
-# Print best-effort native subagent events recorded in the observability log.
+# _graph_status_read_events_safe <run-dir>
+# Status reads <run-dir>/events.jsonl only through graph_events_read_lines or
+# graph_events_read_json. A missing journal or a single crash-truncated tail
+# is nonfatal; a malformed interior line produces a concise warning and returns
+# an empty result so callers continue without mutating the journal or ledger.
+_graph_status_read_events_safe() {
+  local run_dir="$1" events=""
+  if [[ -z "$run_dir" ]]; then
+    return 0
+  fi
+  if events="$(graph_events_read_lines "$run_dir" 2>/dev/null)"; then
+    if [[ -n "$events" ]]; then
+      printf '%s\n' "$events"
+    fi
+    return 0
+  fi
+  echo "Warning: event journal has a malformed interior line; event-derived status details omitted" >&2
+  return 0
+}
+
+# _graph_status_subagent_events <workspace> <namespace> <run_id> <node_id> [events]
+# Print best-effort native subagent events recorded in the run event journal.
+# An optional fifth argument supplies pre-read event lines so the journal is
+# read only once per status invocation.
 _graph_status_subagent_events() {
-  local workspace="$1" namespace="$2" run_id="$3" node_id="$4"
-  local log_file
-  log_file="${workspace}/.ralph-workspace/graph-runs/${namespace}/${run_id}/observability.jsonl"
-  [[ -f "$log_file" ]] || {
-    log_file="${workspace}/.ralph-workspace/logs/native-readonly.log"
-    [[ -f "$log_file" ]] || return 0
-  }
-  local events
-  events="$(jq -r --arg node "$node_id" 'select(.nodeId == $node and (.event | startswith("native-subagent"))) | "    native-subagent event=\(.event) \(.details // {})"' "$log_file" 2>/dev/null)"
+  local workspace="$1" namespace="$2" run_id="$3" node_id="$4" events="${5:-}"
+  local run_dir
+  run_dir="$(graph_state_run_dir "$workspace" "$namespace" "$run_id" 2>/dev/null)" || return 0
+  if [[ -z "$events" ]]; then
+    events="$(_graph_status_read_events_safe "$run_dir")"
+  fi
   [[ -n "$events" ]] || return 0
-  printf '%s\n' "$events"
+  local filtered
+  filtered="$(printf '%s\n' "$events" | jq -r --arg node "$node_id" 'select(.nodeId == $node and (.event | startswith("native-subagent"))) | "    native-subagent event=\(.event) \(.details // {})"')"
+  [[ -n "$filtered" ]] || return 0
+  printf '%s\n' "$filtered"
 }
 
 # _graph_status_usage_aggregate <nodes-dir>
@@ -336,7 +428,15 @@ _graph_status_usage_aggregate() {
   local node_usage child_usage
   node_usage="$(jq -cs '
     def add_numbers: reduce .[] as $o ({}; reduce ($o | to_entries[]? | select(.value | type == "number")) as $e (. ; .[$e.key] = ((.[$e.key] // 0) + $e.value)));
-    [ .[] | .attempts[-1].usageSnapshot? | select(type == "object") ] | add_numbers
+    def reliable:
+      (.usageReliable == true) or (.usageReliable == "true")
+      or ((.usageSnapshot.reliability // .usage.reliability // "") == "authoritative");
+    [ .[]
+      | (.attempts[-1] // .) as $a
+      | select($a | reliable)
+      | ($a.usageSnapshot // $a.usage)
+      | select(type == "object")
+    ] | add_numbers
   ' "$nodes_dir"/*.json 2>/dev/null)" || node_usage='{}'
   for child in "$nodes_dir"/*/delegations/delegation-*/status.json; do
     [[ -f "$child" ]] && child_files+=("$child")
@@ -349,32 +449,397 @@ _graph_status_usage_aggregate() {
   else
     child_usage='{}'
   fi
+  # An empty aggregate means usage was never recorded, not that zero tokens
+  # were spent; show that distinction explicitly instead of an empty object.
+  [[ "$node_usage" == "{}" ]] && node_usage="n/a"
+  [[ "$child_usage" == "{}" ]] && child_usage="n/a"
   printf '  usage parent=%s brokered-children=%s\n' "$node_usage" "$child_usage"
+  return 0
 }
 
-# _graph_status_concurrency_reductions <run-dir>
-# Explain actual admission reductions using the append-only scheduler log.
+# _graph_status_concurrency_reductions <run-dir> [events]
+# Explain actual admission reductions using the append-only event journal.
+# An optional second argument supplies pre-read event lines so the journal is
+# read only once per status invocation.
 _graph_status_concurrency_reductions() {
-  local run_dir="$1" log_file
-  log_file="$run_dir/observability.jsonl"
-  [[ -f "$log_file" ]] || return 0
+  local run_dir="$1" events="${2:-}"
+  [[ -d "$run_dir" ]] || return 0
+  if [[ -z "$events" ]]; then
+    events="$(_graph_status_read_events_safe "$run_dir")"
+  fi
+  [[ -n "$events" ]] || return 0
   local reductions
-  reductions="$(jq -r '
+  reductions="$(printf '%s\n' "$events" | jq -r '
     select(.event == "admission") |
-    if .workKind == "broker-child" and .decision == "denied" then "broker-capacity"
-    elif .subagents == "on" then "native-subagent-reservation"
-    elif .sameRuntimeParallelSafe == false then "runtime-overlay"
-    elif ((.reason // "") | test("verification|resource"; "i")) then "verification-resource-class"
+    if .details.workKind == "broker-child" and .details.decision == "denied" then "broker-capacity"
+    elif .details.subagents == "on" then "native-subagent-reservation"
+    elif .details.sameRuntimeParallelSafe == false then "runtime-overlay"
+    elif ((.details.reason // "") | test("verification|resource"; "i")) then "verification-resource-class"
     else empty end
-  ' "$log_file" 2>/dev/null | sort -u | tr "\n" "," | sed 's/,$//')"
-  [[ -n "$reductions" ]] && printf '  concurrency reduced-by=%s\n' "$reductions"
+  ' | sort -u | tr "\n" "," | sed 's/,$//')"
+  if [[ -n "$reductions" ]]; then
+    printf '  concurrency reduced-by=%s\n' "$reductions"
+  fi
+  # No reductions to report is not a failure: an empty journal, or one with no
+  # reduction-worthy events, must never abort the caller under errexit.
+  return 0
 }
 
-# graph_status_run <workspace> <namespace> <run_id>
+# _graph_status_concurrency_reductions_json <events>
+# Return a JSON array of reduction reasons from pre-read event lines.
+_graph_status_concurrency_reductions_json() {
+  local events="${1:-}"
+  if [[ -z "$events" ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  printf '%s\n' "$events" | jq -r '
+    select(.event == "admission") |
+    if .details.workKind == "broker-child" and .details.decision == "denied" then "broker-capacity"
+    elif .details.subagents == "on" then "native-subagent-reservation"
+    elif .details.sameRuntimeParallelSafe == false then "runtime-overlay"
+    elif ((.details.reason // "") | test("verification|resource"; "i")) then "verification-resource-class"
+    else empty end
+  ' | sort -u | jq -R . | jq -s . || printf '[]\n'
+}
+
+# _graph_status_usage_reliable <attempt-or-node-json>
+# True when the record carries authoritative usage. Missing or estimated
+# snapshots are not treated as reliable.
+_graph_status_usage_reliable() {
+  local rec="${1:-}"
+  [[ -n "$rec" ]] || return 1
+  printf '%s' "$rec" | jq -e '
+    (.usageReliable == true) or (.usageReliable == "true")
+    or ((.usageSnapshot.reliability // .usage.reliability // "") == "authoritative")
+  ' >/dev/null 2>&1
+}
+
+# _graph_status_tool_hints_from_usage <usage-json>
+# Build a JSON array of repeated-tool-call hint strings from a usage snapshot.
+# jq-only; does not invoke python3.
+_graph_status_tool_hints_from_usage() {
+  local usage="${1:-}"
+  if [[ -z "$usage" ]] || ! printf '%s' "$usage" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    printf '[]\n'
+    return 0
+  fi
+  printf '%s' "$usage" | jq -c '
+    def as_int(v):
+      if (v | type) == "number" then v
+      elif (v | type) == "string" and (v | test("^[0-9]+$")) then (v | tonumber)
+      else 0 end;
+    def hint_line:
+      (.optimizationHintLine // .optimization_hint_line // .efficiencyHint // .efficiency_hint // "")
+      | tostring
+      | sub("^HINT:[[:space:]]*"; "")
+      | select(. != "");
+    . as $u
+    | ($u.usage // $u) as $src
+    | [
+        (as_int($src.adjacent_duplicate_tool_calls) as $n
+          | if $n > 0 then "\($n) adjacent duplicate tool call(s)" else empty end),
+        (as_int($src.repeated_read_extra_calls) as $n
+          | if $n > 0 then "\($n) repeated read(s)" else empty end),
+        (as_int($src.repeated_read_targets) as $n
+          | if $n > 0 and as_int($src.repeated_read_extra_calls) == 0 then
+              "\($n) repeated read target(s)"
+            else empty end),
+        (as_int($src.repeated_native_read_like) as $n
+          | if $n > 0 then "\($n) consecutive native read/search pair(s)" else empty end),
+        (hint_line)
+      ]
+  ' 2>/dev/null || printf '[]\n'
+}
+
+# _graph_status_efficiency_json <node_file> [run_dir]
+# Read-only efficiency object for --details/--json: unique attempts, elapsed
+# active/wait seconds, reliable usage or "n/a", latest retry classification,
+# and repeated-tool-call hints. Missing or estimated usage is "n/a".
+_graph_status_efficiency_json() {
+  local node_file="$1" run_dir="${2:-}"
+  local empty
+  empty='{"attempts":0,"activeSeconds":0,"waitSeconds":0,"usage":"n/a","retryClassification":null,"repeatedToolCallHints":[]}'
+  if [[ ! -f "$node_file" ]]; then
+    printf '%s\n' "$empty"
+    return 0
+  fi
+
+  local meta now_epoch
+  now_epoch="$(_graph_status_now_epoch)"
+  meta="$(jq -c '
+    def unique_attempts:
+      reduce (.attempts // [])[] as $a ({};
+        (($a.attemptId // "") | if . == "" then "_" else . end) as $id
+        | .[$id] = ((.[$id] // {}) + $a)
+      ) | [.[]]
+      | sort_by(.startedAt // "");
+    . as $n
+    | unique_attempts as $atts
+    | {
+        attempts: ($atts | length),
+        status: ($n.status // "pending"),
+        firstStartedAt: ([$atts[].startedAt // empty] | map(select(. != "")) | sort | .[0] // ""),
+        lastFinishedAt: ([$atts[].finishedAt // empty] | map(select(. != "")) | sort | .[-1] // ""),
+        lastStartedAt: ([$atts[].startedAt // empty] | map(select(. != "")) | sort | .[-1] // ""),
+        budgetActiveSeconds: ($n.budget.activeSeconds // null),
+        budgetActiveStartedAt: ($n.budget.activeStartedAt // ""),
+        retryClassification: (
+          ($atts[-1].retryClassification // $n.retryClassification // "")
+          | if . == "" then
+              (($atts[-1].reason // $n.reason // "") | capture("retry-wait:(?<c>[^[:space:]]+)")? | .c // "")
+            else . end
+        ),
+        intervals: [ $atts[] | {
+          startedAt: (.startedAt // ""),
+          finishedAt: (.finishedAt // ""),
+          usageReliable: (.usageReliable // false),
+          usage: (.usageSnapshot // .usage // null),
+          usagePath: (.logPaths.usage // "")
+        } ]
+      }
+  ' "$node_file" 2>/dev/null)" || meta=""
+  if [[ -z "$meta" ]] || ! printf '%s' "$meta" | jq -e . >/dev/null 2>&1; then
+    printf '%s\n' "$empty"
+    return 0
+  fi
+
+  local attempts_count status first_started last_finished last_started
+  local budget_sec budget_started retry_class
+  attempts_count="$(printf '%s' "$meta" | jq -r '.attempts // 0')"
+  status="$(printf '%s' "$meta" | jq -r '.status // "pending"')"
+  first_started="$(printf '%s' "$meta" | jq -r '.firstStartedAt // empty')"
+  last_finished="$(printf '%s' "$meta" | jq -r '.lastFinishedAt // empty')"
+  last_started="$(printf '%s' "$meta" | jq -r '.lastStartedAt // empty')"
+  budget_sec="$(printf '%s' "$meta" | jq -r '.budgetActiveSeconds // empty')"
+  budget_started="$(printf '%s' "$meta" | jq -r '.budgetActiveStartedAt // empty')"
+  retry_class="$(printf '%s' "$meta" | jq -r '.retryClassification // empty')"
+  [[ "$attempts_count" =~ ^[0-9]+$ ]] || attempts_count=0
+
+  local active=0 wait=0
+  if [[ "$budget_sec" =~ ^[0-9]+$ ]]; then
+    active="$budget_sec"
+    if [[ -n "$budget_started" ]]; then
+      local open_elapsed
+      open_elapsed="$(_graph_status_interval_seconds "$budget_started" "$(_graph_status_epoch_to_iso "$now_epoch")")" \
+        || open_elapsed=""
+      if [[ "$open_elapsed" =~ ^[0-9]+$ ]]; then
+        active=$((active + open_elapsed))
+      fi
+    fi
+  else
+    local i count started finished elapsed
+    count="$(printf '%s' "$meta" | jq '.intervals | length')"
+    i=0
+    while [[ "$i" -lt "$count" ]]; do
+      started="$(printf '%s' "$meta" | jq -r --argjson idx "$i" '.intervals[$idx].startedAt // empty')"
+      finished="$(printf '%s' "$meta" | jq -r --argjson idx "$i" '.intervals[$idx].finishedAt // empty')"
+      if [[ -z "$finished" ]]; then
+        finished="$(_graph_status_epoch_to_iso "$now_epoch")"
+      fi
+      elapsed="$(_graph_status_interval_seconds "$started" "$finished")" || elapsed=0
+      [[ "$elapsed" =~ ^[0-9]+$ ]] || elapsed=0
+      active=$((active + elapsed))
+      i=$((i + 1))
+    done
+  fi
+
+  local wall_end="$last_finished" wall=0
+  case "$status" in
+    running|retry-wait|awaiting-operator|awaiting-ack|ready)
+      wall_end="$(_graph_status_epoch_to_iso "$now_epoch")"
+      ;;
+  esac
+  if [[ -z "$wall_end" && -n "$last_started" ]]; then
+    wall_end="$(_graph_status_epoch_to_iso "$now_epoch")"
+  fi
+  wall="$(_graph_status_interval_seconds "$first_started" "$wall_end")" || wall=0
+  [[ "$wall" =~ ^[0-9]+$ ]] || wall=0
+  wait=$((wall - active))
+  [[ "$wait" -ge 0 ]] || wait=0
+
+  local usage_json="n/a" hints='[]' i count rec usage_blob path_usage
+  count="$(printf '%s' "$meta" | jq '.intervals | length')"
+  i=0
+  while [[ "$i" -lt "$count" ]]; do
+    rec="$(printf '%s' "$meta" | jq -c --argjson idx "$i" '.intervals[$idx]')"
+    usage_blob="$(printf '%s' "$rec" | jq -c '.usage // empty')"
+    if [[ "$usage_blob" == "null" || -z "$usage_blob" ]]; then
+      usage_blob=""
+    fi
+    if [[ -n "$run_dir" ]]; then
+      local usage_path
+      usage_path="$(printf '%s' "$rec" | jq -r '.usagePath // empty')"
+      if [[ -n "$usage_path" && -f "$run_dir/$usage_path" ]]; then
+        path_usage="$(jq -c . "$run_dir/$usage_path" 2>/dev/null || true)"
+        if [[ -n "$path_usage" ]]; then
+          if [[ -n "$usage_blob" ]]; then
+            usage_blob="$(jq -cn --argjson a "$usage_blob" --argjson b "$path_usage" '$a + $b')"
+          else
+            usage_blob="$path_usage"
+          fi
+        fi
+      fi
+    fi
+    if [[ -n "$usage_blob" ]]; then
+      local more
+      more="$(_graph_status_tool_hints_from_usage "$usage_blob")"
+      hints="$(jq -cn --argjson a "$hints" --argjson b "$more" '$a + $b | unique')"
+    fi
+    if _graph_status_usage_reliable "$rec" && [[ -n "$usage_blob" ]]; then
+      local piece
+      piece="$(printf '%s' "$usage_blob" | jq -c '
+        def pick_num(obj; keys):
+          first(
+            keys[] as $k
+            | obj[$k]
+            | select(. != null)
+            | if type == "number" then .
+              elif type == "string" and test("^-?[0-9]+([.][0-9]+)?$") then tonumber
+              else empty end
+          ) // null;
+        (if type == "object" and (.usage | type) == "object" then .usage else . end) as $src
+        | {
+            inputTokens: pick_num($src; ["inputTokens","input_tokens","promptTokens","prompt_tokens"]),
+            outputTokens: pick_num($src; ["outputTokens","output_tokens","completionTokens","completion_tokens"]),
+            cacheReadTokens: pick_num($src; ["cacheReadTokens","cache_read_tokens","cache_read_input_tokens"]),
+            cacheWriteTokens: pick_num($src; ["cacheWriteTokens","cache_write_tokens","cache_creation_input_tokens"]),
+            reliability: "authoritative"
+          }
+        | with_entries(select(.value != null))
+      ' 2>/dev/null || true)"
+      if [[ -n "$piece" ]] && printf '%s' "$piece" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        if [[ "$usage_json" == "n/a" ]]; then
+          usage_json="$piece"
+        else
+          usage_json="$(jq -cn --argjson a "$usage_json" --argjson b "$piece" '
+            def add_num(x; y):
+              if (x | type) == "number" and (y | type) == "number" then x + y
+              elif (x | type) == "number" then x
+              elif (y | type) == "number" then y
+              else null end;
+            {
+              inputTokens: add_num($a.inputTokens; $b.inputTokens),
+              outputTokens: add_num($a.outputTokens; $b.outputTokens),
+              cacheReadTokens: add_num($a.cacheReadTokens; $b.cacheReadTokens),
+              cacheWriteTokens: add_num($a.cacheWriteTokens; $b.cacheWriteTokens),
+              reliability: "authoritative"
+            } | with_entries(select(.value != null))
+          ')"
+        fi
+      fi
+    fi
+    i=$((i + 1))
+  done
+
+  if [[ -z "$retry_class" ]]; then
+    retry_class="null"
+  else
+    retry_class="$(jq -cn --arg c "$retry_class" '$c')"
+  fi
+  if [[ "$usage_json" == "n/a" ]]; then
+    usage_json='"n/a"'
+  fi
+  [[ -n "$hints" ]] || hints='[]'
+
+  jq -nc \
+    --argjson attempts "$attempts_count" \
+    --argjson active "$active" \
+    --argjson wait "$wait" \
+    --argjson usage "$usage_json" \
+    --argjson retry "$retry_class" \
+    --argjson hints "$hints" \
+    '{
+       attempts: $attempts,
+       activeSeconds: $active,
+       waitSeconds: $wait,
+       usage: $usage,
+       retryClassification: $retry,
+       repeatedToolCallHints: $hints
+     }'
+}
+
+# _graph_status_epoch_to_iso <epoch>
+# Best-effort UTC ISO-8601 for live-end math. Returns empty on failure.
+_graph_status_epoch_to_iso() {
+  local epoch="$1"
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  if date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ" >/dev/null 2>&1; then
+    date -u -d "@$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+    return 0
+  fi
+  if date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ" >/dev/null 2>&1; then
+    date -u -r "$epoch" +"%Y-%m-%dT%H:%M:%SZ"
+    return 0
+  fi
+  return 1
+}
+
+# _graph_status_print_efficiency <node_id> <efficiency_json>
+# Details-only efficiency line. Default status must not call this.
+_graph_status_print_efficiency() {
+  local node_id="$1" eff="${2:-}"
+  [[ -n "$eff" ]] || return 0
+  printf '%s' "$eff" | jq -e . >/dev/null 2>&1 || return 0
+  local attempts active wait usage retry hints
+  attempts="$(printf '%s' "$eff" | jq -r '.attempts // 0')"
+  active="$(_graph_status_seconds_fmt "$(printf '%s' "$eff" | jq -r '.activeSeconds // 0')")"
+  wait="$(_graph_status_seconds_fmt "$(printf '%s' "$eff" | jq -r '.waitSeconds // 0')")"
+  usage="$(printf '%s' "$eff" | jq -c '.usage')"
+  retry="$(printf '%s' "$eff" | jq -r '.retryClassification // "n/a"')"
+  [[ -n "$retry" && "$retry" != "null" ]] || retry="n/a"
+  hints="$(printf '%s' "$eff" | jq -r '.repeatedToolCallHints | join("; ")')"
+  [[ -n "$hints" ]] || hints="n/a"
+  printf '  %s efficiency: attempts=%s active=%s wait=%s usage=%s retry=%s\n' \
+    "$node_id" "$attempts" "$active" "$wait" "$usage" "$retry"
+  printf '    repeated-tool-calls: %s\n' "$hints"
+}
+
+# _graph_status_json_node <id> <type> <runtime> <state> <attempts> <duration> <mode> <base> <scopes> [efficiency_json]
+# Format one node table row as a JSON object. Optional efficiency fields are
+# merged for --json without changing the default text table.
+_graph_status_json_node() {
+  local eff="${10:-}"
+  if [[ -z "$eff" ]] || ! printf '%s' "$eff" | jq -e . >/dev/null 2>&1; then
+    eff='{}'
+  fi
+  jq -n \
+    --arg id "$1" --arg type "$2" --arg runtime "${3:--}" --arg state "$4" \
+    --argjson attempts "${5:-0}" --arg duration "${6:--}" --arg mode "${7:--}" \
+    --arg base "${8:--}" --arg scopes "${9:--}" \
+    --argjson eff "$eff" \
+    '{id: $id, type: $type, runtime: $runtime, state: $state, attempts: $attempts, duration: $duration, mode: $mode, base: $base, scopes: $scopes} + $eff'
+}
+
+# graph_status_run <workspace> <namespace> <run_id> [--details] [--mermaid] [--json]
 #
 # Core read-only status display.  Never writes to the graph-runs directory.
+#
+# By default, output is the run summary plus the node table only. Verbose
+# per-node/per-attempt metadata (workspace mode, write scopes, gate outcome,
+# changeset hash, consensus voter provenance, brokered children, native
+# subagent events, efficiency signals, and similar observability detail) is
+# printed only with --details. The mermaid flowchart is printed only with
+# --mermaid. --json emits a structured JSON object including owner-health,
+# run metadata, the node table, and efficiency fields; it is mutually
+# exclusive with text formatting flags.
 graph_status_run() {
   local workspace="$1" namespace="$2" run_id="$3"
+  if [[ $# -ge 3 ]]; then
+    shift 3
+  else
+    shift $#
+  fi
+
+  local show_details=0 show_mermaid=0 show_json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --details) show_details=1; shift ;;
+      --mermaid) show_mermaid=1; shift ;;
+      --json) show_json=1; shift ;;
+      *) shift ;;
+    esac
+  done
 
   if [[ -z "$workspace" || -z "$namespace" || -z "$run_id" ]]; then
     echo "Error: graph_status_run requires workspace, namespace, run_id" >&2
@@ -400,29 +865,38 @@ graph_status_run() {
     return 1
   fi
 
-  local run_status started_at plan_path
+  local run_status started_at plan_path owner_health
   run_status="$(jq -r '.status // "unknown"' "$run_file")"
   started_at="$(jq -r '.startedAt // ""' "$run_file")"
   plan_path="$(jq -r '.planPath // ""' "$run_file")"
+  owner_health="$(graph_heartbeat_classify_run "$workspace" "$namespace" "$run_id")" || owner_health="unknown"
 
-  printf '# graph status  run=%s  namespace=%s  status=%s\n' \
-    "$run_id" "$namespace" "$run_status"
-  if [[ -n "$plan_path" ]]; then
-    printf '# plan: %s\n' "$plan_path"
+  if [[ "$show_json" -eq 0 ]]; then
+    printf '# graph status  run=%s  namespace=%s  status=%s  owner-health=%s\n' \
+      "$run_id" "$namespace" "$run_status" "$owner_health"
+    if [[ -n "$plan_path" ]]; then
+      printf '# plan: %s\n' "$plan_path"
+    fi
+    if [[ -n "$started_at" ]]; then
+      printf '# started: %s\n' "$started_at"
+    fi
+    printf '\n'
   fi
-  if [[ -n "$started_at" ]]; then
-    printf '# started: %s\n' "$started_at"
+
+  local run_dir events_jsonl
+  run_dir="$(dirname "$run_file")"
+  events_jsonl="$(_graph_status_read_events_safe "$run_dir")"
+
+  if [[ "$show_json" -eq 0 ]]; then
+    _graph_status_usage_aggregate "$nodes_dir"
+    _graph_status_concurrency_reductions "$run_dir" "$events_jsonl"
+    printf '\n'
+
+    # Table header.
+    _graph_status_table_row "NODE" "TYPE" "RUNTIME" "STATE" "ATTEMPTS" "DURATION" "MODE" "BASE" "SCOPES"
+    printf '%s\n' \
+      "------------------------------------------------------------------------------------------------------------------------------------------------"
   fi
-  printf '\n'
-
-  _graph_status_usage_aggregate "$nodes_dir"
-  _graph_status_concurrency_reductions "$(dirname "$run_file")"
-  printf '\n'
-
-  # Table header.
-  _graph_status_table_row "NODE" "TYPE" "RUNTIME" "STATE" "ATTEMPTS" "DURATION" "MODE" "BASE" "SCOPES"
-  printf '%s\n' \
-    "------------------------------------------------------------------------------------------------------------------------------------------------"
 
   # Read node ids from the frozen graph in graph order.
   local node_ids
@@ -430,6 +904,8 @@ graph_status_run() {
 
   # Build mermaid node-state lines as we iterate to avoid a second pass.
   local mermaid_nodes="" mermaid_definitions=""
+  # Build JSON node rows for --json output.
+  local nodes_jsonl=""
 
   while IFS= read -r nid || [[ -n "$nid" ]]; do
     [[ -z "$nid" ]] && continue
@@ -445,9 +921,13 @@ graph_status_run() {
     local mode="-" base="-" scopes="-" scopes_json=""
 
     if [[ -f "$node_file" ]]; then
+      # Attempt count is the number of unique attemptId values, not the raw
+      # attempts[] record count: a v1 ledger appends one record per
+      # transition (running, then terminal), so a single attempt can occupy
+      # two records that must collapse to one for display.
       node_fields="$(jq -r '
         (.writeScopes // .attempts[-1].writeScopes // []) as $scopes |
-        [(.status // "pending"), ((.attempts // []) | length), (.attempts[-1].startedAt // ""), (.attempts[-1].finishedAt // ""), (.workspaceMode // .attempts[-1].workspaceMode // "-"), (.frozenBase // .attempts[-1].frozenBase // "-"), (if ($scopes | length) == 0 then "-" elif ($scopes | length) == 1 then $scopes[0] else ($scopes[0] + " +" + (($scopes | length) - 1 | tostring)) end), (if (has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")) then "yes" else "no" end)] | @tsv
+        [(.status // "pending"), ((.attempts // []) | map(.attemptId) | unique | length), (.attempts[-1].startedAt // ""), (.attempts[-1].finishedAt // ""), (.workspaceMode // .attempts[-1].workspaceMode // "-"), (.frozenBase // .attempts[-1].frozenBase // "-"), (if ($scopes | length) == 0 then "-" elif ($scopes | length) == 1 then $scopes[0] else ($scopes[0] + " +" + (($scopes | length) - 1 | tostring)) end), (if (has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")) then "yes" else "no" end)] | @tsv
       ' "$node_file" 2>/dev/null)"
       local last_started last_finished
       local has_observability="no"
@@ -456,26 +936,43 @@ graph_status_run() {
       base="${base:0:16}"
     fi
 
-    _graph_status_table_row "$nid" "$ntype" "${runtime:--}" "$node_state" \
-      "$attempts_count" "$duration" "$mode" "$base" "$scopes"
+    local eff_json
+    eff_json="$(_graph_status_efficiency_json "$node_file" "$run_dir")"
 
-    # Print v2 per-node metadata (workspace, scopes, gate outcome, etc.).
-    if [[ "${has_observability:-no}" == "yes" ]]; then
-      _graph_status_node_extra "$node_file" "$nid"
+    if [[ "$show_json" -eq 0 ]]; then
+      _graph_status_table_row "$nid" "$ntype" "${runtime:--}" "$node_state" \
+        "$attempts_count" "$duration" "$mode" "$base" "$scopes"
+
+      if [[ "$show_details" -eq 1 ]]; then
+        # Print v2 per-node metadata (workspace, scopes, gate outcome, etc.).
+        if [[ "${has_observability:-no}" == "yes" ]]; then
+          _graph_status_node_extra "$node_file" "$nid"
+        fi
+
+        # For consensus-barrier (join) nodes, show per-voter provenance.
+        if [[ "$ntype" == "consensus-barrier" ]]; then
+          _graph_status_consensus_voters "$workspace" "$namespace" "$nid"
+        fi
+
+        # Brokered children are durable ledger children, not DAG peer nodes.
+        if [[ "$ntype" == "agent" || "$ntype" == "stage" ]]; then
+          _graph_status_brokered_children "$workspace" "$namespace" "$run_id" "$nid"
+        fi
+
+        # Best-effort native subagent events (logged when the runtime supports them).
+        _graph_status_subagent_events "$workspace" "$namespace" "$run_id" "$nid" "$events_jsonl"
+
+        # Efficiency signals stay out of the default table.
+        _graph_status_print_efficiency "$nid" "$eff_json"
+      fi
     fi
 
-    # For consensus-barrier (join) nodes, show per-voter provenance.
-    if [[ "$ntype" == "consensus-barrier" ]]; then
-      _graph_status_consensus_voters "$workspace" "$namespace" "$nid"
+    # Accumulate JSON node rows regardless of output mode.
+    if [[ -z "$nodes_jsonl" ]]; then
+      nodes_jsonl="$(_graph_status_json_node "$nid" "$ntype" "${runtime:--}" "$node_state" "$attempts_count" "$duration" "$mode" "$base" "$scopes" "$eff_json")"
+    else
+      nodes_jsonl="${nodes_jsonl}"$'\n'"$(_graph_status_json_node "$nid" "$ntype" "${runtime:--}" "$node_state" "$attempts_count" "$duration" "$mode" "$base" "$scopes" "$eff_json")"
     fi
-
-    # Brokered children are durable ledger children, not DAG peer nodes.
-    if [[ "$ntype" == "agent" || "$ntype" == "stage" ]]; then
-      _graph_status_brokered_children "$workspace" "$namespace" "$run_id" "$nid"
-    fi
-
-    # Best-effort native subagent events (logged when the runtime supports them).
-    _graph_status_subagent_events "$workspace" "$namespace" "$run_id" "$nid"
 
     # Accumulate mermaid node assignments (class per state).
     local safe_nid
@@ -497,6 +994,64 @@ graph_status_run() {
   ${safe_nid}[\"${escaped_label}\\n${runtime:-}\"]:::${class_name}"
     fi
   done <<< "$node_ids"
+
+  if [[ "$show_json" -eq 1 ]]; then
+    local reductions_json nodes_array_json
+    reductions_json="$(_graph_status_concurrency_reductions_json "$events_jsonl")"
+    if [[ -n "$nodes_jsonl" ]]; then
+      nodes_array_json="$(printf '%s\n' "$nodes_jsonl" | jq -s .)"
+    else
+      nodes_array_json='[]'
+    fi
+    printf '%s\n' "$nodes_array_json" | jq \
+      --arg runId "$run_id" --arg namespace "$namespace" --arg status "$run_status" \
+      --arg ownerHealth "$owner_health" --arg startedAt "$started_at" --arg planPath "$plan_path" \
+      --argjson reductions "$reductions_json" \
+      '
+        def add_num(x; y):
+          if (x | type) == "number" and (y | type) == "number" then x + y
+          elif (x | type) == "number" then x
+          elif (y | type) == "number" then y
+          else null end;
+        def usage_sum:
+          reduce (.[] | .usage | select(type == "object")) as $u
+            ({};
+              {
+                inputTokens: add_num(.inputTokens; $u.inputTokens),
+                outputTokens: add_num(.outputTokens; $u.outputTokens),
+                cacheReadTokens: add_num(.cacheReadTokens; $u.cacheReadTokens),
+                cacheWriteTokens: add_num(.cacheWriteTokens; $u.cacheWriteTokens),
+                reliability: "authoritative"
+              }
+            )
+          | with_entries(select(.value != null))
+          | if . == {} or . == {"reliability":"authoritative"} then "n/a" else . end;
+        . as $nodes
+        | {
+            runId: $runId,
+            namespace: $namespace,
+            status: $status,
+            ownerHealth: $ownerHealth,
+            startedAt: $startedAt,
+            planPath: $planPath,
+            concurrencyReductions: $reductions,
+            efficiency: {
+              attempts: ([ $nodes[].attempts // 0 ] | add // 0),
+              activeSeconds: ([ $nodes[].activeSeconds // 0 ] | add // 0),
+              waitSeconds: ([ $nodes[].waitSeconds // 0 ] | add // 0),
+              usage: ($nodes | usage_sum),
+              retryClassifications: ([ $nodes[].retryClassification | select(. != null and . != "") ] | unique),
+              repeatedToolCallHints: ([ $nodes[].repeatedToolCallHints[]? ] | unique)
+            },
+            nodes: $nodes
+          }
+      '
+    return 0
+  fi
+
+  if [[ "$show_mermaid" -ne 1 ]]; then
+    return 0
+  fi
 
   # Mermaid section.
   printf '\n'
@@ -590,12 +1145,15 @@ graph_status_run() {
 }
 
 # graph_status_cli [--namespace <ns>] [--run <run-id|latest>]
-#   [--workspace <dir>]
+#   [--workspace <dir>] [--details] [--mermaid] [--json]
 #
 # Entry point called by graph-run.sh.  Resolves the run selector and delegates
-# to graph_status_run.  Reads only the graph-runs directory.
+# to graph_status_run.  Reads only the graph-runs directory.  By default,
+# prints only the run summary and node table; --details adds verbose
+# per-node/per-attempt observability metadata, --mermaid adds the
+# flowchart view, and --json emits a structured JSON object.
 graph_status_cli() {
-  local namespace="" run_token="" workspace=""
+  local namespace="" run_token="" workspace="" details=0 mermaid=0 json=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -605,9 +1163,12 @@ graph_status_cli() {
       --run=*) run_token="${1#--run=}"; shift ;;
       --workspace) workspace="$2"; shift 2 ;;
       --workspace=*) workspace="${1#--workspace=}"; shift ;;
+      --details) details=1; shift ;;
+      --mermaid) mermaid=1; shift ;;
+      --json) json=1; shift ;;
       -h|--help)
         cat <<'EOF' >&2
-Usage: graph-run.sh status --namespace <ns> --run <run-id|latest> [--workspace <dir>]
+Usage: graph-run.sh status --namespace <ns> --run <run-id|latest> [--workspace <dir>] [--details] [--mermaid] [--json]
 EOF
         return 0
         ;;
@@ -639,5 +1200,19 @@ EOF
     return 1
   fi
 
-  graph_status_run "$workspace" "$namespace" "$run_id"
+  # Build the optional flag list without relying on possibly-empty array
+  # expansion under nounset (kept bash 3.2 safe, matching the rest of this
+  # file).
+  local extra_args=()
+  if [[ "$details" -eq 1 ]]; then
+    extra_args[${#extra_args[@]}]="--details"
+  fi
+  if [[ "$mermaid" -eq 1 ]]; then
+    extra_args[${#extra_args[@]}]="--mermaid"
+  fi
+  if [[ "$json" -eq 1 ]]; then
+    extra_args[${#extra_args[@]}]="--json"
+  fi
+
+  graph_status_run "$workspace" "$namespace" "$run_id" ${extra_args[@]+"${extra_args[@]}"}
 }

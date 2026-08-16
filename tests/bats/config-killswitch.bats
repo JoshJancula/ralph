@@ -21,6 +21,50 @@ teardown() {
   rm -rf "$RH" "$WS"
 }
 
+write_workspace_killswitch() {
+  mkdir -p "$WS/.ralph-workspace"
+  cat >"$WS/.ralph-workspace/killswitch.json"
+}
+
+run_killswitch_core() {
+  (
+    cd "$WS" || exit 1
+    export WORKSPACE="$WS"
+    export RALPH_HOME="$RH"
+    export RALPH_PROJECT_ROOT="$WS"
+    export RALPH_PLAN_WORKSPACE_ROOT="$WS/.ralph-workspace"
+    export RALPH_AGENT_WORKSPACE="$WS"
+    export RALPH_PLAN_KEY="${RALPH_PLAN_KEY:-ks-core}"
+    export KILLSWITCH_RUNNER_PID=""
+    source "$KILLSWITCH_CORE"
+    "$@"
+  )
+}
+
+killswitch_eval_then_apply() {
+  killswitch_evaluate "$1" >/dev/null
+  printf 'EVAL=%s\n' "$KILLSWITCH_DECISION"
+  killswitch_apply_decision "$KILLSWITCH_DECISION"
+}
+
+killswitch_report_sentinel_freshness() {
+  export KILLSWITCH_RUN_START_TS="$1"
+  local stale_label="$2"
+  local fresh_label="$3"
+  local sentinel
+  sentinel="$(killswitch_sentinel_path)"
+  if killswitch_sentinel_is_stale "$sentinel"; then
+    printf '%s\n' "$stale_label"
+  else
+    printf '%s\n' "$fresh_label"
+  fi
+  if killswitch_sentinel_should_abort "$sentinel"; then
+    printf 'abort\n'
+  else
+    printf 'ignore\n'
+  fi
+}
+
 run_ralph() {
   (
     cd "$WS" || exit 1
@@ -156,4 +200,178 @@ EOF
   run run_ralph config --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"killswitch"* ]]
+}
+
+@test "evaluator allows a benign P10 event" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "tool_denylist": [],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
+  "denied_argument_patterns": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_plan_status","action":"execute","effect":"read","resource":"PLAN.md","arguments":"status"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "allow" ]
+}
+
+@test "legacy toolDenylist and deniedArgumentPatterns are fatal" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dryRun": false,
+  "banned_tools": [],
+  "toolDenylist": ["Bash"],
+  "deniedArgumentPatterns": [
+    {"tool": "ralph_proxy_read", "pattern": "/etc/passwd"}
+  ],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"native-hook","runtime":"claude","tool":"Bash","action":"execute","effect":"write","resource":"","arguments":"echo hi"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "fatal" ]
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_proxy_read","action":"execute","effect":"read","resource":"/etc/passwd","arguments":"path=/etc/passwd"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "fatal" ]
+}
+
+@test "legacy tools.deny and arguments.denyPatterns aliases are fatal" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "tools": {"deny": ["ralph_write_file"]},
+  "arguments": {
+    "denyPatterns": [
+      {"tool": "ralph_run_plan", "argument": "plan_path", "pattern": "^/tmp/"}
+    ]
+  },
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_write_file","action":"execute","effect":"write","resource":"out.md","arguments":"{}"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "fatal" ]
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_run_plan","action":"execute","effect":"write","resource":"","arguments":"plan_path=/tmp/evil.md"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "fatal" ]
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_run_plan","action":"execute","effect":"write","resource":"","arguments":"plan_path=docs/ok.md"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "allow" ]
+}
+
+@test "disabled killswitch allows denylisted tools" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": false,
+  "dry_run": false,
+  "toolDenylist": ["Bash"],
+  "banned_tools": [],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"native-hook","runtime":"claude","tool":"Bash","action":"execute","effect":"write","resource":"","arguments":"rm -rf /"}'
+  [ "$status" -eq 0 ]
+  [ "$output" = "allow" ]
+}
+
+@test "malformed events are deny not fatal" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_evaluate 'not-json'
+  [ "$status" -eq 0 ]
+  [ "$output" = "deny" ]
+}
+
+@test "dry-run trigger writes sentinel JSON contract and does not kill" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": true,
+  "tool_denylist": ["Bash"],
+  "banned_tools": [],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  run run_killswitch_core killswitch_eval_then_apply '{"schemaVersion":1,"source":"native-hook","runtime":"claude","tool":"Bash","action":"execute","effect":"write","resource":"","arguments":"echo hi"}'
+  [ "$status" -eq 77 ]
+  [[ "$output" == *"EVAL=fatal"* ]]
+
+  local sentinel_path
+  sentinel_path="$WS/.ralph-workspace/security/kill-switch.ks-core.json"
+  [ -f "$sentinel_path" ]
+  jq -e '.timestamp and .workspace and .plan_key == "ks-core" and .tool == "Bash" and .category == "tool" and .reason == "tool denylist"' "$sentinel_path"
+  jq -e '.project_root == "'"$WS"'"' "$sentinel_path"
+  jq -e '.agent_workspace == "'"$WS"'"' "$sentinel_path"
+  jq -e '.plan_workspace_root == "'"$WS"'/.ralph-workspace"' "$sentinel_path"
+  local summary hash
+  summary="$(jq -r '.arguments.summary' "$sentinel_path")"
+  [[ "$summary" == *"echo hi"* ]]
+  hash="$(jq -r '.arguments.hash' "$sentinel_path")"
+  [ "${#hash}" -eq 64 ]
+}
+
+@test "stale sentinels are ignored and current sentinels abort" {
+  write_workspace_killswitch <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "banned_paths": [],
+  "custom_rules": []
+}
+EOF
+
+  mkdir -p "$WS/.ralph-workspace/security"
+  local sentinel_path="$WS/.ralph-workspace/security/kill-switch.ks-core.json"
+  printf '{"tool":"old","reason":"previous run"}\n' >"$sentinel_path"
+  touch -t 202001010000 "$sentinel_path"
+
+  run run_killswitch_core killswitch_report_sentinel_freshness "$(date +%s)" stale not-stale
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"stale"* ]]
+  [[ "$output" == *"ignore"* ]]
+
+  printf '{"tool":"now","reason":"current run"}\n' >"$sentinel_path"
+  run run_killswitch_core killswitch_report_sentinel_freshness "$(( $(date +%s) - 5 ))" stale current
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"current"* ]]
+  [[ "$output" == *"abort"* ]]
 }

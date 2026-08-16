@@ -1,7 +1,7 @@
 {
   "name": "qa",
   "_generated": "GENERATED from bundle/.ralph/agents/qa.md by scripts/sync-runtime-assets.sh - edit the canonical file",
-  "model": "",
+  "model": "gpt-5.6-luna",
   "description": "Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria",
   "rules": [
     "bundle/.codex/rules/no-emoji.md",

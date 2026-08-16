@@ -170,7 +170,8 @@ successor_set_has() {
 
   graph_schedule_run "$graph_file" "$run_id" "$DISPATCH_WORKSPACE" "$run_dir"
 
-  [ -f "$state_root/logs/graph-edges/graph-schedule-$run_id.log" ]
+  [ -f "$run_dir/logs/supervisor.log" ]
+  [ ! -e "$state_root/logs/graph-edges/graph-schedule-$run_id.log" ]
   [ ! -e "$DISPATCH_WORKSPACE/.ralph-workspace/logs/graph-edges/graph-schedule-$run_id.log" ]
   [ -f "$run_dir/orchestration-plans/graph-edges.orch.json" ]
   [ "$(find "$run_dir/orchestration-plans/graph-edges" -name '*.plan.md' | wc -l | tr -d ' ')" -eq 1 ]
@@ -180,6 +181,7 @@ successor_set_has() {
 
 @test "isolated graph nodes pass all three roots through every runtime route" {
   local tmpd graph_file state_root run_id run_dir roots_json order_log marker_dir runtime node path args runtime_set
+  local attempt_id log_rel log_abs
   local runtime_specs=()
   tmpd="$(mktemp -d)"
   setup_dispatch_workspace "$tmpd"
@@ -226,8 +228,13 @@ successor_set_has() {
     [ "$(jq -r '.env.RALPH_CONFIG_DISCOVERY_ROOT' "$marker_dir/capture-$node.json")" = "$path" ]
     [ "$(jq -r '.env.RALPH_ARTIFACT_NS' "$marker_dir/capture-$node.json")" = "all-runtimes" ]
     [[ "$(jq -r '.env.RALPH_ORCH_FILE' "$marker_dir/capture-$node.json")" = "$state_root/"* ]]
-    [ -f "$state_root/logs/all-runtimes/nodes/$(graph_workspace_node_key "$node")/attempt-1.log" ]
-    [ "$(jq -r '.env.RALPH_GRAPH_NODE_LOG_PATH' "$marker_dir/capture-$node.json")" = "$state_root/logs/all-runtimes/nodes/$(graph_workspace_node_key "$node")/attempt-1.log" ]
+    attempt_id="$(graph_dispatch_mint_attempt_id "$node" "$run_id" 1)"
+    log_rel="$(graph_logs_attempt_rel "$run_dir" "$node" "$attempt_id" runner.log)"
+    log_abs="$(graph_logs_resolve "$run_dir" "$log_rel")"
+    [ -f "$log_abs" ]
+    [ "$(jq -r '.env.RALPH_GRAPH_NODE_LOG_PATH' "$marker_dir/capture-$node.json")" = "$log_abs" ]
+    [ "$(jq -r '.env.RALPH_GRAPH_NODE_LOG_DIR' "$marker_dir/capture-$node.json")" = "$(dirname "$log_abs")" ]
+    [ ! -e "$state_root/logs/all-runtimes/nodes" ]
     [ ! -e "$path/.git" ]
   done
   unset RALPH_GRAPH_STATE_ROOT RALPH_PLAN_WORKSPACE_ROOT
@@ -1033,9 +1040,27 @@ if [[ "\${GRAPH_TEST_INTEGRATION_MUTATIONS:-0}" == "1" ]]; then
   export RUN_PLAN_STUB_WRITE_ARTIFACTS=""
 fi
 if [[ "\$STAGE" == "left" || "\$STAGE" == "right" ]]; then
-  # Hold long enough that staggered orch startup under a loaded suite still
-  # yields a second-resolution overlap window across distinct runtimes.
-  sleep 3
+  if [[ "\${RUN_PLAN_STUB_OVERLAP_BARRIER:-0}" == "1" ]]; then
+    # Rendezvous instead of a fixed hold. A fixed sleep races the scheduler:
+    # under a parallel suite the sibling's orch startup can lag by more than
+    # the hold, so both stages run concurrently yet their second-resolution
+    # intervals do not overlap and the overlap assertion fails spuriously.
+    # Waiting for the sibling's own started marker makes the overlap window
+    # depend on real concurrency rather than on startup skew. The bounded
+    # wait falls through instead of hanging, so a scheduler that genuinely
+    # serializes the two stages still fails the assertion honestly.
+    if [[ "\$STAGE" == "left" ]]; then PEER="right"; else PEER="left"; fi
+    waited=0
+    while [[ ! -e "\$MARKER_DIR/\$PEER.started" && "\$waited" -lt 300 ]]; do
+      sleep 0.1
+      waited=\$((waited + 1))
+    done
+    # Both stages are now in flight; hold past the next second boundary so the
+    # recorded intervals overlap at second resolution.
+    sleep 2
+  else
+    sleep 3
+  fi
 fi
 date +%s >"\$MARKER_DIR/\$STAGE.finished_at"
 : >"\$MARKER_DIR/\$STAGE.finished"
@@ -1050,6 +1075,19 @@ assert_intervals_overlap() {
   # $1=a_start $2=a_end $3=b_start $4=b_end (unix seconds)
   local a_start="$1" a_end="$2" b_start="$3" b_end="$4"
   [ "$a_start" -lt "$b_end" ] && [ "$b_start" -lt "$a_end" ]
+}
+
+# Fail loudly when a barrier participant gave up waiting. Without this a
+# timeout looks identical to the scheduler genuinely serializing the nodes,
+# which is the actual bug the overlap tests exist to catch.
+assert_no_barrier_timeout() {
+  local marker_dir="$1" f
+  for f in "$marker_dir"/*.barrier_timeout; do
+    [[ -e "$f" ]] || continue
+    echo "barrier timed out in $(basename "$f"): $(cat "$f")" >&2
+    return 1
+  done
+  return 0
 }
 
 assert_intervals_disjoint() {
@@ -1331,8 +1369,14 @@ printf '%s\n' "\${RALPH_PLAN_KEY:-}" >"\$MARKER_DIR/\$STAGE.plan_key"
 printf '%s\n' "\${RALPH_GRAPH_NODE_ID:-}" >"\$MARKER_DIR/\$STAGE.graph_node_id"
 date +%s >"\$MARKER_DIR/\$STAGE.started_at"
 : >"\$MARKER_DIR/\$STAGE.started"
+# Wait for every barrier participant to start. The old 20s budget (80 * 0.25)
+# was too tight under run-bats' 8-way file parallelism: a node that takes
+# longer than that to get scheduled would fall through the loop, run alone,
+# and fail the overlap assertion as if the scheduler had serialized it. The
+# budget is now 150s, and exhausting it records a marker so the failure reads
+# as "barrier timed out" instead of a mysterious non-overlap.
 i=0
-while [[ "\$i" -lt 80 ]]; do
+while [[ "\$i" -lt 600 ]]; do
   # Avoid ls-glob + pipefail aborting when the directory is briefly empty.
   n=0
   for _f in "\$MARKER_DIR"/*.started; do
@@ -1345,6 +1389,10 @@ while [[ "\$i" -lt 80 ]]; do
   sleep 0.25
   i=\$((i + 1))
 done
+if [[ "\$i" -ge 600 ]]; then
+  printf 'barrier timeout: saw %s of %s starters\\n' "\$n" "\$BARRIER_COUNT" \
+    >"\$MARKER_DIR/\$STAGE.barrier_timeout"
+fi
 # Hold for a full second so started_at < finished_at under second-resolution clocks.
 sleep 1
 date +%s >"\$MARKER_DIR/\$STAGE.finished_at"
@@ -1403,6 +1451,10 @@ EOF
   install_stage_aware_run_plan "$DISPATCH_WORKSPACE" "$order_log" "$marker_dir"
 
   export RUN_PLAN_STUB_EXIT_CODE=0
+  # left/right rendezvous on each other's started marker rather than holding a
+  # fixed 3s, so the overlap window survives staggered startup under a
+  # parallel suite. Only this test asserts overlap, so only this test opts in.
+  export RUN_PLAN_STUB_OVERLAP_BARRIER=1
   unset RUN_PLAN_STUB_SLEEP_SECONDS RUN_PLAN_STUB_READY_FILE 2>/dev/null || true
 
   unset RALPH_ARTIFACT_NS RALPH_PLAN_KEY 2>/dev/null || true
@@ -1521,7 +1573,9 @@ EOF
 
   run /bin/bash "$script"
   [ "$status" -eq 0 ]
-  [[ "$output" == bash=3.2* ]]
+  # Substring, not prefix: bats merges stderr into $output and the scheduler
+  # prints its run header there before this script's own printf lines.
+  [[ "$output" == *"bash=3.2"* ]]
   [[ "$output" == *"exit=0"* ]]
   [[ "$output" == *"source=succeeded"* ]]
   [[ "$output" == *"transform=succeeded"* ]]
@@ -1550,6 +1604,7 @@ EOF
   graph_schedule_run "$graph_file" "same-rt-run" "$DISPATCH_WORKSPACE"
   [ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]
 
+  assert_no_barrier_timeout "$marker_dir"
   a_s="$(cat "$marker_dir/a.started_at")"; a_e="$(cat "$marker_dir/a.finished_at")"
   b_s="$(cat "$marker_dir/b.started_at")"; b_e="$(cat "$marker_dir/b.finished_at")"
   c_s="$(cat "$marker_dir/c.started_at")"; c_e="$(cat "$marker_dir/c.finished_at")"
@@ -1580,7 +1635,7 @@ EOF
   assert_intervals_overlap "$(cat "$marker_dir/a.started_at")" "$(cat "$marker_dir/a.finished_at")" "$(cat "$marker_dir/b.started_at")" "$(cat "$marker_dir/b.finished_at")"
   assert_intervals_overlap "$(cat "$marker_dir/a.started_at")" "$(cat "$marker_dir/a.finished_at")" "$(cat "$marker_dir/c.started_at")" "$(cat "$marker_dir/c.finished_at")"
 
-  admission="$DISPATCH_WORKSPACE/.ralph-workspace/logs/safe-same-rt/graph-admission-safe-same-rt-run.jsonl"
+  admission="$(graph_state_run_dir "$DISPATCH_WORKSPACE" "safe-same-rt" "safe-same-rt-run")/logs/admission.jsonl"
   [ "$(jq -s '[.[] | select(.decision == "admitted" and .runtime == "claude")] | length' "$admission")" -eq 3 ]
   jq -s -e 'all(.[]; (.sameRuntimeParallelSafe == true and .overlayIsolation == "temporary-cli-config"))' "$admission" >/dev/null
   rm -rf "$tmpd"
@@ -1606,7 +1661,7 @@ EOF
   assert_intervals_disjoint "$(cat "$marker_dir/a.started_at")" "$(cat "$marker_dir/a.finished_at")" "$(cat "$marker_dir/b.started_at")" "$(cat "$marker_dir/b.finished_at")"
   assert_intervals_disjoint "$(cat "$marker_dir/b.started_at")" "$(cat "$marker_dir/b.finished_at")" "$(cat "$marker_dir/c.started_at")" "$(cat "$marker_dir/c.finished_at")"
 
-  admission="$DISPATCH_WORKSPACE/.ralph-workspace/logs/unsafe-same-rt/graph-admission-unsafe-same-rt-run.jsonl"
+  admission="$(graph_state_run_dir "$DISPATCH_WORKSPACE" "unsafe-same-rt" "unsafe-same-rt-run")/logs/admission.jsonl"
   jq -s -e 'any(.[]; .decision == "denied" and .runtime == "cursor" and .sameRuntimeParallelSafe == false and .effectiveRuntimeCap == 1 and .requestedRuntimeCap == 3)' "$admission" >/dev/null
   rm -rf "$tmpd"
 }
@@ -1630,6 +1685,7 @@ EOF
   [ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]
   [ "$GRAPH_SCHEDULE_MAX_PARALLEL" -eq 3 ]
 
+  assert_no_barrier_timeout "$marker_dir"
   a_s="$(cat "$marker_dir/a.started_at")"; a_e="$(cat "$marker_dir/a.finished_at")"
   b_s="$(cat "$marker_dir/b.started_at")"; b_e="$(cat "$marker_dir/b.finished_at")"
   c_s="$(cat "$marker_dir/c.started_at")"; c_e="$(cat "$marker_dir/c.finished_at")"
@@ -1659,6 +1715,7 @@ EOF
   [ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]
   [ "$GRAPH_SCHEDULE_MAX_PARALLEL" -eq 1 ]
 
+  assert_no_barrier_timeout "$marker_dir"
   a_s="$(cat "$marker_dir/a.started_at")"; a_e="$(cat "$marker_dir/a.finished_at")"
   b_s="$(cat "$marker_dir/b.started_at")"; b_e="$(cat "$marker_dir/b.finished_at")"
   c_s="$(cat "$marker_dir/c.started_at")"; c_e="$(cat "$marker_dir/c.finished_at")"
@@ -1670,7 +1727,7 @@ EOF
 }
 
 @test "per-node log dirs are isolated and RALPH_ARTIFACT_NS is shared" {
-  local a_key b_key c_key
+  local run_dir attempt_id log_rel node ns_a ns_b ns_c
   tmpd="$(mktemp -d)"
   setup_dispatch_workspace "$tmpd"
   graph_file="$tmpd/iso.graph.json"
@@ -1687,16 +1744,13 @@ EOF
   graph_schedule_run "$graph_file" "iso-run" "$DISPATCH_WORKSPACE"
   [ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]
 
-  log_root="$DISPATCH_WORKSPACE/.ralph-workspace/logs/iso-ns/nodes"
-  a_key="$(graph_workspace_node_key a)"
-  b_key="$(graph_workspace_node_key b)"
-  c_key="$(graph_workspace_node_key c)"
-  [ -d "$log_root/$a_key" ]
-  [ -d "$log_root/$b_key" ]
-  [ -d "$log_root/$c_key" ]
-  [ -f "$log_root/$a_key/attempt-1.log" ]
-  [ -f "$log_root/$b_key/attempt-1.log" ]
-  [ -f "$log_root/$c_key/attempt-1.log" ]
+  run_dir="$(graph_state_run_dir "$DISPATCH_WORKSPACE" "iso-ns" "iso-run")"
+  for node in a b c; do
+    attempt_id="$(graph_dispatch_mint_attempt_id "$node" "iso-run" 1)"
+    log_rel="$(graph_logs_attempt_rel "$run_dir" "$node" "$attempt_id" runner.log)"
+    [ -f "$(graph_logs_resolve "$run_dir" "$log_rel")" ]
+  done
+  [ ! -e "$DISPATCH_WORKSPACE/.ralph-workspace/logs/iso-ns/nodes" ]
 
   ns_a="$(cat "$marker_dir/a.artifact_ns")"
   ns_b="$(cat "$marker_dir/b.artifact_ns")"
@@ -2039,7 +2093,13 @@ EOF
   rm -rf "$tmpd"
 }
 
-@test "exit code 4 is treated as an ordinary failure under drain" {
+# Exit 4 used to be an ordinary drain failure. The operator-permission work in
+# the production-hardening continuation made it a permission pause instead: the
+# node parks in awaiting-operator, keeps its retry grant, and the run reports 3
+# (incomplete, waiting on a human) rather than a failure exit. Independent
+# siblings still drain and the paused node's descendants are still blocked.
+# See graph-operator-schedule.bats for the request/decision contract itself.
+@test "exit code 4 pauses the node for an operator decision under drain" {
   tmpd="$(mktemp -d)"
   setup_dispatch_workspace "$tmpd"
   graph_file="$tmpd/stuck-fail.graph.json"
@@ -2060,8 +2120,8 @@ EOF
   unset RALPH_ARTIFACT_NS RALPH_PLAN_KEY 2>/dev/null || true
   rc=0
   graph_schedule_run "$graph_file" "stuck-fail-run" "$DISPATCH_WORKSPACE" || rc=$?
-  [ "$rc" -eq 4 ]
-  [ "$(graph_schedule_node_state_by_id stuck)" = "failed" ]
+  [ "$rc" -eq 3 ]
+  [ "$(graph_schedule_node_state_by_id stuck)" = "awaiting-operator" ]
   [ "$(graph_schedule_node_state_by_id sib)" = "succeeded" ]
   [ "$(graph_schedule_node_state_by_id child)" = "blocked" ]
   [ ! -f "$marker_dir/child.started" ]
@@ -2270,4 +2330,91 @@ EOF
   stage_json='{"outputArtifacts":[{"path":".ralph-workspace/artifacts/{{ARTIFACT_NS}}/reviews/alpha.md"}]}'
   [ "$(_graph_schedule_consensus_voter_artifact_abs "$stage_json")" = \
     "$RALPH_PLAN_WORKSPACE_ROOT/artifacts/jury/reviews/alpha.md" ]
+}
+
+# ---------------------------------------------------------------------------
+# p5-attempt-upserts: _graph_schedule_ledger_record schema-version dispatch
+# ---------------------------------------------------------------------------
+
+@test "_graph_schedule_ledger_record on a v2 run produces one attempts[] entry for a running-to-terminal attempt" {
+  local tmpd workspace ns run_id graph_file plan_file node_file aid
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/ws"
+  mkdir -p "$workspace"
+  ns="sched-v2-ns"
+  run_id="run-sched-v2"
+  plan_file="$workspace/$(basename "$DIAMOND_PLAN")"
+  cp "$DIAMOND_PLAN" "$plan_file"
+  graph_file="$tmpd/graph.json"
+  plan_pipeline_graph_json "$plan_file" > "$graph_file"
+
+  graph_state_init_run_v2 "$workspace" "$ns" "$run_id" "$plan_file" "$graph_file" 2 >/dev/null
+
+  GRAPH_SCHEDULE_WORKSPACE="$workspace"
+  GRAPH_SCHEDULE_LEDGER_NAMESPACE="$ns"
+  GRAPH_SCHEDULE_RUN_ID="$run_id"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$ns" "$run_id")"
+  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
+  GRAPH_SCHEDULE_LOG_FILE=""
+
+  local nid="left"
+  aid="${nid}__${run_id}__1"
+  _graph_schedule_ledger_record "$nid" "running" "$aid" "" "" "2026-01-01T00:00:00Z" "" "cursor" "off" "" ""
+  # The run's schemaVersion (2) is detected and cached without being told.
+  [ "$GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION" = "2" ]
+
+  _graph_schedule_ledger_record "$nid" "succeeded" "$aid" "success" "0" "" "2026-01-01T00:01:00Z" "cursor" "off" "" ""
+
+  node_file="$(graph_state_node_file "$workspace" "$ns" "$run_id" "$nid")"
+  [ "$(jq -r '.schemaVersion' "$node_file")" = "2" ]
+  [ "$(jq -r '.status' "$node_file")" = "succeeded" ]
+  # One attempts[] object for the whole running-to-terminal attempt, not one
+  # record per transition.
+  [ "$(jq '.attempts | length' "$node_file")" -eq 1 ]
+  [ "$(jq -r '.attempts[0].attemptId' "$node_file")" = "$aid" ]
+  [ "$(jq -r '.attempts[0].startedAt' "$node_file")" = "2026-01-01T00:00:00Z" ]
+  [ "$(jq -r '.attempts[0].finishedAt' "$node_file")" = "2026-01-01T00:01:00Z" ]
+  [ "$(jq -r '.attempts[0].outcome' "$node_file")" = "success" ]
+  [ "$(jq -r '.attempts[0].exitCode' "$node_file")" -eq 0 ]
+  # Next attempt number is max suffix (1), not array length after a
+  # would-be v1 duplication.
+  [ "$(graph_state_max_attempt_number "$node_file")" -eq 1 ]
+  [ "$(graph_state_max_attempt_number "$node_file")" -eq "$(jq '.attempts | length' "$node_file")" ]
+
+  rm -rf "$tmpd"
+}
+
+@test "_graph_schedule_ledger_record on a v1 run keeps writing through graph_state_write_node unchanged" {
+  local tmpd workspace ns run_id graph_file plan_file node_file aid
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/ws"
+  mkdir -p "$workspace"
+  ns="sched-v1-ns"
+  run_id="run-sched-v1"
+  plan_file="$workspace/$(basename "$DIAMOND_PLAN")"
+  cp "$DIAMOND_PLAN" "$plan_file"
+  graph_file="$tmpd/graph.json"
+  plan_pipeline_graph_json "$plan_file" > "$graph_file"
+
+  graph_state_init_run "$workspace" "$ns" "$run_id" "$plan_file" "$graph_file" 2 >/dev/null
+
+  GRAPH_SCHEDULE_WORKSPACE="$workspace"
+  GRAPH_SCHEDULE_LEDGER_NAMESPACE="$ns"
+  GRAPH_SCHEDULE_RUN_ID="$run_id"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$ns" "$run_id")"
+  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
+  GRAPH_SCHEDULE_LOG_FILE=""
+
+  local nid="left"
+  aid="${nid}__${run_id}__1"
+  _graph_schedule_ledger_record "$nid" "running" "$aid" "" "" "2026-01-01T00:00:00Z" "" "cursor" "off" "" ""
+  [ "$GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION" = "1" ]
+  _graph_schedule_ledger_record "$nid" "succeeded" "$aid" "success" "0" "" "2026-01-01T00:01:00Z" "cursor" "off" "" ""
+
+  node_file="$(graph_state_node_file "$workspace" "$ns" "$run_id" "$nid")"
+  [ "$(jq -r '.schemaVersion' "$node_file")" = "1" ]
+  # v1 behavior is unchanged: one record per transition, still two entries.
+  [ "$(jq '.attempts | length' "$node_file")" -eq 2 ]
+
+  rm -rf "$tmpd"
 }

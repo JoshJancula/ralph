@@ -215,7 +215,7 @@ ralph_run_plan_routing_resolve_current_context() {
       }
       CLAUDE_TOOLS_FROM_AGENT=""
     fi
-    ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
+    ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (agent config loaded; model not verified against provider)"
     ralph_run_plan_export_agent_mcp_overlay "$workspace" "$PREBUILT_AGENT"
   elif [[ "$runtime" == "claude" || "$runtime" == "codex" ]]; then
     if [[ "${INTERACTIVE_SELECT_MODEL_FLAG:-0}" == "1" ]]; then

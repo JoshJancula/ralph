@@ -238,6 +238,18 @@ if ! jq -e "$schema_filter" "$orch_file" >/dev/null; then
   exit 1
 fi
 
+if jq -e 'has("ralphMode")' "$orch_file" >/dev/null 2>&1; then
+  if ! jq -e '.ralphMode | IN("no", "native", "ralph", "hybrid")' "$orch_file" >/dev/null 2>&1; then
+    echo "Orchestration schema validation failed: ralphMode must be one of: no, native, ralph, hybrid" >&2
+    exit 1
+  fi
+fi
+
+if jq -e '[.stages[]? | select(has("ralphMode"))] | length > 0' "$orch_file" >/dev/null 2>&1; then
+  echo "Orchestration schema validation failed: ralphMode is not allowed on a stage. Tool exposure applies to the whole run -- declare it once at the top level" >&2
+  exit 1
+fi
+
 if jq -e '[.stages[]? | select(has("router"))] | length > 0' "$orch_file" >/dev/null 2>&1; then
   ROUTER_PY="$REPO_ROOT/bundle/.ralph/python/router_contract.py"
   if [[ ! -f "$ROUTER_PY" && -f "$REPO_ROOT/.ralph/python/router_contract.py" ]]; then

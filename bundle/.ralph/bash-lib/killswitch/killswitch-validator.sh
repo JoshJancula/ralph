@@ -153,3 +153,146 @@ killswitch_validate_allowed_tools() {
   done
   return 0
 }
+
+# Returns 0 if the given tool name matches any entry in toolDenylist.
+# Used for unified policy enforcement across MCP and native paths.
+killswitch_tool_is_denied() {
+  local tool="$1"
+  local denylist_json="${2:-${RALPH_KILLSWITCH_DENIED_TOOL_DENYLIST_JSON:-[]}}"
+  local item
+
+  if [[ -z "$tool" ]]; then
+    return 1
+  fi
+
+  for item in "${_KILLSWITCH_TOOL_DENYLIST[@]+"${_KILLSWITCH_TOOL_DENYLIST[@]}"}"; do
+    if [[ "$tool" == "$item" ]]; then
+      return 0
+    fi
+  done
+
+  if [[ -z "$denylist_json" || "$denylist_json" == "[]" ]]; then
+    return 1
+  fi
+
+  if command -v python3 &>/dev/null; then
+    python3 - "$tool" "$denylist_json" <<'PY' >/dev/null 2>&1
+import json, sys
+tool = sys.argv[1]
+try:
+    denylist = json.loads(sys.argv[2])
+except Exception:
+    sys.exit(1)
+if isinstance(denylist, list) and tool in denylist:
+    sys.exit(0)
+sys.exit(1)
+PY
+    return $?
+  fi
+
+  if command -v jq &>/dev/null; then
+    if jq -e --arg name "$tool" '. | index($name) != null' <<< "$denylist_json" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Returns 0 if the given arguments match any pattern in deniedArgumentPatterns.
+# deniedArgumentPatterns is a JSON array of objects with tool, argument, pattern, mode fields.
+# Used for unified policy enforcement across MCP and native paths.
+killswitch_arguments_match_denied_pattern() {
+  local tool="${1:-}"
+  local arguments="${2:-}"
+  local denied_patterns_json="${3:-${RALPH_KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON:-[]}}"
+
+  if [[ -z "$arguments" ]]; then
+    return 1
+  fi
+
+  if [[ "$denied_patterns_json" == "[]" || -z "$denied_patterns_json" ]]; then
+    return 1
+  fi
+
+  if command -v python3 &>/dev/null; then
+    python3 - "$tool" "$arguments" "$denied_patterns_json" <<'PY' >/dev/null 2>&1
+import json, re, sys
+
+tool = sys.argv[1]
+arguments = sys.argv[2]
+try:
+    patterns = json.loads(sys.argv[3])
+except Exception:
+    sys.exit(1)
+if not isinstance(patterns, list):
+    sys.exit(1)
+
+for rule in patterns:
+    if not isinstance(rule, dict):
+        continue
+    rule_tool = rule.get("tool")
+    if rule_tool not in (None, "", tool):
+        continue
+    argument = rule.get("argument")
+    haystack = arguments
+    if argument is not None:
+        extracted = None
+        try:
+            parsed = json.loads(arguments)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and str(argument) in parsed:
+            value = parsed[str(argument)]
+            if isinstance(value, (dict, list)):
+                extracted = json.dumps(value, separators=(",", ":"))
+            else:
+                extracted = str(value)
+        if extracted is None:
+            marker = str(argument)
+            if marker not in arguments:
+                continue
+            keyed = re.search(
+                r'(?:^|[?&,\s{])' + re.escape(marker) + r'\s*[=:]\s*([^,\s}"\']+)',
+                arguments,
+            )
+            if keyed:
+                extracted = keyed.group(1)
+            else:
+                extracted = arguments
+        haystack = extracted
+    pattern = rule.get("pattern")
+    if pattern is None:
+        continue
+    mode = str(rule.get("mode") or "regex").strip().lower()
+    if mode in ("literal", "substring", "contains"):
+        if str(pattern) in haystack:
+            sys.exit(0)
+        continue
+    try:
+        if re.search(str(pattern), haystack):
+            sys.exit(0)
+    except re.error:
+        continue
+sys.exit(1)
+PY
+    return $?
+  fi
+
+  if command -v jq &>/dev/null; then
+    if jq -e --arg tool "$tool" --arg args "$arguments" '
+      .[] |
+      select(
+        (.tool == null or .tool == $tool) and
+        (
+          ((.argument != null and $args | contains(.argument)) or (.argument == null)) and
+          (.pattern != null)
+        )
+      ) |
+      select(.pattern as $pat | $args | test($pat)) |
+      .pattern? // empty
+    ' <<< "$denied_patterns_json" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}

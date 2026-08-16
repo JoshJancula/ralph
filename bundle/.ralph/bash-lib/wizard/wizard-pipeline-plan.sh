@@ -8,7 +8,8 @@
 #   wizard_render_artifact_list_yaml -- render produces/requires YAML arrays.
 #   wizard_render_todo_artifact_content -- TODO content with read/write artifact paths.
 #   wizard_render_todo_verification -- verification text for required outputs.
-#   wizard_render_pipeline_orchestration_plan -- render a full pipeline orchestration plan file.
+#   wizard_render_pipeline_plan -- render a full orchestration or graph pipeline plan file.
+#   wizard_render_pipeline_orchestration_plan -- orchestration-only convenience wrapper.
 #   wizard_create_plan_interactive_execution_mode -- ask simple vs orchestration.
 #   wizard_create_plan_interactive_orchestration -- interactive orchestration scaffolding flow.
 #   wizard_render_graph_jury_preset -- non-interactive cross-provider review jury graph plan.
@@ -23,6 +24,7 @@ wizard_create_plan_allowed_session_strategies=(fresh resume reset compact)
 wizard_create_plan_allowed_context_budgets=(full standard lean)
 
 cp_stages=()
+cp_stage_types=()
 cp_stage_runtimes=()
 cp_stage_agents=()
 cp_stage_models=()
@@ -37,6 +39,19 @@ cp_loop_sources=()
 cp_loop_targets=()
 cp_loop_max_iters=()
 cp_loop_check_paths=()
+
+# Graph-mode-only stage fields (indices align with cp_stages).
+cp_stage_depends_on=()
+cp_stage_policy=()
+cp_stage_quorum=()
+cp_stage_workspace_mode=()
+
+# Flattened consensus voter rows (each row tagged with its owning node id).
+cp_voter_node=()
+cp_voter_id=()
+cp_voter_runtime=()
+cp_voter_agent=()
+cp_voter_model=()
 
 wizard_create_plan_stage_id_valid() {
   [[ -n "$1" && "$1" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
@@ -427,42 +442,89 @@ print(json.dumps(out, separators=(",", ":")))
 PY
 }
 
-wizard_render_pipeline_orchestration_plan() {
-  local plan_name="$1"
-  local plan_overview="$2"
-  local instructions_line="$3"
-  local idx stage_id runtime agent model session context plan_file
-  local loop_target loop_max loop_check
+# wizard_render_pipeline_plan <mode> <plan_name> <plan_overview> <instructions_line>
+#   [max_parallel] [edge_derivation] [failure_policy]
+#
+# mode is "orchestration" or "graph". Both share the same stages:/requires:/
+# produces:/todos: shape (a graph node is a pipeline stage plus a few extra
+# fields), so this single function renders both instead of duplicating the
+# stage/todo loops per mode. Reads cp_stages[]/cp_stage_types[]/... and, for
+# graph mode, cp_stage_depends_on[]/cp_stage_policy[]/cp_stage_quorum[]/
+# cp_stage_workspace_mode[]/cp_voter_*[] populated by the caller.
+wizard_render_pipeline_plan() {
+  local mode="$1"
+  local plan_name="$2"
+  local plan_overview="$3"
+  local instructions_line="$4"
+  local max_parallel="${5:-}"
+  local edge_derivation="${6:-}"
+  local failure_policy="${7:-}"
+  local idx stage_id stage_type runtime agent model session context plan_file
+  local loop_target loop_max loop_check depends_on policy quorum workspace_mode
   local -a yaml_lines=()
   local requires_yaml produces_yaml todo_id todo_content todo_verification line
 
   yaml_lines+=("---")
   yaml_lines+=("name: ${plan_name}")
   yaml_lines+=("overview: ${plan_overview}")
-  yaml_lines+=("execution: orchestration")
+  yaml_lines+=("execution: ${mode}")
   yaml_lines+=("${instructions_line}")
   yaml_lines+=("pipeline:")
+  if [[ "$mode" == "graph" ]]; then
+    [[ -n "$max_parallel" ]] && yaml_lines+=("  maxParallel: ${max_parallel}")
+    [[ -n "$edge_derivation" ]] && yaml_lines+=("  edgeDerivation: ${edge_derivation}")
+    [[ -n "$failure_policy" ]] && yaml_lines+=("  failurePolicy: ${failure_policy}")
+  fi
   yaml_lines+=("  stages:")
 
   for idx in "${!cp_stages[@]}"; do
     stage_id="${cp_stages[$idx]}"
-    runtime="${cp_stage_runtimes[$idx]}"
+    stage_type="${cp_stage_types[$idx]:-agent}"
+    runtime="${cp_stage_runtimes[$idx]:-}"
     agent="${cp_stage_agents[$idx]:-}"
     model="${cp_stage_models[$idx]:-}"
     session="${cp_stage_session[$idx]:-}"
     context="${cp_stage_context[$idx]:-}"
     plan_file="${cp_stage_plan_files[$idx]:-}"
+    depends_on="${cp_stage_depends_on[$idx]:-}"
+    policy="${cp_stage_policy[$idx]:-}"
+    quorum="${cp_stage_quorum[$idx]:-}"
+    workspace_mode="${cp_stage_workspace_mode[$idx]:-}"
 
     yaml_lines+=("    - id: ${stage_id}")
-    if [[ -n "$plan_file" ]]; then
-      yaml_lines+=("      planFile: ${plan_file}")
-    else
-      yaml_lines+=("      runtime: ${runtime}")
-      [[ -n "$agent" ]] && yaml_lines+=("      agent: ${agent}")
-      [[ -n "$model" ]] && yaml_lines+=("      model: ${model}")
+    if [[ "$mode" == "graph" && "$stage_type" != "agent" ]]; then
+      yaml_lines+=("      type: ${stage_type}")
     fi
-    [[ -n "$session" ]] && yaml_lines+=("      sessionStrategy: ${session}")
-    [[ -n "$context" ]] && yaml_lines+=("      contextBudget: ${context}")
+
+    if [[ "$stage_type" == "agent" ]]; then
+      if [[ -n "$plan_file" ]]; then
+        yaml_lines+=("      planFile: ${plan_file}")
+      else
+        yaml_lines+=("      runtime: ${runtime}")
+        [[ -n "$agent" ]] && yaml_lines+=("      agent: ${agent}")
+        [[ -n "$model" ]] && yaml_lines+=("      model: ${model}")
+      fi
+      [[ -n "$session" ]] && yaml_lines+=("      sessionStrategy: ${session}")
+      [[ -n "$context" ]] && yaml_lines+=("      contextBudget: ${context}")
+    fi
+
+    if [[ "$mode" == "graph" ]]; then
+      if [[ "$stage_type" == "consensus" || "$stage_type" == "join" ]]; then
+        [[ -n "$policy" ]] && yaml_lines+=("      policy: ${policy}")
+        [[ -n "$quorum" ]] && yaml_lines+=("      quorum: ${quorum}")
+      fi
+      if [[ -n "$depends_on" ]]; then
+        yaml_lines+=("      dependsOn:")
+        local dep_id
+        local -a dep_ids=()
+        IFS=',' read -r -a dep_ids <<< "$depends_on"
+        for dep_id in "${dep_ids[@]}"; do
+          dep_id="$(printf '%s' "$dep_id" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [[ -n "$dep_id" ]] || continue
+          yaml_lines+=("        - ${dep_id}")
+        done
+      fi
+    fi
 
     requires_yaml="$(wizard_render_artifact_list_yaml "$stage_id" "requires" "        ")"
     produces_yaml="$(wizard_render_artifact_list_yaml "$stage_id" "produces" "        ")"
@@ -475,18 +537,44 @@ wizard_render_pipeline_orchestration_plan() {
       while IFS= read -r line; do [[ -n "$line" ]] && yaml_lines+=("$line"); done <<< "$produces_yaml"
     fi
 
-    loop_target="$(wizard_create_plan_loop_target "$stage_id")"
-    if [[ -n "$loop_target" ]]; then
-      loop_max="$(wizard_create_plan_loop_max "$stage_id")"
-      loop_check="$(wizard_create_plan_loop_check "$stage_id")"
-      yaml_lines+=("      loopBackTo: ${loop_target}")
-      yaml_lines+=("      maxIterations: ${loop_max}")
-      yaml_lines+=("      loopCheck:")
-      yaml_lines+=("        path: ${loop_check}")
+    if [[ "$mode" == "graph" && "$stage_type" == "consensus" ]]; then
+      yaml_lines+=("      voters:")
+      local vidx voter_id voter_runtime voter_agent voter_model
+      for vidx in "${!cp_voter_node[@]}"; do
+        [[ "${cp_voter_node[$vidx]}" == "$stage_id" ]] || continue
+        voter_id="${cp_voter_id[$vidx]}"
+        voter_runtime="${cp_voter_runtime[$vidx]}"
+        voter_agent="${cp_voter_agent[$vidx]:-}"
+        voter_model="${cp_voter_model[$vidx]:-}"
+        yaml_lines+=("        - id: ${voter_id}")
+        yaml_lines+=("          runtime: ${voter_runtime}")
+        [[ -n "$voter_agent" ]] && yaml_lines+=("          agent: ${voter_agent}")
+        [[ -n "$voter_model" ]] && yaml_lines+=("          model: ${voter_model}")
+      done
+    fi
+
+    if [[ "$mode" == "graph" && "$stage_type" == "agent" && -n "$workspace_mode" ]]; then
+      yaml_lines+=("      workspaceMode: ${workspace_mode}")
+      if [[ "$workspace_mode" == "shared" ]]; then
+        yaml_lines+=("      acknowledgeSharedMutationRisk: true")
+        yaml_lines+=("      parallelMutation: allow")
+      fi
+    fi
+
+    if [[ "$mode" == "orchestration" ]]; then
+      loop_target="$(wizard_create_plan_loop_target "$stage_id")"
+      if [[ -n "$loop_target" ]]; then
+        loop_max="$(wizard_create_plan_loop_max "$stage_id")"
+        loop_check="$(wizard_create_plan_loop_check "$stage_id")"
+        yaml_lines+=("      loopBackTo: ${loop_target}")
+        yaml_lines+=("      maxIterations: ${loop_max}")
+        yaml_lines+=("      loopCheck:")
+        yaml_lines+=("        path: ${loop_check}")
+      fi
     fi
   done
 
-  if ((${#cp_parallel_waves[@]} > 0)); then
+  if [[ "$mode" == "orchestration" ]] && ((${#cp_parallel_waves[@]} > 0)); then
     yaml_lines+=("  parallelStages:")
     local wave rendered_wave w
     for wave in "${cp_parallel_waves[@]}"; do
@@ -511,13 +599,30 @@ wizard_render_pipeline_orchestration_plan() {
 
   for idx in "${!cp_stages[@]}"; do
     stage_id="${cp_stages[$idx]}"
+    stage_type="${cp_stage_types[$idx]:-agent}"
     plan_file="${cp_stage_plan_files[$idx]:-}"
+    policy="${cp_stage_policy[$idx]:-}"
     todo_id="${stage_id}-1"
 
     yaml_lines+=("  - id: ${todo_id}")
     yaml_lines+=("    stage: ${stage_id}")
 
-    if [[ -n "$plan_file" ]]; then
+    if [[ "$stage_type" == "consensus" ]]; then
+      yaml_lines+=("    content: |")
+      yaml_lines+=("      Review the upstream result and record a verdict for the ${policy:-veto} policy.")
+      yaml_lines+=("    verification: |")
+      yaml_lines+=("      Confirm a verdict artifact exists for this voter.")
+    elif [[ "$stage_type" == "join" ]]; then
+      yaml_lines+=("    content: |")
+      yaml_lines+=("      Apply the ${policy:-veto} policy to the upstream verdicts.")
+      yaml_lines+=("    verification: |")
+      yaml_lines+=("      Confirm a consensus-result artifact was written under the consensus directory.")
+    elif [[ "$stage_type" == "checkpoint" ]]; then
+      yaml_lines+=("    content: |")
+      yaml_lines+=("      Wait for a human to acknowledge \"${stage_id}\" before closing out.")
+      yaml_lines+=("    verification: |")
+      yaml_lines+=("      Confirm the acknowledgement artifact exists.")
+    elif [[ -n "$plan_file" ]]; then
       yaml_lines+=("    content: |")
       yaml_lines+=("      Run nested plan: ${plan_file}")
       yaml_lines+=("    verification: |")
@@ -551,6 +656,13 @@ wizard_render_pipeline_orchestration_plan() {
 
   local IFS=$'\n'
   printf '%s\n' "${yaml_lines[*]}"
+}
+
+# wizard_render_pipeline_orchestration_plan <plan_name> <plan_overview> <instructions_line>
+# Backward-compatible entry point for the orchestration-only shape; delegates
+# to wizard_render_pipeline_plan.
+wizard_render_pipeline_orchestration_plan() {
+  wizard_render_pipeline_plan orchestration "$1" "$2" "$3"
 }
 
 wizard_create_plan_interactive_execution_mode() {

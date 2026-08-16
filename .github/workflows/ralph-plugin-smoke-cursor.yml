@@ -1,0 +1,76 @@
+name: Ralph plugin authenticated smoke (Cursor)
+
+on:
+  schedule:
+    - cron: '57 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    env:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/cursor
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require authenticated smoke secret
+        run: |
+          set -euo pipefail
+          test -n "$CURSOR_API_KEY"
+          echo "::add-mask::$CURSOR_API_KEY"
+
+      - name: Install Cursor and repository plugin
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: cursor local plugin install'
+            exit 0
+          fi
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+          mkdir -p "$HOME/.cursor/plugins/local"
+          cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR" "$HOME/.cursor/plugins/local/ralph-orchestrator"
+          test -f "$HOME/.cursor/plugins/local/ralph-orchestrator/.cursor-plugin/plugin.json"
+
+      - name: Smoke discovery
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: cursor plugin list'
+          else
+            cursor-agent -p 'List the installed Ralph skills by name; do not modify files.'
+          fi
+
+      - name: Smoke read-only doctor
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-doctor'
+          else
+            cursor-agent -p 'Run the installed ralph-doctor workflow only; do not modify files.'
+          fi
+
+      - name: Smoke safe workflow
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-agents'
+          else
+            cursor-agent -p 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+          fi
+
+      - name: Uninstall repository plugin
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: cursor plugin uninstall'
+          else
+            mv "$HOME/.cursor/plugins/local/ralph-orchestrator" "$RUNNER_TEMP/ralph-orchestrator.uninstalled"
+            test ! -e "$HOME/.cursor/plugins/local/ralph-orchestrator"
+          fi

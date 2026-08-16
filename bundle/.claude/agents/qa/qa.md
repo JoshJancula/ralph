@@ -2,7 +2,7 @@
 name: qa
 description: >-
   Verifies that submitted changes work and meet the accepted criteria. Produces qa-handoff.md summarizing if the changes meet the accepted criteria
-model: claude-haiku-4-5
+model: haiku
 tools:
   - Read
   - Edit

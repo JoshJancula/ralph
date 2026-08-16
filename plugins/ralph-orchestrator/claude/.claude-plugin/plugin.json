@@ -1,0 +1,8 @@
+{
+  "author": {
+    "name": "Ralph maintainers"
+  },
+  "description": "Ralph workflows, agents, skills, hooks, and MCP integration for Claude Code.",
+  "name": "ralph-orchestrator",
+  "version": "0.1.0-beta.1"
+}

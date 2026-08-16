@@ -2,7 +2,7 @@
 name: research
 description: >-
   Explores relevant docs and code paths, then summarizes findings for downstream agents.
-model: claude-haiku-4-5
+model: haiku
 tools:
   - Read
   - Grep

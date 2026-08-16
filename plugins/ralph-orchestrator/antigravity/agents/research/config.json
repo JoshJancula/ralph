@@ -1,0 +1,20 @@
+{
+  "_generated": "GENERATED from .agents/agents/research.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "description": "Explores relevant docs and code paths, then summarizes findings for downstream agents.",
+  "model": "auto",
+  "name": "research",
+  "output_artifacts": [
+    {
+      "kind": "research",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+      "required": true
+    }
+  ],
+  "rules": [
+    ".agents/rules/no-emoji.md",
+    ".agents/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    ".agents/skills/repo-context/SKILL.md"
+  ]
+}

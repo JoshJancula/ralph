@@ -162,6 +162,96 @@ read_stages() {
   unset IFS
 }
 
+# read_graph_nodes -- prompts for graph node ids (mirrors read_stages).
+# Populates: selected_stages.
+read_graph_nodes() {
+  local default_csv="research,implement,review"
+
+  local result
+  result="$(ralph_prompt_list "Nodes" "$default_csv" "$default_csv" "1")"
+
+  selected_stages=()
+  if [[ -z "$result" ]]; then
+    return
+  fi
+
+  local IFS=','
+  for raw in $result; do
+    [[ -n "$raw" ]] || continue
+    selected_stages+=("$raw")
+  done
+  unset IFS
+}
+
+# select_depends_on <node_id> <known_csv>
+# Multi-select dependsOn restricted to already-defined node ids; no custom entries,
+# empty answer means no dependencies (valid for source nodes).
+select_depends_on() {
+  local node_id="$1"
+  local known_csv="${2:-}"
+  if [[ -z "$known_csv" ]]; then
+    printf ''
+    return 0
+  fi
+  ralph_prompt_list "Depends on (for \"$node_id\")" "" "$known_csv" "0"
+}
+
+# select_workspace_mode <node_id>
+# Prompts snapshot|worktree|shared for a graph agent node. shared requires an
+# interactive risk acknowledgement, mirroring create-plan.sh's
+# --acknowledge-shared-mutation-risk flag gate; declining dies rather than
+# silently downgrading the mode.
+select_workspace_mode() {
+  local node_id="$1"
+  local mode ack
+  mode="$(ralph_menu_select --prompt "Workspace mode for \"$node_id\"" --default 1 -- "snapshot" "worktree" "shared")"
+  if [[ "$mode" == "shared" ]]; then
+    print_hint "shared mode uses the caller's live workspace directly; concurrent writers can race."
+    ack="$(ralph_prompt_yesno "Acknowledge shared-mutation risk for \"$node_id\"" "n")"
+    [[ "$ack" == "y" ]] || ralph_die "shared workspaceMode requires acknowledging the risk for \"$node_id\""
+  fi
+  printf '%s' "$mode"
+}
+
+# configure_voters <node_id>
+# Interactively collects voters for a consensus node. Appends rows to the
+# caller's cp_voter_node/cp_voter_id/cp_voter_runtime/cp_voter_agent/cp_voter_model
+# arrays. Subagents are always forced off for voters at compile time, not prompted here.
+configure_voters() {
+  local node_id="$1"
+  local add voter_id voter_runtime voter_agent_selection voter_agent voter_is_custom voter_model voter_count=0
+
+  while true; do
+    if (( voter_count >= 2 )); then
+      add="$(ralph_prompt_yesno "Add another voter for \"$node_id\" ($voter_count so far)" "n")"
+    else
+      add="y"
+      [[ "$voter_count" -eq 0 ]] && print_info "Configuring voters for consensus node \"$node_id\" (at least 2 recommended, each on a distinct runtime)"
+    fi
+    [[ "$add" == "y" ]] || break
+
+    voter_id="$(ralph_prompt_text "Voter id" "voter-$((voter_count + 1))")"
+    voter_runtime="$(select_runtime "$node_id-$voter_id")"
+    voter_agent_selection="$(select_agent "$voter_runtime" "$node_id-$voter_id")"
+    IFS=$'\t' read -r voter_agent voter_is_custom voter_model <<< "$voter_agent_selection"
+    if [[ "${voter_is_custom:-0}" == "1" ]]; then
+      [[ -n "$voter_model" ]] || ralph_die "Model is required for custom $voter_runtime voter \"$voter_id\" on node \"$node_id\"."
+      voter_agent=""
+    fi
+
+    cp_voter_node+=("$node_id")
+    cp_voter_id+=("$voter_id")
+    cp_voter_runtime+=("$voter_runtime")
+    cp_voter_agent+=("$voter_agent")
+    cp_voter_model+=("$voter_model")
+    voter_count=$((voter_count + 1))
+  done
+
+  if (( voter_count == 0 )); then
+    ralph_die "consensus node \"$node_id\" requires at least one voter"
+  fi
+}
+
 # choose_stage_id_from_list -- specialized stage picker for loop targets.
 # This stays bespoke (not using ralph_menu_select) because it supports:
 #   - Empty/none selection via allow_empty parameter

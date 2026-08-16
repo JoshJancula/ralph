@@ -1,0 +1,30 @@
+{
+  "_generated": "GENERATED from .agents/agents/implementation.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "description": "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.",
+  "model": "auto",
+  "name": "implementation",
+  "output_artifacts": [
+    {
+      "kind": "notes",
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md",
+      "required": true
+    },
+    {
+      "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/architecture.md",
+      "required": false
+    },
+    {
+      "kind": "handoff",
+      "path": ".ralph-workspace/handoffs/{{ARTIFACT_NS}}/implementation-to-qa.md",
+      "required": false,
+      "to": "qa"
+    }
+  ],
+  "rules": [
+    ".agents/rules/no-emoji.md",
+    ".agents/rules/efficient-tool-usage.md"
+  ],
+  "skills": [
+    ".agents/skills/repo-context/SKILL.md"
+  ]
+}

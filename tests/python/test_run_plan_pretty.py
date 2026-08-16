@@ -159,16 +159,18 @@ class TestPrettyRendererOverflow(unittest.TestCase):
         store_dir = self.workspace / ".ralph-workspace" / "tool-results" / "renderer-test" / "results"
         self.assertFalse(any(store_dir.glob("*.txt")))
 
-    def test_cursor_tool_output_without_result_id_gets_stored_link(self) -> None:
-        lines = self.renderer._render_tool_output("hello from read", tool_name="ralph_proxy_read")
+    def test_direct_read_output_stays_compact_without_result_store_links(self) -> None:
+        body = "\n".join(f"read line {index:02d}" for index in range(1, 31))
+        lines = self.renderer._render_tool_output(body, tool_name="ralph_proxy_read")
         joined = "\n".join(lines)
-        self.assertIn("hello from read", joined)
-        self.assertIn(".ralph-workspace/tool-results/renderer-test/results/", joined)
-        self.assertIn("ralph_proxy_result_read resultId=", joined)
+        self.assertIn("read line 01", joined)
+        self.assertNotIn("read line 05", joined)
+        self.assertIn("+28 more lines (source path shown in read call)", joined)
+        self.assertNotIn(".ralph-workspace/tool-results/renderer-test/results/", joined)
+        self.assertNotIn("ralph_proxy_result_read resultId=", joined)
+        self.assertNotIn("compacted view:", joined)
         store_dir = self.workspace / ".ralph-workspace" / "tool-results" / "renderer-test" / "results"
-        stored = list(store_dir.glob("*.txt"))
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0].read_text(encoding="utf-8"), "hello from read")
+        self.assertFalse(store_dir.exists())
 
     def _large_proxy_envelope(self, result_id: str = "efeec2df9f877019") -> str:
         import json

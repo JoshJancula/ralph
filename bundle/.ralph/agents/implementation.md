@@ -1,10 +1,10 @@
 ---
 description: "Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition."
 models:
-  claude: "claude-sonnet-4-6"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "sonnet"
+  cursor: "gpt-5.6-luna-high"
+  codex: "gpt-5.6-terra"
+  opencode: "ollama-cloud/kimi-k2.7-code"
   antigravity: "auto"
 rules:
   - no-emoji

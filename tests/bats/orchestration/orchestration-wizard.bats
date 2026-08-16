@@ -36,7 +36,13 @@ skip_flaky_wizard_ci_test() {
   [ "$status" -eq 0 ]
   [[ "$output" == *loaded* ]]
 
-  wizard="$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh"
+  # orchestration-wizard.sh is a thin shim into the shared pipeline-wizard.sh
+  # engine; the select-model sourcing lives there now.
+  shim="$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh"
+  grep -q 'pipeline-wizard.sh' "$shim"
+  grep -q -- '--mode orchestration' "$shim"
+
+  wizard="$REPO_ROOT/bundle/.ralph/pipeline-wizard.sh"
   grep -q 'script_dir/bash-lib' "$wizard"
   grep -q 'select-model-cursor.sh' "$wizard"
   grep -q 'select-model-claude.sh' "$wizard"
@@ -66,10 +72,11 @@ skip_flaky_wizard_ci_test() {
   mkdir -p "$bundle_root/.ralph/bash-lib"
   mkdir -p "$workspace/.cursor/agents/research"
   cp "$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/orchestration-wizard.sh"
+  cp "$REPO_ROOT/bundle/.ralph/pipeline-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
   cp -r "$REPO_ROOT/bundle/.ralph/bash-lib/." "$bundle_root/.ralph/bash-lib/"
   mkdir -p "$bundle_root/.ralph/plan-templates"
   cp "$REPO_ROOT/bundle/.ralph/plan-templates/classic.plan.template.md" "$bundle_root/.ralph/plan-templates/classic.plan.template.md"
-  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh"
+  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
   cat >"$workspace/.cursor/agents/research/config.json" <<'JSON'
 {"model":"auto"}
 JSON
@@ -278,13 +285,14 @@ EOF
   mkdir -p "$workspace/.cursor/agents/implementation"
 
   cp "$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/orchestration-wizard.sh"
+  cp "$REPO_ROOT/bundle/.ralph/pipeline-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
   cp -r "$REPO_ROOT/bundle/.ralph/bash-lib/." "$bundle_root/.ralph/bash-lib/"
   mkdir -p "$bundle_root/.ralph/python"
   cp "$REPO_ROOT/bundle/.ralph/python/wizard-prompts-agent-model.py" "$bundle_root/.ralph/python/"
   cp "$REPO_ROOT/bundle/.ralph/python/wizard-prompts-escape-json.py" "$bundle_root/.ralph/python/"
   mkdir -p "$bundle_root/.ralph/plan-templates"
   cp "$REPO_ROOT/bundle/.ralph/plan-templates/classic.plan.template.md" "$bundle_root/.ralph/plan-templates/classic.plan.template.md"
-  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh"
+  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
 
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/research/config.json"
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/architect/config.json"
@@ -339,13 +347,14 @@ EOF
   mkdir -p "$workspace/.cursor/agents/research"
 
   cp "$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/orchestration-wizard.sh"
+  cp "$REPO_ROOT/bundle/.ralph/pipeline-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
   cp -r "$REPO_ROOT/bundle/.ralph/bash-lib/." "$bundle_root/.ralph/bash-lib/"
   mkdir -p "$bundle_root/.ralph/python"
   cp "$REPO_ROOT/bundle/.ralph/python/wizard-prompts-agent-model.py" "$bundle_root/.ralph/python/"
   cp "$REPO_ROOT/bundle/.ralph/python/wizard-prompts-escape-json.py" "$bundle_root/.ralph/python/"
   mkdir -p "$bundle_root/.ralph/plan-templates"
   cp "$REPO_ROOT/bundle/.ralph/plan-templates/classic.plan.template.md" "$bundle_root/.ralph/plan-templates/classic.plan.template.md"
-  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh"
+  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
 
   echo '{"model":"auto"}' > "$workspace/.cursor/agents/research/config.json"
 

@@ -17,6 +17,11 @@ set -euo pipefail
 
 _CLEANUP_PLAN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+if ! declare -F graph_logs_resolve >/dev/null 2>&1; then
+  # shellcheck source=graph/graph-logs.sh
+  source "$_CLEANUP_PLAN_LIB_DIR/graph/graph-logs.sh"
+fi
+
 cleanup_plan_usage() {
   local script_path="${1:-.ralph/cleanup-plan.sh}"
   cat <<EOF
@@ -301,9 +306,18 @@ cleanup_plan_prune_graph_runs() {
     fi
 
     if [[ "$should_prune" -eq 1 ]]; then
+      local extra_log owned
+      extra_log="$(graph_logs_v1_run_owned_files \
+        "$(dirname "$(dirname "$ns_dir")")" "$namespace" "$run_id" 2>/dev/null || true)"
       rm -rf "$ns_dir/$run_id"
       echo "Pruned graph run: $run_id (namespace: $namespace)"
       cleanup_plan_prune_stage_outcomes_for_run "$stage_outcomes_dir" "$run_id"
+      # Remove only uniquely-named v1 files for this run. Never delete
+      # .ralph-workspace/logs/<namespace>/nodes/ as a shared tree.
+      while IFS= read -r owned; do
+        [[ -n "$owned" && -e "$owned" ]] || continue
+        rm -f "$owned"
+      done <<<"$extra_log"
     else
       kept_terminal=$((kept_terminal + 1))
     fi

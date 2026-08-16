@@ -5,7 +5,7 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
 export RALPH_RUN_PLAN_LIBRARY_ONLY=1
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
 unset RALPH_RUN_PLAN_LIBRARY_ONLY
-VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../scripts/validate-graph-schema.sh"
+VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/validate-graph-schema.sh"
 GRAPH_RUN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/graph-run.sh"
 GRAPH_TEMPLATE_MD="$BATS_TEST_DIRNAME/../../../bundle/.ralph/plan-templates/graph-consensus.plan.template.md"
 

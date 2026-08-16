@@ -200,6 +200,7 @@ graph_dispatch_materialize_orch() {
         namespace: $ns,
         stages: [.nodes[].stage]
       }
+      + (if (.ralphMode // "") != "" then {ralphMode: .ralphMode} else {} end)
       | del(.parallelStages)
     ' "$graph_json_path")" || {
     echo "Error: failed to project stages from graph json" >&2

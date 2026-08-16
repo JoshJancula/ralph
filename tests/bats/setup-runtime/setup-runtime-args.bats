@@ -7,6 +7,7 @@
 # - Required action validation (--hooks, --mcp, or --all)
 # - Runtime-dir basename validation
 # - Dry-run behavior (no actual writes)
+# - --remove argument combinations, closed stdin, and journal recovery
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
@@ -21,6 +22,7 @@ SETUP_RUNTIME_SH="$REPO_ROOT/bundle/.ralph/setup-runtime.sh"
   [[ "$output" == *"--hooks"* ]]
   [[ "$output" == *"--mcp"* ]]
   [[ "$output" == *"--all"* ]]
+  [[ "$output" == *"--remove"* ]]
   [[ "$output" == *"--dry-run"* ]]
   [[ "$output" == *"--yes"* ]]
 }
@@ -254,4 +256,181 @@ SETUP_RUNTIME_SH="$REPO_ROOT/bundle/.ralph/setup-runtime.sh"
       rm -rf "$runtime_dir"
     fi
   done
+}
+
+SETUP_JOURNAL_SH="$REPO_ROOT/bundle/.ralph/bash-lib/setup/setup-journal.sh"
+SETUP_REMOVE_SH="$REPO_ROOT/bundle/.ralph/bash-lib/setup/setup-remove.sh"
+
+@test "setup-runtime.sh --remove requires exactly one of --hooks, --mcp, or --all" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir marker
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+  marker="$temp_dir/.claude/keep.txt"
+  printf 'precious\n' >"$marker"
+
+  run bash "$SETUP_RUNTIME_SH" --runtime claude --runtime-dir "$temp_dir/.claude" --remove --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exactly one of --hooks, --mcp, or --all"* ]]
+  [ "$(cat "$marker")" = "precious" ]
+  [ ! -d "$temp_dir/.ralph-workspace/setup-journal" ]
+}
+
+@test "setup-runtime.sh --remove rejects --hooks with --mcp before mutation" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir marker
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+  marker="$temp_dir/.claude/keep.txt"
+  printf 'precious\n' >"$marker"
+
+  run bash "$SETUP_RUNTIME_SH" --runtime claude --runtime-dir "$temp_dir/.claude" --remove --hooks --mcp --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exactly one of --hooks, --mcp, or --all"* ]]
+  [ "$(cat "$marker")" = "precious" ]
+  [ ! -d "$temp_dir/.ralph-workspace/setup-journal" ]
+}
+
+@test "setup-runtime.sh --remove rejects --all combined with --hooks before mutation" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir marker
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+  marker="$temp_dir/.claude/keep.txt"
+  printf 'precious\n' >"$marker"
+
+  run bash "$SETUP_RUNTIME_SH" --runtime claude --runtime-dir "$temp_dir/.claude" --remove --all --hooks --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exactly one of --hooks, --mcp, or --all"* ]]
+  [ "$(cat "$marker")" = "precious" ]
+  [ ! -d "$temp_dir/.ralph-workspace/setup-journal" ]
+}
+
+@test "setup-runtime.sh --remove --dry-run prints mutation set and creates no journal" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+
+  run bash "$SETUP_RUNTIME_SH" --runtime claude --runtime-dir "$temp_dir/.claude" --remove --all --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Removing Ralph setup"* ]]
+  [[ "$output" == *"hooks"* ]]
+  [[ "$output" == *"mcp"* ]]
+  [[ "$output" == *"DRY-RUN"* ]]
+  [[ "$output" == *"no journal"* ]] || [[ "$output" == *"does not create a setup journal"* ]]
+  [ ! -d "$temp_dir/.ralph-workspace/setup-journal" ]
+}
+
+@test "setup-runtime.sh --remove without --yes fails on closed stdin before mutation" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir marker
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+  marker="$temp_dir/.claude/keep.txt"
+  printf 'precious\n' >"$marker"
+
+  run bash -c 'exec < /dev/null; bash "$@"' _ "$SETUP_RUNTIME_SH" \
+    --runtime claude --runtime-dir "$temp_dir/.claude" --remove --hooks
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--yes"* ]] || [[ "$output" == *"stdin"* ]] || [[ "$output" == *"terminal"* ]]
+  [ "$(cat "$marker")" = "precious" ]
+  [ ! -d "$temp_dir/.ralph-workspace/setup-journal" ]
+}
+
+@test "setup-runtime.sh --remove --yes succeeds with closed stdin" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  mkdir -p "$temp_dir/.claude"
+
+  run bash -c 'exec < /dev/null; bash "$@"' _ "$SETUP_RUNTIME_SH" \
+    --runtime claude --runtime-dir "$temp_dir/.claude" --remove --mcp --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Removing Ralph setup"* ]]
+  [[ "$output" == *"mcp"* ]]
+}
+
+@test "setup journal recovers journaled writes on failure" {
+  [ -f "$SETUP_JOURNAL_SH" ] || skip "setup-journal.sh missing"
+
+  local temp_dir state target
+  temp_dir="$(mktemp -d)"
+  state="$temp_dir/.ralph-workspace"
+  target="$temp_dir/owned.txt"
+  printf 'original\n' >"$target"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    SETUP_DRY_RUN=""
+    setup_journal_begin "$2" "fail-op"
+    setup_journal_record "$3"
+    printf "mutated\n" >"$3"
+    exit 2
+  ' _ "$SETUP_JOURNAL_SH" "$state" "$target"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$target")" = "original" ]
+}
+
+@test "setup journal recovers journaled writes on interrupt signal" {
+  [ -f "$SETUP_JOURNAL_SH" ] || skip "setup-journal.sh missing"
+
+  local temp_dir state target
+  temp_dir="$(mktemp -d)"
+  state="$temp_dir/.ralph-workspace"
+  target="$temp_dir/owned.txt"
+  printf 'original\n' >"$target"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    SETUP_DRY_RUN=""
+    setup_journal_begin "$2" "int-op"
+    setup_journal_record "$3"
+    printf "mutated\n" >"$3"
+    kill -TERM "$$"
+    exit 99
+  ' _ "$SETUP_JOURNAL_SH" "$state" "$target"
+  [ "$status" -ne 0 ]
+  [ "$status" -ne 99 ]
+  [ "$(cat "$target")" = "original" ]
+}
+
+@test "owned-file removal refuses mutation when journal backup fails" {
+  [ -f "$SETUP_JOURNAL_SH" ] || skip "setup-journal.sh missing"
+  [ -f "$SETUP_REMOVE_SH" ] || skip "setup-remove.sh missing"
+
+  local temp_dir source target
+  temp_dir="$(mktemp -d)"
+  source="$temp_dir/source.txt"
+  target="$temp_dir/target.txt"
+  printf 'owned\n' >"$source"
+  cp "$source" "$target"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    setup_merge_status() { :; }
+    SETUP_DRY_RUN=""
+    SETUP_JOURNAL_DIR=""
+    SETUP_JOURNAL_FILE=""
+    if setup_remove_owned_file "$3" "$4"; then
+      exit 0
+    else
+      rc=$?
+      exit "$rc"
+    fi
+  ' _ "$SETUP_JOURNAL_SH" "$SETUP_REMOVE_SH" "$source" "$target"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"setup journal is not active"* ]]
+  [ -f "$target" ]
+  cmp -s "$source" "$target"
 }

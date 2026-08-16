@@ -3,6 +3,7 @@
   "enabled": true,
   "dry_run": false,
   "banned_tools": [],
+  "tool_denylist": [],
   "allowed_tools": [],
   "banned_paths": [
     ".env*",
@@ -13,6 +14,7 @@
   ],
   "allowed_paths": [],
   "allowed_patterns": [],
+  "denied_argument_patterns": [],
   "custom_rules": [
     {
       "name": "no_sudo",

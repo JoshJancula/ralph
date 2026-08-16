@@ -1,10 +1,10 @@
 ---
 description: "Explores relevant docs and code paths, then summarizes findings for downstream agents."
 models:
-  claude: "claude-haiku-4-5"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "haiku"
+  cursor: "auto"
+  codex: "gpt-5.6-luna"
+  opencode: "ollama-cloud/glm-5.2"
   antigravity: "auto"
 rules:
   - no-emoji

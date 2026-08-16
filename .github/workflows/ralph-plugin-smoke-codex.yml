@@ -1,0 +1,91 @@
+name: Ralph plugin authenticated smoke (Codex)
+
+on:
+  schedule:
+    - cron: '37 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/codex
+      CODEX_HOME: ${{ runner.temp }}/ralph-codex-home
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require authenticated smoke secret
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"
+          echo "::add-mask::$OPENAI_API_KEY"
+
+      - name: Install Codex and repository plugin
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: marketplace plugin install for codex'
+            exit 0
+          fi
+          npm install --global @openai/codex
+          marketplace="$RUNNER_TEMP/ralph-codex-marketplace"
+          mkdir -p "$marketplace/.agents/plugins" "$marketplace/plugins"
+          cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR" "$marketplace/plugins/ralph-orchestrator"
+          cat >"$marketplace/.agents/plugins/marketplace.json" <<'JSON'
+          {
+            "name": "ralph-smoke",
+            "interface": {"displayName": "Ralph smoke marketplace"},
+            "plugins": [
+              {
+                "name": "ralph-orchestrator",
+                "source": {"source": "local", "path": "./plugins/ralph-orchestrator"},
+                "category": "Productivity"
+              }
+            ]
+          }
+          JSON
+          codex plugin marketplace add "$marketplace" --json
+          codex plugin add ralph-orchestrator@ralph-smoke --json
+
+      - name: Smoke discovery
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: codex plugin list'
+          else
+            codex plugin list --json | jq -e '.installed[] | select(.name == "ralph-orchestrator")'
+          fi
+
+      - name: Smoke read-only doctor
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-doctor'
+          else
+            codex exec --skip-git-repo-check 'Run the installed ralph-doctor workflow only; do not modify files.'
+          fi
+
+      - name: Smoke safe workflow
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-agents'
+          else
+            codex exec --skip-git-repo-check 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+          fi
+
+      - name: Uninstall repository plugin
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: marketplace plugin uninstall for codex'
+          else
+            codex plugin remove ralph-orchestrator@ralph-smoke --json
+            codex plugin marketplace remove ralph-smoke
+          fi

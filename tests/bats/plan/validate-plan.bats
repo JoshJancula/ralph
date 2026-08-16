@@ -7,7 +7,7 @@ setup() {
   TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ralph-validate-plan.XXXXXX")"
   VALIDATE_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/validate-plan.sh"
   RUN_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/run-plan.sh"
-  VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../scripts/validate-graph-schema.sh"
+  VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/validate-graph-schema.sh"
 }
 
 teardown() {

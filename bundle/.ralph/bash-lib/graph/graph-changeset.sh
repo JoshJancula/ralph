@@ -10,6 +10,11 @@ GRAPH_CHANGESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRAPH_CHANGESET_RALPH_ROOT="$(cd "$GRAPH_CHANGESET_SCRIPT_DIR/../.." && pwd)"
 GRAPH_CHANGESET_HELPER="$GRAPH_CHANGESET_RALPH_ROOT/python/graph_changeset.py"
 
+if ! declare -F graph_logs_resolve >/dev/null 2>&1; then
+  # shellcheck source=graph-logs.sh
+  source "$GRAPH_CHANGESET_SCRIPT_DIR/graph-logs.sh"
+fi
+
 graph_changeset_node_key() {
   graph_workspace_node_key "$1"
 }
@@ -63,8 +68,20 @@ graph_changeset_capture_node() {
   mode="$(printf '%s' "$stage" | jq -r '.workspaceMode // "shared"')"
   scopes="$(printf '%s' "$stage" | jq -c '.writeScopes // []')"
   base_identity="$(jq -r '.sourceBase.filesystemIdentity // .sourceBase.git.treeHash // "shared-optimistic"' "$run_dir/run.json")"
-  usage_file="$state_root/logs/$(jq -r '.namespace' "$graph_json")/nodes/$(graph_changeset_node_key "$node_id")/plan-usage-summary.json"
-  [[ -f "$usage_file" ]] && usage_json="$(jq -c . "$usage_file" 2>/dev/null || true)"
+  local usage_rel ns
+  usage_rel="$(graph_logs_attempt_rel "$run_dir" "$node_id" "$attempt_id" "usage.json" 2>/dev/null || true)"
+  if [[ -n "$usage_rel" ]]; then
+    usage_file="$(graph_logs_read "$run_dir" "$usage_rel" 2>/dev/null || true)"
+  fi
+  if [[ -z "$usage_file" || ! -f "$usage_file" ]]; then
+    ns="$(jq -r '.namespace // empty' "$graph_json" 2>/dev/null || true)"
+    usage_file=""
+    if [[ -n "$state_root" && -n "$ns" ]]; then
+      usage_file="$(graph_logs_v1_node_dir "$state_root" "$ns" "$node_id" 2>/dev/null || true)"
+      [[ -n "$usage_file" ]] && usage_file="$usage_file/plan-usage-summary.json"
+    fi
+  fi
+  [[ -n "$usage_file" && -f "$usage_file" ]] && usage_json="$(jq -c . "$usage_file" 2>/dev/null || true)"
   capture_args=(
     capture --workspace "$workspace" --baseline "$baseline" --output "$output"
     --node-id "$node_id" --attempt-id "$attempt_id" --workspace-mode "$mode"

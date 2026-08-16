@@ -1716,11 +1716,13 @@ fi
 RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORKSPACE_ROOT}"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 export RALPH_PLAN_WORKSPACE_ROOT
-# Graph scheduler sets RALPH_GRAPH_NODE_ID so concurrent nodes keep a shared
-# RALPH_ARTIFACT_NS (edge handoffs) while writing plan-usage-summary.json under
-# a per-node log directory (avoids the parallel-wave race).
-if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
-  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS/nodes/$RALPH_GRAPH_NODE_ID"
+# Graph scheduler sets RALPH_GRAPH_NODE_LOG_DIR to the contained attempt
+# directory under <run-dir>/logs/nodes/<safe-node-id>/<attempt-id>/. Never
+# create or append to the v1 namespace-only logs/<namespace>/nodes/ tree.
+if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  RALPH_LOG_DIR="$RALPH_GRAPH_NODE_LOG_DIR"
+elif [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
 else
   RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
 fi
@@ -1780,15 +1782,20 @@ if [[ -f "$RALPH_SESSION_DIR/runtime-permission-overrides.sh" ]]; then
   source "$RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE"
 fi
 
-if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
+if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  LOG_FILE="$RALPH_LOG_DIR/agent.log"
+  OUTPUT_LOG="$RALPH_LOG_DIR/agent.log"
+elif [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
 else
   LOG_FILE="$CURSOR_PLAN_LOG"
 fi
-if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
-  OUTPUT_LOG="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}-output.log"
-else
-  OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
+if [[ -z "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
+    OUTPUT_LOG="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}-output.log"
+  else
+    OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
+  fi
 fi
 # Destination for captured CLI stdout/stderr (tee); subprocesses may append via invoke helpers.
 export OUTPUT_LOG
@@ -2197,6 +2204,12 @@ ralph_prepare_permission_pause() {
   fi
 
   printf '%s\n' "$prompt_text" >"$PENDING_HUMAN"
+  # Record which graph run owns this pause so a later run does not inherit a
+  # question only this run can answer. See
+  # ralph_session_discard_foreign_run_pause.
+  if [[ -n "${RALPH_GRAPH_RUN_ID:-}" && -n "${PENDING_HUMAN_OWNER:-}" ]]; then
+    printf '%s\n' "$RALPH_GRAPH_RUN_ID" >"$PENDING_HUMAN_OWNER"
+  fi
   if declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
     ralph_write_human_request_artifact \
       "$RALPH_SESSION_DIR" \
@@ -2996,7 +3009,7 @@ if [[ -n "$PREBUILT_AGENT" ]]; then
       unset RALPH_PROGRESSIVE_CONTEXT_PART
     fi
   fi
-  ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
+  ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (agent config loaded; model not verified against provider)"
   ralph_run_plan_export_agent_mcp_overlay "$WORKSPACE" "$PREBUILT_AGENT"
   if [[ "$RUNTIME" == "claude" ]]; then
     _agents_root_for_tools="$(prebuilt_agents_root "$WORKSPACE")"
@@ -3605,6 +3618,9 @@ PY
     printf '%s\n' "$_summary_text"
   else
     echo -e "${C_DIM}Total elapsed time: ${_elapsed_fmt}${C_RST}"
+  fi
+  if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" && -f "$_summary_dir/plan-usage-summary.json" ]]; then
+    cp "$_summary_dir/plan-usage-summary.json" "$RALPH_GRAPH_NODE_LOG_DIR/usage.json" 2>/dev/null || true
   fi
   _RALPH_PLAN_SUMMARY_FINALIZED=1
 }

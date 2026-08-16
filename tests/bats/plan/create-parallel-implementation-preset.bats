@@ -8,7 +8,7 @@ source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-state.sh"
 source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-run-base.sh"
 
 CREATE_PLAN="$REPO_ROOT/.ralph/create-plan.sh"
-VALIDATE_GRAPH="$REPO_ROOT/scripts/validate-graph-schema.sh"
+VALIDATE_GRAPH="$REPO_ROOT/bundle/.ralph/bash-lib/graph/validate-graph-schema.sh"
 ARTIFACT_LOG="$REPO_ROOT/.ralph-workspace/artifacts/GRAPH-ENGINEERING-V2.plan/parallel-preset.log"
 
 setup() {

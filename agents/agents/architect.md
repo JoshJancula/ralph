@@ -1,10 +1,10 @@
 ---
 description: "Turns research into system and module design. Writes architecture.md with boundaries, data flow, and risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition."
 models:
-  claude: "claude-opus-4-5"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "opus"
+  cursor: "gpt-5.6-sol-high"
+  codex: "gpt-5.6-terra"
+  opencode: "ollama-cloud/kimi-k2.7-code"
   antigravity: "auto"
 rules:
   - no-emoji

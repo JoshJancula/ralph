@@ -1,7 +1,7 @@
 {
   "name": "security",
   "_generated": "GENERATED from bundle/.ralph/agents/security.md by scripts/sync-runtime-assets.sh - edit the canonical file",
-  "model": "ollama-cloud/kimi-k2.5",
+  "model": "ollama-cloud/kimi-k2.7",
   "description": "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.",
   "rules": [
     "bundle/.opencode/rules/no-emoji.md",

@@ -1,0 +1,8 @@
+{
+  "name": "{{PLUGIN_ID}}",
+  "description": "Ralph workflows, agents, skills, hooks, and MCP integration for Claude Code.",
+  "version": "{{PLUGIN_VERSION}}",
+  "author": {
+    "name": "Ralph maintainers"
+  }
+}

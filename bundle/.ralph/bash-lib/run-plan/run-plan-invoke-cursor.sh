@@ -22,6 +22,10 @@ unset _run_plan_invoke_cursor_dir
 #   run_plan_invoke_cursor_native_hooks_prepare / run_plan_invoke_cursor_native_hooks_cleanup -- workspace hooks.json overlay.
 #   run_plan_invoke_cursor_mcp_config_prepare / run_plan_invoke_cursor_mcp_config_cleanup -- per-run workspace MCP overlay.
 #   ralph_run_plan_invoke_cursor -- invoke Cursor CLI; exports OUTPUT_LOG, EXIT_CODE_FILE, SESSION_ID_FILE for demux.
+#   run_plan_invoke_cursor_graph_approval_live_supported -- graph help-only live-channel proof (no model call).
+#   run_plan_invoke_cursor_graph_approval_capabilities -- advertise only enforceable Cursor lifetimes.
+#   run_plan_invoke_cursor_graph_approval_apply / restore -- common resumable overlay fallback.
+#   run_plan_invoke_cursor_graph_approval_start_or_fallback -- live path only after nonbillable proof.
 #
 # MCP overlay behavior:
 #   Cursor natively discovers .cursor/mcp.json, rules, skills, hooks, and settings from the
@@ -271,4 +275,382 @@ ralph_run_plan_invoke_cursor() {
   fi
 
   return "$invoke_status"
+}
+
+# Graph-only Cursor approval transport.
+# A live structured channel is used only after nonbillable `--help` proof of
+# `--permission-prompt-tool`. --force, --yolo, --auto-review, and --approve-mcps
+# are not a same-operation response protocol. Otherwise the common resumable
+# overlay writes project `.cursor/cli.json` only. Advertised lifetimes are only
+# those enforceable without ambient user writes: once and run. always-policy is
+# Ralph project policy reapplied through future temporary overlays, never a
+# native Cursor lifetime and never `~/.cursor/cli-config.json`.
+# Normal non-graph `ralph_run_plan_invoke_cursor` does not call these helpers.
+
+run_plan_invoke_cursor_graph_approval_graph_enabled() {
+  case "${RALPH_GRAPH_APPROVAL:-}" in
+    1|true|yes|on)
+      return 0
+      ;;
+  esac
+  [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]
+}
+
+_run_plan_invoke_cursor_graph_approval_ensure_adapter() {
+  if declare -F ralph_approval_adapter_capabilities >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-approval-adapter.sh"
+}
+
+_run_plan_invoke_cursor_graph_approval_live_capability_missing() {
+  local cli_name="${1:-cursor-agent}"
+  local help_text
+  local -a missing=()
+
+  if ! command -v "$cli_name" >/dev/null 2>&1; then
+    printf '%s\n' "cursor cli"
+    return 0
+  fi
+
+  if ! help_text="$("$cli_name" --help 2>/dev/null)"; then
+    missing+=("cursor permission-prompt-tool")
+    printf '%s\n' "${missing[@]}"
+    return 0
+  fi
+
+  if [[ "$help_text" != *"--permission-prompt-tool"* && "$help_text" != *"permission-prompt-tool"* ]]; then
+    missing+=("cursor permission-prompt-tool")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf '%s\n' "${missing[@]}"
+  fi
+}
+
+# run_plan_invoke_cursor_graph_approval_live_supported [cli]
+# Help-only. Never starts a session or sends a prompt.
+run_plan_invoke_cursor_graph_approval_live_supported() {
+  local cli_name="${1:-${CURSOR_PLAN_CLI:-cursor-agent}}"
+  local missing
+  missing="$(_run_plan_invoke_cursor_graph_approval_live_capability_missing "$cli_name")"
+  [[ -z "$missing" ]]
+}
+
+# run_plan_invoke_cursor_graph_approval_capabilities [cli]
+# Overlay can enforce once and run. Live streaming is true only after help proof.
+# always-policy stays unsupported: it must not edit ambient user files.
+run_plan_invoke_cursor_graph_approval_capabilities() {
+  local cli_name="${1:-${CURSOR_PLAN_CLI:-cursor-agent}}"
+  local live="false"
+  local proof
+
+  _run_plan_invoke_cursor_graph_approval_ensure_adapter || return 1
+  if run_plan_invoke_cursor_graph_approval_live_supported "$cli_name"; then
+    live="true"
+  fi
+  proof="$(jq -nc --argjson live "$live" '{
+    liveRequestStreaming: $live,
+    sameOperationResponse: $live,
+    sessionContinuation: true,
+    lifetimes: {once: true, run: true, "always-policy": false}
+  }')"
+  ralph_approval_adapter_capabilities cursor "$proof"
+}
+
+# run_plan_invoke_cursor_graph_approval_fallback [reason]
+run_plan_invoke_cursor_graph_approval_fallback() {
+  local reason="${1:-unsupported}"
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "{\"schemaVersion\":1,\"runtime\":\"cursor\",\"fallback\":true,\"reason\":\"${reason}\",\"path\":\"overlay\"}"
+    return 0
+  fi
+  jq -nc --arg reason "$reason" '{
+    schemaVersion: 1,
+    runtime: "cursor",
+    fallback: true,
+    reason: $reason,
+    path: "overlay",
+    liveRequestStreaming: false
+  }'
+}
+
+run_plan_invoke_cursor_graph_approval_settings_target() {
+  local root="${WORKSPACE:-${RALPH_PROJECT_ROOT:-}}"
+  if [[ -z "$root" ]]; then
+    echo "Error: Cursor graph approval overlay requires WORKSPACE or RALPH_PROJECT_ROOT" >&2
+    return 1
+  fi
+  printf '%s/.cursor/cli.json' "$root"
+}
+
+# run_plan_invoke_cursor_graph_approval_permission_rule <action> <resource> <effect>
+run_plan_invoke_cursor_graph_approval_permission_rule() {
+  local action="$1" resource="$2" effect="$3"
+  action="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
+  effect="$(printf '%s' "$effect" | tr '[:upper:]' '[:lower:]')"
+  resource="${resource#"${resource%%[![:space:]]*}"}"
+  resource="${resource%"${resource##*[![:space:]]}"}"
+  if [[ -z "$resource" || "$resource" == *$'\n'* || "$resource" == *')'* ]]; then
+    echo "Error: Cursor graph approval resource must be a non-empty single line without ')'" >&2
+    return 1
+  fi
+  case "$effect" in
+    network)
+      printf 'WebFetch(domain:%s)' "$resource"
+      ;;
+    read)
+      case "$action" in
+        bash|shell) printf 'Shell(%s)' "$resource" ;;
+        *) printf 'Read(%s)' "$resource" ;;
+      esac
+      ;;
+    write)
+      case "$action" in
+        bash|shell) printf 'Shell(%s)' "$resource" ;;
+        write) printf 'Write(%s)' "$resource" ;;
+        *) printf 'Edit(%s)' "$resource" ;;
+      esac
+      ;;
+    *)
+      echo "Error: Cursor graph approval effect is unsupported: ${effect:-<empty>}" >&2
+      return 1
+      ;;
+  esac
+}
+
+# Merge a Cursor cli.json object with an exact allow or deny rule. Deny wins.
+_run_plan_invoke_cursor_graph_approval_merge_settings() {
+  local existing="$1"
+  local rule="$2"
+  local kind="$3"
+  if [[ -z "$existing" ]] || ! printf '%s' "$existing" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    existing='{}'
+  fi
+  printf '%s' "$existing" | jq -c --arg rule "$rule" --arg kind "$kind" '
+    . as $src
+    | (($src.permissions // {}) | type == "object") as $ok
+    | (if $ok then ($src.permissions.allow // []) else [] end) as $allow0
+    | (if $ok then ($src.permissions.deny // []) else [] end) as $deny0
+    | (if ($allow0 | type) == "array" then $allow0 else [] end) as $allow
+    | (if ($deny0 | type) == "array" then $deny0 else [] end) as $deny
+    | (if $kind == "deny" then ($deny + [$rule] | unique) else $deny end) as $deny1
+    | (if $kind == "deny" then [$allow[] | select(. != $rule)]
+       elif ($deny1 | index($rule)) == null then ($allow + [$rule] | unique)
+       else $allow end) as $allow1
+    | ($src + {
+        permissions: ((($src.permissions // {}) | if type == "object" then . else {} end) + {
+          allow: $allow1,
+          deny: $deny1
+        })
+      })
+  '
+}
+
+_run_plan_invoke_cursor_graph_approval_write_target() {
+  local target="$1" overlay_text="$2"
+  local existed=0 backup="" tmp_path
+  _run_plan_invoke_cursor_graph_approval_ensure_adapter || return 1
+  ralph_approval_adapter_ensure_overlay_state cursor || return 1
+  if declare -F _runtime_overlay_abs_path >/dev/null 2>&1; then
+    target="$(_runtime_overlay_abs_path "$target")"
+  fi
+  if ralph_approval_adapter_is_ambient_user_path "$target"; then
+    echo "Error: Cursor graph approval refuses ambient user path: $target" >&2
+    return 1
+  fi
+  ralph_approval_adapter_overlay_load_state || true
+  if [[ -f "$target" ]]; then
+    existed=1
+  fi
+  runtime_overlay_record_original_file "$target" "" 1 || return 1
+  if [[ ${#RUNTIME_OVERLAY_MUTATED_BACKUPS[@]} -gt 0 ]]; then
+    backup="${RUNTIME_OVERLAY_MUTATED_BACKUPS[${#RUNTIME_OVERLAY_MUTATED_BACKUPS[@]}-1]}"
+  fi
+  mkdir -p "$(dirname "$target")"
+  tmp_path="${target}.ralph-approval.tmp"
+  if ! printf '%s\n' "$overlay_text" >"$tmp_path"; then
+    runtime_overlay_restore_file "$target" "$backup" "$existed" || true
+    echo "Error: Cursor graph approval failed to write $target" >&2
+    return 1
+  fi
+  mv "$tmp_path" "$target"
+  RALPH_APPROVAL_ADAPTER_OVERLAY_TARGETS+=("$target")
+  RALPH_APPROVAL_ADAPTER_OVERLAY_BACKUPS+=("$backup")
+  RALPH_APPROVAL_ADAPTER_OVERLAY_EXISTED+=("$existed")
+  ralph_approval_adapter_overlay_install_traps
+  ralph_approval_adapter_overlay_save_state || true
+  jq -nc --arg target "$target" --arg backup "$backup" '{target:$target,backup:(if $backup == "" then null else $backup end)}'
+}
+
+# run_plan_invoke_cursor_graph_approval_apply <request-json>
+# Graph-only. Builds an equal-or-narrower project cli.json overlay, journals
+# the original, and resumes the same session when continuation is supported.
+run_plan_invoke_cursor_graph_approval_apply() {
+  local input="${1:-}"
+  local caps translated decision lifetime grant_json
+  local action resource effect rule kind
+  local target existing overlay_text session_id tmp_dir
+
+  if ! run_plan_invoke_cursor_graph_approval_graph_enabled; then
+    echo "Error: Cursor graph approval apply is graph-only" >&2
+    return 1
+  fi
+  _run_plan_invoke_cursor_graph_approval_ensure_adapter || return 1
+  if [[ -z "$input" ]] || ! printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: Cursor graph approval apply requires a JSON object" >&2
+    return 1
+  fi
+  ralph_approval_adapter_reject_dangerous_fallback "$(printf '%s' "$input" | jq -r '.fallback // empty')" || return 1
+  ralph_approval_adapter_reject_dangerous_fallback "$(printf '%s' "$input" | jq -r '.permissionMode // .permission_mode // .approvalMode // .approval_mode // empty')" || return 1
+
+  caps="$(run_plan_invoke_cursor_graph_approval_capabilities "${CURSOR_PLAN_CLI:-cursor-agent}")"
+  translated="$(ralph_approval_adapter_translate_decision "$input" "$caps")" || return 1
+  decision="$(printf '%s' "$translated" | jq -r '.decision')"
+  lifetime="$(printf '%s' "$translated" | jq -r '.lifetime')"
+  grant_json="$(printf '%s' "$translated" | jq -c '.grant')"
+  session_id="$(printf '%s' "$input" | jq -r '.sessionId // .session_id // empty')"
+  target="$(printf '%s' "$input" | jq -r '.target // empty')"
+  if [[ -z "$target" ]]; then
+    target="$(run_plan_invoke_cursor_graph_approval_settings_target)" || return 1
+  fi
+  if ralph_approval_adapter_is_ambient_user_path "$target"; then
+    echo "Error: Cursor graph approval refuses ambient user path: $target" >&2
+    return 1
+  fi
+
+  if [[ "$decision" == "deny" ]]; then
+    action="$(printf '%s' "$input" | jq -r '.request.action // .action // "Shell"')"
+    resource="$(printf '%s' "$input" | jq -r '.request.resource // .resource // empty')"
+    effect="$(printf '%s' "$input" | jq -r '.request.effect // .effect // "write"')"
+    kind="deny"
+  else
+    action="$(printf '%s' "$grant_json" | jq -r '.action')"
+    resource="$(printf '%s' "$grant_json" | jq -r '.resource')"
+    effect="$(printf '%s' "$grant_json" | jq -r '.effect')"
+    kind="allow"
+  fi
+  rule="$(run_plan_invoke_cursor_graph_approval_permission_rule "$action" "$resource" "$effect")" || return 1
+
+  existing="{}"
+  if [[ -f "$target" ]]; then
+    existing="$(cat "$target")"
+  fi
+  overlay_text="$(_run_plan_invoke_cursor_graph_approval_merge_settings "$existing" "$rule" "$kind")" || return 1
+
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ralph-cursor-approval.XXXXXX")" || return 1
+
+  if [[ "$decision" == "deny" ]]; then
+    if ! _run_plan_invoke_cursor_graph_approval_write_target "$target" "$overlay_text" >"$tmp_dir/write.json"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    if ! ralph_approval_adapter_overlay_fallback "$(jq -nc --arg runtime cursor '{decision:"deny",runtime:$runtime}')" "$caps" >"$tmp_dir/fallback.json"; then
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    jq -nc \
+      --argjson applied "$(cat "$tmp_dir/fallback.json")" \
+      --argjson write "$(cat "$tmp_dir/write.json")" \
+      --argjson grant "$grant_json" \
+      --arg lifetime "$lifetime" \
+      --arg decision "$decision" \
+      --arg session "$session_id" \
+      --arg overlay "$overlay_text" \
+      '{
+        schemaVersion: 1,
+        runtime: "cursor",
+        path: "overlay",
+        fallback: "overlay",
+        applied: true,
+        decision: $decision,
+        lifetime: $lifetime,
+        grant: $grant,
+        equalOrNarrower: true,
+        continuation: $applied.continuation,
+        sessionStrategy: $applied.sessionStrategy,
+        sessionId: (if $session == "" then null else $session end),
+        target: $write.target,
+        backup: $write.backup,
+        restored: false,
+        overlay: ($overlay | fromjson)
+      }'
+    rm -rf "$tmp_dir"
+    return 0
+  fi
+
+  if ! ralph_approval_adapter_overlay_fallback "$(jq -nc \
+    --arg runtime cursor \
+    --arg decision "$decision" \
+    --arg target "$target" \
+    --arg session "$session_id" \
+    --argjson grant "$grant_json" \
+    --argjson overlay "$overlay_text" \
+    --arg action "$action" \
+    --arg resource "$resource" \
+    --arg effect "$effect" \
+    '{
+      decision: $decision,
+      runtime: $runtime,
+      action: $action,
+      resource: $resource,
+      effect: $effect,
+      grant: $grant,
+      target: $target,
+      overlay: $overlay,
+      sessionId: $session
+    }')" "$caps" >"$tmp_dir/applied.json"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  jq -c \
+    --argjson overlay "$overlay_text" \
+    '. + {runtime:"cursor", path:"overlay", overlay:$overlay}' \
+    "$tmp_dir/applied.json"
+  rm -rf "$tmp_dir"
+}
+
+# run_plan_invoke_cursor_graph_approval_restore [reason]
+run_plan_invoke_cursor_graph_approval_restore() {
+  _run_plan_invoke_cursor_graph_approval_ensure_adapter || return 1
+  ralph_approval_adapter_overlay_restore "${1:-success}"
+}
+
+# run_plan_invoke_cursor_graph_approval_start_or_fallback [cli] [request-json]
+# Live channel only after nonbillable help proof. Otherwise overlay fallback.
+run_plan_invoke_cursor_graph_approval_start_or_fallback() {
+  local cli="${1:-${CURSOR_PLAN_CLI:-cursor-agent}}"
+  local request="${2:-}"
+  local caps
+
+  if ! run_plan_invoke_cursor_graph_approval_graph_enabled; then
+    echo "Error: Cursor graph approval is graph-only" >&2
+    return 1
+  fi
+  _run_plan_invoke_cursor_graph_approval_ensure_adapter || return 1
+
+  if run_plan_invoke_cursor_graph_approval_live_supported "$cli"; then
+    caps="$(run_plan_invoke_cursor_graph_approval_capabilities "$cli")"
+    jq -nc --argjson caps "$caps" '{
+      schemaVersion: 1,
+      runtime: "cursor",
+      fallback: false,
+      path: "live",
+      channel: "permission-prompt-tool",
+      liveRequestStreaming: $caps.liveRequestStreaming,
+      sameOperationResponse: $caps.sameOperationResponse,
+      sessionContinuation: $caps.sessionContinuation,
+      lifetimes: $caps.lifetimes
+    }'
+    return 0
+  fi
+
+  if [[ -n "$request" ]]; then
+    run_plan_invoke_cursor_graph_approval_apply "$request" || return 1
+    return 2
+  fi
+  run_plan_invoke_cursor_graph_approval_fallback "unsupported"
+  return 2
 }

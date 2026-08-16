@@ -192,6 +192,21 @@ export RALPH_PLAN_WORKSPACE_ROOT="$DEFAULT_ORCH_WORKSPACE_ROOT"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
+# Directory run-plan.sh actually writes its per-plan logs into. Mirrors the
+# RALPH_LOG_DIR selection in run-plan-core.sh: the graph scheduler sets
+# RALPH_GRAPH_NODE_ID so concurrent nodes keep a shared RALPH_ARTIFACT_NS while
+# logging under a per-node subdirectory. Every operator-facing log hint must go
+# through this, or graph-mode failures point at paths that do not exist.
+orch_plan_log_dir() {
+  if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+    printf '%s\n' "$RALPH_GRAPH_NODE_LOG_DIR"
+  elif [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+    printf '%s\n' "$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS"
+  else
+    printf '%s\n' "$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS"
+  fi
+}
+
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
 ORCH_BASENAME="${ORCH_BASENAME//[^A-Za-z0-9_.-]/_}"
 LOG_FILE="$RALPH_LOG_DIR/orchestrator-${ORCH_BASENAME}.log"
@@ -874,7 +889,7 @@ orch_stage_execute() {
   echo -e "${C_B}Step ${step_n}${C_RST} ${C_G}$runtime${C_RST} agent=${C_BOLD}$agent${C_RST} source=${C_BOLD}$agent_source${C_RST} model=${C_DIM}${_step_model_label}${C_RST} plan=$plan_rel"
   _plan_tag_stream="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//')"
   _plan_tag_stream="${_plan_tag_stream//[^A-Za-z0-9_.-]/_}"
-  _runner_stream_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${_plan_tag_stream}-output.log"
+  _runner_stream_log="$(orch_plan_log_dir)/plan-runner-${_plan_tag_stream}-output.log"
   echo "" >&2
   echo -e "${C_DIM}Invoking:${C_RST} $runner_label" >&2
   if [[ "$agent_source" == "prebuilt" ]]; then
@@ -1019,6 +1034,9 @@ orch_stage_execute() {
       _runner_env+=(RALPH_STRUCTURED_OUTPUT_SCHEMA="$_final_output_schema")
     fi
   fi
+  if [[ -n "${ORCH_RALPH_MODE:-}" ]]; then
+    _runner_env+=(RALPH_MODE="$ORCH_RALPH_MODE")
+  fi
   _runner_args=(--non-interactive --runtime "$runtime" --workspace "$WORKSPACE" --plan "$plan_abs_file")
   if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
     _runner_args+=(--workspace-root "$WORKSPACE_ROOT_OVERRIDE")
@@ -1052,8 +1070,8 @@ orch_stage_execute() {
   if [[ $rc -ne 0 ]]; then
     plan_tag="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//')"
     plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
-    hint_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}.log"
-    hint_out="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log"
+    hint_log="$(orch_plan_log_dir)/plan-runner-${plan_tag}.log"
+    hint_out="$(orch_plan_log_dir)/plan-runner-${plan_tag}-output.log"
     ralph_orchestrator_log "FAIL step $step_n exit=$rc agent=$agent plan=$plan_abs_file"
     {
       echo ""
@@ -1242,16 +1260,65 @@ orch_stage_execute() {
   # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see
   # run-plan-core.sh), or logs/<RALPH_ARTIFACT_NS>/nodes/<nodeId>/ when the graph
   # scheduler set RALPH_GRAPH_NODE_ID for per-node log isolation.
-  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
-    _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/nodes/$RALPH_GRAPH_NODE_ID/plan-usage-summary.json"
-  else
-    _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-usage-summary.json"
-  fi
+  _stage_usage_file="$(orch_plan_log_dir)/plan-usage-summary.json"
   orch_stage_capture_usage "$step_n" "$agent" "$runtime" "$_stage_usage_file" "$stage_usage_file"
   ralph_orchestrator_log "step $step_n OK"
   echo -e "${C_G}Step $step_n completed.${C_RST}"
   printf -v "$step_status_var" '%s' 0
   return 0
+}
+
+# Resolve the run-wide Ralph tooling mode from the orchestration file.
+#
+# Tool exposure is a property of the whole run: every stage of one run brokers
+# tools the same way. It is declared once, either as ralphMode in the
+# orchestration file (which a graph plan's pipeline.ralphMode is projected
+# into) or as RALPH_MODE in the environment.
+#
+# Declaring both is a conflict rather than a precedence puzzle. Silently
+# letting one win means the mode that actually took effect can only be
+# discovered by reading a log, so disagreeing values are refused outright.
+# Identical values are fine -- that is not a conflict, just a redundant
+# statement of the same intent.
+#
+# Absent both, nothing is exported and the inherited environment stands, so
+# Ralph mode stays opt-in exactly as before.
+orch_resolve_ralph_mode() {
+  ORCH_RALPH_MODE=""
+  local declared="" env_mode="${RALPH_MODE:-}"
+
+  if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+    declared="$(jq -r '.ralphMode // empty' "$ORCH_FILE" 2>/dev/null || echo "")"
+  fi
+
+  if [[ -n "$declared" ]]; then
+    case "$declared" in
+      no | native | ralph | hybrid) ;;
+      *)
+        echo -e "${C_R}${C_BOLD}Orchestrator config error: invalid ralphMode${C_RST}" >&2
+        echo "  ralphMode is \"$declared\" in $ORCH_FILE" >&2
+        echo "  Expected one of: no, native, ralph, hybrid" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  if [[ -n "$declared" && -n "$env_mode" && "$declared" != "$env_mode" ]]; then
+    echo -e "${C_R}${C_BOLD}Orchestrator config error: conflicting Ralph mode${C_RST}" >&2
+    echo "  ralphMode is \"$declared\" in $ORCH_FILE" >&2
+    echo "  RALPH_MODE is \"$env_mode\" in the environment" >&2
+    echo "  These apply to the same run and must agree. Remove one, or set them to the same value." >&2
+    exit 1
+  fi
+
+  if [[ -n "$declared" ]]; then
+    ORCH_RALPH_MODE="$declared"
+    export RALPH_MODE="$declared"
+    ralph_orchestrator_log "ralph mode: $declared (declared in $ORCH_FILE)"
+  elif [[ -n "$env_mode" ]]; then
+    ORCH_RALPH_MODE="$env_mode"
+    ralph_orchestrator_log "ralph mode: $env_mode (from environment)"
+  fi
 }
 
 orch_stage_run_runner() {
@@ -1485,6 +1552,8 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     exit 1
   fi
 
+  orch_resolve_ralph_mode
+
   # Drives {{ARTIFACT_NS}} in paths and per-plan log dirs unless overridden in the environment.
   json_ns="$(jq -r '.namespace // empty' "$ORCH_FILE" 2>/dev/null || echo "")"
   export RALPH_ARTIFACT_NS="${RALPH_ARTIFACT_NS:-${json_ns:-$ORCH_BASENAME}}"
@@ -1609,7 +1678,7 @@ if [[ "$ORCH_FILE" == *.json ]]; then
         plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
         plan_tag="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
         plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
-        wave_output_logs+=("$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log")
+        wave_output_logs+=("$(orch_plan_log_dir)/plan-runner-${plan_tag}-output.log")
         stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/parallel-wave-${wave_idx}-stage-${stage_id}.usage.json"
         mkdir -p "$(dirname "$stage_usage_file")"
         if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then

@@ -1,7 +1,7 @@
 {
   "name": "security",
   "_generated": "GENERATED from bundle/.ralph/agents/security.md by scripts/sync-runtime-assets.sh - edit the canonical file",
-  "model": "",
+  "model": "gpt-5.6-luna",
   "description": "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.",
   "rules": [
     "bundle/.codex/rules/no-emoji.md",

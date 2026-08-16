@@ -13,6 +13,7 @@ _orc_wizard_setup() {
   local workspace="$2"
   mkdir -p "$bundle_root/.ralph/bash-lib"
   cp "$REPO_ROOT/bundle/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/orchestration-wizard.sh"
+  cp "$REPO_ROOT/bundle/.ralph/pipeline-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
   cp -r "$REPO_ROOT/bundle/.ralph/bash-lib/." "$bundle_root/.ralph/bash-lib/"
   mkdir -p "$bundle_root/.ralph/python"
   cp "$REPO_ROOT/bundle/.ralph/python/wizard-prompts-agent-model.py" "$bundle_root/.ralph/python/"
@@ -22,7 +23,7 @@ _orc_wizard_setup() {
   if [[ -f "$REPO_ROOT/bundle/.ralph/plan-templates/pipeline-simple.plan.template.md" ]]; then
     cp "$REPO_ROOT/bundle/.ralph/plan-templates/pipeline-simple.plan.template.md" "$bundle_root/.ralph/plan-templates/pipeline-simple.plan.template.md"
   fi
-  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh"
+  chmod +x "$bundle_root/.ralph/orchestration-wizard.sh" "$bundle_root/.ralph/pipeline-wizard.sh"
 }
 
 # Build the minimal input for a single inline stage (no parallel stages, no loop rules).

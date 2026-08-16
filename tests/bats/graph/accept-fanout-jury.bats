@@ -119,7 +119,7 @@ compile_jury_graph_to() {
   graph_file="$tmpd/accept-fanout-jury.graph.json"
   plan_pipeline_graph_json "$JURY_PLAN" > "$graph_file"
 
-  run bash "$REPO_ROOT/scripts/validate-graph-schema.sh" "$graph_file"
+  run bash "$REPO_ROOT/bundle/.ralph/bash-lib/graph/validate-graph-schema.sh" "$graph_file"
   [ "$status" -eq 0 ]
 
   rm -rf "$tmpd"

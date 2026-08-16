@@ -94,9 +94,84 @@ ralph_cursor_pre_tool_wrapper_path() {
   ralph_cursor_pre_tool_emit_updated_command "$wrapper_command"
 }
 
+ralph_antigravity_killswitch_mode_off() {
+  case "${RALPH_MODE:-no}" in
+    no | off | false | 0) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ralph_antigravity_killswitch_record() {
+  local record_path="${RALPH_KILLSWITCH_HOOK_RECORD:-}"
+  local tool="${1:-}"
+  local decision="${2:-}"
+  local applied="${3:-false}"
+  [[ -n "$record_path" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -nc \
+    --arg runtime "antigravity" \
+    --arg tool "$tool" \
+    --arg decision "$decision" \
+    --argjson applied "$applied" \
+    --arg source "native-hook" \
+    '{runtime:$runtime,tool:$tool,decision:$decision,applied:$applied,source:$source}' \
+    >>"$record_path" 2>/dev/null || true
+}
+
+ralph_antigravity_killswitch_event_json() {
+  local tool="${1:-}"
+  local arguments="${2:-}"
+  jq -nc \
+    --argjson schemaVersion 1 \
+    --arg source "native-hook" \
+    --arg runtime "antigravity" \
+    --arg tool "$tool" \
+    --arg action "execute" \
+    --arg effect "write" \
+    --arg resource "" \
+    --arg arguments "$arguments" \
+    '{
+      schemaVersion: $schemaVersion,
+      source: $source,
+      runtime: $runtime,
+      tool: $tool,
+      action: $action,
+      effect: $effect,
+      resource: $resource,
+      arguments: $arguments
+    }'
+}
+
+ralph_antigravity_killswitch_from_input() {
+  local input_json="${1:-}"
+  local workspace="${2:-}"
+  local tool command event_json core
+
+  ralph_antigravity_killswitch_mode_off && {
+    ralph_antigravity_killswitch_record "$(jq -r '.tool_name // ""' <<<"$input_json")" "skip" false
+    return 0
+  }
+
+  tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
+  command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  [[ -n "$workspace" && -n "$tool" ]] || return 0
+
+  core="$(ralph_native_hook_resolve_bash_lib "$workspace" "killswitch/killswitch-core.sh" 2>/dev/null || true)"
+  [[ -n "$core" && -f "$core" ]] || return 0
+  # shellcheck source=/dev/null
+  source "$core"
+
+  event_json="$(ralph_antigravity_killswitch_event_json "$tool" "$command")" || return 0
+  killswitch_evaluate "$event_json" >/dev/null
+  ralph_antigravity_killswitch_record "$tool" "${KILLSWITCH_DECISION:-allow}" "$([ "${KILLSWITCH_DECISION:-allow}" = "fatal" ] && echo true || echo false)"
+  if [[ "${KILLSWITCH_DECISION:-allow}" == "fatal" ]]; then
+    killswitch_apply_decision fatal
+  fi
+  return 0
+}
+
 ralph_cursor_pre_tool_main() {
   command -v jq >/dev/null 2>&1 || ralph_native_hook_fail_open
-  command -v python3 >/dev/null 2>&1 || ralph_native_hook_fail_open
 
   RALPH_CURSOR_PRE_TOOL_INPUT="$(cat)" || ralph_native_hook_fail_open
 
@@ -104,11 +179,16 @@ ralph_cursor_pre_tool_main() {
   event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_CURSOR_PRE_TOOL_INPUT")"
   tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_CURSOR_PRE_TOOL_INPUT")"
   if [[ "$event" != "preToolUse" || "$tool_name" != "Shell" ]]; then
+    ralph_antigravity_killswitch_record "$tool_name" "nudge" false
     ralph_native_hook_fail_open
   fi
 
   command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_CURSOR_PRE_TOOL_INPUT")"
   [[ -n "$command" ]] || ralph_native_hook_fail_open
+
+  workspace="$(ralph_cursor_pre_tool_workspace)" || ralph_native_hook_fail_open
+  ralph_antigravity_killswitch_from_input "$RALPH_CURSOR_PRE_TOOL_INPUT" "$workspace"
+  command -v python3 >/dev/null 2>&1 || ralph_native_hook_fail_open
 
   if ralph_native_hook_truthy "${RALPH_NATIVE_SHELL_WRAPPER:-}"; then
     use_wrapper=1
@@ -116,7 +196,6 @@ ralph_cursor_pre_tool_main() {
     ralph_native_hook_fail_open
   fi
 
-  workspace="$(ralph_cursor_pre_tool_workspace)" || ralph_native_hook_fail_open
   [[ -n "$workspace" && -d "$workspace" ]] || ralph_native_hook_fail_open
   rewriter_lib="$(ralph_native_hook_resolve_bash_lib "$workspace" "command-rewriter.sh" 2>/dev/null || true)"
   [[ -n "$rewriter_lib" && -f "$rewriter_lib" ]] || ralph_native_hook_fail_open

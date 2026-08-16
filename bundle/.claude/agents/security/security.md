@@ -2,7 +2,7 @@
 name: security
 description: >-
   Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly.
-model: claude-haiku-4-5
+model: sonnet
 tools:
   - Read
   - Edit

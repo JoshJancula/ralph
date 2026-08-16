@@ -35,6 +35,8 @@ RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID=""
 RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
 RUNTIME_OVERLAY_GENERATED_FILES=()
 RUNTIME_OVERLAY_MUTATED_FILES=()
+RUNTIME_OVERLAY_MUTATED_BACKUPS=()
+RUNTIME_OVERLAY_MUTATED_EXISTED=()
 RUNTIME_OVERLAY_WARNINGS=()
 RUNTIME_OVERLAY_CAPABILITIES=()
 RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
@@ -595,12 +597,15 @@ runtime_overlay_init_state() {
   RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
   RUNTIME_OVERLAY_GENERATED_FILES=()
   RUNTIME_OVERLAY_MUTATED_FILES=()
+  RUNTIME_OVERLAY_MUTATED_BACKUPS=()
+  RUNTIME_OVERLAY_MUTATED_EXISTED=()
   RUNTIME_OVERLAY_WARNINGS=()
   RUNTIME_OVERLAY_CAPABILITIES=()
   RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
   RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE=()
   RUNTIME_OVERLAY_EXTERNAL_TEMP_FILES=()
   RUNTIME_OVERLAY_CLEANUP_CMDS=()
+  RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED=0
   if [[ -n "${RALPH_AGENT_TOOL_ACCESS:-}" ]]; then
     RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE="$RALPH_AGENT_TOOL_ACCESS"
   fi
@@ -824,6 +829,79 @@ runtime_overlay_run_cleanup() {
   done
 }
 
+# runtime_overlay_restore_file <target> <backup> <existed>
+# Restore one journaled original. Empty/missing backup plus existed=0 removes a
+# file created by the overlay. Safe to repeat.
+runtime_overlay_restore_file() {
+  local target="$1"
+  local backup="$2"
+  local existed="${3:-0}"
+  if [[ -z "$target" ]]; then
+    return 0
+  fi
+  if [[ "$existed" == "1" && -n "$backup" && -f "$backup" ]]; then
+    mkdir -p "$(dirname "$target")"
+    cp "$backup" "$target" || return 1
+    return 0
+  fi
+  rm -f "$target"
+  return 0
+}
+
+# runtime_overlay_restore_recorded_files
+# Restore every original captured by runtime_overlay_record_original_file in
+# this process. Does not delete generated files. Idempotent.
+runtime_overlay_restore_recorded_files() {
+  local idx abs backup existed
+  if [[ ${#RUNTIME_OVERLAY_MUTATED_FILES[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for ((idx=${#RUNTIME_OVERLAY_MUTATED_FILES[@]}-1; idx>=0; idx--)); do
+    abs="${RUNTIME_OVERLAY_MUTATED_FILES[idx]}"
+    backup="${RUNTIME_OVERLAY_MUTATED_BACKUPS[idx]:-}"
+    existed="${RUNTIME_OVERLAY_MUTATED_EXISTED[idx]:-0}"
+    if ! runtime_overlay_restore_file "$abs" "$backup" "$existed"; then
+      runtime_overlay_add_warning "Failed to restore overlay original: $abs"
+    fi
+  done
+}
+
+# runtime_overlay_restore_on_signal [INT|TERM|HUP]
+# Restore recorded originals, then re-raise so callers still see the signal.
+runtime_overlay_restore_on_signal() {
+  local sig="${1:-TERM}"
+  runtime_overlay_restore_recorded_files || true
+  if declare -F runtime_overlay_journal_mark_cleaned >/dev/null 2>&1; then
+    runtime_overlay_journal_mark_cleaned || true
+  fi
+  trap - INT TERM HUP
+  kill -s "$sig" "$$" 2>/dev/null || exit 143
+}
+
+# runtime_overlay_install_restore_traps
+# Chain INT/TERM/HUP so originals are restored on signal. Idempotent.
+runtime_overlay_install_restore_traps() {
+  local sig existing
+  if [[ "${RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED:-0}" == "1" ]]; then
+    return 0
+  fi
+  RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED=1
+  for sig in INT TERM HUP; do
+    existing="$(trap -p "$sig" 2>/dev/null || true)"
+    if [[ -n "$existing" && "$existing" != "trap -- '' $sig" && "$existing" != "trap -- \"\" $sig" ]]; then
+      existing="${existing#trap -- \'}"
+      existing="${existing#trap -- \"}"
+      existing="${existing%\' $sig}"
+      existing="${existing%\" $sig}"
+      # shellcheck disable=SC2064
+      trap "runtime_overlay_restore_on_signal $sig; $existing" "$sig"
+    else
+      # shellcheck disable=SC2064
+      trap "runtime_overlay_restore_on_signal $sig" "$sig"
+    fi
+  done
+}
+
 runtime_overlay_record_generated_file() {
   local target="$1"
   if [[ -z "$target" ]]; then
@@ -863,20 +941,24 @@ PY
   if [[ "$mutation_root" != "$(_runtime_overlay_project_root)" ]]; then
     rel="agent-workspace/$rel"
   fi
-  local backup="$RUNTIME_OVERLAY_ORIGINALS_DIR/$rel"
-  mkdir -p "$(dirname "$backup")"
-  runtime_overlay_journal_add_mutated_file "$abs" "$backup"
+  local recorded_backup="$RUNTIME_OVERLAY_ORIGINALS_DIR/$rel"
+  mkdir -p "$(dirname "$recorded_backup")"
+  runtime_overlay_journal_add_mutated_file "$abs" "$recorded_backup"
+  local existed=0
   if [[ -f "$abs" ]]; then
-    cp "$abs" "$backup"
+    existed=1
+    cp "$abs" "$recorded_backup"
   else
     if [[ "$skip_missing_warning" != "1" ]]; then
       runtime_overlay_add_warning "Original file missing when recording: $abs"
     fi
-    printf '' > "$backup"
+    printf '' > "$recorded_backup"
   fi
+  RUNTIME_OVERLAY_MUTATED_BACKUPS+=("$recorded_backup")
+  RUNTIME_OVERLAY_MUTATED_EXISTED+=("$existed")
   runtime_overlay_log_decision "mutated_file" "$abs"
   if [[ -n "$backup_var" ]]; then
-    printf -v "$backup_var" '%s' "$backup"
+    printf -v "$backup_var" '%s' "$recorded_backup"
   fi
 }
 

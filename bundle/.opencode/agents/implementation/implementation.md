@@ -2,7 +2,7 @@
 name: implementation
 description: >-
   Implements or changes code per architecture and tasks. Produces implementation-handoff.md summarizing what changed, how to verify, and open risks. Uses a capped todo granularity of 8-30 items for a typical feature and avoids over-granular decomposition.
-model: ollama-cloud/kimi-k2.5
+model: ollama-cloud/kimi-k2.7-code
 tools:
   read: true
   edit: true

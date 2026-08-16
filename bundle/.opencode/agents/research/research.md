@@ -2,7 +2,7 @@
 name: research
 description: >-
   Explores relevant docs and code paths, then summarizes findings for downstream agents.
-model: ollama-cloud/kimi-k2.5
+model: ollama-cloud/glm-5.2
 tools:
   read: true
   grep: true

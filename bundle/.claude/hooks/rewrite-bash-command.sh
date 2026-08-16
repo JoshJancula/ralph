@@ -7,19 +7,92 @@
 #   preserve other tool_input keys when present.
 # - Exit 0 with no stdout leaves the command unchanged.
 #
-# Gate: RALPH_BASH_REWRITE=1 (default off). Fail-open: never blocks the agent.
+# Gate: RALPH_BASH_REWRITE=1 (default off). Rewrite still fails open.
+# Killswitch evaluation runs first when Ralph mode is on; only fatal applies.
 # Telemetry: optional RALPH_BASH_REWRITE_LOG JSONL (command hashes, reason, rewriteApplied).
 # rewriteApplied is true when updatedInput is emitted; there is no suggest-only hook path.
 
 set -uo pipefail
 
-ralph_bash_rewrite_main() {
-  ralph_native_hook_truthy "${RALPH_BASH_REWRITE:-}" || ralph_native_hook_fail_open
+ralph_claude_killswitch_mode_off() {
+  case "${RALPH_MODE:-no}" in
+    no | off | false | 0) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
-  if ! command -v jq >/dev/null 2>&1; then
-    ralph_native_hook_fail_open
+ralph_claude_killswitch_record() {
+  local record_path="${RALPH_KILLSWITCH_HOOK_RECORD:-}"
+  local tool="${1:-}"
+  local decision="${2:-}"
+  local applied="${3:-false}"
+  [[ -n "$record_path" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -nc \
+    --arg runtime "claude" \
+    --arg tool "$tool" \
+    --arg decision "$decision" \
+    --argjson applied "$applied" \
+    --arg source "native-hook" \
+    '{runtime:$runtime,tool:$tool,decision:$decision,applied:$applied,source:$source}' \
+    >>"$record_path" 2>/dev/null || true
+}
+
+ralph_claude_killswitch_event_json() {
+  local tool="${1:-}"
+  local arguments="${2:-}"
+  local resource="${3:-}"
+  jq -nc \
+    --argjson schemaVersion 1 \
+    --arg source "native-hook" \
+    --arg runtime "claude" \
+    --arg tool "$tool" \
+    --arg action "execute" \
+    --arg effect "write" \
+    --arg resource "$resource" \
+    --arg arguments "$arguments" \
+    '{
+      schemaVersion: $schemaVersion,
+      source: $source,
+      runtime: $runtime,
+      tool: $tool,
+      action: $action,
+      effect: $effect,
+      resource: $resource,
+      arguments: $arguments
+    }'
+}
+
+ralph_claude_killswitch_from_input() {
+  local input_json="${1:-}"
+  local workspace="${2:-}"
+  local tool command event_json core
+
+  ralph_claude_killswitch_mode_off && {
+    ralph_claude_killswitch_record "$(jq -r '.tool_name // ""' <<<"$input_json")" "skip" false
+    return 0
+  }
+
+  tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
+  command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  [[ -n "$workspace" && -n "$tool" ]] || return 0
+
+  core="$(ralph_native_hook_resolve_bash_lib "$workspace" "killswitch/killswitch-core.sh" 2>/dev/null || true)"
+  [[ -n "$core" && -f "$core" ]] || return 0
+  # shellcheck source=/dev/null
+  source "$core"
+
+  event_json="$(ralph_claude_killswitch_event_json "$tool" "$command" "")" || return 0
+  killswitch_evaluate "$event_json" >/dev/null
+  ralph_claude_killswitch_record "$tool" "${KILLSWITCH_DECISION:-allow}" "$([ "${KILLSWITCH_DECISION:-allow}" = "fatal" ] && echo true || echo false)"
+  if [[ "${KILLSWITCH_DECISION:-allow}" == "fatal" ]]; then
+    killswitch_apply_decision fatal
   fi
-  if ! command -v python3 >/dev/null 2>&1; then
+  return 0
+}
+
+ralph_bash_rewrite_main() {
+  if ! command -v jq >/dev/null 2>&1; then
     ralph_native_hook_fail_open
   fi
 
@@ -29,6 +102,16 @@ ralph_bash_rewrite_main() {
   event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_BASH_REWRITE_INPUT")"
   tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_BASH_REWRITE_INPUT")"
   if [[ "$event" != "PreToolUse" || "$tool_name" != "Bash" ]]; then
+    ralph_claude_killswitch_record "$tool_name" "nudge" false
+    ralph_native_hook_fail_open
+  fi
+
+  local project_dir
+  project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_REWRITE_INPUT)" || true
+  ralph_claude_killswitch_from_input "$RALPH_BASH_REWRITE_INPUT" "${WORKSPACE:-$project_dir}"
+
+  ralph_native_hook_truthy "${RALPH_BASH_REWRITE:-}" || ralph_native_hook_fail_open
+  if ! command -v python3 >/dev/null 2>&1; then
     ralph_native_hook_fail_open
   fi
 

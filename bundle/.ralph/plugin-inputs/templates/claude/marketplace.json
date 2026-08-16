@@ -1,0 +1,15 @@
+{
+  "name": "ralph-plugins",
+  "description": "Repository-hosted Ralph planning, orchestration, diagnostics, and safe execution workflows.",
+  "owner": {
+    "name": "Ralph contributors"
+  },
+  "plugins": [
+    {
+      "name": "{{PLUGIN_ID}}",
+      "source": ".",
+      "description": "Ralph workflows, agents, skills, hooks, and MCP integration for Claude Code.",
+      "version": "{{PLUGIN_VERSION}}"
+    }
+  ]
+}

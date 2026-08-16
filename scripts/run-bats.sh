@@ -54,6 +54,63 @@ default_parallel_jobs() {
   fi
 }
 
+# Count the .bats files the run will execute, expanding directory arguments.
+# Flags and their values are skipped; only path-shaped arguments are counted.
+bats_target_file_count() {
+  local arg count=0
+  for arg in "$@"; do
+    [[ "$arg" == -* ]] && continue
+    if [[ -d "$arg" ]]; then
+      count=$((count + $(find "$arg" -name '*.bats' -type f | wc -l)))
+    elif [[ "$arg" == *.bats ]]; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
+}
+
+# Bats does not recursively expand directory operands in every execution mode.
+# In particular, a directory passed with file-parallel execution can produce a
+# successful `1..0` run. Expand directories ourselves so the files counted by
+# bats_target_file_count are exactly the files handed to Bats.
+expand_bats_directory_args() {
+  local arg file
+  local -a expanded=()
+  for arg in "${BATS_ARGS[@]}"; do
+    if [[ -d "$arg" ]]; then
+      while IFS= read -r file; do
+        [[ -n "$file" ]] && expanded+=("$file")
+      done < <(find "$arg" -name '*.bats' -type f | LC_ALL=C sort)
+    else
+      expanded+=("$arg")
+    fi
+  done
+  BATS_ARGS=("${expanded[@]}")
+}
+
+# bats -j N does not cap total concurrency: bats-exec-suite runs N files under
+# GNU parallel and passes -j N down to each bats-exec-file, which runs N tests
+# of its own. With N files in flight that is N*N concurrent tests -- `-j 8`
+# over 13 files peaked at ~64 tests on a 10-core box, driving load past 100,
+# stretching individual graph tests to 2-5 minutes, and producing spurious
+# timing failures in graph-resilience/-operator-schedule/-recovery that all
+# pass under a bounded run. Parallelizing across files only keeps total
+# concurrency at N. A single-file run still parallelizes within the file,
+# which is the only way to use -j there.
+bats_parallel_flags() {
+  local jobs="$1"
+  shift
+  [[ "$jobs" -gt 1 ]] || return 0
+  [[ "$(bats_target_file_count "$@")" -gt 1 ]] || return 0
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --no-parallelize-within-files | --no-parallelize-across-files) return 0 ;;
+    esac
+  done
+  echo "--no-parallelize-within-files"
+}
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/run-bats.sh [options] [--] [bats arguments...]
@@ -142,6 +199,12 @@ if [[ "$USER_PATHS" -eq 0 ]]; then
   populate_suite_paths
 fi
 
+expand_bats_directory_args
+if [[ ${#BATS_ARGS[@]} -eq 0 ]]; then
+  echo "run-bats: no test files found for the requested paths" >&2
+  exit 1
+fi
+
 if [[ ! -x "$BATS_BIN" ]]; then
   echo "run-bats: missing executable $BATS_BIN" >&2
   exit 127
@@ -197,7 +260,12 @@ EOF
     fi
     exec "$BATS_BIN" "${BATS_ARGS[@]}"
   fi
-  exec "$BATS_BIN" -j "$JOBS" "${BATS_ARGS[@]}"
+  PARALLEL_FLAGS=()
+  while IFS= read -r flag; do
+    [[ -n "$flag" ]] || continue
+    PARALLEL_FLAGS+=("$flag")
+  done < <(bats_parallel_flags "$JOBS" "${BATS_ARGS[@]}")
+  exec "$BATS_BIN" -j "$JOBS" "${PARALLEL_FLAGS[@]+"${PARALLEL_FLAGS[@]}"}" "${BATS_ARGS[@]}"
 fi
 
 exec "$BATS_BIN" "${BATS_ARGS[@]}"

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "case": "graph-contract-write-scope-mismatch",
+  "description": "The graph contract declares one writeScope for a node but the node actually writes a path outside it; the mismatch must be reported by identifier, not silently accepted.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "nodeId": "node-fixture-writescope",
+    "declaredWriteScopes": ["src/allowed/**"],
+    "actualWrites": ["src/allowed/ok.txt", "config/unscoped.json"],
+    "mismatch": ["config/unscoped.json"]
+  }
+}

@@ -19,7 +19,7 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-state.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-gate.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-schedule.sh"
 
-VALIDATE_SCHEMA="$REPO_ROOT/scripts/validate-graph-schema.sh"
+VALIDATE_SCHEMA="$REPO_ROOT/bundle/.ralph/bash-lib/graph/validate-graph-schema.sh"
 
 # ---------------------------------------------------------------------------
 # Helpers

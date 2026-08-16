@@ -399,7 +399,7 @@ start_ledgered_run() {
   # Wait for `left` to start (it sleeps 30s) and `right` to finish, then kill
   # the scheduler mid-flight. right succeeds quickly; left is still in-flight.
   waited=0
-  while { [[ ! -f "$marker_dir/left.started" ]] || [[ ! -f "$marker_dir/right.finished" ]]; } && [[ "$waited" -lt 120 ]]; do
+  while { [[ ! -f "$marker_dir/left.started" ]] || [[ ! -f "$marker_dir/right.finished" ]]; } && [[ "$waited" -lt 480 ]]; do
     sleep 0.25
     waited=$((waited + 1))
   done
@@ -465,7 +465,7 @@ start_ledgered_run() {
   GRAPH_REAP_POLL_INTERVAL=0.1 graph_schedule_run "$graph_file" "$run_id" "$DISPATCH_WORKSPACE" "$run_dir" &
   sched_pid=$!
   waited=0
-  while [[ ! -f "$marker_dir/left.started" && "$waited" -lt 80 ]]; do
+  while [[ ! -f "$marker_dir/left.started" && "$waited" -lt 480 ]]; do
     sleep 0.25
     waited=$((waited + 1))
   done

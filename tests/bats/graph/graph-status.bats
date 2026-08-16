@@ -10,6 +10,7 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-status.sh
 DIAMOND_PLAN="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-diamond.plan.md"
 CONSENSUS_GRAPH_JSON="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus.graph.json"
 GRAPH_RUN_SH="$REPO_ROOT/bundle/.ralph/graph-run.sh"
+PRODUCTION_FIXTURE_DIR="$BATS_TEST_DIRNAME/../../fixtures/graph-production-failure"
 
 # ---------------------------------------------------------------------------
 # Helper: build a completed ledger for a diamond graph
@@ -89,11 +90,104 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# Regression: production-failure fixture cases
+# ---------------------------------------------------------------------------
+
+@test "status does not abort when concurrency-reduction metadata is empty" {
+  # Based on the sanitized empty-concurrency-reduction-metadata fixture: an
+  # admission log exists but contains no event that maps to a reduction
+  # reason. A helper with nothing optional to print must still return
+  # success so status does not abort under errexit.
+  jq -e '.fixture.concurrencyReductions == {}' \
+    "$PRODUCTION_FIXTURE_DIR/empty-concurrency-reduction-metadata.json" >/dev/null
+
+  local run_dir
+  run_dir="$(dirname "$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")")"
+  printf '%s\n' '{"event":"admission","workKind":"agent","decision":"admitted","subagents":"off","sameRuntimeParallelSafe":true,"reason":"admitted"}' \
+    >"$run_dir/observability.jsonl"
+
+  run _graph_status_concurrency_reductions "$run_dir"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+}
+
+@test "status counts one unique attempt when a running transition and its terminal transition both append to attempts[]" {
+  # Based on the sanitized attempt-running-then-terminal-transition fixture:
+  # a v1 ledger appends a separate attempts[] record for the running
+  # transition and the terminal transition of the same attemptId. Status
+  # must report one attempt, not two transition records.
+  jq -e '.fixture.events | length == 2' \
+    "$PRODUCTION_FIXTURE_DIR/attempt-running-then-terminal-transition.json" >/dev/null
+
+  # Use a fresh run so the node's attempts[] array starts empty (the shared
+  # setup() run already seeded one succeeded attempt per node).
+  local transition_run="run-transition-001"
+  local plan_copy="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
+  graph_state_init_run \
+    "$WORKSPACE" "$NAMESPACE" "$transition_run" \
+    "$plan_copy" "$GRAPH_JSON" 2 >/dev/null
+
+  local nid="$(jq -r '.nodes[0].id' "$GRAPH_JSON")"
+  local attempt_id="${nid}__${transition_run}__1"
+  # Running transition: appends attempts[0] with no outcome yet.
+  graph_state_write_node \
+    "$WORKSPACE" "$NAMESPACE" "$transition_run" "$nid" \
+    "running" \
+    "$attempt_id" "" "" \
+    "2026-01-01T00:00:00Z" "" "cursor" "off" "" >/dev/null
+  # Terminal transition: appends a second attempts[] record for the same
+  # attemptId rather than updating the first (the known v1 duplication bug).
+  graph_state_write_node \
+    "$WORKSPACE" "$NAMESPACE" "$transition_run" "$nid" \
+    "succeeded" \
+    "$attempt_id" "succeeded" "0" \
+    "2026-01-01T00:00:00Z" "2026-01-01T00:01:00Z" "cursor" "off" "" >/dev/null
+
+  local node_file
+  node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$transition_run" "$nid")"
+  # Confirm the ledger really does hold two raw records for one attemptId,
+  # so this test exercises the display-layer fix, not a ledger-layer one.
+  [ "$(jq '.attempts | length' "$node_file")" -eq 2 ]
+  [ "$(jq '[.attempts[].attemptId] | unique | length' "$node_file")" -eq 1 ]
+
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$transition_run"
+  [ "$status" -eq 0 ]
+  local row
+  row="$(printf '%s\n' "$output" | grep "^${nid} ")"
+  [ -n "$row" ]
+  # ATTEMPTS is the fifth whitespace-separated column of the row.
+  [ "$(printf '%s\n' "$row" | awk '{print $5}')" = "1" ]
+}
+
+@test "status renders every graph node exactly once in the default table" {
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+  local node_ids
+  node_ids="$(jq -r '.nodes[].id' "$GRAPH_JSON")"
+  while IFS= read -r nid || [[ -n "$nid" ]]; do
+    [[ -z "$nid" ]] && continue
+    local occurrences
+    occurrences="$(printf '%s\n' "$output" | grep -c "^${nid} ")"
+    [ "$occurrences" -eq 1 ]
+  done <<< "$node_ids"
+}
+
+@test "status displays unavailable usage as n/a rather than an empty aggregate" {
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'usage parent=n/a brokered-children=n/a'
+  ! printf '%s\n' "$output" | grep -q 'usage parent={}'
+}
+
+# ---------------------------------------------------------------------------
 # Mermaid class definitions
 # ---------------------------------------------------------------------------
 
 @test "status mermaid output contains classDef for each state" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --mermaid
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'classDef state_succeeded'
   printf '%s\n' "$output" | grep -q 'classDef state_failed'
@@ -106,16 +200,23 @@ teardown() {
 }
 
 @test "status mermaid applies state class to each node" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --mermaid
   [ "$status" -eq 0 ]
   # At least one node is annotated with the state_succeeded class.
   printf '%s\n' "$output" | grep -q ':::state_succeeded'
 }
 
 @test "status mermaid output starts with flowchart TD inside the mermaid block" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --mermaid
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'flowchart TD'
+}
+
+@test "status default output omits the mermaid flowchart" {
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q 'flowchart TD'
+  ! printf '%s\n' "$output" | grep -q 'classDef state_succeeded'
 }
 
 # ---------------------------------------------------------------------------
@@ -187,10 +288,21 @@ teardown() {
   mkdir -p "${delegation_dir%observed}cancelled"
   printf '%s\n' '{"delegationId":"cancelled","runtime":"claude"}' >"${delegation_dir%observed}cancelled/request.json"
   printf '%s\n' '{"status":"cancelled"}' >"${delegation_dir%observed}cancelled/status.json"
-  printf '{"event":"native-subagent-finished","nodeId":"%s","details":{"role":"research"}}\n' "$node" >"$(dirname "$node_file")/../observability.jsonl"
+  printf '{"schemaVersion":1,"sequence":99,"timestamp":"2026-01-01T00:00:00Z","runId":"%s","event":"native-subagent-finished","nodeId":"%s","attemptId":null,"details":{"role":"research"}}\n' "$RUN_ID" "$node" >"$(dirname "$node_file")/../events.jsonl"
 
   before="$(find "$(graph_state_runs_root "$WORKSPACE")" -type f -exec shasum {} \; | sort)"
+
+  # The run-summary usage aggregate is part of the default output (not
+  # gated behind --details).
   run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'brokered-children={"inputTokens":4}'
+  # Verbose per-node/per-attempt metadata is not part of the default output.
+  ! printf '%s\n' "$output" | grep -q 'mode=snapshot'
+  ! printf '%s\n' "$output" | grep -q 'brokered child=observed'
+  ! printf '%s\n' "$output" | grep -q 'native-subagent event=native-subagent-finished'
+
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
   after="$(find "$(graph_state_runs_root "$WORKSPACE")" -type f -exec shasum {} \; | sort)"
   [ "$before" = "$after" ]
@@ -264,7 +376,7 @@ teardown() {
 }
 RESULT
 
-  run graph_status_run "$cons_ws" "$cons_ns" "$cons_run"
+  run graph_status_run "$cons_ws" "$cons_ns" "$cons_run" --details
   [ "$status" -eq 0 ]
   # The dissenting voter (review:beta) must be named.
   printf '%s\n' "$output" | grep -q 'review:beta'
@@ -313,7 +425,7 @@ RESULT
 }
 RESULT
 
-  run graph_status_run "$cons_ws" "$cons_ns" "$cons_run"
+  run graph_status_run "$cons_ws" "$cons_ns" "$cons_run" --details
   [ "$status" -eq 0 ]
   # The dissenting provider (codex) must appear.
   printf '%s\n' "$output" | grep -q 'codex'
@@ -381,6 +493,17 @@ RESULT
     --workspace "$WORKSPACE"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'succeeded'
+  ! printf '%s\n' "$output" | grep -q 'flowchart TD'
+}
+
+@test "graph-run.sh status --mermaid includes the flowchart" {
+  run bash "$GRAPH_RUN_SH" status \
+    --namespace "$NAMESPACE" \
+    --run "$RUN_ID" \
+    --workspace "$WORKSPACE" \
+    --mermaid
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'flowchart TD'
 }
 
 @test "graph-run.sh status --run latest resolves and exits 0" {

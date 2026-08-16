@@ -2,7 +2,7 @@
 name: code-review
 description: >-
   Reviews changed code for correctness, security, and convention compliance before downstream delivery.
-model: claude-haiku-4-5
+model: sonnet
 tools:
   - Read
   - Edit

@@ -2,7 +2,7 @@
 name: code-review
 description: >-
   Reviews changed code for correctness, security, and convention compliance before downstream delivery.
-model: ollama-cloud/kimi-k2.5
+model: ollama-cloud/kimi-k2.7-code
 tools:
   read: true
   edit: true

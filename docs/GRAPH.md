@@ -4,6 +4,20 @@ Graph mode runs a Ralph plan as a directed acyclic graph (DAG). Use it when part
 
 Graph mode is opt-in. A plan enters it only when its frontmatter contains `execution: graph` or when you use `ralph graph`. Existing checklist plans, flat YAML plans, orchestration plans, and `.orch.json` files keep their existing behavior.
 
+## Graph vs orchestration
+
+A graph node genuinely *is* a pipeline stage plus a small number of extra fields — the two modes are close enough to confuse.
+
+**Orchestration** (`ralph create orc`): stages run in order, or in parallel waves you declare. This is the simpler default — pick it unless you specifically need one of the graph capabilities below.
+
+**Graph** (`ralph create graph`): stages form a dependency graph (`dependsOn`) instead of a fixed order, and adds:
+
+- cross-provider consensus (multiple runtimes vote on one result)
+- checkpoint nodes (pause for human ack without blocking unrelated branches)
+- isolated workspace mutation (snapshot/worktree) for safer parallel writes
+
+Not sure which you want? Run `ralph create wizard` — it asks this question interactively before handing off to the matching wizard.
+
 ## Choose the smallest execution model
 
 | Need | Use |
@@ -25,13 +39,21 @@ A graph is the contract between nodes. An `agent` node with a `planFile` still r
 
 ## Create a graph plan
 
-Create a general graph template:
+Interactive (recommended if you're not sure of the exact shape yet):
+
+```bash
+ralph create graph
+```
+
+Authors `agent`, `consensus`, `checkpoint`, and `join` nodes step by step: node ids, runtime/agent/model, `dependsOn`, consensus voters and policy, workspace mode. `router`, `gate`, and `integrate` node types aren't wizard-authorable yet — hand-edit the generated plan to add them.
+
+Non-interactive/scriptable: a general graph template,
 
 ```bash
 ralph create plan --format graph --name my-graph
 ```
 
-The built-in presets cover the two most common shapes:
+or the built-in presets, which cover the two most common shapes:
 
 ```bash
 # Three independent providers review the same result.
@@ -180,6 +202,40 @@ ralph graph run path/to/graph.plan.md \
   --max-parallel 3
 ```
 
+### Reading the run output
+
+A run opens with a header and a resolved agent table, so you can confirm which runtime, agent, and model each node will use before any of them start:
+
+```
+------------------------------------------------------------------------
+Ralph graph run release-review
+------------------------------------------------------------------------
+  run id         run-20260811T135841Z-0-vk9YK7
+  nodes          26
+  max parallel   5 (per runtime: 1)
+  on failure     drain
+
+Node agents
+  NODE                       RUNTIME   AGENT          MODEL
+  define-canonical-inputs    cursor    architect      gpt-5.6-sol-high
+  implement-cli-bootstrap    opencode  implementation ollama-cloud/kimi-k2.7-code
+  start                      scheduler -              no model invoked
+```
+
+Nodes marked `scheduler` are gate, integration, and checkpoint nodes; they never invoke a model. A model shown as `(unresolved)` means the scheduler could not read one up front and the agent source or runtime default will apply at spawn time; it is a note, not an error.
+
+During execution each node prints a lifecycle line, and a failure carries the underlying cause plus the log that produced it:
+
+```
+-> implement-cli-bootstrap opencode / implementation
+ok start gate profile=noop
+XX implement-cli-bootstrap exit=1 reason=outcome=failed policy=drain
+   cause: kimi-k2.5 was retired at 2026-07-31 00:00:00 -0700 PDT
+   log: .ralph-workspace/graph-runs/<ns>/<run-id>/logs/nodes/<safe-node-id>/<attempt-id>/agent.log
+```
+
+The run closes with a tally, the first failing node, and every node that did not succeed. Color is dropped when stderr is not a terminal, and when `NO_COLOR` or `RALPH_GRAPH_NO_COLOR=1` is set.
+
 Inspect a live or completed run without modifying it:
 
 ```bash
@@ -187,6 +243,42 @@ ralph graph status --namespace release-review --run latest
 ```
 
 `status` prints a node table and a Mermaid graph with state classes. It also surfaces attempt metadata such as workspace mode, scopes, integration inputs, gate outcomes, consensus provenance, and publish readiness when present.
+
+By default `status` stays concise: the run summary plus one row per node (node, type, runtime, state, unique attempt count, duration). Add `--details` for verbose per-node and per-attempt metadata, and `--mermaid` for the flowchart. `--details` also reports attempts, elapsed active and wait time, usage or `n/a` when usage is unreliable, retry classification, and repeated-tool-call hints.
+
+`status` never recovers a run. Reading a stale run tells you it is stale; it does not change it.
+
+### Reading one attempt's logs
+
+Every attempt owns three streams under the run directory. Print one without opening the files yourself:
+
+```bash
+ralph graph logs --namespace release-review --run latest \
+  --node implement-cli-bootstrap \
+  --stream agent --tail 200
+```
+
+- `--stream runner|agent|usage` selects the stream; the default is `agent`.
+- `--attempt <id>` selects one attempt; the default is the latest.
+- `--tail N` bounds the output, and `--follow` waits for new bytes, survives rotation and truncation, and exits when the attempt reaches a terminal state or on SIGINT/SIGTERM.
+
+Paths come from the node ledger's `logPaths` and are resolved only when they stay inside the run directory. A missing v2 file falls back to the historical v1 namespace path. A missing log for a still-active attempt is reported explicitly but is not an error.
+
+### Watching a run live
+
+```bash
+ralph graph attach --namespace release-review --run latest
+```
+
+`attach` is a read-only live view of run status and the event journal. Detaching with SIGINT or SIGTERM never cancels the supervisor and never mutates the ledger, and `attach` never recovers a run.
+
+### Interactive viewer
+
+```bash
+ralph graph tui --namespace release-review --run latest
+```
+
+The TUI adds node navigation, a log pane over the same contained log-selection contract as `ralph graph logs`, and operator decisions bound to keys. It falls back to concise streaming status when `python3`, `curses`, or a suitable TTY is unavailable, and it restores terminal settings on normal exit, exception, SIGINT, and SIGTERM. `--no-tui` forces the streaming path. `ralph graph run --tui` launches the viewer once the run is created; `--no-tui` keeps the headless scheduler in the foreground.
 
 ## Durable state and resume
 
@@ -202,6 +294,12 @@ Each run has a durable ledger at:
 ```
 
 `graph.json` is the frozen topology for that run. Node JSON files record state and attempts. Graph progress does not use checkboxes in the control plan; checkboxes remain local to a node's ordinary Ralph loop.
+
+### Ledger schema versions
+
+A run's ledger carries a `schemaVersion`. Version 2 records one `attempts[]` object per attempt id, updated in place as the attempt starts, heartbeats, reports usage, and terminalizes. Version 1 appended a separate record per state transition, so one attempt could appear twice.
+
+Version 1 runs stay readable forever. Readers normalize a v1 file to the v2 shape in memory and never rewrite it, so `status`, `logs`, `attach`, `recover`, and `successor` all work against a run created before v2 existed. A v1 run also keeps its original write path: the scheduler reads the run's `schemaVersion` once and keeps writing v1 bytes for a v1 run. Ralph refuses a ledger whose `schemaVersion` is missing, non-numeric, or newer than it knows rather than guessing at the shape.
 
 Resume the newest run with:
 
@@ -242,6 +340,107 @@ ralph graph resume path/to/graph.plan.md \
 ```
 
 Resuming before the acknowledgement exists is a clean no-op; the node remains `awaiting-ack`.
+
+## Operator permissions and approvals
+
+When a runtime stops a node because it needs permission it did not have, the node does not fail. It enters `awaiting-operator`, records a request under the run directory, releases its runtime slot, and lets every independent branch keep scheduling. A permission pause does not consume a retry grant and does not charge the node's active-time budget.
+
+List what is waiting, then answer it:
+
+```bash
+ralph graph actions list --namespace release-review --run latest
+ralph graph actions respond <request-id> --decision allow-once
+```
+
+`actions list` prints the request id, node, runtime, action, resource, effect, and available choices. Add `--json` for the request objects.
+
+### Decision lifetimes
+
+| Decision | Scope | Stored |
+|----------|-------|--------|
+| `allow-once` | This request id only. The next identical request asks again. | The decision record for that request |
+| `allow-run` | This exact normalized key, for the rest of this run. | `<run-dir>/operator/policy/<rule-id>.json` |
+| `allow-always` | This exact normalized key, for this project, until revoked. | `<state-root>/operator-policy/approvals.json` |
+| `deny` | This exact normalized key, for the rest of this run. | `<run-dir>/operator/policy/<rule-id>.json` |
+
+`allow-always` is deliberately harder to grant than the others: it requires `--confirm-rule` with the exact normalized rule id, which writes a second confirmation record tied to the original request. Without that confirmation the rule never becomes active.
+
+Requests resolve in a fixed order, and a broader allow can never weaken a narrower deny:
+
+1. an explicit runtime or managed denial on the request
+2. a Ralph `deny` rule for the exact normalized key
+3. an `allow-once` decision for this request id
+4. an exact `allow-run` rule for the same key
+5. an exact active project `allow-always` rule for the same key
+6. otherwise, ask
+
+Matching is exact after normalization. Review and revoke project rules with:
+
+```bash
+ralph graph actions approvals list
+ralph graph actions approvals revoke --runtime cursor --action Bash \
+  --resource src/app.ts --effect write
+```
+
+Revoking the same rule twice is idempotent. These commands only ever touch Ralph's project-scoped approvals; they never edit runtime-global configuration.
+
+## Retry and budgets
+
+A failed attempt is classified before Ralph decides what to do with it. Only two classes are retried automatically:
+
+| Class | Meaning | Retried |
+|-------|---------|---------|
+| `transient-runtime` | Connection reset, timeout, rate limit, provider hiccup | Up to `resilience.transientRetries` |
+| `agent-correctable` | Verification failed, required artifact missing | Up to `resilience.correctiveRetries` |
+| `operator-permission` | Runtime refused a permission-gated action | No; pauses for an operator decision |
+| `plan-contract` | Wrote outside the declared scope, undeclared path | No; node enters `needs-plan-repair` |
+| `terminal-configuration` | Bad credentials, unknown model, invalid schema | No |
+| `cancelled` | Interrupted or signalled | No |
+
+Retries are bounded and deterministic. A granted retry moves the node to `retry-wait` with a recorded classification, retry ordinal, backoff, and `retryAt`; the node returns to `pending` only once that timestamp elapses. Backoff comes from `resilience.backoffSeconds` and is capped, so a repeatedly failing node cannot stretch a run indefinitely. A retry reuses the node's isolated workspace and passes only a compact correction record forward: node identity, attempt and classification, the correction itself, required artifact paths, and references to the previous logs. Full prior prompts and transcripts are never replayed into the retry.
+
+A `plan-contract` failure blocks only that node's descendants. Independent branches keep draining, which is what makes a single out-of-scope write survivable.
+
+Budgets bound the clock rather than the attempt count:
+
+- `budgets.maxActiveSeconds` caps one node's active execution time.
+- `budgets.maxRunActiveSeconds` caps the whole run's active time.
+- `budgets.missingUsage` (`warn` by default) decides what happens when a runtime reports no usable token usage.
+
+Waiting is not active time. Checkpoint waits, permission pauses, and retry backoff do not charge either budget.
+
+## Exit codes
+
+`ralph graph run` and `ralph graph resume` report the state of the graph, not of the last node:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every node succeeded. |
+| `1` | The run failed. A node failed terminally, or nothing remains runnable and the graph cannot complete. |
+| `3` | The run is incomplete but healthy: work remains that is waiting on a human. The run status distinguishes `awaiting-ack` (a checkpoint) from `awaiting-operator` (a permission request). |
+
+Status `3` is not a failure and should not be treated as one in CI. Answer the checkpoint or the permission request, then resume.
+
+## Recovery
+
+A run whose supervisor died leaves attempts marked `running` that nothing is driving. `status` and `attach` report that condition but never repair it; recovery is always an explicit operator action:
+
+```bash
+ralph graph recover --namespace release-review --run latest
+```
+
+Recovery takes the run lock, interrupts orphaned running attempts, records `node-interrupted` and `node-recovered` events, and resets only those interrupted nodes to `pending`. Nodes in `succeeded`, `skipped`, `awaiting-operator`, and `needs-plan-repair` are preserved exactly as they were, so recovery never discards evidence or silently re-answers a permission request. Concurrent recoverers yield exactly one mutation. When recovery is not allowed, the command prints the recovery module's refusal reason and changes nothing.
+
+## Successor runs
+
+A successor run re-uses a finished run's evidence instead of repeating it. The default is a read-only report:
+
+```bash
+ralph graph successor --from latest --plan path/to/graph.plan.md \
+  --namespace release-review
+```
+
+The report compares the predecessor with the newly compiled plan and lists which nodes are reusable. Add `--create` to write a linked successor run that copies only that reusable evidence, and `--run-id <id>` to name it. The predecessor is never mutated. `--from latest`, or a run id that exists in more than one namespace, requires `--namespace`.
 
 ## Scheduling and failure behavior
 
@@ -346,7 +545,7 @@ The `cross-provider-jury` preset is the quickest way to produce a valid three-ru
 
 Use native subagents only for bounded read-only work whose loss on retry is acceptable. They are internal to one runtime invocation: Ralph does not give them their own node state, checkpoint, attribution, or completion authority. The parent node must synthesize their findings, perform mutations, verify the result, and satisfy declared artifacts.
 
-Use Ralph's brokered child delegation when delegated work needs an isolated child plan, durable result artifact, bounded retry, and ledger evidence. Brokered children are depth-limited and remain subordinate to the parent node's scope and completion checks. See [Delegation and nested execution](../bundle/.ralph/docs/DELEGATION.md) for the capability matrix and threat controls.
+Use Ralph's brokered child delegation when delegated work needs an isolated child plan, durable result artifact, bounded retry, and ledger evidence. Brokered children are depth-limited and remain subordinate to the parent node's scope and completion checks. See the delegation guide, `DELEGATION.md` in Ralph's bundled docs (`.ralph/docs/` in an installed project), for the capability matrix and threat controls.
 
 ## Publication
 
@@ -361,7 +560,7 @@ With the default state root, inspect these locations:
 | Path | Contents |
 |------|----------|
 | `.ralph-workspace/graph-runs/<namespace>/<run-id>/` | Frozen graph, run state, node attempts, workspaces, changesets, integration and recovery records. |
-| `.ralph-workspace/logs/<namespace>/nodes/<node-id>/` | Per-node and per-attempt execution logs. |
+| `.ralph-workspace/graph-runs/<namespace>/<run-id>/logs/` | Run-owned supervisor, admission, and per-attempt `runner.log` / `agent.log` / `usage.json`. |
 | `.ralph-workspace/artifacts/<namespace>/` | Shared node artifacts, consensus results, checkpoints, and declared handoffs. |
 
 If you set a separate state root with `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`, these `.ralph-workspace` paths resolve there. Runtime configuration still resolves from the Ralph project root, and the agent workspace remains the tree where the selected runtime reads and writes.
@@ -372,7 +571,15 @@ If you set a separate state root with `--workspace-root` or `RALPH_PLAN_WORKSPAC
 
 **A ready node does not start.** Check `maxParallel`, the per-runtime admission cap, workspace setup, and whether another node has reserved that runtime with `subagents: on`.
 
-**The run exits with status 3.** This is an `awaiting-ack` checkpoint, not a failure. Read `ralph graph status`, create the printed `.ack` file after review, and resume.
+**Every node fails within seconds with `exit=1` and no token usage.** The agent CLI rejected the request before any work began, most often because the configured model id no longer exists at the provider. Read the `cause:` line under the failure and compare the run header's agent table against the models your CLI currently offers. Fix the canonical agent definition rather than a generated per-runtime config; editing one generated copy does not update the others.
+
+**The run exits with status 3.** This is not a failure. Work remains that is waiting on a human: either an `awaiting-ack` checkpoint or an `awaiting-operator` permission request. Read `ralph graph status` to see which. For a checkpoint, create the printed `.ack` file after review; for a permission request, answer it with `ralph graph actions respond`. Then resume.
+
+**A node sits in `awaiting-operator` and nothing happens.** Ralph is waiting for you. Run `ralph graph actions list` for the pending request and answer it. Independent branches keep draining while it waits, so a partially finished run is expected here.
+
+**A node is stuck in `needs-plan-repair`.** The attempt wrote outside its declared scope. Only that node's descendants are blocked. Fix the plan's `writeScopes` or the node's work, then start a run that reflects the corrected plan.
+
+**Attempts are marked `running` but nothing is progressing.** The supervisor died. `status` and `attach` will not repair this by design; run `ralph graph recover` explicitly.
 
 **Resume says `graphSha` changed.** The plan no longer matches the frozen graph. Restore the original plan, begin a new run, or use `--accept-graph-change` only after reviewing which nodes will be invalidated.
 
@@ -386,10 +593,22 @@ If you set a separate state root with `--workspace-root` or `RALPH_PLAN_WORKSPAC
 
 ```bash
 ralph graph compile <plan-path> [--render mermaid|dot|ascii] [--out <path>] [--force]
-ralph graph run <plan-path> [--namespace <ns>] [--max-parallel <n>]
+ralph graph preflight <plan-path> [--json] [--workspace <dir>]
+ralph graph run <plan-path> [--namespace <ns>] [--max-parallel <n>] [--tui|--no-tui]
 ralph graph resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change]
-ralph graph status --namespace <ns> --run <run-id|latest> [--workspace <dir>]
+ralph graph status --namespace <ns> --run <run-id|latest> [--details] [--mermaid]
 ralph graph render <plan-path> [--format mermaid|dot|ascii] [--out <path>]
+ralph graph logs --namespace <ns> --run <run-id|latest> --node <id> [--attempt <id>] [--stream runner|agent|usage] [--tail N] [--follow]
+ralph graph attach --namespace <ns> --run <run-id|latest>
+ralph graph tui --namespace <ns> --run <run-id|latest> [--no-tui]
+ralph graph actions list --namespace <ns> --run <run-id|latest> [--json]
+ralph graph actions respond <request-id> --decision allow-once|allow-run|allow-always|deny [--confirm-rule <rule-id>]
+ralph graph actions approvals list [--json]
+ralph graph actions approvals revoke --runtime <rt> --action <name> --resource <path> --effect <effect>
+ralph graph recover --namespace <ns> --run <run-id|latest>
+ralph graph successor --from <run> --plan <path> [--namespace <ns>] [--create] [--run-id <id>] [--json]
 ```
+
+Every verb accepts `--workspace <dir>`.
 
 For the ordinary plan loop inside an agent node, see [Agent workflow](AGENT-WORKFLOW.md). For environment and root overrides, see [Environment](ENVIRONMENT.md). For the trust boundary around workspaces and model tools, see [Security](SECURITY.md).

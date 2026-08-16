@@ -4,6 +4,7 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
 
 CHANGESET_HELPER="$REPO_ROOT/bundle/.ralph/python/graph_changeset.py"
+PRODUCTION_FIXTURE_DIR="$BATS_TEST_DIRNAME/../../fixtures/graph-production-failure"
 
 @test "graph compiler preserves write policy and rejects unacknowledged shared mutation" {
   local tmpd plan payload
@@ -112,6 +113,185 @@ PLAN
   run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
     --output "$tmpd/symlink.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
     --base-identity base --write-scopes-json '["src/**"]'
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"unsafe escaping symlink"* ]]
+}
+
+@test "changeset accepts a new ancestor directory required by the sanitized nested-file fixture" {
+  local tmpd workspace baseline scope leaf out
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src/feature"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  scope="$(jq -r '.fixture.writeScopes[0]' "$PRODUCTION_FIXTURE_DIR/allowed-nested-file-new-ancestor-directories.json")"
+  leaf="$(jq -r '.fixture.changedPaths[0]' "$PRODUCTION_FIXTURE_DIR/allowed-nested-file-new-ancestor-directories.json")"
+  mkdir -p "$workspace/$(dirname "$leaf")"
+  printf 'nested\n' >"$workspace/$leaf"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json "[\"$scope\"]"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r ".changes[] | select(.path == \"$leaf\") | .operation" "$tmpd/out.json")" = "added" ]
+}
+
+@test "changeset rejects the sanitized undeclared changed leaf and omits its new ancestor directory" {
+  local tmpd workspace baseline scope leaf out
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src/feature"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  scope="$(jq -r '.fixture.writeScopes[0]' "$PRODUCTION_FIXTURE_DIR/undeclared-changed-leaf.json")"
+  leaf="$(jq -r '.fixture.changedPaths[0]' "$PRODUCTION_FIXTURE_DIR/undeclared-changed-leaf.json")"
+  mkdir -p "$workspace/$(dirname "$leaf")"
+  printf 'leak\n' >"$workspace/$leaf"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json "[\"$scope\"]"
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"outOfScope"* ]]
+  [[ "$output" = *"$leaf"* ]]
+  # Only the real offending leaf is reported; the directory created to hold
+  # it (src/other) must not appear as a second, derived violation.
+  [[ "$output" != *'"src/other"'* ]]
+}
+
+@test "changeset accepts an ancestor directory created for an exact non-glob write scope" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  mkdir -p "$workspace/src/allowed"
+  printf 'exact\n' >"$workspace/src/allowed/file.txt"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/file.txt"]'
+  [ "$status" -eq 0 ]
+  [ "$(jq '[.changes[] | select(.path == "src/allowed" and .after.type == "directory")] | length' "$tmpd/out.json")" -eq 1 ]
+}
+
+@test "changeset accepts an ancestor directory created for a single-level glob write scope" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  mkdir -p "$workspace/src/allowed"
+  printf 'glob\n' >"$workspace/src/allowed/file.txt"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/*.txt"]'
+  [ "$status" -eq 0 ]
+}
+
+@test "changeset still rejects a sibling leaf beside an accepted ancestor directory" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  mkdir -p "$workspace/src/allowed"
+  printf 'ok\n' >"$workspace/src/allowed/file.txt"
+  printf 'bad\n' >"$workspace/src/allowed/other.txt"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/file.txt"]'
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"outOfScope"* ]]
+  [[ "$output" = *"src/allowed/other.txt"* ]]
+  # The ancestor directory is derived scaffolding for the allowed leaf, not
+  # a violation in its own right; it must not be reported.
+  [[ "$output" != *'"src/allowed"'* ]]
+}
+
+@test "changeset still rejects an unrelated empty directory that is not an ancestor of any changed leaf" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  mkdir -p "$workspace/unrelated-empty"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/**"]'
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"outOfScope"* ]]
+  [[ "$output" = *"unrelated-empty"* ]]
+}
+
+@test "changeset still rejects a plain file sitting at a would-be ancestor path" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src/allowed"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  printf 'nested\n' >"$workspace/src/allowed/nested.txt"
+  # "src/blocked" is a plain file, never a directory, so it must never be
+  # treated as ancestor scaffolding for anything; it is judged on its own.
+  printf 'blocked\n' >"$workspace/src/blocked"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/nested.txt"]'
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"outOfScope"* ]]
+  [[ "$output" = *"src/blocked"* ]]
+}
+
+@test "changeset still rejects a control path beside an accepted ancestor directory" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src" "$workspace/.ralph"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  mkdir -p "$workspace/src/allowed"
+  printf 'ok\n' >"$workspace/src/allowed/file.txt"
+  printf 'control\n' >"$workspace/.ralph/new-control.sh"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/file.txt"]'
+  [ "$status" -ne 0 ]
+  [[ "$output" = *"controlPaths"* ]]
+  [[ "$output" = *".ralph/new-control.sh"* ]]
+}
+
+@test "changeset still rejects an escaping symlink beside an accepted ancestor directory" {
+  local tmpd workspace baseline
+  tmpd="$(mktemp -d)"
+  workspace="$tmpd/workspace"
+  mkdir -p "$workspace/src/allowed" "$tmpd/outside"
+  baseline="$tmpd/baseline.json"
+  python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
+
+  printf 'ok\n' >"$workspace/src/allowed/file.txt"
+  ln -s ../../../outside "$workspace/src/allowed/escape"
+
+  run python3 "$CHANGESET_HELPER" capture --workspace "$workspace" --baseline "$baseline" \
+    --output "$tmpd/out.json" --node-id build --attempt-id a1 --workspace-mode snapshot \
+    --base-identity base --write-scopes-json '["src/allowed/file.txt"]'
   [ "$status" -ne 0 ]
   [[ "$output" = *"unsafe escaping symlink"* ]]
 }

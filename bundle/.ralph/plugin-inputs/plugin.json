@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "ralph-orchestrator",
+  "displayName": "Ralph Orchestrator",
+  "versionFile": "plugins/ralph-orchestrator/VERSION",
+  "outputRoot": "plugins/ralph-orchestrator",
+  "engine": {
+    "delivery": "external-cli",
+    "command": "ralph",
+    "pluginApi": 1
+  },
+  "agents": [
+    "architect",
+    "code-review",
+    "implementation",
+    "qa",
+    "research",
+    "security"
+  ],
+  "workflows": [
+    "ralph-agents",
+    "ralph-doctor",
+    "ralph-graph",
+    "ralph-orchestrate",
+    "ralph-plan",
+    "ralph-run",
+    "ralph-status"
+  ],
+  "contracts": {
+    "antigravity": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",
+    "opencode": "bundle/.ralph/plugin-inputs/contracts/opencode.json"
+  },
+  "adapters": [
+    "antigravity",
+    "claude",
+    "codex",
+    "cursor",
+    "opencode"
+  ]
+}

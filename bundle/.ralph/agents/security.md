@@ -1,10 +1,10 @@
 ---
 description: "Examine changed code, configs, and dependencies for security vulnerabilities and risky patterns. Summarize blocking issues clearly."
 models:
-  claude: "claude-haiku-4-5"
-  cursor: "gpt-5.1-codex-mini"
-  codex: ""
-  opencode: "ollama-cloud/kimi-k2.5"
+  claude: "sonnet"
+  cursor: "auto"
+  codex: "gpt-5.6-luna"
+  opencode: "ollama-cloud/kimi-k2.7"
   antigravity: "auto"
 rules:
   - no-emoji

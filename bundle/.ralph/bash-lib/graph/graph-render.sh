@@ -572,3 +572,111 @@ graph_render_stub() {
       ;;
   esac
 }
+
+graph_render_cli_usage() {
+  cat <<'EOF' >&2
+Usage: graph-run.sh render <plan-path> [--format mermaid|dot|ascii] [--out <path>]
+
+Render a compiled graph as mermaid, dot, or ascii. This is a pre-run static
+view of the graph shape, not the live run state (see: graph-run.sh status).
+Compiles the plan first if no fresh cached .graph.json exists beside it.
+
+Options:
+  --format <mermaid|dot|ascii>   Output format (default: mermaid).
+  --out <path>                    Write rendered output to <path> instead of
+                                   stdout.
+  -h, --help                      Show this help.
+EOF
+}
+
+# graph_render_cli <plan-path> [--format mermaid|dot|ascii] [--out <path>]
+# Argument parsing and reporting for `ralph graph render`. Compiles the plan
+# (reusing a fresh cached .graph.json when present) and prints the rendered
+# graph to stdout, or writes it to --out when given.
+graph_render_cli() {
+  local plan_path="" format="mermaid" out_path=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --format)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --format requires a value" >&2
+          graph_render_cli_usage
+          return 1
+        fi
+        format="$2"
+        shift 2
+        ;;
+      --format=*)
+        format="${1#--format=}"
+        shift
+        ;;
+      --out)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --out requires a value" >&2
+          graph_render_cli_usage
+          return 1
+        fi
+        out_path="$2"
+        shift 2
+        ;;
+      --out=*)
+        out_path="${1#--out=}"
+        shift
+        ;;
+      -h|--help)
+        graph_render_cli_usage
+        return 0
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "Error: unknown option '$1'" >&2
+        graph_render_cli_usage
+        return 1
+        ;;
+      *)
+        if [[ -n "$plan_path" ]]; then
+          echo "Error: unexpected extra argument '$1'" >&2
+          graph_render_cli_usage
+          return 1
+        fi
+        plan_path="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$plan_path" ]]; then
+    echo "Error: graph render requires a plan path" >&2
+    graph_render_cli_usage
+    return 1
+  fi
+
+  case "$format" in
+    mermaid|dot|ascii) ;;
+    *)
+      echo "Error: --format must be mermaid, dot, or ascii" >&2
+      return 1
+      ;;
+  esac
+
+  local cache_path
+  cache_path="$(graph_compile_cache_path_for_plan "$plan_path")"
+  if ! graph_compile_plan "$plan_path" "$cache_path" 0 >/dev/null; then
+    return 1
+  fi
+
+  local rendered
+  if ! rendered="$(graph_render_stub "$cache_path" "$format")"; then
+    return 1
+  fi
+
+  if [[ -n "$out_path" ]]; then
+    printf '%s\n' "$rendered" >"$out_path"
+  else
+    printf '%s\n' "$rendered"
+  fi
+}

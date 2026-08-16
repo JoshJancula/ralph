@@ -198,11 +198,14 @@ Verbs:
   resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change]
       Resume a graph run from the durable run-state ledger.
 
-  status
-      Not implemented yet; lands in a later phase of the GRAPH-MODE plan.
+  status --namespace <ns> --run <run-id|latest> [--workspace <dir>]
+      Display the current state of a graph run: a table (node, type,
+      runtime, state, attempt count, duration) plus a mermaid flowchart with
+      per-state class definitions. Read-only; safe against a live run.
 
-  render
-      Not implemented yet; lands in a later phase of the GRAPH-MODE plan.
+  render <plan-path> [--format mermaid|dot|ascii] [--out <path>]
+      Render a compiled graph as mermaid, dot, or ascii. Pre-run static view
+      of the graph shape, not the live run state (see: status).
 USAGE
 }
 
@@ -242,18 +245,42 @@ ralph_create_usage() {
 Usage: ralph create <subcommand> [args]
 
 Subcommands:
-  orc   Launch the orchestration wizard for a multi-stage pipeline plan.
-  plan  Create a flat plan file (delegates to create-plan.sh).
-        Options:
-          --name <name>            Plan name (default: auto-generated PLAN1, PLAN2, ...).
-          --format <classic|yaml>
-                                   Plan template format (default: classic).
-                                   classic: zero-dependency markdown checklist.
-                                   yaml: YAML-frontmatter flat TODO queue.
-                                   (standard, structured, pipeline, orchestration, and cursor are accepted as silent aliases for yaml.)
-          --workspace <path>       Workspace directory (default: current directory).
+  wizard  Not sure whether you want orchestration or graph? Asks first, then
+          launches the matching wizard below. See docs/GRAPH.md#graph-vs-orchestration
+          for the same comparison in writing.
+  orc     Launch the interactive wizard for a multi-stage orchestration plan
+          (stages run in order, or in parallel waves you declare). The default
+          choice unless you specifically need one of the graph capabilities below.
+  graph   Launch the interactive wizard for a graph (DAG) plan. Stages form a
+          dependency graph (dependsOn) instead of a fixed order, and adds
+          cross-provider consensus voting, checkpoint (human-ack) nodes, and
+          isolated workspace mutation (snapshot/worktree) for safer parallel
+          writes. Authors agent/consensus/checkpoint/join nodes; router/gate/
+          integrate node types are not yet wizard-authorable (hand-edit after
+          generation).
+  plan    Create a flat plan file (delegates to create-plan.sh).
+          Options:
+            --name <name>            Plan name (default: auto-generated PLAN1, PLAN2, ...).
+            --format <classic|yaml|graph>
+                                     Plan template format (default: classic).
+                                     classic: zero-dependency markdown checklist.
+                                     yaml: YAML-frontmatter flat TODO queue.
+                                     graph: YAML-frontmatter DAG plan (execution: graph);
+                                            run it with `ralph run --plan <path>` or
+                                            `ralph graph <verb>` (see: ralph graph --help).
+                                     (standard, structured, pipeline, orchestration, and cursor are accepted as silent aliases for yaml.)
+            --preset <name>          Graph preset: cross-provider-jury or parallel-implementation
+                                     (--format graph only; non-interactive alternative to `ralph create graph`).
+            --lanes <2|3|4>          Implementation lane count for parallel-implementation
+                                     (default: 2).
+            --workspace-mode <mode>  Lane mode: snapshot (default), worktree, or shared.
+            --acknowledge-shared-mutation-risk
+                                     Required with --workspace-mode shared.
+            --publish-checkpoint     Add an optional human checkpoint after review.
+            --workspace <path>       Workspace directory (default: current directory).
 
-        For a multi-stage orchestration, use: ralph create orc
+          For a multi-stage orchestration, use: ralph create orc
+          For a DAG plan, use: ralph create graph
 USAGE
 }
 
@@ -539,6 +566,12 @@ case "$cmd" in
     case "$sub" in
       orc)
         exec bash "$RALPH_HOME/bundle/.ralph/orchestration-wizard.sh" "$@"
+        ;;
+      graph)
+        exec bash "$RALPH_HOME/bundle/.ralph/graph-wizard.sh" "$@"
+        ;;
+      wizard)
+        exec bash "$RALPH_HOME/bundle/.ralph/pipeline-wizard.sh" "$@"
         ;;
       plan)
         exec bash "$RALPH_HOME/bundle/.ralph/create-plan.sh" "$@"

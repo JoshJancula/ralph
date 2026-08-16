@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 1,
+  "runtime": "antigravity",
+  "outputDirectory": "plugins/ralph-orchestrator/antigravity",
+  "contract": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",
+  "capabilities": {
+    "nativeAgents": true,
+    "nativeHooks": true,
+    "mcp": true,
+    "rules": false,
+    "skills": true,
+    "workflows": true
+  },
+  "copies": [
+    {
+      "source": "bundle/.agents/agents/architect/architect.md",
+      "destination": "agents/architect.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/architect/config.json",
+      "destination": "agents/architect/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/code-review/code-review.md",
+      "destination": "agents/code-review.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/code-review/config.json",
+      "destination": "agents/code-review/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/implementation/implementation.md",
+      "destination": "agents/implementation.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/implementation/config.json",
+      "destination": "agents/implementation/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/qa/qa.md",
+      "destination": "agents/qa.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/qa/config.json",
+      "destination": "agents/qa/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/research/research.md",
+      "destination": "agents/research.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/research/config.json",
+      "destination": "agents/research/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/security/security.md",
+      "destination": "agents/security.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents/security/config.json",
+      "destination": "agents/security/config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/agents.md",
+      "destination": "agents.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/skills/repo-context/SKILL.md",
+      "destination": "skills/repo-context/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/hooks.json",
+      "destination": "hooks.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-shell-policy.sh",
+      "destination": "hooks/pre-tool-shell-policy.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-proxy-read-handoff.sh",
+      "destination": "hooks/pre-tool-proxy-read-handoff.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-exploration-policy.sh",
+      "destination": "hooks/pre-tool-exploration-policy.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-shell-telemetry.sh",
+      "destination": "hooks/post-tool-shell-telemetry.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-native-result-compact.sh",
+      "destination": "hooks/post-tool-native-result-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-mcp-compact.sh",
+      "destination": "hooks/post-tool-mcp-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/after-shell-telemetry.sh",
+      "destination": "hooks/after-shell-telemetry.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
+      "destination": "shared/ralph-plugin-bootstrap.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-exec.sh",
+      "destination": "shared/ralph-plugin-exec.sh",
+      "mode": "0755"
+    }
+  ],
+  "templates": [
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/antigravity/host-manifest.json",
+      "destination": "host-manifest.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/antigravity/mcp_config.json",
+      "destination": "mcp_config.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-agents.md",
+      "destination": "skills/ralph-agents/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "skills/ralph-doctor/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-graph.md",
+      "destination": "skills/ralph-graph/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-orchestrate.md",
+      "destination": "skills/ralph-orchestrate/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "skills/ralph-plan/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "skills/ralph-run/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "skills/ralph-status/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-agents.md",
+      "destination": "workflows/ralph-agents.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "workflows/ralph-doctor.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-graph.md",
+      "destination": "workflows/ralph-graph.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-orchestrate.md",
+      "destination": "workflows/ralph-orchestrate.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "workflows/ralph-plan.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "workflows/ralph-run.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "workflows/ralph-status.md",
+      "mode": "0644"
+    }
+  ]
+}

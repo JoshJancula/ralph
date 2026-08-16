@@ -47,12 +47,17 @@ if ! declare -F ralph_atomic_write_json >/dev/null 2>&1; then
   source "$GRAPH_STATE_SCRIPT_DIR/../atomic-json.sh"
 fi
 
-# Schema version for run.json.
+# Schema version for run.json. Existing callers (the live scheduler) write
+# and expect exactly this version; do not bump it here. See the p4-state-v2
+# section near the end of this file for the v2 schema, states, and readers.
 GRAPH_STATE_RUN_SCHEMA_VERSION=1
-# Schema version for per-node ledger entries.
+# Schema version for per-node ledger entries. Same stability note as above.
 GRAPH_STATE_NODE_SCHEMA_VERSION=1
 
-# The nine node states. Order is stable for round-trip tests; do not reorder.
+# The nine v1 node states. Order is stable for round-trip tests; do not
+# reorder. v2 appends four more states after this array is defined (see
+# p4-state-v2 below); appending, not reordering, keeps this literal list's
+# round-trip tests unaffected.
 GRAPH_STATE_NODE_STATES=(
   pending
   ready
@@ -66,6 +71,8 @@ GRAPH_STATE_NODE_STATES=(
 )
 
 # Run-level statuses (subset of node states that make sense for the whole run).
+# v2 appends two more statuses after this array is defined (see
+# p4-state-v2 below).
 GRAPH_STATE_RUN_STATUSES=(
   running
   succeeded
@@ -258,6 +265,67 @@ graph_state_ralph_version() {
 # Prints the current UTC time as an ISO-8601 stamp (seconds precision).
 graph_state_now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ
+}
+
+# graph_state_supervisor_pid
+# Best-effort supervisor PID. Honors the GRAPH_STATE_SUPERVISOR_PID env
+# override for tests and deterministic fixtures; otherwise reports the
+# current shell PID ($$).
+graph_state_supervisor_pid() {
+  if [[ -n "${GRAPH_STATE_SUPERVISOR_PID:-}" ]]; then
+    printf '%s\n' "$GRAPH_STATE_SUPERVISOR_PID"
+    return 0
+  fi
+  printf '%s\n' "$$"
+}
+
+# graph_state_owner_hostname
+# Best-effort hostname of the supervisor. Honors GRAPH_STATE_OWNER_HOSTNAME
+# for tests; otherwise tries the hostname(1) command. Falls back to empty
+# (which the caller writes as JSON null) when unavailable.
+graph_state_owner_hostname() {
+  if [[ -n "${GRAPH_STATE_OWNER_HOSTNAME:-}" ]]; then
+    printf '%s\n' "$GRAPH_STATE_OWNER_HOSTNAME"
+    return 0
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    hostname 2>/dev/null || true
+  fi
+}
+
+# graph_state_owner_process_start_id
+# Best-effort stable process-start identity for the supervisor. Honors
+# GRAPH_STATE_OWNER_PROCESS_START_ID for tests and deterministic fixtures;
+# otherwise probes /proc/<pid> (Linux) or ps -o lstart= (portable) to
+# obtain a value that differs when a PID has been reused. Returns empty
+# when the identity cannot be obtained (caller writes as JSON null).
+graph_state_owner_process_start_id() {
+  if [[ -n "${GRAPH_STATE_OWNER_PROCESS_START_ID:-}" ]]; then
+    printf '%s\n' "$GRAPH_STATE_OWNER_PROCESS_START_ID"
+    return 0
+  fi
+  local pid start
+  pid="${GRAPH_STATE_SUPERVISOR_PID:-$$}"
+  [[ -z "$pid" ]] && return 0
+  start=""
+  if [[ -d "/proc/$pid" ]] && command -v stat >/dev/null 2>&1; then
+    start="$(stat -c %Z "/proc/$pid" 2>/dev/null || stat -f %B "/proc/$pid" 2>/dev/null)"
+  fi
+  if [[ -z "$start" ]] && command -v ps >/dev/null 2>&1; then
+    start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1)"
+  fi
+  printf '%s\n' "$start"
+}
+
+# graph_state_heartbeat_now
+# Current heartbeat timestamp. Honors GRAPH_STATE_HEARTBEAT_AT for tests and
+# deterministic fixtures; otherwise uses graph_state_now_iso.
+graph_state_heartbeat_now() {
+  if [[ -n "${GRAPH_STATE_HEARTBEAT_AT:-}" ]]; then
+    printf '%s\n' "$GRAPH_STATE_HEARTBEAT_AT"
+    return 0
+  fi
+  graph_state_now_iso
 }
 
 # graph_state_validate_node_state <state>
@@ -765,13 +833,63 @@ graph_state_node_attempts_json() {
   jq -c '.attempts // []' "$node_file" 2>/dev/null
 }
 
+# graph_state_max_attempt_number <node_file>
+#
+# Prints the maximum numeric suffix of unique attemptIds in a node ledger
+# file (e.g. left__run-1__3 -> 3). Duplicate attemptIds (v1 transition
+# records for the same attempt) do not inflate the result: numbering uses
+# this suffix, not attempts[] array length and not unique-id count. Prints
+# 0 when the file is missing or has no numeric suffixes.
+graph_state_max_attempt_number() {
+  local node_file="$1" n
+  if [[ -z "$node_file" || ! -f "$node_file" ]]; then
+    echo 0
+    return 0
+  fi
+  command -v jq >/dev/null 2>&1 || { echo 0; return 1; }
+  n="$(jq '[.attempts[]?.attemptId? // empty | try (capture("__(?<number>[0-9]+)$").number | tonumber) catch empty] | max // 0' "$node_file" 2>/dev/null)" || n=0
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s\n' "$n"
+}
+
+# graph_state_node_max_attempt_number <workspace> <namespace> <run_id> <node_id>
+# Ledger-path wrapper around graph_state_max_attempt_number.
+graph_state_node_max_attempt_number() {
+  local node_file
+  node_file="$(graph_state_node_file "$@")" || { echo 0; return 0; }
+  graph_state_max_attempt_number "$node_file"
+}
+
 # graph_state_reset_node_to_pending <workspace> <namespace> <run_id> <node_id>
 # Resets a node's status to pending without appending an attempt. Preserves
 # the existing attempts array so prior provenance is not lost. Used by
 # p3-resume for failed/cancelled/blocked nodes and for running nodes with no
 # adoptable StageOutcomeReport.
+#
+# This is a supervisor reset, not a model-driven state transition: v1 has no
+# transition check, and v2's machine rejects running->pending and
+# cancelled->pending. A v2 node is therefore rewritten in place (schema and
+# attempts preserved) rather than routed through graph_state_write_node_v2.
+# A v1 node keeps using graph_state_write_node so resume reads stay byte-
+# compatible with pre-v2 ledgers.
 graph_state_reset_node_to_pending() {
   local workspace="$1" namespace="$2" run_id="$3" node_id="$4"
+  local node_file version base_json
+
+  node_file="$(graph_state_node_file "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  if [[ -f "$node_file" ]]; then
+    version="$(jq -r '.schemaVersion // 1' "$node_file" 2>/dev/null)" || version=1
+    if [[ "$version" =~ ^[0-9]+$ ]] && [[ "$version" -ge 2 ]]; then
+      base_json="$(jq -c . "$node_file" 2>/dev/null)" || return 1
+      if ! ralph_atomic_write_json "$node_file" \
+        '($base | fromjson) | .status = "pending"' \
+        --arg base "$base_json"; then
+        echo "Error: failed to reset v2 node ledger entry for $node_id" >&2
+        return 1
+      fi
+      return 0
+    fi
+  fi
   graph_state_write_node "$workspace" "$namespace" "$run_id" "$node_id" "pending" \
     "" "" "" "" "" "" "" ""
 }
@@ -782,4 +900,626 @@ graph_state_reset_node_to_pending() {
 # .nodeId from the ledger entry instead. Provided for completeness only.
 graph_state_node_id_from_filename() {
   printf '%s\n' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# p4-state-v2: ledger schema v2
+# ---------------------------------------------------------------------------
+#
+# v2 extends the v1 ledger without changing v1 on-disk bytes or any existing
+# scheduler/status/resume/retention/publish behavior: graph_state_init_run
+# and graph_state_write_node above are untouched and keep writing
+# schemaVersion 1, exactly as before. v1 runs remain readable forever
+# through the normalizing readers below; a read never rewrites a v1 file.
+#
+# A v2 node ledger owns one attempts[] object per attemptId (not one object
+# per state transition, which is the known v1 duplication: a running
+# transition and its later terminal transition both append separate
+# attempts[] records for the same attemptId). Each v2 attempt object may
+# carry: attemptId, startedAt, finishedAt, outcome, exitCode, runtime,
+# reason, logPaths, usageSnapshot, usageReliable, retryClassification,
+# heartbeatAt, operatorRequestId.
+#
+# graph_state_init_run_v2 / graph_state_write_node_v2 are the new entry
+# points that write this shape; graph_state_write_node_v2 is the atomic
+# attempt upsert (p5-attempt-upserts): starting an attempt creates one
+# record, and heartbeat/usage/log-metadata/terminalization calls update that
+# same record, idempotently, through ralph_atomic_write_json. The live
+# scheduler (bash-lib/graph/graph-schedule.sh, _graph_schedule_ledger_record)
+# reads a run's schemaVersion once per run and dispatches to
+# graph_state_write_node for schemaVersion 1 (unchanged) or
+# graph_state_write_node_v2 for schemaVersion 2+, so a v1 run's on-disk
+# behavior is untouched and a v2 run gets one attempts[] object per attempt.
+# No caller creates a v2 run by default yet -- graph_state_init_run_v2 is
+# available for callers that opt in.
+
+# Highest schemaVersion this Ralph build understands for node and run ledger
+# documents. A document with a higher schemaVersion is from a newer Ralph
+# and must be rejected with an actionable error rather than guessed at.
+GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION=2
+GRAPH_STATE_MAX_KNOWN_RUN_SCHEMA_VERSION=2
+
+# Schema version written by the new v2 entry points.
+GRAPH_STATE_NODE_SCHEMA_VERSION_V2=2
+GRAPH_STATE_RUN_SCHEMA_VERSION_V2=2
+
+# v2 node states, appended after the original nine (see the note above
+# GRAPH_STATE_NODE_STATES): a retry backoff wait, a block on an explicit
+# operator decision (distinct from awaiting-ack, which is a gate outcome),
+# a node whose stage contract needs a plan edit before it can run again,
+# and a node whose owning attempt was orphaned by a dead supervisor.
+GRAPH_STATE_NODE_STATES+=(
+  retry-wait
+  awaiting-operator
+  needs-plan-repair
+  interrupted
+)
+
+# Run-level states meaningful at the whole-run granularity. interrupted
+# mirrors the node state: the owning supervisor died mid-run. awaiting-operator
+# mirrors awaiting-ack for a whole-run operator decision (as opposed to one
+# node's gate outcome). retry-wait and needs-plan-repair are node-scoped
+# concepts only; a run as a whole does not retry-wait or need-plan-repair.
+GRAPH_STATE_RUN_STATUSES+=(
+  interrupted
+  awaiting-operator
+)
+
+# graph_state_validate_node_transition <from_state> <to_state>
+#
+# Returns 0 when moving a node from <from_state> to <to_state> is legal in
+# the v2 state machine. An empty <from_state> (the node's first write) is
+# always legal, matching how a node is seeded at "pending" implicitly. A
+# same-state transition is always legal (an idempotent re-write, e.g. a
+# heartbeat refresh on a running attempt). Terminal states (succeeded,
+# skipped, cancelled) have no legal outgoing transition other than to
+# themselves.
+graph_state_validate_node_transition() {
+  local from="$1" to="$2"
+  if [[ -z "$to" ]]; then
+    return 1
+  fi
+  if [[ -z "$from" ]]; then
+    return 0
+  fi
+  if [[ "$from" == "$to" ]]; then
+    return 0
+  fi
+  case "$from" in
+    pending)
+      case "$to" in
+        ready|running|blocked|skipped|cancelled|needs-plan-repair) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    ready)
+      case "$to" in
+        running|blocked|skipped|cancelled) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    running)
+      case "$to" in
+        succeeded|failed|blocked|awaiting-ack|cancelled|retry-wait|awaiting-operator|needs-plan-repair|interrupted) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    failed)
+      case "$to" in
+        pending|retry-wait|needs-plan-repair) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    blocked)
+      case "$to" in
+        pending) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    awaiting-ack)
+      case "$to" in
+        ready|running|cancelled|needs-plan-repair) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    retry-wait)
+      case "$to" in
+        pending|ready|running|cancelled) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    awaiting-operator)
+      case "$to" in
+        pending|ready|running|cancelled|needs-plan-repair) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    needs-plan-repair)
+      case "$to" in
+        pending|cancelled) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    interrupted)
+      case "$to" in
+        pending|ready|running|cancelled|needs-plan-repair) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    succeeded|skipped|cancelled)
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# graph_state_normalize_node_json <node_json>
+#
+# Pure in-memory transform: normalizes a raw node ledger JSON document (any
+# supported schemaVersion) into the v2 shape. attempts[] is deduplicated to
+# one object per attemptId by folding records in array order, so a v1
+# running record and its later terminal record for the same attemptId merge
+# into a single object (later records win per field; a field only present on
+# the earlier record, such as startedAt, survives). Never reads or writes a
+# file; the caller decides whether/where to persist the result. The result
+# always carries schemaVersion 2 plus sourceSchemaVersion recording the
+# original on-disk version, so a caller can tell a document was normalized
+# rather than natively v2.
+graph_state_normalize_node_json() {
+  local node_json="$1"
+  if [[ -z "$node_json" ]]; then
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -c '
+    . as $doc
+    | ($doc.schemaVersion // 1) as $src
+    | ($doc.attempts // [])
+    | reduce .[] as $a ({}; .[$a.attemptId] = ((.[$a.attemptId] // {}) * $a))
+    | [.[]]
+    as $merged
+    | $doc
+    | .attempts = $merged
+    | .lastAttemptId = ($doc.lastAttemptId // (if ($merged | length) > 0 then $merged[-1].attemptId else null end))
+    | .schemaVersion = 2
+    | .sourceSchemaVersion = $src
+  ' <<<"$node_json" 2>/dev/null
+}
+
+# graph_state_read_node_v2 <workspace> <namespace> <run_id> <node_id>
+#
+# Reads a node ledger entry normalized to the v2 shape regardless of its
+# on-disk schemaVersion. v1 files are normalized in memory only; the file on
+# disk is never rewritten by this read. Fails with an actionable error for a
+# missing/non-numeric schemaVersion or one beyond
+# GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION rather than guessing at an
+# unknown future shape.
+graph_state_read_node_v2() {
+  local node_file raw version
+  node_file="$(graph_state_node_file "$@")" || return 1
+  [[ -f "$node_file" ]] || return 1
+  raw="$(cat "$node_file")" || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  version="$(jq -r '.schemaVersion // 1' <<<"$raw" 2>/dev/null)"
+  if [[ ! "$version" =~ ^[0-9]+$ ]]; then
+    echo "Error: node ledger $node_file has a non-numeric schemaVersion: ${version:-<missing>}" >&2
+    return 1
+  fi
+  if [[ "$version" -lt 1 ]]; then
+    echo "Error: node ledger $node_file has an invalid schemaVersion: $version" >&2
+    return 1
+  fi
+  if [[ "$version" -gt "$GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION" ]]; then
+    echo "Error: node ledger $node_file has schemaVersion $version, newer than the highest version this Ralph build understands ($GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION). Upgrade Ralph before reading this run." >&2
+    return 1
+  fi
+  if [[ "$version" -eq 1 ]]; then
+    graph_state_normalize_node_json "$raw"
+    return $?
+  fi
+  jq -c '.' <<<"$raw" 2>/dev/null
+}
+
+# graph_state_normalize_run_json <run_json>
+#
+# Pure in-memory transform: normalizes a raw run ledger JSON document (v1 or
+# v2) into the v2 shape. A v1 document is upgraded to schemaVersion 2 with
+# sourceSchemaVersion recording the original on-disk version, and any missing
+# v2 owner/heartbeat fields are filled with JSON null. The original file is
+# never read or written by this helper; the caller decides whether/where to
+# persist the result. A document that is already v2 passes through unchanged.
+graph_state_normalize_run_json() {
+  local run_json="$1"
+  if [[ -z "$run_json" ]]; then
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -c '
+    . as $doc
+    | ($doc.schemaVersion // 1) as $src
+    | (if $src == 2 then . else (.schemaVersion = 2 | .sourceSchemaVersion = $src) end)
+    | .supervisorPid = (.supervisorPid // null)
+    | .ownerHostname = (.ownerHostname // null)
+    | .ownerProcessStartId = (.ownerProcessStartId // null)
+    | .heartbeatAt = (.heartbeatAt // null)
+  ' <<<"$run_json" 2>/dev/null
+}
+
+# graph_state_read_run_v2 <workspace> <namespace> <run_id>
+#
+# Reads run.json with schema-version validation. v2 documents pass through
+# unchanged; v1 documents are normalized in memory to the v2 shape (missing
+# owner/heartbeat fields become null) without rewriting the file. Fails with
+# an actionable error for a missing/non-numeric schemaVersion or one beyond
+# GRAPH_STATE_MAX_KNOWN_RUN_SCHEMA_VERSION rather than guessing at an
+# unknown future shape.
+graph_state_read_run_v2() {
+  local run_file raw version
+  run_file="$(graph_state_run_file "$@")" || return 1
+  [[ -f "$run_file" ]] || return 1
+  raw="$(cat "$run_file")" || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  version="$(jq -r '.schemaVersion // 1' <<<"$raw" 2>/dev/null)"
+  if [[ ! "$version" =~ ^[0-9]+$ ]]; then
+    echo "Error: run ledger $run_file has a non-numeric schemaVersion: ${version:-<missing>}" >&2
+    return 1
+  fi
+  if [[ "$version" -lt 1 ]]; then
+    echo "Error: run ledger $run_file has an invalid schemaVersion: $version" >&2
+    return 1
+  fi
+  if [[ "$version" -gt "$GRAPH_STATE_MAX_KNOWN_RUN_SCHEMA_VERSION" ]]; then
+    echo "Error: run ledger $run_file has schemaVersion $version, newer than the highest version this Ralph build understands ($GRAPH_STATE_MAX_KNOWN_RUN_SCHEMA_VERSION). Upgrade Ralph before reading this run." >&2
+    return 1
+  fi
+  if [[ "$version" -eq 1 ]]; then
+    graph_state_normalize_run_json "$raw"
+    return $?
+  fi
+  jq -c '.' <<<"$raw" 2>/dev/null
+}
+
+# graph_state_write_node_v2 <workspace> <namespace> <run_id> <node_id> <state>
+#   [attempt_id] [attempt_fields_json] [node_extra_json]
+#
+# v2 node writer -- the atomic attempt upsert. attempt_fields_json is an
+# optional JSON object populating any subset of the v2 attempt fields:
+# startedAt, finishedAt, outcome, exitCode, runtime, reason, logPaths,
+# usageSnapshot, usageReliable, retryClassification, heartbeatAt,
+# operatorRequestId. When attempt_id matches an existing attempts[] entry,
+# the fields are merged into that one object through ralph_atomic_write_json
+# so the node keeps exactly one attempts[] object per attemptId -- starting
+# an attempt creates the one record; a later heartbeat, usage, log-metadata,
+# or terminalization call updates it in place. Fields already on the
+# existing entry that are not present in attempt_fields_json are left
+# alone. node_extra_json is merged into both the node document and the
+# matching attempt (same contract as v1 extra_json). Repeating an identical
+# update is idempotent (the merged content is byte-for-byte the same);
+# attempting to terminalize an attempt that already has a different recorded
+# outcome is rejected before any write, so the file on disk is left unchanged.
+#
+# A v1 predecessor node file is normalized in memory before merging (see
+# graph_state_normalize_node_json); the resulting write is v2 going forward.
+# Validates the requested state transition against the node's current
+# on-disk state (a node's first write is always legal) and rejects a node
+# ledger with an unknown future schemaVersion.
+graph_state_write_node_v2() {
+  local workspace="$1" namespace="$2" run_id="$3" node_id="$4" state="$5"
+  local attempt_id="${6:-}" attempt_fields_json="${7:-}" node_extra_json="${8:-}"
+  local node_file
+
+  if [[ -z "$workspace" || -z "$namespace" || -z "$run_id" || -z "$node_id" ]]; then
+    echo "Error: graph_state_write_node_v2 requires workspace, namespace, run_id, node_id" >&2
+    return 1
+  fi
+  if ! graph_state_validate_node_state "$state"; then
+    echo "Error: invalid node state: ${state:-}" >&2
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+
+  node_file="$(graph_state_node_file "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  if ! mkdir -p "$(dirname "$node_file")"; then
+    echo "Error: failed to create nodes directory" >&2
+    return 1
+  fi
+
+  if [[ -z "$attempt_fields_json" ]]; then
+    attempt_fields_json='{}'
+  fi
+  if ! jq -e . >/dev/null 2>&1 <<<"$attempt_fields_json"; then
+    echo "Error: invalid attempt_fields_json for node ledger entry $node_id" >&2
+    return 1
+  fi
+  if [[ -z "$node_extra_json" ]]; then
+    node_extra_json='{}'
+  fi
+  if ! jq -e . >/dev/null 2>&1 <<<"$node_extra_json"; then
+    echo "Error: invalid node_extra_json for node ledger entry $node_id" >&2
+    return 1
+  fi
+
+  local base_json="null" prev_state=""
+  if [[ -f "$node_file" ]]; then
+    base_json="$(jq -c . "$node_file" 2>/dev/null)" || base_json="null"
+    if [[ "$base_json" != "null" ]]; then
+      local base_version
+      base_version="$(jq -r '.schemaVersion // 1' <<<"$base_json" 2>/dev/null)"
+      if [[ ! "$base_version" =~ ^[0-9]+$ ]] || [[ "$base_version" -gt "$GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION" ]]; then
+        echo "Error: node ledger $node_file has schemaVersion ${base_version:-<invalid>}, newer than the highest version this Ralph build understands ($GRAPH_STATE_MAX_KNOWN_NODE_SCHEMA_VERSION)" >&2
+        return 1
+      fi
+      if [[ "$base_version" -eq 1 ]]; then
+        base_json="$(graph_state_normalize_node_json "$base_json")" || base_json="null"
+      fi
+      prev_state="$(jq -r '.status // empty' <<<"$base_json" 2>/dev/null)"
+    fi
+  fi
+
+  if ! graph_state_validate_node_transition "$prev_state" "$state"; then
+    echo "Error: illegal node state transition for $node_id: ${prev_state:-<none>} -> $state" >&2
+    return 1
+  fi
+
+  # Conflict detection: an attempt that already recorded a terminal outcome
+  # cannot be re-terminalized with a different outcome. Repeating the same
+  # outcome (or any other idempotent repeat) is allowed and leaves the
+  # merged content unchanged; this check only rejects a genuine conflict,
+  # and it rejects before any write, so the file on disk is untouched.
+  if [[ -n "$attempt_id" && "$attempt_fields_json" != "{}" ]]; then
+    local existing_outcome incoming_outcome
+    existing_outcome="$(jq -r --arg aid "$attempt_id" '(.attempts // [])[]? | select(.attemptId == $aid) | .outcome // empty' <<<"$base_json" 2>/dev/null)"
+    incoming_outcome="$(jq -r '.outcome // empty' <<<"$attempt_fields_json" 2>/dev/null)"
+    if [[ -n "$existing_outcome" && -n "$incoming_outcome" && "$existing_outcome" != "$incoming_outcome" ]]; then
+      echo "Error: attempt $attempt_id for node $node_id already terminalized with outcome '$existing_outcome'; refusing to terminalize again with a different outcome '$incoming_outcome'" >&2
+      return 1
+    fi
+  fi
+
+  local has_attempt=0
+  [[ -n "$attempt_id" ]] && has_attempt=1
+
+  if ! ralph_atomic_write_json "$node_file" \
+    '(if $base == "null" then {schemaVersion: $sv, nodeId: $nid, status: "pending", attempts: [], lastAttemptId: null} else ($base | fromjson) end)
+     | .schemaVersion = $sv
+     | .nodeId = $nid
+     | .status = $state
+     | (if $hasAttempt == "1" then
+         (.attempts = ((.attempts // []) as $atts
+           | ($atts | map(.attemptId) | index($aid)) as $idx
+           | (if $extra == "{}" then {} else ($extra | fromjson) end) as $ex
+           | if $idx == null then
+               $atts + [({attemptId: $aid} * ($fields | fromjson) * $ex)]
+             else
+               $atts | .[$idx] = ($atts[$idx] * ($fields | fromjson) * $ex)
+             end))
+         | .lastAttemptId = $aid
+       else . end)
+     + (if $extra == "{}" then {} else ($extra | fromjson) end)' \
+    --argjson sv "$GRAPH_STATE_NODE_SCHEMA_VERSION_V2" \
+    --arg nid "$node_id" --arg state "$state" --arg aid "$attempt_id" \
+    --arg hasAttempt "$has_attempt" \
+    --arg fields "$attempt_fields_json" \
+    --arg extra "$node_extra_json" \
+    --arg base "$base_json"; then
+    echo "Error: failed to write v2 node ledger entry for $node_id" >&2
+    return 1
+  fi
+  return 0
+}
+
+# graph_state_init_run_v2 <workspace> <namespace> <run_id> <plan_path>
+#   <graph_json_path> [max_parallel]
+#
+# Same contract as graph_state_init_run, but writes schemaVersion 2 for
+# run.json and seeds every node through graph_state_write_node_v2. Does not
+# modify graph_state_init_run itself, so the live scheduler (which still
+# calls graph_state_init_run) is unaffected; this is the entry point a later
+# TODO wires callers to.
+graph_state_init_run_v2() {
+  local workspace="$1" namespace="$2" run_id="$3" plan_path="$4" graph_json_path="$5" max_parallel="${6:-2}"
+  local run_dir run_file graph_file nodes_dir graph_sha ralph_version started_at node_count node_id
+
+  if [[ -z "$workspace" || -z "$namespace" || -z "$run_id" || -z "$plan_path" || -z "$graph_json_path" ]]; then
+    echo "Error: graph_state_init_run_v2 requires workspace, namespace, run_id, plan_path, graph_json_path" >&2
+    return 1
+  fi
+  if [[ ! -f "$graph_json_path" ]]; then
+    echo "Error: graph_state_init_run_v2 graph json not found: $graph_json_path" >&2
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  [[ "$max_parallel" =~ ^[1-9][0-9]*$ ]] || max_parallel=2
+
+  run_dir="$(graph_state_run_dir "$workspace" "$namespace" "$run_id")" || return 1
+  run_file="$(graph_state_run_file "$workspace" "$namespace" "$run_id")" || return 1
+  graph_file="$(graph_state_graph_file "$workspace" "$namespace" "$run_id")" || return 1
+  nodes_dir="$(graph_state_nodes_dir "$workspace" "$namespace" "$run_id")" || return 1
+
+  if ! mkdir -p "$run_dir" "$nodes_dir"; then
+    echo "Error: failed to create run directory: $run_dir" >&2
+    return 1
+  fi
+
+  local tmp_graph
+  tmp_graph="$(mktemp "$run_dir/.graph-XXXXXX")" || return 1
+  if ! cp "$graph_json_path" "$tmp_graph"; then
+    rm -f "$tmp_graph"
+    return 1
+  fi
+  if ! mv -f "$tmp_graph" "$graph_file"; then
+    rm -f "$tmp_graph"
+    return 1
+  fi
+
+  graph_sha="$(graph_state_compute_graph_sha "$graph_file")" || return 1
+  ralph_version="$(graph_state_ralph_version)"
+  started_at="$(graph_state_now_iso)"
+
+  local supervisor_pid owner_hostname process_start_id heartbeat_at spid_json
+  supervisor_pid="$(graph_state_supervisor_pid)"
+  owner_hostname="$(graph_state_owner_hostname)"
+  process_start_id="$(graph_state_owner_process_start_id)"
+  heartbeat_at="$(graph_state_heartbeat_now)"
+  if [[ "$supervisor_pid" =~ ^[0-9]+$ ]]; then
+    spid_json="$supervisor_pid"
+  else
+    spid_json="null"
+  fi
+
+  if ! ralph_atomic_write_json "$run_file" \
+    '{schemaVersion: $sv, ralphVersion: $rv, runId: $rid, planPath: $pp, graphSha: $gs, startedAt: $sa, status: "running", maxParallel: $mp, supervisorPid: $spid, ownerHostname: (if $oh == "" then null else $oh end), ownerProcessStartId: (if $op == "" then null else $op end), heartbeatAt: $hb}' \
+    --argjson sv "$GRAPH_STATE_RUN_SCHEMA_VERSION_V2" \
+    --arg rv "$ralph_version" \
+    --arg rid "$run_id" \
+    --arg pp "$plan_path" \
+    --arg gs "$graph_sha" \
+    --arg sa "$started_at" \
+    --argjson mp "$max_parallel" \
+    --argjson spid "$spid_json" \
+    --arg oh "$owner_hostname" \
+    --arg op "$process_start_id" \
+    --arg hb "$heartbeat_at"; then
+    echo "Error: failed to write run.json" >&2
+    return 1
+  fi
+
+  node_count="$(jq '.nodes | length' "$graph_file")" || node_count=0
+  local i=0
+  while [[ "$i" -lt "$node_count" ]]; do
+    node_id="$(jq -r ".nodes[$i].id // empty" "$graph_file")"
+    if [[ -n "$node_id" ]]; then
+      graph_state_write_node_v2 "$workspace" "$namespace" "$run_id" "$node_id" "pending" || {
+        echo "Error: failed to seed v2 node ledger entry for $node_id" >&2
+        return 1
+      }
+    fi
+    i=$((i + 1))
+  done
+
+  graph_state_update_latest "$workspace" "$namespace" "$run_id" || true
+  return 0
+}
+
+# graph_state_run_status_is_terminal <status>
+# Returns 0 when <status> is a terminal whole-run status. The only non-terminal
+# run status is "running".
+graph_state_run_status_is_terminal() {
+  case "${1:-}" in
+    running) return 1 ;;
+    succeeded|failed|cancelled|awaiting-ack|interrupted|awaiting-operator) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# graph_state_update_run_heartbeat <workspace> <namespace> <run_id> [timestamp]
+#
+# Atomically updates the heartbeatAt field of run.json. Rejects the update
+# when the run has already reached a terminal status. Repeating the exact same
+# timestamp is a no-op (idempotent). When <timestamp> is omitted, the current
+# heartbeat time is used.
+graph_state_update_run_heartbeat() {
+  local workspace="$1" namespace="$2" run_id="$3" timestamp="${4:-}"
+  local run_file base_json status current_hb
+
+  if [[ -z "$workspace" || -z "$namespace" || -z "$run_id" ]]; then
+    echo "Error: graph_state_update_run_heartbeat requires workspace, namespace, and run_id" >&2
+    return 1
+  fi
+  run_file="$(graph_state_run_file "$workspace" "$namespace" "$run_id")" || return 1
+  if [[ ! -f "$run_file" ]]; then
+    echo "Error: run ledger not found: $run_file" >&2
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+
+  base_json="$(graph_state_read_run_v2 "$workspace" "$namespace" "$run_id")" || return 1
+  status="$(jq -r '.status // empty' <<<"$base_json" 2>/dev/null)"
+  if graph_state_run_status_is_terminal "$status"; then
+    echo "Error: cannot update heartbeat for terminal run $run_id (status: $status)" >&2
+    return 1
+  fi
+
+  if [[ -z "$timestamp" ]]; then
+    timestamp="$(graph_state_heartbeat_now)"
+  fi
+  current_hb="$(jq -r '.heartbeatAt // empty' <<<"$base_json" 2>/dev/null)"
+  if [[ "$current_hb" == "$timestamp" ]]; then
+    return 0
+  fi
+
+  if ! ralph_atomic_write_json "$run_file" \
+    '($base | fromjson) | .heartbeatAt = $hb' \
+    --arg base "$base_json" \
+    --arg hb "$timestamp"; then
+    echo "Error: failed to update run heartbeat for $run_id" >&2
+    return 1
+  fi
+  return 0
+}
+
+# graph_state_update_attempt_heartbeat <workspace> <namespace> <run_id>
+#   <node_id> <attempt_id> [timestamp]
+#
+# Atomically updates the heartbeatAt field on a single running attempt. The
+# node must be in the running state and the attempt must not already carry a
+# terminal outcome. Repeating the exact same timestamp is a no-op. When
+# <timestamp> is omitted, the current heartbeat time is used.
+graph_state_update_attempt_heartbeat() {
+  local workspace="$1" namespace="$2" run_id="$3" node_id="$4" attempt_id="$5" timestamp="${6:-}"
+  local node_file base_json status attempt_idx outcome current_hb
+
+  if [[ -z "$workspace" || -z "$namespace" || -z "$run_id" || -z "$node_id" || -z "$attempt_id" ]]; then
+    echo "Error: graph_state_update_attempt_heartbeat requires workspace, namespace, run_id, node_id, and attempt_id" >&2
+    return 1
+  fi
+  node_file="$(graph_state_node_file "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  if [[ ! -f "$node_file" ]]; then
+    echo "Error: node ledger not found: $node_file" >&2
+    return 1
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+
+  base_json="$(graph_state_read_node_v2 "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  status="$(jq -r '.status // empty' <<<"$base_json" 2>/dev/null)"
+  if [[ "$status" != "running" ]]; then
+    echo "Error: cannot update heartbeat for node $node_id because it is not running (status: $status)" >&2
+    return 1
+  fi
+
+  attempt_idx="$(jq -r --arg aid "$attempt_id" '(.attempts // []) | map(.attemptId) | index($aid)' <<<"$base_json" 2>/dev/null)"
+  if [[ -z "$attempt_idx" || "$attempt_idx" == "null" ]]; then
+    echo "Error: attempt $attempt_id not found for node $node_id" >&2
+    return 1
+  fi
+  outcome="$(jq -r --arg aid "$attempt_id" '(.attempts // [])[] | select(.attemptId == $aid) | .outcome // empty' <<<"$base_json" 2>/dev/null)"
+  if [[ -n "$outcome" ]]; then
+    echo "Error: cannot update heartbeat for terminal attempt $attempt_id on node $node_id (outcome: $outcome)" >&2
+    return 1
+  fi
+
+  if [[ -z "$timestamp" ]]; then
+    timestamp="$(graph_state_heartbeat_now)"
+  fi
+  current_hb="$(jq -r --arg aid "$attempt_id" '(.attempts // [])[] | select(.attemptId == $aid) | .heartbeatAt // empty' <<<"$base_json" 2>/dev/null)"
+  if [[ "$current_hb" == "$timestamp" ]]; then
+    return 0
+  fi
+
+  if ! ralph_atomic_write_json "$node_file" \
+    '($base | fromjson)
+     | .attempts = ((.attempts // []) as $atts
+       | ($atts | map(.attemptId) | index($aid)) as $idx
+       | if $idx == null then $atts
+         else ($atts | .[$idx] = ($atts[$idx] * {heartbeatAt: $hb}))
+         end)' \
+    --arg base "$base_json" \
+    --arg aid "$attempt_id" \
+    --arg hb "$timestamp"; then
+    echo "Error: failed to update attempt heartbeat for $attempt_id on node $node_id" >&2
+    return 1
+  fi
+  return 0
 }
