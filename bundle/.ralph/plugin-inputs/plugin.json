@@ -9,22 +9,12 @@
     "command": "ralph",
     "pluginApi": 1
   },
-  "agents": [
-    "architect",
-    "code-review",
-    "implementation",
-    "qa",
-    "research",
-    "security"
-  ],
   "workflows": [
-    "ralph-agents",
     "ralph-doctor",
-    "ralph-graph",
-    "ralph-orchestrate",
     "ralph-plan",
     "ralph-run",
-    "ralph-status"
+    "ralph-status",
+    "ralph-workflow"
   ],
   "contracts": {
     "antigravity": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",

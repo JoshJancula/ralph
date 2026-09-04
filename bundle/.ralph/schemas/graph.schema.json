@@ -14,7 +14,7 @@
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "enum": [1]
+      "enum": [2]
     },
     "ralphVersion": {
       "type": "string",
@@ -32,19 +32,47 @@
       "type": "integer",
       "minimum": 1
     },
+    "edgeDerivation": {
+      "type": "string",
+      "enum": ["declared", "artifacts", "both"]
+    },
     "failurePolicy": {
       "type": "string",
-      "enum": [
-        "drain",
-        "cancel"
-      ]
+      "enum": ["drain", "cancel"]
+    },
+    "strictEdges": {
+      "type": "boolean"
     },
     "publishMode": {
       "type": "string",
-      "enum": [
-        "manual",
-        "on-verified"
-      ]
+      "enum": ["manual", "on-verified"]
+    },
+    "ralphMode": {
+      "type": "string",
+      "enum": ["no", "native", "ralph", "hybrid"]
+    },
+    "maxReworkIterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "tooling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultProfile"],
+      "properties": {
+        "defaultProfile": {
+          "type": "string",
+          "enum": ["raw", "ralph-read-heavy", "ralph-compact", "ralph-aggressive"]
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["raw", "ralph-read-heavy", "ralph-compact", "ralph-aggressive"]
+          }
+        }
+      }
     },
     "verificationProfiles": {
       "type": "array",
@@ -125,23 +153,49 @@
             "enum": [
               "stage",
               "consensus",
-              "repair-epoch"
+              "repair-epoch",
+              "rework"
             ]
           },
           "stage": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
-              "subagents": {
+              "id": {
                 "type": "string",
-                "enum": [
-                  "inherit",
-                  "on",
-                  "off"
-                ]
+                "pattern": "^.+$"
+              },
+              "runtime": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "role": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "sessionStrategy": {
+                "type": "string",
+                "enum": ["fresh", "resume", "reset", "compact"]
+              },
+              "contextBudget": {
+                "type": "string",
+                "enum": ["full", "standard", "lean"]
+              },
+              "nativeSubagents": {
+                "type": "string",
+                "enum": ["off", "inherit"]
               },
               "workspaceMode": {
                 "type": "string",
                 "enum": ["shared", "snapshot", "worktree"]
+              },
+              "setupProfile": {
+                "type": "string",
+                "pattern": "^.+$"
               },
               "agentGitAccess": {
                 "type": "string",
@@ -173,6 +227,212 @@
               "ownershipRole": {
                 "type": "string",
                 "enum": ["integration", "repair"]
+              },
+              "toolingProfile": {
+                "type": "string",
+                "enum": ["raw", "ralph-read-heavy", "ralph-compact", "ralph-aggressive"]
+              },
+              "type": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "policy": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "onVoterError": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "verdictSchema": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "quorum": {
+                "type": ["integer", "string", "number"]
+              },
+              "minRuntimes": {
+                "type": ["integer", "string", "number"]
+              },
+              "voters": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {"type": "string", "pattern": "^.+$"},
+                    "runtime": {"type": "string", "pattern": "^.+$"},
+                    "role": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+                    },
+                    "model": {"type": "string", "pattern": "^.+$"},
+                    "sessionStrategy": {
+                      "type": "string",
+                      "enum": ["fresh", "resume", "reset", "compact"]
+                    },
+                    "contextBudget": {
+                      "type": "string",
+                      "enum": ["full", "standard", "lean"]
+                    },
+                    "nativeSubagents": {
+                      "type": "string",
+                      "enum": ["off", "inherit"]
+                    }
+                  }
+                }
+              },
+              "dependsOn": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^.+$"
+                }
+              },
+              "grader": {
+                "type": "boolean"
+              },
+              "rubric": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "router": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowedTargets": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^.+$"}
+                  },
+                  "terminalOutcomes": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^.+$"}
+                  },
+                  "defaultTarget": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                  },
+                  "onInvalid": {
+                    "type": "string",
+                    "enum": ["fail", "default"]
+                  }
+                }
+              },
+              "outputArtifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": {"type": "string", "pattern": "^.+$"},
+                    "schema": {"type": "string", "pattern": "^.+$"},
+                    "required": {"type": "boolean"}
+                  }
+                }
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": {"type": "string", "pattern": "^.+$"},
+                    "schema": {"type": "string", "pattern": "^.+$"},
+                    "required": {"type": "boolean"}
+                  }
+                }
+              },
+              "inputArtifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": {"type": "string", "pattern": "^.+$"},
+                    "schema": {"type": "string", "pattern": "^.+$"},
+                    "required": {"type": "boolean"}
+                  }
+                }
+              },
+              "plan": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "_inlineTodos": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {"type": "string"},
+                    "content": {"type": "string"},
+                    "verification": {"type": "string"},
+                    "status": {"type": "string"}
+                  }
+                }
+              },
+              "maxParallel": {
+                "type": ["integer", "string", "number"]
+              },
+              "edgeDerivation": {
+                "type": "string",
+                "enum": ["declared", "artifacts", "both"]
+              },
+              "failurePolicy": {
+                "type": "string",
+                "enum": ["drain", "cancel"]
+              },
+              "publishMode": {
+                "type": "string",
+                "enum": ["manual", "on-verified"]
+              },
+              "delegation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["delegatedRuns"],
+                "properties": {
+                  "delegatedRuns": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["mode", "runtimes", "roles", "maxRuns", "maxParallel"],
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": ["off", "read-only", "changeset"]
+                      },
+                      "runtimes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": ["cursor", "claude", "codex", "opencode", "antigravity"]
+                        }
+                      },
+                      "roles": {
+                        "type": "array",
+                        "items": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"}
+                      },
+                      "maxRuns": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "maxParallel": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              },
+              "loopCheck": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {"type": "string", "pattern": "^.+$"},
+                  "schema": {"type": "string", "pattern": "^.+$"}
+                }
               }
             }
           }

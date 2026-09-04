@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-dep-approval",
+  "feature-delivery | Dependency",
+  "WAITING  Ship the feature",
+  "0/1 stages  0s",
+  "> waiting   \u2500\u2500 approve-plan",
+  "approve-plan  approval  waiting",
+  "Next  answer the outstanding request",
+  "Question  Approve the implementation pl\u2026",
+  "Request  outstanding",
+  "Changes target  implement",
+  "Attempt  1  Duration  1m 0s",
+  "Blocker  approval (outstanding)"
+]

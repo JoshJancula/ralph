@@ -10,9 +10,8 @@ ABI_FILE="$REPO_ROOT/bundle/.ralph/plugin-api-version"
 EXPECTED_VERSION="0.1.0-beta.1"
 
 ADAPTER_RUNTIMES=(antigravity claude codex cursor opencode)
-AGENT_IDS=(architect code-review implementation qa research security)
-WORKFLOW_IDS=(ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status)
-PLUGIN_KEYS=(schemaVersion id displayName versionFile outputRoot engine agents workflows contracts adapters)
+WORKFLOW_IDS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
+PLUGIN_KEYS=(schemaVersion id displayName versionFile outputRoot engine workflows contracts adapters)
 ADAPTER_KEYS=(schemaVersion runtime outputDirectory contract capabilities copies templates)
 OPENCODE_CONTRACT_KEYS=(schemaVersion runtime cliVersion pluginPackageVersion moduleFormat pluginExport typeDeclaration typeDeclarationSha256 requiredHooks moduleSource)
 ANTIGRAVITY_CONTRACT_KEYS=(schemaVersion runtime configRoot mcpFile cli printFlag conversationFlag modelFlag modelsCommand pluginCommands modelValuePolicy)
@@ -51,7 +50,7 @@ canonical_json_files() {
   [[ "$INPUT_ROOT" != "$REPO_ROOT/plugins/ralph-orchestrator"* ]]
 }
 
-@test "plugin descriptor is the closed P03 schema with five adapters and six agents" {
+@test "plugin descriptor is the closed P03 schema with five adapters and five workflows" {
   assert_exact_keys "$PLUGIN_JSON" "${PLUGIN_KEYS[*]}"
 
   run jq -e '
@@ -64,8 +63,8 @@ canonical_json_files() {
     .engine.command == "ralph" and
     .engine.pluginApi == 1 and
     (.engine | keys_unsorted) == ["delivery", "command", "pluginApi"] and
-    .agents == ["architect", "code-review", "implementation", "qa", "research", "security"] and
-    .workflows == ["ralph-agents", "ralph-doctor", "ralph-graph", "ralph-orchestrate", "ralph-plan", "ralph-run", "ralph-status"] and
+    (has("roles") | not) and
+    .workflows == ["ralph-doctor", "ralph-plan", "ralph-run", "ralph-status", "ralph-workflow"] and
     .adapters == ["antigravity", "claude", "codex", "cursor", "opencode"] and
     .contracts.antigravity == "bundle/.ralph/plugin-inputs/contracts/antigravity.json" and
     .contracts.opencode == "bundle/.ralph/plugin-inputs/contracts/opencode.json" and
@@ -74,18 +73,25 @@ canonical_json_files() {
   [ "$status" -eq 0 ]
 }
 
-@test "six canonical agent references exist and are not duplicated into plugin-inputs" {
-  local id
-  [ "$(jq -r '.agents | length' "$PLUGIN_JSON")" -eq 6 ]
-  for id in "${AGENT_IDS[@]}"; do
-    [ -f "$REPO_ROOT/bundle/.ralph/agents/${id}.md" ]
-    [ ! -f "$INPUT_ROOT/agents/${id}.md" ]
+@test "plugin descriptor does not ship roles and adapters do not copy role files" {
+  local adapter
+  run jq -e 'has("roles") | not' "$PLUGIN_JSON"
+  [ "$status" -eq 0 ]
+  [ ! -d "$INPUT_ROOT/roles" ]
+  for adapter in "$INPUT_ROOT/adapters/"*.json; do
+    ! jq -e '
+      any(
+        (.copies[]?, .templates[]?);
+        (.source | test("bundle/\\.ralph/roles/")) or
+        (.destination | test("^roles/"))
+      )
+    ' "$adapter"
   done
 }
 
 @test "shared workflow inputs exist for every declared workflow id" {
   local id
-  [ "$(jq -r '.workflows | length' "$PLUGIN_JSON")" -eq 7 ]
+  [ "$(jq -r '.workflows | length' "$PLUGIN_JSON")" -eq 5 ]
   for id in "${WORKFLOW_IDS[@]}"; do
     [ -f "$INPUT_ROOT/workflows/${id}.md" ]
     [ ! -L "$INPUT_ROOT/workflows/${id}.md" ]

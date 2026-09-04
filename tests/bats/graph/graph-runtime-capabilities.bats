@@ -332,30 +332,26 @@ EOF
   jq -s -e 'any(.[]; .ownerId == "n2" and .sameRuntimeParallelSafe == false and .overlayIsolation == "project-root-overlay-journal" and .effectiveRuntimeCap == 1)' "$GRAPH_SCHEDULE_ADMISSION_LOG_FILE" >/dev/null
 }
 
-@test "native parent reserves declared runtime allowance in token budget" {
+@test "parent-process admission uses one slot regardless of nativeSubagents" {
   GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME=3
   GRAPH_SCHEDULE_TOKEN_CAP=3
-  [ "$(_graph_schedule_slots_for_node claude on)" -eq 3 ]
-  [ "$(_graph_schedule_slots_for_node claude on 1)" -eq 2 ]
-  _graph_schedule_runtime_reserve_slots claude 3 3
-  run _graph_schedule_runtime_can_admit codex off 1
-  [ "$status" -ne 0 ]
-  _graph_schedule_runtime_release_slots claude 3 3
+  [ "$(_graph_schedule_slots_for_node)" -eq 1 ]
+  [ "$(_graph_schedule_slots_for_node claude inherit)" -eq 1 ]
+  _graph_schedule_runtime_reserve_slots claude 1 1
   _graph_schedule_runtime_can_admit codex off 1
+  _graph_schedule_runtime_reserve_slots claude 1 1
+  _graph_schedule_runtime_can_admit cursor off 1
+  _graph_schedule_runtime_reserve_slots claude 1 1
+  run _graph_schedule_runtime_can_admit opencode off 1
+  [ "$status" -ne 0 ]
 }
 
-@test "native allowance preflight fails before dispatch when parent plus children cannot fit" {
+@test "native budget preflight is a no-op without child-count reservations" {
   graph="$TMPD/native.graph.json"
-  printf '%s\n' '{"nodes":[{"id":"parent","stage":{"runtime":"claude","subagents":"on","delegation":{"native":{"maxParallel":1}}}}]}' >"$graph"
+  printf '%s\n' '{"nodes":[{"id":"parent","stage":{"runtime":"claude","nativeSubagents":"inherit"}}]}' >"$graph"
   GRAPH_SCHEDULE_MAX_PARALLEL=1
   GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME=1
   GRAPH_SCHEDULE_TOKEN_CAP=1
   run graph_schedule_native_budget_preflight "$graph"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"parent+native.maxParallel requires 2"* ]]
-
-  GRAPH_SCHEDULE_MAX_PARALLEL=2
-  GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME=2
-  GRAPH_SCHEDULE_TOKEN_CAP=2
-  graph_schedule_native_budget_preflight "$graph"
+  [ "$status" -eq 0 ]
 }

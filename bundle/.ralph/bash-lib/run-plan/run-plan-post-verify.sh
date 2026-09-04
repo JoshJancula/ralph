@@ -86,7 +86,7 @@ _ralph_exec_verification_watchdog() {
     if [[ "$waited" -ge "$secs" ]]; then
       RALPH_VERIFY_EXEC_TIMED_OUT=1
       kill -TERM "$cmd_pid" 2>/dev/null || true
-      sleep 1
+      ralph_wait 1
       kill -KILL "$cmd_pid" 2>/dev/null || true
       break
     fi
@@ -375,3 +375,209 @@ _ralph_extract_verification_summary() {
   fi
   printf '%s' "$summary"
 }
+
+# ---------------------------------------------------------------------------
+# Tier-2 post-verification repair continuation records (consume-once).
+#
+# Runner-owned post-verification runs after the invocation ends. Persist a
+# bounded continuation record under $RALPH_SESSION_DIR/continuations/ and resolve
+# todo-continue on the next invocation via the per-TODO session manifest,
+# regardless of cross-TODO session strategy.
+# ---------------------------------------------------------------------------
+
+if [[ -z "${RALPH_POST_VERIFY_REPAIR_LOADED:-}" ]]; then
+RALPH_POST_VERIFY_REPAIR_LOADED=1
+
+ralph_post_verify_repair_require_session_dir() {
+  [[ -n "${RALPH_SESSION_DIR:-}" ]] || {
+    printf '%s\n' "Error: RALPH_SESSION_DIR is required for post-verification repair continuation" >&2
+    return 1
+  }
+  command -v jq >/dev/null 2>&1 || {
+    printf '%s\n' "Error: jq is required for post-verification repair continuation" >&2
+    return 1
+  }
+}
+
+ralph_post_verify_repair_root() {
+  ralph_post_verify_repair_require_session_dir || return 1
+  printf '%s/continuations\n' "$RALPH_SESSION_DIR"
+}
+
+ralph_post_verify_repair_record_path() {
+  local request_id="${1:-}"
+  local root
+  [[ -n "$request_id" && "$request_id" != *"/"* && "$request_id" != *".."* ]] || return 1
+  root="$(ralph_post_verify_repair_root)" || return 1
+  printf '%s/%s.json\n' "$root" "$request_id"
+}
+
+ralph_post_verify_repair_consumed_marker_path() {
+  local request_id="${1:-}" record_path
+  record_path="$(ralph_post_verify_repair_record_path "$request_id")" || return 1
+  printf '%s.consumed\n' "$record_path"
+}
+
+ralph_post_verify_repair_request_id_for_attempt() {
+  local attempt_key="${1:-}"
+  local hash=""
+  [[ -n "$attempt_key" ]] || return 1
+  if command -v shasum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$attempt_key" | shasum -a 256 | awk '{print $1}' | head -c 16)"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$attempt_key" | sha256sum | awk '{print $1}' | head -c 16)"
+  else
+    hash="$(printf '%s' "$attempt_key" | tr -c '[:alnum:]' '-' | head -c 16)"
+  fi
+  printf 'post-verification-repair-%s\n' "$hash"
+}
+
+ralph_post_verify_repair_capture_session_context() {
+  local manifest_key record session_id capture
+  session_id=""
+  capture="${RALPH_TODO_SESSION_CAPTURE_DEGRADED:-degraded}"
+  if declare -F ralph_session_todo_manifest_key >/dev/null 2>&1 \
+    && manifest_key="$(ralph_session_todo_manifest_key 2>/dev/null)"; then
+    if record="$(ralph_session_todo_read_raw "$manifest_key" 2>/dev/null)"; then
+      session_id="$(jq -r '.session_id // empty' <<<"$record")"
+      capture="$(jq -r '.capture // empty' <<<"$record")"
+      [[ -n "$capture" ]] || capture="${RALPH_TODO_SESSION_CAPTURE_DEGRADED:-degraded}"
+    fi
+  fi
+  jq -nc \
+    --arg session_id "$session_id" \
+    --arg capture "$capture" \
+    '{session_id: (if $session_id == "" then null else $session_id end), capture: $capture}'
+}
+
+ralph_post_verify_repair_persist() {
+  local failure_reason="${1:-strict_verify_command_failed}"
+  local failure_summary="${2:-}"
+  local failure_artifact="${3:-}"
+  local failure_command="${4:-}"
+  local todo_line="${5:-}"
+  local identity attempt_key request_id path marker now_iso record session_ctx
+
+  ralph_post_verify_repair_require_session_dir || return 1
+  declare -F ralph_session_todo_identity_json >/dev/null 2>&1 || return 1
+  declare -F ralph_session_todo_attempt_key >/dev/null 2>&1 || return 1
+  identity="$(ralph_session_todo_identity_json)" || return 1
+  attempt_key="$(ralph_session_todo_attempt_key "$identity")"
+  request_id="$(ralph_post_verify_repair_request_id_for_attempt "$attempt_key")" || return 1
+  path="$(ralph_post_verify_repair_record_path "$request_id")" || return 1
+  marker="$(ralph_post_verify_repair_consumed_marker_path "$request_id")" || return 1
+  [[ ! -f "$path" ]] || return 1
+  [[ ! -f "$marker" ]] || return 1
+
+  session_ctx="$(ralph_post_verify_repair_capture_session_context)"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u)"
+  record="$(jq -nc \
+    --argjson schema_version 1 \
+    --arg kind "post-verification-repair" \
+    --arg request_id "$request_id" \
+    --arg tier "invocation" \
+    --arg reason "post-verification-repair" \
+    --arg failure_reason "$failure_reason" \
+    --arg failure_summary "$failure_summary" \
+    --arg failure_artifact "$failure_artifact" \
+    --arg failure_command "$failure_command" \
+    --arg todo_line "$todo_line" \
+    --arg attempt_key "$attempt_key" \
+    --argjson identity "$identity" \
+    --argjson session "$session_ctx" \
+    --arg created_at "$now_iso" \
+    '{
+      schema_version: $schema_version,
+      kind: $kind,
+      request_id: $request_id,
+      tier: $tier,
+      reason: $reason,
+      failure_reason: $failure_reason,
+      failure_summary: $failure_summary,
+      failure_artifact: (if $failure_artifact == "" then null else $failure_artifact end),
+      failure_command: (if $failure_command == "" then null else $failure_command end),
+      todo_line: (if $todo_line == "" then null else $todo_line end),
+      attempt_key: $attempt_key,
+      identity: $identity,
+      session: $session,
+      consumed: false,
+      created_at: $created_at,
+      consumed_at: null
+    }')"
+
+  mkdir -p "$(dirname "$path")"
+  umask 077
+  printf '%s\n' "$record" >"${path}.tmp" && mv -f "${path}.tmp" "$path"
+  chmod 600 "$path" 2>/dev/null || true
+  jq -c '.' <<<"$record"
+}
+
+ralph_post_verify_repair_find_pending() {
+  local root attempt_key current_key record_path record consumed marker
+  ralph_post_verify_repair_require_session_dir || return 1
+  declare -F ralph_session_todo_attempt_key >/dev/null 2>&1 || return 1
+  root="$(ralph_post_verify_repair_root)" || return 1
+  [[ -d "$root" ]] || return 1
+  current_key="$(ralph_session_todo_attempt_key "$(ralph_session_todo_identity_json)")"
+  for record_path in "$root"/post-verification-repair-*.json; do
+    [[ -f "$record_path" ]] || continue
+    record="$(jq -c '.' "$record_path" 2>/dev/null)" || continue
+    [[ "$(jq -r '.kind // empty' <<<"$record")" == "post-verification-repair" ]] || continue
+    [[ "$(jq -r '.consumed // false' <<<"$record")" == "false" ]] || continue
+    attempt_key="$(jq -r '.attempt_key // empty' <<<"$record")"
+    [[ -n "$attempt_key" && "$attempt_key" == "$current_key" ]] || continue
+    marker="$(ralph_post_verify_repair_consumed_marker_path "$(jq -r '.request_id // empty' <<<"$record")")"
+    [[ ! -f "$marker" ]] || continue
+    jq -c '.' <<<"$record"
+    return 0
+  done
+  return 1
+}
+
+ralph_post_verify_repair_mark_consumed() {
+  local request_id="${1:-}" path marker now_iso
+  [[ -n "$request_id" ]] || return 1
+  path="$(ralph_post_verify_repair_record_path "$request_id")" || return 1
+  marker="$(ralph_post_verify_repair_consumed_marker_path "$request_id")" || return 1
+  [[ -f "$path" ]] || return 1
+  [[ ! -f "$marker" ]] || return 1
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u)"
+  jq -c --arg consumed_at "$now_iso" '.consumed = true | .consumed_at = $consumed_at' "$path" >"${path}.tmp" \
+    && mv -f "${path}.tmp" "$path"
+  printf '%s\n' "$now_iso" >"${marker}.tmp" && mv -f "${marker}.tmp" "$marker"
+}
+
+# Returns 0 when a pending post-verification repair continuation was consumed.
+ralph_post_verify_repair_try_apply() {
+  local record request_id failure_reason failure_summary failure_artifact failure_command
+  record="$(ralph_post_verify_repair_find_pending 2>/dev/null || true)"
+  [[ -n "$record" ]] || return 1
+  request_id="$(jq -r '.request_id // empty' <<<"$record")"
+  [[ -n "$request_id" ]] || return 1
+  ralph_post_verify_repair_mark_consumed "$request_id" || return 1
+
+  if declare -F ralph_session_todo_reactivate_for_repair >/dev/null 2>&1; then
+    ralph_session_todo_reactivate_for_repair "$record" >/dev/null 2>&1 || true
+  fi
+
+  failure_reason="$(jq -r '.failure_reason // empty' <<<"$record")"
+  failure_summary="$(jq -r '.failure_summary // empty' <<<"$record")"
+  failure_artifact="$(jq -r '.failure_artifact // empty' <<<"$record")"
+  failure_command="$(jq -r '.failure_command // empty' <<<"$record")"
+
+  POST_VERIFICATION_FAILURE_REASON="${failure_reason:-strict_verify_command_failed}"
+  POST_VERIFICATION_FAILURE_SUMMARY="$failure_summary"
+  POST_VERIFICATION_FAILURE_ARTIFACT="$failure_artifact"
+  POST_VERIFICATION_FAILURE_COMMAND="$failure_command"
+
+  RALPH_PLAN_INVOCATION_REASON="${RALPH_TODO_INVOCATION_REASON_CONTINUE:-todo-continue}"
+  export RALPH_PLAN_INVOCATION_REASON
+  RALPH_POST_VERIFY_REPAIR_CONTINUATION=1
+  export RALPH_POST_VERIFY_REPAIR_CONTINUATION
+  if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+    ralph_run_plan_log "tier2 post-verification repair continuation: consumed record ${request_id}; scheduling todo-continue invocation"
+  fi
+  return 0
+}
+
+fi

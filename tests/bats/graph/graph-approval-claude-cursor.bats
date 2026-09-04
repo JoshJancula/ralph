@@ -664,3 +664,137 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"graph-only"* ]]
 }
+
+fake_permission_event() {
+  local runtime="$1" session="$2" request_id="$3" tool="$4" action="$5" resource="$6" effect="$7"
+  jq -nc \
+    --arg runtime "$runtime" \
+    --arg session "$session" \
+    --arg request_id "$request_id" \
+    --arg tool "$tool" \
+    --arg action "$action" \
+    --arg resource "$resource" \
+    --arg effect "$effect" \
+    '{
+      runtime: $runtime,
+      sessionId: $session,
+      nativeRequestId: $request_id,
+      tool: $tool,
+      action: $action,
+      resource: $resource,
+      effect: $effect
+    }'
+}
+
+@test "cross-runtime fake-adapter permission normalization asserts exact action resource choices" {
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-codex.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-antigravity.sh"
+  export ANTIGRAVITY_PLAN_CLI="$BIN_DIR/agy"
+  export CODEX_PLAN_CLI="$BIN_DIR/codex"
+  cat >"$BIN_DIR/agy" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "--help" || "$1" == "help" || "$1" == "-h" ]]; then
+  printf '%s\n' "Usage: agy" "  -p" "  --model"
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$BIN_DIR/agy"
+  cat >"$BIN_DIR/codex" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "app-server" && "${2:-}" == "--help" ]]; then
+  printf '%s\n' "Usage: codex app-server"
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$BIN_DIR/codex"
+
+  local parsed expected_choices='["allow-once","allow-run","deny"]'
+  local expected_lifetimes='["once","run"]'
+
+  # Claude
+  run run_plan_invoke_claude_graph_approval_parse_permission \
+    "$(fake_permission_event claude ses-claude req-claude Bash execute 'npm test -- focused' write)"
+  [ "$status" -eq 0 ]
+  parsed="$output"
+  [ "$(printf '%s' "$parsed" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.runtime')" = "claude" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.sessionId')" = "ses-claude" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.nativeRequestId')" = "req-claude" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.tool')" = "bash" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.action')" = "execute" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.resource')" = "npm test -- focused" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.effect')" = "write" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.choices')" = "$expected_choices" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.lifetimes')" = "$expected_lifetimes" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.choices | index("allow-always")')" = "null" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.lifetimes | index("always-policy")')" = "null" ]
+
+  # Cursor
+  run run_plan_invoke_cursor_graph_approval_parse_permission \
+    "$(fake_permission_event cursor ses-cursor req-cursor Shell execute 'git status --short' write)"
+  [ "$status" -eq 0 ]
+  parsed="$output"
+  [ "$(printf '%s' "$parsed" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.runtime')" = "cursor" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.action')" = "execute" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.resource')" = "git status --short" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.choices')" = "$expected_choices" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.choices | index("allow-always")')" = "null" ]
+
+  # Codex (native app-server shape)
+  run run_plan_invoke_codex_graph_approval_parse_permission "$(jq -nc '{
+    id: 42,
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: "thr-norm",
+      turnId: "turn-norm",
+      itemId: "item-norm",
+      command: "ls -la src",
+      cwd: "/tmp/ws"
+    }
+  }')"
+  [ "$status" -eq 0 ]
+  parsed="$output"
+  [ "$(printf '%s' "$parsed" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.runtime')" = "codex" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.sessionId')" = "thr-norm" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.nativeRequestId')" = "42" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.tool')" = "bash" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.action')" = "execute" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.resource')" = "ls -la src" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.choices')" = "$expected_choices" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.choices | index("allow-always")')" = "null" ]
+  # Native accept/decline tokens must not leak into Ralph choices
+  [ "$(printf '%s' "$parsed" | jq -r '.choices | index("accept")')" = "null" ]
+
+  # Antigravity
+  run run_plan_invoke_antigravity_graph_approval_parse_permission \
+    "$(fake_permission_event antigravity ses-agy req-agy Edit edit src/app.ts write)"
+  [ "$status" -eq 0 ]
+  parsed="$output"
+  [ "$(printf '%s' "$parsed" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.runtime')" = "antigravity" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.tool')" = "edit" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.action')" = "edit" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.resource')" = "src/app.ts" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.choices')" = "$expected_choices" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.choices | index("allow-always")')" = "null" ]
+
+  # Generic placeholder rejected for every advertised runtime shim
+  local runtime
+  for runtime in claude cursor antigravity; do
+    case "$runtime" in
+      claude) run run_plan_invoke_claude_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}' ;;
+      cursor) run run_plan_invoke_cursor_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}' ;;
+      antigravity) run run_plan_invoke_antigravity_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}' ;;
+    esac
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+    [ "$(printf '%s' "$output" | jq -r '.classification')" = "unknown" ]
+  done
+  run run_plan_invoke_codex_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+}

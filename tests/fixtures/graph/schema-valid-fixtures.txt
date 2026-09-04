@@ -1,0 +1,22 @@
+# Explicit manifest of graph authoring fixtures expected to compile successfully
+# and validate against bundle/.ralph/schemas/graph.schema.json.
+# Do NOT glob tests/fixtures/graph: that directory also holds intentionally
+# invalid plans for cycle, duplicate-producer, consensus, and missing-artifact
+# negative tests.
+#
+# Paths are relative to this directory (tests/fixtures/graph/).
+
+# Ordinary agent node without the removed role field
+graph-agent-roleless.plan.md
+
+# Representative existing valid fixtures
+graph-edges.plan.md
+graph-diamond.plan.md
+graph-consensus.plan.md
+graph-checkpoint.plan.md
+graph-cond-pass-to-review.plan.md
+graph-consensus-join-subagents-on.plan.md
+
+# Rework-loop and tooling coverage (schema fields added for PLAN15)
+graph-rework-loop.plan.md
+graph-tooling.plan.md

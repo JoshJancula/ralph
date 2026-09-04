@@ -11,6 +11,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/codex
@@ -29,9 +32,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: marketplace plugin install for codex'
+            echo 'mock: codex plugin marketplace add'
+            echo 'mock: codex plugin add'
             exit 0
           fi
+          # Same Codex adapter verb shape; isolated marketplace name for CI only.
+          # Production adapter uses ralph-orchestrator@ralph-plugins from the
+          # packaged marketplace root under $RALPH_HOME/plugins/.../codex.
           npm install --global @openai/codex
           marketplace="$RUNNER_TEMP/ralph-codex-marketplace"
           mkdir -p "$marketplace/.agents/plugins" "$marketplace/plugins"
@@ -56,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: codex plugin list'
+            echo 'mock: codex plugin list --json'
           else
             codex plugin list --json | jq -e '.installed[] | select(.name == "ralph-orchestrator")'
           fi
@@ -74,9 +81,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: ralph-agents'
+            echo 'mock: ralph-workflow'
           else
-            codex exec --skip-git-repo-check 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+            codex exec --skip-git-repo-check 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
           fi
 
       - name: Uninstall repository plugin
@@ -84,8 +91,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: marketplace plugin uninstall for codex'
+            echo 'mock: codex plugin remove'
+            echo 'mock: codex plugin marketplace remove'
           else
             codex plugin remove ralph-orchestrator@ralph-smoke --json
-            codex plugin marketplace remove ralph-smoke
+            codex plugin marketplace remove ralph-smoke --json
           fi

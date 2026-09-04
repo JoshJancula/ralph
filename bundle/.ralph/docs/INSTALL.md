@@ -48,14 +48,32 @@ ralph run --plan path/to/pipeline.plan.md                      # run a multi-sta
 ralph models add claude claude-sonnet-4-6                      # save a model id
 ralph dashboard                                                # start the dashboard UI
 ralph workspaces list                                          # list registered projects
-ralph config killswitch init                                   # add per-project killswitch config
-ralph config killswitch                                        # show active killswitch source and paths
+ralph safety status                                            # show effective killswitch source and paths
+ralph safety init --project                                    # add per-project killswitch config
+ralph plugin list                                              # packaged plugin availability for all five runtimes
+ralph plugin install --runtime cursor                          # host-install a packaged plugin (preview + confirm)
 ralph setup --runtime claude --runtime-dir ~/.claude --hooks   # durable Claude compaction hooks in your user runtime
 ralph setup --runtime claude --hooks --mcp                     # project-local hooks + MCP for a runtime
 ralph install ...                                              # re-run the installer
 ```
 
 Each command dispatches to the matching script under `$RALPH_HOME` (for example, `ralph run-plan` runs `$RALPH_HOME/bundle/.ralph/run-plan.sh`).
+
+### Installer help
+
+`./install.sh --help` and `ralph install --help` share the same structured help (Usage, Local / Global install, Update / removal, Workflow / plugin follow-up, Options, Examples). Color is used only when stdout is a TTY; redirected help and `NO_COLOR` / `RALPH_INSTALL_NO_COLOR` stay plain text.
+
+### Workflows and plugin packages after install
+
+| Asset | Where install puts it | Ownership |
+|-------|------------------------|-----------|
+| Bundled workflows | Local: `TARGET/.ralph/workflows/`; global: `$RALPH_HOME/bundle/.ralph/workflows/` | Installer-owned (updated on upgrade) |
+| Global user workflows | `$RALPH_HOME/workflows/` | User data; never recorded, overwritten, migrated, or uninstalled |
+| Project user workflows | `<state-root>/workflows/` | User data; same rule |
+| Packaged plugins | `$RALPH_HOME/plugins/ralph-orchestrator/<runtime>/` | Installer-owned copies; install never host-installs into Claude/Codex/Cursor/OpenCode/Antigravity |
+| Plugin journals | `$RALPH_HOME/plugin-installs/<runtime>.json` (user scope); `<state-root>/plugin-installs/opencode.json` (OpenCode project) | Written only by `ralph plugin`, never by `install.sh` |
+
+After install, use `ralph workflow list` / `ralph workflow start` for workflows, and `ralph plugin` for host plugin lifecycle. Safety config: [SECURITY.md](SECURITY.md#kill-switch-ralph-safety).
 
 ### Runtime setup (`ralph setup`)
 
@@ -119,7 +137,7 @@ ralph models remove claude claude-sonnet-4-6
 
 Antigravity does not use the saved-model store. Ralph lists available models via `agy models` and invokes `agy --model "<exact model string from agy models>"`, preserving the exact display string returned by `agy models`. Set `ANTIGRAVITY_PLAN_MODEL` for non-interactive runs.
 
-Saved models live in `~/.config/ralph/models.json` (override the directory with `RALPH_CONFIG_HOME`). The first saved model per runtime is the default when a plan run has no `--model` flag, env override, or agent-config model. You can also set `CLAUDE_PLAN_MODEL`, `CODEX_PLAN_MODEL`, or `ANTIGRAVITY_PLAN_MODEL` directly. Full resolution order: [ENVIRONMENT.md](ENVIRONMENT.md#models).
+Saved models live in `~/.config/ralph/models.json` (override the directory with `RALPH_CONFIG_HOME`). On attended `ralph run --plan` for Claude or Codex, Ralph shows every saved model and asks you to pick one (plus a custom-entry option). Index 0 is only used as a non-interactive fallback when `--model` / plan-header model is unset. Full resolution order: [ENVIRONMENT.md](ENVIRONMENT.md#models).
 
 ### Where things live
 
@@ -129,6 +147,9 @@ Saved models live in `~/.config/ralph/models.json` (override the directory with 
 | The `ralph` command | `~/.local/bin/ralph` | -- |
 | Settings (workspace registry, models) | `~/.config/ralph/` | `XDG_CONFIG_HOME`, `RALPH_CONFIG_HOME` |
 | Global session state | `~/.local/state/ralph/` | `XDG_STATE_HOME` |
+| Global user workflows | `~/.ralph/workflows/` | under `RALPH_HOME` |
+| Packaged plugins | `~/.ralph/plugins/ralph-orchestrator/<runtime>/` | under `RALPH_HOME` |
+| User-scope plugin journals | `~/.ralph/plugin-installs/<runtime>.json` | under `RALPH_HOME` |
 | Shared runtime configs (optional) | `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, `~/.agents/` | `RALPH_GLOBAL_RUNTIME_HOME` |
 
 Plan logs and artifacts always stay in each project's own `.ralph-workspace/` directory unless you move them with `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`. When a project has no local `.ralph/`, session state defaults to `~/.local/state/ralph/sessions/` instead (an explicit `RALPH_PLAN_SESSION_HOME` always wins).
@@ -229,7 +250,7 @@ These flags work in both modes: `install.sh --global` updates `$RALPH_HOME`, and
 
 Combine `--cursor`, `--claude`, `--codex`, `--opencode`, `--antigravity`, and `--shared` to trim what is copied.
 
-**Partial installs:** a runtime flag alone (for example `--cursor`) does not install the shared `.ralph/` scripts. Add `--shared` when you need the runner, orchestrator, and templates -- the Claude and Codex runners also expect `.ralph/agent-config-tool.sh` when you use `--agent`. A default install still copies the dashboard into `.ralph/ralph-dashboard/`, so a `.ralph/` directory may exist that only contains the dashboard until you add `--shared`.
+**Partial installs:** a runtime flag alone (for example `--cursor`) does not install the shared `.ralph/` scripts. Add `--shared` when you need the runner, orchestrator, and templates. A default install still copies the dashboard into `.ralph/ralph-dashboard/`, so a `.ralph/` directory may exist that only contains the dashboard until you add `--shared`.
 
 ## Uninstall
 
@@ -277,9 +298,26 @@ ralph dashboard
 cd .ralph/ralph-dashboard && npm install && npm run build && PORT=8124 npm start
 ```
 
+## Host plugins (`ralph plugin`)
+
+Installing Ralph copies generated packages to `$RALPH_HOME/plugins/ralph-orchestrator/<runtime>/` but does **not** register them with a host. Host install is a separate lifecycle:
+
+```bash
+ralph plugin list
+ralph plugin status --runtime claude
+ralph plugin install --runtime claude --dry-run
+ralph plugin install --runtime claude          # TTY confirm; non-TTY needs --yes
+ralph plugin install --runtime opencode --workspace /path/to/project
+ralph plugin remove --runtime cursor --yes
+```
+
+Supported default scopes: Claude, Codex, Cursor, and Antigravity use `user`; OpenCode uses `project`. Any other scope exits 2. Preview is mandatory; `--dry-run` never mutates; states are `absent|current|drifted|unverifiable`. Operator guide (repository checkout): `plugins/ralph-orchestrator/README.md`.
+
 ## See also
 
 - [Documentation index](README.md)
+- [Security](SECURITY.md) -- `ralph safety` killswitch CLI and fail-closed loading
+- [Workflows](WORKFLOWS.md) -- including global workflows under `$RALPH_HOME/workflows/`
 - [Agent workflow](AGENT-WORKFLOW.md) -- how the plan loop works
 - [Tooling](TOOLING.md) -- optional Ralph mode, compaction, native adapters
 - [MCP](MCP.md) -- optional MCP server configuration after install

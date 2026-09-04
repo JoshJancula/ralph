@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Validate compiled .graph.json structure, including optional resilience and
 # budget objects. Existing graphs that omit those objects remain valid and
-# parse as legacy fail-fast with no token/cost ceilings.
+# parse as fail-fast with no token/cost ceilings.
 #
 # This file is a CLI (`validate-graph-schema.sh <graph-file>`) and may also
 # be sourced for parse helpers used by later scheduler work.
@@ -201,16 +201,38 @@ graph_schema_validate_budgets_object() {
 # Prints the compiled-graph object at .<key> or .pipeline.<key>, or null.
 graph_schema_declared_object() {
   local graph_file="$1" key="$2"
-  jq -c --arg key "$key" '
+  local cache_name value
+
+  # Per-process memo. This is the hottest jq call in a graph run: a five-node
+  # scheduler test resolved the same (file, key) pair 42 times, each one a
+  # ~19ms jq fork against an identical file. The compiled graph is frozen for
+  # the life of a run -- preflight refuses an unfrozen graph.json and nothing
+  # in the scheduling path writes it -- so a memo cannot go stale. Each
+  # dispatch is a fresh process, which bounds the cache lifetime naturally.
+  #
+  # bash 3.2 has no associative arrays, so the key is a sanitized dynamic
+  # variable name. The sanitization is pure parameter expansion: adding a fork
+  # here would defeat the point.
+  cache_name="_GRAPH_SCHEMA_DECL_${graph_file}_${key}"
+  cache_name="${cache_name//[^A-Za-z0-9_]/_}"
+  if [[ -n "${!cache_name+set}" ]]; then
+    printf '%s\n' "${!cache_name}"
+    return 0
+  fi
+
+  value="$(jq -c --arg key "$key" '
     if has($key) then .[$key]
     elif (has("pipeline") and (.pipeline | type == "object") and (.pipeline | has($key))) then .pipeline[$key]
     else null
     end
-  ' "$graph_file"
+  ' "$graph_file")" || return 1
+
+  printf -v "$cache_name" '%s' "$value"
+  printf '%s\n' "$value"
 }
 
 # graph_schema_parse_resilience_object <json-or-null>
-# Resolves retry/backoff/mode. Omitted objects are legacy fail-fast.
+# Resolves retry/backoff/mode. Omitted objects are fail-fast.
 # A present object uses conservative bounded defaults for missing fields,
 # unless mode is fail-fast (retry counts default to 0).
 graph_schema_parse_resilience_object() {
@@ -241,15 +263,11 @@ graph_schema_parse_resilience_object() {
 graph_schema_parse_budgets_object() {
   local declared="${1:-null}" scope="${2:-graph}" defaults
   if [[ -z "$declared" || "$declared" == "null" ]]; then
-    jq -nc '{
-      maxAttempts: null,
-      maxActiveSeconds: null,
-      maxRunActiveSeconds: null,
-      maxInputTokens: null,
-      maxOutputTokens: null,
-      maxEstimatedCostUsd: null,
-      missingUsage: "warn"
-    }'
+    # Compile-time constant: emit it directly rather than forking jq to render
+    # a fixed literal. This is the single hottest jq call in a graph run (42 of
+    # 683 forks in a five-node scheduler test), and the sibling default objects
+    # below are already plain strings.
+    printf '%s\n' '{"maxAttempts":null,"maxActiveSeconds":null,"maxRunActiveSeconds":null,"maxInputTokens":null,"maxOutputTokens":null,"maxEstimatedCostUsd":null,"missingUsage":"warn"}'
     return 0
   fi
   graph_schema_validate_budgets_object "$declared" "budgets" "$scope" || return 1
@@ -360,8 +378,8 @@ graph_schema_validate_file() {
   done
 
   schema_version="$(jq -r '.schemaVersion' "$graph_file")"
-  if [[ "$schema_version" != "1" ]]; then
-    graph_schema_fail "schemaVersion must be 1"
+  if [[ "$schema_version" != "2" ]]; then
+    graph_schema_fail "schemaVersion must be 2"
     return 1
   fi
 
@@ -376,9 +394,21 @@ graph_schema_validate_file() {
         ;;
     esac
   fi
-  if jq -e '[.nodes[] | select(.stage.ralphMode != null)] | length > 0' "$graph_file" >/dev/null 2>&1; then
-    graph_schema_fail "ralphMode is not allowed on a node; declare it once at the graph level"
-    return 1
+  # Optional per-node tooling profile override. When present it must name one
+  # of the profiles declared in tooling-profiles.json (single source of truth).
+  if jq -e '[.nodes[] | select(.stage.toolingProfile != null)] | length > 0' "$graph_file" >/dev/null 2>&1; then
+    local tooling_profiles_path
+    tooling_profiles_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/tooling-profiles.json"
+    if [[ -f "$tooling_profiles_path" ]]; then
+      if ! jq -e --slurpfile profiles_doc "$tooling_profiles_path" '
+          ($profiles_doc[0].profiles // {}) as $profiles |
+          [.nodes[] | select(.stage.toolingProfile != null) | .stage.toolingProfile] |
+          all(. as $name | $profiles | has($name))
+        ' "$graph_file" >/dev/null 2>&1; then
+        graph_schema_fail "toolingProfile on a node must be one of the declared tooling-profiles.json profile names"
+        return 1
+      fi
+    fi
   fi
 
   if [[ "$(jq -r '.ralphVersion | type' "$graph_file")" != "string" ]] || [[ -z "$(jq -r '.ralphVersion' "$graph_file")" ]]; then
@@ -446,12 +476,37 @@ graph_schema_validate_file() {
       return 1
     fi
     case "$node_type" in
-      agent|stage|join|router|checkpoint|integrate|gate|consensus-voter|consensus-barrier) ;;
+      agent|stage|join|router|checkpoint|integrate|gate|approval|consensus-voter|consensus-barrier) ;;
       *) graph_schema_fail "node $node_id: unknown node type $node_type"; return 1 ;;
     esac
     if ! printf '%s' "$node" | jq -e 'has("dependsOn") and has("derivedFrom") and has("stage")' >/dev/null 2>&1; then
       graph_schema_fail "node $node_id missing required graph fields"
       return 1
+    fi
+    if [[ "$node_type" == "approval" ]]; then
+      # Public Dependency approval is a frozen supervisor boundary: never
+      # checkpoint/humanAck vocabulary, never agent/runtime fields.
+      if ! printf '%s' "$node" | jq -e '
+          (.stage.type // "") == "approval"
+          and ((.stage.question // "") | type == "string" and length > 0)
+          and ((.stage.changesTarget // "") | type == "string" and length > 0)
+          and ((.dependsOn | type) == "array" and (.dependsOn | length) > 0)
+          and (
+            ((.stage.inputArtifacts // []) | type == "array" and length > 0)
+            or ((.stage.requires // []) | type == "array" and length > 0)
+          )
+          and (.stage.humanAck // null) == null
+          and (.stage.runtime // null) == null
+          and (.stage.model // null) == null
+          and (.stage.agent // null) == null
+          and (.stage.role // null) == null
+          and (.stage.plan // null) == null
+          and (.stage.planFile // null) == null
+          and (.stage.planFrom // null) == null
+        ' >/dev/null 2>&1; then
+        graph_schema_fail "node $node_id: approval requires question, changesTarget, dependsOn, and required artifacts without agent/runtime/plan/humanAck fields"
+        return 1
+      fi
     fi
     while IFS= read -r dep; do
       [ -n "$dep" ] || continue

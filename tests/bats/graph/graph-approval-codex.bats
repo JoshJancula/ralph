@@ -552,3 +552,37 @@ start_codex_wait_session() {
   [ "$(cat "$session_dir/state")" = "closed" ]
   [ "$(cat "$session_dir/close.reason")" = "supervisor" ]
 }
+
+@test "cross-runtime fake-adapter permission normalization asserts exact action resource choices" {
+  # Codex destination for normalize-other-runtime-permissions: elevate a fake
+  # app-server approval into G15 without advertising always-policy.
+  write_codex_app_server_help_stub supported
+  export CODEX_PLAN_CLI="$BIN_DIR/codex"
+
+  run run_plan_invoke_codex_graph_approval_parse_permission "$(command_request_json)"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$output" | jq -r '.runtime')" = "codex" ]
+  [ "$(printf '%s' "$output" | jq -r '.sessionId')" = "thr-cmd" ]
+  [ "$(printf '%s' "$output" | jq -r '.nativeRequestId')" = "11" ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "bash" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "execute" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "ls -la src" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" = "write" ]
+  [ "$(printf '%s' "$output" | jq -c '.choices')" = '["allow-once","allow-run","deny"]' ]
+  [ "$(printf '%s' "$output" | jq -c '.lifetimes')" = '["once","run"]' ]
+  [ "$(printf '%s' "$output" | jq -r '.choices | index("allow-always")')" = "null" ]
+  [ "$(printf '%s' "$output" | jq -r '.choices | index("accept")')" = "null" ]
+
+  run run_plan_invoke_codex_graph_approval_parse_permission "$(file_request_json)"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "/tmp/ws/src" ]
+  [ "$(printf '%s' "$output" | jq -c '.choices')" = '["allow-once","allow-run","deny"]' ]
+
+  run run_plan_invoke_codex_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.classification')" = "unknown" ]
+}

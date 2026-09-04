@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
-# Sync canonical rules, skills, and agent bodies into per-runtime directories.
+# Sync canonical rules and skills into per-runtime directories.
 #
 # Canonical sources:
 #   root layer   - agents/rules/*.md, agents/skills/<id>/SKILL.md
-#                  agents/agents/<id>.md
 #   bundle layer - bundle/.ralph/rules/*.md, bundle/.ralph/skills/<id>/SKILL.md
-#                  bundle/.ralph/agents/<id>.md
 #
 # Generated targets (root layer at repo root; bundle layer under bundle/):
 #   .<runtime>/rules/<name>.md (.mdc for cursor)
 #   .<runtime>/skills/<id>/SKILL.md
-#   .<runtime>/agents/<id>/<id>.md  (.toml for codex)
+#
+# Native six-profile agent definitions are no longer generated. Existing
+# generated agent files are left untouched until a later cleanup step.
+# Hooks and plugin generation stay independent of runtime asset sync; each
+# has its own entry point and neither invokes the other.
 #
 # Usage:
 #   bash scripts/sync-runtime-assets.sh [--check] [--layer root|bundle]
 #
 # Default writes both layers. --check compares without writing and exits nonzero
-# when any generated file is missing, differs, or is stale.
+# when any generated file is missing, differs, or is stale; or when six-profile
+# agent outputs are missing and would be newly generated from still-present
+# canonical agent sources.
 set -euo pipefail
 
 SCRIPT_DIR="${SCRIPT_DIR:-}"
@@ -46,8 +50,8 @@ fi
 
 if ! declare -F agent_source_fm_scalar >/dev/null 2>&1; then
   for frontmatter_path in \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/agent-source/frontmatter.sh" \
-    "$REPO_ROOT/.ralph/bash-lib/agent-source/frontmatter.sh"; do
+    "$REPO_ROOT/bundle/.ralph/bash-lib/canonical-frontmatter.sh" \
+    "$REPO_ROOT/.ralph/bash-lib/canonical-frontmatter.sh"; do
     if [[ -r "$frontmatter_path" ]]; then
       # shellcheck source=/dev/null
       source "$frontmatter_path"
@@ -58,9 +62,9 @@ fi
 
 if ! declare -F ralph_validate_skill_package >/dev/null 2>&1; then
   for skill_package_path in \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/agent-config/skill-package.sh" \
-    "$REPO_ROOT/.ralph/bash-lib/agent-config/skill-package.sh" \
-    "$SCRIPT_DIR/../bundle/.ralph/bash-lib/agent-config/skill-package.sh"; do
+    "$REPO_ROOT/bundle/.ralph/bash-lib/skill-package.sh" \
+    "$REPO_ROOT/.ralph/bash-lib/skill-package.sh" \
+    "$SCRIPT_DIR/../bundle/.ralph/bash-lib/skill-package.sh"; do
     if [[ -r "$skill_package_path" ]]; then
       # shellcheck source=/dev/null
       source "$skill_package_path"
@@ -70,6 +74,9 @@ if ! declare -F ralph_validate_skill_package >/dev/null 2>&1; then
 fi
 
 RUNTIMES=(claude codex opencode cursor antigravity)
+# Fixed Ralph portable profile IDs. Generation of native agent defs for these
+# IDs is retired; --check still detects when those outputs are missing while
+# canonical agent sources remain (would newly generate).
 AGENT_IDS=(architect code-review implementation qa research security)
 MARKER_PREFIX='<!-- GENERATED from '
 MARKER_SUFFIX=' by scripts/sync-runtime-assets.sh - edit the canonical file -->'
@@ -82,10 +89,13 @@ sync_assets_usage() {
   cat <<'EOF' >&2
 Usage: sync-runtime-assets.sh [--check] [--layer root|bundle]
 
-Regenerate per-runtime rules and skills from canonical sources.
+Regenerate per-runtime rules and skills from canonical sources. Does not
+generate native six-profile agent definitions.
 
 Options:
-  --check           Compare generated files without writing; exit nonzero on drift.
+  --check           Compare generated files without writing; exit nonzero on
+                    rules/skills drift, or missing six-profile agent outputs
+                    that would be newly generated.
   --layer LAYER     Restrict to root or bundle layer (default: both).
   -h, --help        Show this help.
 EOF
@@ -721,7 +731,7 @@ print(data.get('canonical', ''))
 
 sync_assets_prune_stale_for_layer() {
   local layer="$1"
-  local prefix runtime rules_dir skills_dir agents_dir rule_glob ext registry_dir registry_rel registry_abs canonical_rel
+  local prefix runtime rules_dir skills_dir rule_glob
   prefix="$(sync_assets_layer_dest_prefix "$layer")"
 
   for runtime in "${RUNTIMES[@]}"; do
@@ -730,24 +740,103 @@ sync_assets_prune_stale_for_layer() {
     rule_glob="$(sync_assets_rule_glob_for_runtime "$runtime")"
     sync_assets_handle_stale_in_dir "$rules_dir" "$rule_glob"
     sync_assets_handle_stale_skills_in_dir "$skills_dir"
-    ext="md"
-    [[ "$runtime" == "codex" ]] && ext="toml"
-    agents_dir="$REPO_ROOT/${prefix}$(sync_assets_runtime_config_dirname "$runtime")/agents"
-    sync_assets_handle_stale_agents_in_dir "$agents_dir" "$ext"
+    # Do not prune or delete existing six-profile agent files or registries.
   done
+}
 
-  registry_rel="$(sync_assets_expected_antigravity_registry_dest "$layer")"
-  registry_abs="$REPO_ROOT/$registry_rel"
-  if [[ -f "$registry_abs" ]] && sync_assets_has_marker "$registry_abs"; then
-    canonical_rel="$(sync_assets_extract_canonical_rel "$registry_abs")" || canonical_rel=""
-    if [[ -z "$canonical_rel" || ! -e "$REPO_ROOT/$canonical_rel" ]]; then
-      sync_assets_report_issue "stale: $registry_rel"
-      if [[ "$CHECK_MODE" -eq 0 ]]; then
-        rm -f "$registry_abs"
+sync_assets_is_six_profile_id() {
+  local candidate="$1"
+  local id
+  for id in "${AGENT_IDS[@]}"; do
+    if [[ "$candidate" == "$id" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+
+# Native six-profile agent generation is retired. Never write agent defs or
+# registries. In --check, report when a six-profile output is missing while its
+# canonical agent source still exists (that path would newly generate output).
+sync_assets_check_six_profile_agent_generation() {
+  local layer="$1"
+  local agents_canonical agents_dir agent_path agent_id runtime dest_rel cfg_rel registry_rel
+
+  [[ "$CHECK_MODE" -eq 1 ]] || return 0
+
+  agents_canonical="$(sync_assets_layer_agents_canonical "$layer")"
+  agents_dir="$REPO_ROOT/$agents_canonical"
+  [[ -d "$agents_dir" ]] || return 0
+
+  while IFS= read -r agent_path; do
+    [[ -f "$agent_path" ]] || continue
+    agent_id="$(basename "$agent_path" .md)"
+    sync_assets_is_six_profile_id "$agent_id" || continue
+    for runtime in "${RUNTIMES[@]}"; do
+      dest_rel="$(sync_assets_expected_agent_dest "$layer" "$runtime" "$agent_id")"
+      if [[ ! -f "$REPO_ROOT/$dest_rel" ]]; then
+        sync_assets_report_issue "would newly generate six-profile output: $dest_rel"
       fi
+      cfg_rel="$(sync_assets_expected_agent_config_dest "$layer" "$runtime" "$agent_id")"
+      if [[ ! -f "$REPO_ROOT/$cfg_rel" ]]; then
+        sync_assets_report_issue "would newly generate six-profile output: $cfg_rel"
+      fi
+    done
+  done < <(find "$agents_dir" -maxdepth 1 -type f -name '*.md' | LC_ALL=C sort)
+
+  if [[ -n "$(find "$agents_dir" -maxdepth 1 -type f -name '*.md' | head -1)" ]]; then
+    registry_rel="$(sync_assets_expected_antigravity_registry_dest "$layer")"
+    if [[ ! -f "$REPO_ROOT/$registry_rel" ]]; then
+      sync_assets_report_issue "would newly generate six-profile output: $registry_rel"
     fi
   fi
 }
+
+sync_assets_progress() {
+  # Write mode is otherwise completely silent for minutes at a time, which reads as a
+  # hang. Check mode already reports per-file issues on stdout, so stay quiet there.
+  if [[ "$CHECK_MODE" -eq 0 ]]; then
+    printf '%s\n' "$1" >&2
+  fi
+}
+
+sync_assets_process_layer() {
+  local layer="$1"
+  sync_assets_progress "sync: $layer rules"
+  sync_assets_sync_rules_for_layer "$layer"
+  sync_assets_progress "sync: $layer skills"
+  sync_assets_sync_skills_for_layer "$layer"
+  # Stop generating native agent definitions. Existing files are left in place.
+  sync_assets_check_six_profile_agent_generation "$layer"
+  sync_assets_progress "sync: $layer prune"
+  sync_assets_prune_stale_for_layer "$layer"
+}
+
+sync_assets_main() {
+  sync_assets_parse_args "$@"
+
+  local layer
+  case "$LAYER_SCOPE" in
+    both)
+      sync_assets_process_layer root
+      sync_assets_process_layer bundle
+      ;;
+    root | bundle)
+      sync_assets_process_layer "$LAYER_SCOPE"
+      ;;
+    *)
+      sync_assets_usage
+      ;;
+  esac
+
+  if [[ "$ISSUES" -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+# Agent render helpers remain for unit tests that source this script. Native
+# six-profile generation is no longer invoked from sync_assets_process_layer.
 
 sync_assets_agent_canonical_rel() {
   local layer="$1"
@@ -802,13 +891,21 @@ sync_assets_agent_output_artifacts_list() {
 }
 
 sync_assets_agent_mcp_servers_list() {
+  # Profile mcp_servers parsing was removed. Reject presence; emit nothing.
   local canonical_abs="$1"
-  local mcp_script
-  mcp_script="$REPO_ROOT/bundle/.ralph/python/agent-config-mcp.py"
-  if [[ ! -f "$mcp_script" ]] || ! command -v python3 >/dev/null 2>&1; then
+  if [[ ! -r "$canonical_abs" ]]; then
     return 0
   fi
-  python3 "$mcp_script" --frontmatter "$canonical_abs" 2>/dev/null || true
+  if awk '
+    NR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { exit }
+    fm && /^mcp_servers[[:space:]]*:/ { found = 1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$canonical_abs"; then
+    echo "mcp_servers was removed from Ralph profiles. Configure MCP in native runtime settings. Run: ralph migrate agents-to-roles" >&2
+    return 1
+  fi
+  return 0
 }
 
 sync_assets_agent_max_budget() {
@@ -873,7 +970,8 @@ sync_assets_render_agent_config_json() {
   skills="$(sync_assets_agent_skills_list "$canonical_abs")"
   artifacts="$(sync_assets_agent_output_artifacts_list "$canonical_abs")"
   allowed_tools="$(sync_assets_agent_allowed_tools "$canonical_abs")"
-  mcp_servers="$(sync_assets_agent_mcp_servers_list "$canonical_abs")"
+  # Reject removed profile mcp_servers; do not emit normalized MCP context fields.
+  sync_assets_agent_mcp_servers_list "$canonical_abs" >/dev/null || return 1
 
   printf '{\n'
   printf '  "name": %s,\n' "$(sync_assets_json_string "$agent_id")"
@@ -941,20 +1039,6 @@ sync_assets_render_agent_config_json() {
       printf '    %s' "$(sync_assets_frontmatter_artifact_json "$artifact")"
       first=0
     done <<< "$artifacts"
-    printf '\n  ]'
-  fi
-  if [[ -n "$mcp_servers" ]]; then
-    printf ',\n  "mcp_servers": [\n'
-    first=1
-    local entry
-    while IFS= read -r entry; do
-      [[ -n "$entry" ]] || continue
-      if [[ "$first" -eq 0 ]]; then
-        printf ',\n'
-      fi
-      printf '    %s' "$entry"
-      first=0
-    done <<< "$mcp_servers"
     printf '\n  ]'
   fi
   printf '\n}\n'
@@ -1242,36 +1326,6 @@ sync_assets_handle_stale_agents_in_dir() {
       fi
     fi
   done
-}
-
-sync_assets_process_layer() {
-  local layer="$1"
-  sync_assets_sync_rules_for_layer "$layer"
-  sync_assets_sync_skills_for_layer "$layer"
-  sync_assets_sync_agents_for_layer "$layer"
-  sync_assets_prune_stale_for_layer "$layer"
-}
-
-sync_assets_main() {
-  sync_assets_parse_args "$@"
-
-  local layer
-  case "$LAYER_SCOPE" in
-    both)
-      sync_assets_process_layer root
-      sync_assets_process_layer bundle
-      ;;
-    root | bundle)
-      sync_assets_process_layer "$LAYER_SCOPE"
-      ;;
-    *)
-      sync_assets_usage
-      ;;
-  esac
-
-  if [[ "$ISSUES" -ne 0 ]]; then
-    exit 1
-  fi
 }
 
 sync_assets_main "$@"

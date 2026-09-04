@@ -4,12 +4,10 @@ pipeline:
   stages:
     - id: source
       runtime: cursor
-      agent: research
       produces:
         - path: shared/output.md
     - id: consumer
       runtime: cursor
-      agent: implementation
       dependsOn:
         - source
       requires:

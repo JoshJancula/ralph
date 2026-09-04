@@ -124,10 +124,8 @@ pipeline:
   stages:
     - id: source
       runtime: cursor
-      agent: implementation
     - id: sink
       runtime: cursor
-      agent: implementation
       dependsOn:
         - id: source
           condition: rejected-invalid
@@ -164,13 +162,11 @@ pipeline:
   stages:
     - id: a
       runtime: cursor
-      agent: implementation
       dependsOn:
         - id: b
           condition: passed
     - id: b
       runtime: cursor
-      agent: implementation
       dependsOn:
         - a
 todos:
@@ -266,7 +262,7 @@ write_cond_graph() {
   local out_path="$1" nodes_json="$2" edges_json="$3"
   cat >"$out_path" <<EOF
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ralphVersion": "test",
   "name": "cond-test",
   "namespace": "cond-test",
@@ -287,7 +283,7 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","agent":"impl"}}
+      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"publish","reasons":["declared"],"condition":"passed"}
@@ -321,8 +317,8 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","agent":"impl"}},
-      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","agent":"impl"}}
+      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","role":"impl"}},
+      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"publish","reasons":["declared"],"condition":"passed"},
@@ -349,7 +345,7 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","agent":"impl"}}
+      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"repair","reasons":["declared"],"condition":"changes-required"}
@@ -379,7 +375,7 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","agent":"impl"}}
+      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"publish","reasons":["declared"],"condition":"passed"}
@@ -403,8 +399,8 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","agent":"impl"}},
-      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","agent":"impl"}}
+      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","role":"impl"}},
+      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"publish","reasons":["declared"],"condition":"passed"},
@@ -439,9 +435,9 @@ EOF
   write_cond_graph "$gj" \
     '[
       {"id":"gate","type":"gate","dependsOn":[],"derivedFrom":"declared","stage":{"id":"gate"}},
-      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","agent":"impl"}},
-      {"id":"final","type":"agent","dependsOn":["publish"],"derivedFrom":"stage","stage":{"id":"final","runtime":"cursor","agent":"impl"}},
-      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","agent":"impl"}}
+      {"id":"publish","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"publish","runtime":"cursor","role":"impl"}},
+      {"id":"final","type":"agent","dependsOn":["publish"],"derivedFrom":"stage","stage":{"id":"final","runtime":"cursor","role":"impl"}},
+      {"id":"repair","type":"agent","dependsOn":["gate"],"derivedFrom":"stage","stage":{"id":"repair","runtime":"cursor","role":"impl"}}
     ]' \
     '[
       {"from":"gate","to":"publish","reasons":["declared"],"condition":"passed"},

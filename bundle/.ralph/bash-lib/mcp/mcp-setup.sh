@@ -528,7 +528,7 @@ ralph_mcp_proxy_preflight() {
     fi
   done
   if [[ "$scope" == graph-node ]]; then
-    for tool_name in ralph_delegate_start ralph_delegate_status ralph_delegate_wait ralph_delegate_result ralph_delegate_cancel; do
+    for tool_name in ralph_delegated_run_start ralph_delegated_run_status ralph_delegated_run_wait ralph_delegated_run_result ralph_delegated_run_cancel; do
       if ! jq -e --arg n "$tool_name" '[.tools[]?.name] | index($n) != null' <<< "$tools_result" >/dev/null 2>&1; then
         missing+=" $tool_name"
       fi

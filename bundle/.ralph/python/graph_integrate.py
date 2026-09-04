@@ -230,7 +230,9 @@ def integrate(args: argparse.Namespace) -> int:
             "kind": "integration-conflict",
             "integrationNodeId": args.node_id,
             "baseIdentity": args.base_identity,
+            "workspacePath": str(workspace),
             "inputs": input_records,
+            "conflictingPaths": sorted({item["path"] for item in conflicts}),
             "conflicts": conflicts,
         }
         atomic_json(conflict_output, artifact)

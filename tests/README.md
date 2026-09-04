@@ -79,7 +79,7 @@ bin/bats -T tests/bats/run-plan/run-plan-unified.bats
 
 ```bash
 bash scripts/capture-bats-timing.sh
-bash scripts/capture-bats-timing.sh -j 8
+bash scripts/capture-bats-timing.sh -j 4
 ```
 
 Output: `.ralph-workspace/logs/bats-timing/runs/<timestamp>/` with symlinks at `latest.json` and `latest.txt`.

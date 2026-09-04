@@ -233,8 +233,8 @@ make_stage_outcome() {
   [ -f "$stage_outcomes_dir/node-X__run-B__0.json" ]
 }
 
-@test "prune_graph_runs does not delete shared v1 namespace node logs" {
-  local workspace ns_dir state_root decoy v1_pruned
+@test "prune_graph_runs leaves namespace-unowned files untouched" {
+  local workspace ns_dir state_root decoy historical_file
   workspace="$(mktemp -d)"
   ns_dir="$workspace/.ralph-workspace/graph-runs/myns"
   state_root="$workspace/.ralph-workspace"
@@ -245,9 +245,8 @@ make_stage_outcome() {
   printf 'run-owned\n' >"$ns_dir/run-old/logs/supervisor.log"
   decoy="$state_root/logs/myns/nodes/shared/attempt-1.log"
   printf 'not-uniquely-owned\n' >"$decoy"
-  v1_pruned="$state_root/logs/myns/graph-schedule-run-old.log"
-  printf 'v1-old\n' >"$v1_pruned"
-  printf 'v1-kept\n' >"$state_root/logs/myns/graph-schedule-run-kept.log"
+  historical_file="$state_root/logs/myns/graph-schedule-run-old.log"
+  printf 'historical\n' >"$historical_file"
   set_mtime_days_ago "$ns_dir/run-old" 60
   ln -sfn "run-kept" "$ns_dir/latest"
 
@@ -258,6 +257,6 @@ make_stage_outcome() {
   [ -d "$ns_dir/run-kept" ]
   [ -f "$decoy" ]
   [ "$(cat "$decoy")" = "not-uniquely-owned" ]
-  [ ! -f "$v1_pruned" ]
-  [ -f "$state_root/logs/myns/graph-schedule-run-kept.log" ]
+  [ -f "$historical_file" ]
+  [ "$(cat "$historical_file")" = "historical" ]
 }

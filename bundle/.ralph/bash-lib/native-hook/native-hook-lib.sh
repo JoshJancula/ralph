@@ -165,7 +165,10 @@ ralph_native_hook_project_dir() {
   fi
 
   if [[ -n "$input_json_var" ]]; then
-    input_json="${!input_json_var:-{}}"
+    # Not "${!input_json_var:-{}}": bash closes that expansion one brace
+    # early, so a populated payload arrives with a stray trailing "}".
+    input_json="${!input_json_var:-}"
+    [[ -n "$input_json" ]] || input_json='{}'
     cwd="$(jq -r '.cwd // empty' <<<"$input_json")"
     if [[ -n "$cwd" ]]; then
       printf '%s\n' "$cwd"

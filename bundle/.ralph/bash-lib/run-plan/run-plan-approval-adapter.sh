@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Shared graph approval-adapter contract.
 #
-# This module owns capability discovery, common decision translation, and
-# the run-local reversible overlay fallback. Discovery is fail-closed: a
-# capability is supported only when a static proof or an explicit proof
-# object says so. Missing, malformed, aliased, or vague values stay
-# unsupported and are listed in `unsupported`. Callers must not infer live
-# streaming from session continuation, same-operation response from live
-# streaming, or one lifetime from another.
+# This module owns capability discovery, G15 permission-record normalization,
+# common decision translation, the run-local reversible overlay fallback, and
+# the G16 approval continuation transaction. Discovery is fail-closed: a
+# capability is supported only when a static proof or an explicit proof object
+# says so. Missing, malformed, aliased, or vague values stay unsupported and
+# are listed in `unsupported`. Callers must not infer live streaming from
+# session continuation, same-operation response from live streaming, or one
+# lifetime from another. Permission records advertise only choices/lifetimes
+# proved by capabilities. allow-once is offered only when same-operation
+# response or a narrow reversible overlay can enforce it; deny remains stronger.
 #
 # Decision translation maps a Ralph decision onto a native lifetime and
 # proves the native grant is equal to or narrower than the Ralph request.
@@ -133,6 +136,225 @@ ralph_approval_adapter_bool_word() {
     true) printf 'true' ;;
     *) printf 'false' ;;
   esac
+}
+
+# ralph_approval_adapter_choices_from_capabilities <capabilities-json>
+# Maps proved lifetimes onto Ralph operator choices. always-policy is the only
+# path to allow-always. Deny is always included for an actionable request.
+# Prints one compact JSON object: {choices:[...], lifetimes:[...]}.
+ralph_approval_adapter_choices_from_capabilities() {
+  local caps="${1-}"
+  if [[ -z "$caps" ]] || ! printf '%s' "$caps" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: approval adapter choices require a capabilities JSON object" >&2
+    return 1
+  fi
+  jq -nc --argjson caps "$caps" '
+    def life($name):
+      ($caps.lifetimes | type) == "object" and ($caps.lifetimes[$name] == true);
+    {
+      choices: (
+        []
+        + (if life("once") then ["allow-once"] else [] end)
+        + (if life("run") then ["allow-run"] else [] end)
+        + (if life("always-policy") then ["allow-always"] else [] end)
+        + ["deny"]
+      ),
+      lifetimes: (
+        []
+        + (if life("once") then ["once"] else [] end)
+        + (if life("run") then ["run"] else [] end)
+        + (if life("always-policy") then ["always-policy"] else [] end)
+      )
+    }
+  '
+}
+
+# ralph_approval_adapter_permission_unknown <runtime> <reason>
+# Compact non-actionable G15 rejection (classification unknown).
+ralph_approval_adapter_permission_unknown() {
+  local runtime="${1:-}"
+  local reason="${2:-permission request is not actionable}"
+  runtime="$(ralph_approval_adapter_normalize_runtime "$runtime")"
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "{\"schemaVersion\":1,\"runtime\":\"${runtime}\",\"actionable\":false,\"classification\":\"unknown\",\"reason\":\"${reason}\"}"
+    return 0
+  fi
+  jq -nc --arg runtime "$runtime" --arg reason "$reason" '{
+    schemaVersion: 1,
+    runtime: $runtime,
+    actionable: false,
+    classification: "unknown",
+    reason: $reason
+  }'
+}
+
+# ralph_approval_adapter_normalize_tool_tuple <tool> <action> <effect>
+# Canonicalizes tool/action/effect without broadening a proved read into write.
+# Prints compact JSON {tool,action,effect} or returns 1 when unmappable.
+ralph_approval_adapter_normalize_tool_tuple() {
+  local tool action effect
+  tool="$(ralph_approval_adapter_trim "${1-}" | tr '[:upper:]' '[:lower:]')"
+  action="$(ralph_approval_adapter_trim "${2-}" | tr '[:upper:]' '[:lower:]')"
+  effect="$(ralph_approval_adapter_trim "${3-}" | tr '[:upper:]' '[:lower:]')"
+
+  case "$tool" in
+    bash|shell)
+      tool="bash"
+      [[ -n "$action" ]] || action="execute"
+      [[ -n "$effect" ]] || effect="write"
+      ;;
+    edit|write|patch)
+      [[ -n "$action" ]] || action="edit"
+      [[ -n "$effect" ]] || effect="write"
+      ;;
+    read|glob|grep)
+      [[ -n "$action" ]] || action="read"
+      [[ -n "$effect" ]] || effect="read"
+      ;;
+    webfetch|websearch)
+      [[ -n "$action" ]] || action="fetch"
+      [[ -n "$effect" ]] || effect="network"
+      ;;
+    *)
+      if [[ -z "$tool" ]]; then
+        return 1
+      fi
+      [[ -n "$action" ]] || action="$tool"
+      [[ -n "$effect" ]] || effect="write"
+      ;;
+  esac
+
+  case "$effect" in
+    read|write|network) ;;
+    edit|shell) effect="write" ;;
+    *) effect="write" ;;
+  esac
+
+  jq -nc --arg tool "$tool" --arg action "$action" --arg effect "$effect" \
+    '{tool:$tool, action:$action, effect:$effect}'
+}
+
+# ralph_approval_adapter_build_permission_record <fields-json> <capabilities-json>
+# Elevates a proved identity into the G15 actionable permission request
+# contract. Choices and lifetimes come only from capabilities -- never invent
+# allow-always / always-policy when the adapter cannot enforce them.
+#
+# Required fields: runtime, sessionId, nativeRequestId, tool, action, resource,
+# effect. Optional: reason, expiresAt.
+#
+# Prints one compact JSON object. Exit 0 when input is JSON; callers must check
+# .actionable. Exit 1 only for empty/malformed input or missing jq.
+ralph_approval_adapter_build_permission_record() {
+  local fields="${1-}"
+  local caps="${2-}"
+  local reason_max=200
+  local choice_doc choices_json lifetimes_json
+  local runtime session_id request_id tool action resource effect reason expires
+  local mapped
+
+  if [[ -z "$fields" ]]; then
+    echo "Error: approval adapter permission record requires a fields JSON object" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for approval adapter permission records" >&2
+    return 1
+  fi
+  if ! printf '%s' "$fields" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: approval adapter permission record fields must be a JSON object" >&2
+    return 1
+  fi
+
+  runtime="$(ralph_approval_adapter_normalize_runtime "$(printf '%s' "$fields" | jq -r '.runtime // empty')")"
+  session_id="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.sessionId // .sessionID // .session // empty')")"
+  request_id="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.nativeRequestId // .requestId // .id // empty')")"
+  tool="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.tool // empty')")"
+  action="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.action // empty')")"
+  resource="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.resource // empty')")"
+  effect="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.effect // empty')")"
+  reason="$(ralph_approval_adapter_trim "$(printf '%s' "$fields" | jq -r '.reason // empty')")"
+  expires="$(printf '%s' "$fields" | jq -c '.expiresAt // null')"
+
+  if [[ "$(printf '%s' "$tool" | tr '[:upper:]' '[:lower:]')" == "permission"
+        && "$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')" == "permission"
+        && "$(printf '%s' "$effect" | tr '[:upper:]' '[:lower:]')" == "write" ]]; then
+    ralph_approval_adapter_permission_unknown "$runtime" \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  if [[ -z "$runtime" || -z "$session_id" || -z "$request_id" || -z "$resource" ]]; then
+    ralph_approval_adapter_permission_unknown "$runtime" \
+      "permission event is missing actionable identity"
+    return 0
+  fi
+
+  if ! mapped="$(ralph_approval_adapter_normalize_tool_tuple "$tool" "$action" "$effect")"; then
+    ralph_approval_adapter_permission_unknown "$runtime" \
+      "permission event is missing actionable tool identity"
+    return 0
+  fi
+  tool="$(printf '%s' "$mapped" | jq -r '.tool')"
+  action="$(printf '%s' "$mapped" | jq -r '.action')"
+  effect="$(printf '%s' "$mapped" | jq -r '.effect')"
+
+  if [[ "$(printf '%s' "$tool" | tr '[:upper:]' '[:lower:]')" == "permission"
+        && "$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')" == "permission"
+        && "$effect" == "write" ]]; then
+    ralph_approval_adapter_permission_unknown "$runtime" \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  # Proved read must not broaden to write.
+  if [[ "$(printf '%s' "$fields" | jq -r '.effect // empty' | tr '[:upper:]' '[:lower:]')" == "read"
+        && "$effect" != "read" ]]; then
+    ralph_approval_adapter_permission_unknown "$runtime" \
+      "permission parse must not convert a read request into a write effect"
+    return 0
+  fi
+
+  if [[ -z "$caps" ]] || ! printf '%s' "$caps" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    caps="$(ralph_approval_adapter_capabilities "$runtime")"
+  fi
+  choice_doc="$(ralph_approval_adapter_choices_from_capabilities "$caps")" || return 1
+  choices_json="$(printf '%s' "$choice_doc" | jq -c '.choices')"
+  lifetimes_json="$(printf '%s' "$choice_doc" | jq -c '.lifetimes')"
+
+  if [[ -z "$reason" ]]; then
+    reason="${runtime} ${tool} ${action} requires approval for ${resource}"
+  fi
+  if ((${#reason} > reason_max)); then
+    reason="${reason:0:$((reason_max - 3))}..."
+  fi
+
+  jq -nc \
+    --arg runtime "$runtime" \
+    --arg session "$session_id" \
+    --arg request_id "$request_id" \
+    --arg tool "$tool" \
+    --arg action "$action" \
+    --arg resource "$resource" \
+    --arg effect "$effect" \
+    --arg reason "$reason" \
+    --argjson choices "$choices_json" \
+    --argjson lifetimes "$lifetimes_json" \
+    --argjson expires "$expires" \
+    '{
+      schemaVersion: 1,
+      runtime: $runtime,
+      actionable: true,
+      sessionId: $session,
+      nativeRequestId: $request_id,
+      tool: $tool,
+      action: $action,
+      resource: $resource,
+      effect: $effect,
+      choices: $choices,
+      lifetimes: $lifetimes,
+      reason: $reason,
+      expiresAt: $expires
+    }'
 }
 
 # ralph_approval_adapter_capabilities [runtime] [proof-json]
@@ -776,25 +998,26 @@ ralph_approval_adapter_overlay_load_state() {
 
 # ralph_approval_adapter_overlay_save_state
 ralph_approval_adapter_overlay_save_state() {
-  local state_path idx compact="false"
+  local state_path idx compact="false" entries="[]" entry
   state_path="$(ralph_approval_adapter_overlay_state_path)" || return 1
   mkdir -p "$(dirname "$state_path")"
   if [[ "${RALPH_APPROVAL_ADAPTER_COMPACT_TURN_USED:-0}" == "1" ]]; then
     compact="true"
   fi
-  {
-    printf '{"schemaVersion":%s,"compactTurnUsed":%s,"entries":[' \
-      "$RALPH_APPROVAL_ADAPTER_SCHEMA_VERSION" "$compact"
-    for ((idx=0; idx<${#RALPH_APPROVAL_ADAPTER_OVERLAY_TARGETS[@]}; idx++)); do
-      [[ "$idx" -eq 0 ]] || printf ','
-      jq -nc \
-        --arg path "${RALPH_APPROVAL_ADAPTER_OVERLAY_TARGETS[idx]}" \
-        --arg backup "${RALPH_APPROVAL_ADAPTER_OVERLAY_BACKUPS[idx]:-}" \
-        --argjson existed "${RALPH_APPROVAL_ADAPTER_OVERLAY_EXISTED[idx]:-0}" \
-        '{path:$path,backup:$backup,existed:$existed}'
-    done
-    printf ']}\n'
-  } >"$state_path"
+  entries="[]"
+  for ((idx=0; idx<${#RALPH_APPROVAL_ADAPTER_OVERLAY_TARGETS[@]}; idx++)); do
+    entry="$(jq -nc \
+      --arg path "${RALPH_APPROVAL_ADAPTER_OVERLAY_TARGETS[idx]}" \
+      --arg backup "${RALPH_APPROVAL_ADAPTER_OVERLAY_BACKUPS[idx]:-}" \
+      --argjson existed "${RALPH_APPROVAL_ADAPTER_OVERLAY_EXISTED[idx]:-0}" \
+      '{path:$path,backup:$backup,existed:$existed}')" || return 1
+    entries="$(jq -nc --argjson acc "$entries" --argjson ent "$entry" '$acc + [$ent]')" || return 1
+  done
+  jq -nc \
+    --argjson schema "$RALPH_APPROVAL_ADAPTER_SCHEMA_VERSION" \
+    --argjson compact "$compact" \
+    --argjson entries "$entries" \
+    '{schemaVersion:$schema,compactTurnUsed:$compact,entries:$entries}' >"$state_path"
 }
 
 # ralph_approval_adapter_overlay_reset
@@ -1017,4 +1240,429 @@ ralph_approval_adapter_overlay_fallback() {
       compactTurns: (if $continuation == "compact" then 1 else 0 end),
       fallbackName: (if $fallback == "" then "overlay" else $fallback end)
     }'
+}
+
+# ---------------------------------------------------------------------------
+# G16 approval continuation transaction
+# ---------------------------------------------------------------------------
+#
+# Before retry the adapter either answers the original native request
+# (same-operation) or installs a journaled narrow overlay. allow-once is
+# consumed atomically when that continuation begins. The same normalized
+# tuple must not immediately recreate itself while an allow-once continuation
+# is active; that is an adapter defect, not a fresh operator prompt.
+# Unsupported lifetimes never appear in choices. Deny remains stronger and
+# does not write an allow overlay.
+
+# ralph_approval_adapter_iso_now
+ralph_approval_adapter_iso_now() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+# ralph_approval_adapter_continuation_root
+# Run-local directory for continuation / consume / active-tuple state.
+ralph_approval_adapter_continuation_root() {
+  local plan_key="${RALPH_PLAN_KEY:-}" state_dir
+  ralph_approval_adapter_ensure_overlay_lib || return 1
+  if [[ -n "${RUNTIME_OVERLAY_STATE_DIR:-}" ]]; then
+    printf '%s/approval-continuation' "$RUNTIME_OVERLAY_STATE_DIR"
+    return 0
+  fi
+  [[ -n "$plan_key" ]] || return 1
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_dir="$(_runtime_overlay_workspace_root)/runtime-config/${plan_key}"
+  else
+    state_dir="$(_runtime_overlay_project_root)/.ralph-workspace/runtime-config/${plan_key}"
+  fi
+  printf '%s/approval-continuation' "$state_dir"
+}
+
+# ralph_approval_adapter_normalized_tuple <request-json>
+# Exact normalized identity for create-once binding.
+ralph_approval_adapter_normalized_tuple() {
+  local input="${1:-}"
+  if [[ -z "$input" ]] || ! printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: approval adapter normalized tuple requires a JSON object" >&2
+    return 1
+  fi
+  printf '%s' "$input" | jq -c '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      else "" end;
+    {
+      runtime: (str(.runtime // "") | ascii_downcase),
+      tool: str(.tool // .request.tool // .grant.tool // ""),
+      action: str(.action // .request.action // .grant.action // ""),
+      resource: str(.resource // .request.resource // .grant.resource // ""),
+      effect: str(.effect // .request.effect // .grant.effect // ""),
+      sessionId: str(.sessionId // .session_id // .session // ""),
+      nativeRequestId: str(.nativeRequestId // .requestId // .id // "")
+    }
+  '
+}
+
+# ralph_approval_adapter_can_enforce_once <capabilities-json>
+# allow-once requires same-operation response or the tested overlay fallback
+# (lifetime:once proved, or no explicit once:false veto).
+ralph_approval_adapter_can_enforce_once() {
+  local caps="${1:-}"
+  if [[ -z "$caps" ]] || ! printf '%s' "$caps" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    return 0
+  fi
+  if ralph_approval_adapter_capability_is_supported "$caps" sameOperationResponse; then
+    return 0
+  fi
+  if ralph_approval_adapter_capability_is_supported "$caps" "lifetime:once"; then
+    return 0
+  fi
+  # Explicit once:false without same-operation means allow-once must not be offered.
+  if printf '%s' "$caps" | jq -e '(.lifetimes | type) == "object" and .lifetimes.once == false' >/dev/null 2>&1; then
+    return 1
+  fi
+  # Overlay fallback remains the tested narrow continuation path.
+  return 0
+}
+
+# ralph_approval_adapter_active_continuation_path
+ralph_approval_adapter_active_continuation_path() {
+  local root
+  root="$(ralph_approval_adapter_continuation_root)" || return 1
+  printf '%s/active.json' "$root"
+}
+
+# ralph_approval_adapter_continuation_record_path <request-id>
+ralph_approval_adapter_continuation_record_path() {
+  local request_id="${1:-}" root
+  [[ -n "$request_id" ]] || return 1
+  root="$(ralph_approval_adapter_continuation_root)" || return 1
+  printf '%s/continuations/%s.json' "$root" "$request_id"
+}
+
+# ralph_approval_adapter_consume_record_path <request-id>
+ralph_approval_adapter_consume_record_path() {
+  local request_id="${1:-}" root
+  [[ -n "$request_id" ]] || return 1
+  root="$(ralph_approval_adapter_continuation_root)" || return 1
+  printf '%s/consumed/%s.json' "$root" "$request_id"
+}
+
+# ralph_approval_adapter_clear_active_continuation
+ralph_approval_adapter_clear_active_continuation() {
+  local path
+  path="$(ralph_approval_adapter_active_continuation_path 2>/dev/null || true)"
+  [[ -n "$path" && -f "$path" ]] || return 0
+  rm -f "$path"
+}
+
+# ralph_approval_adapter_assert_not_recreated <request-json>
+# Fail as adapter-defect when an active allow-once continuation covers the
+# same normalized tuple and the new request id differs (immediate recreation).
+ralph_approval_adapter_assert_not_recreated() {
+  local input="${1:-}" active_path active tuple request_id active_id
+  local tool action resource effect runtime
+
+  active_path="$(ralph_approval_adapter_active_continuation_path 2>/dev/null || true)"
+  [[ -n "$active_path" && -f "$active_path" ]] || return 0
+
+  tuple="$(ralph_approval_adapter_normalized_tuple "$input")" || return 1
+  request_id="$(printf '%s' "$tuple" | jq -r '.nativeRequestId // empty')"
+  runtime="$(printf '%s' "$tuple" | jq -r '.runtime // empty')"
+  tool="$(printf '%s' "$tuple" | jq -r '.tool // empty')"
+  action="$(printf '%s' "$tuple" | jq -r '.action // empty')"
+  resource="$(printf '%s' "$tuple" | jq -r '.resource // empty')"
+  effect="$(printf '%s' "$tuple" | jq -r '.effect // empty')"
+
+  active="$(cat "$active_path")"
+  active_id="$(printf '%s' "$active" | jq -r '.nativeRequestId // empty')"
+  if [[ "$(printf '%s' "$active" | jq -r '.decision // empty')" != "allow-once" ]]; then
+    return 0
+  fi
+  if [[ "$request_id" == "$active_id" ]]; then
+    echo "Error: approval adapter continuation defect: same request recreated after consume ($request_id)" >&2
+    return 1
+  fi
+  if [[ "$(printf '%s' "$active" | jq -r '.tuple.runtime // empty')" == "$runtime" \
+        && "$(printf '%s' "$active" | jq -r '.tuple.tool // empty')" == "$tool" \
+        && "$(printf '%s' "$active" | jq -r '.tuple.action // empty')" == "$action" \
+        && "$(printf '%s' "$active" | jq -r '.tuple.resource // empty')" == "$resource" \
+        && "$(printf '%s' "$active" | jq -r '.tuple.effect // empty')" == "$effect" ]]; then
+    echo "Error: approval adapter continuation defect: normalized tuple recreated after allow-once ($active_id -> $request_id)" >&2
+    return 1
+  fi
+  return 0
+}
+
+# ralph_approval_adapter_write_consume_record <request-json> <decision> <path-kind>
+# Create-once consume record. Second write of the same request id fails.
+ralph_approval_adapter_write_consume_record() {
+  local input="${1:-}" decision="${2:-}" path_kind="${3:-adapter-continuation}"
+  local tuple request_id path tmp root
+
+  tuple="$(ralph_approval_adapter_normalized_tuple "$input")" || return 1
+  request_id="$(printf '%s' "$tuple" | jq -r '.nativeRequestId // empty')"
+  if [[ -z "$request_id" ]]; then
+    echo "Error: approval adapter consume requires nativeRequestId" >&2
+    return 1
+  fi
+  path="$(ralph_approval_adapter_consume_record_path "$request_id")" || return 1
+  if [[ -f "$path" ]]; then
+    echo "Error: approval adapter decision already consumed: $request_id" >&2
+    return 1
+  fi
+  root="$(dirname "$path")"
+  mkdir -p "$root" || return 1
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-approval-consume.XXXXXX")" || return 1
+  jq -nc \
+    --argjson tuple "$tuple" \
+    --arg decision "$decision" \
+    --arg path_kind "$path_kind" \
+    --arg consumedAt "$(ralph_approval_adapter_iso_now)" \
+    --arg requestId "$request_id" \
+    '{
+      schemaVersion: 1,
+      requestId: $requestId,
+      decision: $decision,
+      path: $path_kind,
+      consumedAt: $consumedAt,
+      tuple: $tuple
+    }' >"$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
+  if ! ln "$tmp" "$path" 2>/dev/null; then
+    if [[ -f "$path" ]]; then
+      rm -f "$tmp"
+      echo "Error: approval adapter decision already consumed: $request_id" >&2
+      return 1
+    fi
+    mv "$tmp" "$path" || {
+      rm -f "$tmp"
+      return 1
+    }
+  else
+    rm -f "$tmp"
+  fi
+  printf '%s\n' "$path"
+}
+
+# ralph_approval_adapter_write_continuation_record <request-json> <decision> <path-kind> <applied-json>
+ralph_approval_adapter_write_continuation_record() {
+  local input="${1:-}" decision="${2:-}" path_kind="${3:-overlay}"
+  local applied="${4:-"{}"}"
+  local tuple request_id path root tmp_applied
+
+  tuple="$(ralph_approval_adapter_normalized_tuple "$input")" || return 1
+  request_id="$(printf '%s' "$tuple" | jq -r '.nativeRequestId // empty')"
+  if [[ -z "$request_id" ]]; then
+    echo "Error: approval adapter continuation requires nativeRequestId" >&2
+    return 1
+  fi
+  path="$(ralph_approval_adapter_continuation_record_path "$request_id")" || return 1
+  root="$(dirname "$path")"
+  mkdir -p "$root" || return 1
+  tmp_applied="$(mktemp "${TMPDIR:-/tmp}/ralph-approval-applied.XXXXXX")" || return 1
+  if ! printf '%s' "$applied" | jq -c '.' >"$tmp_applied" 2>/dev/null; then
+    rm -f "$tmp_applied"
+    echo "Error: approval adapter continuation applied payload must be JSON" >&2
+    return 1
+  fi
+  jq -nc \
+    --argjson tuple "$tuple" \
+    --slurpfile applied "$tmp_applied" \
+    --arg decision "$decision" \
+    --arg path_kind "$path_kind" \
+    --arg requestId "$request_id" \
+    --arg at "$(ralph_approval_adapter_iso_now)" \
+    '{
+      schemaVersion: 1,
+      requestId: $requestId,
+      decision: $decision,
+      path: $path_kind,
+      createdAt: $at,
+      tuple: $tuple,
+      applied: $applied[0]
+    }' >"$path" || {
+    rm -f "$tmp_applied"
+    return 1
+  }
+  rm -f "$tmp_applied"
+  printf '%s\n' "$path"
+}
+
+# ralph_approval_adapter_set_active_continuation <request-json> <decision> <path-kind>
+ralph_approval_adapter_set_active_continuation() {
+  local input="${1:-}" decision="${2:-}" path_kind="${3:-overlay}"
+  local tuple request_id path root
+
+  tuple="$(ralph_approval_adapter_normalized_tuple "$input")" || return 1
+  request_id="$(printf '%s' "$tuple" | jq -r '.nativeRequestId // empty')"
+  path="$(ralph_approval_adapter_active_continuation_path)" || return 1
+  root="$(dirname "$path")"
+  mkdir -p "$root" || return 1
+  jq -nc \
+    --argjson tuple "$tuple" \
+    --arg decision "$decision" \
+    --arg path_kind "$path_kind" \
+    --arg requestId "$request_id" \
+    --arg at "$(ralph_approval_adapter_iso_now)" \
+    '{
+      schemaVersion: 1,
+      nativeRequestId: $requestId,
+      decision: $decision,
+      path: $path_kind,
+      startedAt: $at,
+      tuple: $tuple
+    }' >"$path" || return 1
+}
+
+# ralph_approval_adapter_continue <request-json> [capabilities-json]
+#
+# G16 transaction. request-json fields:
+#   decision, runtime, tool?, action, resource, effect, sessionId,
+#   nativeRequestId|requestId, target?, overlay?, sameOperationReply?
+#     (bool: caller already answered the live native request)
+#
+# allow-once: same-operation reply OR journaled narrow overlay before retry.
+# If neither is possible, refuse (do not offer allow-once).
+# Consumes allow-once atomically when continuation begins.
+# Prints one compact JSON object with continuation + consume paths.
+ralph_approval_adapter_continue() {
+  local input="${1:-}" caps="${2:-}"
+  local decision lifetime translated applied path_kind
+  local consume_path continuation_path session_id request_id
+  local same_op_done overlay_input runtime tmp_applied
+
+  if [[ -z "$input" ]] || ! printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: approval adapter continue requires a JSON object" >&2
+    return 1
+  fi
+  ralph_approval_adapter_assert_not_recreated "$input" || return 1
+
+  decision="$(ralph_approval_adapter_trim "$(printf '%s' "$input" | jq -r '.decision // empty')")"
+  runtime="$(ralph_approval_adapter_normalize_runtime "$(printf '%s' "$input" | jq -r '.runtime // empty')")"
+  session_id="$(printf '%s' "$input" | jq -r '.sessionId // .session_id // .session // empty')"
+  request_id="$(printf '%s' "$input" | jq -r '.nativeRequestId // .requestId // .id // empty')"
+  same_op_done="$(printf '%s' "$input" | jq -r '(.sameOperationReply // false) | tostring')"
+
+  if [[ -z "$caps" ]] || ! printf '%s' "$caps" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    caps="$(ralph_approval_adapter_capabilities "$runtime")"
+  fi
+
+  if [[ "$decision" == "allow-once" ]]; then
+    if ! ralph_approval_adapter_can_enforce_once "$caps"; then
+      echo "Error: approval adapter cannot enforce allow-once (no same-operation response or overlay); do not offer it" >&2
+      return 1
+    fi
+    if [[ "$same_op_done" != "true" ]] \
+         && ! ralph_approval_adapter_capability_is_supported "$caps" sameOperationResponse \
+         && [[ "$(printf '%s' "$input" | jq -r '.overlay // .target // empty')" == "" ]] \
+         && [[ "$(printf '%s' "$input" | jq -c '.overlay // null')" == "null" ]]; then
+      # Overlay fallback can still synthesize a narrow grant from action/resource.
+      :
+    fi
+  fi
+
+  translated="$(ralph_approval_adapter_translate_decision "$input" "$caps")" || return 1
+  lifetime="$(printf '%s' "$translated" | jq -r '.lifetime')"
+  decision="$(printf '%s' "$translated" | jq -r '.decision')"
+
+  if [[ "$decision" == "allow-once" && "$same_op_done" == "true" ]]; then
+    path_kind="same-operation"
+    applied="$(jq -nc \
+      --argjson translated "$translated" \
+      --arg runtime "$runtime" \
+      --arg session "$session_id" \
+      '{
+        schemaVersion: 1,
+        runtime: $runtime,
+        path: "same-operation",
+        fallback: "same-operation",
+        applied: true,
+        decision: $translated.decision,
+        lifetime: $translated.lifetime,
+        grant: $translated.grant,
+        equalOrNarrower: true,
+        continuation: "session",
+        sessionStrategy: "resume",
+        sessionId: (if $session == "" then null else $session end),
+        target: null,
+        backup: null,
+        restored: false,
+        compactTurns: 0
+      }')"
+  else
+    path_kind="overlay"
+    if [[ "$decision" == "deny" ]]; then
+      path_kind="deny"
+    fi
+    overlay_input="$(printf '%s' "$input" | jq -c \
+      --argjson translated "$translated" \
+      --arg runtime "$runtime" \
+      --arg session "$session_id" \
+      '{
+        decision: $translated.decision,
+        runtime: $runtime,
+        action: ($translated.grant.action // .action // .request.action // ""),
+        resource: ($translated.grant.resource // .resource // .request.resource // ""),
+        effect: ($translated.grant.effect // .effect // .request.effect // ""),
+        grant: $translated.grant,
+        sessionId: $session
+      }
+      + (if (.target | type) == "string" and .target != "" then {target:.target} else {} end)
+      + (if (.overlay != null) then {overlay:.overlay} else {} end)')"
+    applied="$(ralph_approval_adapter_overlay_fallback "$overlay_input" "$caps")" || return 1
+  fi
+
+  # Atomic consume when the continued operation begins (allow-* only).
+  consume_path=""
+  if [[ "$decision" == "allow-once" || "$decision" == "allow-run" || "$decision" == "allow-always" ]]; then
+    consume_path="$(ralph_approval_adapter_write_consume_record "$input" "$decision" "$path_kind")" || return 1
+    ralph_approval_adapter_set_active_continuation "$input" "$decision" "$path_kind" || return 1
+  fi
+
+  continuation_path="$(ralph_approval_adapter_write_continuation_record \
+    "$input" "$decision" "$path_kind" "$applied")" || return 1
+
+  tmp_applied="$(mktemp "${TMPDIR:-/tmp}/ralph-approval-continue-applied.XXXXXX")" || return 1
+  printf '%s' "$applied" >"$tmp_applied"
+  jq -nc \
+    --slurpfile applied_file "$tmp_applied" \
+    --arg consume "${consume_path:-}" \
+    --arg continuation "$continuation_path" \
+    --arg path_kind "$path_kind" \
+    --arg decision "$decision" \
+    --arg lifetime "$lifetime" \
+    --arg requestId "$request_id" \
+    '{
+      schemaVersion: 1,
+      decision: $decision,
+      lifetime: $lifetime,
+      path: $path_kind,
+      requestId: (if $requestId == "" then null else $requestId end),
+      consumeRecord: (if $consume == "" then null else $consume end),
+      continuationRecord: $continuation,
+      applied: $applied_file[0],
+      continuation: $applied_file[0].continuation,
+      sessionStrategy: $applied_file[0].sessionStrategy,
+      sessionId: $applied_file[0].sessionId,
+      target: $applied_file[0].target,
+      backup: $applied_file[0].backup,
+      restored: false
+    }'
+  rm -f "$tmp_applied"
+}
+
+# ralph_approval_adapter_continue_restore [reason]
+# Clears the active continuation tuple and restores journaled overlays.
+ralph_approval_adapter_continue_restore() {
+  local reason="${1:-success}" restored
+  restored="$(ralph_approval_adapter_overlay_restore "$reason")" || true
+  ralph_approval_adapter_clear_active_continuation
+  if [[ -n "$restored" ]]; then
+    printf '%s\n' "$restored"
+  else
+    jq -nc --arg reason "$reason" '{schemaVersion:1,restored:true,reason:$reason}'
+  fi
 }

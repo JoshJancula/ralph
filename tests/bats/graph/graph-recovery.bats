@@ -1,154 +1,7 @@
 #!/usr/bin/env bats
-# Tests for graph recovery helpers: interrupting orphaned running attempts,
-# preserving attempt fields, and appending events.
+# graph-recovery: library-level tests. No real dispatch.
 
-source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/atomic-json.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-state.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-logs.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-events.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-heartbeat.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-recovery.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-schedule.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-status.sh"
-
-DIAMOND_PLAN="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-diamond.plan.md"
-STUB_RUN_PLAN="$BATS_TEST_DIRNAME/../../fixtures/orchestrator-single-stage/run-plan-stub.sh"
-RALPH_DIR="$REPO_ROOT/bundle/.ralph"
-GRAPH_RUN_SH="$REPO_ROOT/bundle/.ralph/graph-run.sh"
-
-compile_graph() {
-  local src_plan="$1" workspace="$2" out_path="$3"
-  local plan_file="$workspace/$(basename "$src_plan")"
-  cp "$src_plan" "$plan_file"
-  plan_pipeline_graph_json "$plan_file" > "$out_path"
-}
-
-set_run_json_field() {
-  local run_file="$1" field="$2" value="$3"
-  local tmp
-  tmp="$(mktemp)"
-  jq --arg f "$field" --arg v "$value" '.[$f] = $v' "$run_file" > "$tmp"
-  mv "$tmp" "$run_file"
-}
-
-set_run_json_null() {
-  local run_file="$1" field="$2"
-  local tmp
-  tmp="$(mktemp)"
-  jq --arg f "$field" '.[$f] = null' "$run_file" > "$tmp"
-  mv "$tmp" "$run_file"
-}
-
-mark_run_stale() {
-  local run_file
-  run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  set_run_json_field "$run_file" "heartbeatAt" "2026-08-12T00:00:00Z"
-  set_run_json_field "$run_file" "supervisorPid" "99999"
-  set_run_json_field "$run_file" "ownerProcessStartId" "old-start"
-}
-
-run_stale_recovery() {
-  GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
-    graph_recovery_attempt_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
-}
-
-recover_cmd() {
-  bash "$GRAPH_RUN_SH" recover "$@" --workspace "$WORKSPACE"
-}
-
-ledger_snapshot() {
-  local runs_dir
-  runs_dir="$(graph_state_runs_root "$WORKSPACE")"
-  find "$runs_dir" -type f | sort | while IFS= read -r f; do
-    printf '%s %s\n' "$(shasum "$f" | awk '{print $1}')" "$f"
-  done
-}
-
-# Install stub run-plan and a per-stage behavior orchestrator so resume tests
-# never invoke a live/paid runtime.
-install_stub_runtimes() {
-  local behavior_dir="$1" marker_dir="$2"
-  mkdir -p "$WORKSPACE/.ralph" "$WORKSPACE/.ralph-workspace" "$behavior_dir" "$marker_dir"
-  cp -R "$RALPH_DIR"/* "$WORKSPACE/.ralph/"
-  chmod +x "$WORKSPACE/.ralph"/*.sh 2>/dev/null || true
-  chmod +x "$WORKSPACE/.ralph/bash-lib"/*/*.sh 2>/dev/null || true
-  cp "$STUB_RUN_PLAN" "$WORKSPACE/.ralph/run-plan.sh"
-  chmod +x "$WORKSPACE/.ralph/run-plan.sh"
-
-  cat >"$WORKSPACE/.ralph/orchestrator.sh" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-attempt=""
-stage=""
-prev=""
-for arg in "\$@"; do
-  if [[ "\$prev" == "--attempt-id" ]]; then
-    attempt="\$arg"
-  elif [[ "\$prev" == "--single-stage" ]]; then
-    stage="\$arg"
-  fi
-  prev="\$arg"
-done
-workspace="\${@: -1}"
-ns="$NAMESPACE"
-run_id="$RUN_ID"
-behavior_dir="$behavior_dir"
-marker_dir="$marker_dir"
-report="\$workspace/.ralph-workspace/artifacts/\$ns/stage-outcomes/\${attempt}.json"
-mkdir -p "\$(dirname "\$report")" "\$marker_dir"
-printf '%s\\n' "\$\$" >"\$marker_dir/\$stage.pid"
-: >"\$marker_dir/\$stage.started"
-write_report() {
-  local outcome="\$1" exit_code="\$2"
-  printf '%s\\n' "{\"schemaVersion\":1,\"runId\":\"\$run_id\",\"stageId\":\"\$stage\",\"attemptId\":\"\$attempt\",\"outcome\":\"\$outcome\",\"exitCode\":\$exit_code,\"startedAt\":\"2026-01-01T00:00:00Z\",\"finishedAt\":\"2026-01-01T00:00:01Z\"}" >"\$report"
-}
-behavior="success"
-if [[ -f "\$behavior_dir/\$stage" ]]; then
-  behavior="\$(cat "\$behavior_dir/\$stage")"
-fi
-case "\$behavior" in
-  fail:*)
-    ec="\${behavior#fail:}"
-    [[ "\$ec" =~ ^[0-9]+$ ]] || ec=1
-    write_report failed "\$ec"
-    : >"\$marker_dir/\$stage.finished"
-    exit "\$ec"
-    ;;
-  *)
-    write_report success 0
-    : >"\$marker_dir/\$stage.finished"
-    exit 0
-    ;;
-esac
-EOF
-  chmod +x "$WORKSPACE/.ralph/orchestrator.sh"
-  export GRAPH_DISPATCH_ORCHESTRATOR="$WORKSPACE/.ralph/orchestrator.sh"
-  export RALPH_ALLOW_NESTED_RUNS=1
-  export ORCHESTRATOR_RUNNER_TO_CONSOLE=0
-  export RALPH_MODE=no
-  export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
-  export RALPH_ARTIFACT_PROVENANCE=0
-}
-
-setup() {
-  TMPD="$(mktemp -d)"
-  WORKSPACE="$TMPD/ws"
-  mkdir -p "$WORKSPACE"
-  NAMESPACE="recovery-ns"
-  RUN_ID="run-recovery-001"
-  GRAPH_JSON="$TMPD/graph.json"
-  compile_graph "$DIAMOND_PLAN" "$WORKSPACE" "$GRAPH_JSON"
-  PLAN_FILE="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2 >/dev/null
-  export GRAPH_RECOVERY_INTERRUPT_AT="2026-08-12T00:00:00Z"
-}
-
-teardown() {
-  unset RALPH_GRAPH_FOLLOW_INTERVAL RALPH_GRAPH_FOLLOW_MAX_POLLS 2>/dev/null || true
-  rm -rf "$TMPD"
-}
+source "$BATS_TEST_DIRNAME/test_helper/graph-recovery-shared.bash"
 
 @test "recovery interrupt attempt terminalizes running attempt as interrupted and preserves logs and usage" {
   local nid="left"
@@ -163,7 +16,7 @@ teardown() {
   printf 'agent log line\n' > "$log_dir/agent.log"
   printf '{"input_tokens":7,"output_tokens":3}\n' > "$log_dir/usage.json"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" "{\"startedAt\":\"2026-01-01T00:00:00Z\",\"runtime\":\"cursor\",\"logPaths\":{\"runner\":\"logs/nodes/$nid/$aid/runner.log\",\"agent\":\"logs/nodes/$nid/$aid/agent.log\",\"usage\":\"logs/nodes/$nid/$aid/usage.json\"},\"usageSnapshot\":{\"input_tokens\":7},\"usageReliable\":true}"
 
   run graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "$aid"
@@ -198,7 +51,7 @@ teardown() {
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
   run_dir="$(graph_state_run_dir "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   run graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "$aid"
@@ -222,7 +75,7 @@ teardown() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "pending"
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "pending"
 
   run graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "$aid"
   [ "$status" -ne 0 ]
@@ -236,7 +89,7 @@ teardown() {
   local run_dir
   run_dir="$(graph_state_run_dir "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   run graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "$aid" "supervisor died"
@@ -252,7 +105,7 @@ teardown() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   run graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "${nid}__${RUN_ID}__9"
@@ -273,7 +126,7 @@ teardown() {
   set_run_json_field "$run_file" "supervisorPid" "99999"
   set_run_json_field "$run_file" "ownerProcessStartId" "old-start"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
@@ -348,7 +201,7 @@ teardown() {
   set_run_json_field "$run_file" "supervisorPid" "99999"
   set_run_json_field "$run_file" "ownerProcessStartId" "old-start"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   local out1 rc1 out2 rc2
@@ -415,22 +268,22 @@ teardown() {
 
   mark_run_stale
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "running" \
     "$source_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "succeeded" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "succeeded" \
     "$source_aid" '{"outcome":"succeeded","finishedAt":"2026-01-01T00:01:00Z"}'
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "right" "skipped"
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "right" "skipped"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "running" \
     "$sink_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "awaiting-operator" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "awaiting-operator" \
     "$sink_aid" '{"outcome":"awaiting-operator"}'
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair" "needs-plan-repair"
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair" "needs-plan-repair"
   repair_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair")"
 
   GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
@@ -458,16 +311,16 @@ teardown() {
 
   mark_run_stale
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "running" \
     "$source_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "succeeded" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "source" "succeeded" \
     "$source_aid" '{"outcome":"succeeded","finishedAt":"2026-01-01T00:01:00Z"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "right" "skipped"
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "right" "skipped"
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "running" \
     "$sink_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "awaiting-operator" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "sink" "awaiting-operator" \
     "$sink_aid" '{"outcome":"awaiting-operator"}'
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair" "needs-plan-repair"
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair" "needs-plan-repair"
   repair_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "repair")"
 
   local before_source before_right before_sink before_repair
@@ -498,7 +351,7 @@ teardown() {
   left_aid="left__${RUN_ID}__1"
 
   mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
@@ -528,7 +381,7 @@ teardown() {
   left_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left")"
   left_aid="left__${RUN_ID}__1"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
   graph_recovery_interrupt_attempt "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "$left_aid" "pre-recovery interrupt"
   [ "$(jq -r '.status' "$left_file")" = "interrupted" ]
@@ -548,60 +401,6 @@ teardown() {
   [ "$recovered_count" -eq 1 ]
 }
 
-@test "recovery resume accepts a run the explicit helper returned to a resumable status" {
-  local run_file left_file run_dir left_aid behavior_dir marker_dir
-  local recovery_starts_before recovery_starts_after rc
-  behavior_dir="$TMPD/behavior"
-  marker_dir="$TMPD/markers"
-
-  compile_graph "$DIAMOND_PLAN" "$WORKSPACE" "$GRAPH_JSON"
-  NAMESPACE="$(jq -r '.namespace // "recovery-ns"' "$GRAPH_JSON")"
-  PLAN_FILE="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
-
-  # Install stubs before the frozen compile so resume's recompile matches.
-  install_stub_runtimes "$behavior_dir" "$marker_dir"
-  printf '%s\n' "success" >"$behavior_dir/source"
-  printf '%s\n' "success" >"$behavior_dir/left"
-  printf '%s\n' "success" >"$behavior_dir/right"
-  printf '%s\n' "success" >"$behavior_dir/sink"
-  compile_graph "$DIAMOND_PLAN" "$WORKSPACE" "$GRAPH_JSON"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2 >/dev/null
-
-  run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  left_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left")"
-  run_dir="$(graph_state_run_dir "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  left_aid="left__${RUN_ID}__1"
-
-  mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
-    "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
-
-  GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
-    run run_stale_recovery
-  [ "$status" -eq 0 ]
-  [ "$(jq -r '.status' "$left_file")" = "pending" ]
-  [ "$(jq -r '.status' "$run_file")" = "interrupted" ]
-  graph_schedule_run_status_is_resumable "$(jq -r '.status' "$run_file")"
-
-  recovery_starts_before="$(jq -c 'select(.event == "recovery-start")' "$run_dir/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$recovery_starts_before" -eq 1 ]
-
-  rc=0
-  GRAPH_REAP_POLL_INTERVAL=0.1 \
-    graph_schedule_resume "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" || rc=$?
-  [ "$rc" -eq 0 ]
-  [ "$(graph_schedule_node_state_by_id source)" = "succeeded" ]
-  [ "$(graph_schedule_node_state_by_id left)" = "succeeded" ]
-  [ "$(graph_schedule_node_state_by_id right)" = "succeeded" ]
-  [ "$(graph_schedule_node_state_by_id sink)" = "succeeded" ]
-  [ "$(jq -r '.status' "$run_file")" = "succeeded" ]
-  [ -f "$marker_dir/left.finished" ]
-  [ -f "$marker_dir/sink.finished" ]
-
-  recovery_starts_after="$(jq -c 'select(.event == "recovery-start")' "$run_dir/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$recovery_starts_after" -eq "$recovery_starts_before" ]
-}
-
 @test "recovery resume status does not invoke recovery implicitly" {
   local run_file left_file run_dir left_aid runs_dir before_snapshot after_snapshot
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
@@ -611,7 +410,7 @@ teardown() {
   left_aid="left__${RUN_ID}__1"
 
   mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   before_snapshot="$(find "$runs_dir" -type f | sort | while IFS= read -r f; do
@@ -633,18 +432,6 @@ teardown() {
     recovery_events="$(jq -c 'select(.event == "recovery-start" or .event == "node-interrupted" or .event == "node-recovered" or .event == "recovery-finish")' "$run_dir/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
     [ "$recovery_events" -eq 0 ]
   }
-}
-
-@test "recovery resume refuses a published run" {
-  local run_file
-  run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  set_run_json_field "$run_file" "status" "published"
-
-  run graph_schedule_resume "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"cannot resume"* ]]
-  [[ "$output" == *"published"* ]]
-  [ "$(jq -r '.status' "$run_file")" = "published" ]
 }
 
 @test "recovery cli --help exits 0" {
@@ -678,7 +465,7 @@ teardown() {
   run_dir="$(graph_state_run_dir "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
 
   mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   GRAPH_HEARTBEAT_TTL_SECONDS=1 GRAPH_HEARTBEAT_NOW_EPOCH=1999999999 \
@@ -688,6 +475,11 @@ teardown() {
   [ "$(jq -r '.attempts[0].outcome' "$node_file")" = "interrupted" ]
   [ "$(jq -r '.status' "$run_file")" = "interrupted" ]
   [ "$(jq -r 'select(.event == "recovery-start") | .runId' "$run_dir/events.jsonl")" = "$RUN_ID" ]
+  [[ "$output" == *"Mutation summary: interrupted 1 attempt(s), reset 1 node(s) to pending."* ]]
+  # The public resume verb addresses a run by ID; the old --namespace/--run
+  # selector pair went with the removed graph surface.
+  [[ "$output" == *"Resume with: ralph workflow resume $RUN_ID"* ]]
+  [[ "$output" != *"--namespace"* ]]
 }
 
 @test "recovery cli prints refusal for a healthy run" {
@@ -748,7 +540,7 @@ teardown() {
   left_aid="left__${RUN_ID}__1"
 
   mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   before_snapshot="$(ledger_snapshot)"
@@ -774,7 +566,7 @@ teardown() {
   left_aid="left__${RUN_ID}__1"
 
   mark_run_stale
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "left" "running" \
     "$left_aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}'
 
   before_snapshot="$(ledger_snapshot)"

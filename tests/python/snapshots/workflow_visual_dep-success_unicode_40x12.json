@@ -1,0 +1,142 @@
+{
+  "width": 40,
+  "height": 12,
+  "plain": [
+    "Ralph fixture-dep-succeeded",
+    "plan-delivery \u00b7 Dependency",
+    "SUCCEEDED  Execute supplied plan",
+    "1/1 stages  2m 0s",
+    "> succeeded \u2500\u2500 integrate",
+    "integrate  supervisor  succeeded",
+    "Attempt  1  Duration  1m 0s",
+    "Artifacts  integration.json",
+    "",
+    "",
+    "",
+    ""
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-succeeded",
+        "role": "path",
+        "width": 21
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "plan-delivery \u00b7 Dependency",
+        "role": "muted",
+        "width": 26
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "SUCCEEDED",
+        "role": "success",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "  Execute supplied plan        ",
+        "role": "default",
+        "width": 31
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "1/1 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "2m 0s",
+        "role": "muted",
+        "width": 5
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> succeeded \u2500\u2500 integrate                ",
+        "role": "focus",
+        "width": 40
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "integrate",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "supervisor",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 23,
+        "text": "succeeded",
+        "role": "success",
+        "width": 9
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 22,
+        "text": "1m 0s             ",
+        "role": "default",
+        "width": 18
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Artifacts  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "integration.json",
+        "role": "path",
+        "width": 16
+      }
+    ],
+    [],
+    [],
+    [],
+    []
+  ]
+}

@@ -306,18 +306,9 @@ cleanup_plan_prune_graph_runs() {
     fi
 
     if [[ "$should_prune" -eq 1 ]]; then
-      local extra_log owned
-      extra_log="$(graph_logs_v1_run_owned_files \
-        "$(dirname "$(dirname "$ns_dir")")" "$namespace" "$run_id" 2>/dev/null || true)"
       rm -rf "$ns_dir/$run_id"
       echo "Pruned graph run: $run_id (namespace: $namespace)"
       cleanup_plan_prune_stage_outcomes_for_run "$stage_outcomes_dir" "$run_id"
-      # Remove only uniquely-named v1 files for this run. Never delete
-      # .ralph-workspace/logs/<namespace>/nodes/ as a shared tree.
-      while IFS= read -r owned; do
-        [[ -n "$owned" && -e "$owned" ]] || continue
-        rm -f "$owned"
-      done <<<"$extra_log"
     else
       kept_terminal=$((kept_terminal + 1))
     fi

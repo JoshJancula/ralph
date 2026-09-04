@@ -109,8 +109,14 @@ check_native_schema() {
       jq -e '.mcpServers | type == "object"' "$root/mcp_config.json" >/dev/null || {
         MATRIX_DETAIL="mcp_config.json is not a native Antigravity object"; return 1;
       }
-      jq -e '.name == "architect" and .model == "auto"' "$root/agents/architect/config.json" >/dev/null || {
-        MATRIX_DETAIL="agent config is not a native Antigravity schema"; return 1;
+      [ ! -d "$root/agents" ] || {
+        MATRIX_DETAIL="Antigravity package must not ship agents/"; return 1;
+      }
+      [ ! -d "$root/roles" ] || {
+        MATRIX_DETAIL="Antigravity package must not ship roles/"; return 1;
+      }
+      [ -f "$root/workflows/ralph-workflow.md" ] || {
+        MATRIX_DETAIL="Antigravity package missing ralph-workflow"; return 1;
       }
       jq -e . "$root/hooks.json" >/dev/null || {
         MATRIX_DETAIL="hooks.json is not valid JSON"; return 1;
@@ -141,9 +147,10 @@ import sys
 import tomllib
 
 root = sys.argv[1]
-for path in glob.glob(os.path.join(root, "agents", "*.toml")):
-    with open(path, "rb") as handle:
-        tomllib.load(handle)
+agents = glob.glob(os.path.join(root, "agents", "*.toml"))
+assert not agents, "Codex package must not ship agents"
+roles = glob.glob(os.path.join(root, "roles", "*.md"))
+assert not roles, "Codex package must not ship roles"
 with open(os.path.join(root, "mcp.example.toml"), "rb") as handle:
     data = tomllib.load(handle)
 assert data["mcp_servers"]["ralph"]["command"] == "bash"

@@ -26,6 +26,8 @@ bundle="$FAKE_BUNDLE"
 case "\$1" in
   --help)
     if [[ "\$mode" == "missing-verbs" ]]; then
+      # REQUIRED_VERBS is (run create workflow); omit workflow so the probe has
+      # a genuinely missing verb to report.
       cat <<'HELP'
 Usage: ralph <command> [args]
 
@@ -44,8 +46,7 @@ Usage: ralph <command> [args]
 Commands:
   run          Run a plan
   create       Create scaffolding
-  graph        Graph-mode plans
-  agent        Manage agent profiles
+  workflow     Manage workflows
 
 Options:
   --bundle-path  Print the bundled .ralph directory (for scripts)
@@ -60,7 +61,7 @@ HELP
     printf '%s\n' "\$bundle"
     exit 0
     ;;
-  doctor|capabilities|hook)
+  doctor|capabilities|hook|graph|role)
     printf '%s\n' "forbidden verb invoked: \$1" >&2
     exit 99
     ;;
@@ -152,7 +153,7 @@ assert_no_forbidden_verbs() {
   write_abi 2
   run run_probe
   assert_outcome incompatible "$status" "$output"
-  [ "$(printf '%s\n' "$output" | jq -r '.missingVerbs | sort | join(",")')" = "agent,graph" ]
+  [ "$(printf '%s\n' "$output" | jq -r '.missingVerbs | sort | join(",")')" = "workflow" ]
   [[ "$output" == *"required command help is missing"* ]]
   assert_no_forbidden_verbs
 }

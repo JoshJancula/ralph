@@ -13,36 +13,6 @@
   },
   "copies": [
     {
-      "source": "bundle/.opencode/agents/architect/architect.md",
-      "destination": "agents/architect.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.opencode/agents/code-review/code-review.md",
-      "destination": "agents/code-review.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.opencode/agents/implementation/implementation.md",
-      "destination": "agents/implementation.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.opencode/agents/qa/qa.md",
-      "destination": "agents/qa.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.opencode/agents/research/research.md",
-      "destination": "agents/research.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.opencode/agents/security/security.md",
-      "destination": "agents/security.md",
-      "mode": "0644"
-    },
-    {
       "source": "bundle/.opencode/plugins/ralph-runtime-hooks.ts",
       "destination": "plugins/ralph-runtime-hooks.ts",
       "mode": "0644"
@@ -70,23 +40,8 @@
       "mode": "0644"
     },
     {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-agents.md",
-      "destination": "skills/ralph-agents/SKILL.md",
-      "mode": "0644"
-    },
-    {
       "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
       "destination": "skills/ralph-doctor/SKILL.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-graph.md",
-      "destination": "skills/ralph-graph/SKILL.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-orchestrate.md",
-      "destination": "skills/ralph-orchestrate/SKILL.md",
       "mode": "0644"
     },
     {
@@ -105,23 +60,13 @@
       "mode": "0644"
     },
     {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-agents.md",
-      "destination": "workflows/ralph-agents.md",
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "skills/ralph-workflow/SKILL.md",
       "mode": "0644"
     },
     {
       "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
       "destination": "workflows/ralph-doctor.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-graph.md",
-      "destination": "workflows/ralph-graph.md",
-      "mode": "0644"
-    },
-    {
-      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-orchestrate.md",
-      "destination": "workflows/ralph-orchestrate.md",
       "mode": "0644"
     },
     {
@@ -137,6 +82,11 @@
     {
       "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
       "destination": "workflows/ralph-status.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "workflows/ralph-workflow.md",
       "mode": "0644"
     }
   ]

@@ -22,6 +22,9 @@
 #   - --remove requires exactly one of --hooks, --mcp, or --all.
 #   - Default --runtime-dir is "$PWD/.$runtime" (antigravity uses "$PWD/.agents").
 #   - Runtime-dir basename must match the selected runtime unless --yes is provided.
+#   - Setup never creates or validates Ralph native agent definitions. Native
+#     runtime agent directories (and agents.md) are left untouched; rules,
+#     skills, hooks, plugins, and MCP setup continue as before.
 
 set -euo pipefail
 
@@ -71,12 +74,15 @@ SETUP_DRY_RUN=""
 SETUP_YES=""
 SETUP_PROJECT_ROOT=""
 SETUP_STATE_ROOT=""
+# shellcheck source=bash-lib/help-render.sh
+source "$SCRIPT_DIR/bash-lib/help-render.sh"
 
 print_help() {
-  cat << 'EOF'
+  cat << 'EOF' | ralph_help_render
 Usage: ralph setup --runtime <claude|cursor|codex|opencode|antigravity|agy> [--runtime-dir <path>] [--hooks] [--mcp] [--all] [--remove] [--dry-run] [--yes]
 
 Configure a runtime directory with durable Ralph compaction hooks and MCP tools.
+Does not create or validate Ralph native agent definitions; native agent dirs stay untouched.
 
 Options:
   --runtime <name>      Runtime to configure (claude, cursor, codex, opencode, antigravity; agy aliases antigravity)
@@ -96,6 +102,7 @@ Constraints:
   - Default --runtime-dir is "$PWD/.$runtime" (antigravity uses "$PWD/.agents").
   - Runtime-dir basename must match the selected runtime config dir unless --yes is provided.
   - Non-dry-run --remove requires --yes when stdin is not a terminal.
+  - Native runtime agent directories and agents.md are never created or validated.
 
 Examples:
   ralph setup --runtime claude --runtime-dir ~/.claude --hooks

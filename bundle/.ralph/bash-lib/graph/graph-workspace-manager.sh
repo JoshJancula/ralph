@@ -255,6 +255,26 @@ _graph_workspace_journal_git() {
     --arg head "$head" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
+_graph_workspace_seal_snapshot_git_discovery() {
+  local path="$1" discovered sealed
+  command -v git >/dev/null 2>&1 || return 0
+  [[ -d "$path" && ! -L "$path" ]] || return 1
+  discovered="$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+  [[ -n "$discovered" ]] || return 0
+  # A local repository terminates parent discovery while keeping ordinary Git
+  # probes usable for coding runtimes. It belongs only to the snapshot, never
+  # to the caller's checkout.
+  git init -q "$path" || {
+    echo "Error: failed to seal snapshot Git discovery at $path" >&2
+    return 1
+  }
+  sealed="$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null || true)"
+  if [[ "$sealed" != "$path/.git" ]] || [[ "$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)" != "$path" ]]; then
+    echo "Error: snapshot workspace can still discover caller Git" >&2
+    return 1
+  fi
+}
+
 _graph_workspace_materialize_snapshot() {
   local source="$1" path="$2" temporary
   [[ -d "$source" && ! -L "$source" ]] || {
@@ -268,20 +288,42 @@ _graph_workspace_materialize_snapshot() {
     return 1
   }
   mkdir "$temporary" || return 1
-  if ! cp -R "$source/." "$temporary/"; then
-    chmod -R u+w "$temporary" 2>/dev/null || true
+  # Prefer filesystem copy-on-write clones when the host supports them.  APFS
+  # (the primary macOS operator environment) can clone the frozen source tree
+  # without copying file contents; Linux implementations may expose the same
+  # capability through cp --reflink.  Fall back to an ordinary recursive copy
+  # on filesystems that reject the fast path.  The destination remains a real,
+  # independently writable directory either way.
+  if ! cp -cR "$source/." "$temporary/" 2>/dev/null; then
     rm -rf "$temporary"
-    return 1
+    mkdir "$temporary" || return 1
+    if ! cp --reflink=auto -R "$source/." "$temporary/" 2>/dev/null; then
+      rm -rf "$temporary"
+      mkdir "$temporary" || return 1
+      if ! cp -R "$source/." "$temporary/"; then
+        chmod -R u+w "$temporary" 2>/dev/null || true
+        rm -rf "$temporary"
+        return 1
+      fi
+    fi
   fi
-  chmod -R u+w "$temporary" 2>/dev/null || {
-    rm -rf "$temporary"
-    return 1
-  }
+  # Most source trees are already user-writable. Avoid a full recursive chmod
+  # unless the snapshot actually contains a protected entry.
+  if [[ -n "$(find "$temporary" ! -perm -u+w -print -quit 2>/dev/null)" ]]; then
+    if ! chmod -R u+w "$temporary"; then
+      rm -rf "$temporary"
+      return 1
+    fi
+  fi
   if [[ -e "$temporary/.git" || -L "$temporary/.git" ]]; then
     rm -rf "$temporary"
     echo "Error: snapshot materialization unexpectedly contains Git metadata" >&2
     return 1
   fi
+  _graph_workspace_seal_snapshot_git_discovery "$temporary" || {
+    rm -rf "$temporary"
+    return 1
+  }
   mv "$temporary" "$path"
 }
 

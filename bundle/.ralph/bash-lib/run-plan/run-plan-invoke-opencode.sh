@@ -11,8 +11,11 @@ RALPH_RUN_PLAN_INVOKE_OPENCODE_LOADED=1
 #   run_plan_invoke_opencode_config_prepare / run_plan_invoke_opencode_config_cleanup -- ephemeral OPENCODE_CONFIG for ralph MCP and/or native hooks.
 #   run_plan_invoke_opencode_native_hooks_prepare / run_plan_invoke_opencode_native_hooks_cleanup -- Ralph plugin overlay metadata.
 #   ralph_run_plan_invoke_opencode -- run `opencode run` (non-interactive) with model, resume; exports log/session paths for demux.
+#   run_plan_invoke_opencode_native_subagents_preflight -- fail closed when nativeSubagents=off lacks a proven deny.
 #   run_plan_invoke_opencode_serve_supported -- graph-only feature-detect of `opencode serve` via help (no model call).
 #   run_plan_invoke_opencode_serve_capture_request -- parse one permission.asked event into session/request/effect.
+#   run_plan_invoke_opencode_graph_approval_parse_permission -- elevate a native event into the G15 actionable request contract (or reject as unknown).
+#   run_plan_invoke_opencode_graph_approval_capabilities / apply / restore -- G16 continuation (same-operation reply or narrow reversible overlay).
 #   run_plan_invoke_opencode_serve_capture_from_command -- start `opencode serve` on 127.0.0.1 plus an ephemeral port, consume ordered permission events, then stop.
 #   run_plan_invoke_opencode_serve_map_decision -- map once/run/project/deny onto an OpenCode permission reply without converting read to write.
 #   run_plan_invoke_opencode_serve_session_start -- start serve, capture the first permission, and keep the server alive.
@@ -529,6 +532,49 @@ run_plan_invoke_opencode_config_prepare() {
   if [[ "${OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE:-0}" == "1" ]]; then
     need_hooks=1
   fi
+
+  # Ambient-MCP boundary rule. Proven mechanism: OPENCODE_CONFIG is one LAYER of
+  # OpenCode's documented precedence chain (remote, global, custom, project,
+  # directory -- see _run_plan_invoke_opencode_config_layer_paths), not a
+  # replacement for the user's configuration. Ralph therefore copies the merged
+  # ambient layers into the per-run temp config and merges only its own keys on
+  # top (permission, provider cache options, mcp), so native settings and
+  # JSONC-sourced values survive and no MCP-only document is ever handed to the
+  # CLI.
+  #
+  # For a Ralph profile with no selected-agent mcp_servers overrides, the merged
+  # ambient `.mcp` object already carries every ambient server, so Ralph layers
+  # ONLY its own server via the Ralph-only generator instead of overwriting the
+  # ambient entries with the reconstructed effective catalog from
+  # RALPH_RUNTIME_MCP_RESOLVE_PATH (a lossy snapshot that can drop fields the
+  # shared JSON catalog shape does not carry).
+  #
+  # The one class of ambient state native layering cannot preserve is a
+  # selected-agent `mcp_servers` override that must win over an ambient entry of
+  # the same name: OpenCode has no per-invocation mechanism to express that, so
+  # the safest current merge (the reconstructed effective catalog) is retained
+  # for that case and the limitation is recorded in
+  # RUNTIME_OVERLAY_SUMMARY_MCP_OVERRIDE_DECISIONS rather than left silent.
+  # Non-Ralph (raw) runs keep their existing behavior: no MCP merge at all.
+  local _opencode_agent_mcp_present=0
+  if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
+    _opencode_agent_mcp_present=1
+  fi
+  local overlay_decision="profile_raw_native_mcp_discovery_unchanged"
+  if [[ "$need_mcp" -eq 1 ]]; then
+    if [[ "$_opencode_agent_mcp_present" == "1" \
+      && -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "${RALPH_RUNTIME_MCP_RESOLVE_PATH}" ]]; then
+      overlay_decision="profile_ralph_agent_overrides_reconstructed_catalog"
+    else
+      overlay_decision="profile_ralph_layered_native_opencode_config"
+    fi
+  fi
+  OPENCODE_PLAN_MCP_OVERLAY_DECISION="$overlay_decision"
+  export OPENCODE_PLAN_MCP_OVERLAY_DECISION
+  if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
+    runtime_overlay_set_mcp_override_decisions "$overlay_decision"
+  fi
+
   if [[ -n "${PLAN_PATH:-}" && -n "$workspace" ]]; then
     case "$PLAN_PATH" in
       "$workspace"/*) ;;
@@ -721,17 +767,23 @@ run_plan_invoke_opencode_config_prepare() {
   if [[ "$need_mcp" -eq 1 ]]; then
     local mcp_overlay_json
     mcp_overlay_json="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-mcp-XXXXXX")"
-    if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
-      # Shared resolver already produced the effective catalog (ambient user/project
-      # servers + selected-agent overrides + Ralph's protected server). Preserve its
-      # native OpenCode shape.
+    if [[ "$overlay_decision" == "profile_ralph_agent_overrides_reconstructed_catalog" ]]; then
+      # Selected-agent mcp_servers overrides must win over same-named ambient
+      # entries and OpenCode has no invocation-local mechanism for that, so the
+      # shared resolver's effective catalog (ambient user/project servers +
+      # agent overrides + Ralph's protected server) is authoritative here. The
+      # limitation is recorded in RUNTIME_OVERLAY_SUMMARY_MCP_OVERRIDE_DECISIONS.
       if declare -F ralph_run_plan_log >/dev/null 2>&1; then
-        ralph_run_plan_log "OpenCode MCP config: using resolver path=${RALPH_RUNTIME_MCP_RESOLVE_PATH}"
+        ralph_run_plan_log "OpenCode MCP config: using resolver path=${RALPH_RUNTIME_MCP_RESOLVE_PATH} decision=${overlay_decision}"
       fi
-      jq -c '.mcp // {}' "$RALPH_RUNTIME_MCP_RESOLVE_PATH" > "$mcp_overlay_json"
+      # Keep the `{mcp: {...}}` wrapper the merge step below expects (the same
+      # shape ralph_mcp_generate_config emits for opencode); an unwrapped object
+      # would be silently dropped by the merge.
+      jq -c '{mcp: (.mcp // {})}' "$RALPH_RUNTIME_MCP_RESOLVE_PATH" > "$mcp_overlay_json"
     else
-      # Fallback when the resolver is not available (e.g. direct helper tests): use the
-      # Ralph-only generator.
+      # Ralph profile without agent overrides (and the direct-helper fallback when
+      # the resolver has not run): layer only Ralph's own server on top of the
+      # ambient `.mcp` object already present in the working config.
       if declare -F ralph_run_plan_log >/dev/null 2>&1; then
         ralph_run_plan_log "OpenCode MCP config: using fallback generator"
       fi
@@ -809,11 +861,43 @@ run_plan_invoke_opencode_mcp_config_prepare() {
   run_plan_invoke_opencode_config_prepare
 }
 
+# run_plan_invoke_opencode_native_subagents_preflight
+# nativeSubagents=off requires a proven deny boundary. OpenCode has none (capability
+# nativeSubagentsOffDeny=unsupported), so graph/orchestration/standard off fails
+# closed before argv or model invocation. inherit preserves ambient behavior.
+# Never uses prompt-only suppression.
+run_plan_invoke_opencode_native_subagents_preflight() {
+  local mode
+
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  [[ "$mode" == "off" ]] || return 0
+
+  if ! declare -F graph_runtime_native_subagents_off_supported >/dev/null 2>&1; then
+    # shellcheck source=../graph/graph-runtime-capabilities.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../graph" && pwd)/graph-runtime-capabilities.sh"
+  fi
+
+  if graph_runtime_native_subagents_off_supported opencode; then
+    # Future: apply the proven deny argv/config here. OpenCode has none today.
+    return 0
+  fi
+
+  echo "Error: nativeSubagents=off is unsupported for runtime opencode (no proven deny boundary); refusing to invoke (use nativeSubagents=inherit)." >&2
+  return 1
+}
+
 ralph_run_plan_invoke_opencode() {
   ralph_run_plan_sync_mode_knobs
   ralph_run_plan_subagents_log_contract opencode || return 1
   ralph_run_plan_subagents_require_runtime_capability opencode || return 1
   ralph_run_plan_native_subagent_verify_runtime opencode || return 1
+
+  # nativeSubagents=off: OpenCode capability is unsupported; fail before CLI argv.
+  # inherit: skip; do not alter ambient native-subagent availability.
+  if ! run_plan_invoke_opencode_native_subagents_preflight; then
+    return 1
+  fi
+
   RALPH_OPENCODE_CONFIG_SOURCE_DESC=""
   RALPH_OPENCODE_AMBIENT_CACHE_SETTINGS="0"
   RALPH_OPENCODE_FINAL_CACHE_SETTINGS="0"
@@ -1191,6 +1275,437 @@ run_plan_invoke_opencode_serve_capture_request() {
   }
 
   printf '%s\n' "$captured"
+}
+
+# run_plan_invoke_opencode_graph_approval_parse_permission <event-or-request-or-fixture-json>
+# Elevates a native OpenCode permission.asked event (or a previously captured
+# serve request) into the G15 actionable permission request contract:
+# sessionId, nativeRequestId, tool, action, exact resource, effect,
+# supported choices/lifetimes, expiresAt, and a bounded reason.
+#
+# Fail-closed:
+#   - generic permission/permission/write is rejected as unknown
+#   - fixtures or prompts lacking native identity are not actionable
+#   - a proved read request never broadens to write
+#
+# Prints one compact JSON object. Exit 0 always when the input is JSON;
+# callers must check .actionable. Exit 1 only for empty/malformed input.
+run_plan_invoke_opencode_graph_approval_parse_permission() {
+  local raw="${1:-}"
+  local captured fields caps elevated
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: OpenCode graph approval parse requires a permission event or request" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for OpenCode graph approval parse" >&2
+    return 1
+  fi
+  if ! printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: OpenCode graph approval parse requires a JSON object" >&2
+    return 1
+  fi
+
+  _run_plan_invoke_opencode_graph_approval_ensure_adapter || return 1
+
+  # Explicit generic placeholder: never park for an operator.
+  if printf '%s' "$raw" | jq -e '
+    def lower($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then ($v | ascii_downcase)
+      else "" end;
+    (lower(.tool // .permissionRequest.tool // "")) == "permission"
+    and (lower(.action // .permissionRequest.action // "")) == "permission"
+    and (lower(.effect // .permissionRequest.effect // "")) == "write"
+  ' >/dev/null 2>&1; then
+    ralph_approval_adapter_permission_unknown opencode \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  # Prefer a native permission.asked (or captured serve) identity. Generic
+  # failure fixtures and transcript-only prompts have no native request id.
+  if printf '%s' "$raw" | jq -e '
+    def event:
+      if (.payload | type) == "object" then .payload else . end;
+    (event.type // "") == "permission.asked"
+    or (has("requestId") and has("session") and has("effect"))
+    or (has("sessionID") and has("id") and has("permission"))
+  ' >/dev/null 2>&1; then
+    if printf '%s' "$raw" | jq -e 'has("requestId") and has("session") and has("effect")' >/dev/null 2>&1; then
+      captured="$raw"
+    else
+      captured="$(run_plan_invoke_opencode_serve_capture_request "$raw")" || {
+        ralph_approval_adapter_permission_unknown opencode \
+          "OpenCode permission event is missing actionable identity"
+        return 0
+      }
+    fi
+  else
+    ralph_approval_adapter_permission_unknown opencode \
+      "OpenCode permission input lacks native session/request identity"
+    return 0
+  fi
+
+  fields="$(printf '%s' "$captured" | jq -ce '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      elif ($v | type) == "array" then ($v | map(tostring) | join(" "))
+      else "" end;
+    def lower($v):
+      str($v) | ascii_downcase;
+    def map_tool_action_effect($permission; $capture_effect; $metadata_tool):
+      (lower($permission)) as $p
+      | (lower($capture_effect)) as $ce
+      | (lower($metadata_tool)) as $mt
+      | if $p == "external_directory" then
+          if $mt == "bash" or $mt == "shell" or $ce == "shell" then
+            {tool:"bash", action:"execute", effect:"write"}
+          elif $mt == "edit" or $mt == "write" or $mt == "patch" or $ce == "edit" then
+            {tool:(if $mt == "" then "edit" else $mt end), action:"edit", effect:"write"}
+          elif $mt == "webfetch" or $mt == "websearch" or $ce == "network" then
+            {tool:(if $mt == "" then "webfetch" else $mt end), action:"fetch", effect:"network"}
+          else
+            {tool:(if $mt == "" then "read" else $mt end), action:"read", effect:"read"}
+          end
+        elif $p == "read" or $p == "glob" or $p == "grep" then
+          {tool:$p, action:"read", effect:"read"}
+        elif $p == "edit" or $p == "write" or $p == "patch" then
+          {tool:$p, action:"edit", effect:"write"}
+        elif $p == "bash" or $p == "shell" then
+          {tool:"bash", action:"execute", effect:"write"}
+        elif $p == "webfetch" or $p == "websearch" then
+          {tool:$p, action:"fetch", effect:"network"}
+        elif $ce == "read" then
+          {tool:(if $p == "" then "read" else $p end), action:"read", effect:"read"}
+        elif $ce == "edit" then
+          {tool:(if $p == "" then "edit" else $p end), action:"edit", effect:"write"}
+        elif $ce == "shell" then
+          {tool:"bash", action:"execute", effect:"write"}
+        elif $ce == "network" then
+          {tool:(if $p == "" then "webfetch" else $p end), action:"fetch", effect:"network"}
+        else
+          empty
+        end;
+    . as $req
+    | (str($req.session // $req.sessionId // $req.sessionID)) as $session
+    | (str($req.requestId // $req.nativeRequestId // $req.id)) as $request_id
+    | (lower($req.permission // "")) as $permission
+    | (lower($req.effect // "")) as $capture_effect
+    | (str($req.metadata.tool // $req.tool // "")) as $metadata_tool
+    | (str($req.resource // "")) as $resource
+    | (map_tool_action_effect($permission; $capture_effect; $metadata_tool)) as $mapped
+    | if $session == "" or $request_id == "" or ($mapped | type) != "object" or $resource == "" then
+        empty
+      else
+        {
+          runtime: "opencode",
+          sessionId: $session,
+          nativeRequestId: $request_id,
+          tool: $mapped.tool,
+          action: $mapped.action,
+          resource: $resource,
+          effect: $mapped.effect,
+          reason: "",
+          expiresAt: null,
+          _captureEffect: $capture_effect
+        }
+      end
+  ' 2>/dev/null)" || {
+    ralph_approval_adapter_permission_unknown opencode \
+      "OpenCode permission event is missing actionable identity"
+    return 0
+  }
+
+  if [[ "$(printf '%s' "$fields" | jq -r '._captureEffect // empty')" == "read" \
+        && "$(printf '%s' "$fields" | jq -r '.effect // empty')" != "read" ]]; then
+    ralph_approval_adapter_permission_unknown opencode \
+      "OpenCode permission parse must not convert a read request into a write effect"
+    return 0
+  fi
+
+  fields="$(printf '%s' "$fields" | jq -c 'del(._captureEffect)')"
+  caps="$(run_plan_invoke_opencode_graph_approval_capabilities "${OPENCODE_PLAN_CLI:-${OPENCODE_CLI:-opencode}}")" || return 1
+  elevated="$(ralph_approval_adapter_build_permission_record "$fields" "$caps")" || return 1
+  printf '%s\n' "$elevated"
+}
+
+_run_plan_invoke_opencode_graph_approval_ensure_adapter() {
+  if declare -F ralph_approval_adapter_capabilities >/dev/null 2>&1; then
+    return 0
+  fi
+  local dir
+  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "$dir/run-plan-approval-adapter.sh"
+}
+
+# run_plan_invoke_opencode_graph_approval_capabilities [cli]
+# Overlay enforces once/run/always-policy without ambient user writes. Serve
+# reply is the same-operation path when a live session is present.
+run_plan_invoke_opencode_graph_approval_capabilities() {
+  local proof
+  _run_plan_invoke_opencode_graph_approval_ensure_adapter || return 1
+  proof="$(jq -nc '{
+    liveRequestStreaming: false,
+    sameOperationResponse: true,
+    sessionContinuation: true,
+    lifetimes: {once: true, run: true, "always-policy": true}
+  }')"
+  ralph_approval_adapter_capabilities opencode "$proof"
+}
+
+# run_plan_invoke_opencode_graph_approval_overlay_for_grant <effect> <resource> [tool]
+# Narrow permission overlay keyed by tool when present, otherwise by effect.
+# Proved read stays under read; bash/execute write stays under bash (never
+# widens a shell grant into edit).
+run_plan_invoke_opencode_graph_approval_overlay_for_grant() {
+  local effect="${1:-}" resource="${2:-}" tool="${3:-}" key
+  effect="$(printf '%s' "$effect" | tr '[:upper:]' '[:lower:]')"
+  tool="$(printf '%s' "$tool" | tr '[:upper:]' '[:lower:]')"
+  case "$tool" in
+    bash|shell) key="bash" ;;
+    edit|write|patch) key="edit" ;;
+    read|glob|grep) key="read" ;;
+    webfetch|websearch) key="webfetch" ;;
+    *)
+      case "$effect" in
+        read) key="read" ;;
+        write|edit) key="edit" ;;
+        shell|bash) key="bash" ;;
+        network) key="webfetch" ;;
+        *) key="$effect" ;;
+      esac
+      ;;
+  esac
+  if [[ -z "$resource" || -z "$key" ]]; then
+    echo "Error: OpenCode graph approval overlay requires effect and resource" >&2
+    return 1
+  fi
+  jq -nc --arg key "$key" --arg resource "$resource" \
+    '{permission: {($key): {($resource): "allow"}}}'
+}
+
+# run_plan_invoke_opencode_graph_approval_config_target
+# Run-local OpenCode permission override path (never ambient user/home).
+run_plan_invoke_opencode_graph_approval_config_target() {
+  local plan_key="${RALPH_PLAN_KEY:-opencode-approval}" root
+  if [[ -n "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]]; then
+    printf '%s' "$OPENCODE_PLAN_PERMISSION_CONFIG_PATH"
+    return 0
+  fi
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    root="${RALPH_PLAN_WORKSPACE_ROOT}/runtime-config/${plan_key}"
+  elif [[ -n "${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}" ]]; then
+    root="${RALPH_PROJECT_ROOT:-$WORKSPACE}/.ralph-workspace/runtime-config/${plan_key}"
+  else
+    echo "Error: OpenCode graph approval apply requires a project or workspace root" >&2
+    return 1
+  fi
+  mkdir -p "$root" || return 1
+  printf '%s/opencode-permission-override.json' "$root"
+}
+
+# run_plan_invoke_opencode_graph_approval_apply <request-json> [session-dir]
+# Graph-only G16 continuation: answer the live native request in-session when
+# possible, otherwise install a journaled narrow reversible overlay before
+# retry. allow-once is consumed atomically. Exact keys for allow-run/always are
+# preserved; deny remains stronger and does not write an allow overlay.
+run_plan_invoke_opencode_graph_approval_apply() {
+  local input="${1:-}" session_dir="${2:-}"
+  local caps translated decision lifetime grant_json
+  local action resource effect overlay_json target tool
+  local same_op=false respond_json continue_input continued
+  local session_id request_id native_event same_op_json="false"
+  local narrow_overlay merged
+
+  if ! run_plan_invoke_opencode_serve_graph_enabled; then
+    echo "Error: OpenCode graph approval apply is graph-only" >&2
+    return 1
+  fi
+  _run_plan_invoke_opencode_graph_approval_ensure_adapter || return 1
+  if [[ -z "$input" ]] || ! printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: OpenCode graph approval apply requires a JSON object" >&2
+    return 1
+  fi
+  ralph_approval_adapter_reject_dangerous_fallback "$(printf '%s' "$input" | jq -r '.fallback // empty')" || return 1
+
+  caps="$(run_plan_invoke_opencode_graph_approval_capabilities "${OPENCODE_PLAN_CLI:-${OPENCODE_CLI:-opencode}}")"
+  translated="$(ralph_approval_adapter_translate_decision "$input" "$caps")" || return 1
+  decision="$(printf '%s' "$translated" | jq -r '.decision')"
+  lifetime="$(printf '%s' "$translated" | jq -r '.lifetime')"
+  grant_json="$(printf '%s' "$translated" | jq -c '.grant')"
+  session_id="$(printf '%s' "$input" | jq -r '.sessionId // .session_id // .session // empty')"
+  request_id="$(printf '%s' "$input" | jq -r '.nativeRequestId // .requestId // .id // empty')"
+
+  if [[ "$decision" == "deny" ]]; then
+    action="$(printf '%s' "$input" | jq -r '.request.action // .action // "edit"')"
+    resource="$(printf '%s' "$input" | jq -r '.request.resource // .resource // empty')"
+    effect="$(printf '%s' "$input" | jq -r '.request.effect // .effect // "write"')"
+    tool="$(printf '%s' "$input" | jq -r '.tool // .request.tool // empty')"
+    [[ -n "$tool" ]] || tool="$action"
+  else
+    action="$(printf '%s' "$grant_json" | jq -r '.action')"
+    resource="$(printf '%s' "$grant_json" | jq -r '.resource')"
+    effect="$(printf '%s' "$grant_json" | jq -r '.effect')"
+    tool="$(printf '%s' "$input" | jq -r '.tool // .request.tool // empty')"
+    [[ -n "$tool" ]] || tool="$action"
+  fi
+
+  # Prefer same-operation reply while the serve session still holds the request.
+  if [[ -n "$session_dir" && -d "$session_dir" ]] \
+       && run_plan_invoke_opencode_serve_session_alive "$session_dir" 2>/dev/null; then
+    case "$decision" in
+      allow-once) native_event="once" ;;
+      allow-run) native_event="run" ;;
+      allow-always) native_event="project" ;;
+      deny) native_event="deny" ;;
+      *) native_event="" ;;
+    esac
+    if [[ -n "$native_event" ]]; then
+      if respond_json="$(run_plan_invoke_opencode_serve_respond "$session_dir" "$native_event" 2>/dev/null)"; then
+        if printf '%s' "$respond_json" | jq -e '.resolved == true and .fallback != true' >/dev/null 2>&1; then
+          same_op=true
+          same_op_json="true"
+        fi
+      fi
+    fi
+  fi
+
+  target="$(printf '%s' "$input" | jq -r '.target // empty')"
+  if [[ -z "$target" ]]; then
+    target="$(run_plan_invoke_opencode_graph_approval_config_target)" || return 1
+  fi
+  if ralph_approval_adapter_is_ambient_user_path "$target"; then
+    echo "Error: OpenCode graph approval refuses ambient user path: $target" >&2
+    return 1
+  fi
+
+  overlay_json="null"
+  # allow-once installs a narrow overlay when the live request was not answered
+  # (retry path). allow-run / allow-always always install the overlay.
+  if [[ "$decision" != "deny" ]]; then
+    if [[ "$same_op" != "true" || "$decision" == "allow-run" || "$decision" == "allow-always" ]]; then
+      narrow_overlay="$(run_plan_invoke_opencode_graph_approval_overlay_for_grant "$effect" "$resource" "$tool")" || return 1
+      if [[ -f "$target" ]]; then
+        merged="$(run_plan_invoke_opencode_serve_merge_permission_overlay "$target" "$narrow_overlay")" || return 1
+        overlay_json="$(cat "$merged")"
+        rm -f "$merged"
+      else
+        overlay_json="$narrow_overlay"
+      fi
+    fi
+  fi
+
+  if [[ "$same_op" == "true" && "$decision" == "allow-once" ]]; then
+    continue_input="$(jq -nc \
+      --arg decision "$decision" \
+      --arg action "$action" \
+      --arg resource "$resource" \
+      --arg effect "$effect" \
+      --arg tool "$tool" \
+      --arg session "$session_id" \
+      --arg requestId "$request_id" \
+      --argjson grant "$grant_json" \
+      '{
+        decision: $decision,
+        runtime: "opencode",
+        action: $action,
+        resource: $resource,
+        effect: $effect,
+        tool: $tool,
+        grant: $grant,
+        sessionId: $session,
+        nativeRequestId: $requestId,
+        sameOperationReply: true
+      }')"
+  elif [[ "$decision" == "deny" ]]; then
+    continue_input="$(jq -nc \
+      --arg decision "$decision" \
+      --arg action "$action" \
+      --arg resource "$resource" \
+      --arg effect "$effect" \
+      --arg tool "$tool" \
+      --arg session "$session_id" \
+      --arg requestId "$request_id" \
+      --argjson grant "$grant_json" \
+      '{
+        decision: $decision,
+        runtime: "opencode",
+        action: $action,
+        resource: $resource,
+        effect: $effect,
+        tool: $tool,
+        grant: $grant,
+        sessionId: $session,
+        nativeRequestId: $requestId
+      }')"
+  else
+    if [[ "$overlay_json" == "null" ]]; then
+      echo "Error: OpenCode graph approval allow requires same-operation reply or a narrow overlay" >&2
+      return 1
+    fi
+    continue_input="$(jq -nc \
+      --arg decision "$decision" \
+      --arg action "$action" \
+      --arg resource "$resource" \
+      --arg effect "$effect" \
+      --arg tool "$tool" \
+      --arg session "$session_id" \
+      --arg requestId "$request_id" \
+      --arg target "$target" \
+      --argjson grant "$grant_json" \
+      --argjson overlay "$overlay_json" \
+      --argjson sameOp "$same_op_json" \
+      '{
+        decision: $decision,
+        runtime: "opencode",
+        action: $action,
+        resource: $resource,
+        effect: $effect,
+        tool: $tool,
+        grant: $grant,
+        sessionId: $session,
+        nativeRequestId: $requestId,
+        target: $target,
+        overlay: $overlay,
+        sameOperationReply: $sameOp
+      }')"
+  fi
+
+  continued="$(ralph_approval_adapter_continue "$continue_input" "$caps")" || return 1
+
+  jq -nc \
+    --argjson continued "$continued" \
+    --argjson sameOp "$same_op_json" \
+    --arg lifetime "$lifetime" \
+    '{
+      schemaVersion: 1,
+      runtime: "opencode",
+      path: $continued.path,
+      decision: $continued.decision,
+      lifetime: $lifetime,
+      sameOperationReply: $sameOp,
+      consumeRecord: $continued.consumeRecord,
+      continuationRecord: $continued.continuationRecord,
+      continuation: $continued.continuation,
+      sessionStrategy: $continued.sessionStrategy,
+      sessionId: $continued.sessionId,
+      target: $continued.target,
+      backup: $continued.backup,
+      restored: false,
+      grant: $continued.applied.grant,
+      equalOrNarrower: true
+    }'
+}
+
+# run_plan_invoke_opencode_graph_approval_restore [reason]
+run_plan_invoke_opencode_graph_approval_restore() {
+  _run_plan_invoke_opencode_graph_approval_ensure_adapter || return 1
+  ralph_approval_adapter_continue_restore "${1:-success}"
 }
 
 _run_plan_invoke_opencode_serve_ephemeral_port() {

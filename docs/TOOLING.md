@@ -60,7 +60,7 @@ When Ralph MCP is active, `tools/list` always includes the orchestration and res
 | `ralph_proxy_result_read` / `_search` / `_summary` | Read, search, or summarize stored full outputs by `resultId` | `native`, `ralph`, `hybrid` |
 | `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob` | Bounded file read, search, and glob | `ralph`, `hybrid` |
 | `ralph_proxy_shell` | Run a shell command with policy checks and bounded output | `ralph`, `hybrid` |
-| `ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel` | Async job lifecycle for long-running commands (avoids MCP timeouts); runner-first verification remains the default path for completion commands so these helpers are reserved for exploratory or manual monitoring. Prefer `_wait` for blocking waits, treat `_status` as a manual follow-up, avoid short-interval polling loops, and hide them with `RALPH_PROXY_SHELL_ASYNC=0`. | `ralph`, `hybrid` |
+| `ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel` | Async job lifecycle for long-running commands (avoids MCP timeouts). Manual fallback when a human is monitoring a job — not the automation path for durable TODO waits (use opt-in `RALPH_BG_JOBS` + `.ralph/ralph-bg.sh` / Stop hooks; see [Background jobs and Stop hook continuation](#background-jobs-and-stop-hook-continuation)). Prefer `_wait` for blocking waits, treat `_status` as a manual follow-up, never short-interval polling loops. Hide with `RALPH_PROXY_SHELL_ASYNC=0`. Runner-first `verify:` remains the default completion path. | `ralph`, `hybrid` |
 
 There are no `ralph_proxy_edit` or `ralph_proxy_write` tools; agents keep using runtime-native edit tools for modifications. The standalone MCP server refuses to start with `RALPH_MODE=no`.
 
@@ -73,23 +73,61 @@ In `ralph` and `hybrid` modes, the prompt also tells agents to prefer the proxy 
 In `ralph` or `hybrid` mode, each runtime gets an ephemeral MCP config pointing at the active install's `mcp-server.sh` (workspace-local `.ralph/mcp-server.sh`, or `$RALPH_HOME/bundle/.ralph/mcp-server.sh` for `ralph run-plan`; override with `RALPH_MCP_PROXY_SERVER_SCRIPT`). Whatever the mechanism, Ralph backs up any file it touches and restores it when the run ends.
 
 **MCP precedence in Ralph mode (highest to lowest):**
-1. Native ambient MCP servers (runtime's own configuration chain)
-2. Agent `mcp_servers` declarations (string references or portable definitions)
-3. Ralph's protected `ralph` MCP server (always last)
 
-Agent definitions with the same name as ambient servers override the ambient definition. The reserved `ralph` name cannot be redefined by agents.
+1. Native ambient MCP servers from the runtime's own configuration chain
+2. Ralph's protected `ralph` MCP server, layered only when the selected mode
+   requires it
+
+Workflow stage fields cannot define, override, or reference MCP servers. Ralph
+adds only its protected server; native ambient MCP remains runtime-owned.
 
 | Runtime | Mechanism | Notes |
 |---------|-----------|-------|
-| Claude | Temp config via `--strict-mcp-config --mcp-config <temp>` | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available -- Claude requires a native `Read` before `Edit`/`Write`, so stripping `Read` would deadlock edits. `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` also strips `Read` for read-only plans. |
-| Cursor | Merges `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. Agent `mcp_servers` are merged before Ralph's entry. |
-| Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true` (fails closed if the server cannot start), and a tools approval mode so non-interactive runs do not cancel Ralph tools (`CODEX_PLAN_MCP_TOOLS_APPROVAL_MODE` to change, `omit` for older CLIs). Native tools remain alongside Ralph tools. Agent `mcp_servers` are translated to `--config mcp_servers.<agent-server>.*` overrides. |
-| OpenCode | Temp config via `OPENCODE_CONFIG` merging with native config | Merges `mcp.ralph` into a copy of any existing config (JSONC comments survive). In `hybrid`, native OpenCode tools (`read`, `grep`, `glob`, `bash`) and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Strict proxy enforcement is unsupported: OpenCode cannot hide native tools pre-execution, so strict-proxy runs fail fast unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` downgrades to a post-run audit. Agent `mcp_servers` are merged into the effective config. See [OpenCode hybrid contract](#opencode-hybrid-contract). |
-| Antigravity | Temp config via `ANTIGRAVITY_CONFIG` when needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. Agent `mcp_servers` merged into temporary config only when needed. |
+| Claude | Temp config containing only the `ralph` server via `--mcp-config <temp>`, without `--strict-mcp-config`, so native MCP discovery stays on and ambient servers are never rebuilt into the temp file | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available. Outside a Ralph mode, Claude minimal mode may lock down with `--strict-mcp-config` and an empty catalog (`CLAUDE_PLAN_MINIMAL_DISABLE_MCP`; see ENVIRONMENT.md). |
+| Cursor | Merges only `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. |
+| Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true`, and the configured tools approval mode. Native tools and native MCP remain alongside Ralph tools. |
+| OpenCode | Temp config via `OPENCODE_CONFIG` merging only Ralph's server with native config | JSONC comments survive. In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Strict proxy enforcement is unsupported unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` enables a post-run audit. See [OpenCode hybrid contract](#opencode-hybrid-contract). |
+| Antigravity | Temp config via `ANTIGRAVITY_CONFIG` only when Ralph's server is needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. |
 
 **Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses Ralph proxy tools with native reads or searches, instead of just logging a warning. Codex strict runs add a live preflight that proves a real `ralph_proxy_read` works before the plan starts.
 
 **Kill switch:** a fatal policy violation writes a sentinel under `.ralph-workspace/security/kill-switch.<plan-key>.json` and the run exits non-zero, so orchestrator stages fail instead of advancing. Stale sentinels from earlier runs are logged and ignored. See [SECURITY.md](SECURITY.md).
+
+## Prompt layering and stage instructions
+
+Ralph assembles prompts in this order:
+
+1. Existing Ralph execution and safety preamble
+2. Optional workflow stage instructions block (`WORKFLOW_STAGE_INSTRUCTIONS`)
+   when the current stage declares inline `instructions:`
+3. Resolved stage and TODO contracts
+4. The current task
+
+Ralph never inlines removed `role:` / profile-agent metadata, runtime rules,
+skills, MCP definitions, or artifact contracts as a substitute identity.
+Native runtime configuration supplies those native capabilities; Ralph supplies
+declared stage/TODO contracts and any stage `instructions:` text.
+
+## Native subagents
+
+`nativeSubagents` is a runtime behavior setting, not a Ralph delegation
+mechanism. It accepts `off` or `inherit`:
+
+- Standard leaf TODOs default to `inherit`.
+- Workflow agent stages (Sequential and Dependency) default to `off` where the
+  runtime has a proven deny boundary.
+- Consensus voters compile to `off`.
+- `inherit` leaves ambient runtime-native subagents unchanged. Their activity
+  is opaque and parent-owned; Ralph does not create a child ledger entry.
+- **Native subagents never replace or satisfy plan TODOs or stage completion.**
+  The parent runtime agent remains responsible for every write, verification
+  step, declared artifact, and completion decision.
+- `off` is enforced at the runtime boundary when that runtime supports a
+  tested deny control. Prompt wording is never used as suppression.
+
+The old `subagents` and `delegation.native` controls are removed. Use
+delegated runs when Ralph-managed child execution, artifacts, or completion
+evidence is required. See [DELEGATION.md](../bundle/.ralph/docs/DELEGATION.md).
 
 ## Shell output compaction
 
@@ -142,6 +180,64 @@ When no command is known at all (for example a stored result with no attached co
 | `--ralph-mode no` | Everything off unless you set the variables yourself |
 
 Native adapter compaction stores originals in the same place as MCP compaction, and the same retrieval tools work on both. That shared storage is what makes `hybrid` safe when a runtime's native hook path is only partially proven: the compacted transcript still points at the same stored originals.
+
+## Named tooling profiles
+
+Instead of setting `RALPH_MODE` and compaction knobs by hand on every stage,
+orchestration and graph plans can declare a plan-wide `tooling` block. The
+four named profiles live in `.ralph/tooling-profiles.json` (single source of
+truth for names and env overlays):
+
+```yaml
+pipeline:
+  tooling:
+    defaultProfile: ralph-compact
+    overrides:
+      research: ralph-read-heavy
+```
+
+| Profile | Intent |
+|---------|--------|
+| `raw` | Stock assistant behavior: Ralph MCP off (`RALPH_MODE=no`), no proxy-shell or native-result compaction. Named `raw` rather than `native` because `RALPH_MODE=native` means native hooks on with MCP off. |
+| `ralph-read-heavy` | Ralph MCP on with proxy-shell compaction for known-noise command families only. Generic fallback and native-result compaction stay off so unknown large output and source reads stay intact. |
+| `ralph-compact` | Ralph MCP on, proxy-shell compaction on, and the generic fallback enabled at a 16384-byte threshold for unknown large shell output. Source reads (read/grep/glob) stay unwindowed. |
+| `ralph-aggressive` | Same as `ralph-compact` but the generic threshold drops to 4096 bytes and `RALPH_NATIVE_RESULT_COMPACT=1` also windows native exploration output. The only profile that compacts source output. |
+
+Rules:
+
+- `defaultProfile` is required when `tooling` is present; every override key must
+  name a declared stage id; every value must be one of the four names.
+- Compilation emits a resolved `toolingProfile` on each stage. Dependency
+  dispatch applies the overlay (plus `RALPH_TOOLING_PROFILE` / optional
+  `RALPH_TOOLING_PROFILE_DEGRADED`) before the single-stage Sequential bridge /
+  `run-plan` runs the node. Internal engine identifiers (`graph`,
+  `orchestration`) may still appear in compiled formats and script names.
+- A pipeline may declare either run-level `ralphMode` or `tooling`, not both.
+  Plans that omit `tooling` keep prior behavior.
+- Supervisor-owned nodes (`integrate`, `join`, `gate`, `checkpoint`, `router`,
+  `approval`) are not agent stages; do not author tooling overrides for them.
+- Public workflow modes are Sequential and Dependency; both engines accept the
+  same `tooling` authoring block. Authored workflows use `mode:` rather than
+  legacy engine labels.
+
+Env-var detail and the capability matrix: [ENVIRONMENT.md](ENVIRONMENT.md#named-tooling-profiles).
+Workflow authoring (including tooling profiles): [WORKFLOWS.md](WORKFLOWS.md).
+
+### Context budget vs tooling profile
+
+A stage's `toolingProfile` (`raw`, `ralph-read-heavy`, `ralph-compact`, `ralph-aggressive`)
+and the context budget (`contextBudget` / `RALPH_PLAN_CONTEXT_BUDGET`: `full`, `standard`,
+`lean`) are orthogonal. They govern opposite directions of the same run and neither one
+composes with or overrides the other:
+
+| Control | Direction | What it governs |
+|---------|-----------|-----------------|
+| `toolingProfile` | Inbound (tools to the model) | How tool output from reads, searches, and shell commands is bounded, compacted, and stored. |
+| `contextBudget` / `RALPH_PLAN_CONTEXT_BUDGET` | Outbound (Ralph to the model) | How much context Ralph attaches to the prompt it sends for each TODO. |
+
+Both stay independently settable per stage: a `raw` tooling profile still honors a `lean`
+context budget, and a `ralph-aggressive` profile does not shrink the outbound prompt budget
+on its own. See [ENVIRONMENT.md](ENVIRONMENT.md#context-budget-vs-tooling-profile).
 
 ## Shell command rewriting
 
@@ -202,19 +298,28 @@ Native adapters are merged for one run and restored afterward (see [Overlay stat
 
 "Wrapper-based" means the hook rewrites the command to run through a Ralph wrapper that captures, compacts, and stores the output -- same storage and retrieval as everything else.
 
-### Native configuration preservation
+### Native configuration ownership
 
-Ralph preserves each runtime's native user, project, and local/private configuration chain. Configurations are discovered from the Ralph project root, not the state root or agent workspace.
+The selected runtime launches its normal primary/default agent. Native user,
+project, and local/private configuration owns rules, skills, hooks, plugins,
+MCP servers, permissions, memory, and runtime-native subagents. Ralph does not
+inject workflow stage metadata into native configuration or treat a stage as a
+native agent profile. Configurations are discovered from the Ralph project
+root, not the state root or agent workspace. Ralph layers only its protected
+`ralph` MCP server when the selected mode requires it.
 
 | Runtime | Native config sources (precedence order) | Ralph additions |
 |---------|------------------------------------------|-----------------|
-| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server |
-| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
-| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
-| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
-| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Ralph layers its protected `ralph` server |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings, and existing `.cursor/mcp.json` | Ralph layers its protected `ralph` server |
+| **Codex** | `~/.codex/config.toml` and trusted project `.codex/config.toml` | Ralph adds per-run `mcp_servers.ralph.*` overrides |
+| **OpenCode** | Global, custom, and project `opencode.json` (JSONC preserved) | Ralph merges its protected `ralph` server into a temporary config |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json` | Ralph uses a temporary config only when its protected server is needed |
 
-All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup via runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
+Workflow stage fields cannot define or override MCP servers. All mutations use
+reversible workspace overlays or temporary config files. Byte-exact originals
+are restored on success, failure, timeout, and signal cleanup via
+runtime-config journals under `.ralph-workspace/runtime-config/<plan-key>/`.
 
 Runtime processes are separately protected by the detached process guardian. Each launch is recorded under `.ralph-workspace/processes/active/` and isolated in an OS session before Ralph waits for it. This lets cleanup find runtime children even after nested shells create sibling process groups or the main runner is killed. See [ENVIRONMENT.md](ENVIRONMENT.md#process-lifecycle-and-orphan-prevention) for limits and operator commands.
 
@@ -258,6 +363,54 @@ Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` into the workspac
 **Authoritative compaction path:** `ralph_proxy_shell` with `RALPH_PROXY_SHELL_COMPACT=1` is the authoritative OpenCode path for noisy shell output. Native exploration results are not compacted by default; the staged plugin remains best-effort/conditional and runs record `native_hooks_effective=false` until revalidation proves agent-visible mutation.
 
 **Cache-read reporting:** Provider cache-read token fields (`cache_read_input_tokens`, `cache_read_per_tool_turn`) are model/provider dependent and are **telemetry only**. They inform optimization hints (for example `RALPH_CACHE_READ_PER_TURN_WARN`) but are not Ralph's primary context-control mechanism; bounded tool output and result windowing are.
+
+## Background jobs and Stop hook continuation
+
+When `RALPH_BG_JOBS=1` (opt-in; default `0` / off), a TODO can wait on a long command without agent-authored polling. Env vars: [ENVIRONMENT.md](ENVIRONMENT.md#background-jobs-and-durable-todo-continuations). Prefer strict plan/TODO `verify:` for completion checks; background only when waiting inside the agent turn would cost extra model turns.
+
+### Two-tier model
+
+| Tier | Mechanism | When |
+|------|-----------|------|
+| **1 — hook continuation (preferred)** | Agent runs `.ralph/ralph-bg.sh '<command>'`, ends the turn without a completion marker. The runtime Stop / stop hook blocks outside the model, waits for the job, injects a bounded result, and the **same session** continues (warm prompt cache). | Runtime has a usable end-of-turn hook **and** process-group isolation is available. |
+| **2 — invocation boundary (fallback)** | Runner ends the invocation, waits outside the model, then starts a new invocation for the **same TODO** bound to its exact captured session id. | No usable hook, isolation unavailable, forced `RALPH_BG_TIER=invocation`, or human answers (always cross invocations). |
+
+Tier selection is supervisor-owned (`RALPH_BG_TIER=auto|hook|invocation`), never inferred from model prose. Recorded in telemetry.
+
+### Per-runtime Stop hook contract
+
+Every registration sets an explicit per-hook `timeout` from `RALPH_BG_HOOK_TIMEOUT` (default `5400`). Vendor defaults are too short for long holds.
+
+| Runtime | Event | Holds the turn | Injection field | Loop guard | Vendor default hook timeout |
+|---------|-------|----------------|-----------------|------------|------------------------------|
+| Claude Code | `Stop`, `SubagentStop` | yes, blocks | `decision:"block"` + `reason` | `stop_hook_active`; Ralph raises `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` for `RALPH_BG_MAX_PER_TODO` | `timeout` field, **60s** |
+| Codex | `Stop` | yes, blocks | `decision:"block"` + `reason` (becomes a new user prompt) | `stop_hook_active` | **600s** |
+| Antigravity | `Stop` | yes | `decision:"continue"` + `reason` | not documented; Ralph self-guards | **30s** |
+| Cursor | `stop` | hook blocks while it runs but cannot prevent completion | `followup_message` (auto-submitted as next user message) | `loop_count` / `loop_limit` (default 5) | `timeout`, platform default |
+| OpenCode | `session.idle` | unproven (event, not a gate) | plugin client SDK | n/a | n/a (async JS plugin) |
+
+Ralph also self-guards: refuse more than `RALPH_BG_MAX_PER_TODO` continuations per logical attempt, and release when the runtime reports its own guard is active. A second Stop fire for an already-consumed job releases the turn.
+
+### Detach and isolation
+
+Background jobs launch through `ralph_native_shell_launch_process_group` (tries `setsid`, then `python3` `os.setsid()`, else non-isolated). Tier 1 **refuses** `isolated=false` launches: the job is terminated and Ralph falls back to tier 2. A non-isolated child dies when the agent turn ends; never silently background one.
+
+### Job lifecycle, cancellation, recovery
+
+State machine: `requested -> launched -> running -> terminal -> consumed` under `$RALPH_SESSION_DIR/bg-jobs/<job-id>/`. Terminal status is exactly one of `passed`, `failed`, `timed_out`, `cancelled`, `interrupted`, `unknown`. Results are consume-once. Plan teardown cancels outstanding jobs for the current identity; restart recovery adopts orphaned jobs whose owner died and writes `bg-jobs/recovery-report.json`.
+
+### Exact-ID safety (tier 2) and cost model
+
+Tier 2 resumes only the exact captured runtime session id for that TODO (manifest under `todo-sessions/`). Never bare `--last` / `--continue` / most-recent. If capture is `degraded`, Ralph starts a fresh invocation that still injects the bounded result once — it does not attach an unsafe wrong session.
+
+Cheapest first:
+
+1. One blocking foreground tool call (already optimal; progress heartbeats are not conversation turns).
+2. Background job + tier 1 hook continuation (one extra turn) when work outlives the tool timeout.
+3. Tier 2 when no hook/isolation.
+4. Agent-authored polling loops are forbidden.
+
+Converting a fine blocking call into a background job makes latency and context worse. Async MCP shell tools (`ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel`) stay a **manual** fallback for humans monitoring a job; they are not the automation path for durable TODO continuation (that path is `ralph-bg.sh` + Stop hooks / tier-2 wait). Prefer strict `verify:` for completion gates.
 
 ## Overlay state and cleanup
 
@@ -423,7 +576,7 @@ The experimental knowledge-graph tools (`ralph_knowledge_*`) are hidden unless t
 
 ## Ralph optimizations (Ralph/hybrid)
 
-Tier 1 through Tier 3 Ralph features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, progressive context, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#feature-gates-tier-1-through-tier-3).
+Tier 1 through Tier 3 Ralph features (stable prompt prefix, continuation summary, compact MCP catalog, contextual search, result reduce, structured output, and related gates) are **enabled in `ralph`/`hybrid` mode** unless their specific env var is `0`. They stay **off in `no`/`native`** unless explicitly set to `1`. See [ENVIRONMENT.md](ENVIRONMENT.md#feature-gates-tier-1-through-tier-3).
 
 Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval (`bundle/.ralph/python/retrieval_eval.py`), and tool eval (`bundle/.ralph/python/tool_eval.py`).
 

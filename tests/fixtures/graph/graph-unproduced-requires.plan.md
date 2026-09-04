@@ -4,7 +4,6 @@ pipeline:
   stages:
     - id: consumer
       runtime: cursor
-      agent: implementation
       requires:
         - path: external/input.md
 todos:

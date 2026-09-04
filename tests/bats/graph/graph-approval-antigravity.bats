@@ -581,3 +581,36 @@ EOF
   ! grep -Fxq -- "--dangerously-skip-permissions" "$record"
   ! grep -Eiq -- 'claude-sonnet|sonnet-4' "$record"
 }
+
+@test "cross-runtime fake-adapter permission normalization asserts exact action resource choices" {
+  # Antigravity destination for normalize-other-runtime-permissions.
+  write_agy_help_stub empty-help
+  export ANTIGRAVITY_PLAN_CLI="$BIN_DIR/agy"
+
+  run run_plan_invoke_antigravity_graph_approval_parse_permission "$(jq -nc '{
+    sessionId: "ses-agy",
+    nativeRequestId: "req-agy",
+    tool: "Edit",
+    action: "edit",
+    resource: "src/app.ts",
+    effect: "write"
+  }')"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$output" | jq -r '.runtime')" = "antigravity" ]
+  [ "$(printf '%s' "$output" | jq -r '.sessionId')" = "ses-agy" ]
+  [ "$(printf '%s' "$output" | jq -r '.nativeRequestId')" = "req-agy" ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "src/app.ts" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" = "write" ]
+  [ "$(printf '%s' "$output" | jq -c '.choices')" = '["allow-once","allow-run","deny"]' ]
+  [ "$(printf '%s' "$output" | jq -c '.lifetimes')" = '["once","run"]' ]
+  [ "$(printf '%s' "$output" | jq -r '.choices | index("allow-always")')" = "null" ]
+  [ "$(printf '%s' "$output" | jq -r '.lifetimes | index("always-policy")')" = "null" ]
+
+  run run_plan_invoke_antigravity_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.classification')" = "unknown" ]
+}

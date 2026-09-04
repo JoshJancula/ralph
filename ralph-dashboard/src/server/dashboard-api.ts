@@ -177,6 +177,8 @@ interface UsageSummaryRecord {
   stage_id?: string;
   model?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
   started_at?: string;
   ended_at?: string;
   elapsed_seconds?: number;
@@ -252,6 +254,8 @@ export type ToolCallClassificationMetrics = Record<ToolCallAccountingKey, number
 
 interface ModelBreakdownItem {
   runtime: string;
+  role?: string;
+  modelSource?: string;
   model: string;
   invocations: number;
   elapsed_seconds: number;
@@ -339,6 +343,8 @@ interface MetricsSummaryItem {
   stage_id?: string;
   model?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
   started_at?: string;
   ended_at?: string;
   elapsed_seconds: number;
@@ -943,6 +949,8 @@ function getBreakdownEntries(record: UsageSummaryRecord): ModelBreakdownItem[] {
   return [
     {
       runtime: record.runtime || '',
+      role: record.role || undefined,
+      modelSource: record.modelSource || undefined,
       model: record.model || '',
       invocations: toInt(record.invocations ?? record.steps ?? 1),
       elapsed_seconds: toNumber(record.elapsed_seconds),
@@ -2730,6 +2738,8 @@ function normalizeModelBreakdownRow(item: Record<string, unknown>): ModelBreakdo
   const canonical = canonicalUsageFromRecord(item);
   const row: ModelBreakdownItem = {
     runtime: String(item['runtime'] ?? ''),
+    role: typeof item['role'] === 'string' ? item['role'] : undefined,
+    modelSource: typeof item['modelSource'] === 'string' ? item['modelSource'] : undefined,
     model: String(item['model'] ?? ''),
     invocations: toNumber(item['invocations']),
     elapsed_seconds: toNumber(item['elapsed_seconds']),
@@ -2901,6 +2911,8 @@ function normalizeSummaryRecord(
     stage_id: record.stage_id || undefined,
     model: record.model || undefined,
     runtime: record.runtime || undefined,
+    role: record.role || undefined,
+    modelSource: record.modelSource || undefined,
     started_at: record.started_at || undefined,
     ended_at: record.ended_at || undefined,
     elapsed_seconds: toNumber(record.elapsed_seconds),
@@ -2952,6 +2964,8 @@ async function applyModelBreakdownFallback(
       string,
       {
         runtime: string;
+        role?: string;
+        modelSource?: string;
         model: string;
         invocations: number;
         elapsed_seconds: number;
@@ -2981,10 +2995,14 @@ async function applyModelBreakdownFallback(
       accumulateOverlayFromRecord(planOverlayAcc, item);
       accumulateToolCallsFromRecord(planToolCallAcc, item);
       const runtime = String(item['runtime'] ?? '');
+      const role = typeof item['role'] === 'string' ? item['role'] : undefined;
+      const modelSource = typeof item['modelSource'] === 'string' ? item['modelSource'] : undefined;
       const model = String(item['model'] ?? '');
-      const key = `${runtime}\u0000${model}`;
+      const key = `${runtime}\u0000${role ?? ''}\u0000${modelSource ?? ''}\u0000${model}`;
       const bucket = grouped.get(key) ?? {
         runtime,
+        role,
+        modelSource,
         model,
         invocations: 0,
         elapsed_seconds: 0,
@@ -3041,6 +3059,8 @@ async function applyModelBreakdownFallback(
         });
         const row: ModelBreakdownItem = {
           runtime: bucket.runtime,
+          role: bucket.role,
+          modelSource: bucket.modelSource,
           model: bucket.model,
           invocations: bucket.invocations,
           elapsed_seconds: bucket.elapsed_seconds,
@@ -4035,6 +4055,17 @@ export interface GraphRunSummary {
   nodeCount: number;
 }
 
+export interface DelegatedRunRecord {
+  delegatedRunId: string;
+  runtime: string;
+  role?: string;
+  workspaceMode: string;
+  status: string;
+  verification?: string;
+  usage: Record<string, number>;
+}
+
+/** @deprecated Components will migrate to DelegatedRunRecord in the UI TODO. */
 export interface BrokeredChildState {
   delegationId: string;
   runtime?: string;
@@ -4052,8 +4083,10 @@ export interface NativeSubagentEvent {
 
 export interface GraphUsageSummary {
   parent: Record<string, number>;
-  brokeredChildren: Record<string, number>;
+  delegatedRuns: Record<string, number>;
   total: Record<string, number>;
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
+  brokeredChildren?: Record<string, number>;
 }
 
 export interface GraphNodeAttempt {
@@ -4063,7 +4096,11 @@ export interface GraphNodeAttempt {
   startedAt?: string;
   finishedAt?: string;
   runtime?: string;
-  subagents?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
   reason?: string;
   /** V2 observability metadata recorded by the scheduler for this attempt. */
   workspaceMode?: string;
@@ -4073,7 +4110,6 @@ export interface GraphNodeAttempt {
   changesetBaseline?: string;
   changesetHash?: string;
   conflictArtifact?: string;
-  nativeSubagentMode?: string;
   crossRuntimeMode?: string;
   integrationInputs?: string[];
   integrationResultIdentity?: string;
@@ -4091,6 +4127,12 @@ export interface GraphNodeState {
   status: string;
   attempts: GraphNodeAttempt[];
   lastAttemptId?: string;
+  runtime?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
   /** V2 observability metadata merged from the latest attempt. */
   workspaceMode?: string;
   workspacePath?: string;
@@ -4099,7 +4141,6 @@ export interface GraphNodeState {
   changesetBaseline?: string;
   changesetHash?: string;
   conflictArtifact?: string;
-  nativeSubagentMode?: string;
   crossRuntimeMode?: string;
   integrationInputs?: string[];
   integrationResultIdentity?: string;
@@ -4110,6 +4151,8 @@ export interface GraphNodeState {
   usageSnapshot?: Record<string, unknown>;
   admissionSummary?: Record<string, unknown>;
   repairEpoch?: string;
+  delegatedRuns?: DelegatedRunRecord[];
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
   brokeredChildren?: BrokeredChildState[];
   nativeSubagentEvents?: NativeSubagentEvent[];
 }
@@ -4130,6 +4173,104 @@ function safeReadJson(filePath: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function safeReadJsonValue(filePath: string): unknown {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function numericUsage(value: unknown): Record<string, number> {
+  if (!isJsonRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(([, candidate]) => typeof candidate === 'number' && Number.isFinite(candidate)),
+  ) as Record<string, number>;
+}
+
+/**
+ * Parse one v2 delegated-run ledger record into the dashboard data contract.
+ * Old node-local records deliberately fail closed: the dashboard never
+ * translates delegationId/task/resultArtifact into the new shape.
+ */
+export function parseDelegatedRunRecord(
+  request: Record<string, unknown>,
+  status: Record<string, unknown>,
+): DelegatedRunRecord | null {
+  const delegatedRunId = request['delegatedRunId'];
+  const runtime = request['runtime'];
+  if (
+    request['schemaVersion'] !== 2
+    || status['schemaVersion'] !== 2
+    || Object.prototype.hasOwnProperty.call(request, 'delegationId')
+    || typeof delegatedRunId !== 'string'
+    || typeof runtime !== 'string'
+    || status['delegatedRunId'] !== delegatedRunId
+  ) {
+    return null;
+  }
+
+  const role = typeof request['role'] === 'string' ? request['role'] : undefined;
+  const workspaceMode =
+    (typeof status['workspaceMode'] === 'string' && status['workspaceMode'])
+    || (typeof request['workspaceMode'] === 'string' && request['workspaceMode'])
+    || 'snapshot';
+  const verification =
+    typeof status['verification'] === 'string'
+      ? status['verification']
+      : typeof status['verificationOutcome'] === 'string'
+        ? status['verificationOutcome']
+        : undefined;
+
+  return {
+    delegatedRunId,
+    runtime,
+    ...(role ? { role } : {}),
+    workspaceMode,
+    status: typeof status['status'] === 'string' ? status['status'] : 'unknown',
+    ...(verification ? { verification } : {}),
+    usage: numericUsage(status['usage']),
+  };
+}
+
+function normalizeGraphNodeAttempt(value: unknown): GraphNodeAttempt | null {
+  if (!isJsonRecord(value) || typeof value['attemptId'] !== 'string' || typeof value['outcome'] !== 'string') {
+    return null;
+  }
+  const attempt: GraphNodeAttempt = {
+    attemptId: value['attemptId'],
+    outcome: value['outcome'],
+  };
+  for (const key of [
+    'runtime', 'role', 'modelSource', 'nativeSubagents', 'reason', 'startedAt', 'finishedAt',
+    'workspaceMode', 'workspacePath', 'frozenBase', 'changesetBaseline', 'changesetHash',
+    'conflictArtifact', 'crossRuntimeMode', 'integrationResultIdentity', 'gateOutcome',
+    'gateResultPath', 'changesetManifest', 'repairEpoch',
+  ] as const) {
+    if (typeof value[key] === 'string') {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  if (typeof value['exitCode'] === 'number') attempt.exitCode = value['exitCode'];
+  for (const key of ['writeScopes', 'integrationInputs'] as const) {
+    if (Array.isArray(value[key]) && value[key].every((item) => typeof item === 'string')) {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  for (const key of ['publishReadiness', 'usageSnapshot', 'admissionSummary'] as const) {
+    if (isJsonRecord(value[key])) {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  return attempt;
 }
 
 function addUsage(total: Record<string, number>, value: unknown): void {
@@ -4161,7 +4302,7 @@ function readJsonLines(filePath: string): Array<Record<string, unknown>> {
 function concurrencyReduction(event: Record<string, unknown>): string | null {
   if (event['event'] !== 'admission') return null;
   if (event['workKind'] === 'broker-child' && event['decision'] === 'denied') return 'broker capacity';
-  if (event['subagents'] === 'on') return 'native subagent reservation';
+  if (event['nativeSubagents'] === 'inherit') return 'native subagent reservation';
   if (event['sameRuntimeParallelSafe'] === false) return 'runtime overlays';
   const reason = typeof event['reason'] === 'string' ? event['reason'] : '';
   return /verification|resource/i.test(reason) ? 'verification resource class' : null;
@@ -4275,7 +4416,7 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
   const graphJson = safeReadJson(join(runDir, 'graph.json'));
   const observabilityEvents = readJsonLines(join(runDir, 'observability.jsonl'));
   const parentUsage: Record<string, number> = {};
-  const childUsage: Record<string, number> = {};
+  const delegatedRunsUsage: Record<string, number> = {};
 
   const nodeStates: GraphNodeState[] = [];
   const nodesDir = join(runDir, 'nodes');
@@ -4287,7 +4428,7 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
     'changesetBaseline',
     'changesetHash',
     'conflictArtifact',
-    'nativeSubagentMode',
+    'nativeSubagents',
     'crossRuntimeMode',
     'integrationInputs',
     'integrationResultIdentity',
@@ -4300,6 +4441,44 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
     'repairEpoch',
   ] as const;
 
+  const delegatedRunsByNode = new Map<string, DelegatedRunRecord[]>();
+  const delegatedRunParents = new Map<string, string>();
+  const queueValue = safeReadJsonValue(join(runDir, 'delegation-queue.json'));
+  if (Array.isArray(queueValue)) {
+    for (const entry of queueValue) {
+      if (!isJsonRecord(entry)) continue;
+      const delegatedRunId = entry['delegatedRunId'];
+      const parentNodeId = entry['parentNodeId'];
+      if (typeof delegatedRunId === 'string' && typeof parentNodeId === 'string') {
+        delegatedRunParents.set(delegatedRunId, parentNodeId);
+      }
+    }
+  }
+
+  const delegatedRunsDir = join(graphRunsDir, '..', 'delegated-runs');
+  if (existsSync(delegatedRunsDir)) {
+    try {
+      const delegatedEntries = await fs.readdir(delegatedRunsDir, { withFileTypes: true });
+      for (const delegatedEntry of delegatedEntries) {
+        if (!delegatedEntry.isDirectory()) continue;
+        const delegatedRunDir = join(delegatedRunsDir, delegatedEntry.name);
+        const record = parseDelegatedRunRecord(
+          safeReadJson(join(delegatedRunDir, 'request.json')),
+          safeReadJson(join(delegatedRunDir, 'status.json')),
+        );
+        if (!record) continue;
+        const parentNodeId = delegatedRunParents.get(record.delegatedRunId);
+        if (!parentNodeId) continue;
+        const records = delegatedRunsByNode.get(parentNodeId) ?? [];
+        records.push(record);
+        delegatedRunsByNode.set(parentNodeId, records);
+        addUsage(delegatedRunsUsage, record.usage);
+      }
+    } catch {
+      // Delegated-run observability is best-effort; malformed entries are ignored.
+    }
+  }
+
   if (existsSync(nodesDir)) {
     try {
       const nodeFiles = await fs.readdir(nodesDir);
@@ -4308,17 +4487,26 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
           continue;
         }
         const raw = safeReadJson(join(nodesDir, file));
+        const attempts = Array.isArray(raw['attempts'])
+          ? raw['attempts']
+            .map(normalizeGraphNodeAttempt)
+            .filter((attempt): attempt is GraphNodeAttempt => attempt !== null)
+          : [];
+        const latestAttempt = attempts[attempts.length - 1] ?? {};
         const state: GraphNodeState = {
           nodeId: typeof raw['nodeId'] === 'string' ? raw['nodeId'] : file.replace(/\.json$/, ''),
           status: typeof raw['status'] === 'string' ? raw['status'] : 'pending',
-          attempts: Array.isArray(raw['attempts'])
-            ? (raw['attempts'] as GraphNodeAttempt[])
-            : [],
+          attempts,
           lastAttemptId: typeof raw['lastAttemptId'] === 'string' ? raw['lastAttemptId'] : undefined,
         };
         // Surface v2 observability metadata from the node entry and from the
         // latest attempt, with the node entry taking precedence.
-        const latestAttempt = state.attempts[state.attempts.length - 1] ?? {};
+        for (const key of ['runtime', 'role', 'modelSource', 'nativeSubagents'] as const) {
+          const value = raw[key] ?? latestAttempt[key];
+          if (typeof value === 'string') {
+            (state as unknown as Record<string, unknown>)[key] = value;
+          }
+        }
         // A node summary is cumulative across its local Ralph loop; count only
         // the latest snapshot, never every retry snapshot.
         addUsage(parentUsage, latestAttempt.usageSnapshot);
@@ -4328,61 +4516,6 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
             (state as unknown as Record<string, unknown>)[key] = value as unknown;
           }
         }
-        // Brokered children are durable ledger children under the parent node;
-        // they are never peer nodes in the frozen graph.
-        const nodeId = state.nodeId;
-        const delegationsDir = join(runDir, 'nodes', file.replace(/\.json$/, ''), 'delegations');
-        if (existsSync(delegationsDir)) {
-          try {
-            const childDirs = await fs.readdir(delegationsDir, { withFileTypes: true });
-            const brokeredChildren: BrokeredChildState[] = [];
-            for (const childEnt of childDirs) {
-              if (!childEnt.isDirectory() || !childEnt.name.startsWith('delegation-')) {
-                continue;
-              }
-              const childDir = join(delegationsDir, childEnt.name);
-              const request = safeReadJson(join(childDir, 'request.json'));
-              const status = safeReadJson(join(childDir, 'status.json'));
-              if (typeof request['delegationId'] !== 'string') {
-                continue;
-              }
-              brokeredChildren.push({
-                delegationId: request['delegationId'] as string,
-                runtime: typeof request['runtime'] === 'string' ? request['runtime'] : undefined,
-                status: typeof status['status'] === 'string' ? status['status'] : 'unknown',
-                task: typeof request['task'] === 'string' ? request['task'] : undefined,
-                resultArtifact: status['finalResult'] && typeof (status['finalResult'] as Record<string, unknown>)['resultArtifact'] === 'string'
-                  ? ((status['finalResult'] as Record<string, unknown>)['resultArtifact'] as string)
-                  : undefined,
-                usage: typeof status['usage'] === 'object' && status['usage'] !== null
-                  ? (status['usage'] as Record<string, number>)
-                  : undefined,
-              });
-              // Each brokered child owns its own ledger. Its aggregated usage
-              // is intentionally not included in the parent node snapshot.
-              addUsage(childUsage, status['usage']);
-            }
-            if (brokeredChildren.length > 0) {
-              state.brokeredChildren = brokeredChildren.sort((a, b) =>
-                a.delegationId.localeCompare(b.delegationId),
-              );
-            }
-          } catch {
-            // ignore; children are best-effort observability
-          }
-        }
-        const nativeSubagentEvents = observabilityEvents
-          .filter((event) => event['nodeId'] === state.nodeId
-            && typeof event['event'] === 'string'
-            && event['event'].startsWith('native-subagent'))
-          .map((event) => ({
-            event: event['event'] as string,
-            timestamp: typeof event['timestamp'] === 'string' ? event['timestamp'] : undefined,
-            details: event['details'] && typeof event['details'] === 'object'
-              ? event['details'] as Record<string, unknown>
-              : undefined,
-          }));
-        if (nativeSubagentEvents.length > 0) state.nativeSubagentEvents = nativeSubagentEvents;
         nodeStates.push(state);
       }
     } catch {
@@ -4390,14 +4523,23 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
     }
   }
 
+  for (const state of nodeStates) {
+    const delegatedRuns = delegatedRunsByNode.get(state.nodeId);
+    if (delegatedRuns && delegatedRuns.length > 0) {
+      state.delegatedRuns = delegatedRuns.sort((a, b) =>
+        a.delegatedRunId.localeCompare(b.delegatedRunId),
+      );
+    }
+  }
+
   const totalUsage: Record<string, number> = { ...parentUsage };
-  addUsage(totalUsage, childUsage);
+  addUsage(totalUsage, delegatedRunsUsage);
   const concurrencyReductions = [...new Set(observabilityEvents
     .map(concurrencyReduction)
     .filter((value): value is string => value !== null))];
   res.json({
     namespace, runId, run: runJson, nodes: nodeStates, graph: graphJson,
-    usage: { parent: parentUsage, brokeredChildren: childUsage, total: totalUsage },
+    usage: { parent: parentUsage, delegatedRuns: delegatedRunsUsage, total: totalUsage },
     concurrencyReductions,
   });
 }

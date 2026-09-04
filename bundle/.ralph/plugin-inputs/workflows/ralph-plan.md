@@ -8,15 +8,15 @@ description: Scaffold, edit, and validate flat Ralph plans without executing the
 Authoring Ralph plugin workflow. Scaffolds, edits, and validates classic or
 yaml plans. Does not execute a plan.
 
-Category: authoring (P09). Allowed operations: scaffold, edit, validate,
-compile, render. Compile and render belong to graph authoring; this workflow
-does not invoke them. The only bootstrap operation is `probe`. Never call
-`ensure`, never run `install.sh`, and never call `ralph-plugin-exec.sh`.
-Never invoke `ralph run`, `ralph graph run`, or `ralph graph resume`.
+Category: authoring (P09). Allowed operations: scaffold, edit, validate.
+The only bootstrap operation is `probe`. Never call `ensure`, never run
+`install.sh`, and never call `ralph-plugin-exec.sh`. Never invoke `ralph run`,
+`ralph workflow start`, or `ralph workflow resume`.
 
 Compose authoring from existing CLI verbs (`ralph create plan`) and
 `validate-plan.sh` from the installed bundle. Do not invent a `ralph
-validate` or `ralph capabilities` verb.
+validate` verb. For Sequential or Dependency multi-stage work, use the
+`ralph-workflow` skill instead.
 
 ```bash
 set -euo pipefail
@@ -32,6 +32,9 @@ operation="${RALPH_PLUGIN_OPERATION:-scaffold}"
 plan_path="${RALPH_PLUGIN_PLAN_PATH:-}"
 plan_name="${RALPH_PLUGIN_PLAN_NAME:-}"
 plan_format="${RALPH_PLUGIN_PLAN_FORMAT:-classic}"
+requested_runtime="${RALPH_PLUGIN_RUNTIME:-}"
+requested_model="${RALPH_PLUGIN_MODEL:-}"
+requested_native_subagents="${RALPH_PLUGIN_NATIVE_SUBAGENTS:-off}"
 
 probe_ec=0
 probe_json=""
@@ -74,11 +77,6 @@ case "$operation" in
     ;;
   scaffold|edit|validate)
     ;;
-  compile|render)
-    printf 'rejected-operation: %s\n' "$operation"
-    printf 'reason: compile and render are graph authoring operations\n'
-    exit 1
-    ;;
   *)
     printf 'rejected-operation: %s\n' "$operation"
     printf 'reason: allowed operations are scaffold, edit, validate\n'
@@ -87,6 +85,13 @@ case "$operation" in
 esac
 
 printf 'operation: %s\n' "$operation"
+printf 'runtime: %s\n' "${requested_runtime:-runtime default}"
+if [[ -n "$requested_model" ]]; then
+  printf 'model source: explicit override (%s)\n' "$requested_model"
+else
+  printf 'model source: runtime saved/default\n'
+fi
+printf 'native subagents: %s\n' "$requested_native_subagents"
 
 case "$operation" in
   scaffold)

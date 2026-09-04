@@ -8,9 +8,14 @@ compound commands that should bail, and binary output.
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from ralph_script_loader import load_ralph_script
+# Add the tests/python directory to the path for importing ralph_script_loader
+sys.path.insert(0, str(Path(__file__).parent))
+
+from ralph_script_loader import load_ralph_script  # noqa: E402
 
 
 SOC = load_ralph_script("shell-output-compact")

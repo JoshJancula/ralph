@@ -2,14 +2,14 @@
   "author": {
     "name": "Ralph maintainers"
   },
-  "description": "Plan, orchestrate, inspect, and safely run Ralph workflows from Cursor.",
+  "description": "Plan, author workflows, inspect runs, and safely execute Ralph from Cursor.",
   "displayName": "Ralph Orchestrator",
   "keywords": [
     "ralph",
     "planning",
-    "orchestration",
-    "graph",
-    "agents"
+    "workflow",
+    "sequential",
+    "dependency"
   ],
   "license": "MIT",
   "name": "ralph-orchestrator",

@@ -6,15 +6,35 @@ fi
 RALPH_ORCHESTRATOR_VERIFY_LOADED=1
 
 # Public interface:
+#   orch_stage_collect_expected_artifacts -- stage-only required output paths into EXPECTED_ARTIFACT_PATHS.
 #   artifact_remediation_text -- prints remediation steps for missing artifacts.
 #   verify_step_artifacts -- asserts EXPECTED_ARTIFACT_PATHS exist and are non-empty after a stage.
+
+# Collect required output paths exclusively from the stage JSON (artifacts +
+# outputArtifacts with required=true). Template tokens are expanded via
+# artifact_paths_append_unique. Roles and profile output_artifacts are never
+# consulted.
+orch_stage_collect_expected_artifacts() {
+  local stage_json="$1"
+  local artifacts_array artifact_path
+
+  EXPECTED_ARTIFACT_PATHS=()
+  artifacts_array="$(echo "$stage_json" | jq '.artifacts // []' 2>/dev/null)" || artifacts_array="[]"
+  while IFS= read -r artifact_path; do
+    [[ -z "$artifact_path" ]] && continue
+    artifact_paths_append_unique "$artifact_path"
+  done < <(echo "$artifacts_array" | jq -r '.[] | select(.required == true) | .path' 2>/dev/null)
+  while IFS= read -r artifact_path; do
+    [[ -z "$artifact_path" ]] && continue
+    artifact_paths_append_unique "$artifact_path"
+  done < <(echo "$stage_json" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
+}
 
 artifact_remediation_text() {
   echo "  Remediation:"
   echo "    1. Open the step plan and ensure the agent finished every TODO (agent should write declared outputs)."
   echo "    2. Create or fill the missing path under the repo root (see .ralph-workspace/artifacts/ for handoff files)."
-  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage"
-  echo "       or adjust output_artifacts in the agent config."
+  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage."
   echo "    4. Re-run from repo root: $0 --orchestration \"$ORCH_FILE\" \"$WORKSPACE\""
 }
 

@@ -1,0 +1,686 @@
+{
+  "width": 120,
+  "height": 40,
+  "plain": [
+    "Ralph fixture-seq-stale  bug-fix | Sequential",
+    "Task  Fix the timeout",
+    "STALE  Elapsed 0s  Updated just now  Stages 0/1",
+    "[------------------------------------------] 0/1",
+    "the owning supervisor is gone and the run can be recovered",
+    "Stages",
+    "> stale      implement",
+    "+- Selected stage -----------------------------------------------------------------------------------------------------+",
+    "| implement  executable  stale                                                                                         |",
+    "| Next  recover the abandoned run                                                                                      |",
+    "| Attempt  2  Duration  1m 0s                                                                                          |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "+----------------------------------------------------------------------------------------------------------------------+"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-stale",
+        "role": "path",
+        "width": 17
+      },
+      {
+        "col": 25,
+        "text": "bug-fix",
+        "role": "heading",
+        "width": 7
+      },
+      {
+        "col": 32,
+        "text": " | Sequential",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Fix the timeout                                                                                                   ",
+        "role": "default",
+        "width": 114
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "STALE",
+        "role": "warning",
+        "width": 5
+      },
+      {
+        "col": 5,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 15,
+        "text": "0s",
+        "role": "default",
+        "width": 2
+      },
+      {
+        "col": 17,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 27,
+        "text": "just now",
+        "role": "default",
+        "width": 8
+      },
+      {
+        "col": 35,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 44,
+        "text": "0/1                                                                         ",
+        "role": "default",
+        "width": 76
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[------------------------------------------] ",
+        "role": "muted",
+        "width": 45
+      },
+      {
+        "col": 45,
+        "text": "0/1",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "the owning supervisor is gone and the run can be recovered",
+        "role": "muted",
+        "width": 58
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Stages",
+        "role": "heading",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> stale      implement                                                                                                  ",
+        "role": "focus",
+        "width": 120
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-----------------------------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 102
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "implement",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 13,
+        "text": "executable",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 25,
+        "text": "stale",
+        "role": "warning",
+        "width": 5
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 8,
+        "text": "recover the abandoned run",
+        "role": "command",
+        "width": 25
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "2",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "1m 0s                                                                                          ",
+        "role": "default",
+        "width": 95
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+----------------------------------------------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 120
+      }
+    ]
+  ]
+}

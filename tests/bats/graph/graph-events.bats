@@ -60,14 +60,21 @@ _status_event_journal_run() {
   mkdir -p "$ws"
   local graph_file="$TMPD/status-event-graph.json"
   cat >"$graph_file" <<'EOF'
-{"schemaVersion":1,"ralphVersion":"test","name":"status-event","namespace":"status-event","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"only","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"only","runtime":"cursor","agent":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}],"outputArtifacts":[]}}],"edges":[]}
+{"schemaVersion":2,"ralphVersion":"test","name":"status-event","namespace":"status-event","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"only","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"only","runtime":"cursor","role":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}],"outputArtifacts":[]}}],"edges":[]}
 EOF
   touch "$ws/plan.md"
   local run_id="run-001"
   export RALPH_GRAPH_STATE_ROOT="$state"
   export RALPH_PLAN_WORKSPACE_ROOT="$state"
   graph_state_init_run "$ws" status-event "$run_id" "$ws/plan.md" "$graph_file" 2>/dev/null
-  graph_state_write_node "$ws" status-event "$run_id" "only" "succeeded" "only-1" "succeeded" "0" "2026-01-01T00:00:00Z" "2026-01-01T00:01:00Z" "cursor" "off" "" >/dev/null
+  graph_state_write_node "$ws" status-event "$run_id" "only" "running" \
+    "only-1" \
+    '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}' \
+    '{"workspaceMode":"off"}' >/dev/null
+  graph_state_write_node "$ws" status-event "$run_id" "only" "succeeded" \
+    "only-1" \
+    '{"outcome":"succeeded","exitCode":0,"finishedAt":"2026-01-01T00:01:00Z"}' \
+    '{"workspaceMode":"off"}' >/dev/null
   local run_dir="$state/graph-runs/status-event/$run_id"
   if [[ -n "$event_content" ]]; then
     printf '%s' "$event_content" >"$run_dir/events.jsonl"
@@ -228,7 +235,7 @@ EOF
   tmpd="$TMPD"
   graph_file="$tmpd/one.graph.json"
   cat >"$graph_file" <<EOF
-{"schemaVersion":1,"ralphVersion":"test","name":"one","namespace":"one","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"only","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"only","runtime":"cursor","agent":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}],"outputArtifacts":[]}}],"edges":[]}
+{"schemaVersion":2,"ralphVersion":"test","name":"one","namespace":"one","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"only","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"only","runtime":"cursor","role":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}],"outputArtifacts":[]}}],"edges":[]}
 EOF
 
   run_id="events-sched-run"

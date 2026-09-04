@@ -1,0 +1,14 @@
+{
+  "_inlineTodos": [
+    {
+      "content": "diagnose gate failures and route to owning repair lanes",
+      "id": "fix-r1-diagnose-1",
+      "status": "pending",
+      "verification": ""
+    }
+  ],
+  "id": "fix-r1-diagnose",
+  "nativeSubagents": "inherit",
+  "role": "code-review",
+  "runtime": "cursor"
+}

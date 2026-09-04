@@ -61,7 +61,7 @@ EOF
   export RALPH_PLAN_SUBAGENTS=on
   run ralph_run_plan_invoke_antigravity
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported for runtime antigravity"* ]]
+  [[ "$output" == *"nativeSubagents=on was removed"* ]]
   [ ! -e "$record" ]
 }
 
@@ -119,6 +119,50 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fxq -- "--print-timeout" "$record"
   grep -Fxq -- "1800s" "$record"
+}
+
+@test "antigravity invoke ignores portable-profile model context config" {
+  local record="$TEST_TMPDIR/agy-no-profile.args"
+  write_agy_stub "$record"
+
+  # Legacy portable-profile fields must not become Antigravity argv/config.
+  # Model comes only from SELECTED_MODEL (prior TODOs); unset => native default.
+  export PREBUILT_AGENT=implementation
+  export PREBUILT_AGENT_CONTEXT=$'## profile context\nmust-not-appear-in-argv'
+  export RALPH_AGENT_MAX_BUDGET=7.25
+  export RALPH_AGENT_NATIVE_NAME=implementation
+  export RALPH_AGENT_NATIVE_PASSTHROUGH=1
+  export PROMPT="antigravity-primary-default-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  ! grep -Fxq -- "--agent" "$record"
+  ! grep -Fxq -- "--model" "$record"
+  ! grep -Fxq -- "--max-budget-usd" "$record"
+  ! grep -Fxq -- "implementation" "$record"
+  ! grep -Fq -- "must-not-appear-in-argv" "$record"
+  grep -Fxq -- "--print" "$record"
+  grep -Fxq -- "antigravity-primary-default-turn" "$record"
+}
+
+@test "antigravity invoke honors SELECTED_MODEL without profile reads" {
+  local record="$TEST_TMPDIR/agy-selected-model.args"
+  write_agy_stub "$record"
+
+  export PREBUILT_AGENT=implementation
+  export SELECTED_MODEL="Claude Sonnet 4.6 (thinking)"
+  export PROMPT="antigravity-model-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--model" "$record"
+  grep -Fxq -- "Claude Sonnet 4.6 (thinking)" "$record"
+  ! grep -Fxq -- "--agent" "$record"
+  ! grep -Fxq -- "implementation" "$record"
 }
 
 @test "antigravity invoke helper passes exact model string unchanged" {

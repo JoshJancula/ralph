@@ -7,6 +7,7 @@ RALPH_RUN_PLAN_INVOKE_ANTIGRAVITY_LOADED=1
 
 # Public interface:
 #   ralph_run_plan_invoke_antigravity -- run the antigravity CLI (agy) for a TODO.
+#   run_plan_invoke_antigravity_native_subagents_preflight -- fail closed when nativeSubagents=off lacks a proven deny.
 #   run_plan_invoke_antigravity_session_resume_args / run_plan_invoke_antigravity_bare_resume_args -- argv helpers for resume.
 #   run_plan_invoke_antigravity_bare_resume_warn -- stderr when bare resume is disallowed.
 #   run_plan_invoke_antigravity_capture_conversation -- record agy's conversation id for the next TODO.
@@ -14,6 +15,7 @@ RALPH_RUN_PLAN_INVOKE_ANTIGRAVITY_LOADED=1
 #   run_plan_invoke_antigravity_trusted_isolated_sandbox_authorized -- graph bypass gate.
 #   run_plan_invoke_antigravity_graph_approval_live_supported -- graph help-only native-control proof (no model call).
 #   run_plan_invoke_antigravity_graph_approval_capabilities -- advertise only enforceable Antigravity lifetimes.
+#   run_plan_invoke_antigravity_graph_approval_parse_permission -- elevate a fake-adapter event into the G15 contract.
 #   run_plan_invoke_antigravity_graph_approval_apply / restore -- common resumable overlay fallback.
 #   run_plan_invoke_antigravity_graph_approval_await_operator -- noninteractive wait without hanging.
 #   run_plan_invoke_antigravity_graph_approval_start_or_fallback -- live path only after nonbillable proof.
@@ -239,15 +241,47 @@ run_plan_invoke_antigravity_capture_conversation() {
   printf '%s\n' "$cid" >"$session_file"
 }
 
+# run_plan_invoke_antigravity_native_subagents_preflight
+# nativeSubagents=off requires a proven deny boundary. Antigravity has none
+# (capability nativeSubagentsOffDeny=unsupported), so graph/orchestration/standard
+# off fails closed before argv or model invocation. inherit preserves ambient
+# behavior. Never uses prompt-only suppression.
+run_plan_invoke_antigravity_native_subagents_preflight() {
+  local mode
+
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  [[ "$mode" == "off" ]] || return 0
+
+  if ! declare -F graph_runtime_native_subagents_off_supported >/dev/null 2>&1; then
+    # shellcheck source=../graph/graph-runtime-capabilities.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../graph" && pwd)/graph-runtime-capabilities.sh"
+  fi
+
+  if graph_runtime_native_subagents_off_supported antigravity; then
+    # Future: apply the proven deny argv/config here. Antigravity has none today.
+    return 0
+  fi
+
+  echo "Error: nativeSubagents=off is unsupported for runtime antigravity (no proven deny boundary); refusing to invoke (use nativeSubagents=inherit)." >&2
+  return 1
+}
+
 ralph_run_plan_invoke_antigravity() {
   ralph_run_plan_sync_mode_knobs
   ralph_run_plan_subagents_log_contract antigravity || return 1
   ralph_run_plan_subagents_require_runtime_capability antigravity || return 1
   ralph_run_plan_native_subagent_verify_runtime antigravity || return 1
+
+  # nativeSubagents=off: Antigravity capability is unsupported; fail before CLI argv.
+  # inherit: skip; do not alter ambient native-subagent availability.
+  if ! run_plan_invoke_antigravity_native_subagents_preflight; then
+    return 1
+  fi
+
   local project_root="${RALPH_PROJECT_ROOT:-${WORKSPACE:-$PWD}}"
 
-  # Create and export ANTIGRAVITY_CONFIG only when the effective MCP catalog
-  # requires ambient+agent+Ralph merging. Always restore/remove temp artifacts.
+  # Create and export ANTIGRAVITY_CONFIG only when Ralph's protected server must
+  # be injected (reconstructed ambient + Ralph). Always restore/remove temp artifacts.
   local antigravity_config_path=""
   cleanup_antigravity_config() {
     if [[ -n "${antigravity_config_path:-}" ]]; then
@@ -264,18 +298,50 @@ ralph_run_plan_invoke_antigravity() {
   }
   trap cleanup_antigravity_config EXIT
 
-  ralph_runtime_config_mcp_resolve "antigravity" "$project_root" "${PREBUILT_AGENT:-}" "${WORKSPACE:-$project_root}" || {
+  # Roles add no Antigravity argv/config. Profile MCP layer is removed; resolve
+  # composes ambient + Ralph protected server when mode enables it.
+  ralph_runtime_config_mcp_resolve "antigravity" "$project_root" "" "${WORKSPACE:-$project_root}" || {
     # Ensure cleanup runs via trap.
     return 1
   }
+  # Ambient-MCP boundary, proven against the current adapter and agy's documented
+  # surface (see the header notes above and runtime-config-mcp.sh):
+  #
+  #   * agy's only invocation-local MCP mechanism is ANTIGRAVITY_CONFIG, which
+  #     REPLACES the native `.agents/mcp_config.json` discovery path. There is no
+  #     additive/layering flag, so there is no way to add one server while leaving
+  #     ambient discovery intact.
+  #   * Therefore the boundary is enforced by NOT writing an overlay at all unless
+  #     Ralph's protected server must be injected. `ralph_runtime_config_mcp_needs_resolve`
+  #     encodes that invariant for antigravity: raw runs leave ambient `.agents`
+  #     discovery untouched; ralph/hybrid reconstruct ambient + Ralph.
+  #   * When Ralph mode requires the protected server, the reconstructed effective
+  #     catalog (ambient user/project servers + Ralph) is the safest available
+  #     behavior under ANTIGRAVITY_CONFIG replacement semantics. Ambient servers
+  #     survive only through that reconstruction (a lossy snapshot); the limitation
+  #     is recorded in RUNTIME_OVERLAY_SUMMARY_MCP_OVERRIDE_DECISIONS.
+  local _antigravity_ralph_profile=0
+  if [[ "${RALPH_MODE:-no}" != "no" || "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
+    _antigravity_ralph_profile=1
+  fi
+  local antigravity_overlay_decision=""
+  if [[ "$_antigravity_ralph_profile" == "1" ]]; then
+    antigravity_overlay_decision="profile_ralph_native_mcp_config_unchanged"
+  else
+    antigravity_overlay_decision="profile_raw_native_mcp_config_unchanged"
+  fi
   if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "${RALPH_RUNTIME_MCP_RESOLVE_PATH}" ]]; then
     antigravity_config_path="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
-    # Only export ANTIGRAVITY_CONFIG when the run is in Ralph-mode
-    # (ralph/hybrid). Native-only runs may still resolve MCP overlays,
-    # but they must not be forced to use Ralph's merged catalog.
-    if [[ "${RALPH_MODE:-no}" != "no" ]]; then
+    # Only export ANTIGRAVITY_CONFIG when Ralph mode requires the protected server.
+    if [[ "$_antigravity_ralph_profile" == "1" ]]; then
       export ANTIGRAVITY_CONFIG="$antigravity_config_path"
+      antigravity_overlay_decision="profile_ralph_reconstructed_catalog"
     fi
+  fi
+  ANTIGRAVITY_PLAN_MCP_OVERLAY_DECISION="$antigravity_overlay_decision"
+  export ANTIGRAVITY_PLAN_MCP_OVERLAY_DECISION
+  if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
+    runtime_overlay_set_mcp_override_decisions "$antigravity_overlay_decision"
   fi
 
   # Log path, exit-code sidecar, and session-id file for resume capture.
@@ -337,6 +403,9 @@ ralph_run_plan_invoke_antigravity() {
 
   # Record the conversation id agy used so the next TODO can resume it.
   run_plan_invoke_antigravity_capture_conversation
+  if declare -F ralph_session_todo_capture_after_invocation >/dev/null 2>&1; then
+    ralph_session_todo_capture_after_invocation || true
+  fi
 }
 
 # Graph-only Antigravity approval transport.
@@ -420,6 +489,69 @@ run_plan_invoke_antigravity_graph_approval_capabilities() {
     lifetimes: {once: true, run: true, "always-policy": false}
   }')"
   ralph_approval_adapter_capabilities antigravity "$proof"
+}
+
+# run_plan_invoke_antigravity_graph_approval_parse_permission <fake-adapter-event-json>
+# Elevates an Antigravity fake-adapter permission event into the G15 actionable
+# request contract. Choices/lifetimes come only from Antigravity capabilities
+# (once+run; never advertise always-policy).
+run_plan_invoke_antigravity_graph_approval_parse_permission() {
+  local raw="${1:-}"
+  local fields caps
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: Antigravity graph approval parse requires a permission event" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Antigravity graph approval parse" >&2
+    return 1
+  fi
+  if ! printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: Antigravity graph approval parse requires a JSON object" >&2
+    return 1
+  fi
+  _run_plan_invoke_antigravity_graph_approval_ensure_adapter || return 1
+
+  if printf '%s' "$raw" | jq -e '
+    def lower($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then ($v | ascii_downcase)
+      else "" end;
+    (lower(.tool // .permissionRequest.tool // "")) == "permission"
+    and (lower(.action // .permissionRequest.action // "")) == "permission"
+    and (lower(.effect // .permissionRequest.effect // "")) == "write"
+  ' >/dev/null 2>&1; then
+    ralph_approval_adapter_permission_unknown antigravity \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  fields="$(printf '%s' "$raw" | jq -ce '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      else "" end;
+    {
+      runtime: "antigravity",
+      sessionId: str(.sessionId // .sessionID // .session // .permissionRequest.sessionId // ""),
+      nativeRequestId: str(.nativeRequestId // .requestId // .id // .permissionRequest.nativeRequestId // ""),
+      tool: str(.tool // .tool_name // .permissionRequest.tool // ""),
+      action: str(.action // .permissionRequest.action // ""),
+      resource: str(.resource // .command // .path // .permissionRequest.resource // ""),
+      effect: str(.effect // .permissionRequest.effect // ""),
+      reason: str(.reason // .permissionRequest.reason // ""),
+      expiresAt: (.expiresAt // null)
+    }
+  ' 2>/dev/null)" || {
+    ralph_approval_adapter_permission_unknown antigravity \
+      "Antigravity permission event is missing actionable identity"
+    return 0
+  }
+
+  caps="$(run_plan_invoke_antigravity_graph_approval_capabilities "${ANTIGRAVITY_PLAN_CLI:-agy}")" || return 1
+  ralph_approval_adapter_build_permission_record "$fields" "$caps"
 }
 
 # run_plan_invoke_antigravity_graph_approval_fallback [reason]

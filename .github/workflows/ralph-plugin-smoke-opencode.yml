@@ -11,6 +11,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/opencode
@@ -32,16 +35,14 @@ jobs:
             echo 'mock: local plugin install for opencode'
             exit 0
           fi
+          # Matches OpenCode adapter owned paths: .opencode/{plugins,skills} only.
           npm install --global opencode-ai
           mkdir -p "$RALPH_SMOKE_PROJECT/.opencode/plugins" \
-            "$RALPH_SMOKE_PROJECT/.opencode/skills" \
-            "$RALPH_SMOKE_PROJECT/.opencode/agents"
+            "$RALPH_SMOKE_PROJECT/.opencode/skills"
           cp "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR/plugins/ralph-runtime-hooks.ts" \
             "$RALPH_SMOKE_PROJECT/.opencode/plugins/ralph-runtime-hooks.ts"
           cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR/skills/." \
             "$RALPH_SMOKE_PROJECT/.opencode/skills/"
-          cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR/agents/." \
-            "$RALPH_SMOKE_PROJECT/.opencode/agents/"
 
       - name: Smoke discovery
         run: |
@@ -67,10 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: ralph-agents'
+            echo 'mock: ralph-workflow'
           else
             cd "$RALPH_SMOKE_PROJECT"
-            opencode run 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+            opencode run 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
           fi
 
       - name: Uninstall repository plugin

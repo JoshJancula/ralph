@@ -7,8 +7,7 @@ OUTPUT_ROOT="$REPO_ROOT/plugins/ralph-orchestrator"
 VERSION_FILE="$OUTPUT_ROOT/VERSION"
 
 RUNTIMES=(antigravity claude codex cursor opencode)
-AGENTS=(architect code-review implementation qa research security)
-WORKFLOWS=(ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status)
+WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
 
 generated_checksum() {
   (
@@ -40,10 +39,8 @@ generated_checksum() {
       (._generated | contains("scripts/sync-plugin-assets.sh"))
     ' "$OUTPUT_ROOT/$runtime/host-manifest.json"
 
-    for id in "${AGENTS[@]}"; do
-      [ -f "$OUTPUT_ROOT/$runtime/agents/$id.md" ] ||
-        [ -f "$OUTPUT_ROOT/$runtime/agents/$id.toml" ]
-    done
+    [ ! -d "$OUTPUT_ROOT/$runtime/roles" ]
+    [ ! -d "$OUTPUT_ROOT/$runtime/agents" ]
     [ -f "$OUTPUT_ROOT/$runtime/skills/repo-context/SKILL.md" ]
     for workflow in "${WORKFLOWS[@]}"; do
       [ -f "$OUTPUT_ROOT/$runtime/workflows/$workflow.md" ]
@@ -53,6 +50,9 @@ generated_checksum() {
       grep -Fq 'scripts/sync-plugin-assets.sh' \
         "$OUTPUT_ROOT/$runtime/skills/$workflow/SKILL.md"
     done
+    [ ! -f "$OUTPUT_ROOT/$runtime/workflows/ralph-agents.md" ]
+    [ ! -f "$OUTPUT_ROOT/$runtime/workflows/ralph-graph.md" ]
+    [ ! -f "$OUTPUT_ROOT/$runtime/workflows/ralph-orchestrate.md" ]
     ! find "$OUTPUT_ROOT/$runtime" -type f \
       \( -name 'run-plan.sh' -o -name 'orchestrator.sh' -o -name 'graph-run.sh' \
          -o -name '*.py' \) -print -quit | grep -q .

@@ -25,6 +25,8 @@ SETUP_RUNTIME_SH="$REPO_ROOT/bundle/.ralph/setup-runtime.sh"
   [[ "$output" == *"--remove"* ]]
   [[ "$output" == *"--dry-run"* ]]
   [[ "$output" == *"--yes"* ]]
+  [[ "$output" == *"Does not create or validate Ralph native agent"* ]] || \
+    [[ "$output" == *"Native runtime agent directories"* ]]
 }
 
 @test "setup-runtime.sh with no args shows error" {
@@ -433,4 +435,60 @@ SETUP_REMOVE_SH="$REPO_ROOT/bundle/.ralph/bash-lib/setup/setup-remove.sh"
   [[ "$output" == *"setup journal is not active"* ]]
   [ -f "$target" ]
   cmp -s "$source" "$target"
+}
+
+# Clean end-to-end fixture: project with MCP server + unrelated native agent.
+_fixture_setup_runtime_clean_with_native_agent() {
+  local project_dir="$1"
+  local runtime_dir="$2"
+  local marker="${3:-native-agent-marker-do-not-touch}"
+  mkdir -p "$project_dir/.ralph" "$runtime_dir/agents/my-native-agent" "$runtime_dir/agents/research"
+  cp "$REPO_ROOT/bundle/.ralph/mcp-server.sh" "$project_dir/.ralph/mcp-server.sh"
+  chmod +x "$project_dir/.ralph/mcp-server.sh"
+  printf '%s\n' "$marker" >"$runtime_dir/agents/my-native-agent/my-native-agent.md"
+  printf 'stale-six\n' >"$runtime_dir/agents/research/research.md"
+}
+
+@test "clean setup --all continues hooks/mcp and preserve unrelated native agent" {
+  command -v jq >/dev/null || skip "jq required"
+  command -v python3 >/dev/null || skip "python3 required"
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  local project_dir runtime_dir marker
+  project_dir="$(mktemp -d)"
+  runtime_dir="$project_dir/.cursor"
+  marker="native-agent-marker-do-not-touch"
+  _fixture_setup_runtime_clean_with_native_agent "$project_dir" "$runtime_dir" "$marker"
+
+  run bash "$SETUP_RUNTIME_SH" \
+    --runtime cursor \
+    --runtime-dir "$runtime_dir" \
+    --all \
+    --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hooks"* ]]
+  [[ "$output" == *"mcp"* ]]
+  [ -f "$runtime_dir/mcp.json" ]
+  jq -e '.mcpServers.ralph' "$runtime_dir/mcp.json" >/dev/null
+  [ -d "$runtime_dir/hooks" ] || [ -f "$runtime_dir/hooks.json" ]
+  [ -f "$runtime_dir/agents/my-native-agent/my-native-agent.md" ]
+  [[ "$(cat "$runtime_dir/agents/my-native-agent/my-native-agent.md")" == "$marker" ]]
+  [ -f "$runtime_dir/agents/research/research.md" ]
+  [[ "$(cat "$runtime_dir/agents/research/research.md")" == "stale-six" ]]
+  [ ! -d "$runtime_dir/agents/architect" ]
+  [ ! -d "$runtime_dir/agents/code-review" ]
+  [ ! -d "$runtime_dir/agents/implementation" ]
+  [ ! -d "$runtime_dir/agents/qa" ]
+  [ ! -d "$runtime_dir/agents/security" ]
+  [ ! -e "$project_dir/.agents/agents.md" ]
+  rm -rf "$project_dir"
+}
+
+@test "help documents that setup does not create Ralph native agent definitions" {
+  [ -f "$SETUP_RUNTIME_SH" ] || skip "setup-runtime.sh missing"
+
+  run bash "$SETUP_RUNTIME_SH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Does not create or validate Ralph native agent"* ]]
+  [[ "$output" == *"Native runtime agent directories"* ]]
 }

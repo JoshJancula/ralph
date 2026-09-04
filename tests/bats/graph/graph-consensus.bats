@@ -102,10 +102,8 @@ pipeline:
       voters:
         - id: alpha
           runtime: cursor
-          agent: code-review
         - id: beta
           runtime: codex
-          agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -153,11 +151,9 @@ pipeline:
       voters:
         - id: alpha
           runtime: cursor
-          agent: code-review
           sessionStrategy: reset
         - id: beta
           runtime: codex
-          agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -178,19 +174,138 @@ EOF
   rm -rf "$tmpd"
 }
 
-# --- forced subagents=off ---
+# --- forced nativeSubagents=off on voters / supervisor rejection / repair ---
 
-@test "emitted voter stage carries resolved subagents off when voter omits the field" {
+@test "native subagent: emitted voter stage carries nativeSubagents off when voter omits the field" {
   tmpd="$(mktemp -d)"
-  plan_file="$tmpd/graph-consensus.plan.md"
-  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus.plan.md" "$plan_file"
+  plan_file="$tmpd/graph-consensus-voter-native-subagents-omit.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-native-subagents-omit.plan.md" "$plan_file"
 
   run plan_pipeline_graph_json "$plan_file"
   [ "$status" -eq 0 ]
   payload="$(json_payload "$output")"
 
-  subagents_vals="$(json_field "$payload" '.nodes | map(select(.type=="consensus-voter")) | map(.stage.subagents) | unique | join(",")')"
-  [ "$subagents_vals" = "off" ]
+  ns_vals="$(json_field "$payload" '.nodes | map(select(.type=="consensus-voter")) | map(.stage.nativeSubagents) | unique | join(",")')"
+  [ "$ns_vals" = "off" ]
+  # No legacy subagents key, and no Ralph-child ledger fields on voter stages.
+  has_subagents="$(json_field "$payload" '.nodes | map(select(.type=="consensus-voter")) | map(select(.stage | has("subagents"))) | length')"
+  [ "$has_subagents" = "0" ]
+  has_native_mode="$(json_field "$payload" '.nodes | map(select(.type=="consensus-voter")) | map(select(.stage.delegation.native? != null)) | length')"
+  [ "$has_native_mode" = "0" ]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: voter declaring nativeSubagents off compiles without error" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-consensus-voter-native-subagents-off.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-native-subagents-off.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  payload="$(json_payload "$output")"
+  [ "$(json_field "$payload" '.nodes | map(select(.type=="consensus-voter")) | map(.stage.nativeSubagents) | unique | join(",")')" = "off" ]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: voter declaring nativeSubagents inherit is rejected with voter id and provenance reason" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-consensus-voter-native-subagents-inherit.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-native-subagents-inherit.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"alpha"* ]]
+  [[ "$output" == *"provenance"* || "$output" == *"nativeSubagents"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: supervisor integrate rejects nativeSubagents" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-integrate.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-integrate.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" == *"integrate"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: supervisor join rejects nativeSubagents" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-join.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-join.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" == *"join"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: supervisor gate rejects nativeSubagents" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-gate.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-gate.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" == *"gate"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: supervisor checkpoint rejects nativeSubagents" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-checkpoint.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-checkpoint.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" == *"checkpoint"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: supervisor router rejects nativeSubagents" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-router.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-router.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" == *"router"* ]]
+
+  rm -rf "$tmpd"
+}
+
+@test "native subagent: repair diagnose and lanes keep ordinary agent-stage nativeSubagents rules" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-repair-native-subagents.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-repair-native-subagents.plan.md" "$plan_file"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  payload="$(json_payload "$output")"
+
+  [ "$(json_field "$payload" '.nodes[] | select(.id=="fix-r1-diagnose") | .stage.nativeSubagents')" = "inherit" ]
+  # Lane-a declares off explicitly: an authored value is always preserved at
+  # compile time, and an unenforceable one is refused later at preflight.
+  [ "$(json_field "$payload" '.nodes[] | select(.id=="fix-r1-repair-lane-a") | .stage.nativeSubagents')" = "off" ]
+  # Lane-b omits the field on cursor, which has no proven deny boundary, so the
+  # default is inherit rather than an off Ralph could not enforce.
+  [ "$(json_field "$payload" '.nodes[] | select(.id=="fix-r1-repair-lane-b") | .stage.nativeSubagents')" = "inherit" ]
+  # Supervisor repair phases must not carry nativeSubagents.
+  [ "$(json_field "$payload" '.nodes[] | select(.id=="fix-integrate") | .stage | has("nativeSubagents")')" = "false" ]
+  [ "$(json_field "$payload" '.nodes[] | select(.id=="fix-gate") | .stage | has("nativeSubagents")')" = "false" ]
 
   rm -rf "$tmpd"
 }
@@ -221,25 +336,45 @@ EOF
   rm -rf "$tmpd"
 }
 
-@test "voter declaring subagents on is rejected with voter id and reason in the message" {
+@test "voter declaring removed subagents is rejected with migration guidance" {
   tmpd="$(mktemp -d)"
   plan_file="$tmpd/graph-consensus-voter-subagents-on.plan.md"
   cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-subagents-on.plan.md" "$plan_file"
+  # Fixture still uses removed agent+subagents; rewrite to role + subagents for this check.
+  cat >"$plan_file" <<'EOF'
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      type: consensus
+      voters:
+        - id: alpha
+          runtime: cursor
+          subagents: on
+        - id: beta
+          runtime: codex
+todos:
+  - id: review-1
+    stage: review
+    content: review
+    status: pending
+---
+EOF
 
   run plan_pipeline_graph_json "$plan_file"
   [ "$status" -ne 0 ]
-  # Message must name the voter id.
   [[ "$output" == *"alpha"* ]]
-  # Message must state the reason (provenance / recorded).
-  [[ "$output" == *"provenance"* ]]
+  [[ "$output" == *"subagents"* ]]
+  [[ "$output" == *"nativeSubagents"* || "$output" == *"migrate"* ]]
 
   rm -rf "$tmpd"
 }
 
-@test "voter declaring subagents off compiles without error" {
+@test "voter declaring nativeSubagents off compiles without error" {
   tmpd="$(mktemp -d)"
-  plan_file="$tmpd/graph-consensus-voter-subagents-off.plan.md"
-  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-subagents-off.plan.md" "$plan_file"
+  plan_file="$tmpd/graph-consensus-voter-native-subagents-off.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-native-subagents-off.plan.md" "$plan_file"
 
   run plan_pipeline_graph_json "$plan_file"
   [ "$status" -eq 0 ]
@@ -247,10 +382,10 @@ EOF
   rm -rf "$tmpd"
 }
 
-@test "voter omitting subagents field compiles without error" {
+@test "voter omitting nativeSubagents field compiles without error" {
   tmpd="$(mktemp -d)"
-  plan_file="$tmpd/graph-consensus.plan.md"
-  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus.plan.md" "$plan_file"
+  plan_file="$tmpd/graph-consensus-voter-native-subagents-omit.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-voter-native-subagents-omit.plan.md" "$plan_file"
 
   run plan_pipeline_graph_json "$plan_file"
   [ "$status" -eq 0 ]
@@ -260,13 +395,14 @@ EOF
 
 # --- join/adjudicator not covered by voter restriction ---
 
-@test "join node declaring subagents on is accepted (voter restriction does not apply)" {
+@test "join node declaring nativeSubagents is rejected (supervisor restriction)" {
   tmpd="$(mktemp -d)"
-  plan_file="$tmpd/graph-consensus-join-subagents-on.plan.md"
-  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus-join-subagents-on.plan.md" "$plan_file"
+  plan_file="$tmpd/graph-supervisor-native-subagents-reject-join.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-supervisor-native-subagents-reject-join.plan.md" "$plan_file"
 
   run plan_pipeline_graph_json "$plan_file"
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
 
   rm -rf "$tmpd"
 }
@@ -283,7 +419,7 @@ EOF
   "decision": "approved",
   "voters": [
     {"voterId": "review:alpha", "runtime": "cursor", "status": "approved", "confidence": 0.9},
-    {"voterId": "review:beta",  "runtime": "claude", "status": "approved", "agent": "code-review", "model": "claude-haiku"},
+    {"voterId": "review:beta",  "runtime": "claude", "status": "approved", "model": "claude-haiku"},
     {"voterId": "review:gamma", "runtime": "codex",  "status": "approved", "artifact": "review.json", "feedback": "LGTM"}
   ],
   "agreement": 1.0
@@ -837,13 +973,10 @@ pipeline:
       voters:
         - id: alpha
           runtime: cursor
-          agent: code-review
         - id: beta
           runtime: claude
-          agent: code-review
         - id: gamma
           runtime: codex
-          agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -875,13 +1008,10 @@ pipeline:
       voters:
         - id: alpha
           runtime: claude
-          agent: code-review
         - id: beta
           runtime: claude
-          agent: code-review
         - id: gamma
           runtime: claude
-          agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -938,9 +1068,9 @@ _build_retry_graph_json() {
         stage: {
           id: $voter_id,
           runtime: $runtime,
-          agent: "code-review",
+          role: "code-review",
           sessionStrategy: "fresh",
-          subagents: "off",
+          nativeSubagents: "off",
           _inlineTodos: [{
             id: ($voter_id + "-task"),
             content: "Review the work and write your verdict.",
@@ -1428,4 +1558,43 @@ _build_retry_graph_json() {
     "$state_root/artifacts/jury/consensus/review_barrier.json" ]
   [ "$(graph_consensus_adjudicator_artifact_path "$workspace" "jury" "review:barrier")" = \
     "$state_root/artifacts/jury/consensus/review_barrier-adjudicator.md" ]
+}
+
+
+# --- voter role compile ---
+
+
+
+@test "role: rejects removed voter agent with migration guidance" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/voter-agent.plan.md"
+  cat >"$plan_file" <<'EOF'
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      type: consensus
+      runtime: cursor
+      quorum: 2
+      minRuntimes: 2
+      voters:
+        - id: alpha
+          runtime: cursor
+        - id: beta
+          runtime: claude
+          agent: code-review
+todos:
+  - id: review-1
+    stage: review
+    content: review
+    status: pending
+---
+EOF
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agent: was removed"* ]]
+  [[ "$output" != *"ralph migrate"* ]]
+  rm -rf "$tmpd"
 }

@@ -42,6 +42,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/stop-continuation.sh",
+            "timeout": 5400
+          }
+        ]
+      }
     ]
   }
 }

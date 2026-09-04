@@ -68,18 +68,10 @@ graph_changeset_capture_node() {
   mode="$(printf '%s' "$stage" | jq -r '.workspaceMode // "shared"')"
   scopes="$(printf '%s' "$stage" | jq -c '.writeScopes // []')"
   base_identity="$(jq -r '.sourceBase.filesystemIdentity // .sourceBase.git.treeHash // "shared-optimistic"' "$run_dir/run.json")"
-  local usage_rel ns
+  local usage_rel
   usage_rel="$(graph_logs_attempt_rel "$run_dir" "$node_id" "$attempt_id" "usage.json" 2>/dev/null || true)"
   if [[ -n "$usage_rel" ]]; then
     usage_file="$(graph_logs_read "$run_dir" "$usage_rel" 2>/dev/null || true)"
-  fi
-  if [[ -z "$usage_file" || ! -f "$usage_file" ]]; then
-    ns="$(jq -r '.namespace // empty' "$graph_json" 2>/dev/null || true)"
-    usage_file=""
-    if [[ -n "$state_root" && -n "$ns" ]]; then
-      usage_file="$(graph_logs_v1_node_dir "$state_root" "$ns" "$node_id" 2>/dev/null || true)"
-      [[ -n "$usage_file" ]] && usage_file="$usage_file/plan-usage-summary.json"
-    fi
   fi
   [[ -n "$usage_file" && -f "$usage_file" ]] && usage_json="$(jq -c . "$usage_file" 2>/dev/null || true)"
   capture_args=(

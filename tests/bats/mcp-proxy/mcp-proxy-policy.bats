@@ -816,11 +816,15 @@ assert_policy_validate_status() {
   "enabled": true,
   "dry_run": true,
   "banned_tools": [],
-  "toolDenylist": ["Bash"],
-  "deniedArgumentPatterns": [
+  "tool_denylist": ["Bash"],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
+  "denied_argument_patterns": [
     {"tool": "ralph_proxy_read", "pattern": "/etc/passwd"}
   ],
-  "banned_paths": [],
   "custom_rules": []
 }
 EOF

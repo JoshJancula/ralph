@@ -11,6 +11,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
     env:
       ANTIGRAVITY_API_KEY: ${{ secrets.ANTIGRAVITY_API_KEY }}
       RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/antigravity
@@ -31,6 +34,7 @@ jobs:
             echo 'mock: agy plugin install'
             exit 0
           fi
+          # Exact Antigravity adapter argv: agy plugin install <package>
           curl -fsSL https://antigravity.google/cli/install.sh | bash
           echo "$HOME/.local/bin" >>"$GITHUB_PATH"
           mkdir -p "$RUNNER_TEMP/ralph-antigravity-plugin"
@@ -59,9 +63,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: ralph-agents'
+            echo 'mock: ralph-workflow'
           else
-            agy --print 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+            agy --print 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
           fi
 
       - name: Uninstall repository plugin

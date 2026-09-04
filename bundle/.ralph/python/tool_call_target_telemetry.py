@@ -562,14 +562,21 @@ def optimization_hint_line(usage: Mapping[str, Any]) -> str:
     if isinstance(seq, list):
         sequence_counts = count_sequence_antipatterns(seq)
 
+    # Auto-load windowing metrics only when usage names a plan_key explicitly.
+    # Do not fall back to ambient RALPH_PLAN_KEY / RALPH_ARTIFACT_NS here: that
+    # makes sequence-only callers (baselines, unit tests) inherit unrelated
+    # workspace result-windowing.jsonl noise from the active agent session.
     readback_stats = usage.get("stored_result_readbacks")
     if not isinstance(readback_stats, Mapping):
         plan_key = str(usage.get("plan_key") or usage.get("planKey") or "").strip()
-        windowing_path = result_windowing_log_path(plan_key=plan_key)
-        if windowing_path is not None:
-            readback_stats = analyze_result_windowing_log(
-                windowing_path, plan_key=plan_key
-            )
+        if plan_key:
+            windowing_path = result_windowing_log_path(plan_key=plan_key)
+            if windowing_path is not None:
+                readback_stats = analyze_result_windowing_log(
+                    windowing_path, plan_key=plan_key
+                )
+            else:
+                readback_stats = {}
         else:
             readback_stats = {}
 

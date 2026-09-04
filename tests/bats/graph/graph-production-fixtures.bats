@@ -276,3 +276,18 @@ fixture_files() {
   [ "$(jq -r '.fixture.mismatch | length' "$f")" -eq 1 ]
   [ "$(jq -r '.fixture.mismatch[0]' "$f")" = "config/unscoped.json" ]
 }
+
+@test "production topology uses the matching optional role" {
+  local plan="$BATS_TEST_TMPDIR/production-topology.plan.md"
+  run python3 "$BATS_TEST_DIRNAME/../../fixtures/graph/build_production_topology.py" "$plan"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^      role: implementation$' "$plan")" -eq 27 ]
+  ! grep -Eq '^      agent:' "$plan"
+}
+
+@test "production topology adds no model pins" {
+  local plan="$BATS_TEST_TMPDIR/production-topology.plan.md"
+  run python3 "$BATS_TEST_DIRNAME/../../fixtures/graph/build_production_topology.py" "$plan"
+  [ "$status" -eq 0 ]
+  ! grep -Eq '^[[:space:]]+model:' "$plan"
+}

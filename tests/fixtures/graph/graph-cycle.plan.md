@@ -4,17 +4,14 @@ pipeline:
   stages:
     - id: a
       runtime: cursor
-      agent: research
       dependsOn:
         - c
     - id: b
       runtime: cursor
-      agent: implementation
       dependsOn:
         - a
     - id: c
       runtime: cursor
-      agent: implementation
       dependsOn:
         - b
 todos:

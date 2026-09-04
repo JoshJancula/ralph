@@ -48,6 +48,145 @@ Options:
 EOF
 }
 
+# graph_compile_freeze_planfrom_bindings <graph-json-path>
+#
+# Ordinary Dependency planFrom consumers (including bounded rework clones
+# <target>-r<n>): freeze the authored planner-stage binding onto the compiled
+# node, force sessionStrategy=fresh when absent, strip _inlineTodos/plan (plan
+# is bound at dispatch from the registry control copy), and keep stage.planFrom
+# as the frozen planner id. Rework clones inherit the original planner-stage
+# relationship from the cloned stage.planFrom; the review/repair dependsOn is
+# feedback only and never replaces the planner binding. Refuses planFrom stages
+# that already carry a concrete plan path (invalid generated plan projection).
+# Mutates the file in place. Prints the path on success.
+graph_compile_freeze_planfrom_bindings() {
+  local graph_path="${1:-}"
+  local tmp bad
+  [[ -n "$graph_path" && -f "$graph_path" ]] || {
+    echo "Error: graph_compile_freeze_planfrom_bindings requires a graph json file" >&2
+    return 1
+  }
+  command -v jq >/dev/null 2>&1 || {
+    echo "Error: jq is required for graph_compile_freeze_planfrom_bindings" >&2
+    return 1
+  }
+
+  bad="$(jq -r '
+    [.nodes[]?
+      | select((.stage.planFrom // "") != "")
+      | select((.stage.plan // "") != "")
+      | .id] | .[]
+    ' "$graph_path" 2>/dev/null)" || true
+  if [[ -n "$bad" ]]; then
+    echo "Error: invalid generated plan projection: planFrom node(s) already carry a plan path: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+    return 1
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-planfrom.XXXXXX")" || return 1
+  if ! jq -c '
+    .nodes |= map(
+      if ((.stage.planFrom // "") != "") then
+        . as $n
+        | .planFromBinding = {
+            plannerStageId: .stage.planFrom,
+            planSourceKind: "generated"
+          }
+        | .stage.planFrom = .stage.planFrom
+        | .stage |= (
+            del(._inlineTodos)
+            | del(.plan)
+            | if ((.sessionStrategy // "") == "") then
+                .sessionStrategy = "fresh"
+              else .
+              end
+          )
+      else .
+      end
+    )
+    ' "$graph_path" >"$tmp"; then
+    rm -f "$tmp"
+    echo "Error: failed to freeze planFrom planner bindings" >&2
+    return 1
+  fi
+  mv -f "$tmp" "$graph_path" || {
+    rm -f "$tmp"
+    return 1
+  }
+  printf '%s\n' "$graph_path"
+}
+
+# graph_compile_freeze_provided_plan_bindings <graph-json-path> <plan-input-stage-id>
+#
+# Dependency plan-entry runs: freeze the exact planInput.stage (and its
+# bounded rework clones <stage>-r<n>) with planSourceKind=provided and
+# null planSourceStageId. Forces sessionStrategy=fresh when absent, strips
+# _inlineTodos/plan, and clears authored planFrom on those nodes so the
+# supplied-plan path wins for this run. Task-entry callers omit this step so
+# generated planFrom bindings remain byte-compatible. Mutates in place.
+graph_compile_freeze_provided_plan_bindings() {
+  local graph_path="${1:-}" stage_id="${2:-}"
+  local tmp bad missing
+  [[ -n "$graph_path" && -f "$graph_path" && -n "$stage_id" ]] || {
+    echo "Error: graph_compile_freeze_provided_plan_bindings requires a graph json file and planInput stage id" >&2
+    return 1
+  }
+  command -v jq >/dev/null 2>&1 || {
+    echo "Error: jq is required for graph_compile_freeze_provided_plan_bindings" >&2
+    return 1
+  }
+
+  missing="$(jq -r --arg id "$stage_id" '
+    if ([.nodes[]? | select(.id == $id)] | length) == 0 then $id else empty end
+  ' "$graph_path" 2>/dev/null)"
+  if [[ -n "$missing" ]]; then
+    echo "Error: planInput.stage not found in compiled graph: $stage_id" >&2
+    return 1
+  fi
+
+  bad="$(jq -r --arg id "$stage_id" '
+    [.nodes[]?
+      | select(.id == $id or (.id | test("^" + $id + "-r[0-9]+$")))
+      | select((.stage.plan // "") != "")
+      | .id] | .[]
+    ' "$graph_path" 2>/dev/null)" || true
+  if [[ -n "$bad" ]]; then
+    echo "Error: invalid provided plan projection: planInput node(s) already carry a plan path: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+    return 1
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-provided.XXXXXX")" || return 1
+  if ! jq -c --arg id "$stage_id" '
+    .nodes |= map(
+      if (.id == $id or (.id | test("^" + $id + "-r[0-9]+$"))) then
+        .planInputBinding = {
+          planSourceKind: "provided",
+          planSourceStageId: null
+        }
+        | del(.planFromBinding)
+        | .stage |= (
+            del(._inlineTodos)
+            | del(.plan)
+            | del(.planFrom)
+            | if ((.sessionStrategy // "") == "") then
+                .sessionStrategy = "fresh"
+              else .
+              end
+          )
+      else .
+      end
+    )
+    ' "$graph_path" >"$tmp"; then
+    rm -f "$tmp"
+    echo "Error: failed to freeze provided-plan bindings" >&2
+    return 1
+  fi
+  mv -f "$tmp" "$graph_path" || {
+    rm -f "$tmp"
+    return 1
+  }
+  printf '%s\n' "$graph_path"
+}
+
 # graph_compile_cache_path_for_plan <plan-path>
 # Prints the default cache location for a plan's compiled graph: the plan
 # path with a .plan.md or .md suffix replaced by .graph.json (or the suffix
@@ -59,6 +198,75 @@ graph_compile_cache_path_for_plan() {
     *.md) printf '%s\n' "${plan_path%.md}.graph.json" ;;
     *) printf '%s\n' "${plan_path}.graph.json" ;;
   esac
+}
+
+# graph_compile_assert_approval_boundary <graph-json-path>
+# Confirms every public Dependency approval node remains a frozen supervisor
+# marker (type=approval) distinct from legacy checkpoint/file acknowledgement.
+# Prints the path on success.
+graph_compile_assert_approval_boundary() {
+  local graph_path="${1:-}"
+  local bad
+  [[ -n "$graph_path" && -f "$graph_path" ]] || {
+    echo "Error: graph_compile_assert_approval_boundary requires a graph json file" >&2
+    return 1
+  }
+  command -v jq >/dev/null 2>&1 || {
+    echo "Error: jq is required for graph_compile_assert_approval_boundary" >&2
+    return 1
+  }
+
+  bad="$(jq -r '
+    [
+      .nodes[]?
+      | select((.type // "") == "approval" or ((.stage.type // "") == "approval"))
+      | select(
+          (.type // "") != "approval"
+          or ((.stage.type // "") != "approval")
+          or ((.stage.question // "") | length) == 0
+          or ((.stage.changesTarget // "") | length) == 0
+          or ((.dependsOn // []) | length) == 0
+          or (
+            ((.stage.inputArtifacts // []) | length) == 0
+            and ((.stage.requires // []) | length) == 0
+          )
+          or (.stage | has("humanAck"))
+          or ((.stage.runtime // null) != null)
+          or ((.stage.model // null) != null)
+          or ((.stage.agent // null) != null)
+          or ((.stage.role // null) != null)
+          or ((.stage.plan // null) != null)
+          or ((.stage.planFile // null) != null)
+          or ((.stage.planFrom // null) != null)
+        )
+      | .id
+    ] | .[]
+  ' "$graph_path" 2>/dev/null)" || true
+  if [[ -n "$bad" ]]; then
+    echo "Error: Dependency approval node(s) failed frozen supervisor boundary: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+    return 1
+  fi
+
+  # Approval must never compile as checkpoint or carry ack-file vocabulary.
+  bad="$(jq -r '
+    [
+      .nodes[]?
+      | select((.stage.type // "") == "approval" or (.type // "") == "approval")
+      | select((.type // "") == "checkpoint" or ((.stage.type // "") == "checkpoint"))
+      | .id
+    ] | .[]
+  ' "$graph_path" 2>/dev/null)" || true
+  if [[ -n "$bad" ]]; then
+    echo "Error: approval must not compile as checkpoint: $(printf '%s' "$bad" | tr '\n' ' ')" >&2
+    return 1
+  fi
+  if grep -qiE 'humanAck|ORCHESTRATOR_HUMAN_ACK|checkpoints/.+\.ack' "$graph_path" 2>/dev/null; then
+    if jq -e '[.nodes[]? | select((.type // "") == "approval")] | length > 0' "$graph_path" >/dev/null 2>&1; then
+      echo "Error: approval graph must not include legacy humanAck/checkpoint ack vocabulary" >&2
+      return 1
+    fi
+  fi
+  printf '%s\n' "$graph_path"
 }
 
 # graph_compile_plan <plan-path> [out-path] [force]
@@ -103,6 +311,26 @@ graph_compile_plan() {
     return "$compile_status"
   fi
 
+  if ! graph_compile_freeze_planfrom_bindings "$tmp" >/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  # Plan-entry Dependency runs set RALPH_WORKFLOW_PLAN_INPUT_STAGE to the
+  # exact planInput.stage id so provided bindings freeze at compile time.
+  # Task-entry leaves it unset; generated planFrom bindings stay unchanged.
+  if [[ -n "${RALPH_WORKFLOW_PLAN_INPUT_STAGE:-}" ]]; then
+    if ! graph_compile_freeze_provided_plan_bindings "$tmp" "$RALPH_WORKFLOW_PLAN_INPUT_STAGE" >/dev/null; then
+      rm -f "$tmp"
+      return 1
+    fi
+  fi
+
+  if ! graph_compile_assert_approval_boundary "$tmp" >/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+
   if [[ -f "$GRAPH_COMPILE_VALIDATE_SCHEMA_SH" ]]; then
     if ! bash "$GRAPH_COMPILE_VALIDATE_SCHEMA_SH" "$tmp"; then
       rm -f "$tmp"
@@ -119,7 +347,7 @@ graph_compile_plan() {
 }
 
 # graph_compile_cli [--render mermaid|dot|ascii] [--out <path>] [--force] <plan-path>
-# Argument parsing and reporting for `ralph graph compile`.
+# Argument parsing and reporting for `graph-run.sh compile`.
 graph_compile_cli() {
   local plan_path=""
   local render_format=""

@@ -100,6 +100,8 @@ export interface ToolCallClassificationMetrics {
 
 export interface ModelBreakdownItem {
   runtime: string;
+  role?: string;
+  modelSource?: string;
   model: string;
   invocations: number;
   elapsed_seconds: number;
@@ -123,6 +125,8 @@ export interface MetricsSummaryItem {
   stage_id?: string;
   model?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
   started_at?: string;
   ended_at?: string;
   elapsed_seconds: number;
@@ -193,6 +197,17 @@ export interface GraphRunSummary {
   nodeCount: number;
 }
 
+export interface DelegatedRunRecord {
+  delegatedRunId: string;
+  runtime: string;
+  role?: string;
+  workspaceMode: string;
+  status: string;
+  verification?: string;
+  usage: Record<string, number>;
+}
+
+/** @deprecated Components will migrate to DelegatedRunRecord in the UI TODO. */
 export interface BrokeredChildState {
   delegationId: string;
   runtime?: string;
@@ -210,8 +225,10 @@ export interface NativeSubagentEvent {
 
 export interface GraphUsageSummary {
   parent: Record<string, number>;
-  brokeredChildren: Record<string, number>;
+  delegatedRuns?: Record<string, number>;
   total: Record<string, number>;
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
+  brokeredChildren?: Record<string, number>;
 }
 
 export interface GraphNodeAttempt {
@@ -221,7 +238,13 @@ export interface GraphNodeAttempt {
   startedAt?: string;
   finishedAt?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Runtime payloads use nativeSubagents. */
   subagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
   reason?: string;
   /** V2 observability metadata recorded by the scheduler for this attempt. */
   workspaceMode?: string;
@@ -231,7 +254,6 @@ export interface GraphNodeAttempt {
   changesetBaseline?: string;
   changesetHash?: string;
   conflictArtifact?: string;
-  nativeSubagentMode?: string;
   crossRuntimeMode?: string;
   integrationInputs?: string[];
   integrationResultIdentity?: string;
@@ -249,6 +271,12 @@ export interface GraphNodeState {
   status: string;
   attempts: GraphNodeAttempt[];
   lastAttemptId?: string;
+  runtime?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
   /** V2 observability metadata merged from the latest attempt. */
   workspaceMode?: string;
   workspacePath?: string;
@@ -257,7 +285,6 @@ export interface GraphNodeState {
   changesetBaseline?: string;
   changesetHash?: string;
   conflictArtifact?: string;
-  nativeSubagentMode?: string;
   crossRuntimeMode?: string;
   integrationInputs?: string[];
   integrationResultIdentity?: string;
@@ -268,6 +295,8 @@ export interface GraphNodeState {
   usageSnapshot?: Record<string, unknown>;
   admissionSummary?: Record<string, unknown>;
   repairEpoch?: string;
+  delegatedRuns?: DelegatedRunRecord[];
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
   brokeredChildren?: BrokeredChildState[];
   nativeSubagentEvents?: NativeSubagentEvent[];
 }

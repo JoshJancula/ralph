@@ -4,6 +4,7 @@
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-state.sh"
+bats_require_minimum_version 1.5.0
 
 GRAPH_RUN_SH="$REPO_ROOT/bundle/.ralph/graph-run.sh"
 
@@ -32,7 +33,7 @@ setup() {
         stage: {
           id: "impl",
           runtime: "cursor",
-          agent: "implementation",
+          role: "implementation",
           workspaceMode: "snapshot"
         }
       }
@@ -75,7 +76,7 @@ write_attempt_logs() {
     --arg agent "logs/nodes/${node_id}/${attempt_id}/agent.log" \
     --arg usage "logs/nodes/${node_id}/${attempt_id}/usage.json" \
     '{
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: $nodeId,
       status: "succeeded",
       lastAttemptId: $attemptId,
@@ -114,9 +115,10 @@ write_attempt_logs() {
 
 @test "logs cli select defaults to last-attempt agent stream" {
   write_attempt_logs impl impl-1
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl
   [ "$status" -eq 0 ]
   [ "$output" = $'agent-impl-1-1\nagent-impl-1-2' ]
+  printf '%s\n' "$stderr" | grep -q '# graph logs'
 }
 
 @test "logs cli select --attempt reads that attempt not the latest" {
@@ -127,7 +129,7 @@ write_attempt_logs() {
   jq -n \
     --arg a1 "$aid1" --arg a2 "$aid2" \
     '{
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: "impl",
       status: "succeeded",
       lastAttemptId: $a2,
@@ -137,36 +139,58 @@ write_attempt_logs() {
       ]
     }' >"$RUN_DIR/nodes/impl.json"
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --attempt impl-1 --stream agent
   [ "$status" -eq 0 ]
   [ "$output" = $'agent-impl-1-1\nagent-impl-1-2' ]
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
   [ "$status" -eq 0 ]
   [ "$output" = $'agent-impl-2-1\nagent-impl-2-2' ]
 }
 
 @test "logs cli select --stream runner prints the runner log" {
   write_attempt_logs impl impl-1
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
   [ "$status" -eq 0 ]
   [ "$output" = $'runner-impl-1-1\nrunner-impl-1-2\nrunner-impl-1-3' ]
 }
 
 @test "logs cli select --stream usage prints usage json" {
   write_attempt_logs impl impl-1
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream usage
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream usage
   [ "$status" -eq 0 ]
   [ "$output" = '{"attempt":"impl-1"}' ]
 }
 
 @test "logs cli select --tail N prints only the last N lines" {
   write_attempt_logs impl impl-1
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --stream runner --tail 2
   [ "$status" -eq 0 ]
   [ "$output" = $'runner-impl-1-2\nrunner-impl-1-3' ]
+}
+
+@test "logs cli select defaults to a bounded recent tail" {
+  local log_dir index
+  log_dir="$RUN_DIR/logs/nodes/impl/impl-1"
+  mkdir -p "$log_dir" "$RUN_DIR/nodes"
+  for index in $(seq 1 100); do
+    printf 'agent-line-%s\n' "$index"
+  done >"$log_dir/agent.log"
+  jq -nc ' {
+    schemaVersion: 3,
+    nodeId: "impl",
+    status: "succeeded",
+    lastAttemptId: "impl-1",
+    attempts: [{attemptId:"impl-1",logPaths:{agent:"logs/nodes/impl/impl-1/agent.log"}}]
+  }' >"$RUN_DIR/nodes/impl.json"
+
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q '^agent-line-1$'
+  printf '%s\n' "$output" | grep -q '^agent-line-21$'
+  printf '%s\n' "$output" | grep -q '^agent-line-100$'
 }
 
 @test "logs cli select rejects an unknown stream" {
@@ -193,7 +217,7 @@ write_attempt_logs() {
   mkdir -p "$RUN_DIR/nodes" "$TMPD/outside"
   printf 'secret\n' >"$TMPD/outside/stolen.log"
   jq -nc --arg abs "$TMPD/outside/stolen.log" '{
-    schemaVersion: 2,
+    schemaVersion: 3,
     nodeId: "impl",
     status: "succeeded",
     lastAttemptId: "impl-1",
@@ -209,7 +233,7 @@ write_attempt_logs() {
   mkdir -p "$RUN_DIR/nodes" "$TMPD/outside"
   printf 'secret\n' >"$TMPD/outside/stolen.log"
   jq -n '{
-    schemaVersion: 2,
+    schemaVersion: 3,
     nodeId: "impl",
     status: "succeeded",
     lastAttemptId: "impl-1",
@@ -229,7 +253,7 @@ write_attempt_logs() {
   printf 'secret\n' >"$TMPD/outside/stolen.log"
   ln -s "$TMPD/outside/stolen.log" "$RUN_DIR/logs/nodes/impl/impl-1/runner.log"
   jq -n '{
-    schemaVersion: 2,
+    schemaVersion: 3,
     nodeId: "impl",
     status: "succeeded",
     lastAttemptId: "impl-1",
@@ -247,7 +271,7 @@ write_attempt_logs() {
   mkdir -p "$RUN_DIR/logs/nodes/impl/impl-1" "$RUN_DIR/nodes"
   printf 'undeclared\n' >"$RUN_DIR/logs/nodes/impl/impl-1/runner.log"
   jq -n '{
-    schemaVersion: 2,
+    schemaVersion: 3,
     nodeId: "impl",
     status: "succeeded",
     lastAttemptId: "impl-1",
@@ -262,16 +286,16 @@ write_attempt_logs() {
   write_attempt_logs impl impl-1
   mkdir -p "$STATE_ROOT/logs/$NAMESPACE/nodes/impl"
   printf 'v1-decoy\n' >"$STATE_ROOT/logs/$NAMESPACE/nodes/impl/impl-1.log"
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
   [ "$status" -eq 0 ]
   [ "$output" = $'runner-impl-1-1\nrunner-impl-1-2\nrunner-impl-1-3' ]
   printf '%s\n' "$output" | grep -qv 'v1-decoy'
 }
 
-@test "logs cli select reads v1 namespace files when the v2 log is missing" {
+@test "logs cli refuses an unowned namespace log when the run-owned log is missing" {
   mkdir -p "$RUN_DIR/nodes" "$STATE_ROOT/logs/$NAMESPACE/nodes/impl"
   jq -n '{
-    schemaVersion: 2,
+    schemaVersion: 3,
     nodeId: "impl",
     status: "succeeded",
     lastAttemptId: "impl-1",
@@ -288,20 +312,20 @@ write_attempt_logs() {
   printf 'v1-agent\n' >"$STATE_ROOT/logs/$NAMESPACE/nodes/impl/agent.log"
   printf '{"v1":true}\n' >"$STATE_ROOT/logs/$NAMESPACE/nodes/impl/plan-usage-summary.json"
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
-  [ "$status" -eq 0 ]
-  [ "$output" = "v1-runner" ]
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"graph log not found"* ]]
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
-  [ "$status" -eq 0 ]
-  [ "$output" = "v1-agent" ]
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"graph log not found"* ]]
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream usage
-  [ "$status" -eq 0 ]
-  [ "$output" = '{"v1":true}' ]
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream usage
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"graph log not found"* ]]
 }
 
-@test "logs cli select reads a v1 node ledger without rewriting it" {
+@test "logs cli rejects a prior node ledger rather than reading an unowned namespace log" {
   mkdir -p "$RUN_DIR/nodes" "$STATE_ROOT/logs/$NAMESPACE/nodes/impl"
   local node_file="$RUN_DIR/nodes/impl.json"
   printf '%s\n' '{"schemaVersion":1,"nodeId":"impl","status":"succeeded","lastAttemptId":"impl-1","attempts":[{"attemptId":"impl-1","outcome":"succeeded"}]}' \
@@ -310,9 +334,9 @@ write_attempt_logs() {
   before="$(cat "$node_file")"
   printf 'historical-agent\n' >"$STATE_ROOT/logs/$NAMESPACE/nodes/impl/agent.log"
 
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
-  [ "$status" -eq 0 ]
-  [ "$output" = "historical-agent" ]
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream agent
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"requires schemaVersion 3"* ]]
   [ "$(cat "$node_file")" = "$before" ]
   [ "$(jq -r '.schemaVersion' "$node_file")" = "1" ]
 }
@@ -322,7 +346,7 @@ write_attempt_logs() {
   local node_file="$RUN_DIR/nodes/impl.json"
   local before
   before="$(cat "$node_file")"
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner --tail 1
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --stream runner --tail 1
   [ "$status" -eq 0 ]
   [ "$output" = "runner-impl-1-3" ]
   [ "$(cat "$node_file")" = "$before" ]
@@ -344,7 +368,7 @@ write_running_attempt() {
     --arg agent "logs/nodes/${node_id}/${attempt_id}/agent.log" \
     --arg usage "logs/nodes/${node_id}/${attempt_id}/usage.json" \
     '{
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: $nodeId,
       status: "running",
       lastAttemptId: $attemptId,
@@ -419,9 +443,25 @@ attach_cmd() {
 
 @test "logs cli follow on a terminal attempt prints and exits" {
   write_attempt_logs impl impl-1
-  run logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --follow --stream agent
+  run --separate-stderr logs_cmd --namespace "$NAMESPACE" --run "$RUN_ID" --node impl --follow --stream agent
   [ "$status" -eq 0 ]
   [ "$output" = $'agent-impl-1-1\nagent-impl-1-2' ]
+}
+
+@test "logs cli follows a running attempt by default" {
+  write_running_attempt impl impl-1
+  local out="$TMPD/default-follow.out" log_file="$RUN_DIR/logs/nodes/impl/impl-1/agent.log"
+  export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  bash "$GRAPH_RUN_SH" logs --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
+    --stream agent --workspace "$WORKSPACE" >"$out" 2>/dev/null &
+  FOLLOW_PID=$!
+  wait_for_file_match "$out" 'agent-impl-1-1'
+  printf 'agent-impl-1-live\n' >>"$log_file"
+  wait_for_file_match "$out" 'agent-impl-1-live'
+  mark_attempt_terminal impl impl-1 succeeded
+  wait_pid_exit "$FOLLOW_PID"
+  FOLLOW_PID=""
 }
 
 @test "logs cli follow missing log is explicit but nonfatal for an active attempt" {

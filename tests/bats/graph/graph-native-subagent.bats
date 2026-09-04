@@ -37,33 +37,15 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Runtime capability checks
+# Ralph-child removal (fail-closed stubs)
 # ---------------------------------------------------------------------------
 
-@test "runtime_supported: claude is the only supported runtime" {
-  run graph_native_subagent_runtime_supported claude
-  [ "$status" -eq 0 ]
-}
-
-@test "runtime_supported: opencode is not supported and returns 1" {
-  run graph_native_subagent_runtime_supported opencode
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not supported"* ]] || [[ "$output" == *"proven"* ]] || [[ "$output" == *"PROVEN"* ]]
-}
-
-@test "runtime_supported: codex is not supported and returns 1" {
-  run graph_native_subagent_runtime_supported codex
-  [ "$status" -ne 0 ]
-}
-
-@test "runtime_supported: cursor is not supported and returns 1" {
-  run graph_native_subagent_runtime_supported cursor
-  [ "$status" -ne 0 ]
-}
-
-@test "runtime_supported: antigravity is not supported and returns 1" {
-  run graph_native_subagent_runtime_supported antigravity
-  [ "$status" -ne 0 ]
+@test "runtime_supported: every runtime is refused after Ralph-child removal" {
+  for rt in claude opencode codex cursor antigravity unknownruntime; do
+    run graph_native_subagent_runtime_supported "$rt"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"removed"* || "$output" == *"nativeSubagents"* ]]
+  done
 }
 
 @test "runtime_supported: empty runtime returns 1" {
@@ -71,431 +53,378 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-@test "runtime_supported: unknown runtime returns 1" {
-  run graph_native_subagent_runtime_supported unknownruntime
-  [ "$status" -ne 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Allowed role validation
-# ---------------------------------------------------------------------------
-
-@test "validate_agents: research is an allowed read-only role" {
+@test "validate_agents: portable allowlist removed" {
   run graph_native_subagent_validate_agents research
-  [ "$status" -eq 0 ]
-}
-
-@test "validate_agents: code-review is an allowed read-only role" {
-  run graph_native_subagent_validate_agents code-review
-  [ "$status" -eq 0 ]
-}
-
-@test "validate_agents: log-analysis is an allowed read-only role" {
-  run graph_native_subagent_validate_agents log-analysis
-  [ "$status" -eq 0 ]
-}
-
-@test "validate_agents: explorer is an allowed read-only role" {
-  run graph_native_subagent_validate_agents explorer
-  [ "$status" -eq 0 ]
-}
-
-@test "validate_agents: multiple allowed roles all pass" {
-  run graph_native_subagent_validate_agents research code-review
-  [ "$status" -eq 0 ]
-}
-
-@test "validate_agents: implementation is denied (not a read-only role)" {
-  run graph_native_subagent_validate_agents implementation
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not an allowed read-only role"* ]]
+  [[ "$output" == *"removed"* || "$output" == *"allowlist"* || "$output" == *"nativeSubagents"* ]]
 }
 
-@test "validate_agents: architect is denied" {
-  run graph_native_subagent_validate_agents architect
-  [ "$status" -ne 0 ]
-}
-
-@test "validate_agents: qa is denied" {
-  run graph_native_subagent_validate_agents qa
-  [ "$status" -ne 0 ]
-}
-
-@test "validate_agents: security is denied (not in bounded read-only set)" {
-  run graph_native_subagent_validate_agents security
-  [ "$status" -ne 0 ]
-}
-
-@test "validate_agents: mix of allowed and denied fails on denied" {
-  run graph_native_subagent_validate_agents research implementation
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not an allowed read-only role"* ]]
-}
-
-@test "validate_agents: no arguments returns 1" {
-  run graph_native_subagent_validate_agents
-  [ "$status" -ne 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Child overlay generation (tool restriction)
-# ---------------------------------------------------------------------------
-
-@test "generate_child_overlay: claude overlay has only read-only tools" {
+@test "generate_child_overlay: refuses and writes no file" {
   local out_path="$TMPD/research.md"
   run graph_native_subagent_generate_child_overlay research claude "$out_path"
-  [ "$status" -eq 0 ]
-  [ -f "$out_path" ]
-  # Must contain only Read, Grep, Glob
-  grep -q "Read" "$out_path"
-  grep -q "Grep" "$out_path"
-  grep -q "Glob" "$out_path"
-}
-
-@test "generate_child_overlay: claude overlay does NOT contain Edit" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  # Edit must not appear in the tools section (may appear in body text)
-  local tools_section
-  tools_section="$(sed -n '/^tools:/,/^---$/p' "$out_path" | head -20)"
-  [[ "$tools_section" != *"Edit"* ]]
-}
-
-@test "generate_child_overlay: claude overlay does NOT contain Write" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  local tools_section
-  tools_section="$(sed -n '/^tools:/,/^---$/p' "$out_path" | head -20)"
-  [[ "$tools_section" != *"Write"* ]]
-}
-
-@test "generate_child_overlay: claude overlay does NOT contain Bash (no shell mutation)" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  local tools_section
-  tools_section="$(sed -n '/^tools:/,/^---$/p' "$out_path" | head -20)"
-  [[ "$tools_section" != *"Bash"* ]]
-}
-
-@test "generate_child_overlay: claude overlay does NOT contain Agent (no subagent spawning)" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  # Agent must not appear in the tools section
-  local tools_section
-  tools_section="$(sed -n '/^tools:/,/^---$/p' "$out_path" | head -20)"
-  [[ "$tools_section" != *"Agent"* ]]
-}
-
-@test "generate_child_overlay: prompt contract is embedded in overlay body" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  grep -q "Native Subagent Read-Only Contract" "$out_path"
-}
-
-@test "generate_child_overlay: overlay prohibits marking TODOs complete" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  grep -q "TODO_COMPLETION" "$out_path"
-}
-
-@test "generate_child_overlay: overlay prohibits spawning sub-agents" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  grep -q "no Agent tool" "$out_path"
-}
-
-@test "generate_child_overlay: overlay prohibits editing plan files" {
-  local out_path="$TMPD/research.md"
-  graph_native_subagent_generate_child_overlay research claude "$out_path"
-  grep -q "plan files" "$out_path"
-}
-
-@test "generate_child_overlay: overlay names the correct agent" {
-  local out_path="$TMPD/code-review.md"
-  graph_native_subagent_generate_child_overlay code-review claude "$out_path"
-  grep -q "name: code-review" "$out_path"
-}
-
-@test "generate_child_overlay: unsupported runtime returns 1" {
-  local out_path="$TMPD/research.md"
-  run graph_native_subagent_generate_child_overlay research opencode "$out_path"
   [ "$status" -ne 0 ]
   [ ! -f "$out_path" ]
 }
 
-@test "generate_child_overlay: missing arguments return 1" {
-  run graph_native_subagent_generate_child_overlay research claude
-  [ "$status" -ne 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Prompt contract content
-# ---------------------------------------------------------------------------
-
-@test "prompt_contract: contains Native Subagent Contract header" {
-  run graph_native_subagent_prompt_contract "test-node" "research, code-review"
+@test "prompt_contract: emits no Ralph-child contract text" {
+  run graph_native_subagent_prompt_contract "n1" "research"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Native Subagent Contract"* ]]
+  [ -z "$output" ]
 }
 
-@test "prompt_contract: includes the node id" {
-  run graph_native_subagent_prompt_contract "my-node-42" "research"
-  [[ "$output" == *"my-node-42"* ]]
-}
-
-@test "prompt_contract: lists allowed agents" {
-  run graph_native_subagent_prompt_contract "n1" "research, code-review"
-  [[ "$output" == *"research, code-review"* ]]
-}
-
-@test "prompt_contract: prohibits marking TODOs complete" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"TODO_COMPLETION"* ]]
-}
-
-@test "prompt_contract: prohibits editing plan files" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"plan files"* ]]
-}
-
-@test "prompt_contract: prohibits spawning sub-agents" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"no Agent tool"* ]] || [[ "$output" == *"sub-agents"* ]]
-}
-
-@test "prompt_contract: prohibits emitting authoritative verification" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"verification"* ]]
-}
-
-@test "prompt_contract: states parent must synthesize results" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"Synthesize"* ]] || [[ "$output" == *"synthesize"* ]]
-}
-
-@test "prompt_contract: describes child failure handling" {
-  run graph_native_subagent_prompt_contract "n1" "research"
-  [[ "$output" == *"failure"* ]] || [[ "$output" == *"Failure"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# Setup (top-level orchestration)
-# ---------------------------------------------------------------------------
-
-@test "setup: succeeds for claude with allowed agents" {
+@test "setup: always refuses and writes no overlay artifacts" {
+  local overlay_dir="$TMPD/overlays"
+  mkdir -p "$overlay_dir"
+  export RALPH_MCP_SCOPE="graph-node"
+  export RALPH_GRAPH_DELEGATION_DEPTH="0"
   local delegation='{"maxDepth":1,"maxChildren":2,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -eq 0 ]
-}
-
-@test "setup: generates overlay files for each declared agent" {
-  local delegation='{"maxDepth":1,"maxChildren":2,"native":{"mode":"read-only","allowedAgents":["research","code-review"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir" >/dev/null
-  [ -f "$overlay_dir/research.md" ]
-  [ -f "$overlay_dir/code-review.md" ]
-}
-
-@test "setup: outputs prompt contract on stdout" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Native Subagent Contract"* ]]
-}
-
-@test "setup: fails before model invocation for unsupported runtime opencode" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" opencode "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not supported"* ]] || [[ "$output" == *"PROVEN"* ]]
-}
-
-@test "setup: fails before model invocation for unsupported runtime codex" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" codex "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -ne 0 ]
-}
-
-@test "setup: fails before model invocation for unsupported runtime cursor" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" cursor "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -ne 0 ]
-}
-
-@test "setup: fails when declared agent is not an allowed read-only role" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["implementation"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
   run graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not an allowed read-only role"* ]]
+  [[ "$output" == *"removed"* || "$output" == *"nativeSubagents"* ]]
+  [ -z "$(find "$overlay_dir" -type f 2>/dev/null)" ]
 }
 
-@test "setup: succeeds with no declared agents (empty allowedAgents)" {
-  local delegation='{"maxDepth":1,"maxChildren":0,"native":{"mode":"read-only","allowedAgents":[]},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  run graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir"
-  [ "$status" -eq 0 ]
-}
-
-@test "setup: logs to native-readonly.log" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off"}}'
-  local overlay_dir="$TMPD/overlays"
-  graph_native_subagent_setup "$delegation" claude "$TMPD" "test-node" "$overlay_dir" >/dev/null
-  local log_file="$TMPD/.ralph-workspace/logs/native-readonly.log"
-  [ -f "$log_file" ]
-  grep -q "graph-native-subagent" "$log_file"
-}
-
-@test "setup: missing required argument returns 1" {
-  run graph_native_subagent_setup "" claude "$TMPD" "test-node" "$TMPD/overlays"
+@test "setup: child scope still denied with no overlay artifacts" {
+  local overlay_dir="$TMPD/overlays-child"
+  mkdir -p "$overlay_dir"
+  export RALPH_MCP_SCOPE="native-subagent"
+  export RALPH_GRAPH_DELEGATION_DEPTH="1"
+  local delegation='{"native":{"mode":"read-only","allowedAgents":["research"]}}'
+  run graph_native_subagent_setup "$delegation" claude "$TMPD" "child-node" "$overlay_dir"
   [ "$status" -ne 0 ]
+  [ -z "$(find "$overlay_dir" -type f 2>/dev/null)" ]
 }
 
-# ---------------------------------------------------------------------------
-# env_from_delegation
-# ---------------------------------------------------------------------------
-
-@test "env_from_delegation: sets read-only mode for claude with native mode" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only"},"crossRuntime":{"mode":"off"}}'
-  graph_native_subagent_env_from_delegation "$delegation" claude
-  [ "${RALPH_PLAN_NATIVE_SUBAGENT_MODE:-}" = "read-only" ]
-  [ "${RALPH_PLAN_NATIVE_SUBAGENT_RUNTIME:-}" = "claude" ]
-}
-
-@test "env_from_delegation: sets off mode when native.mode is off" {
-  local delegation='{"maxDepth":1,"maxChildren":0,"native":{"mode":"off"},"crossRuntime":{"mode":"off"}}'
+@test "env_from_delegation: always resolves to off" {
+  local delegation='{"native":{"mode":"read-only","allowedAgents":["research"]}}'
   graph_native_subagent_env_from_delegation "$delegation" claude
   [ "${RALPH_PLAN_NATIVE_SUBAGENT_MODE:-}" = "off" ]
 }
 
-@test "env_from_delegation: sets off mode for unsupported runtime even when mode is read-only" {
-  local delegation='{"maxDepth":1,"maxChildren":1,"native":{"mode":"read-only"},"crossRuntime":{"mode":"off"}}'
-  graph_native_subagent_env_from_delegation "$delegation" opencode
-  [ "${RALPH_PLAN_NATIVE_SUBAGENT_MODE:-}" = "off" ]
-}
-
-@test "env_from_delegation: sets off mode for empty delegation" {
-  graph_native_subagent_env_from_delegation "" claude
-  [ "${RALPH_PLAN_NATIVE_SUBAGENT_MODE:-}" = "off" ]
-}
-
-# ---------------------------------------------------------------------------
-# Invoke-common integration: verify_runtime
-# ---------------------------------------------------------------------------
-
-@test "invoke-common: native_subagent_verify_runtime passes when mode is off" {
-  unset RALPH_PLAN_NATIVE_SUBAGENT_MODE
+@test "invoke-common: verify_runtime is a no-op after Ralph-child removal" {
+  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
   source "$_invoke_common"
   run ralph_run_plan_native_subagent_verify_runtime opencode
   [ "$status" -eq 0 ]
 }
 
-@test "invoke-common: native_subagent_verify_runtime passes for claude when mode is read-only" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  source "$_invoke_common"
-  run ralph_run_plan_native_subagent_verify_runtime claude
-  [ "$status" -eq 0 ]
-}
-
-@test "invoke-common: native_subagent_verify_runtime fails for opencode when mode is read-only" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  source "$_invoke_common"
-  run ralph_run_plan_native_subagent_verify_runtime opencode
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not supported"* ]] || [[ "$output" == *"refusing to invoke"* ]]
-}
-
-@test "invoke-common: native_subagent_verify_runtime fails for cursor when mode is read-only" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  source "$_invoke_common"
-  run ralph_run_plan_native_subagent_verify_runtime cursor
-  [ "$status" -ne 0 ]
-}
-
-@test "invoke-common: native_subagent_verify_runtime fails for codex when mode is read-only" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  source "$_invoke_common"
-  run ralph_run_plan_native_subagent_verify_runtime codex
-  [ "$status" -ne 0 ]
-}
-
-@test "invoke-common: native_subagent_verify_runtime fails for antigravity when mode is read-only" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  source "$_invoke_common"
-  run ralph_run_plan_native_subagent_verify_runtime antigravity
-  [ "$status" -ne 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Invoke-common integration: append_contract
-# ---------------------------------------------------------------------------
-
-@test "invoke-common: append_contract does nothing when mode is off" {
-  unset RALPH_PLAN_NATIVE_SUBAGENT_MODE
-  PROMPT_STATIC="original content"
-  export PROMPT_STATIC
-  source "$_invoke_common"
-  ralph_run_plan_native_subagent_append_contract
-  [ "$PROMPT_STATIC" = "original content" ]
-}
-
-@test "invoke-common: append_contract injects contract when mode is read-only" {
+@test "invoke-common: append_contract never injects Ralph-child contract" {
   export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
   PROMPT_STATIC="original content"
   export PROMPT_STATIC
   export RALPH_STAGE_ID="my-stage"
   source "$_invoke_common"
   ralph_run_plan_native_subagent_append_contract
-  [[ "$PROMPT_STATIC" == *"Native Subagent Contract"* ]]
-  [[ "$PROMPT_STATIC" == *"original content"* ]]
+  [ "$PROMPT_STATIC" = "original content" ]
+  [[ "$PROMPT_STATIC" != *"Native Subagent Contract"* ]]
 }
 
-@test "invoke-common: append_contract is idempotent (does not double-inject)" {
-  export RALPH_PLAN_NATIVE_SUBAGENT_MODE=read-only
-  PROMPT_STATIC="original content"
-  export PROMPT_STATIC
-  source "$_invoke_common"
-  ralph_run_plan_native_subagent_append_contract
-  local after_first="$PROMPT_STATIC"
-  ralph_run_plan_native_subagent_append_contract
-  [ "$PROMPT_STATIC" = "$after_first" ]
+@test "collect_failure_evidence: no Ralph-child ledger to scan" {
+  run graph_native_subagent_collect_failure_evidence "attempt-1" "$TMPD" "$TMPD/test.log"
+  [ "$status" -ne 0 ]
 }
 
 # ---------------------------------------------------------------------------
-# Failure evidence collection
+# Graph/orchestration nativeSubagents authoring schema (roles redesign)
 # ---------------------------------------------------------------------------
 
-@test "collect_failure_evidence: logs to native-readonly.log when no evidence found" {
-  local log_path="$TMPD/.ralph-workspace/logs/native-readonly.log"
-  mkdir -p "$(dirname "$log_path")"
-  graph_native_subagent_collect_failure_evidence "test-attempt-123" "$TMPD" "$log_path" || true
-  [ -f "$log_path" ]
-  grep -q "CHILD FAILURE EVIDENCE" "$log_path"
-  grep -q "test-attempt-123" "$log_path"
+json_payload() {
+  printf '%s\n' "$1" | awk 'END{print}'
 }
 
-@test "collect_failure_evidence: returns 0 when report file found" {
-  local attempt_id="mynode__runid__1"
-  local artifacts_dir="$TMPD/.ralph-workspace/artifacts/ns/stage-outcomes"
-  mkdir -p "$artifacts_dir"
-  echo '{"outcome":"failed","exitCode":1}' > "$artifacts_dir/${attempt_id}.json"
-  local log_path="$TMPD/test.log"
-  run graph_native_subagent_collect_failure_evidence "$attempt_id" "$TMPD" "$log_path"
+@test "schema: accepts nativeSubagents off and inherit on agent stages" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local tmpd plan_file
+  tmpd="$(mktemp -d)"
+  for mode in off inherit; do
+    plan_file="$tmpd/native-$mode.plan.md"
+    cat >"$plan_file" <<EOF
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: cursor
+      nativeSubagents: $mode
+todos:
+  - id: source-1
+    stage: source
+    content: do work
+    status: pending
+---
+EOF
+    run plan_pipeline_graph_json "$plan_file"
+    [ "$status" -eq 0 ]
+    payload="$(json_payload "$output")"
+    [ "$(printf '%s' "$payload" | jq -r '.nodes[] | select(.id=="source") | .stage.nativeSubagents')" = "$mode" ]
+    [ "$(printf '%s' "$payload" | jq -r '.nodes[] | select(.id=="source") | .stage | has("subagents")')" = "false" ]
+  done
+  rm -rf "$tmpd"
+}
+
+@test "default: omitted nativeSubagents compiles per-runtime deny capability" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local tmpd plan_file payload
+  tmpd="$(mktemp -d)"
+
+  # Runtimes with a proven deny boundary default to off.
+  for rt in claude codex; do
+    plan_file="$tmpd/native-default-$rt.plan.md"
+    cat >"$plan_file" <<EOF
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: $rt
+todos:
+  - id: source-1
+    stage: source
+    content: do work
+    status: pending
+---
+EOF
+    run plan_pipeline_graph_json "$plan_file"
+    [ "$status" -eq 0 ]
+    payload="$(json_payload "$output")"
+    [ "$(printf '%s' "$payload" | jq -r '.nodes[] | select(.id=="source") | .stage.nativeSubagents')" = "off" ]
+    [ "$(printf '%s' "$payload" | jq -r '.nodes[] | select(.id=="source") | .stage | has("subagents")')" = "false" ]
+  done
+
+  # Runtimes with no proven deny boundary default to inherit: Ralph must not
+  # pick a value that would refuse to invoke a stage nobody set to off.
+  for rt in cursor opencode antigravity; do
+    plan_file="$tmpd/native-default-$rt.plan.md"
+    cat >"$plan_file" <<EOF
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: $rt
+todos:
+  - id: source-1
+    stage: source
+    content: do work
+    status: pending
+---
+EOF
+    run plan_pipeline_graph_json "$plan_file"
+    [ "$status" -eq 0 ]
+    payload="$(json_payload "$output")"
+    [ "$(printf '%s' "$payload" | jq -r '.nodes[] | select(.id=="source") | .stage.nativeSubagents')" = "inherit" ]
+  done
+
+  # The frozen delegated-run policy is unchanged by the nativeSubagents default.
+  plan_file="$tmpd/native-default-cursor.plan.md"
+  run plan_pipeline_graph_json "$plan_file"
   [ "$status" -eq 0 ]
-  grep -q "report_file" "$log_path"
+  payload="$(json_payload "$output")"
+  [ "$(printf '%s' "$payload" | jq -c '.nodes[] | select(.id=="source") | .stage.delegation')" = '{"delegatedRuns":{"mode":"off","runtimes":[],"roles":[],"maxRuns":0,"maxParallel":0}}' ]
+  rm -rf "$tmpd"
 }
 
-@test "collect_failure_evidence: returns 1 when no evidence files found" {
-  run graph_native_subagent_collect_failure_evidence "no-evidence-attempt" "$TMPD" "$TMPD/test.log"
-  [ "$status" -ne 0 ]
+@test "default: the compiler deny-capability table matches graph-runtime-capabilities" {
+  # The compiler cannot source the bash capability table, so the duplicated set
+  # is asserted against it here rather than left to drift.
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-runtime-capabilities.sh"
+  local py_set rt bash_supported
+  py_set="$(sed -n 's/^NATIVE_SUBAGENTS_OFF_SUPPORTED_RUNTIMES = {\(.*\)}$/\1/p' \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh" | tr -d '" ' | tr ',' '\n' | sort | tr '\n' ' ')"
+  bash_supported=""
+  for rt in cursor claude codex opencode antigravity; do
+    if graph_runtime_native_subagents_off_supported "$rt"; then
+      bash_supported="$bash_supported$rt\n"
+    fi
+  done
+  bash_supported="$(printf "$bash_supported" | sort | tr '\n' ' ')"
+  [ "$py_set" = "$bash_supported" ]
 }
 
-@test "collect_failure_evidence: missing required args returns 1" {
-  run graph_native_subagent_collect_failure_evidence ""
+@test "removed: rejects stage subagents with migration guidance" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local tmpd plan_file
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/removed-subagents.plan.md"
+  cat >"$plan_file" <<'EOF'
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: cursor
+      subagents: inherit
+todos:
+  - id: source-1
+    stage: source
+    content: do work
+    status: pending
+---
+EOF
+  run plan_pipeline_graph_json "$plan_file"
   [ "$status" -ne 0 ]
+  [[ "$output" == *"subagents: was removed"* ]] || [[ "$output" == *"subagents was removed"* ]]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" != *"ralph migrate"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "removed: rejects delegation.native with migration guidance" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local tmpd plan_file
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/removed-delegation-native.plan.md"
+  cat >"$plan_file" <<'EOF'
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: cursor
+      delegation:
+        native:
+          mode: read-only
+          allowedAgents:
+            - research
+          maxParallel: 1
+todos:
+  - id: source-1
+    stage: source
+    content: do work
+    status: pending
+---
+EOF
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"delegation.native"* ]]
+  [[ "$output" == *"was removed"* ]]
+  [[ "$output" == *"nativeSubagents"* ]]
+  [[ "$output" != *"ralph migrate"* ]]
+  rm -rf "$tmpd"
+}
+
+# ---------------------------------------------------------------------------
+# State / scheduler / status / resume: resolved nativeSubagents (roles redesign)
+# ---------------------------------------------------------------------------
+
+@test "scheduler: load_index stores resolved nativeSubagents and rejects on" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-schedule.sh"
+  local graph
+  graph="$TMPD/sched-load.graph.json"
+  printf '%s\n' '{"schemaVersion":2,"ralphVersion":"1.0.0","name":"t","namespace":"t","maxParallel":1,"nodes":[{"id":"a","type":"agent","dependsOn":[],"stage":{"id":"a","runtime":"cursor","nativeSubagents":"inherit"}},{"id":"b","type":"agent","dependsOn":[],"stage":{"id":"b","runtime":"claude"}}],"edges":[]}' >"$graph"
+  graph_schedule_load_index "$graph"
+  [ "$(graph_schedule_node_native_subagents_by_id a)" = "inherit" ]
+  [ "$(graph_schedule_node_native_subagents_by_id b)" = "off" ]
+  [ "$(_graph_schedule_slots_for_node)" -eq 1 ]
+
+  printf '%s\n' '{"schemaVersion":2,"ralphVersion":"1.0.0","name":"t","namespace":"t","maxParallel":1,"nodes":[{"id":"bad","type":"agent","dependsOn":[],"stage":{"id":"bad","runtime":"cursor","nativeSubagents":"on"}}],"edges":[]}' >"$graph"
+  run graph_schedule_load_index "$graph"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid nativeSubagents"* ]]
+}
+
+@test "scheduler: admission logs nativeSubagents and never reserves child slots" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-schedule.sh"
+  unset RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT
+  graph="$TMPD/sched-admit.graph.json"
+  admission="$TMPD/admission.jsonl"
+  printf '%s\n' '{"schemaVersion":2,"ralphVersion":"1.0.0","name":"t","namespace":"t","maxParallel":2,"nodes":[{"id":"n1","type":"agent","dependsOn":[],"stage":{"id":"n1","runtime":"claude","nativeSubagents":"inherit"}}],"edges":[]}' >"$graph"
+  graph_schedule_load_index "$graph"
+  [[ ${#GRAPH_NODE_HELD_SLOTS[@]} -eq 1 ]]
+  GRAPH_SCHEDULE_MAX_PARALLEL=2
+  GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME=2
+  GRAPH_SCHEDULE_TOKEN_CAP=2
+  GRAPH_SCHEDULE_ADMISSION_LOG_FILE="$admission"
+  : >"$admission"
+  reserve_err="$TMPD/reserve.err"
+  _graph_schedule_runtime_reserve n1 claude inherit 2>"$reserve_err"
+  [[ "${GRAPH_NODE_HELD_SLOTS[0]}" == "1" ]]
+  [[ -s "$admission" ]]
+  jq -s -e 'length == 1 and .[0].nativeSubagents == "inherit" and .[0].runtimeSlots == 1 and (.[0] | has("subagents") | not)' "$admission" >/dev/null
+  ! grep -q 'reserves runtime=' "$reserve_err"
+  _graph_schedule_runtime_release n1
+  [[ "${GRAPH_NODE_HELD_SLOTS[0]}" == "0" ]]
+  run graph_schedule_native_budget_preflight "$graph"
+  [ "$status" -eq 0 ]
+}
+
+@test "state: ledger attempt records resolved nativeSubagents not subagents" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-state.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-schedule.sh"
+  unset RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT
+  workspace="$TMPD/ws-state"
+  state_ns="native-state"
+  state_run="run-state-1"
+  mkdir -p "$workspace"
+  graph="$TMPD/state.graph.json"
+  printf '%s\n' '{"schemaVersion":2,"ralphVersion":"1.0.0","name":"'"$state_ns"'","namespace":"'"$state_ns"'","maxParallel":1,"nodes":[{"id":"n1","type":"agent","dependsOn":[],"stage":{"id":"n1","runtime":"cursor","nativeSubagents":"inherit"}}],"edges":[]}' >"$graph"
+  graph_schedule_load_index "$graph"
+  graph_state_init_run "$workspace" "$state_ns" "$state_run" "$graph" "$graph" 1 >/dev/null
+  GRAPH_SCHEDULE_WORKSPACE="$workspace"
+  GRAPH_SCHEDULE_LEDGER_NAMESPACE="$state_ns"
+  GRAPH_SCHEDULE_RUN_ID="$state_run"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$state_ns" "$state_run")"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph"
+  [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]]
+  _graph_schedule_ledger_record n1 running "n1__${state_run}__1" "" "" "2026-01-01T00:00:00Z" "" "cursor" "inherit" ""
+  node_file="$(graph_state_node_file "$workspace" "$state_ns" "$state_run" "n1")"
+  [ -f "$node_file" ]
+  [ "$(jq -r '.attempts[0].nativeSubagents' "$node_file")" = "inherit" ]
+  [ "$(jq -r '.attempts[0] | has("subagents")' "$node_file")" = "false" ]
+}
+
+@test "resume: rewritten attempts keep nativeSubagents provenance across writes" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-state.sh"
+  unset RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT
+  workspace="$TMPD/ws-resume"
+  state_ns="native-resume"
+  state_run="run-resume-1"
+  mkdir -p "$workspace/.ralph-workspace/graph-runs/$state_ns/$state_run/nodes"
+  graph_state_write_node "$workspace" "$state_ns" "$state_run" "n1" "running" \
+    "n1__${state_run}__1" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor","nativeSubagents":"off"}'
+  graph_state_write_node "$workspace" "$state_ns" "$state_run" "n1" "succeeded" \
+    "n1__${state_run}__1" '{"outcome":"success","exitCode":0,"finishedAt":"2026-01-01T00:01:00Z","runtime":"cursor","nativeSubagents":"off"}' \
+    '{"runtime":"cursor","nativeSubagents":"off"}'
+  node_file="$(graph_state_node_file "$workspace" "$state_ns" "$state_run" "n1")"
+  [ "$(jq -r '.attempts | length' "$node_file")" = "1" ]
+  [ "$(jq -r '.attempts[0].nativeSubagents' "$node_file")" = "off" ]
+  [ "$(jq -r '.nativeSubagents' "$node_file")" = "off" ]
+  [ "$(jq -r 'has("subagents")' "$node_file")" = "false" ]
+}
+
+@test "status: details print nativeSubagents and omit reservation reductions" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-state.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-status.sh"
+  unset RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT
+  workspace="$TMPD/ws-status"
+  state_ns="native-status"
+  state_run="run-status-1"
+  mkdir -p "$workspace/.ralph-workspace/graph-runs/$state_ns/$state_run/nodes"
+  graph_state_write_node "$workspace" "$state_ns" "$state_run" "n1" "succeeded" \
+    "n1__${state_run}__1" \
+    '{"outcome":"success","exitCode":0,"startedAt":"2026-01-01T00:00:00Z","finishedAt":"2026-01-01T00:01:00Z","runtime":"cursor","nativeSubagents":"inherit"}' \
+    '{"nativeSubagents":"inherit","nativeSubagentMode":"inherit"}'
+  node_file="$(graph_state_node_file "$workspace" "$state_ns" "$state_run" "n1")"
+  run _graph_status_node_extra "$node_file" "n1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nativeSubagents=inherit"* ]]
+  [[ "$output" != *"native-subagent-reservation"* ]]
+
+  run_dir="$(graph_state_run_dir "$workspace" "$state_ns" "$state_run")"
+  events='{"event":"admission","details":{"workKind":"graph-node","decision":"admitted","nativeSubagents":"inherit","sameRuntimeParallelSafe":true,"reason":"runtime-and-token-cap"}}'
+  run _graph_status_concurrency_reductions "$run_dir" "$events"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"native-subagent-reservation"* ]]
 }

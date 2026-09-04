@@ -854,7 +854,10 @@ ralph_mcp_proxy_grep_source_cap_policy_json() {
 
 ralph_mcp_proxy_result_byte_cap_for_tool() {
   local tool_name="${1:-}"
-  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON:-{}}"
+  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON:-}"
+  # Not ":-{}": bash closes that expansion one brace early, so a configured
+  # cap map arrives with a stray trailing "}" and every lookup silently misses.
+  [[ -n "$tool_caps_json" ]] || tool_caps_json='{}'
   local tool_cap global_cap hook_cap
 
   hook_cap="${RALPH_HOOK_RESULT_BYTE_CAP:-}"
@@ -880,7 +883,9 @@ ralph_mcp_proxy_result_byte_cap_for_tool() {
 
 ralph_mcp_proxy_result_token_cap_for_tool() {
   local tool_name="${1:-}"
-  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_TOKEN_CAPS_JSON:-{}}"
+  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_TOKEN_CAPS_JSON:-}"
+  # Not ":-{}": see the byte-cap lookup above.
+  [[ -n "$tool_caps_json" ]] || tool_caps_json='{}'
   local tool_cap global_cap hook_cap
 
   hook_cap="${RALPH_HOOK_RESULT_TOKEN_CAP:-}"

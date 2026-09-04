@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-dep-blocked","workflowId":"feature-delivery","mode":"dependency","entryKind":"task","task":"Ship the feature","taskProvenance":"explicit","sourcePath":"/fixtures/feature-delivery.workflow.md","sourceKind":"project","state":"blocked","inputPath":"/fixtures/input.plan.md","inputPlan":null,"createdAt":"2026-08-27T06:00:00Z","updatedAt":"2026-08-27T06:01:00Z"},
+  "stages": [{"id":"verify","state":"blocked","stageKind":"supervisor","attempt":1,"completedTodos":0,"totalTodos":0,"artifacts":[],"blocker":null,"createdAt":"2026-08-27T06:00:00Z","updatedAt":"2026-08-27T06:01:00Z"}],
+  "diagnosis": {"state":"blocked","reasonCode":"missing-artifact","summary":"verify is missing a required artifact declared by its dependencies","stageId":"verify","requestKind":null,"requestId":null,"evidence":["missing artifact /fixtures/evidence.json"],"retryable":false,"nextAction":null},
+  "nextAction": null
+}

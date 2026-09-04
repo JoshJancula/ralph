@@ -54,10 +54,56 @@ ralph_permission_block_is_host_registry_noise() {
   local lower
   lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
 
+  # Codex can inherit parent-session transport markers and then fail before a
+  # model turn while initializing its in-process app-server client.  Although
+  # the platform error can contain "Operation not permitted", it is a runtime
+  # bootstrap error, not an approval request an operator can resolve.
+  if printf '%s\n' "$lower" | grep -qF 'failed to initialize in-process app-server client'; then
+    return 1
+  fi
+
   if printf '%s\n' "$lower" | grep -qE 'workspace-registry:|skipping ralph workspace registry|failed to update ralph workspace registry'; then
     return 0
   fi
   if printf '%s\n' "$lower" | grep -qE 'traceback \(most recent call last\).*(workspace-registry|workspaces\.json)'; then
+    return 0
+  fi
+  return 1
+}
+
+ralph_permission_is_runtime_bootstrap_failure() {
+  local text="${1:-}"
+  local lower
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  printf '%s\n' "$lower" | grep -qF 'failed to initialize in-process app-server client'
+}
+
+# ralph_permission_is_termination <output_segment> <exit_code>
+# Termination branch for the permission classifier (G10/G11). Runner-owned
+# timeout / cancel / signal exits outrank permission-shaped transcript
+# wording. Returns 0 when this invocation is a termination, not a
+# permission block -- callers must not fabricate a permission pause.
+#
+# Recognized termination signals:
+#   - exit 124 (timeout(1)-style), 130 (SIGINT), 143 (SIGTERM), 78 (abort)
+#   - run-plan-owned timeout marker lines in the output segment
+#   - explicit cancel / received-signal notices that are not approval prompts
+ralph_permission_is_termination() {
+  local text="${1:-}"
+  local exit_code="${2:-0}"
+  local lower
+
+  case "$exit_code" in
+    78 | 124 | 130 | 143) return 0 ;;
+  esac
+
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$lower" ]] || return 1
+
+  if printf '%s\n' "$lower" | grep -qE 'invocation (stuck: timeout|timeout exceeded|terminated due to timeout)|terminated due to timeout \(elapsed'; then
+    return 0
+  fi
+  if printf '%s\n' "$lower" | grep -qE 'received signal (term|int|hup|kill)|operator cancel(led)?|cancelled by (the )?(operator|supervisor)|supervisor (cancel|signal|interrupt)'; then
     return 0
   fi
   return 1
@@ -69,6 +115,13 @@ ralph_classify_permission_block() {
   local runtime="${3:-}"
 
   if ralph_permission_block_is_host_registry_noise "$text"; then
+    return 1
+  fi
+
+  # Termination branch: never treat runner timeout / cancel / signal exits
+  # as permission blocks, even when the transcript mentions "permission
+  # denied" or similar diagnostic wording.
+  if ralph_permission_is_termination "$text" "$exit_code"; then
     return 1
   fi
 
@@ -222,6 +275,12 @@ ralph_classify_permission_block_fallback() {
   local runtime="${3:-}"
 
   if ralph_permission_block_is_host_registry_noise "$text"; then
+    return 1
+  fi
+
+  # Same termination short-circuit as the primary classifier: runner-owned
+  # markers and signal exits outrank weak permission-like wording.
+  if ralph_permission_is_termination "$text" "$exit_code"; then
     return 1
   fi
 
@@ -385,9 +444,6 @@ ralph_build_permission_resume_command() {
   parts+="--workspace $(printf %q "$workspace") "
   if [[ "${NON_INTERACTIVE_FLAG:-0}" == "1" ]]; then
     parts+="--non-interactive "
-  fi
-  if [[ -n "${PREBUILT_AGENT:-}" ]]; then
-    parts+="--agent $(printf %q "$PREBUILT_AGENT") "
   fi
   if [[ -n "${SELECTED_MODEL:-}" ]]; then
     parts+="--model $(printf %q "$SELECTED_MODEL") "
@@ -872,6 +928,12 @@ ralph_apply_permission_operator_response() {
   local decision
   local runtime_overlay_path=""
 
+  # Best-effort overlay writes must never overturn the operator's answer. When
+  # one fails, the approval still stands and this records why enforcement may
+  # be weaker than requested so the caller can warn.
+  RALPH_PERMISSION_APPLY_DEGRADED=""
+  export RALPH_PERMISSION_APPLY_DEGRADED
+
   decision="$(ralph_permission_operator_response_decision "$response_text")"
   case "$decision" in
     allow)
@@ -901,11 +963,19 @@ ralph_apply_permission_operator_response() {
         if overlay_path="$(ralph_write_opencode_permission_overlay "$session_dir" "$blocked_path" 2>/dev/null)"; then
           OPENCODE_PLAN_PERMISSION_CONFIG_PATH="$overlay_path"
           export OPENCODE_PLAN_PERMISSION_CONFIG_PATH
+        else
+          RALPH_PERMISSION_APPLY_DEGRADED="opencode-overlay"
+        fi
+        # A denial excerpt does not always yield a concrete path. Without one
+        # there is nothing to add to the proxy allowlist, but that is a gap in
+        # what we could extract -- not an operator decision. Record it and keep
+        # the approval.
+        if [[ -n "$blocked_path" ]]; then
           if ! ralph_write_session_mcp_allowlist "$session_dir" "$blocked_path"; then
-            decision="deny"
+            RALPH_PERMISSION_APPLY_DEGRADED="${RALPH_PERMISSION_APPLY_DEGRADED:+${RALPH_PERMISSION_APPLY_DEGRADED},}mcp-allowlist"
           fi
         else
-          decision="deny"
+          RALPH_PERMISSION_APPLY_DEGRADED="${RALPH_PERMISSION_APPLY_DEGRADED:+${RALPH_PERMISSION_APPLY_DEGRADED},}no-blocked-path"
         fi
       fi
       ;;
@@ -1516,6 +1586,10 @@ ralph_permission_block_type() {
   local exit_code="${2:-0}"
   local runtime="${3:-}"
   local result
+  if ralph_permission_is_runtime_bootstrap_failure "$text"; then
+    printf 'none\n'
+    return 0
+  fi
   if result="$(ralph_classify_permission_block "$text" "$exit_code" "$runtime" 2>/dev/null)"; then
     printf '%s\n' "$result"
   elif result="$(ralph_classify_permission_block_fallback "$text" "$exit_code" "$runtime" 2>/dev/null)"; then

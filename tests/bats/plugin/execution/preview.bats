@@ -50,26 +50,12 @@ EOF
 
 write_plan_fixtures() {
   printf '%s\n' '- [ ] demo' >"$FAKE_PROJECT/plan.md"
-  cat >"$FAKE_PROJECT/orch.plan.md" <<'EOF'
+  cat >"$FAKE_PROJECT/feature.workflow.md" <<'EOF'
 ---
-name: orch-demo
-pipeline:
-  - id: s1
-    runtime: claude
-    agent: architect
+name: feature-delivery
+kind: workflow
+mode: dependency
 ---
-- [ ] stage
-EOF
-  cat >"$FAKE_PROJECT/graph.plan.md" <<'EOF'
----
-name: graph-demo
-execution: graph
-pipeline:
-  - id: n1
-    runtime: cursor
-    agent: implementation
----
-- [ ] node
 EOF
 }
 
@@ -99,7 +85,7 @@ assert_preview_order() {
   local text=$1
   local labels
   labels="$(printf '%s\n' "$text" | awk -F: '{print $1}')"
-  [ "$labels" = $'kind\nplanPath\nprojectRoot\nstateRoot\nagentRoot\nruntime\nagent\nmodel\ncommand\nconfirmationId' ]
+  [ "$labels" = $'kind\nplanPath\nprojectRoot\nstateRoot\nagentRoot\nruntime\nmodel\nmodel source\nnative subagents\ntask\ninputPlan\nrunId\ncommand\nconfirmationId' ]
 }
 
 assert_zero_invocation() {
@@ -120,8 +106,12 @@ assert_confirmation_id() {
       "stateRoot=\(.stateRoot)",
       "agentRoot=\(.agentRoot)",
       "runtime=\(.runtime)",
-      "agent=\(.agent)",
       "model=\(.model)",
+      "modelSource=\(.modelSource)",
+      "nativeSubagents=\(.nativeSubagents)",
+      "task=\(.task)",
+      "inputPlan=\(.inputPlan)",
+      "runId=\(.runId)",
       "command=\(.command)"
     ] | join("\n") + "\n"
   ' <<<"$json")"
@@ -149,7 +139,6 @@ assert_unchanged_tree() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -164,78 +153,84 @@ assert_unchanged_tree() {
   assert_json_field "$json" "stateRoot" "$FAKE_STATE"
   assert_json_field "$json" "agentRoot" "$FAKE_AGENT"
   assert_json_field "$json" "runtime" "cursor"
-  assert_json_field "$json" "agent" "implementation"
   assert_json_field "$json" "model" "composer-2"
-  [[ "$output" == *"command: ralph run --plan '$FAKE_PROJECT/plan.md' --runtime 'cursor' --agent 'implementation' --model 'composer-2' --workspace '$FAKE_PROJECT' --workspace-root '$FAKE_STATE' --agent-workspace '$FAKE_AGENT'"* ]]
-  assert_json_field "$json" "command" "ralph run --plan '$FAKE_PROJECT/plan.md' --runtime 'cursor' --agent 'implementation' --model 'composer-2' --workspace '$FAKE_PROJECT' --workspace-root '$FAKE_STATE' --agent-workspace '$FAKE_AGENT'"
+  assert_json_field "$json" "modelSource" "explicit override"
+  assert_json_field "$json" "nativeSubagents" "inherit"
+  [[ "$output" == *"command: ralph run --plan '$FAKE_PROJECT/plan.md' --runtime 'cursor' --model 'composer-2' --workspace '$FAKE_PROJECT' --workspace-root '$FAKE_STATE' --agent-workspace '$FAKE_AGENT'"* ]]
+  assert_json_field "$json" "command" "ralph run --plan '$FAKE_PROJECT/plan.md' --runtime 'cursor' --model 'composer-2' --workspace '$FAKE_PROJECT' --workspace-root '$FAKE_STATE' --agent-workspace '$FAKE_AGENT'"
   assert_confirmation_id "$json"
   assert_zero_invocation
   assert_unchanged_tree "$before"
 }
 
-@test "preview orchestration uses ralph run and does not invoke the orchestrator" {
+@test "preview workflow-start prints ralph workflow start --file and does not invoke engines" {
   local json text
+  run preview_env preview \
+    --kind workflow-start \
+    --plan "$FAKE_PROJECT/feature.workflow.md" \
+    --task "ship feature" \
+    --input-plan "$FAKE_PROJECT/plan.md" \
+    --runtime claude \
+    --workspace "$FAKE_PROJECT" \
+    --workspace-root "$FAKE_STATE" \
+    --agent-workspace "$FAKE_AGENT"
+  [ "$status" -eq 0 ]
+  text="$(text_from_output "$output")"
+  json="$(json_from_output "$output")"
+  assert_preview_order "$text"
+  assert_json_field "$json" "kind" "workflow-start"
+  assert_json_field "$json" "planPath" "$FAKE_PROJECT/feature.workflow.md"
+  assert_json_field "$json" "task" "ship feature"
+  assert_json_field "$json" "inputPlan" "$FAKE_PROJECT/plan.md"
+  [[ "$(printf '%s\n' "$json" | jq -r '.command')" == ralph\ workflow\ start\ --file\ * ]]
+  [[ "$(printf '%s\n' "$json" | jq -r '.command')" == *"--plan '$FAKE_PROJECT/plan.md'"* ]]
+  [[ "$(printf '%s\n' "$json" | jq -r '.command')" != *orchestrat* ]]
+  [[ "$(printf '%s\n' "$json" | jq -r '.command')" != *'ralph graph'* ]]
+  assert_confirmation_id "$json"
+  assert_zero_invocation
+}
+
+@test "preview workflow-resume prints ralph workflow resume and does not resume" {
+  local json text
+  run preview_env preview \
+    --kind workflow-resume \
+    --run run-20260101T000000Z-demo-abcdef \
+    --workspace "$FAKE_PROJECT" \
+    --workspace-root "$FAKE_STATE" \
+    --agent-workspace "$FAKE_AGENT"
+  [ "$status" -eq 0 ]
+  text="$(text_from_output "$output")"
+  json="$(json_from_output "$output")"
+  assert_preview_order "$text"
+  assert_json_field "$json" "kind" "workflow-resume"
+  assert_json_field "$json" "runId" "run-20260101T000000Z-demo-abcdef"
+  assert_json_field "$json" "command" "ralph workflow resume 'run-20260101T000000Z-demo-abcdef' --workspace '$FAKE_PROJECT'"
+  assert_confirmation_id "$json"
+  assert_zero_invocation
+}
+
+@test "preview rejects removed orchestration and graph kinds" {
   run preview_env preview \
     --kind orchestration \
-    --plan "$FAKE_PROJECT/orch.plan.md" \
-    --runtime claude \
-    --agent architect \
-    --workspace "$FAKE_PROJECT" \
-    --workspace-root "$FAKE_STATE" \
-    --agent-workspace "$FAKE_AGENT"
-  [ "$status" -eq 0 ]
-  text="$(text_from_output "$output")"
-  json="$(json_from_output "$output")"
-  assert_preview_order "$text"
-  assert_json_field "$json" "kind" "orchestration"
-  assert_json_field "$json" "planPath" "$FAKE_PROJECT/orch.plan.md"
-  [[ "$(printf '%s\n' "$json" | jq -r '.command')" == ralph\ run\ --plan\ * ]]
-  [[ "$(printf '%s\n' "$json" | jq -r '.command')" != *orchestrat* ]]
-  assert_confirmation_id "$json"
-  assert_zero_invocation
-}
+    --plan "$FAKE_PROJECT/plan.md" \
+    --workspace "$FAKE_PROJECT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown kind"* ]]
 
-@test "preview graph-run prints ralph graph run and does not start a graph" {
-  local json text
   run preview_env preview \
     --kind graph-run \
-    --plan "$FAKE_PROJECT/graph.plan.md" \
-    --runtime opencode \
-    --agent implementation \
-    --model "kimi-k2.7-code" \
-    --namespace plugin-preview \
-    --workspace "$FAKE_PROJECT" \
-    --workspace-root "$FAKE_STATE" \
-    --agent-workspace "$FAKE_AGENT"
-  [ "$status" -eq 0 ]
-  text="$(text_from_output "$output")"
-  json="$(json_from_output "$output")"
-  assert_preview_order "$text"
-  assert_json_field "$json" "kind" "graph-run"
-  assert_json_field "$json" "runtime" "opencode"
-  assert_json_field "$json" "agent" "implementation"
-  assert_json_field "$json" "model" "kimi-k2.7-code"
-  assert_json_field "$json" "command" "ralph graph run '$FAKE_PROJECT/graph.plan.md' --namespace 'plugin-preview' --workspace '$FAKE_PROJECT'"
-  assert_confirmation_id "$json"
-  assert_zero_invocation
+    --plan "$FAKE_PROJECT/plan.md" \
+    --workspace "$FAKE_PROJECT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown kind"* ]]
 }
 
-@test "preview graph-resume prints ralph graph resume and does not resume" {
-  local json text
+@test "preview rejects removed --role" {
   run preview_env preview \
-    --kind graph-resume \
-    --plan "$FAKE_PROJECT/graph.plan.md" \
-    --namespace plugin-preview \
-    --run latest \
-    --workspace "$FAKE_PROJECT" \
-    --workspace-root "$FAKE_STATE" \
-    --agent-workspace "$FAKE_AGENT"
-  [ "$status" -eq 0 ]
-  text="$(text_from_output "$output")"
-  json="$(json_from_output "$output")"
-  assert_preview_order "$text"
-  assert_json_field "$json" "kind" "graph-resume"
-  assert_json_field "$json" "command" "ralph graph resume '$FAKE_PROJECT/graph.plan.md' --namespace 'plugin-preview' --run 'latest' --workspace '$FAKE_PROJECT'"
-  assert_confirmation_id "$json"
-  assert_zero_invocation
+    --kind plan \
+    --plan "$FAKE_PROJECT/plan.md" \
+    --role implementation \
+    --workspace "$FAKE_PROJECT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--role was removed"* ]]
 }

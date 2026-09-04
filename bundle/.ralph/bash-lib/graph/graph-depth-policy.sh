@@ -275,7 +275,7 @@ graph_depth_policy_child_env_vars() {
 # the MCP handler.
 graph_depth_policy_ledger_guard() {
   local depth="${1:-}"
-  local requested_tool="${2:-ralph_delegate_start}"
+  local requested_tool="${2:-ralph_delegated_run_start}"
 
   if [[ ! "$depth" =~ ^[0-9]+$ ]]; then
     graph_depth_policy_log_denial "ledger" "$requested_tool" \

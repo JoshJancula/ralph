@@ -15,25 +15,25 @@ Pick what matches what you are doing. You can read them in any order.
 | Guide | What it is for |
 |-------|----------------|
 | [INSTALL.md](INSTALL.md) | Installing Ralph: global install (recommended), in-repo install, `install.sh` flags, uninstall |
-| [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | How `ralph create plan` works across `classic` and `yaml`, how human input behaves (terminal vs offline files), orchestration stages, `loopControl`, cleanup, and copy-paste prompts |
+| [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | Plan loop, human input, prompts, and execution ownership |
 | [worker-ralph-example.md](worker-ralph-example.md) | One plan, one runtime, end to end: where logs and artifacts go |
-| [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipelines: stage plans, pipeline plan format, running the orchestrator, checking artifacts |
-| [GRAPH.md](GRAPH.md) | Graph mode: DAG authoring, presets, node types, isolated workspaces, gates, consensus, durable resume, and publication |
-| [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
+| [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Sequential pipeline examples (classic orchestration as Sequential internals) |
+| [WORKFLOWS.md](WORKFLOWS.md) | Core operating model, Sequential vs Dependency, status/watch terminal viewer, ten bundled SDLCs, planner/`planInput`, authoring |
+| [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs a workflow |
 | [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
 | [TOOLING.md](TOOLING.md) | Optional Ralph mode (`--ralph-mode` / `RALPH_MODE`): MCP proxy tools, shell output compaction, native adapters per runtime, overlay cleanup |
-| [ENVIRONMENT.md](ENVIRONMENT.md) | Full environment variable reference, session/resume controls, feature gates, models |
+| [ENVIRONMENT.md](ENVIRONMENT.md) | Full environment variable reference, session/resume controls, workflow terminal UI, feature gates, models |
 | [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, what it changes on disk, `.cursorignore`, hooks, Codex caveats, killswitch configuration |
 | [BENCHMARKS.md](BENCHMARKS.md) | Token and compaction benchmark report across Ralph optimization paths (run `ralph benchmark`) |
 
 ## Quick reference
 
 - **Open tasks:** `- [ ]` (space inside the brackets). **Done:** `- [x]`. **Not a task:** `- []`.
-- **Plan entry point:** `ralph create plan` scaffolds a single plan. `--format classic` creates the zero-dependency markdown checklist; `--format yaml` creates the flat YAML-frontmatter TODO queue; `--format graph` creates an opt-in DAG plan. For a multi-stage sequential pipeline, use `ralph create orc`. Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) are still accepted as aliases for `yaml`.
-- **Run any plan:** `ralph run --plan <path>` auto-detects the format. Classic checklists and flat yaml plans run via `run-plan.sh`; orchestration plans run via `orchestrator.sh`; plans with `execution: graph` run via the graph scheduler.
-- **Graph plans:** Compile with `ralph graph compile <plan>`, run with `ralph graph run <plan>`, inspect with `ralph graph status --namespace <ns> --run latest`, and resume with `ralph graph resume <plan> --namespace <ns> --run latest`. See [GRAPH.md](GRAPH.md).
-- **Saved models:** `ralph models add|list|remove <claude|codex> [id]` (or `.ralph/models.sh`); store at `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json`. See [ENVIRONMENT.md](ENVIRONMENT.md#models).
-- **Orchestration plans:** `ralph create orc` launches the interactive wizard and outputs a yaml `.plan.md` with a `pipeline:` block. Each stage carries inline content or delegates to a separate plan via `planFile:`; both run through `run-plan.sh`.
+- **Create commands (only two):** `ralph create plan` scaffolds a leaf plan (`--format classic` or `yaml`). `ralph create workflow` scaffolds a reusable workflow (`--mode sequential` or `--mode dependency`). Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) remain aliases for `yaml`.
+- **Run a leaf plan:** `ralph run --plan <path>` runs classic or YAML checklists through `run-plan.sh`. Workflow-shaped inputs are refused with the workflow-start replacement.
+- **Start a workflow:** Task-based `ralph workflow start feature-delivery --task "..."` or supplied-plan `ralph workflow start plan-delivery --plan <path>`. Inspect with `ralph workflow inspect`, list with `ralph workflow list`. See [WORKFLOWS.md](WORKFLOWS.md).
+- **Models:** `ralph models list <claude|codex|cursor|opencode|antigravity>` lists models (saved store for Claude/Codex; native CLI discovery for Cursor/OpenCode/Antigravity). `ralph models add|remove <claude|codex> [id]` manages the saved store at `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json`. See [ENVIRONMENT.md](ENVIRONMENT.md#models).
+- **Sequential workflows:** `ralph create workflow --mode sequential` uses classic orchestration as the Sequential implementation (ordered stages / parallel waves with artifact handoffs).
 
 ## CLI session resume
 
@@ -104,6 +104,18 @@ Per-run summary: `.ralph-workspace/runtime-config/<plan-key>/summary.json` (incl
 Plan-aggregate telemetry (discover report): `.ralph-workspace/logs/<plan-key>/discover-report.json` (includes compaction events, missed savings, low-value filters, and optimization opportunities).
 
 These are local run artifacts, not uploaded. Dashboard visualization is optional; metrics are human-readable JSON. More on telemetry: [TOOLING.md#telemetry](TOOLING.md#telemetry).
+
+Print a detailed usage report for the current workspace, or scope it to one
+workflow's stage attempts:
+
+```bash
+ralph usage
+ralph usage --run run-20260827T183012Z-feature-delivery-a1b2c3
+```
+
+Plan runners print their per-plan summary when they exit. Workflow lifecycle
+commands print the run aggregate when they return to the terminal; a detached,
+still-running workflow is explicitly marked as a partial report.
 
 ## Benchmark report
 

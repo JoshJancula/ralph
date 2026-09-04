@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-dep-waves",
+  "feature-delivery | Dependency",
+  "WAITING  Ship the feature with an inten\u2026",
+  "1/4 stages  2m 0s",
+  "> waiting   approve-plan",
+  "approve-plan  approval  waiting",
+  "Next  answer the outstanding request",
+  "Question  Approve the implementation pl\u2026",
+  "Request  outstanding",
+  "Changes target  implement",
+  "Attempt  1  Duration  30s",
+  "Blocker  approval (outstanding)"
+]

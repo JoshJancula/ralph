@@ -41,19 +41,22 @@ teardown() {
   export RALPH_PLAN_SUBAGENTS=on
   run ralph_run_plan_invoke_opencode
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported for runtime opencode"* ]]
+  [[ "$output" == *"nativeSubagents=on was removed"* ]]
   [ ! -e "$record" ]
 }
 
-@test "opencode accepts the portable subagents off contract" {
+@test "opencode refuses nativeSubagents off before native argv" {
   local record="$TEST_TMPDIR/opencode-subagents-off.args"
+  : >"$record"
   run_plan_invoke_test_write_stub "opencode" "$record"
-  export RALPH_PLAN_SUBAGENTS=off
+  export RALPH_PLAN_NATIVE_SUBAGENTS=off
   export PROMPT="opencode-subagents-off"
   export RALPH_MODE=native
   run ralph_run_plan_invoke_opencode
-  [ "$status" -eq 0 ]
-  [ -s "$record" ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents=off"* ]]
+  [[ "$output" == *"unsupported for runtime opencode"* ]]
+  ! grep -Fxq -- "run" "$record"
 }
 
 @test "opencode restores project-local package metadata mutated by the CLI" {
@@ -116,4 +119,51 @@ EOF
   run ralph_run_plan_invoke_opencode
   [ "$status" -eq 0 ]
   jq -e --arg pattern "$control_dir/**" '.permission.external_directory[$pattern] == "allow"' "$captured_config" >/dev/null
+}
+
+@test "opencode invoke ignores portable-profile model context config" {
+  local record="$TEST_TMPDIR/opencode-no-profile.args"
+  run_plan_invoke_test_write_stub "opencode" "$record"
+
+  # Legacy portable-profile fields must not become OpenCode argv/config.
+  # Native primary remains `--agent build`. Model comes only from SELECTED_MODEL
+  # (prior TODOs); unset => native default.
+  export PREBUILT_AGENT=implementation
+  export PREBUILT_AGENT_CONTEXT=$'## profile context\nmust-not-appear-in-argv'
+  export RALPH_AGENT_MAX_BUDGET=7.25
+  export RALPH_AGENT_NATIVE_NAME=implementation
+  export RALPH_AGENT_NATIVE_PASSTHROUGH=1
+  export PROMPT="opencode-primary-default-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_opencode
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  grep -Fxq -- "run" "$record"
+  grep -Fxq -- "--agent" "$record"
+  grep -Fxq -- "build" "$record"
+  ! grep -Fxq -- "--model" "$record"
+  ! grep -Fxq -- "--max-budget-usd" "$record"
+  ! grep -Fxq -- "implementation" "$record"
+  ! grep -Fq -- "must-not-appear-in-argv" "$record"
+  grep -Fxq -- "opencode-primary-default-turn" "$record"
+}
+
+@test "opencode invoke honors SELECTED_MODEL without profile reads" {
+  local record="$TEST_TMPDIR/opencode-selected-model.args"
+  run_plan_invoke_test_write_stub "opencode" "$record"
+
+  export PREBUILT_AGENT=implementation
+  export SELECTED_MODEL="opencode-resolved-model"
+  export PROMPT="opencode-model-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_opencode
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--model" "$record"
+  grep -Fxq -- "opencode-resolved-model" "$record"
+  grep -Fxq -- "--agent" "$record"
+  grep -Fxq -- "build" "$record"
+  ! grep -Fxq -- "implementation" "$record"
 }

@@ -5,6 +5,8 @@ source "$BATS_TEST_DIRNAME/../../helper/load-lib.bash"
 PLUGIN_ROOT="$REPO_ROOT/plugins/ralph-orchestrator/cursor"
 SETUP_HELPERS_SH="$REPO_ROOT/bundle/.ralph/bash-lib/setup/setup-helpers.sh"
 SETUP_MCP_SH="$REPO_ROOT/bundle/.ralph/bash-lib/setup/setup-mcp.sh"
+CANONICAL_WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
+OBSOLETE_WORKFLOWS=(ralph-agents ralph-graph ralph-orchestrate)
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -15,7 +17,7 @@ teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
-@test "Cursor plugin contains manifest, six agents, skill, rules, hooks, MCP, workflows, and metadata" {
+@test "Cursor plugin contains manifest, skill, rules, hooks, MCP, workflows, and metadata" {
   [ -f "$PLUGIN_ROOT/host-manifest.json" ]
   [ -f "$PLUGIN_ROOT/.cursor-plugin/plugin.json" ]
   [ -f "$PLUGIN_ROOT/skills/repo-context/SKILL.md" ]
@@ -23,13 +25,17 @@ teardown() {
   [ -f "$PLUGIN_ROOT/mcp.example.json" ]
   [ -f "$PLUGIN_ROOT/.ralph-plugin-generated.json" ]
 
-  local id workflow
-  for id in architect code-review implementation qa research security; do
-    [ -f "$PLUGIN_ROOT/agents/$id.md" ]
-  done
-  for workflow in ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status; do
+  [ ! -d "$PLUGIN_ROOT/agents" ]
+  [ ! -d "$PLUGIN_ROOT/roles" ]
+
+  local workflow
+  for workflow in "${CANONICAL_WORKFLOWS[@]}"; do
     [ -f "$PLUGIN_ROOT/workflows/$workflow.md" ]
     [ -f "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
+  done
+  for workflow in "${OBSOLETE_WORKFLOWS[@]}"; do
+    [ ! -e "$PLUGIN_ROOT/workflows/$workflow.md" ]
+    [ ! -e "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
   done
   [ "$(find "$PLUGIN_ROOT/rules" -maxdepth 1 -type f -name '*.mdc' | wc -l | tr -d ' ')" -eq 2 ]
   [ "$(find "$PLUGIN_ROOT/hooks" -maxdepth 1 -type f -name '*.sh' | wc -l | tr -d ' ')" -eq 7 ]
@@ -94,4 +100,35 @@ EOF
     .mcpServers.ralph.env.RALPH_MODE == "hybrid" and
     .operatorSetting.keep == true
   ' "$runtime_dir/mcp.json"
+}
+
+@test "Cursor owned-copy install and remove leave native project config byte-identical" {
+  local project="$TEST_TMPDIR/project"
+  local home="$TEST_TMPDIR/home"
+  local target="$home/.cursor/plugins/local/ralph-orchestrator"
+  local native="$project/.cursor/mcp.json"
+  local before after
+
+  mkdir -p "$project/.cursor" "$(dirname "$target")"
+  cat >"$native" <<'EOF'
+{
+  "mcpServers": {
+    "native": { "command": "keep-me" }
+  }
+}
+EOF
+  before="$(shasum -a 256 "$native" | awk '{print $1}')"
+
+  cp -R "$PLUGIN_ROOT" "$target"
+  [ -f "$target/.cursor-plugin/plugin.json" ]
+  after="$(shasum -a 256 "$native" | awk '{print $1}')"
+  [ "$before" = "$after" ]
+
+  # Simulate a modified copied file remaining after partial drift; package remove
+  # of the owned tree must still leave the operator native config untouched.
+  printf 'operator-edit\n' >>"$target/hooks.json"
+  rm -rf "$target"
+  [ ! -e "$target" ]
+  after="$(shasum -a 256 "$native" | awk '{print $1}')"
+  [ "$before" = "$after" ]
 }

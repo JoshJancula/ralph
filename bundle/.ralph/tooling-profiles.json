@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "raw": {
+      "description": "Ralph MCP and proxy-shell/native-result compaction disabled: RALPH_MODE=no leaves native hooks off and Ralph MCP unused, so output flows through unmodified. Named 'raw' rather than 'native' because Ralph's RALPH_MODE=native means native hooks on with MCP off, which is nearly the opposite of this profile.",
+      "env": {
+        "RALPH_MODE": "no",
+        "RALPH_PROXY_SHELL_COMPACT": "0",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "0",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-read-heavy": {
+      "description": "Ralph MCP active with proxy-shell compaction on for known-noise command families, but the generic fallback stays off so unknown large output is left untouched. RALPH_NATIVE_RESULT_COMPACT stays 0 because it windows read/grep/glob output, which IS source output; preserving source output is the baseline for every Ralph profile except ralph-aggressive.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "0",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-compact": {
+      "description": "Ralph MCP active with proxy-shell compaction on and the generic fallback enabled at a conservative 16384-byte threshold, so unknown large shell output beyond that size is also compacted. RALPH_COMPACT_GENERIC_FALLBACK is the real aggressiveness dial for unknown commands. RALPH_NATIVE_RESULT_COMPACT stays 0 to keep source output (read/grep/glob) untouched, matching every profile except ralph-aggressive.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "1",
+        "RALPH_COMPACT_GENERIC_THRESHOLD_BYTES": "16384",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-aggressive": {
+      "description": "Ralph MCP active with proxy-shell compaction on, the generic fallback lowered to a 4096-byte threshold for maximum unknown-output trimming, and RALPH_NATIVE_RESULT_COMPACT enabled to also window native read/grep/glob source output. This is the only profile that compacts source output; all other profiles leave it untouched by design.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "1",
+        "RALPH_COMPACT_GENERIC_THRESHOLD_BYTES": "4096",
+        "RALPH_NATIVE_RESULT_COMPACT": "1"
+      }
+    }
+  }
+}

@@ -22,10 +22,10 @@ write_valid_fixture() {
     "$repo/bundle/.ralph/plugin-inputs/adapters" \
     "$repo/bundle/.ralph/plugin-inputs/contracts" \
     "$repo/bundle/.ralph/plugin-inputs/templates/claude" \
-    "$repo/bundle/.claude/agents/architect" \
+    "$repo/bundle/.ralph/plugin-inputs/shared" \
     "$repo/bundle/.opencode/plugins" \
     "$repo/plugins/ralph-orchestrator"
-  printf 'agent\n' >"$repo/bundle/.claude/agents/architect/architect.md"
+  printf '#!/bin/bash\necho bootstrap\n' >"$repo/bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh"
   printf 'export const Plugin = {}\n' >"$repo/bundle/.opencode/plugins/ralph-runtime-hooks.ts"
   printf '{\n  "id": "{{PLUGIN_ID}}"\n}\n' >"$repo/bundle/.ralph/plugin-inputs/templates/claude/host-manifest.json"
   printf '0.1.0-beta.1\n' >"$repo/plugins/ralph-orchestrator/VERSION"
@@ -42,7 +42,6 @@ write_valid_fixture() {
     "command": "ralph",
     "pluginApi": 1
   },
-  "agents": ["architect"],
   "workflows": ["ralph-status"],
   "contracts": {
     "antigravity": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",
@@ -68,9 +67,9 @@ EOF
   },
   "copies": [
     {
-      "source": "bundle/.claude/agents/architect/architect.md",
-      "destination": "agents/architect.md",
-      "mode": "0644"
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
+      "destination": "shared/ralph-plugin-bootstrap.sh",
+      "mode": "0755"
     }
   ],
   "templates": [
@@ -143,6 +142,71 @@ EOF
   [ "$before" = "$after" ]
 }
 
+@test "nativeSubagents delegatedRuns preserve task artifact tooling runtime workspace" {
+  local repo="$TEST_TMPDIR/common-contract"
+  write_valid_fixture "$repo"
+  python3 - "$repo/bundle/.ralph/plugin-inputs/contracts/antigravity.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+data.update({
+    "task": "keep this task",
+    "artifact": {"produces": ["artifacts/result.md"]},
+    "tooling": {"profile": "ralph-compact"},
+    "runtime": "antigravity",
+    "workspace": {"mode": "snapshot"},
+    "nativeSubagents": "inherit",
+    "delegatedRuns": {"mode": "off"},
+})
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+  run load_inputs "$repo"
+  [ "$status" -eq 0 ]
+}
+
+@test "rejects removed agent/role and old delegation fields" {
+  local repo="$TEST_TMPDIR/removed-agent"
+  write_valid_fixture "$repo"
+  python3 - "$repo/bundle/.ralph/plugin-inputs/plugin.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+data["agents"] = ["architect"]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+  run load_inputs "$repo"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"profile field was removed"* ]]
+  [[ "$output" == *"no plugin roles"* ]]
+
+  python3 - "$repo/bundle/.ralph/plugin-inputs/plugin.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+data.pop("agents", None)
+data["delegation"] = {"crossRuntime": {"mode": "read-only"}}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+  run load_inputs "$repo"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"old delegation fields were removed"* ]]
+}
+
 @test "rejects literal credentials" {
   local repo="$TEST_TMPDIR/credentials"
   write_valid_fixture "$repo"
@@ -178,8 +242,8 @@ open(path,"a").write("\n")
   local outside="$TEST_TMPDIR/outside-secret.md"
   write_valid_fixture "$repo"
   printf 'escaped\n' >"$outside"
-  rm -f "$repo/bundle/.claude/agents/architect/architect.md"
-  ln -s "$outside" "$repo/bundle/.claude/agents/architect/architect.md"
+  rm -f "$repo/bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh"
+  ln -s "$outside" "$repo/bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh"
   run load_inputs "$repo"
   [ "$status" -ne 0 ]
   [[ "$output" == *"symlink"* ]]

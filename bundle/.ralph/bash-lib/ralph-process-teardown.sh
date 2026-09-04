@@ -282,9 +282,11 @@ ralph_run_plan_agent_teardown() {
   fi
   RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE=1
 
-  # The durable registry owns runtime processes. Stop its verified sessions
-  # before touching the legacy shell wrapper group so a live runtime cannot
-  # replace children while teardown walks a stale snapshot.
+  # The durable registry owns runtime processes. Stop verified agent/runtime
+  # sessions before touching the legacy shell wrapper group. Durable background
+  # job scopes (kind=bg-job) are preserved across per-invocation teardown so
+  # stop-hook / invocation-boundary waiters and the completion gate can still
+  # observe running jobs; plan-exit teardown finalizes them.
   if declare -F ralph_process_stop_active >/dev/null 2>&1; then
     ralph_process_stop_active "agent-teardown" || true
   fi
@@ -315,6 +317,26 @@ ralph_run_plan_agent_teardown() {
 }
 
 # Public alias used by run-plan exit and interrupt handlers.
+# Also finalizes durable background jobs that per-invocation agent teardown
+# intentionally preserves.
 ralph_run_plan_process_teardown_on_exit() {
+  local bg_reason="cancelled"
+
   ralph_run_plan_agent_teardown
+
+  case "${EXIT_STATUS:-}" in
+    interrupted) bg_reason="interrupted" ;;
+  esac
+
+  if ! declare -F ralph_run_plan_background_jobs_teardown >/dev/null 2>&1; then
+    local _ralph_bg_teardown_lib
+    _ralph_bg_teardown_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan/run-plan-bg-teardown.sh"
+    if [[ -f "$_ralph_bg_teardown_lib" ]]; then
+      # shellcheck source=run-plan/run-plan-bg-teardown.sh
+      source "$_ralph_bg_teardown_lib"
+    fi
+  fi
+  if declare -F ralph_run_plan_background_jobs_teardown >/dev/null 2>&1; then
+    ralph_run_plan_background_jobs_teardown "$bg_reason" || true
+  fi
 }

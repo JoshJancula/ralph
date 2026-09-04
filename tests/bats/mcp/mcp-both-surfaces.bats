@@ -166,9 +166,10 @@ STUB
       ralph_run_plan_invoke_claude_allowed_tools_list "Bash,Read" 0 0
     ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
   )"
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegate_start$'
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegate_wait$'
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegate_cancel$'
+  # The broker tools are namespaced ralph_delegated_run_* on the delegated-run surface.
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_start$'
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_wait$'
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_cancel$'
 }
 
 # ---- Preflight probe tool surface --------------------------------------------

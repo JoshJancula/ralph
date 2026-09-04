@@ -11,6 +11,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
     env:
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
       RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/cursor
@@ -31,6 +34,8 @@ jobs:
             echo 'mock: cursor local plugin install'
             exit 0
           fi
+          # Matches Cursor adapter owned-copy target:
+          # $HOME/.cursor/plugins/local/ralph-orchestrator
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >>"$GITHUB_PATH"
           mkdir -p "$HOME/.cursor/plugins/local"
@@ -59,9 +64,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
-            echo 'mock: ralph-agents'
+            echo 'mock: ralph-workflow'
           else
-            cursor-agent -p 'Run the installed ralph-agents discovery workflow only; do not modify files.'
+            cursor-agent -p 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
           fi
 
       - name: Uninstall repository plugin

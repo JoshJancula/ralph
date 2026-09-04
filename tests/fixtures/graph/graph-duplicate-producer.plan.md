@@ -4,12 +4,10 @@ pipeline:
   stages:
     - id: left
       runtime: cursor
-      agent: research
       produces:
         - path: shared/output.md
     - id: right
       runtime: cursor
-      agent: implementation
       produces:
         - path: shared/output.md
 todos:

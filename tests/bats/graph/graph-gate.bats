@@ -48,7 +48,7 @@ out_path, ns, profile_name, steps_raw, flaky_raw = sys.argv[1:]
 steps = json.loads(steps_raw)
 flaky = json.loads(flaky_raw)
 doc = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "ralphVersion": "1.0.0",
     "name": ns,
     "namespace": ns,
@@ -687,7 +687,7 @@ SCRIPT
   local graph_json="$tmpd/schema-integrate.graph.json"
 
   jq -n '{
-    schemaVersion: 1,
+    schemaVersion: 2,
     ralphVersion: "1.0.0",
     name: "schema-integrate",
     namespace: "schema-integrate",

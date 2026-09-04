@@ -28,7 +28,7 @@ make_publish_fixture() {
   git -C "$PROJECT" -c user.name=Ralph -c user.email=ralph@example.invalid \
     commit -qm "base"
   cat >"$GRAPH" <<JSON
-{"schemaVersion":1,"ralphVersion":"test","name":"publish-test","namespace":"publish-test","maxParallel":1,"failurePolicy":"drain","publishMode":"$mode","nodes":[{"id":"integrate","type":"integrate","dependsOn":[],"derivedFrom":"stage","stage":{"workspaceMode":"snapshot"}}],"edges":[]}
+{"schemaVersion":2,"ralphVersion":"test","name":"publish-test","namespace":"publish-test","maxParallel":1,"failurePolicy":"drain","publishMode":"$mode","nodes":[{"id":"integrate","type":"integrate","dependsOn":[],"derivedFrom":"stage","stage":{"workspaceMode":"snapshot"}}],"edges":[]}
 JSON
   printf '%s\n' '---' 'execution: graph' '---' >"$PLAN"
   jq -cn --arg plan "$PLAN" \
@@ -71,7 +71,6 @@ pipeline:
   stages:
     - id: one
       runtime: cursor
-      agent: implementation
 todos:
   - id: one-todo
     stage: one
@@ -212,6 +211,18 @@ PLAN
   [ "$status" -ne 0 ]
   [ "$(cat "$PROJECT/src/app.txt")" = "base" ]
   [ -d "$INTEGRATION" ]
+}
+
+@test "failed and cancelled runs retain isolated work before publish exists" {
+  make_publish_fixture manual
+  jq '.status = "failed" | del(.publish, .publishReadiness)' \
+    "$RUN_DIR/run.json" >"$RUN_DIR/run.json.next"
+  mv "$RUN_DIR/run.json.next" "$RUN_DIR/run.json"
+  graph_publish_should_retain "$RUN_DIR" "$GRAPH"
+
+  jq '.status = "cancelled"' "$RUN_DIR/run.json" >"$RUN_DIR/run.json.next"
+  mv "$RUN_DIR/run.json.next" "$RUN_DIR/run.json"
+  graph_publish_should_retain "$RUN_DIR" "$GRAPH"
 }
 
 @test "incomplete delegation and integration conflict refuse publish" {

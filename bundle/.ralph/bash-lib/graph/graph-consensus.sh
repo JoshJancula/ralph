@@ -134,7 +134,11 @@ _graph_consensus_build_dissent_packet() {
 # for the adjudicator stage.  Defaults to claude/code-review when absent.
 _graph_consensus_dispatch_adjudicator() {
   local workspace="$1" namespace="$2" run_id="$3" node_id="$4"
-  local voters_result_json="$5" policy_cfg_json="${6:-{}}"
+  local voters_result_json="$5" policy_cfg_json="${6:-}"
+  # Not "${6:-{}}": bash closes that expansion one brace early, so a provided
+  # value arrives with a stray trailing "}". Same defect this file documents at
+  # graph_consensus_run_join.
+  [[ -n "$policy_cfg_json" ]] || policy_cfg_json='{}'
 
   local adj_id="${node_id}-adjudicator"
   local adj_artifact
@@ -154,9 +158,9 @@ _graph_consensus_dispatch_adjudicator() {
   printf '%s\n' "$dissent_packet" > "$packet_path"
 
   # Extract adjudicator configuration from policy_cfg_json.
-  local adj_runtime adj_agent adj_model
+  local adj_runtime adj_role adj_model
   adj_runtime="$(printf '%s' "$policy_cfg_json" | jq -r '.runtime // "claude"')"
-  adj_agent="$(printf '%s' "$policy_cfg_json" | jq -r '.agent // "code-review"')"
+  adj_role="$(printf '%s' "$policy_cfg_json" | jq -r '.role // "code-review"')"
   adj_model="$(printf '%s' "$policy_cfg_json" | jq -r '.model // ""')"
 
   # Build the adjudicator todo content containing the full dissent packet.
@@ -192,7 +196,7 @@ Your verdict determines the final decision."
     --arg ns      "$namespace" \
     --arg adj_id  "$adj_id" \
     --arg rt      "$adj_runtime" \
-    --arg ag      "$adj_agent" \
+    --arg role    "$adj_role" \
     --arg mo      "$adj_model" \
     --arg content "$todo_content" \
     --arg art     "$adj_artifact" \
@@ -206,8 +210,8 @@ Your verdict determines the final decision."
         dependsOn: [],
         derivedFrom: "adjudicate",
         stage: (
-          {id: $adj_id, runtime: $rt, sessionStrategy: "fresh", subagents: "off"}
-          + (if $ag != "" then {agent: $ag} else {} end)
+          {id: $adj_id, runtime: $rt, sessionStrategy: "fresh", nativeSubagents: "off"}
+          + (if $role != "" then {role: $role} else {} end)
           + (if $mo != "" then {model: $mo} else {} end)
           + {
             _inlineTodos: [{
@@ -617,7 +621,7 @@ graph_consensus_run_join() {
   fi
 
   if ! graph_state_write_node "$workspace" "$namespace" "$run_id" "$node_id" \
-      "$ledger_state" "" "" "" "" "" "" "" ""; then
+      "$ledger_state"; then
     echo "Error: failed to update ledger for consensus join node $node_id" >&2
     return 1
   fi

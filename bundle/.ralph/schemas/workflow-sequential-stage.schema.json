@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "index",
+    "state",
+    "attempt",
+    "planPath",
+    "planRunId",
+    "planSourceKind",
+    "planSourceStageId",
+    "originalPlanPath",
+    "sourcePlanPath",
+    "controlPlanPath",
+    "currentTodoId",
+    "wave",
+    "terminalResult",
+    "blocker",
+    "completedTodos",
+    "totalTodos",
+    "artifacts",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "stale",
+        "failed",
+        "cancelled",
+        "succeeded"
+      ]
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "planPath": {
+      "type": ["string", "null"],
+      "pattern": "^/.+$"
+    },
+    "planRunId": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "planSourceKind": {
+      "type": ["string", "null"],
+      "enum": ["generated", "provided", null]
+    },
+    "planSourceStageId": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "originalPlanPath": {
+      "type": ["string", "null"],
+      "pattern": "^/.+$"
+    },
+    "sourcePlanPath": {
+      "type": ["string", "null"],
+      "pattern": "^/.+$"
+    },
+    "controlPlanPath": {
+      "type": ["string", "null"],
+      "pattern": "^/.+$"
+    },
+    "currentTodoId": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "wave": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "terminalResult": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "blocker": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "requestId",
+        "reasonCode",
+        "retryable",
+        "changesTarget",
+        "action"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["approval", "input"]
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "reasonCode": {
+          "type": "string",
+          "enum": [
+            "operator-request",
+            "operator-input",
+            "human-approval",
+            "human-changes-requested",
+            "unmet-dependency",
+            "failed-prerequisite",
+            "missing-artifact",
+            "invalid-artifact",
+            "loop-exhausted",
+            "cycle",
+            "live-owner",
+            "stale-owner",
+            "stage-failed",
+            "cancelled",
+            "none"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "changesTarget": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "action": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["label", "argv"],
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "argv": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "completedTodos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "totalTodos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

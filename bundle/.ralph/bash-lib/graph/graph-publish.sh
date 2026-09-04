@@ -41,7 +41,7 @@ graph_publish_filesystem_identity() {
 
 graph_publish_recovery_command() {
   local plan_path="$1" namespace="$2" run_id="$3"
-  printf 'ralph graph resume %q --namespace %q --run %q' "$plan_path" "$namespace" "$run_id"
+  printf 'ralph workflow resume %q' "$run_id"
 }
 
 graph_publish_update_run() {
@@ -131,7 +131,8 @@ graph_publish_refuse() {
   graph_publish_update_run "$run_dir/run.json" "$mode" refused "$handoff" "$detail" || return 1
   graph_publish_log "$log_file" "refused detail=$detail integration=$integration"
   echo "Error: graph publish refused: $detail" >&2
-  echo "Recovery: $recovery" >&2
+  echo "Next: $command" >&2
+  echo "Recovery record: $recovery" >&2
   return 1
 }
 
@@ -370,9 +371,13 @@ graph_publish_finalize() {
 }
 
 graph_publish_should_retain() {
-  local run_dir="$1" graph_json="$2" mode status
+  local run_dir="$1" graph_json="$2" mode status run_status
   mode="$(jq -r '.publishMode // "manual"' "$graph_json" 2>/dev/null || echo manual)"
   status="$(jq -r '.publish.status // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  run_status="$(jq -r '.status // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  # Failed and cancelled runs retain their isolated workspaces so the
+  # operator can inspect evidence and resume without discarding partial work.
+  [[ "$run_status" == "failed" || "$run_status" == "cancelled" ]] && return 0
   [[ "$mode" == "manual" && "$status" == "ready" ]] && return 0
   [[ "$status" == "refused" || "$status" == "rolled-back" ]] && return 0
   return 1

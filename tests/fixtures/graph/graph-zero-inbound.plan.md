@@ -4,20 +4,16 @@ pipeline:
   stages:
     - id: alpha
       runtime: cursor
-      agent: research
       produces:
         - path: shared/input.md
     - id: beta
       runtime: cursor
-      agent: implementation
     - id: gamma
       runtime: cursor
-      agent: implementation
       dependsOn:
         - alpha
     - id: delta
       runtime: cursor
-      agent: implementation
       requires:
         - path: external/input.md
 todos:

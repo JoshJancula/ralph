@@ -7,7 +7,9 @@
 # is a newline-delimited list of project-relative files or directories that
 # must not enter the base. Documented cache directories are excluded by the
 # capture helper: .cache, node_modules, __pycache__, .pytest_cache,
-# .mypy_cache, .ruff_cache, .tox, .venv, and any .git directory.
+# .mypy_cache, .ruff_cache, .tox, .venv, and any .git directory. Control and
+# state roots (.ralph, .ralph-workspace, and the resolved state root) are
+# excluded by resolved identity so a nested or symlinked name cannot leak.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "This file is meant to be sourced, not executed." >&2

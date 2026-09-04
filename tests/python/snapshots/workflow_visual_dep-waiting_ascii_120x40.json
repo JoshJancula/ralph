@@ -1,0 +1,752 @@
+{
+  "width": 120,
+  "height": 40,
+  "plain": [
+    "Ralph fixture-dep-waves  feature-delivery | Dependency",
+    "Task  Ship the feature with an intentionally long task summary",
+    "WAITING  Elapsed 2m 0s  Updated 30s ago  Stages 1/4",
+    "failed 1  waiting 1  blocked 1",
+    "[###########-------------------------------] 1/4",
+    "the run is waiting for the operator to decide an approval gate",
+    "Progress tree",
+    "Wave 0",
+    "  succeeded  research",
+    "  failed     implement 1/4",
+    "Wave 1",
+    "> waiting    approve-plan",
+    "Wave 2",
+    "  blocked    integrate",
+    "+- Selected stage -----------------------------------------------------------------------------------------------------+",
+    "| approve-plan  approval  waiting                                                                                      |",
+    "| Next  answer the outstanding request                                                                                 |",
+    "| Question  Approve the implementation plan?                                                                           |",
+    "| Request  outstanding                                                                                                 |",
+    "| Changes target  implement                                                                                            |",
+    "| Attempt  1  Duration  30s                                                                                            |",
+    "| Blocker  approval (outstanding)                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "+----------------------------------------------------------------------------------------------------------------------+"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-waves",
+        "role": "path",
+        "width": 17
+      },
+      {
+        "col": 25,
+        "text": "feature-delivery",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 41,
+        "text": " | Dependency",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Ship the feature with an intentionally long task summary                                                          ",
+        "role": "default",
+        "width": 114
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "WAITING",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 17,
+        "text": "2m 0s",
+        "role": "default",
+        "width": 5
+      },
+      {
+        "col": 22,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 32,
+        "text": "30s ago",
+        "role": "default",
+        "width": 7
+      },
+      {
+        "col": 39,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 48,
+        "text": "1/4                                                                     ",
+        "role": "default",
+        "width": 72
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "failed ",
+        "role": "muted",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "1",
+        "role": "failure",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "waiting ",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 18,
+        "text": "1",
+        "role": "warning",
+        "width": 1
+      },
+      {
+        "col": 21,
+        "text": "blocked 1",
+        "role": "muted",
+        "width": 9
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "###########",
+        "role": "success",
+        "width": 11
+      },
+      {
+        "col": 12,
+        "text": "-------------------------------] ",
+        "role": "muted",
+        "width": 33
+      },
+      {
+        "col": 45,
+        "text": "1/4",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "the run is waiting for the operator to decide an approval gate",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Progress tree",
+        "role": "heading",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Wave 0",
+        "role": "muted",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 1,
+        "text": " succeeded  ",
+        "role": "success",
+        "width": 12
+      },
+      {
+        "col": 13,
+        "text": "research                                                                                                   ",
+        "role": "default",
+        "width": 107
+      }
+    ],
+    [
+      {
+        "col": 1,
+        "text": " failed     ",
+        "role": "failure",
+        "width": 12
+      },
+      {
+        "col": 13,
+        "text": "implement",
+        "role": "default",
+        "width": 9
+      },
+      {
+        "col": 22,
+        "text": " 1/4",
+        "role": "muted",
+        "width": 4
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Wave 1",
+        "role": "muted",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> waiting    approve-plan                                                                                               ",
+        "role": "focus",
+        "width": 120
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Wave 2",
+        "role": "muted",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 1,
+        "text": " blocked    ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 13,
+        "text": "integrate                                                                                                  ",
+        "role": "default",
+        "width": 107
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-----------------------------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 102
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "approve-plan",
+        "role": "heading",
+        "width": 12
+      },
+      {
+        "col": 16,
+        "text": "approval",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 26,
+        "text": "waiting",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 8,
+        "text": "answer the outstanding request",
+        "role": "command",
+        "width": 30
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Question  ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "Approve the implementation plan?                                                                           ",
+        "role": "default",
+        "width": 107
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Request  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "outstanding",
+        "role": "warning",
+        "width": 11
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Changes target  ",
+        "role": "muted",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "implement",
+        "role": "path",
+        "width": 9
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "30s                                                                                            ",
+        "role": "default",
+        "width": 95
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Blocker  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "approval (outstanding)",
+        "role": "warning",
+        "width": 22
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+----------------------------------------------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 120
+      }
+    ]
+  ]
+}

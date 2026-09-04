@@ -1,0 +1,458 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "Ralph fixture-dep-succeeded  plan-delivery | Dependency",
+    "Task  Execute supplied plan",
+    "SUCCEEDED  Elapsed 2m 0s  Updated just now  Stages 1/1",
+    "[##########################################] 1/1",
+    "no blocking condition was found",
+    "Progress tree",
+    "> succeeded  \u2500\u2500 integrate",
+    "+- Selected stage -------------------------------------------------------------+",
+    "| integrate  supervisor  succeeded                                             |",
+    "| Attempt  1  Duration  1m 0s                                                  |",
+    "| Artifacts  integration.json                                                  |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "+------------------------------------------------------------------------------+"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-succeeded",
+        "role": "path",
+        "width": 21
+      },
+      {
+        "col": 29,
+        "text": "plan-delivery",
+        "role": "heading",
+        "width": 13
+      },
+      {
+        "col": 42,
+        "text": " | Dependency",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Execute supplied plan                                                     ",
+        "role": "default",
+        "width": 74
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "SUCCEEDED",
+        "role": "success",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 19,
+        "text": "2m 0s",
+        "role": "default",
+        "width": 5
+      },
+      {
+        "col": 24,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 34,
+        "text": "just now",
+        "role": "default",
+        "width": 8
+      },
+      {
+        "col": 42,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 51,
+        "text": "1/1                          ",
+        "role": "default",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "##########################################",
+        "role": "success",
+        "width": 42
+      },
+      {
+        "col": 43,
+        "text": "] ",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 45,
+        "text": "1/1",
+        "role": "success",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "no blocking condition was found",
+        "role": "muted",
+        "width": 31
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Progress tree",
+        "role": "heading",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> succeeded  \u2500\u2500 integrate                                                       ",
+        "role": "focus",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-------------------------------------------------------------+",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "integrate",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 13,
+        "text": "supervisor",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 25,
+        "text": "succeeded",
+        "role": "success",
+        "width": 9
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "1m 0s                                                  ",
+        "role": "default",
+        "width": 55
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Artifacts  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "integration.json",
+        "role": "path",
+        "width": 16
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}

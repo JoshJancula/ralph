@@ -28,33 +28,51 @@ pipeline:
   stages:
     - id: plan-shards
       runtime: claude
-      agent: architect
+      instructions: Design the approach and record the decision.
       planFile: .ralph-workspace/plans/GRAPH_PLAN_NAMESPACE_HERE-parallel/00-plan-shards.plan.md
       workspaceMode: snapshot
       agentGitAccess: off
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/shard-plan.md
+          required: true
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/ownership-map.json
+          required: true
 
     # Add two to four lanes. Every lane needs a unique planFile and a disjoint
     # project-relative writeScopes entry. Snapshot is the safe default.
     - id: lane-1
       runtime: cursor
-      agent: implementation
+      instructions: Implement the change end to end and write the handoff artifact.
       planFile: .ralph-workspace/plans/GRAPH_PLAN_NAMESPACE_HERE-parallel/01-lane-1.plan.md
       dependsOn: [plan-shards]
       workspaceMode: snapshot
       agentGitAccess: off
       writeScopes: [src/lane-1/**]
+      requires:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/shard-plan.md
+          required: true
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/ownership-map.json
+          required: true
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/lane-1-verification.md
+          required: true
 
     - id: lane-2
       runtime: codex
-      agent: implementation
+      instructions: Implement the change end to end and write the handoff artifact.
       planFile: .ralph-workspace/plans/GRAPH_PLAN_NAMESPACE_HERE-parallel/02-lane-2.plan.md
       dependsOn: [plan-shards]
       workspaceMode: snapshot
       agentGitAccess: off
       writeScopes: [src/lane-2/**]
+      requires:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/shard-plan.md
+          required: true
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/ownership-map.json
+          required: true
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/parallel/lane-2-verification.md
+          required: true
 
     - id: full-gate
       type: gate
@@ -65,23 +83,19 @@ pipeline:
       type: consensus
       policy: veto
       dependsOn: [full-gate]
-      subagents: off
       voters:
         - id: cursor-review
           runtime: cursor
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
           sessionStrategy: fresh
-          subagents: off
         - id: codex-review
           runtime: codex
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
           sessionStrategy: fresh
-          subagents: off
         - id: claude-review
           runtime: claude
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
           sessionStrategy: fresh
-          subagents: off
 
     - id: review-decision
       type: join
@@ -103,12 +117,12 @@ pipeline:
       profile: fast
     diagnose:
       runtime: claude
-      agent: architect
+      instructions: Design the approach and record the decision.
       content: Route each fast-gate finding through the frozen ownership map to exactly one repair lane.
     lanes:
       - id: lane-1
         runtime: cursor
-        agent: implementation
+        instructions: Implement the change end to end and write the handoff artifact.
         planFile: .ralph-workspace/plans/GRAPH_PLAN_NAMESPACE_HERE-parallel/01-lane-1.plan.md
         workspaceMode: snapshot
         agentGitAccess: off
@@ -116,7 +130,7 @@ pipeline:
         content: Repair only lane-1 findings; do not widen its scope or mutate the graph.
       - id: lane-2
         runtime: codex
-        agent: implementation
+        instructions: Implement the change end to end and write the handoff artifact.
         planFile: .ralph-workspace/plans/GRAPH_PLAN_NAMESPACE_HERE-parallel/02-lane-2.plan.md
         workspaceMode: snapshot
         agentGitAccess: off

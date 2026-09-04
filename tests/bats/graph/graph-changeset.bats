@@ -17,7 +17,6 @@ pipeline:
   stages:
     - id: build
       runtime: cursor
-      agent: implementation
       workspaceMode: snapshot
       agentGitAccess: off
       writeScopes:
@@ -307,12 +306,10 @@ pipeline:
   stages:
     - id: left
       runtime: cursor
-      agent: implementation
       workspaceMode: snapshot
       writeScopes: [src/**]
     - id: right
       runtime: codex
-      agent: implementation
       workspaceMode: snapshot
       writeScopes: [src/api/**]
 todos:
@@ -338,7 +335,6 @@ pipeline:
   stages:
     - id: build
       runtime: cursor
-      agent: implementation
       workspaceMode: worktree
       writeScopes: [src/**]
 todos:
@@ -369,7 +365,7 @@ PLAN
   python3 "$CHANGESET_HELPER" baseline --workspace "$workspace" --output "$baseline" >/dev/null
   core="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
   eval "$(sed -n '/^ralph_graph_write_scope_verify_todo()/,/^}/p' "$core")"
-  ralph_run_plan_log() { :; }
+  ralph_run_plan_log() { printf '%s\n' "$*"; }
   export WORKSPACE="$workspace"
   export RALPH_AGENT_WORKSPACE="$workspace"
   export RALPH_PLAN_WORKSPACE_ROOT="$tmpd/state"
@@ -391,4 +387,7 @@ PLAN
   printf 'invalid\n' >"$workspace/docs/invalid.txt"
   run ralph_graph_write_scope_verify_todo todo-2
   [ "$status" -ne 0 ]
+  [[ "$output" == *"changeset scope verification failed"* ]]
+  [[ "$output" == *"docs/invalid.txt"* ]]
+  [[ "$output" == *"graph write-scope verification failed before TODO completion: todo-2"* ]]
 }

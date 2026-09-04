@@ -8,9 +8,15 @@
       "category": "exact_symbol",
       "query": "ralph_run_plan_merge_prompt",
       "search_path": "bundle/.ralph/bash-lib/run-plan",
-      "relevant_paths": ["bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"],
-      "line_hints": [556],
-      "symbol_hints": ["ralph_run_plan_merge_prompt"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+      ],
+      "line_hints": [
+        556
+      ],
+      "symbol_hints": [
+        "ralph_run_plan_merge_prompt"
+      ],
       "rationale": "Exact shell function that merges stable and volatile prompt segments."
     },
     {
@@ -18,9 +24,15 @@
       "category": "exact_symbol",
       "query": "score_candidate filepath content terms",
       "search_path": "bundle/.ralph/python",
-      "relevant_paths": ["bundle/.ralph/python/mcp-proxy-search-rank.py"],
-      "line_hints": [76],
-      "symbol_hints": ["score_candidate"],
+      "relevant_paths": [
+        "bundle/.ralph/python/mcp-proxy-search-rank.py"
+      ],
+      "line_hints": [
+        76
+      ],
+      "symbol_hints": [
+        "score_candidate"
+      ],
       "rationale": "BM25 scoring entry point for lexical search ranking."
     },
     {
@@ -28,9 +40,15 @@
       "category": "exact_symbol",
       "query": "ralph_mcp_proxy_owned_tool_search",
       "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": ["bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"],
-      "line_hints": [2427],
-      "symbol_hints": ["ralph_mcp_proxy_owned_tool_search"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
+      ],
+      "line_hints": [
+        2427
+      ],
+      "symbol_hints": [
+        "ralph_mcp_proxy_owned_tool_search"
+      ],
       "rationale": "Owned-tool handler wiring candidate gather and rank for ralph_proxy_search."
     },
     {
@@ -41,8 +59,12 @@
         "bundle/.ralph/python/tool_call_classification.py",
         "tests/python/test_tool_call_classification.py"
       ],
-      "line_hints": [97],
-      "symbol_hints": ["classify_tool_calls"],
+      "line_hints": [
+        97
+      ],
+      "symbol_hints": [
+        "classify_tool_calls"
+      ],
       "rationale": "Telemetry bucket classifier; tests are acceptable hits for symbol lookup."
     },
     {
@@ -54,8 +76,12 @@
         "bundle/.ralph/python/continuation_summary.py",
         "tests/python/test_continuation_summary.py"
       ],
-      "line_hints": [373],
-      "symbol_hints": ["render_markdown"],
+      "line_hints": [
+        373
+      ],
+      "symbol_hints": [
+        "render_markdown"
+      ],
       "rationale": "Renders the between-todo continuation summary block."
     },
     {
@@ -73,14 +99,20 @@
       "id": "concept-three-root-model",
       "category": "conceptual",
       "query": "three root model project state agent workspace",
-      "relevant_paths": ["AGENTS.md", "docs/AGENT-WORKFLOW.md"],
+      "relevant_paths": [
+        "AGENTS.md",
+        "docs/AGENT-WORKFLOW.md"
+      ],
       "rationale": "Architecture doc explaining project root, state root, and agent workspace separation."
     },
     {
       "id": "concept-session-resume",
       "category": "conceptual",
       "query": "CLI session resume session-id runtime",
-      "relevant_paths": ["docs/ENVIRONMENT.md", "AGENTS.md"],
+      "relevant_paths": [
+        "docs/ENVIRONMENT.md",
+        "AGENTS.md"
+      ],
       "rationale": "Documentation for per-runtime session resume behavior."
     },
     {
@@ -89,8 +121,7 @@
       "query": "changes-required feedback loopback verbatim",
       "relevant_paths": [
         "bundle/.ralph/bash-lib/run-plan/run-plan-loopback.sh",
-        "docs/AGENT-WORKFLOW.md",
-        "docs/cookbook-review/BACKLOG.md"
+        "docs/AGENT-WORKFLOW.md"
       ],
       "rationale": "Loopback path and docs describing evaluator feedback injection."
     },
@@ -99,9 +130,15 @@
       "category": "shell_function",
       "query": "ralph_mcp_proxy_load_policy",
       "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": ["bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh"],
-      "line_hints": [460],
-      "symbol_hints": ["ralph_mcp_proxy_load_policy"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-policy.sh"
+      ],
+      "line_hints": [
+        460
+      ],
+      "symbol_hints": [
+        "ralph_mcp_proxy_load_policy"
+      ],
       "rationale": "Loads inline or file-based MCP proxy policy for owned tools."
     },
     {
@@ -109,9 +146,15 @@
       "category": "shell_function",
       "query": "ralph_mcp_proxy_owned_tool_search_gather_candidates",
       "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": ["bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"],
-      "line_hints": [2366],
-      "symbol_hints": ["ralph_mcp_proxy_owned_tool_search_gather_candidates"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
+      ],
+      "line_hints": [
+        2366
+      ],
+      "symbol_hints": [
+        "ralph_mcp_proxy_owned_tool_search_gather_candidates"
+      ],
       "rationale": "rg/grep candidate gathering used before BM25 ranking."
     },
     {
@@ -122,8 +165,12 @@
         "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh",
         "tests/bats/orchestration/orchestration-handoffs.bats"
       ],
-      "line_hints": [201],
-      "symbol_hints": ["inject_handoffs_into_plan"],
+      "line_hints": [
+        201
+      ],
+      "symbol_hints": [
+        "inject_handoffs_into_plan"
+      ],
       "rationale": "Orchestration handoff injection into downstream stage plans."
     },
     {
@@ -134,8 +181,12 @@
         "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh",
         "tests/python/test_artifact_schema_validator.py"
       ],
-      "line_hints": [64],
-      "symbol_hints": ["verify_stage_artifact_schemas"],
+      "line_hints": [
+        64
+      ],
+      "symbol_hints": [
+        "verify_stage_artifact_schemas"
+      ],
       "rationale": "Validates JSON artifacts against declared schemas before handoff."
     },
     {
@@ -146,8 +197,12 @@
         "bundle/.ralph/python/tool_call_target_telemetry.py",
         "tests/python/test_tool_call_target_telemetry.py"
       ],
-      "line_hints": [542],
-      "symbol_hints": ["optimization_hint_line"],
+      "line_hints": [
+        542
+      ],
+      "symbol_hints": [
+        "optimization_hint_line"
+      ],
       "rationale": "Builds telemetry hint recommending ralph_proxy_batch usage."
     },
     {
@@ -158,8 +213,12 @@
         "bundle/.ralph/python/evaluator_contract.py",
         "tests/python/test_evaluator_contract.py"
       ],
-      "line_hints": [118],
-      "symbol_hints": ["render_feedback_block"],
+      "line_hints": [
+        118
+      ],
+      "symbol_hints": [
+        "render_feedback_block"
+      ],
       "rationale": "Formats schema-validated evaluator feedback for loopback injection."
     },
     {
@@ -170,8 +229,12 @@
         "tests/python/ralph_script_loader.py",
         "tests/python/test_ralph_script_loader.py"
       ],
-      "line_hints": [103],
-      "symbol_hints": ["load_ralph_script"],
+      "line_hints": [
+        103
+      ],
+      "symbol_hints": [
+        "load_ralph_script"
+      ],
       "rationale": "Test helper that loads bundle/.ralph/python scripts by basename."
     },
     {
@@ -179,35 +242,49 @@
       "category": "python_helper",
       "query": "assert_supported_schema validate_instance",
       "search_path": "bundle/.ralph/python",
-      "relevant_paths": ["bundle/.ralph/python/artifact_json_schema.py"],
+      "relevant_paths": [
+        "bundle/.ralph/python/artifact_json_schema.py"
+      ],
       "rationale": "Stdlib JSON-schema-subset validator for orchestration artifacts."
     },
     {
       "id": "doc-mcp-proxy-tools",
       "category": "documentation",
       "query": "ralph_proxy_batch read-only operations",
-      "relevant_paths": ["docs/TOOLING.md", "docs/ENVIRONMENT.md"],
+      "relevant_paths": [
+        "docs/TOOLING.md",
+        "docs/ENVIRONMENT.md"
+      ],
       "rationale": "Operator documentation for MCP proxy batching policy."
     },
     {
       "id": "doc-agent-workflow-handoff",
       "category": "documentation",
       "query": "orchestration handoff artifact produces requires",
-      "relevant_paths": ["docs/AGENT-WORKFLOW.md", "AGENTS.md"],
+      "relevant_paths": [
+        "docs/AGENT-WORKFLOW.md",
+        "AGENTS.md"
+      ],
       "rationale": "Workflow doc describing stage artifact handoffs."
     },
     {
       "id": "doc-retrieval-cluster",
       "category": "documentation",
       "query": "contextual BM25 retrieval eval harness",
-      "relevant_paths": ["docs/cookbook-review/04-retrieval-rag.md"],
+      "relevant_paths": [
+        "docs/cookbook-review/04-retrieval-rag.md"
+      ],
       "rationale": "Cookbook cluster doc motivating retrieval measurement; heading match case."
     },
     {
       "id": "doc-install-three-roots",
       "category": "documentation",
       "query": "workspace registry state root install",
-      "relevant_paths": ["docs/INSTALL.md", "install.sh", "AGENTS.md"],
+      "relevant_paths": [
+        "docs/INSTALL.md",
+        "install.sh",
+        "AGENTS.md"
+      ],
       "rationale": "Install guide mentioning workspace layout and registry."
     },
     {
@@ -215,7 +292,9 @@
       "category": "tests",
       "query": "TestScoreCandidate definition pattern bonus",
       "search_path": "tests/python",
-      "relevant_paths": ["tests/python/test_mcp_proxy_search_rank.py"],
+      "relevant_paths": [
+        "tests/python/test_mcp_proxy_search_rank.py"
+      ],
       "rationale": "Unit tests asserting BM25 definition-pattern boosting behavior."
     },
     {
@@ -223,7 +302,9 @@
       "category": "tests",
       "query": "test_evaluator_contract changes-required feedback",
       "search_path": "tests/python",
-      "relevant_paths": ["tests/python/test_evaluator_contract.py"],
+      "relevant_paths": [
+        "tests/python/test_evaluator_contract.py"
+      ],
       "rationale": "Contract tests for evaluator JSON parsing and feedback rules."
     },
     {
@@ -231,7 +312,9 @@
       "category": "tests",
       "query": "ralph_proxy_search searchEnabled policy",
       "search_path": "tests/bats/mcp-proxy",
-      "relevant_paths": ["tests/bats/mcp-proxy/mcp-proxy-search.bats"],
+      "relevant_paths": [
+        "tests/bats/mcp-proxy/mcp-proxy-search.bats"
+      ],
       "rationale": "Bats integration tests for owned search tool policy gating."
     },
     {
@@ -239,35 +322,40 @@
       "category": "tests",
       "query": "test_continuation_summary render markdown",
       "search_path": "tests/python",
-      "relevant_paths": ["tests/python/test_continuation_summary.py"],
+      "relevant_paths": [
+        "tests/python/test_continuation_summary.py"
+      ],
       "rationale": "Python tests for continuation summary rendering."
     },
     {
       "id": "agent-config-tool",
       "category": "agent_configuration",
-      "query": "agent-config-tool.sh validate",
-      "search_path": "bundle/.ralph",
+      "query": "workflow_resource_candidate_path project global bundled",
+      "search_path": "bundle/.ralph/bash-lib/workflow",
       "relevant_paths": [
-        "bundle/.ralph/agent-config-tool.sh",
-        "bundle/.ralph/bash-lib/agent-config/validate.sh",
-        "bundle/.ralph/bash-lib/agent-config/cli.sh"
+        "bundle/.ralph/bash-lib/workflow/workflow-resource.sh"
       ],
-      "rationale": "Agent profile validation entry script and helpers."
+      "rationale": "Pure workflow resource resolver implementing project -> global -> bundled precedence, replacing the removed role frontmatter/source surface.",
+      "symbol_hints": [
+        "workflow_resource_candidate_path"
+      ]
     },
     {
       "id": "agent-code-review-md",
       "category": "agent_configuration",
-      "query": "code-review evaluator JSON contract",
-      "search_path": "bundle/.ralph/agents",
-      "relevant_paths": ["bundle/.ralph/agents/code-review.md"],
-      "rationale": "Canonical code-review agent instructions referencing evaluator output."
+      "query": "code review stage instructions and evidence",
+      "search_path": "bundle/.ralph/workflows",
+      "relevant_paths": [
+        "bundle/.ralph/workflows/feature-delivery.workflow.md",
+        "bundle/.ralph/workflows/bug-fix.workflow.md"
+      ],
+      "rationale": "Inline review stage instructions in the bundled workflows, replacing the removed code-review role document."
     },
     {
       "id": "agent-schema-readme",
       "category": "agent_configuration",
       "query": "mcp_servers reserved ralph server name",
       "relevant_paths": [
-        "bundle/.claude/agents/README.md",
         "AGENTS.md",
         "docs/TOOLING.md"
       ],
@@ -277,7 +365,10 @@
       "id": "orch-validate-schema-script",
       "category": "orchestration",
       "query": "validate-orchestration-schema.sh",
-      "relevant_paths": ["scripts/validate-orchestration-schema.sh", "AGENTS.md"],
+      "relevant_paths": [
+        "scripts/validate-orchestration-schema.sh",
+        "AGENTS.md"
+      ],
       "rationale": "Orchestration JSON schema validation script."
     },
     {
@@ -300,8 +391,12 @@
         "tests/bats/orchestration/orchestration-handoffs.bats",
         "AGENTS.md"
       ],
-      "line_hints": [102],
-      "symbol_hints": ["collect_incoming_handoffs"],
+      "line_hints": [
+        102
+      ],
+      "symbol_hints": [
+        "collect_incoming_handoffs"
+      ],
       "rationale": "Collects upstream artifacts required for a stage handoff block."
     },
     {
@@ -320,7 +415,9 @@
       "category": "plan_parsing",
       "query": "validate-plan classic yaml frontmatter",
       "search_path": "tests/bats/plan",
-      "relevant_paths": ["tests/bats/plan/validate-plan.bats"],
+      "relevant_paths": [
+        "tests/bats/plan/validate-plan.bats"
+      ],
       "rationale": "Bats coverage for classic and yaml plan format validation."
     },
     {
@@ -328,18 +425,26 @@
       "category": "mcp_policy",
       "query": "ralph_mcp_proxy_path_is_allowed",
       "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": ["bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"],
-      "line_hints": [798],
-      "symbol_hints": ["ralph_mcp_proxy_path_is_allowed"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
+      ],
+      "line_hints": [
+        798
+      ],
+      "symbol_hints": [
+        "ralph_mcp_proxy_path_is_allowed"
+      ],
       "rationale": "Path allowlist guard for proxy read/search/write operations."
     },
     {
       "id": "mcp-permission-classify-path",
       "category": "mcp_policy",
-      "query": "permission classify shell denial",
+      "query": "ralph_classify_permission_block shell denial",
       "search_path": "bundle/.ralph/bash-lib",
-      "relevant_paths": ["bundle/.ralph/bash-lib/permission-classify.sh"],
-      "rationale": "Difficult case: terms appear in filename more than on the definition line."
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/permission-classify.sh"
+      ],
+      "rationale": "Difficult case: filename-plus-symbol match. Uses the public entry symbol so graph-failure-classify.sh cannot monopolize generic classify tokens."
     },
     {
       "id": "mcp-search-rank-baseline",
@@ -357,7 +462,9 @@
       "category": "difficult_path_match",
       "query": "orchestrator handoffs inject plan stage",
       "search_path": "bundle/.ralph/bash-lib/orchestrator",
-      "relevant_paths": ["bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh"],
+      "relevant_paths": [
+        "bundle/.ralph/bash-lib/orchestrator/orchestrator-handoffs.sh"
+      ],
       "rationale": "Query terms match path segment orchestrator-handoffs more than a single line."
     },
     {
@@ -375,17 +482,25 @@
       "id": "difficult-heading-cookbook-backlog",
       "category": "difficult_path_match",
       "query": "retrieval eval harness precision recall MRR",
-      "relevant_paths": ["docs/cookbook-review/BACKLOG.md", "docs/cookbook-review/04-retrieval-rag.md"],
-      "rationale": "Table row and heading in backlog doc; query terms sparse on best line."
+      "relevant_paths": [
+        "docs/cookbook-review/04-retrieval-rag.md"
+      ],
+      "rationale": "Heading match in the retrieval cookbook doc; BACKLOG.md was removed so the gate tracks the surviving cluster page."
     },
     {
       "id": "difficult-symbol-nearby-normalize",
       "category": "difficult_path_match",
       "query": "normalize_terms query deduplicate",
       "search_path": "bundle/.ralph/python",
-      "relevant_paths": ["bundle/.ralph/python/mcp-proxy-search-rank.py"],
-      "line_hints": [32],
-      "symbol_hints": ["normalize_terms"],
+      "relevant_paths": [
+        "bundle/.ralph/python/mcp-proxy-search-rank.py"
+      ],
+      "line_hints": [
+        32
+      ],
+      "symbol_hints": [
+        "normalize_terms"
+      ],
       "rationale": "Conceptual wording; best hit is normalize_terms definition not literal query tokens."
     }
   ]

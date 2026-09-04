@@ -4,7 +4,6 @@ pipeline:
   stages:
     - id: prepare
       runtime: cursor
-      agent: implementation
       produces:
         - path: shared/prepared.md
     - id: gate-check
@@ -15,7 +14,6 @@ pipeline:
         - path: shared/prepared.md
     - id: finalize
       runtime: cursor
-      agent: implementation
       dependsOn:
         - id: gate-check
           condition: passed

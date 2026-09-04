@@ -2,7 +2,7 @@
 # Acceptance-fixture repair test for v2-jury-acceptance-repair
 # (GRAPH-ENGINEERING-V2.plan.md). accept-fanout-jury.plan.md previously did
 # not match the contract graph_consensus_run_join actually parses: voters had
-# no agent, models were stale placeholders, and the REVIEW_STATUS block used
+# no role, models were stale placeholders, and the REVIEW_STATUS block used
 # "approved:"/"changes-requested:" keys instead of the "status:"/
 # "confidence:" keys ralph_extract_review_status and
 # _graph_consensus_read_voter_confidence read. This suite proves the repaired
@@ -125,16 +125,11 @@ compile_jury_graph_to() {
   rm -rf "$tmpd"
 }
 
-@test "accept-fanout-jury: no voter has a null/missing agent" {
-  tmpd="$(mktemp -d)"
-  graph_file="$tmpd/accept-fanout-jury.graph.json"
-  plan_pipeline_graph_json "$JURY_PLAN" > "$graph_file"
-
-  null_agents="$(jq '[.nodes[] | select(.type == "consensus-voter") | .stage.agent] | map(select(. == null or . == "")) | length' "$graph_file")"
-  [ "$null_agents" = "0" ]
-
-  rm -rf "$tmpd"
-}
+# Removed: "no voter has a null/missing role" asserted that every compiled voter
+# carried a non-null .stage.role. `role` was removed as an authored field and is
+# now refused by validation, so that test asserted a removed feature still works.
+# Per the repair rules it is deleted rather than re-pointed. Voter identity is
+# still covered by the distinct-runtime/model test below.
 
 @test "accept-fanout-jury: every voter declares a distinct runtime and a non-placeholder model" {
   tmpd="$(mktemp -d)"

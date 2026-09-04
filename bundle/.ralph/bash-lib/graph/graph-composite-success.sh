@@ -90,6 +90,8 @@ graph_composite_success_validate() {
     GRAPH_COMPOSITE_SUCCESS_REASON="pending-human-request"; return 1
   fi
   stage="$(_graph_composite_success_stage "$graph" "$node_id")" || { GRAPH_COMPOSITE_SUCCESS_REASON="unknown-node"; return 1; }
+  # Required outputs are stage-declared only (outputArtifacts / artifacts).
+  # Roles and legacy profile output_artifacts never contribute completion evidence.
   while IFS=$'\t' read -r declared required || [[ -n "$declared" ]]; do
     [[ -n "$declared" ]] || continue
     if [[ "$required" == "true" && ! -s "$state_root/artifacts/$namespace/exchange/$declared" ]]; then

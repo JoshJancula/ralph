@@ -20,7 +20,7 @@ fi
 
 GRAPH_HEARTBEAT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! declare -F graph_state_read_run_v2 >/dev/null 2>&1; then
+if ! declare -F graph_state_read_run >/dev/null 2>&1; then
   # shellcheck source=./graph-state.sh
   source "$GRAPH_HEARTBEAT_SCRIPT_DIR/graph-state.sh"
 fi
@@ -94,12 +94,18 @@ graph_heartbeat_process_start_id_of_pid() {
     return 1
   fi
 
-  # Portable fallback: ps -o lstart. Empty output means the process is dead.
+  # Portable fallback: ps supplies a start identity when permitted. If process
+  # inspection is restricted, kill -0 can still prove a PID is dead; an alive
+  # process without a readable identity remains unknown rather than being
+  # mistaken for stale.
   if command -v ps >/dev/null 2>&1; then
     start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1)"
     if [[ -n "$start" ]]; then
       printf '%s\n' "$start"
       return 0
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      return 2
     fi
     return 1
   fi
@@ -127,7 +133,7 @@ graph_heartbeat_classify_run() {
     return 0
   fi
 
-  run_json="$(graph_state_read_run_v2 "$workspace" "$namespace" "$run_id")" || true
+  run_json="$(graph_state_read_run "$workspace" "$namespace" "$run_id")" || true
   if [[ -z "$run_json" ]]; then
     echo "unknown"
     return 0
@@ -156,7 +162,7 @@ graph_heartbeat_classify_run() {
   # Heartbeat expired. Prove owner mismatch or death before calling stale.
   pid="$(jq -r '.supervisorPid // empty' <<<"$run_json" 2>/dev/null)"
   owner_start_id="$(jq -r '.ownerProcessStartId // empty' <<<"$run_json" 2>/dev/null)"
-  if [[ -z "$pid" || -z "$owner_start_id" ]]; then
+  if [[ -z "$pid" ]]; then
     echo "unknown"
     return 0
   fi
@@ -174,6 +180,13 @@ graph_heartbeat_classify_run() {
     return 0
   fi
 
+  # A readable owner identity is required only to distinguish a live PID from
+  # PID reuse. A dead PID is already conclusive evidence of a stale run.
+  if [[ -z "$owner_start_id" ]]; then
+    echo "unknown"
+    return 0
+  fi
+
   if [[ "$current_start_id" != "$owner_start_id" ]]; then
     echo "stale"
     return 0
@@ -181,5 +194,53 @@ graph_heartbeat_classify_run() {
 
   # Expired heartbeat, but we cannot prove owner mismatch or death.
   echo "unknown"
+  return 0
+}
+
+# graph_heartbeat_live_owner_matches <workspace> <namespace> <run_id> [expected_hostname]
+# Strengthening check for cancel: requires a healthy heartbeat classification,
+# a live PID, matching ownerProcessStartId, and (when recorded) a matching
+# hostname. Does not weaken graph_heartbeat_classify_run. Prints:
+#   owned | foreign | not-live
+# and returns 0 only for owned.
+graph_heartbeat_live_owner_matches() {
+  local workspace="$1" namespace="$2" run_id="$3"
+  local expected_hostname="${4:-}"
+  local health run_json pid recorded_start recorded_host current_start pid_rc=0
+
+  health="$(graph_heartbeat_classify_run "$workspace" "$namespace" "$run_id" 2>/dev/null || echo unknown)"
+  if [[ "$health" != "healthy" ]]; then
+    printf 'not-live\n'
+    return 1
+  fi
+
+  run_json="$(graph_state_read_run "$workspace" "$namespace" "$run_id" 2>/dev/null || true)"
+  [[ -n "$run_json" ]] || { printf 'not-live\n'; return 1; }
+
+  pid="$(jq -r '.supervisorPid // empty' <<<"$run_json" 2>/dev/null)"
+  recorded_start="$(jq -r '.ownerProcessStartId // empty' <<<"$run_json" 2>/dev/null)"
+  recorded_host="$(jq -r '.ownerHostname // empty' <<<"$run_json" 2>/dev/null)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { printf 'not-live\n'; return 1; }
+  [[ -n "$recorded_start" ]] || { printf 'foreign\n'; return 1; }
+
+  current_start="$(graph_heartbeat_process_start_id_of_pid "$pid")"; pid_rc=$?
+  if [[ "$pid_rc" -ne 0 ]]; then
+    printf 'not-live\n'
+    return 1
+  fi
+  if [[ "$current_start" != "$recorded_start" ]]; then
+    printf 'foreign\n'
+    return 1
+  fi
+
+  if [[ -z "$expected_hostname" ]] && declare -F graph_state_owner_hostname >/dev/null 2>&1; then
+    expected_hostname="$(graph_state_owner_hostname 2>/dev/null || true)"
+  fi
+  if [[ -n "$recorded_host" && -n "$expected_hostname" && "$recorded_host" != "$expected_hostname" ]]; then
+    printf 'foreign\n'
+    return 1
+  fi
+
+  printf 'owned\n'
   return 0
 }

@@ -8,7 +8,7 @@
     {
       "name": "{{PLUGIN_ID}}",
       "source": ".",
-      "description": "Ralph workflows, agents, skills, hooks, and MCP integration for Claude Code.",
+      "description": "Ralph workflows, roles, skills, hooks, and MCP integration for Claude Code.",
       "version": "{{PLUGIN_VERSION}}"
     }
   ]

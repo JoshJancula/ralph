@@ -20,6 +20,28 @@ ALLOWED_RUNTIMES = ("antigravity", "claude", "codex", "cursor", "opencode")
 CONTRACT_RUNTIMES = frozenset({"antigravity", "opencode"})
 ALLOWED_MODES = frozenset({"0644", "0755"})
 RESERVED_MCP_NAMES = frozenset({"ralph"})
+ROLE_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+REMOVED_PROFILE_KEYS = {
+    "agent": "removed (no plugin roles)",
+    "agents": "removed (no plugin roles)",
+    "roles": "removed (no plugin roles)",
+    "role": "removed (no plugin roles)",
+    "subagents": "nativeSubagents",
+    "crossRuntime": "delegatedRuns",
+    "maxChildren": "delegatedRuns.maxRuns",
+    "allowedRuntimes": "delegatedRuns.runtimes",
+    "allowedAgents": "delegatedRuns.roles",
+}
+COMMON_INPUT_KEYS = (
+    "task",
+    "artifact",
+    "tooling",
+    "runtime",
+    "workspace",
+    "nativeSubagents",
+    "delegatedRuns",
+    "delegation",
+)
 MCP_COLLECTION_KEYS = frozenset({"mcpServers", "mcp_servers"})
 ENV_REF_RE = re.compile(r"^\$\{[A-Z_][A-Z0-9_]*\}$")
 SECRET_VALUE_RE = re.compile(
@@ -38,7 +60,6 @@ PLUGIN_KEYS = (
     "versionFile",
     "outputRoot",
     "engine",
-    "agents",
     "workflows",
     "contracts",
     "adapters",
@@ -139,6 +160,123 @@ def _require_closed_keys(obj: dict[str, Any], keys: tuple[str, ...], context: st
         _fail(context, f"unknown keys: {', '.join(extra)}")
     if missing:
         _fail(context, f"missing keys: {', '.join(missing)}")
+
+
+def _require_known_keys(
+    obj: dict[str, Any],
+    required: tuple[str, ...],
+    optional: tuple[str, ...],
+    context: str,
+) -> None:
+    allowed = set(required) | set(optional)
+    extra = [key for key in obj if key not in allowed]
+    missing = [key for key in required if key not in obj]
+    if extra:
+        _fail(context, f"unknown keys: {', '.join(extra)}")
+    if missing:
+        _fail(context, f"missing keys: {', '.join(missing)}")
+
+
+def _reject_removed_profile_keys(obj: dict[str, Any], context: str) -> None:
+    for key, replacement in REMOVED_PROFILE_KEYS.items():
+        if key in obj:
+            if replacement.startswith("removed"):
+                _fail(
+                    f"{context}.{key}",
+                    f"profile field was removed; {replacement}",
+                )
+            else:
+                _fail(
+                    f"{context}.{key}",
+                    f"profile field was removed; use {replacement}",
+                )
+
+
+def _validate_delegated_runs(value: Any, context: str) -> dict[str, Any]:
+    delegated = _require_object(value, context)
+    allowed = {"mode", "runtimes", "roles", "maxRuns", "maxParallel"}
+    unknown = sorted(set(delegated) - allowed)
+    if unknown:
+        _fail(context, f"unknown fields: {', '.join(unknown)}")
+    mode = delegated.get("mode", "off")
+    if not isinstance(mode, str) or mode not in {"off", "read-only", "changeset"}:
+        _fail(f"{context}.mode", "must be off, read-only, or changeset")
+    if mode == "off":
+        if set(delegated) != {"mode"}:
+            _fail(context, "only mode is allowed when mode is off")
+    else:
+        runtimes = delegated.get("runtimes")
+        if (
+            not isinstance(runtimes, list)
+            or not runtimes
+            or any(not isinstance(runtime, str) or runtime not in ALLOWED_RUNTIMES for runtime in runtimes)
+            or len(runtimes) != len(set(runtimes))
+        ):
+            _fail(
+                f"{context}.runtimes",
+                "must be a non-empty array of unique supported runtimes",
+            )
+        roles = delegated.get("roles")
+        if roles is not None and (
+            not isinstance(roles, list)
+            or not roles
+            or any(not isinstance(role, str) or not ROLE_ID_RE.fullmatch(role) for role in roles)
+            or len(roles) != len(set(roles))
+        ):
+            _fail(
+                f"{context}.roles",
+                "must be a non-empty array of unique valid roles",
+            )
+        max_runs = delegated.get("maxRuns")
+        max_parallel = delegated.get("maxParallel")
+        if not isinstance(max_runs, int) or isinstance(max_runs, bool) or max_runs <= 0:
+            _fail(f"{context}.maxRuns", "must be a positive integer")
+        if (
+            not isinstance(max_parallel, int)
+            or isinstance(max_parallel, bool)
+            or max_parallel <= 0
+            or max_parallel > max_runs
+        ):
+            _fail(
+                f"{context}.maxParallel",
+                "must be a positive integer no greater than maxRuns",
+            )
+    return delegated
+
+
+def _validate_common_input_fields(obj: dict[str, Any], context: str) -> dict[str, Any]:
+    """Validate shared routing fields without rewriting unrelated inputs."""
+    _reject_removed_profile_keys(obj, context)
+    common = {key: obj[key] for key in COMMON_INPUT_KEYS if key in obj}
+    if "nativeSubagents" in common:
+        native_subagents = _require_string(
+            common["nativeSubagents"], f"{context}.nativeSubagents"
+        )
+        if native_subagents not in {"off", "inherit"}:
+            _fail(f"{context}.nativeSubagents", "must be off or inherit")
+        common["nativeSubagents"] = native_subagents
+    if "delegatedRuns" in common:
+        common["delegatedRuns"] = _validate_delegated_runs(
+            common["delegatedRuns"], f"{context}.delegatedRuns"
+        )
+    if "delegation" in common:
+        delegation = _require_object(common["delegation"], f"{context}.delegation")
+        if "native" in delegation:
+            _fail(
+                f"{context}.delegation.native",
+                "was removed; use nativeSubagents: off|inherit",
+            )
+        if set(delegation) != {"delegatedRuns"}:
+            _fail(
+                f"{context}.delegation",
+                "only delegatedRuns is supported; old delegation fields were removed",
+            )
+        common["delegation"] = {
+            "delegatedRuns": _validate_delegated_runs(
+                delegation["delegatedRuns"], f"{context}.delegation.delegatedRuns"
+            )
+        }
+    return common
 
 
 def _require_string(value: Any, context: str) -> str:
@@ -374,7 +512,8 @@ def _resolve_destination(
 
 
 def _validate_opencode_contract(obj: dict[str, Any], context: str) -> dict[str, Any]:
-    _require_closed_keys(obj, OPENCODE_CONTRACT_KEYS, context)
+    common = _validate_common_input_fields(obj, context)
+    _require_known_keys(obj, OPENCODE_CONTRACT_KEYS, COMMON_INPUT_KEYS, context)
     if _require_int(obj["schemaVersion"], f"{context}.schemaVersion") != 1:
         _fail(f"{context}.schemaVersion", "must be 1")
     if _require_string(obj["runtime"], f"{context}.runtime") != "opencode":
@@ -386,6 +525,7 @@ def _validate_opencode_contract(obj: dict[str, Any], context: str) -> dict[str, 
     if not re.fullmatch(r"[0-9a-f]{64}", sha):
         _fail(f"{context}.typeDeclarationSha256", "must be a 64-character lowercase hex digest")
     return {
+        **common,
         "schemaVersion": 1,
         "runtime": "opencode",
         "cliVersion": _require_string(obj["cliVersion"], f"{context}.cliVersion"),
@@ -402,7 +542,8 @@ def _validate_opencode_contract(obj: dict[str, Any], context: str) -> dict[str, 
 
 
 def _validate_antigravity_contract(obj: dict[str, Any], context: str) -> dict[str, Any]:
-    _require_closed_keys(obj, ANTIGRAVITY_CONTRACT_KEYS, context)
+    common = _validate_common_input_fields(obj, context)
+    _require_known_keys(obj, ANTIGRAVITY_CONTRACT_KEYS, COMMON_INPUT_KEYS, context)
     if _require_int(obj["schemaVersion"], f"{context}.schemaVersion") != 1:
         _fail(f"{context}.schemaVersion", "must be 1")
     if _require_string(obj["runtime"], f"{context}.runtime") != "antigravity":
@@ -414,6 +555,7 @@ def _validate_antigravity_contract(obj: dict[str, Any], context: str) -> dict[st
     if policy != "opaque-byte-preserved":
         _fail(f"{context}.modelValuePolicy", "must be opaque-byte-preserved")
     return {
+        **common,
         "schemaVersion": 1,
         "runtime": "antigravity",
         "configRoot": _require_string(obj["configRoot"], f"{context}.configRoot"),
@@ -452,7 +594,8 @@ def _load_contract(
 
 def _load_plugin_descriptor(path: str, context: str) -> dict[str, Any]:
     obj = _require_object(_read_json(path, context), context)
-    _require_closed_keys(obj, PLUGIN_KEYS, context)
+    common = _validate_common_input_fields(obj, context)
+    _require_known_keys(obj, PLUGIN_KEYS, COMMON_INPUT_KEYS, context)
     _reject_literal_credentials(obj, context)
     _reject_reserved_mcp(obj, context)
     if _require_int(obj["schemaVersion"], f"{context}.schemaVersion") != 1:
@@ -472,13 +615,13 @@ def _load_plugin_descriptor(path: str, context: str) -> dict[str, Any]:
     contracts_obj = _require_object(obj["contracts"], f"{context}.contracts")
     _require_closed_keys(contracts_obj, ("antigravity", "opencode"), f"{context}.contracts")
     return {
+        **common,
         "schemaVersion": 1,
         "id": plugin_id,
         "displayName": _require_string(obj["displayName"], f"{context}.displayName"),
         "versionFile": _reject_traversal(obj["versionFile"], f"{context}.versionFile"),
         "outputRoot": output_root,
         "engine": _validate_engine(obj["engine"], f"{context}.engine"),
-        "agents": _require_string_list(obj["agents"], f"{context}.agents"),
         "workflows": _require_string_list(obj["workflows"], f"{context}.workflows"),
         "contracts": {
             "antigravity": _reject_traversal(
@@ -500,7 +643,8 @@ def _load_adapter_descriptor(
     context: str,
 ) -> dict[str, Any]:
     obj = _require_object(_read_json(path, context), context)
-    _require_closed_keys(obj, ADAPTER_KEYS, context)
+    common = _validate_common_input_fields(obj, context)
+    _require_known_keys(obj, ADAPTER_KEYS, COMMON_INPUT_KEYS, context)
     _reject_literal_credentials(obj, context)
     _reject_reserved_mcp(obj, context)
     if _require_int(obj["schemaVersion"], f"{context}.schemaVersion") != 1:
@@ -582,6 +726,7 @@ def _load_adapter_descriptor(
             _fail(f"{context}.contract", "must be null")
         contract = None
     return {
+        **common,
         "schemaVersion": 1,
         "runtime": runtime,
         "outputDirectory": output_directory,

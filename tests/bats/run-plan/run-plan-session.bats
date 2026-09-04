@@ -55,6 +55,7 @@ setup() {
   sed -n '/^ralph_try_consume_human_response()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   sed -n '/^ralph_operator_response_file_owned_by_current_user()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
 }
 
 teardown() {
@@ -241,8 +242,10 @@ create_shared_layout() {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
 
-  local tmp_dir pending human_context operator_response human_request log_file
+  local tmp_dir pending human_context operator_response human_request log_file session_dir
   tmp_dir="$(mktemp -d)"
+  session_dir="$tmp_dir/session"
+  mkdir -p "$session_dir/continuations"
   pending="$tmp_dir/pending-human.txt"
   printf 'how should we proceed?\n' >"$pending"
   human_request="$tmp_dir/human-request.json"
@@ -283,6 +286,13 @@ EOF
     set -euo pipefail
     printf() { builtin printf -- "$@"; }
     source "$1"
+    export RALPH_SESSION_DIR="$7"
+    export RALPH_PLAN_KEY="guidance-test"
+    export RUNTIME="cursor"
+    export RALPH_CURRENT_TODO_LINE="12"
+    export RALPH_CURRENT_TODO_ORDINAL="1"
+    export RALPH_CURRENT_TODO_ID="guidance-test-todo"
+    export RALPH_CURRENT_TODO_HASH="hash-guidance"
     HUMAN_CONTEXT="$2"
     PENDING_HUMAN="$3"
     HUMAN_REQUEST_FILE="$4"
@@ -294,7 +304,8 @@ EOF
     ralph_try_consume_human_response
     printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
     printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
-  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$log_file"
+    printf "CONT=%s\n" "$(ls -1 "$RALPH_SESSION_DIR/continuations"/human-answer-*.json 2>/dev/null | wc -l | tr -d " ")"
+  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$log_file" "$session_dir"
 
   [ "$status" -eq 0 ]
   run_output="$output"
@@ -304,8 +315,8 @@ EOF
   content="$(<"$human_context")"
   [[ "$content" == *"how should we proceed?"* ]]
   [[ "$content" == *"yes, please continue"* ]]
-  [[ "$run_output" == *"RESUME=1"* ]]
-  [[ "$run_output" == *"STRATEGY=resume"* ]]
+  [[ "$run_output" == *"CONT=1"* ]]
+  [[ "$run_output" != *"STRATEGY=resume"* ]]
   grep -q "Applied guidance answer from operator-response.txt; continuing plan run" "$log_file"
 
   rm -rf "$tmp_dir"
@@ -319,7 +330,7 @@ EOF
   local session_dir
   tmp_dir="$(mktemp -d)"
   session_dir="$tmp_dir/session"
-  mkdir -p "$session_dir"
+  mkdir -p "$session_dir/continuations"
   pending="$tmp_dir/pending-human.txt"
   printf 'permission required\n' >"$pending"
   human_request="$tmp_dir/human-request.json"
@@ -360,11 +371,17 @@ EOF
   run bash -c '
     set -euo pipefail
     source "$1"
+    export RALPH_SESSION_DIR="$6"
+    export RALPH_PLAN_KEY="permission-test"
+    export RUNTIME="opencode"
+    export RALPH_CURRENT_TODO_LINE="14"
+    export RALPH_CURRENT_TODO_ORDINAL="1"
+    export RALPH_CURRENT_TODO_ID="permission-test-todo"
+    export RALPH_CURRENT_TODO_HASH="hash-permission"
     HUMAN_CONTEXT="$2"
     PENDING_HUMAN="$3"
     HUMAN_REQUEST_FILE="$4"
     OPERATOR_RESPONSE_FILE="$5"
-    RALPH_SESSION_DIR="$6"
     LOG_FILE="$7"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
@@ -372,6 +389,7 @@ EOF
     ralph_try_consume_human_response
     printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
     printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+    printf "CONT=%s\n" "$(ls -1 "$RALPH_SESSION_DIR/continuations"/human-answer-*.json 2>/dev/null | wc -l | tr -d " ")"
     printf "OVERLAY=%s\n" "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-unset}"
   ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$session_dir" "$log_file"
 
@@ -379,8 +397,8 @@ EOF
   [ ! -f "$pending" ]
   [ ! -f "$operator_response" ]
   [ -f "$human_request" ]
-  [[ "$output" == *"RESUME=1"* ]]
-  [[ "$output" == *"STRATEGY=resume"* ]]
+  [[ "$output" == *"CONT=1"* ]]
+  [[ "$output" != *"STRATEGY=resume"* ]]
   [ -f "$session_dir/permission-remediation.json" ]
   jq -e '.kind == "permission"' "$session_dir/permission-remediation.json"
   jq -e '.blocked_path == "/tmp/*"' "$session_dir/permission-remediation.json"
@@ -463,7 +481,70 @@ EOF
   rm -rf "$tmp_dir"
 }
 
-@test "ralph_try_consume_human_response deny leaves the request open and does not apply overlays" {
+@test "ralph_apply_permission_operator_response keeps allow when no blocked path was extracted" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir workspace session_dir response_json
+  tmp_dir="$(mktemp -d)"
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+  response_json="$tmp_dir/operator-response.json"
+  cat <<EOF >"$response_json"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "allow",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "terminal bridge response",
+  "answer": ""
+}
+EOF
+  session_dir="$workspace/.ralph-workspace/sessions/proxy-allow-nopath"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    export SCRIPT_DIR="'"$REPO_ROOT"'/bundle/.ralph"
+    export WORKSPACE="$3"
+    export RALPH_PLAN_KEY="proxy-allow-nopath"
+    export RUNTIME="opencode"
+    export RALPH_PLAN_WORKSPACE_ROOT="$3/.ralph-workspace"
+    ralph_session_init "$3" "plan.log"
+    result_file="$(mktemp)"
+    ralph_apply_permission_operator_response \
+      "$RALPH_SESSION_DIR" \
+      "opencode" \
+      "external_directory" \
+      "" \
+      "" \
+      "" \
+      "$(cat "$5")" >"$result_file"
+    decision="$(cat "$result_file")"
+    rm -f "$result_file"
+    printf "decision=%s\n" "$decision"
+    printf "degraded=%s\n" "${RALPH_PERMISSION_APPLY_DEGRADED:-none}"
+  ' _ \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" \
+    "$workspace" \
+    "$session_dir" \
+    "$response_json"
+
+  [ "$status" -eq 0 ]
+  # An operator approval must never be reported back as a denial just because
+  # the denial excerpt carried no concrete path to allowlist.
+  [[ "$output" == *"decision=allow"* ]]
+  [[ "$output" == *"degraded="*"no-blocked-path"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_try_consume_human_response deny clears the request and does not apply overlays" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
 
@@ -524,8 +605,11 @@ EOF
   ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$tmp_dir/session" "$log_file"
 
   [ "$status" -eq 0 ]
-  [ -f "$pending" ]
-  [ -f "$operator_response" ]
+  # A deny stops the current run only. The request and the consumed answer must
+  # be cleared, otherwise every later run re-consumes the stale deny and exits
+  # immediately without ever prompting the operator again.
+  [ ! -f "$pending" ]
+  [ ! -f "$operator_response" ]
   [ -f "$human_request" ]
   [[ "$output" == *"DECISION=deny"* ]]
   [[ "$output" == *"RESUME=unset"* || "$output" == *"RESUME=0"* ]]

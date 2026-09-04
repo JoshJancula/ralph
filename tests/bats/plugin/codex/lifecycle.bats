@@ -3,6 +3,8 @@
 source "$BATS_TEST_DIRNAME/../../helper/load-lib.bash"
 
 PLUGIN_ROOT="$REPO_ROOT/plugins/ralph-orchestrator/codex"
+CANONICAL_WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
+OBSOLETE_WORKFLOWS=(ralph-agents ralph-graph ralph-orchestrate)
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -12,7 +14,7 @@ teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
-@test "Codex plugin contains manifest, skill, personas, hooks, MCP, workflows, and metadata" {
+@test "Codex plugin contains manifest, skill, hooks, MCP, workflows, and metadata" {
   [ -f "$PLUGIN_ROOT/host-manifest.json" ]
   [ -f "$PLUGIN_ROOT/.codex-plugin/plugin.json" ]
   [ -f "$PLUGIN_ROOT/skills/repo-context/SKILL.md" ]
@@ -20,13 +22,17 @@ teardown() {
   [ -f "$PLUGIN_ROOT/mcp.example.toml" ]
   [ -f "$PLUGIN_ROOT/.ralph-plugin-generated.json" ]
 
-  local id workflow
-  for id in architect code-review implementation qa research security; do
-    [ -f "$PLUGIN_ROOT/agents/$id.toml" ]
-  done
-  for workflow in ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status; do
+  [ ! -d "$PLUGIN_ROOT/agents" ]
+  [ ! -d "$PLUGIN_ROOT/roles" ]
+
+  local workflow
+  for workflow in "${CANONICAL_WORKFLOWS[@]}"; do
     [ -f "$PLUGIN_ROOT/workflows/$workflow.md" ]
     [ -f "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
+  done
+  for workflow in "${OBSOLETE_WORKFLOWS[@]}"; do
+    [ ! -e "$PLUGIN_ROOT/workflows/$workflow.md" ]
+    [ ! -e "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
   done
 
   jq -e '
@@ -92,7 +98,6 @@ EOF
       --kind plan \
       --plan "$plan" \
       --runtime codex \
-      --agent implementation \
       --workspace "$project" \
       --workspace-root "$state_root" \
       --agent-workspace "$repo_one"

@@ -41,40 +41,51 @@ Session files are created with owner-only permissions: `.ralph-workspace/session
 
 `RALPH_PLAN_ALLOW_UNSAFE_RESUME=1` makes the runner reuse session state without a stored session ID. Only set it in isolated environments you control; on shared hosts leave it unset so each invocation creates fresh, owner-restricted session data.
 
-## Kill Switch
+## Kill switch (`ralph safety`)
 
 The killswitch blocks dangerous commands or file access before they execute. When a violation is detected, Ralph logs the event, kills the runner process tree, and writes a sentinel so downstream orchestration stages do not proceed.
 
+Public CLI namespace: `ralph safety status|validate|check|init|edit`. Internal filenames and env vars may still say `killswitch`. The old route `ralph config killswitch` exits 2 and prints `Use: ralph safety <status|validate|check|init|edit>`.
+
 In Ralph mode, a fatal proxy or policy violation (denied tool, denied argument pattern, path traversal) writes a sentinel to `.ralph-workspace/security/kill-switch.<plan-key>.json` recording the tool, category, reason, and a redacted argument summary. The MCP server exits non-zero, and the plan runner checks for a current-run sentinel before and after each runtime invocation, so a tripped run fails instead of advancing to the next orchestrator stage. Stale sentinels from earlier runs are logged and ignored.
 
-### Configuration locations
+### Source precedence and fail-closed loading
 
-Ralph loads killswitch config from the first file found in this order:
+Ralph loads the first configured source in this order:
 
-| Priority | Path | Use case |
-|----------|------|----------|
-| 1 | `$WORKSPACE/.ralph-workspace/killswitch.json` | Per-project overrides |
-| 2 | `$RALPH_HOME/killswitch.json` | Global config (when using global install) |
-| 3 | Bundle default | Ships with Ralph |
+| Priority | Source | Path / selection |
+|----------|--------|------------------|
+| 1 | Override file | `RALPH_KILLSWITCH_OVERRIDE_FILE` when set (session runs often point this at `.ralph-workspace/sessions/<plan-key>/killswitch-override.json` after an operator allow) |
+| 2 | Project | `<state-root>/killswitch.json` (default `$WORKSPACE/.ralph-workspace/killswitch.json`) |
+| 3 | Global | `$RALPH_HOME/killswitch.json` |
+| 4 | Bundle default | Ships with Ralph (`$(ralph --bundle-path)/killswitch.json`) |
 
-To customize, copy the bundle default to your workspace or global location and edit:
+Missing optional sources fall through. Any **configured** winning source that is unreadable, fails schema version 2 validation, or fails shared normalization fails closed before runtime invocation: Ralph does not silently fall through to a lower-precedence valid file. Env overrides (`RALPH_BANNED_*` and related) merge only after a successful load. Schema: `bundle/.ralph/schemas/killswitch.schema.json` (snake_case keys with documented camelCase aliases; duplicate canonical/alias pairs, unknown keys, wrong types, invalid regex, and invalid custom-rule shapes are rejected).
+
+### Safety CLI
 
 ```bash
-# Per-project (stays in .ralph-workspace, which is gitignored)
-ralph config killswitch init
+# Effective enabled/dry-run, winning source, precedence, env overrides, counts, warnings
+ralph safety status
+ralph safety status --json
 
-# Global (after global install; applies when no workspace override exists)
-ralph config killswitch init --global
+# Validate without mutation
+ralph safety validate --project
+ralph safety validate --global
+ralph safety validate --file ./killswitch.json
 
-# See which config is active and where to edit
-ralph config killswitch
+# Classify command text with the production evaluator (never executes the text)
+ralph safety check --command 'sudo ls'
+ralph safety check --command 'echo ok' --json
 
-# Open an existing config in $EDITOR
-ralph config killswitch edit
-ralph config killswitch edit --global
+# Create or edit project / global config (atomic validate; editor: $VISUAL then $EDITOR then vi)
+ralph safety init --project
+ralph safety init --global
+ralph safety edit --project
+ralph safety edit --global
 ```
 
-The bundle default path (for scripts) is `$(ralph --bundle-path)/killswitch.json`.
+`status --json` is `{schemaVersion:1,enabled,dryRun,source,path,precedence,environmentOverrides,counts,warnings}`. `check --json` is `{schemaVersion:1,outcome,source,matchedRule,precedence,dryRun}`. `init` / `edit` target a stated path, preview, and require `--yes` when stdin is not a TTY. Reads and cancelled previews never create files.
 
 ### Configuration reference
 

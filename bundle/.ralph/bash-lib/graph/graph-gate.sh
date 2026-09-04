@@ -19,6 +19,10 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 GRAPH_GATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_wait >/dev/null 2>&1; then
+  # shellcheck source=../ralph-wait.sh
+  source "$GRAPH_GATE_SCRIPT_DIR/../ralph-wait.sh"
+fi
 
 if ! declare -F graph_ui_node >/dev/null 2>&1; then
   # shellcheck source=graph-ui.sh
@@ -103,7 +107,7 @@ _graph_gate_watchdog() {
     if [[ "$waited" -ge "$secs" ]]; then
       GRAPH_GATE_STEP_TIMED_OUT=1
       kill -TERM "$cmd_pid" 2>/dev/null || true
-      sleep 1
+      ralph_wait 1
       kill -KILL "$cmd_pid" 2>/dev/null || true
       break
     fi
@@ -294,10 +298,16 @@ graph_gate_run() {
   local i step_name step_cmd step_timeout step_resource step_continue step_required_json
   local step_required_count step_artifact exe step_ec step_outcome step_reruns
   local step_timed_out artifact_path artifact_rel step_entry
+  local gate_stage_id_sub="${node_id//:/_}"
 
   for ((i = 0; i < steps_count; i++)); do
     step_name="$(printf '%s' "$profile_json" | jq -r ".steps[$i].name // \"step-$i\"")"
     step_cmd="$(printf '%s' "$profile_json" | jq -r ".steps[$i].command // empty")"
+    # Gate steps that assert on a run artifact need the run's namespace. These
+    # are the same tokens used everywhere else a path is authored, resolved here
+    # so a profile can name .ralph-workspace/artifacts/{{ARTIFACT_NS}}/... .
+    step_cmd="${step_cmd//\{\{ARTIFACT_NS\}\}/$namespace}"
+    step_cmd="${step_cmd//\{\{STAGE_ID\}\}/$gate_stage_id_sub}"
     step_timeout="$(printf '%s' "$profile_json" | jq -r ".steps[$i].timeout // 300")"
     step_resource="$(printf '%s' "$profile_json" | jq -r ".steps[$i].resourceClass // \"default\"")"
     step_continue="$(printf '%s' "$profile_json" | jq -r ".steps[$i].continueOnFailure // false")"

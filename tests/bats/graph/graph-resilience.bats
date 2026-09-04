@@ -26,7 +26,7 @@ teardown() {
 write_base_graph() {
   local dest="$1"
   cat >"$dest" <<'EOF'
-{"schemaVersion":1,"ralphVersion":"1.0.0","name":"demo","namespace":"demo","maxParallel":2,"failurePolicy":"drain","nodes":[{"id":"n1","type":"stage","dependsOn":[],"derivedFrom":"stage","stage":{}},{"id":"n2","type":"stage","dependsOn":[],"derivedFrom":"stage","stage":{}}],"edges":[]}
+{"schemaVersion":2,"ralphVersion":"1.0.0","name":"demo","namespace":"demo","maxParallel":2,"failurePolicy":"drain","nodes":[{"id":"n1","type":"stage","dependsOn":[],"derivedFrom":"stage","stage":{}},{"id":"n2","type":"stage","dependsOn":[],"derivedFrom":"stage","stage":{}}],"edges":[]}
 EOF
 }
 
@@ -35,7 +35,7 @@ merge_graph() {
   jq -c --argjson extra "$extra" '. * $extra' "$dest" >"$dest.tmp" && mv "$dest.tmp" "$dest"
 }
 
-@test "resilience schema accepts omitted resilience and budgets as legacy fail-fast" {
+@test "resilience schema accepts omitted resilience and budgets as fail-fast" {
   local graph_file="$TMPD/omitted.graph.json"
   write_base_graph "$graph_file"
 
@@ -314,7 +314,7 @@ write_retry_graph() {
         stage: {
           id: "impl",
           runtime: "cursor",
-          agent: "implementation",
+          role: "implementation",
           sessionResume: true,
           workspaceMode: "snapshot",
           outputArtifacts: [{path: "stub-output.md", required: true}],
@@ -333,7 +333,7 @@ prepare_retry_ledger() {
   local run_id="run-retry-1"
   mkdir -p "$workspace"
   printf 'plan\n' >"$workspace/plan.md"
-  graph_state_init_run_v2 "$workspace" "$ns" "$run_id" "$workspace/plan.md" "$graph_file" 1
+  graph_state_init_run "$workspace" "$ns" "$run_id" "$workspace/plan.md" "$graph_file" 1
   graph_schedule_load_index "$graph_file"
   GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
   GRAPH_SCHEDULE_WORKSPACE="$workspace"
@@ -341,7 +341,6 @@ prepare_retry_ledger() {
   GRAPH_SCHEDULE_RUN_ID="$run_id"
   GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$ns" "$run_id")"
   GRAPH_SCHEDULE_NAMESPACE="$ns"
-  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
   GRAPH_SCHEDULE_FAILED_NODE=""
   GRAPH_SCHEDULE_STOP_DISPATCH=0
   GRAPH_SCHEDULE_EXIT_CODE=0
@@ -606,7 +605,7 @@ EOF
   run_id="resilience-retry-run"
   export RALPH_GRAPH_STATE_ROOT="$state_root"
   export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
-  graph_state_init_run_v2 "$DISPATCH_WORKSPACE" resilience-retry "$run_id" \
+  graph_state_init_run "$DISPATCH_WORKSPACE" resilience-retry "$run_id" \
     "$DISPATCH_WORKSPACE/resilience-retry.plan.md" "$graph_file" 1
   run_dir="$state_root/graph-runs/resilience-retry/$run_id"
   graph_run_base_prepare "$run_dir" \

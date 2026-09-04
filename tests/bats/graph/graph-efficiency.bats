@@ -43,7 +43,7 @@ write_efficiency_graph() {
         stage: {
           id: "impl",
           runtime: "cursor",
-          agent: "implementation",
+          role: "implementation",
           workspaceMode: "snapshot",
           outputArtifacts: [
             {path: "exchange/out.md", required: true},
@@ -96,7 +96,7 @@ assert_no_forbidden_fields() {
 
   [ "$(printf '%s' "$ctx" | jq -r '.nodeId')" = "impl" ]
   [ "$(printf '%s' "$ctx" | jq -r '.runtime')" = "cursor" ]
-  [ "$(printf '%s' "$ctx" | jq -r '.agent')" = "implementation" ]
+  [ "$(printf '%s' "$ctx" | jq -r '.role')" = "implementation" ]
   [ "$(printf '%s' "$ctx" | jq -r '.attemptNumber')" = "2" ]
   [ "$(printf '%s' "$ctx" | jq -r '.previousAttemptId')" = "$prev_id" ]
   [ "$(printf '%s' "$ctx" | jq -r '.classification')" = "agent-correctable" ]
@@ -211,7 +211,7 @@ init_efficiency_status_run() {
   mkdir -p "$WORKSPACE"
   write_efficiency_graph
   printf '# efficiency status plan\n' >"$TMPD/plan.md"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$TMPD/plan.md" "$GRAPH_FILE" 1 >/dev/null
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$TMPD/plan.md" "$GRAPH_FILE" 1 >/dev/null
 }
 
 write_efficiency_status_node() {
@@ -220,7 +220,7 @@ write_efficiency_status_node() {
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "impl")"
   jq -n --argjson reliable "$reliable" '
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: "impl",
       status: "succeeded",
       lastAttemptId: "impl__efficiency-run__2",
@@ -273,9 +273,9 @@ write_efficiency_status_node() {
 
   run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q '^impl '
-  printf '%s\n' "$output" | grep -q 'succeeded'
-  printf '%s\n' "$output" | grep -E -q '[[:space:]]2[[:space:]]'
+  printf '%s\n' "$output" | grep -q '^== COMPLETION =='
+  printf '%s\n' "$output" | grep -q 'succeeded: 1'
+  ! printf '%s\n' "$output" | grep -q '^impl '
   ! printf '%s\n' "$output" | grep -q 'efficiency:'
   ! printf '%s\n' "$output" | grep -q 'repeated-tool-calls'
   ! printf '%s\n' "$output" | grep -q 'retry=transient-runtime'

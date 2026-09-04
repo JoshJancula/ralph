@@ -292,6 +292,18 @@ class GraphTuiReadModelTests(_GraphTuiSampleMixin, unittest.TestCase):
         )
         self.assertEqual(snapshot.health, "stale")
 
+    def test_terminal_run_health_does_not_offer_stale_recovery(self) -> None:
+        self._write_run(status="failed")
+        snapshot = gt.load_snapshot(
+            self.run_dir,
+            now_epoch=self._heartbeat_epoch() + 120,
+            heartbeat_ttl_seconds=60,
+            process_lookup=lambda pid: ("dead", None),
+        )
+        self.assertEqual(snapshot.health, "terminal")
+        state = gt.initial_state(snapshot)
+        self.assertEqual(gt.apply_key(state, "c", snapshot), state)
+
     def test_usage_reliability_marks_missing_as_unavailable_not_zero(self) -> None:
         self._write_node(
             "impl",
@@ -491,7 +503,7 @@ class GraphTuiRenderTests(_GraphTuiSampleMixin, unittest.TestCase):
         lines = self._lines(frame)
         self.assertEqual(len(lines), 24)
         header = lines[0]
-        self.assertIn("ralph graph", header)
+        self.assertIn("ralph workflow", header)
         self.assertIn("run=run-001", header)
         self.assertIn("ns=sample-graph", header)
         self.assertIn("status=running", header)
@@ -536,10 +548,10 @@ class GraphTuiRenderTests(_GraphTuiSampleMixin, unittest.TestCase):
         self.assertEqual(empty, "")
         one = self._lines(self._frame(height=1))
         self.assertEqual(len(one), 1)
-        self.assertIn("ralph graph", one[0])
+        self.assertIn("ralph workflow", one[0])
         two = self._lines(self._frame(height=2))
         self.assertEqual(len(two), 2)
-        self.assertIn("ralph graph", two[0])
+        self.assertIn("ralph workflow", two[0])
         self.assertTrue(two[1].startswith("q quit") or "quit" in two[1])
 
     def test_selected_node_is_marked_in_table(self) -> None:
@@ -783,6 +795,20 @@ class GraphTuiNavigationTests(_GraphTuiSampleMixin, unittest.TestCase):
         self.assertTrue(moved.quit_requested)
         self.assertEqual(moved.selected_node_id, "review")
         self.assertTrue(gt.apply_key(state, "Q", snapshot).quit_requested)
+
+    def test_printable_curses_key_codes_drive_navigation_and_quit(self) -> None:
+        state, snapshot = self._nav()
+        moved = gt.apply_key(state, ord("j"), snapshot)
+        self.assertEqual(moved.selected_node_id, "review")
+        self.assertTrue(gt.apply_key(moved, ord("q"), snapshot).quit_requested)
+
+    def test_printable_curses_key_codes_drive_filter_input(self) -> None:
+        state, snapshot = self._nav()
+        editing = gt.apply_key(state, ord("/"), snapshot)
+        self.assertTrue(editing.filter_editing)
+        filtered = gt.apply_keys(editing, [ord("r"), ord("e"), ord("v")], snapshot)
+        self.assertEqual(filtered.filter_query, "rev")
+        self.assertFalse(filtered.quit_requested)
 
     def test_refresh_sets_flag_until_snapshot_is_applied(self) -> None:
         state, snapshot = self._nav()
@@ -1567,7 +1593,7 @@ class GraphTuiLifecycleTests(_GraphTuiSampleMixin, unittest.TestCase):
         result = gt.run_tui_session(
             self.run_dir,
             keys=("j", "q"),
-            painter=painted.append,
+            painter=lambda canvas: painted.append(canvas.render_plain()),
             sleep=lambda _seconds: None,
         )
         self.assertEqual(result.exit_code, 0)
@@ -1650,8 +1676,25 @@ class GraphTuiLifecycleTests(_GraphTuiSampleMixin, unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(curses.wrapper_called)
         self.assertTrue(curses.endwin_called)
+        self.assertTrue(curses.noecho_called)
+        self.assertTrue(curses.cbreak_called)
+        self.assertIn(True, curses.stdscr.keypad_values)
+        self.assertEqual(curses.stdscr.keypad_values[-1], False)
         self.assertEqual(len(termios.setattr_calls), 1)
         self.assertTrue(curses.stdscr.painted)
+        self.assertTrue(any(attr != 0 for attr in curses.stdscr.attrs))
+
+    def test_curses_session_keeps_terminal_failure_visible_until_quit(self) -> None:
+        self._write_run(status="failed")
+        curses = _FakeCurses(keys=(ord("q"),))
+        result = gt.run_curses_session(
+            self.run_dir,
+            curses_mod=curses,
+            keys=("q",),
+            max_frames=3,
+        )
+        self.assertTrue(result.quit_requested)
+        self.assertGreaterEqual(result.frames, 2)
 
     def test_curses_session_restores_when_wrapper_raises(self) -> None:
         curses = _FakeCurses(fail=True)
@@ -1774,13 +1817,20 @@ class _FakeStdscr:
         self.keys = list(keys)
         self.painted = False
         self.lines: List[str] = []
+        self.attrs: List[int] = []
         self.timeout_ms: Optional[int] = None
+        self.keypad_enabled = False
+        self.keypad_values: List[bool] = []
 
     def getmaxyx(self) -> tuple:
         return (24, 80)
 
     def timeout(self, ms: int) -> None:
         self.timeout_ms = ms
+
+    def keypad(self, enabled: bool) -> None:
+        self.keypad_enabled = enabled
+        self.keypad_values.append(enabled)
 
     def getch(self) -> int:
         if self.keys:
@@ -1790,10 +1840,17 @@ class _FakeStdscr:
 
     def erase(self) -> None:
         self.lines = []
+        self.attrs = []
 
-    def addnstr(self, row: int, col: int, text: str, length: int) -> None:
+    def addnstr(self, row: int, col: int, text: str, length: int, attr: int = 0) -> None:
         self.painted = True
         self.lines.append(text[:length])
+        self.attrs.append(attr)
+
+    def addstr(self, row: int, col: int, text: str, attr: int = 0) -> None:
+        self.painted = True
+        self.lines.append(text)
+        self.attrs.append(attr)
 
     def refresh(self) -> None:
         self.painted = True
@@ -1801,12 +1858,56 @@ class _FakeStdscr:
 
 class _FakeCurses:
     error = type("error", (Exception,), {})
+    A_NORMAL = 0
+    A_BOLD = 1
+    A_DIM = 2
+    A_REVERSE = 4
+    COLOR_RED = 1
+    COLOR_GREEN = 2
+    COLOR_YELLOW = 3
+    COLOR_CYAN = 6
 
     def __init__(self, keys: Sequence[object] = (), fail: bool = False) -> None:
         self.stdscr = _FakeStdscr(keys)
         self.wrapper_called = False
         self.endwin_called = False
         self.fail = fail
+        self.noecho_called = False
+        self.cbreak_called = False
+        self.echo_called = False
+        self.nocbreak_called = False
+        self.curs_set_calls: List[int] = []
+
+    def noecho(self) -> None:
+        self.noecho_called = True
+
+    def cbreak(self) -> None:
+        self.cbreak_called = True
+
+    def echo(self) -> None:
+        self.echo_called = True
+
+    def nocbreak(self) -> None:
+        self.nocbreak_called = True
+
+    def curs_set(self, visibility: int) -> int:
+        self.curs_set_calls.append(visibility)
+        return 1
+
+    def has_colors(self) -> bool:
+        return True
+
+    def start_color(self) -> None:
+        return None
+
+    def use_default_colors(self) -> None:
+        return None
+
+    def init_pair(self, pair: int, foreground: int, background: int) -> None:
+        return None
+
+    def color_pair(self, pair: int) -> int:
+        return pair << 8
 
     def wrapper(self, func: Callable) -> object:
         self.wrapper_called = True
@@ -1838,6 +1939,89 @@ class _RecordingRunner:
         recorded = tuple(argv)  # type: ignore[arg-type]
         self.calls.append(recorded)
         return gt.GraphTuiCommandResult(self.returncode, self.stdout, self.stderr, recorded)
+
+
+class GraphTuiRoutingAndSharedUiTests(_GraphTuiSampleMixin, unittest.TestCase):
+    def test_resolve_public_workflow_run_id_for_registry_backed_graph(self) -> None:
+        registry = Path(self._tmp.name) / "workflow-runs" / "wf-public-001"
+        registry.mkdir(parents=True)
+        _write_json(registry / "run.json", {"runId": "wf-public-001", "state": "running"})
+        self._write_run(registryRunPath=str(registry.resolve()), runId="wf-public-001")
+        self.assertEqual(gt.resolve_public_workflow_run_id(self.run_dir), "wf-public-001")
+        self.assertEqual(
+            gt.resolve_public_workflow_state_root(self.run_dir),
+            registry.resolve().parent.parent,
+        )
+
+    def test_standalone_graph_has_no_public_route(self) -> None:
+        self.assertIsNone(gt.resolve_public_workflow_run_id(self.run_dir))
+        self.assertIsNone(gt.resolve_public_workflow_state_root(self.run_dir))
+
+    def test_main_routes_registry_backed_graph_to_workflow_viewer(self) -> None:
+        registry = Path(self._tmp.name) / "workflow-runs" / "wf-route-001"
+        registry.mkdir(parents=True)
+        _write_json(registry / "run.json", {"runId": "wf-route-001", "state": "running"})
+        self._write_run(registryRunPath=str(registry.resolve()), runId="wf-route-001")
+        printed: List[str] = []
+        calls: List[str] = []
+
+        class _Result:
+            exit_code = 0
+
+        def _fake_viewer(run_id: str, **kwargs: object) -> _Result:
+            calls.append(run_id)
+            self.assertTrue(kwargs.get("force_plain"))
+            return _Result()
+
+        with mock.patch.object(gt.wviewer, "run_workflow_viewer", side_effect=_fake_viewer):
+            rc = gt.main(
+                ["--run-dir", str(self.run_dir), "--mode", "no-tui"],
+                output=printed.append,
+                sleep=lambda _seconds: None,
+                max_frames=1,
+            )
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["wf-route-001"])
+        self.assertEqual(printed, [])
+
+    def test_standalone_main_keeps_graph_streaming_contract(self) -> None:
+        printed: List[str] = []
+        errors: List[str] = []
+        missing = gt.TuiCapabilities(python_ok=True, curses_ok=False, tty_ok=True, reason="curses")
+        rc = gt.main(
+            ["--run-dir", str(self.run_dir), "--mode", "tui"],
+            capabilities=missing,
+            output=printed.append,
+            err=errors.append,
+            sleep=lambda _seconds: None,
+            max_frames=1,
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("streaming status" in line for line in errors))
+        self.assertTrue(any("run=run-001" in line for line in printed))
+
+    def test_shared_semantic_palette_and_terminal_restorer(self) -> None:
+        import workflow_curses as wcurse
+
+        self.assertTrue(issubclass(gt.TerminalRestorer, wcurse.TerminalRestorer))
+        self.assertIs(gt.init_curses_palette, wcurse.init_palette)
+        self.assertIs(gt.paint_semantic_canvas, wcurse.paint_canvas)
+        curses = _FakeCurses()
+        graph_palette = gt.init_curses_palette(curses)
+        workflow_palette = wcurse.init_palette(curses)
+        self.assertEqual(graph_palette, workflow_palette)
+        for role in ("accent", "success", "warning", "failure", "muted", "heading", "focus"):
+            self.assertIn(role, graph_palette)
+        canvas = gt.render_canvas(gt.load_snapshot(self.run_dir), width=80, height=12)
+        roles = {cell.role for row in canvas.cells for cell in row}
+        self.assertTrue({"heading", "accent", "success", "warning"} & roles)
+
+    def test_canvas_plain_matches_render_frame(self) -> None:
+        snapshot = gt.load_snapshot(self.run_dir)
+        frame = gt.render_frame(snapshot, width=72, height=18)
+        canvas = gt.render_canvas(snapshot, width=72, height=18)
+        self.assertEqual(canvas.render_plain(), frame)
+        self.assertNotIn("\x1b", frame)
 
 
 if __name__ == "__main__":

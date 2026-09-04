@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "timestamp",
+    "runId",
+    "stageId",
+    "event",
+    "priorState",
+    "newState",
+    "details"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stageId": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "event": {
+      "type": "string",
+      "minLength": 1
+    },
+    "priorState": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "stale",
+        "failed",
+        "cancelled",
+        "succeeded",
+        "skipped"
+      ]
+    },
+    "newState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "stale",
+        "failed",
+        "cancelled",
+        "succeeded",
+        "skipped"
+      ]
+    },
+    "details": {
+      "type": "object"
+    }
+  }
+}

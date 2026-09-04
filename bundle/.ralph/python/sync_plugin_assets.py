@@ -590,6 +590,20 @@ def _write_adapter(
             _assert_contained(target, plugin_output_dir, f"manifest path {rel}")
             if os.path.isfile(target) and not os.path.islink(target):
                 os.remove(target)
+        # Drop empty directories left behind by removed generated files (bottom-up).
+        for root, dirnames, filenames in os.walk(adapter_dir, topdown=False):
+            if os.path.realpath(root) == os.path.realpath(adapter_dir):
+                continue
+            try:
+                _assert_contained(root, adapter_dir, "empty directory prune")
+                _assert_contained(root, plugin_output_dir, "empty directory prune")
+            except SyncPluginError:
+                continue
+            if not dirnames and not filenames:
+                try:
+                    os.rmdir(root)
+                except OSError:
+                    pass
     finally:
         for root, dirnames, filenames in os.walk(tmp_dir, topdown=False):
             for name in filenames:

@@ -37,7 +37,7 @@ graph_render_reasons_comment() {
 }
 
 # _graph_render_node_annotation <graph-json-path> <node-id>
-# Return a compact annotation for a node label when v2 fields are present:
+# Return a compact annotation for a node label when extended fields are present:
 # workspace mode, write scopes, native subagent mode, cross-runtime mode,
 # repair epoch, changeset hash, publish readiness, and concurrency-reduction
 # hints.  Empty when no annotation field is present.
@@ -590,7 +590,7 @@ EOF
 }
 
 # graph_render_cli <plan-path> [--format mermaid|dot|ascii] [--out <path>]
-# Argument parsing and reporting for `ralph graph render`. Compiles the plan
+# Argument parsing and reporting for `graph-run.sh render`. Compiles the plan
 # (reusing a fresh cached .graph.json when present) and prints the rendered
 # graph to stdout, or writes it to --out when given.
 graph_render_cli() {

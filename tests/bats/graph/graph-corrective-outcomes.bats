@@ -1,65 +1,7 @@
 #!/usr/bin/env bats
-# Compact correction records, in-place corrective retry, and plan-contract
-# waiting (needs-plan-repair) for graph results.
+# graph-corrective-outcomes: library-level tests. No real dispatch.
 
-source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/atomic-json.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-failure-classify.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-run-base.sh"
-source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-schedule.sh"
-
-assert_compact_correction() {
-  local record="$1"
-  [ -f "$record" ]
-  [ "$(jq -r 'keys | sort | join(",")' "$record")" = \
-    "failedCompletionComponent,nextAttemptNumber,offendingPaths,verificationResultPath" ]
-  [ "$(jq -r 'has("prompt") or has("output") or has("rawOutput") or has("stdout") or has("stderr") or has("text")' "$record")" = "false" ]
-}
-
-write_corrective_graph() {
-  local out_path="$1" session_resume="${2:-true}"
-  jq -n --argjson resume "$session_resume" '
-    {
-      schemaVersion: 1,
-      ralphVersion: "test",
-      name: "corrective-retry",
-      namespace: "corrective-retry",
-      maxParallel: 1,
-      failurePolicy: "drain",
-      nodes: [{
-        id: "impl",
-        type: "agent",
-        dependsOn: [],
-        derivedFrom: "stage",
-        stage: {
-          id: "impl",
-          runtime: "cursor",
-          agent: "implementation",
-          sessionResume: $resume,
-          workspaceMode: "snapshot",
-          outputArtifacts: [{path: "stub-output.md", required: true}],
-          _inlineTodos: [{id: "impl-1", content: "work impl", status: "pending"}]
-        }
-      }],
-      edges: []
-    }
-  ' >"$out_path"
-}
-
-setup() {
-  TMPD="$(mktemp -d)"
-  RUN_DIR="$TMPD/run"
-  mkdir -p "$RUN_DIR"
-  unset RALPH_GRAPH_CORRECTION_RECORD RALPH_GRAPH_PROMPT RALPH_PLAN_PROMPT 2>/dev/null || true
-}
-
-teardown() {
-  chmod -R u+w "$TMPD" 2>/dev/null || true
-  rm -rf "$TMPD" 2>/dev/null || true
-  unset RALPH_GRAPH_STATE_ROOT RALPH_PLAN_WORKSPACE_ROOT GRAPH_DISPATCH_ORCHESTRATOR 2>/dev/null || true
-  unset RALPH_ALLOW_NESTED_RUNS ORCHESTRATOR_RUNNER_TO_CONSOLE RALPH_MODE 2>/dev/null || true
-  unset RALPH_ARTIFACT_NS RALPH_GRAPH_MAX_PARALLEL RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME 2>/dev/null || true
-}
+source "$BATS_TEST_DIRNAME/test_helper/graph-corrective-outcomes-shared.bash"
 
 @test "corrective record writes compact json for missing artifact" {
   local record
@@ -72,6 +14,33 @@ teardown() {
   [ "$(jq -r '.failedCompletionComponent' "$record")" = "required-artifact-missing" ]
   [ "$(jq -r '.offendingPaths | join(",")' "$record")" = "exchange/out.md" ]
   [ "$(jq -r '.verificationResultPath' "$record")" = "null" ]
+  [ "$(jq -r '.nextAttemptNumber' "$record")" = "2" ]
+}
+
+@test "corrective record adapts nested StageOutcomeReport v2 failure evidence" {
+  local missing record report
+  missing="$TMPD/state/artifacts/corrective-retry/out.md"
+  report="$(jq -cn --arg p "$missing" '{
+    schemaVersion: 2,
+    outcome: "failed",
+    exitCode: 1,
+    failure: {
+      classification: "agent-correctable",
+      cause: "required-artifact-missing",
+      source: "orchestrator",
+      summary: "a required artifact was not produced",
+      retryable: true,
+      operatorAction: "none",
+      missingArtifacts: [$p],
+      offendingPaths: [],
+      verification: "unknown"
+    }
+  }')"
+
+  record="$(graph_schedule_write_correction_record "$RUN_DIR" "impl" "1" "$report")"
+  assert_compact_correction "$record"
+  [ "$(jq -r '.failedCompletionComponent' "$record")" = "required-artifact-missing" ]
+  [ "$(jq -r '.offendingPaths[0]' "$record")" = "$missing" ]
   [ "$(jq -r '.nextAttemptNumber' "$record")" = "2" ]
 }
 
@@ -187,7 +156,7 @@ teardown() {
   ns="corrective-retry"
   run_id="run-corrective-1"
   printf 'plan\n' >"$workspace/plan.md"
-  graph_state_init_run_v2 "$workspace" "$ns" "$run_id" "$workspace/plan.md" "$graph_file" 1
+  graph_state_init_run "$workspace" "$ns" "$run_id" "$workspace/plan.md" "$graph_file" 1
 
   graph_schedule_load_index "$graph_file"
   GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
@@ -195,7 +164,6 @@ teardown() {
   GRAPH_SCHEDULE_LEDGER_NAMESPACE="$ns"
   GRAPH_SCHEDULE_RUN_ID="$run_id"
   GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$ns" "$run_id")"
-  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
   RUN_DIR="$GRAPH_SCHEDULE_LEDGER_RUN_DIR"
 
   aid="impl__${run_id}__1"
@@ -282,272 +250,57 @@ teardown() {
   [ "$(cat "$TMPD/requeued.path")" = "$record" ]
 }
 
-@test "corrective retry scheduler reuses the isolated workspace and session turn" {
-  local graph_file state_root run_id run_dir roots_json marker_dir node_key workspace_path
-  local node_file record orch passed_record
-  graph_file="$TMPD/corrective.graph.json"
-  write_corrective_graph "$graph_file" true
+@test "required artifact v2 failure retries once with exact compact context and retained workspace" {
+  local record attempt_two
+  prepare_required_artifact_retry_harness 1
 
-  DISPATCH_WORKSPACE="$TMPD/workspace"
-  mkdir -p "$DISPATCH_WORKSPACE/.ralph" "$DISPATCH_WORKSPACE/.ralph-workspace"
-  printf 'plan\n' >"$DISPATCH_WORKSPACE/corrective-retry.plan.md"
-  printf 'source\n' >"$DISPATCH_WORKSPACE/src.txt"
+  _graph_schedule_handle_reaped_node 0
+  # A zero-second backoff releases retry-wait immediately.
+  [ "$(graph_schedule_node_state_by_id impl)" = "pending" ]
+  [ -f "$RETRY_WORKSPACE/keep-me.txt" ]
 
-  marker_dir="$TMPD/markers"
-  mkdir -p "$marker_dir"
-  orch="$TMPD/orchestrator.sh"
-  cat >"$orch" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-attempt=""
-stage=""
-prev=""
-for arg in "\$@"; do
-  if [[ "\$prev" == "--attempt-id" ]]; then
-    attempt="\$arg"
-  elif [[ "\$prev" == "--single-stage" ]]; then
-    stage="\$arg"
-  fi
-  prev="\$arg"
-done
-workspace="\${RALPH_AGENT_WORKSPACE:-\$PWD}"
-ns="\${RALPH_ARTIFACT_NS:-corrective-retry}"
-state_root="\${RALPH_PLAN_WORKSPACE_ROOT:?}"
-report="\$state_root/artifacts/\$ns/stage-outcomes/\${attempt}.json"
-mkdir -p "\$(dirname "\$report")" "$marker_dir"
-if [[ -n "\${RALPH_GRAPH_CORRECTION_RECORD:-}" ]]; then
-  printf '%s\n' "\$RALPH_GRAPH_CORRECTION_RECORD" >"$marker_dir/correction-path"
-  printf '%s\n' "\${RALPH_PLAN_SESSION_STRATEGY:-}" >"$marker_dir/session-strategy"
-  printf '%s\n' "\${RALPH_PLAN_CLI_RESUME:-}" >"$marker_dir/cli-resume"
-  printf '%s\n' "\${RALPH_GRAPH_PROMPT-__unset__}" >"$marker_dir/graph-prompt"
-  printf '%s\n' "\${RALPH_PLAN_PROMPT-__unset__}" >"$marker_dir/plan-prompt"
-  printf '%s\n' "\${RALPH_GRAPH_RAW_OUTPUT-__unset__}" >"$marker_dir/raw-output"
-  printf 'stub artifact\n' >"\$workspace/stub-output.md"
-  printf '%s\n' "{\"schemaVersion\":1,\"runId\":\"corrective-retry-run\",\"stageId\":\"\$stage\",\"attemptId\":\"\$attempt\",\"outcome\":\"success\",\"exitCode\":0,\"startedAt\":\"2026-01-01T00:00:02Z\",\"finishedAt\":\"2026-01-01T00:00:03Z\"}" >"\$report"
-  exit 0
-fi
-printf 'attempt-1-partial\n' >"\$workspace/keep-me.txt"
-printf '%s\n' "{\"schemaVersion\":1,\"runId\":\"corrective-retry-run\",\"stageId\":\"\$stage\",\"attemptId\":\"\$attempt\",\"outcome\":\"failed\",\"exitCode\":1,\"kind\":\"artifact-publish-failed\",\"missingArtifacts\":[\"stub-output.md\"],\"startedAt\":\"2026-01-01T00:00:00Z\",\"finishedAt\":\"2026-01-01T00:00:01Z\"}" >"\$report"
-exit 1
-EOF
-  chmod +x "$orch"
-  export GRAPH_DISPATCH_ORCHESTRATOR="$orch"
-  export RALPH_ALLOW_NESTED_RUNS=1
-  export ORCHESTRATOR_RUNNER_TO_CONSOLE=0
-  export RALPH_MODE=no
-  export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
-  export RALPH_ARTIFACT_PROVENANCE=0
-
-  state_root="$TMPD/state"
-  run_id="corrective-retry-run"
-  export RALPH_GRAPH_STATE_ROOT="$state_root"
-  export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
-  graph_state_init_run_v2 "$DISPATCH_WORKSPACE" corrective-retry "$run_id" \
-    "$DISPATCH_WORKSPACE/corrective-retry.plan.md" "$graph_file" 1
-  run_dir="$state_root/graph-runs/corrective-retry/$run_id"
-  roots_json="$(jq -cn --arg project "$DISPATCH_WORKSPACE" --arg state "$state_root" \
-    '{projectRoot:$project,stateRoot:$state,agentWorkspace:$project}')"
-  graph_run_base_prepare "$run_dir" "$roots_json" '["snapshot"]'
-  graph_workspace_prepare_run "$run_dir" "$graph_file"
-
-  graph_schedule_run "$graph_file" "$run_id" "$DISPATCH_WORKSPACE" "$run_dir"
-  [ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]
-
-  node_key="$(graph_workspace_node_key impl)"
-  workspace_path="$(graph_workspace_prepare_node "$run_dir" "$graph_file" impl)"
-  [ -f "$workspace_path/keep-me.txt" ]
-  [ "$(cat "$workspace_path/keep-me.txt")" = "attempt-1-partial" ]
-  [[ "$workspace_path" == "$(cd "$run_dir" && pwd -P)/workspaces/nodes/$node_key" ]]
-
-  record="$run_dir/corrections/impl.json"
+  record="$RETRY_RUN_DIR/corrections/impl.json"
   assert_compact_correction "$record"
+  [ "$(jq -r '.failedCompletionComponent' "$record")" = "required-artifact-missing" ]
+  [ "$(jq -r '.offendingPaths[0]' "$record")" = "$RETRY_MISSING" ]
   [ "$(jq -r '.nextAttemptNumber' "$record")" = "2" ]
-  [ -f "$marker_dir/correction-path" ]
-  passed_record="$(cat "$marker_dir/correction-path")"
-  [ -f "$passed_record" ]
-  assert_compact_correction "$passed_record"
-  [ "$(jq -c . "$passed_record")" = "$(jq -c . "$record")" ]
-  [ "$(cat "$marker_dir/session-strategy")" = "resume" ]
-  [ "$(cat "$marker_dir/cli-resume")" = "1" ]
-  [ "$(cat "$marker_dir/graph-prompt")" = "__unset__" ]
-  [ "$(cat "$marker_dir/plan-prompt")" = "__unset__" ]
-  [ "$(cat "$marker_dir/raw-output")" = "__unset__" ]
 
-  node_file="$(graph_state_node_file "$DISPATCH_WORKSPACE" corrective-retry "$run_id" impl)"
-  [ "$(jq '.attempts | length' "$node_file")" -eq 2 ]
-  [ "$(jq -r '.attempts[0].attemptId' "$node_file")" = "impl__${run_id}__1" ]
-  [ "$(jq -r '.attempts[0].outcome' "$node_file")" = "failed" ]
-  [ "$(jq -r '.attempts[1].attemptId' "$node_file")" = "impl__${run_id}__2" ]
-  [ "$(jq -r '.attempts[1].outcome' "$node_file")" = "success" ]
-  [ "$(jq -r '.status' "$node_file")" = "succeeded" ]
+  GRAPH_NODE_STATES[$(graph_schedule_index_map_get impl)]="pending"
+  GRAPH_SCHEDULE_SPAWN_CORRECTION_RECORD=""
+  _graph_schedule_prepare_corrective_retry_spawn impl 2 ""
+  [ "$GRAPH_SCHEDULE_SPAWN_CORRECTION_RECORD" = "$record" ]
+  assert_compact_correction "$GRAPH_SCHEDULE_SPAWN_CORRECTION_RECORD"
+
+  attempt_two="impl__${RETRY_RUN_ID}__2"
+  printf 'required artifact\n' >"$RETRY_MISSING"
+  [ -s "$RETRY_MISSING" ]
+  _graph_schedule_ledger_record impl running "$attempt_two" "" "" \
+    "2026-01-01T00:00:02Z" "" cursor off ""
+  _graph_schedule_ledger_record impl succeeded "$attempt_two" success 0 "" \
+    "2026-01-01T00:00:03Z" cursor off ""
+  GRAPH_NODE_STATES[$(graph_schedule_index_map_get impl)]="succeeded"
+
+  [ "$(awk -F '\t' '$3 != "" {print $3}' "$RETRY_LEDGER" | sort -u | wc -l | tr -d ' ')" -eq 2 ]
+  grep -q $'impl\tfailed\t'"$RETRY_ATTEMPT_ONE"$'\tfailed' "$RETRY_LEDGER"
+  grep -q $'impl\tsucceeded\t'"$attempt_two"$'\tsuccess' "$RETRY_LEDGER"
+  [ "$(graph_schedule_node_state_by_id impl)" = "succeeded" ]
 }
 
-write_plan_contract_graph() {
-  local out_path="$1"
-  jq -n '
-    {
-      schemaVersion: 1,
-      ralphVersion: "test",
-      name: "plan-contract",
-      namespace: "plan-contract",
-      maxParallel: 1,
-      failurePolicy: "drain",
-      nodes: [
-        {
-          id: "contract",
-          type: "agent",
-          dependsOn: [],
-          derivedFrom: "stage",
-          stage: {
-            id: "contract",
-            runtime: "cursor",
-            agent: "implementation",
-            workspaceMode: "snapshot",
-            writeScopes: ["src/allowed/**"],
-            outputArtifacts: [{path: "stub-output.md", required: true}],
-            _inlineTodos: [{id: "contract-1", content: "work contract", status: "pending"}]
-          }
-        },
-        {
-          id: "independent",
-          type: "agent",
-          dependsOn: [],
-          derivedFrom: "stage",
-          stage: {
-            id: "independent",
-            runtime: "claude",
-            agent: "implementation",
-            workspaceMode: "snapshot",
-            outputArtifacts: [{path: "independent.md", required: true}],
-            _inlineTodos: [{id: "independent-1", content: "work independent", status: "pending"}]
-          }
-        },
-        {
-          id: "child",
-          type: "agent",
-          dependsOn: ["contract"],
-          derivedFrom: "stage",
-          stage: {
-            id: "child",
-            runtime: "cursor",
-            agent: "implementation",
-            workspaceMode: "snapshot",
-            _inlineTodos: [{id: "child-1", content: "work child", status: "pending"}]
-          }
-        }
-      ],
-      edges: [{from: "contract", to: "child", reasons: ["declared"]}]
-    }
-  ' >"$out_path"
-}
+@test "required artifact v2 failure with zero corrective retries fails after one attempt" {
+  local record rc=0
+  prepare_required_artifact_retry_harness 0
 
-write_plan_contract_diamond_graph() {
-  local out_path="$1"
-  jq -n '
-    {
-      schemaVersion: 1,
-      ralphVersion: "test",
-      name: "plan-contract-diamond",
-      namespace: "plan-contract-diamond",
-      maxParallel: 1,
-      failurePolicy: "drain",
-      nodes: [
-        {
-          id: "source",
-          type: "agent",
-          dependsOn: [],
-          derivedFrom: "stage",
-          stage: {
-            id: "source",
-            runtime: "cursor",
-            agent: "implementation",
-            _inlineTodos: [{id: "source-1", content: "work source", status: "pending"}]
-          }
-        },
-        {
-          id: "left",
-          type: "agent",
-          dependsOn: ["source"],
-          derivedFrom: "stage",
-          stage: {
-            id: "left",
-            runtime: "claude",
-            agent: "implementation",
-            writeScopes: ["src/left/**"],
-            _inlineTodos: [{id: "left-1", content: "work left", status: "pending"}]
-          }
-        },
-        {
-          id: "right",
-          type: "agent",
-          dependsOn: ["source"],
-          derivedFrom: "stage",
-          stage: {
-            id: "right",
-            runtime: "codex",
-            agent: "implementation",
-            _inlineTodos: [{id: "right-1", content: "work right", status: "pending"}]
-          }
-        },
-        {
-          id: "sink",
-          type: "agent",
-          dependsOn: ["left", "right"],
-          derivedFrom: "stage",
-          stage: {
-            id: "sink",
-            runtime: "cursor",
-            agent: "implementation",
-            _inlineTodos: [{id: "sink-1", content: "work sink", status: "pending"}]
-          }
-        }
-      ],
-      edges: [
-        {from: "source", to: "left", reasons: ["declared"]},
-        {from: "source", to: "right", reasons: ["declared"]},
-        {from: "left", to: "sink", reasons: ["declared"]},
-        {from: "right", to: "sink", reasons: ["declared"]}
-      ]
-    }
-  ' >"$out_path"
-}
+  _graph_schedule_handle_reaped_node 0 || rc=$?
+  [ "$rc" -ne 0 ]
+  [ "$(graph_schedule_node_state_by_id impl)" = "failed" ]
 
-install_plan_contract_orchestrator() {
-  local orch="$1" marker_dir="$2" contract_stage="${3:-contract}"
-  mkdir -p "$marker_dir"
-  cat >"$orch" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-attempt=""
-stage=""
-prev=""
-for arg in "\$@"; do
-  if [[ "\$prev" == "--attempt-id" ]]; then
-    attempt="\$arg"
-  elif [[ "\$prev" == "--single-stage" ]]; then
-    stage="\$arg"
-  fi
-  prev="\$arg"
-done
-workspace="\${RALPH_AGENT_WORKSPACE:-\$PWD}"
-ns="\${RALPH_ARTIFACT_NS:-plan-contract}"
-state_root="\${RALPH_PLAN_WORKSPACE_ROOT:-\$workspace/.ralph-workspace}"
-report="\$state_root/artifacts/\$ns/stage-outcomes/\${attempt}.json"
-mkdir -p "\$(dirname "\$report")" "$marker_dir"
-: >"$marker_dir/\$stage.started"
-if [[ "\$stage" == "$contract_stage" ]]; then
-  printf '%s\n' "{\"schemaVersion\":1,\"runId\":\"plan-contract-run\",\"stageId\":\"\$stage\",\"attemptId\":\"\$attempt\",\"outcome\":\"failed\",\"exitCode\":1,\"kind\":\"undeclared-path\",\"outOfScope\":[\"docs/secret.md\"],\"startedAt\":\"2026-01-01T00:00:00Z\",\"finishedAt\":\"2026-01-01T00:00:01Z\"}" >"\$report"
-  : >"$marker_dir/\$stage.finished"
-  exit 1
-fi
-printf 'ok\n' >"\$workspace/\${stage}.md"
-printf 'stub artifact\n' >"\$workspace/stub-output.md"
-printf 'independent\n' >"\$workspace/independent.md"
-printf '%s\n' "{\"schemaVersion\":1,\"runId\":\"plan-contract-run\",\"stageId\":\"\$stage\",\"attemptId\":\"\$attempt\",\"outcome\":\"success\",\"exitCode\":0,\"startedAt\":\"2026-01-01T00:00:02Z\",\"finishedAt\":\"2026-01-01T00:00:03Z\"}" >"\$report"
-: >"$marker_dir/\$stage.finished"
-exit 0
-EOF
-  chmod +x "$orch"
+  record="$RETRY_RUN_DIR/corrections/impl.json"
+  assert_compact_correction "$record"
+  [ "$(jq -r '.offendingPaths[0]' "$record")" = "$RETRY_MISSING" ]
+  [ -f "$RETRY_WORKSPACE/keep-me.txt" ]
+
+  [ "$(awk -F '\t' '$3 != "" {print $3}' "$RETRY_LEDGER" | sort -u | wc -l | tr -d ' ')" -eq 1 ]
+  grep -q $'impl\tfailed\t'"$RETRY_ATTEMPT_ONE"$'\tfailed' "$RETRY_LEDGER"
 }
 
 @test "corrective plan contract maps undeclared path to needs-plan-repair" {
@@ -609,112 +362,4 @@ EOF
   [ "$(graph_schedule_node_state_by_id child)" = "blocked" ]
   [ "$(graph_schedule_node_state_by_id independent)" = "pending" ]
   [ "$GRAPH_SCHEDULE_STOP_DISPATCH" -eq 0 ]
-}
-
-@test "corrective plan contract lets independent branches drain" {
-  local graph_file state_root run_id run_dir roots_json marker_dir orch graph_before rc
-  graph_file="$TMPD/plan-contract.graph.json"
-  write_plan_contract_graph "$graph_file"
-  cp "$graph_file" "$TMPD/graph.before.json"
-  graph_before="$(jq -c . "$graph_file")"
-
-  DISPATCH_WORKSPACE="$TMPD/workspace"
-  mkdir -p "$DISPATCH_WORKSPACE/.ralph" "$DISPATCH_WORKSPACE/.ralph-workspace"
-  printf 'plan\n' >"$DISPATCH_WORKSPACE/plan-contract.plan.md"
-  printf 'source\n' >"$DISPATCH_WORKSPACE/src.txt"
-
-  marker_dir="$TMPD/markers"
-  orch="$TMPD/orchestrator.sh"
-  install_plan_contract_orchestrator "$orch" "$marker_dir" "contract"
-  export GRAPH_DISPATCH_ORCHESTRATOR="$orch"
-  export RALPH_ALLOW_NESTED_RUNS=1
-  export ORCHESTRATOR_RUNNER_TO_CONSOLE=0
-  export RALPH_MODE=no
-  export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
-  export RALPH_ARTIFACT_PROVENANCE=0
-  export RALPH_GRAPH_MAX_PARALLEL=1
-  export RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME=1
-
-  state_root="$TMPD/state"
-  run_id="plan-contract-run"
-  export RALPH_GRAPH_STATE_ROOT="$state_root"
-  export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
-  graph_state_init_run_v2 "$DISPATCH_WORKSPACE" plan-contract "$run_id" \
-    "$DISPATCH_WORKSPACE/plan-contract.plan.md" "$graph_file" 1
-  run_dir="$state_root/graph-runs/plan-contract/$run_id"
-  roots_json="$(jq -cn --arg project "$DISPATCH_WORKSPACE" --arg state "$state_root" \
-    '{projectRoot:$project,stateRoot:$state,agentWorkspace:$project}')"
-  graph_run_base_prepare "$run_dir" "$roots_json" '["snapshot"]'
-  graph_workspace_prepare_run "$run_dir" "$graph_file"
-
-  rc=0
-  graph_schedule_run "$graph_file" "$run_id" "$DISPATCH_WORKSPACE" "$run_dir" || rc=$?
-  [ "$rc" -ne 0 ]
-  [ "$GRAPH_SCHEDULE_EXIT_CODE" -ne 0 ]
-  [ "$(graph_schedule_node_state_by_id contract)" = "needs-plan-repair" ]
-  [ "$(graph_schedule_node_state_by_id independent)" = "succeeded" ]
-  [ "$(graph_schedule_node_state_by_id child)" = "blocked" ]
-  [ -f "$marker_dir/independent.finished" ]
-  [ ! -f "$marker_dir/child.started" ]
-  [ "$GRAPH_SCHEDULE_STOP_DISPATCH" -eq 0 ]
-  [ ! -e "$run_dir/corrections/contract.json" ]
-
-  [ "$(jq -c . "$graph_file")" = "$graph_before" ]
-  cmp -s "$graph_file" "$TMPD/graph.before.json"
-  [ "$(jq -c --arg id contract '.nodes[] | select(.id == $id) | .stage.writeScopes' "$graph_file")" = '["src/allowed/**"]' ]
-  [ "$(jq -c --arg id contract '.nodes[] | select(.id == $id) | .stage.writeScopes' "$run_dir/graph.json")" = '["src/allowed/**"]' ]
-  cmp -s "$run_dir/graph.json" "$TMPD/graph.before.json"
-}
-
-@test "corrective plan contract does not block a descendant with another path" {
-  local graph_file state_root run_id run_dir roots_json marker_dir orch rc
-  graph_file="$TMPD/plan-contract-diamond.graph.json"
-  write_plan_contract_diamond_graph "$graph_file"
-  cp "$graph_file" "$TMPD/graph.before.json"
-
-  DISPATCH_WORKSPACE="$TMPD/workspace"
-  mkdir -p "$DISPATCH_WORKSPACE/.ralph" "$DISPATCH_WORKSPACE/.ralph-workspace"
-  printf 'plan\n' >"$DISPATCH_WORKSPACE/plan-contract-diamond.plan.md"
-
-  marker_dir="$TMPD/markers"
-  orch="$TMPD/orchestrator.sh"
-  install_plan_contract_orchestrator "$orch" "$marker_dir" "left"
-  export GRAPH_DISPATCH_ORCHESTRATOR="$orch"
-  export RALPH_ALLOW_NESTED_RUNS=1
-  export ORCHESTRATOR_RUNNER_TO_CONSOLE=0
-  export RALPH_MODE=no
-  export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
-  export RALPH_ARTIFACT_PROVENANCE=0
-  export RALPH_GRAPH_MAX_PARALLEL=1
-  export RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME=1
-  export RALPH_ARTIFACT_NS=plan-contract-diamond
-
-  state_root="$TMPD/state"
-  run_id="plan-contract-run"
-  export RALPH_GRAPH_STATE_ROOT="$state_root"
-  export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
-  graph_state_init_run_v2 "$DISPATCH_WORKSPACE" plan-contract-diamond "$run_id" \
-    "$DISPATCH_WORKSPACE/plan-contract-diamond.plan.md" "$graph_file" 1
-  run_dir="$state_root/graph-runs/plan-contract-diamond/$run_id"
-  roots_json="$(jq -cn --arg project "$DISPATCH_WORKSPACE" --arg state "$state_root" \
-    '{projectRoot:$project,stateRoot:$state,agentWorkspace:$project}')"
-  graph_run_base_prepare "$run_dir" "$roots_json" '["snapshot"]'
-  graph_workspace_prepare_run "$run_dir" "$graph_file"
-
-  rc=0
-  graph_schedule_run "$graph_file" "$run_id" "$DISPATCH_WORKSPACE" "$run_dir" || rc=$?
-  [ "$rc" -ne 0 ]
-  [ "$GRAPH_SCHEDULE_EXIT_CODE" -ne 0 ]
-  [ "$(graph_schedule_node_state_by_id source)" = "succeeded" ]
-  [ "$(graph_schedule_node_state_by_id left)" = "needs-plan-repair" ]
-  [ "$(graph_schedule_node_state_by_id right)" = "succeeded" ]
-  # Sink still depends on left, so it stays pending rather than blocked.
-  # Independent sibling right still drains because dispatch is not stopped.
-  [ "$(graph_schedule_node_state_by_id sink)" = "pending" ]
-  [ -f "$marker_dir/right.finished" ]
-  [ ! -f "$marker_dir/sink.started" ]
-  [ "$GRAPH_SCHEDULE_STOP_DISPATCH" -eq 0 ]
-  cmp -s "$graph_file" "$TMPD/graph.before.json"
-  cmp -s "$run_dir/graph.json" "$TMPD/graph.before.json"
-  [ "$(jq -c --arg id left '.nodes[] | select(.id == $id) | .stage.writeScopes' "$graph_file")" = '["src/left/**"]' ]
 }

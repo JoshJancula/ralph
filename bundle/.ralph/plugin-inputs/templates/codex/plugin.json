@@ -1,15 +1,15 @@
 {
   "name": "{{PLUGIN_ID}}",
   "version": "{{PLUGIN_VERSION}}",
-  "description": "Plan, orchestrate, inspect, and safely run Ralph workflows from Codex.",
+  "description": "Plan, author workflows, inspect runs, and safely execute Ralph from Codex.",
   "author": {
     "name": "Ralph maintainers"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Ralph Orchestrator",
-    "shortDescription": "Operate Ralph plans and graphs safely.",
-    "longDescription": "Native Ralph skills for plan authoring, orchestration, graph setup, status, diagnostics, agent discovery, preview, and operator-confirmed execution.",
+    "shortDescription": "Operate Ralph plans and workflows safely.",
+    "longDescription": "Native Ralph skills for plan authoring, Sequential and Dependency workflows, status, diagnostics, preview, and operator-confirmed execution.",
     "developerName": "Ralph maintainers",
     "category": "Productivity",
     "capabilities": [

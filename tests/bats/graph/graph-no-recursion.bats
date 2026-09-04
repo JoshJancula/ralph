@@ -7,8 +7,8 @@
 #
 # Scenarios covered:
 #   1. Direct nested native spawn: native-subagent scope calls graph_native_subagent_setup
-#   2. Broker call from native child: native-subagent scope calls ralph_delegate_start
-#   3. Broker call from delegated child: delegated-child scope calls ralph_delegate_start
+#   2. Broker call from native child: native-subagent scope calls ralph_delegated_run_start
+#   3. Broker call from delegated child: delegated-child scope calls ralph_delegated_run_start
 #   4. Raw graph/orchestrator call: child scope hidden from catalog + handler denial
 #   5. Forged depth env: delegated-child scope with RALPH_GRAPH_DELEGATION_DEPTH=0
 #   6. Inherited ambient MCP: depth=1 with no scope set blocks delegation
@@ -34,7 +34,7 @@ setup() {
   export RALPH_GRAPH_ATTEMPT_ID="attempt-1"
   export RALPH_GRAPH_NODE_RUNTIME="claude"
   export RALPH_GRAPH_DELEGATION_DEPTH="0"
-  export RALPH_GRAPH_NODE_POLICY='{"maxDepth":1,"maxChildren":3,"native":{"mode":"read-only","allowedAgents":["research"],"maxParallel":1},"crossRuntime":{"mode":"off","allowedRuntimes":[],"allowedAgents":[],"maxParallel":1}}'
+  export RALPH_GRAPH_NODE_POLICY='{"delegatedRuns":{"mode":"read-only","runtimes":["codex"],"roles":["research"],"maxRuns":3,"maxParallel":1}}'
   export RALPH_MCP_SCOPE="graph-node"
 
   # Stubs for MCP protocol send functions
@@ -64,9 +64,9 @@ _start_args() {
   jq -cn \
     --arg task "inspect files" \
     --arg key "key-1" \
-    --arg rt "inherit" \
-    --arg ag "research" \
-    '{task:$task,idempotency_key:$key,runtime:$rt,agent:$ag}'
+    --arg rt "codex" \
+    --arg role "research" \
+    '{task:$task,idempotencyKey:$key,runtime:$rt,role:$role}'
 }
 
 # ---------------------------------------------------------------------------
@@ -85,8 +85,10 @@ _start_args() {
     "claude" "$WS" "child-node" "$tmpoverlay"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"scope"* || "$output" == *"permitted"* || "$output" == *"spawn"* ]] \
+  [[ "$output" == *"scope"* || "$output" == *"permitted"* || "$output" == *"spawn"* || "$output" == *"removed"* ]] \
     || { echo "output should mention scope/spawn denial; got: $output"; return 1; }
+  # No Ralph-child overlay artifacts written.
+  [ ! -d "$tmpoverlay" ] || [ -z "$(find "$tmpoverlay" -type f 2>/dev/null)" ]
 }
 
 @test "no-recursion: depth=1 env prevents native spawn even without explicit scope" {
@@ -121,17 +123,37 @@ _start_args() {
     || { echo "log has no denial record; contents: $(cat "$logfile")"; return 1; }
 }
 
+@test "no-recursion: Ralph-child setup from parent scope refuses and writes no overlay or ledger" {
+  export RALPH_MCP_SCOPE="graph-node"
+  export RALPH_GRAPH_DELEGATION_DEPTH="0"
+
+  # shellcheck source=../../../bundle/.ralph/bash-lib/graph/graph-native-subagent.sh
+  source "$_SUBAGENT_LIB"
+
+  local tmpoverlay="$TMPD/overlays-parent"
+  mkdir -p "$tmpoverlay"
+  run graph_native_subagent_setup '{"native":{"mode":"read-only","allowedAgents":["research"]}}' \
+    "claude" "$WS" "parent-node" "$tmpoverlay"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"removed"* || "$output" == *"nativeSubagents"* ]]
+  [ -z "$(find "$tmpoverlay" -type f 2>/dev/null)" ]
+  # No native-child ledger directory under the workspace.
+  [ ! -d "$WS/.ralph-workspace/native-subagent-children" ]
+  [ ! -d "$WS/.ralph-workspace/native-child-ledger" ]
+}
+
 # ---------------------------------------------------------------------------
 # 2. Broker call from native child (native-subagent scope)
 # ---------------------------------------------------------------------------
 
-@test "no-recursion: native-subagent scope cannot call ralph_delegate_start" {
+@test "no-recursion: native-subagent scope cannot call ralph_delegated_run_start" {
   export RALPH_MCP_SCOPE="native-subagent"
 
   # shellcheck source=../../../bundle/.ralph/bash-lib/graph/graph-delegation-mcp.sh
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected error for native-subagent scope"; return 1; }
   [[ "$LAST_ERROR" == *"scope"* ]] \
@@ -144,19 +166,19 @@ _start_args() {
   source "$_MCP_LIB"
 
   local fake_id="delegation-000000000000000000000001"
-  handle_delegate_status "$(jq -cn --arg d "$fake_id" '{delegation_id:$d}')" "true" "1"
+  handle_delegated_run_status "$(jq -cn --arg d "$fake_id" '{delegatedRunId:$d}')" "true" "1"
   [ -n "$LAST_ERROR" ] || { echo "expected status denial"; return 1; }
 
   LAST_ERROR=""
-  handle_delegate_wait "$(jq -cn --arg d "$fake_id" '{delegation_id:$d}')" "true" "1"
+  handle_delegated_run_wait "$(jq -cn --arg d "$fake_id" '{delegatedRunId:$d}')" "true" "1"
   [ -n "$LAST_ERROR" ] || { echo "expected wait denial"; return 1; }
 
   LAST_ERROR=""
-  handle_delegate_result "$(jq -cn --arg d "$fake_id" '{delegation_id:$d}')" "true" "1"
+  handle_delegated_run_result "$(jq -cn --arg d "$fake_id" '{delegatedRunId:$d}')" "true" "1"
   [ -n "$LAST_ERROR" ] || { echo "expected result denial"; return 1; }
 
   LAST_ERROR=""
-  handle_delegate_cancel "$(jq -cn --arg d "$fake_id" '{delegation_id:$d}')" "true" "1"
+  handle_delegated_run_cancel "$(jq -cn --arg d "$fake_id" '{delegatedRunId:$d}')" "true" "1"
   [ -n "$LAST_ERROR" ] || { echo "expected cancel denial"; return 1; }
 }
 
@@ -165,13 +187,13 @@ _start_args() {
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   local logfile; logfile="$(_no_recursion_log)"
   [ -f "$logfile" ] || { echo "no-recursion.log was not created"; return 1; }
   grep -q '"layer"' "$logfile" && grep -q '"scope"' "$logfile" \
     || { echo "log has no structured denial record; contents: $(cat "$logfile")"; return 1; }
-  grep -q '"requested_tool".*ralph_delegate_start' "$logfile" \
+  grep -q '"requested_tool".*ralph_delegated_run_start' "$logfile" \
     || { echo "log missing requested_tool field; contents: $(cat "$logfile")"; return 1; }
 }
 
@@ -179,13 +201,13 @@ _start_args() {
 # 3. Broker call from delegated child (delegated-child scope)
 # ---------------------------------------------------------------------------
 
-@test "no-recursion: delegated-child scope cannot call ralph_delegate_start" {
+@test "no-recursion: delegated-child scope cannot call ralph_delegated_run_start" {
   export RALPH_MCP_SCOPE="delegated-child"
   export RALPH_GRAPH_DELEGATION_DEPTH="1"
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected error for delegated-child scope"; return 1; }
   [[ "$LAST_ERROR" == *"scope"* ]] \
@@ -199,7 +221,7 @@ _start_args() {
   source "$_MCP_LIB"
 
   local fake_id="delegation-000000000000000000000001"
-  handle_delegate_status "$(jq -cn --arg d "$fake_id" '{delegation_id:$d}')" "true" "1"
+  handle_delegated_run_status "$(jq -cn --arg d "$fake_id" '{delegatedRunId:$d}')" "true" "1"
   [ -n "$LAST_ERROR" ] || { echo "expected status denial for delegated-child"; return 1; }
 }
 
@@ -209,12 +231,12 @@ _start_args() {
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   local logfile; logfile="$(_no_recursion_log)"
   [ -f "$logfile" ] || { echo "no-recursion.log was not created"; return 1; }
   local record
-  record="$(grep '"requested_tool".*ralph_delegate_start' "$logfile" | head -1)"
+  record="$(grep '"requested_tool".*ralph_delegated_run_start' "$logfile" | head -1)"
   [ -n "$record" ] || { echo "no matching denial record; contents: $(cat "$logfile")"; return 1; }
   # Validate JSON fields present
   jq -e '.layer and .runtime and .parent_node and .child_identity and .requested_tool and .reason' \
@@ -232,7 +254,7 @@ _start_args() {
   source "$_MCP_LIB"
 
   local hidden_tools
-  hidden_tools="$(graph_delegation_mcp_catalog_hidden_tools)"
+  hidden_tools="$(graph_delegated_run_mcp_catalog_hidden_tools)"
   [[ "$hidden_tools" == *"ralph_run_plan"* ]] \
     || { echo "ralph_run_plan should be hidden for delegated-child; got: $hidden_tools"; return 1; }
   [[ "$hidden_tools" == *"ralph_orchestrator_run"* ]] \
@@ -247,9 +269,9 @@ _start_args() {
   source "$_MCP_LIB"
 
   local hidden_tools
-  hidden_tools="$(graph_delegation_mcp_catalog_hidden_tools)"
-  [[ "$hidden_tools" == *"ralph_delegate_start"* ]] \
-    || { echo "ralph_delegate_start should be hidden for native-subagent; got: $hidden_tools"; return 1; }
+  hidden_tools="$(graph_delegated_run_mcp_catalog_hidden_tools)"
+  [[ "$hidden_tools" == *"ralph_delegated_run_start"* ]] \
+    || { echo "ralph_delegated_run_start should be hidden for native-subagent; got: $hidden_tools"; return 1; }
   [[ "$hidden_tools" == *"ralph_run_plan"* ]] \
     || { echo "ralph_run_plan should be hidden for native-subagent; got: $hidden_tools"; return 1; }
 }
@@ -260,7 +282,7 @@ _start_args() {
   source "$_MCP_LIB"
 
   local hidden_tools
-  hidden_tools="$(graph_delegation_mcp_catalog_hidden_tools)"
+  hidden_tools="$(graph_delegated_run_mcp_catalog_hidden_tools)"
   [[ "$hidden_tools" == *"ralph_run_plan"* ]] \
     || { echo "ralph_run_plan should be hidden for graph-node; got: $hidden_tools"; return 1; }
   [[ "$hidden_tools" == *"ralph_orchestrator_run"* ]] \
@@ -277,7 +299,7 @@ _start_args() {
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected scope denial despite forged depth=0"; return 1; }
   [[ "$LAST_ERROR" == *"scope"* ]] \
@@ -290,7 +312,7 @@ _start_args() {
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   local logfile; logfile="$(_no_recursion_log)"
   [ -f "$logfile" ] || { echo "no-recursion.log was not created"; return 1; }
@@ -302,11 +324,11 @@ _start_args() {
   export RALPH_MCP_SCOPE="graph-node"
   export RALPH_GRAPH_DELEGATION_DEPTH="1"
   # Policy claims maxDepth=5, which exceeds the frozen cap
-  export RALPH_GRAPH_NODE_POLICY='{"maxDepth":5,"native":{"mode":"off"},"crossRuntime":{"mode":"off","allowedRuntimes":[],"allowedAgents":[]}}'
+  export RALPH_GRAPH_NODE_POLICY='{"delegatedRuns":{"mode":"read-only","runtimes":["codex"],"roles":["research"],"maxRuns":3,"maxParallel":1}}'
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected depth denial even with maxDepth=5 in policy"; return 1; }
   [[ "$LAST_ERROR" == *"depth"* ]] \
@@ -327,16 +349,16 @@ _start_args() {
   unset RALPH_MCP_SCOPE  # simulates inheriting ambient MCP without scope restriction
   export RALPH_GRAPH_DELEGATION_DEPTH="1"
   # policy maxDepth=1, depth is already at limit
-  export RALPH_GRAPH_NODE_POLICY='{"maxDepth":1,"native":{"mode":"read-only","allowedAgents":["research"]},"crossRuntime":{"mode":"off","allowedRuntimes":[],"allowedAgents":[]}}'
+  export RALPH_GRAPH_NODE_POLICY='{"delegatedRuns":{"mode":"read-only","runtimes":["codex"],"roles":["research"],"maxRuns":3,"maxParallel":1}}'
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(jq -cn \
+  handle_delegated_run_start "$(jq -cn \
     --arg task "inspect" \
     --arg key "k-ambient" \
-    --arg rt "inherit" \
-    --arg ag "research" \
-    '{task:$task,idempotency_key:$key,runtime:$rt,agent:$ag}')" "true" "1"
+    --arg rt "codex" \
+    --arg role "research" \
+    '{task:$task,idempotencyKey:$key,runtime:$rt,role:$role}')" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected depth denial with unset scope + depth=1"; return 1; }
   [[ "$LAST_ERROR" == *"depth"* ]] \
@@ -346,16 +368,16 @@ _start_args() {
 @test "no-recursion: unset scope with depth=1 denial is logged to no-recursion.log" {
   unset RALPH_MCP_SCOPE
   export RALPH_GRAPH_DELEGATION_DEPTH="1"
-  export RALPH_GRAPH_NODE_POLICY='{"maxDepth":1,"native":{"mode":"read-only","allowedAgents":["research"]},"crossRuntime":{"mode":"off","allowedRuntimes":[],"allowedAgents":[]}}'
+  export RALPH_GRAPH_NODE_POLICY='{"delegatedRuns":{"mode":"read-only","runtimes":["codex"],"roles":["research"],"maxRuns":3,"maxParallel":1}}'
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(jq -cn \
+  handle_delegated_run_start "$(jq -cn \
     --arg task "inspect" \
     --arg key "k-ambient-log" \
-    --arg rt "inherit" \
-    --arg ag "research" \
-    '{task:$task,idempotency_key:$key,runtime:$rt,agent:$ag}')" "true" "1"
+    --arg rt "codex" \
+    --arg role "research" \
+    '{task:$task,idempotencyKey:$key,runtime:$rt,role:$role}')" "true" "1"
 
   local logfile; logfile="$(_no_recursion_log)"
   [ -f "$logfile" ] || { echo "no-recursion.log was not created"; return 1; }
@@ -371,11 +393,11 @@ _start_args() {
   # Agent sets scope to graph-node but RALPH_GRAPH_DELEGATION_DEPTH=1 still blocks
   export RALPH_MCP_SCOPE="graph-node"
   export RALPH_GRAPH_DELEGATION_DEPTH="1"
-  export RALPH_GRAPH_NODE_POLICY='{"maxDepth":1,"native":{"mode":"read-only","allowedAgents":["research"]},"crossRuntime":{"mode":"off","allowedRuntimes":[],"allowedAgents":[]}}'
+  export RALPH_GRAPH_NODE_POLICY='{"delegatedRuns":{"mode":"read-only","runtimes":["codex"],"roles":["research"],"maxRuns":3,"maxParallel":1}}'
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   [ -n "$LAST_ERROR" ] || { echo "expected depth denial for graph-node with depth=1"; return 1; }
   [[ "$LAST_ERROR" == *"depth"* ]] \
@@ -386,13 +408,13 @@ _start_args() {
   source "$REPO_ROOT/bundle/.ralph/bash-lib/graph/graph-delegation-ledger.sh"
 
   # Attempt to write a ledger entry with depth=2 (exceeds GRAPH_DEPTH_MAX=1)
-  run graph_depth_policy_ledger_guard "2" "ralph_delegate_start"
+  run graph_depth_policy_ledger_guard "2" "ralph_delegated_run_start"
 
   [ "$status" -ne 0 ] || { echo "ledger guard should reject depth=2"; return 1; }
 }
 
 @test "no-recursion: ledger guard allows depth <= 1" {
-  run graph_depth_policy_ledger_guard "1" "ralph_delegate_start"
+  run graph_depth_policy_ledger_guard "1" "ralph_delegated_run_start"
   [ "$status" -eq 0 ] || { echo "ledger guard should allow depth=1; got status=$status output=$output"; return 1; }
 }
 
@@ -447,7 +469,7 @@ _start_args() {
 
   source "$_MCP_LIB"
 
-  handle_delegate_start "$(_start_args)" "true" "1"
+  handle_delegated_run_start "$(_start_args)" "true" "1"
 
   local logfile; logfile="$(_no_recursion_log)"
   local record

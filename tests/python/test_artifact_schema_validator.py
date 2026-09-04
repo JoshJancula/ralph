@@ -250,7 +250,9 @@ class ArtifactSchemaOrchestrationTests(unittest.TestCase):
         artifact_rel = ".ralph-workspace/artifacts/demo/review.json"
         artifact_path = self.workspace / artifact_rel
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text(json.dumps({"status": "approved"}), encoding="utf-8")
+        # "feedback" is optional now, so an omitted key is valid; use an enum
+        # violation to keep exercising schema-failure location reporting.
+        artifact_path.write_text(json.dumps({"status": "maybe"}), encoding="utf-8")
         stage = {
             "id": "review",
             "artifacts": [
@@ -324,13 +326,53 @@ class ArtifactSchemaOrchestrationTests(unittest.TestCase):
             validate_orchestration_schema_paths(str(workspace), orchestration, artifact_ns="demo")
 
 
+# Bundled schemas that assert_supported_schema does not govern. That helper
+# validates operator-authored stage artifact-output schemas (finalOutputSchema),
+# whose only callers are planner_contract, router_contract, and rubric_contract.
+# Config schemas and multi-record containers live in the same directory but are
+# consumed by their own normalizers, so they are checked for their own shape.
+NON_ARTIFACT_SCHEMAS = {
+    # Killswitch config schema, consumed by killswitch_config.py. Carries the
+    # standard "$schema" annotation, which the artifact validator does not take.
+    "killswitch.schema.json",
+    # Container of the three workflow action record shapes, not one document.
+    "workflow-action.schema.json",
+}
+
+# Container schemas and the sub-schema keys each one holds.
+CONTAINER_SCHEMA_KEYS = {
+    "workflow-action.schema.json": ("request", "decision", "consumed"),
+}
+
+
 class BundledArtifactSchemaTests(unittest.TestCase):
     def test_bundled_schemas_are_supported_documents(self) -> None:
         schema_dir = REPO_ROOT / "bundle/.ralph/schemas"
+        seen = 0
         for schema_path in sorted(schema_dir.glob("*.schema.json")):
+            if schema_path.name in NON_ARTIFACT_SCHEMAS:
+                continue
             with self.subTest(schema=schema_path.name):
                 document = load_schema_document(str(schema_path))
                 assert_supported_schema(document)
+                seen += 1
+        # Guard against the exclusion set silently swallowing the whole glob.
+        self.assertGreater(seen, 0)
+
+    def test_container_schemas_hold_supported_sub_schemas(self) -> None:
+        schema_dir = REPO_ROOT / "bundle/.ralph/schemas"
+        for name, keys in CONTAINER_SCHEMA_KEYS.items():
+            document = load_schema_document(str(schema_dir / name))
+            self.assertEqual(tuple(document.keys()), keys)
+            for key in keys:
+                with self.subTest(schema=name, sub_schema=key):
+                    assert_supported_schema(document[key])
+
+    def test_excluded_schemas_still_exist_and_parse(self) -> None:
+        schema_dir = REPO_ROOT / "bundle/.ralph/schemas"
+        for name in sorted(NON_ARTIFACT_SCHEMAS):
+            with self.subTest(schema=name):
+                self.assertIsInstance(load_schema_document(str(schema_dir / name)), dict)
 
 
 if __name__ == "__main__":

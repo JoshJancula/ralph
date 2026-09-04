@@ -42,10 +42,18 @@ execution="$(awk '
   NR == 1 && $0 == "---" { in_frontmatter = 1; seen_open = 1; next }
   in_frontmatter && $0 == "---" { exit }
   in_frontmatter && $1 == "execution:" { print $2; exit }
+  # mode: is the public alias for execution: (AGENTS.md); map it the same way.
+  in_frontmatter && $1 == "mode:" && $2 == "dependency" { print "graph"; exit }
+  in_frontmatter && $1 == "mode:" && $2 == "sequential" { print "orchestration"; exit }
+  in_frontmatter && $1 == "mode:" && $2 == "standard" { print "standard"; exit }
 ' "$plan_path" 2>/dev/null || true)"
 
 if [[ "$execution" == "graph" ]]; then
-  graph_tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph.XXXXXX.json")"
+  # The X's must be the last characters of the template: BSD mktemp (macOS)
+  # ignores a trailing suffix and creates the literal path instead of a random
+  # one, so ".XXXXXX.json" made every run reuse /tmp/ralph-graph.XXXXXX.json and
+  # any second concurrent validation failed with "File exists".
+  graph_tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-json.XXXXXX")"
   trap 'rm -f "$graph_tmp"' EXIT
   if ! plan_pipeline_graph_json "$plan_path" >"$graph_tmp"; then
     exit 1

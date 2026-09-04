@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Contained graph-owned log paths under <run-dir>/logs/.
 #
-# Canonical v2 layout (paths stored relative to run-dir in the ledger):
+# Canonical layout (paths stored relative to run-dir in the ledger):
 #   logs/supervisor.log
 #   logs/admission.jsonl
 #   logs/nodes/<safe-node-id>/<attempt-id>/{runner.log,agent.log,usage.json}
 #
 # All writes go through graph_logs_resolve. Absolute paths, `..`, symlink
 # escapes, and identifiers that sanitize to a collision are rejected.
-# Namespace-only v1 paths under <state-root>/logs/<namespace>/ remain
-# readable for historical runs and are never opened for append.
+# Graph logs are owned by their run directory.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "This file is meant to be sourced, not executed." >&2
@@ -303,56 +302,10 @@ graph_logs_append() {
   printf '%s\n' "$text" >>"$abs" || return 1
 }
 
-# graph_logs_v1_namespace_dir <state-root> <namespace>
-# Historical namespace-only log root. Read-only.
-graph_logs_v1_namespace_dir() {
-  local state_root="$1" namespace="$2"
-  if [[ -z "$state_root" || -z "$namespace" ]]; then
-    echo "Error: graph_logs_v1_namespace_dir requires state-root and namespace" >&2
-    return 1
-  fi
-  printf '%s/logs/%s\n' "${state_root%/}" "$namespace"
-}
-
-# graph_logs_v1_supervisor <state-root> <namespace> <run-id>
-graph_logs_v1_supervisor() {
-  local state_root="$1" namespace="$2" run_id="$3"
-  printf '%s/graph-schedule-%s.log\n' \
-    "$(graph_logs_v1_namespace_dir "$state_root" "$namespace")" "$run_id"
-}
-
-# graph_logs_v1_admission <state-root> <namespace> <run-id>
-graph_logs_v1_admission() {
-  local state_root="$1" namespace="$2" run_id="$3"
-  printf '%s/graph-admission-%s.jsonl\n' \
-    "$(graph_logs_v1_namespace_dir "$state_root" "$namespace")" "$run_id"
-}
-
-# graph_logs_v1_node_dir <state-root> <namespace> <node-id>
-# Prefers the sanitized workspace key directory, then the raw node-id directory.
-graph_logs_v1_node_dir() {
-  local state_root="$1" namespace="$2" node_id="$3"
-  local root key_dir raw_dir
-  root="$(graph_logs_v1_namespace_dir "$state_root" "$namespace")/nodes"
-  if declare -F graph_workspace_node_key >/dev/null 2>&1; then
-    key_dir="$root/$(graph_workspace_node_key "$node_id" 2>/dev/null || true)"
-    if [[ -n "$key_dir" && -d "$key_dir" ]]; then
-      printf '%s\n' "$key_dir"
-      return 0
-    fi
-  fi
-  raw_dir="$root/$node_id"
-  if [[ -d "$raw_dir" ]]; then
-    printf '%s\n' "$raw_dir"
-    return 0
-  fi
-  printf '%s\n' "${key_dir:-$raw_dir}"
-}
-
-# graph_logs_read <run-dir> <relative-path> [v1-fallback-abs]
-# Prints the first existing readable file. Never creates or appends.
+# graph_logs_read <run-dir> <relative-path>
+# Prints a readable, contained run-owned file. Never creates or appends.
 graph_logs_read() {
-  local run_dir="$1" rel="$2" v1_fallback="${3:-}"
+  local run_dir="$1" rel="$2"
   local abs
   if [[ -n "$run_dir" && -n "$rel" ]]; then
     if abs="$(graph_logs_resolve "$run_dir" "$rel" 2>/dev/null)" && [[ -f "$abs" && ! -L "$abs" ]]; then
@@ -360,17 +313,12 @@ graph_logs_read() {
       return 0
     fi
   fi
-  if [[ -n "$v1_fallback" && -f "$v1_fallback" ]]; then
-    printf '%s\n' "$v1_fallback"
-    return 0
-  fi
   return 1
 }
 
 # graph_logs_owned_paths <run-dir>
 # Prints absolute paths owned by this run: the contained logs/ tree plus any
-# relative logPaths recorded in v2 node ledgers. Never emits namespace-only
-# v1 node directories.
+# relative logPaths recorded in canonical node ledgers.
 graph_logs_owned_paths() {
   local run_dir="$1"
   local run_real logs_dir node_file rel abs
@@ -394,18 +342,6 @@ graph_logs_owned_paths() {
   fi
 }
 
-# graph_logs_v1_run_owned_files <state-root> <namespace> <run-id>
-# Uniquely named v1 supervisor/admission files for one run. Node attempt
-# files under logs/<namespace>/nodes/ are not uniquely owned and are omitted.
-graph_logs_v1_run_owned_files() {
-  local state_root="$1" namespace="$2" run_id="$3"
-  local supervisor admission
-  supervisor="$(graph_logs_v1_supervisor "$state_root" "$namespace" "$run_id")" || return 0
-  admission="$(graph_logs_v1_admission "$state_root" "$namespace" "$run_id")" || return 0
-  [[ -f "$supervisor" ]] && printf '%s\n' "$supervisor"
-  [[ -f "$admission" ]] && printf '%s\n' "$admission"
-}
-
 # graph_logs_validate_stream <stream>
 # Accepts runner, agent, or usage.
 graph_logs_validate_stream() {
@@ -414,6 +350,33 @@ graph_logs_validate_stream() {
     *)
       echo "Error: graph logs --stream must be runner, agent, or usage" >&2
       return 1
+      ;;
+  esac
+}
+
+# workflow_logs_validate_public_stream <stream>
+# Public workflow logs streams (stage-scoped; no internal node/namespace args).
+workflow_logs_validate_public_stream() {
+  case "${1:-}" in
+    agent|supervisor|combined) return 0 ;;
+    *)
+      echo "Error: workflow logs --stream must be agent, supervisor, or combined" >&2
+      return 1
+      ;;
+  esac
+}
+
+# workflow_logs_map_public_stream <public-stream>
+# Prints internal graph stream name(s), one per line: agent, runner.
+workflow_logs_map_public_stream() {
+  local stream="${1:-}"
+  workflow_logs_validate_public_stream "$stream" || return 1
+  case "$stream" in
+    agent) printf 'agent\n' ;;
+    supervisor) printf 'runner\n' ;;
+    combined)
+      printf 'runner\n'
+      printf 'agent\n'
       ;;
   esac
 }
@@ -478,91 +441,13 @@ graph_logs_ledger_rel() {
   printf '%s\n' "$rel"
 }
 
-# graph_logs_v1_first_regular <dir> <glob-pattern> [attempt-id]
-# Prints one non-symlink regular file matching glob-pattern. Prefers a
-# basename that contains attempt-id. Otherwise requires exactly one match.
-graph_logs_v1_first_regular() {
-  local dir="$1" pattern="$2" attempt_id="${3:-}"
-  local f base named="" only="" count=0 named_count=0
-  local old_nullglob=""
-  [[ -n "$dir" && -d "$dir" && -n "$pattern" ]] || return 1
-  old_nullglob="$(shopt -p nullglob 2>/dev/null || true)"
-  shopt -s nullglob
-  for f in "$dir"/$pattern; do
-    [[ -f "$f" && ! -L "$f" ]] || continue
-    base="${f##*/}"
-    count=$((count + 1))
-    only="$f"
-    if [[ -n "$attempt_id" && "$base" == *"$attempt_id"* ]]; then
-      named_count=$((named_count + 1))
-      named="$f"
-    fi
-  done
-  if [[ -n "$old_nullglob" ]]; then
-    eval "$old_nullglob"
-  else
-    shopt -u nullglob
-  fi
-  if [[ "$named_count" -eq 1 ]]; then
-    printf '%s\n' "$named"
-    return 0
-  fi
-  if [[ "$count" -eq 1 ]]; then
-    printf '%s\n' "$only"
-    return 0
-  fi
-  return 1
-}
-
-# graph_logs_v1_stream_file <state-root> <namespace> <node-id> <attempt-id> <stream>
-# Historical namespace-only node files. Read-only; never creates or follows
-# symlinks. Identifiers with path components are rejected before join.
-graph_logs_v1_stream_file() {
-  local state_root="$1" namespace="$2" node_id="$3" attempt_id="$4" stream="$5"
-  local v1_dir=""
-  graph_logs_validate_stream "$stream" || return 1
-  if [[ -z "$state_root" || -z "$namespace" || -z "$node_id" ]]; then
-    return 1
-  fi
-  graph_logs_sanitize_id "$node_id" >/dev/null || return 1
-  if [[ -n "$attempt_id" ]]; then
-    graph_logs_sanitize_id "$attempt_id" >/dev/null || return 1
-  fi
-  v1_dir="$(graph_logs_v1_node_dir "$state_root" "$namespace" "$node_id")" || return 1
-  [[ -d "$v1_dir" ]] || return 1
-  case "$stream" in
-    runner)
-      if [[ -n "$attempt_id" ]]; then
-        graph_logs_regular_file "$v1_dir/${attempt_id}.log" && return 0
-        graph_logs_regular_file "$v1_dir/attempt-${attempt_id}.log" && return 0
-      fi
-      graph_logs_regular_file "$v1_dir/runner.log" && return 0
-      graph_logs_v1_first_regular "$v1_dir" "attempt-*.log" "$attempt_id" && return 0
-      ;;
-    agent)
-      graph_logs_regular_file "$v1_dir/agent.log" && return 0
-      if [[ -n "$attempt_id" ]]; then
-        graph_logs_regular_file "$v1_dir/${attempt_id}-output.log" && return 0
-      fi
-      graph_logs_v1_first_regular "$v1_dir" "plan-runner-*-output.log" "$attempt_id" && return 0
-      ;;
-    usage)
-      graph_logs_regular_file "$v1_dir/usage.json" && return 0
-      graph_logs_regular_file "$v1_dir/plan-usage-summary.json" && return 0
-      ;;
-  esac
-  return 1
-}
-
 # graph_logs_select <run-dir> <node_json> <attempt_id> <stream>
-#   [state-root] [namespace] [node-id]
 # Resolves one readable log file. Ledger-owned relative paths are resolved
-# only through graph_logs_resolve. A missing contained file may fall back
-# to a v1 namespace path. A present but uncontained ledger path is fatal.
+# only through graph_logs_resolve. A present but uncontained ledger path is
+# fatal; a missing ledger-owned file is a real error.
 graph_logs_select() {
   local run_dir="$1" node_json="$2" attempt_id="$3" stream="$4"
-  local state_root="${5:-}" namespace="${6:-}" node_id="${7:-}"
-  local resolved_attempt="" rel="" abs="" v1="" rc=0
+  local resolved_attempt="" rel="" abs="" rc=0
 
   graph_logs_validate_stream "$stream" || return 1
   resolved_attempt="$(graph_logs_ledger_attempt_id "$node_json" "$attempt_id")" || return 1
@@ -589,14 +474,6 @@ graph_logs_select() {
     fi
   fi
 
-  if [[ -n "$state_root" && -n "$namespace" && -n "$node_id" ]]; then
-    v1="$(graph_logs_v1_stream_file "$state_root" "$namespace" "$node_id" "$resolved_attempt" "$stream" 2>/dev/null || true)"
-    if [[ -n "$v1" ]]; then
-      printf '%s\n' "$v1"
-      return 0
-    fi
-  fi
-
   echo "Error: graph log not found for stream '$stream'" >&2
   return 1
 }
@@ -618,4 +495,35 @@ graph_logs_print_file() {
     return $?
   fi
   cat "$abs"
+}
+
+# _graph_logs_operator_view_ready
+# Lazy-load the operator read model without a circular import at file load.
+_graph_logs_operator_view_ready() {
+  if declare -F graph_operator_view_build >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck source=./graph-operator-view.sh
+  source "$GRAPH_LOGS_SCRIPT_DIR/graph-operator-view.sh"
+}
+
+# graph_logs_operator_context_print <workspace> <namespace> <run_id> <node_id> [stream]
+# Read-only. Prints the shared operator context header on stdout. Log bytes
+# follow on stdout after the separator when callers tee stderr/stdout apart.
+graph_logs_operator_context_print() {
+  local workspace="$1" namespace="$2" run_id="$3" node_id="$4" stream="${5:-agent}"
+  local view_json=""
+  _graph_logs_operator_view_ready || return 0
+  view_json="$(graph_operator_view_build "$workspace" "$namespace" "$run_id" 2>/dev/null)" || return 0
+  graph_operator_view_format_logs_context "$view_json" "$node_id" "$stream"
+}
+
+# graph_attach_operator_context_print <workspace> <namespace> <run_id>
+# Read-only attach/status snapshot from the same operator projection.
+graph_attach_operator_context_print() {
+  local workspace="$1" namespace="$2" run_id="$3"
+  local view_json=""
+  _graph_logs_operator_view_ready || return 1
+  view_json="$(graph_operator_view_build "$workspace" "$namespace" "$run_id" 2>/dev/null)" || return 1
+  graph_operator_view_format_attach_snapshot "$view_json"
 }

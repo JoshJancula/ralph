@@ -319,14 +319,69 @@ ralph_native_shell_terminate_spawned_job() {
   printf '%s\n' "$escalated"
 }
 
+# Best-effort process-start identity for <pid>.
+# Exit 0: process exists; start identity printed on stdout.
+# Exit 1: process is dead or pid is invalid.
+# Exit 2: process inspection is unavailable or restricted.
+ralph_native_shell_process_start_id_of_pid() {
+  local pid="${1:-}" start=""
+
+  if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  if [[ -d "/proc" ]]; then
+    if [[ -d "/proc/$pid" ]]; then
+      if command -v stat >/dev/null 2>&1; then
+        start="$(stat -c %Z "/proc/$pid" 2>/dev/null || stat -f %B "/proc/$pid" 2>/dev/null || true)"
+      fi
+      if [[ -n "$start" ]]; then
+        printf '%s\n' "$start"
+        return 0
+      fi
+      return 2
+    fi
+    return 1
+  fi
+
+  if command -v ps >/dev/null 2>&1; then
+    start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1)"
+    if [[ -n "$start" ]]; then
+      printf '%s\n' "$start"
+      return 0
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      return 2
+    fi
+    return 1
+  fi
+
+  return 2
+}
+
 ralph_native_shell_pid_running() {
   local pid="${1:-}"
-  local stat=""
+  local expected_start_id="${2:-}"
+  local stat="" current_start="" start_rc=0
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
-  [[ -n "$stat" ]] || return 0
+  [[ -n "$stat" ]] || {
+    if [[ -n "$expected_start_id" && "$expected_start_id" != "unknown" ]]; then
+      current_start="$(ralph_native_shell_process_start_id_of_pid "$pid")" || start_rc=$?
+      if (( start_rc == 0 )) && [[ "$current_start" != "$expected_start_id" ]]; then
+        return 1
+      fi
+    fi
+    return 0
+  }
   [[ "$stat" == Z* ]] && return 1
+  if [[ -n "$expected_start_id" && "$expected_start_id" != "unknown" ]]; then
+    current_start="$(ralph_native_shell_process_start_id_of_pid "$pid")" || start_rc=$?
+    if (( start_rc == 0 )) && [[ "$current_start" != "$expected_start_id" ]]; then
+      return 1
+    fi
+  fi
   return 0
 }
 

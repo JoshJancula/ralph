@@ -6,46 +6,83 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/atomic-json.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-state.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-status.sh"
+source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-operator-view.sh"
+
+# Test fixture adapter for the compact node-state setup used below. Production
+# graph-state.sh exposes only the canonical JSON ledger API.
+eval "$(declare -f graph_state_write_node | sed 's/^graph_state_write_node /graph_state_write_node_canonical /')"
+graph_state_write_node() {
+  if [[ "$#" -le 8 ]]; then
+    graph_state_write_node_canonical "$@"
+    return
+  fi
+  local workspace="$1" namespace="$2" run_id="$3" node_id="$4" state="$5"
+  local attempt_id="${6:-}" outcome="${7:-}" exit_code="${8:-0}"
+  local started_at="${9:-}" finished_at="${10:-}" runtime="${11:-}" native_subagents="${12:-}" reason="${13:-}" extra="${14:-}"
+  local fields='{}'
+  fields="$(jq -cn --arg outcome "$outcome" --argjson exitCode "${exit_code:-0}" --arg startedAt "$started_at" --arg finishedAt "$finished_at" --arg runtime "$runtime" --arg nativeSubagents "$native_subagents" --arg reason "$reason" '{outcome:$outcome,exitCode:$exitCode,startedAt:$startedAt,finishedAt:$finishedAt,runtime:$runtime,nativeSubagents:$nativeSubagents,reason:$reason}')"
+  if [[ "$state" != "running" ]]; then
+    graph_state_write_node_canonical "$workspace" "$namespace" "$run_id" "$node_id" running "$attempt_id" "$(jq -c 'del(.outcome,.exitCode,.finishedAt)' <<<"$fields")" >/dev/null || return
+  fi
+  graph_state_write_node_canonical "$workspace" "$namespace" "$run_id" "$node_id" "$state" "$attempt_id" "$fields" "${extra:-{}}"
+}
 
 DIAMOND_PLAN="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-diamond.plan.md"
 CONSENSUS_GRAPH_JSON="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-consensus.graph.json"
 GRAPH_RUN_SH="$REPO_ROOT/bundle/.ralph/graph-run.sh"
 PRODUCTION_FIXTURE_DIR="$BATS_TEST_DIRNAME/../../fixtures/graph-production-failure"
+REAL_RUN_NS="ralph-plugin-beta-graph"
+REAL_RUN_ID="run-20260815T021145Z-0-udoZs5"
 
 # ---------------------------------------------------------------------------
 # Helper: build a completed ledger for a diamond graph
 # ---------------------------------------------------------------------------
 
-setup() {
-  TMPD="$(mktemp -d)"
-  WORKSPACE="$TMPD/ws"
-  mkdir -p "$WORKSPACE"
-  NAMESPACE="test-ns"
-  RUN_ID="run-test-001"
-
-  # Compile the diamond plan into a graph json.
-  GRAPH_JSON="$TMPD/graph.json"
-  local plan_copy="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
+# The completed diamond ledger is identical for every test in this file, and
+# building it costs ~4s (graph compile plus per-node atomic ledger writes).
+# Build it once per file and hand each test a copy; a test that mutates state
+# only ever touches its own copy.
+setup_file() {
+  local ws="$BATS_FILE_TMPDIR/template/ws"
+  mkdir -p "$ws"
+  local plan_copy="$ws/$(basename "$DIAMOND_PLAN")"
   cp "$DIAMOND_PLAN" "$plan_copy"
-  plan_pipeline_graph_json "$plan_copy" > "$GRAPH_JSON"
+  plan_pipeline_graph_json "$plan_copy" > "$BATS_FILE_TMPDIR/template/graph.json"
 
-  # Initialize the ledger.
   graph_state_init_run \
-    "$WORKSPACE" "$NAMESPACE" "$RUN_ID" \
-    "$plan_copy" "$GRAPH_JSON" 2 >/dev/null
+    "$ws" "test-ns" "run-test-001" \
+    "$plan_copy" "$BATS_FILE_TMPDIR/template/graph.json" 2 >/dev/null
 
-  # Mark each node with a completed state so status has something to show.
-  # Diamond graph has: source, left, right, join (id names may vary).
   local now="2026-01-01T00:00:00Z"
   local done="2026-01-01T00:01:00Z"
   while IFS= read -r nid || [[ -n "$nid" ]]; do
     [[ -z "$nid" ]] && continue
     graph_state_write_node \
-      "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" \
+      "$ws" "test-ns" "run-test-001" "$nid" \
       "succeeded" \
       "${nid}-attempt-1" "succeeded" "0" \
       "$now" "$done" "cursor" "off" "" >/dev/null
-  done < <(jq -r '.nodes[].id' "$GRAPH_JSON")
+  done < <(jq -r '.nodes[].id' "$BATS_FILE_TMPDIR/template/graph.json")
+}
+
+setup() {
+  TMPD="$(mktemp -d)"
+  WORKSPACE="$TMPD/ws"
+  NAMESPACE="test-ns"
+  RUN_ID="run-test-001"
+  GRAPH_JSON="$TMPD/graph.json"
+
+  cp -R "$BATS_FILE_TMPDIR/template/ws" "$WORKSPACE"
+  cp "$BATS_FILE_TMPDIR/template/graph.json" "$GRAPH_JSON"
+
+  # run.json records an absolute planPath; repoint it at this copy so a test
+  # that reads it sees its own workspace.
+  local run_json="$WORKSPACE/.ralph-workspace/graph-runs/$NAMESPACE/$RUN_ID/run.json"
+  if [[ -f "$run_json" ]]; then
+    local plan_copy="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
+    jq --arg p "$plan_copy" '.planPath = $p' "$run_json" > "$run_json.tmp" \
+      && mv "$run_json.tmp" "$run_json"
+  fi
 }
 
 teardown() {
@@ -57,7 +94,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "status shows every node with its state and attempt count" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
   # All nodes from the diamond graph must appear.
   local node_ids
@@ -70,14 +107,14 @@ teardown() {
 }
 
 @test "status shows runtime from the frozen graph" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
   # The diamond plan uses cursor runtime throughout.
   printf '%s\n' "$output" | grep -q 'cursor'
 }
 
 @test "status shows attempt count of 1 for each node" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
   # Each table row for a node has attempt count 1 (set in setup).
   printf '%s\n' "$output" | grep -q '^[A-Za-z]' || true  # at least a node row exists
@@ -87,6 +124,13 @@ teardown() {
   run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'succeeded'
+}
+
+@test "default status collapses untouched pending nodes to a count" {
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'untouched:.*pending'
+  ! printf '%s\n' "$output" | grep -q '^NODE '
 }
 
 # ---------------------------------------------------------------------------
@@ -103,7 +147,7 @@ teardown() {
 
   local run_dir
   run_dir="$(dirname "$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")")"
-  printf '%s\n' '{"event":"admission","workKind":"agent","decision":"admitted","subagents":"off","sameRuntimeParallelSafe":true,"reason":"admitted"}' \
+  printf '%s\n' '{"event":"admission","workKind":"agent","decision":"admitted","nativeSubagents":"off","sameRuntimeParallelSafe":true,"reason":"admitted"}' \
     >"$run_dir/observability.jsonl"
 
   run _graph_status_concurrency_reductions "$run_dir"
@@ -116,9 +160,8 @@ teardown() {
 
 @test "status counts one unique attempt when a running transition and its terminal transition both append to attempts[]" {
   # Based on the sanitized attempt-running-then-terminal-transition fixture:
-  # a v1 ledger appends a separate attempts[] record for the running
-  # transition and the terminal transition of the same attemptId. Status
-  # must report one attempt, not two transition records.
+  # A running transition and terminal transition share one attempt record.
+  # Status must report one attempt.
   jq -e '.fixture.events | length == 2' \
     "$PRODUCTION_FIXTURE_DIR/attempt-running-then-terminal-transition.json" >/dev/null
 
@@ -138,8 +181,7 @@ teardown() {
     "running" \
     "$attempt_id" "" "" \
     "2026-01-01T00:00:00Z" "" "cursor" "off" "" >/dev/null
-  # Terminal transition: appends a second attempts[] record for the same
-  # attemptId rather than updating the first (the known v1 duplication bug).
+  # Terminal transition updates the same canonical attempt record.
   graph_state_write_node \
     "$WORKSPACE" "$NAMESPACE" "$transition_run" "$nid" \
     "succeeded" \
@@ -148,12 +190,11 @@ teardown() {
 
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$transition_run" "$nid")"
-  # Confirm the ledger really does hold two raw records for one attemptId,
-  # so this test exercises the display-layer fix, not a ledger-layer one.
-  [ "$(jq '.attempts | length' "$node_file")" -eq 2 ]
+  # Canonical schema 2 has exactly one record per attemptId.
+  [ "$(jq '.attempts | length' "$node_file")" -eq 1 ]
   [ "$(jq '[.attempts[].attemptId] | unique | length' "$node_file")" -eq 1 ]
 
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$transition_run"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$transition_run" --details
   [ "$status" -eq 0 ]
   local row
   row="$(printf '%s\n' "$output" | grep "^${nid} ")"
@@ -163,7 +204,7 @@ teardown() {
 }
 
 @test "status renders every graph node exactly once in the default table" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
   local node_ids
   node_ids="$(jq -r '.nodes[].id' "$GRAPH_JSON")"
@@ -176,9 +217,9 @@ teardown() {
 }
 
 @test "status displays unavailable usage as n/a rather than an empty aggregate" {
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q 'usage parent=n/a brokered-children=n/a'
+  printf '%s\n' "$output" | grep -q 'usage parent=n/a delegated-runs=n/a'
   ! printf '%s\n' "$output" | grep -q 'usage parent={}'
 }
 
@@ -274,45 +315,53 @@ teardown() {
   printf '%s\n' "$output" | grep -q 'pending'
 }
 
-@test "status exposes v2 workspace, gate, repair, child, usage, and admission observations without mutation" {
-  local node="$(jq -r '.nodes[0].id' "$GRAPH_JSON")"
+@test "status exposes workspace, gate, repair, child, usage, and admission observations without mutation" {
+  local observed_run="run-observed-001" node="$(jq -r '.nodes[0].id' "$GRAPH_JSON")"
   local node_file before after delegation_dir
-  node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$node")"
-  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$node" "failed" \
-    "${node}-obs" "failed" "1" "2026-01-01T00:00:00Z" "2026-01-01T00:01:00Z" "cursor" "on" "gate changes required" \
-    '{"workspaceMode":"snapshot","workspacePath":"/isolated/node","writeScopes":["src"],"frozenBase":"frozen-base-0123456789","changesetHash":"changeset-0123456789","integrationInputs":["left.json","right.json"],"conflictArtifact":"integration.conflict.json","gateOutcome":"changes-required","repairEpoch":"repair-1","nativeSubagentMode":"read-only","usageSnapshot":{"input_tokens":10},"admissionSummary":{"reason":"runtime-overlay"},"publishReadiness":{"status":"drifted"},"verificationResourceClasses":["exclusive"]}' >/dev/null
-  delegation_dir="$(dirname "$node_file")/$(basename "$node_file" .json)/delegations/delegation-observed"
-  mkdir -p "$delegation_dir"
-  printf '%s\n' '{"delegationId":"observed","runtime":"codex"}' >"$delegation_dir/request.json"
-  printf '%s\n' '{"status":"awaiting-ack","usage":{"inputTokens":4}}' >"$delegation_dir/status.json"
-  mkdir -p "${delegation_dir%observed}cancelled"
-  printf '%s\n' '{"delegationId":"cancelled","runtime":"claude"}' >"${delegation_dir%observed}cancelled/request.json"
-  printf '%s\n' '{"status":"cancelled"}' >"${delegation_dir%observed}cancelled/status.json"
-  printf '{"schemaVersion":1,"sequence":99,"timestamp":"2026-01-01T00:00:00Z","runId":"%s","event":"native-subagent-finished","nodeId":"%s","attemptId":null,"details":{"role":"research"}}\n' "$RUN_ID" "$node" >"$(dirname "$node_file")/../events.jsonl"
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$observed_run" \
+    "$WORKSPACE/$(basename "$DIAMOND_PLAN")" "$GRAPH_JSON" 2 >/dev/null
+  node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$observed_run" "$node")"
+  local observed_extra='{"workspaceMode":"snapshot","workspacePath":"/isolated/node","writeScopes":["src"],"frozenBase":"frozen-base-0123456789","changesetHash":"changeset-0123456789","integrationInputs":["left.json","right.json"],"conflictArtifact":"integration.conflict.json","gateOutcome":"changes-required","repairEpoch":"repair-1","nativeSubagentMode":"read-only","usageSnapshot":{"input_tokens":10},"admissionSummary":{"reason":"runtime-overlay"},"publishReadiness":{"status":"drifted"},"verificationResourceClasses":["exclusive"]}'
+  graph_state_write_node_canonical "$WORKSPACE" "$NAMESPACE" "$observed_run" "$node" running \
+    "${node}-obs" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor","nativeSubagents":"inherit"}' "$observed_extra" >/dev/null
+  graph_state_write_node_canonical "$WORKSPACE" "$NAMESPACE" "$observed_run" "$node" failed \
+    "${node}-obs" '{"outcome":"failed","exitCode":1,"finishedAt":"2026-01-01T00:01:00Z","reason":"gate changes required"}' "$observed_extra" >/dev/null
+  # Delegated runs live in the flat state-root ledger, keyed by delegatedRunId.
+  local delegated_root="$WORKSPACE/.ralph-workspace/delegated-runs"
+  local observed_id="delegated-run-0123456789abcdef01234567"
+  local cancelled_id="delegated-run-0123456789abcdef01234568"
+  mkdir -p "$delegated_root/$observed_id" "$delegated_root/$cancelled_id"
+  printf '%s\n' "{\"delegatedRunId\":\"$observed_id\",\"runtime\":\"codex\",\"role\":\"research\"}" \
+    >"$delegated_root/$observed_id/request.json"
+  printf '%s\n' '{"status":"running","usage":{"inputTokens":4}}' \
+    >"$delegated_root/$observed_id/status.json"
+  printf '%s\n' "{\"delegatedRunId\":\"$cancelled_id\",\"runtime\":\"claude\"}" \
+    >"$delegated_root/$cancelled_id/request.json"
+  printf '%s\n' '{"status":"cancelled"}' >"$delegated_root/$cancelled_id/status.json"
+  printf '{"schemaVersion":1,"sequence":99,"timestamp":"2026-01-01T00:00:00Z","runId":"%s","event":"native-subagent-finished","nodeId":"%s","attemptId":null,"details":{"role":"research"}}\n' "$observed_run" "$node" >"$(dirname "$node_file")/../events.jsonl"
 
   before="$(find "$(graph_state_runs_root "$WORKSPACE")" -type f -exec shasum {} \; | sort)"
 
-  # The run-summary usage aggregate is part of the default output (not
-  # gated behind --details).
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID"
+  # The run-summary usage aggregate is part of the --details output.
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$observed_run" --details
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -q 'brokered-children={"inputTokens":4}'
+  printf '%s\n' "$output" | grep -q 'delegated-runs={"inputTokens":4}'
   # Verbose per-node/per-attempt metadata is not part of the default output.
   ! printf '%s\n' "$output" | grep -q 'mode=snapshot'
-  ! printf '%s\n' "$output" | grep -q 'brokered child=observed'
+  ! printf '%s\n' "$output" | grep -q "delegated run=$observed_id"
   ! printf '%s\n' "$output" | grep -q 'native-subagent event=native-subagent-finished'
 
-  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" --details
+  run graph_status_run "$WORKSPACE" "$NAMESPACE" "$observed_run" --details
   [ "$status" -eq 0 ]
   after="$(find "$(graph_state_runs_root "$WORKSPACE")" -type f -exec shasum {} \; | sort)"
   [ "$before" = "$after" ]
   printf '%s\n' "$output" | grep -q 'mode=snapshot'
   printf '%s\n' "$output" | grep -q 'gateOutcome=changes-required'
   printf '%s\n' "$output" | grep -q 'repairEpoch=repair-1'
-  printf '%s\n' "$output" | grep -q 'brokered child=observed'
-  printf '%s\n' "$output" | grep -q 'brokered child=cancelled'
+  printf '%s\n' "$output" | grep -q "delegated run=$observed_id"
+  printf '%s\n' "$output" | grep -q "delegated run=$cancelled_id"
   printf '%s\n' "$output" | grep -q 'native-subagent event=native-subagent-finished'
-  printf '%s\n' "$output" | grep -q 'brokered-children={"inputTokens":4}'
+  printf '%s\n' "$output" | grep -q 'delegated-runs={"inputTokens":4}'
   printf '%s\n' "$output" | grep -q 'verificationResources='
 }
 
@@ -367,9 +416,9 @@ teardown() {
   "policy": "veto",
   "decision": "changes-required",
   "voters": [
-    {"voterId": "review:alpha", "runtime": "cursor",  "status": "approved",          "agent": "code-review", "confidence": 0.9},
-    {"voterId": "review:beta",  "runtime": "codex",   "status": "changes-required",  "agent": "code-review", "confidence": 0.7},
-    {"voterId": "review:gamma", "runtime": "claude",  "status": "approved",          "agent": "code-review", "confidence": 0.85}
+    {"voterId": "review:alpha", "runtime": "cursor",  "status": "approved",          "role": "code-review", "confidence": 0.9},
+    {"voterId": "review:beta",  "runtime": "codex",   "status": "changes-required",  "role": "code-review", "confidence": 0.7},
+    {"voterId": "review:gamma", "runtime": "claude",  "status": "approved",          "role": "code-review", "confidence": 0.85}
   ],
   "dissent": ["review:beta"],
   "agreement": 0.667
@@ -493,6 +542,7 @@ RESULT
     --workspace "$WORKSPACE"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'succeeded'
+  printf '%s\n' "$output" | grep -q '== COMPLETION =='
   ! printf '%s\n' "$output" | grep -q 'flowchart TD'
 }
 
@@ -512,4 +562,80 @@ RESULT
     --run latest \
     --workspace "$WORKSPACE"
   [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# G06-G08 operator view: action-first default screen
+# ---------------------------------------------------------------------------
+
+@test "operator view build emits graph-operator-view/v1 with attention ordering" {
+  local live_run_id="run-awaiting"
+  local now="2026-01-01T00:00:00Z"
+  local plan_copy="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
+
+  graph_state_init_run \
+    "$WORKSPACE" "$NAMESPACE" "$live_run_id" \
+    "$plan_copy" "$GRAPH_JSON" 2 >/dev/null
+
+  local first_nid second_nid
+  first_nid="$(jq -r '.nodes[0].id' "$GRAPH_JSON")"
+  second_nid="$(jq -r '.nodes[1].id' "$GRAPH_JSON")"
+
+  graph_state_write_node \
+    "$WORKSPACE" "$NAMESPACE" "$live_run_id" "$first_nid" \
+    "awaiting-operator" \
+    "${first_nid}-attempt-1" "awaiting-operator" "4" \
+    "$now" "2026-01-01T00:01:00Z" "cursor" "off" "" >/dev/null
+
+  graph_state_write_node \
+    "$WORKSPACE" "$NAMESPACE" "$live_run_id" "$second_nid" \
+    "failed" \
+    "${second_nid}-attempt-1" "failed" "1" \
+    "$now" "2026-01-01T00:02:00Z" "cursor" "off" "" >/dev/null
+
+  local run_file
+  run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$live_run_id")"
+  jq '.status = "failed"' "$run_file" >"${run_file}.tmp" && mv "${run_file}.tmp" "$run_file"
+
+  run graph_operator_view_build "$WORKSPACE" "$NAMESPACE" "$live_run_id"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.schema')" = "graph-operator-view/v1" ]
+  [ "$(printf '%s' "$output" | jq -r '.attention[0].state')" = "awaiting-operator" ]
+  [ "$(printf '%s' "$output" | jq -r '.attention[0].nodeId')" = "$first_nid" ]
+  [ "$(printf '%s' "$output" | jq -r '.attention[1].state')" = "failed" ]
+  [ "$(printf '%s' "$output" | jq -r '.attention[1].nodeId')" = "$second_nid" ]
+  [ "$(printf '%s' "$output" | jq -r '.pending.count')" -ge 1 ]
+}
+
+@test "default status snapshot explains real-run failures and waits without listing every pending node" {
+  local run_file
+  run_file="$(graph_state_run_file "$REPO_ROOT" "$REAL_RUN_NS" "$REAL_RUN_ID" 2>/dev/null || true)"
+  [ -n "$run_file" ]
+  [ -f "$run_file" ]
+
+  run env NO_COLOR=1 COLUMNS=80 bash "$GRAPH_RUN_SH" status \
+    --namespace "$REAL_RUN_NS" \
+    --run "$REAL_RUN_ID" \
+    --workspace "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+
+  # First screen: attention before routine pending noise.
+  local first_screen
+  first_screen="$(printf '%s\n' "$output" | head -n 40)"
+  printf '%s\n' "$first_screen" | grep -q '== NEEDS ATTENTION =='
+  printf '%s\n' "$first_screen" | grep -q 'awaiting-operator'
+  printf '%s\n' "$first_screen" | grep -q 'stage terminated before completion'
+  printf '%s\n' "$first_screen" | grep -q "ralph workflow actions list $REAL_RUN_ID"
+  printf '%s\n' "$first_screen" | grep -q '(failed)'
+
+  # Failed nodes still surface a runner-log command somewhere in the screen.
+  printf '%s\n' "$output" | grep -q "ralph workflow logs $REAL_RUN_ID"
+
+  # Collapsed pending; no exhaustive node table in default mode.
+  printf '%s\n' "$output" | grep -q 'untouched:.*pending'
+  ! printf '%s\n' "$output" | grep -q '^adapter-antigravity-lifecycle '
+
+  # Operator guidance, not raw ledger paths.
+  ! printf '%s\n' "$first_screen" | grep -q 'nodes/implement-cli-bootstrap.json'
+  ! printf '%s\n' "$first_screen" | grep -q 'operator/requests/'
 }

@@ -1,20 +1,21 @@
 <!-- GENERATED from bundle/.ralph/plugin-inputs/workflows/ralph-run.md by scripts/sync-plugin-assets.sh - edit the canonical file -->
 ---
 name: ralph-run
-description: Preview an exact Ralph plan, orchestration, or graph command and hand execution to an operator-confirmed terminal gate.
+description: Preview an exact Ralph leaf-plan or workflow start/resume command and hand execution to an operator-confirmed terminal gate.
 ---
 
 # ralph-run
 
 Use this workflow only when the current user directly asks to run or resume
 Ralph work. It is the sole executing workflow. Never call `ralph run`, `ralph
-graph run`, `ralph graph resume`, or the orchestrator directly.
+workflow start`, `ralph workflow resume`, or engine scripts directly.
 
 ## Required operator journey
 
-1. Collect the execution kind, absolute plan path, project root, state root,
-   agent workspace, and any runtime, agent, model, namespace, or run id required
-   by that kind. Never invent a runtime or model.
+1. Collect the execution kind (`plan`, `workflow-start`, or `workflow-resume`),
+   absolute paths, project root, state root, agent workspace, and any runtime,
+   model, native-subagent policy, task, input plan, or run id required by that
+   kind. Never invent a runtime or model.
 2. Resolve the shared scripts relative to this workflow or skill. Run the
    bootstrap `probe --json`. If it is not `usable` or `newer`, stop with its
    remediation; do not install automatically.
@@ -39,19 +40,32 @@ else
   RALPH_PLUGIN_EXEC="${CLAUDE_PLUGIN_ROOT:-.}/$_exec_rel"
 fi
 
-/bin/bash "$RALPH_PLUGIN_EXEC" preview \
-  --kind "$RALPH_PLUGIN_KIND" \
-  --plan "$RALPH_PLUGIN_PLAN_PATH" \
-  --runtime "$RALPH_PLUGIN_RUNTIME" \
-  --agent "$RALPH_PLUGIN_AGENT" \
-  --model "$RALPH_PLUGIN_MODEL" \
-  --workspace "$RALPH_PLUGIN_PROJECT_ROOT" \
-  --workspace-root "$RALPH_PLUGIN_STATE_ROOT" \
+preview_args=(
+  preview
+  --kind "$RALPH_PLUGIN_KIND"
+  --workspace "$RALPH_PLUGIN_PROJECT_ROOT"
+  --workspace-root "$RALPH_PLUGIN_STATE_ROOT"
   --agent-workspace "$RALPH_PLUGIN_AGENT_WORKSPACE"
+)
+[[ -n "${RALPH_PLUGIN_PLAN_PATH:-}" ]] && preview_args+=(--plan "$RALPH_PLUGIN_PLAN_PATH")
+[[ -n "${RALPH_PLUGIN_TASK:-}" ]] && preview_args+=(--task "$RALPH_PLUGIN_TASK")
+[[ -n "${RALPH_PLUGIN_LEAF_PLAN:-}" ]] && preview_args+=(--input-plan "$RALPH_PLUGIN_LEAF_PLAN")
+[[ -n "${RALPH_PLUGIN_RUNTIME:-}" ]] && preview_args+=(--runtime "$RALPH_PLUGIN_RUNTIME")
+[[ -n "${RALPH_PLUGIN_MODEL:-}" ]] && preview_args+=(--model "$RALPH_PLUGIN_MODEL")
+[[ -n "${RALPH_PLUGIN_NATIVE_SUBAGENTS:-}" ]] && preview_args+=(--native-subagents "$RALPH_PLUGIN_NATIVE_SUBAGENTS")
+[[ -n "${RALPH_PLUGIN_RUN_ID:-}" ]] && preview_args+=(--run "$RALPH_PLUGIN_RUN_ID")
+/bin/bash "$RALPH_PLUGIN_EXEC" "${preview_args[@]}"
 ```
 
-For graph run, add `--namespace`. For graph resume, add both `--namespace` and
-`--run`. Preserve model values byte-for-byte.
+Kinds:
+
+- `plan`: `--plan` is a leaf Ralph plan; preview builds `ralph run --plan ...`.
+- `workflow-start`: `--plan` is a workflow definition file; optional `--task`
+  and `--input-plan` (supplied leaf plan) map to public start flags.
+- `workflow-resume`: requires `--run <run-id>`; continues the same control plan.
+
+Preserve model values byte-for-byte. In the preview, runtime, model source, and
+native subagents are separate fields. Native subagents are an execution policy.
 
 ## Operator-terminal execution
 

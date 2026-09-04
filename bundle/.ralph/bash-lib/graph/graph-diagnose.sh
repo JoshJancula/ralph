@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic-first gate-failure diagnosis and repair-lane feedback routing
-# (v2-feedback-routing). Maps a gate node's gate-result.json to owning write
+# Maps a gate node's gate-result.json to owning write
 # scopes/repair lanes declared inside a repairRounds round, escalating to a
 # delegation-disabled router/diagnostic agent only when a finding's files
 # match more than one lane's writeScopes.

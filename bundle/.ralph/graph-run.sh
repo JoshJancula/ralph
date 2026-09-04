@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Graph mode entrypoint (`ralph graph <verb>`): compile, preflight, run, resume,
+# Graph engine entrypoint (internal: bash .ralph/graph-run.sh <verb>): compile, preflight, run, resume,
 # status, render, actions, logs, attach, tui, recover, and successor. compile
 # lints and visualizes an existing pipeline plan's implicit artifact DAG without
 # running anything; preflight compiles a plan and prints the read-only
@@ -16,12 +16,18 @@
 # never touches the loop execution path in run-plan.sh or orchestrator.sh.
 #
 # Phase 3 ledger note: each attempt entry must record the resolved stage
-# subagents value (inherit|on|off). Omitting it would hide an unaccounted
+# nativeSubagents value (off|inherit). Omitting it would hide an unaccounted
 # token source and corrupt savings/usage comparisons.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RALPH_BASH_LIB="$SCRIPT_DIR/bash-lib"
+# shellcheck source=bash-lib/help-render.sh
+source "$RALPH_BASH_LIB/help-render.sh"
+# Bind ownership once in the entrypoint process. graph_state_init_run obtains
+# this value through command substitution, where BASHPID would otherwise be a
+# short-lived child rather than the graph supervisor.
+export GRAPH_STATE_SUPERVISOR_PID="${GRAPH_STATE_SUPERVISOR_PID:-${BASHPID:-$$}}"
 
 # shellcheck source=bash-lib/graph/graph-compile.sh
 source "$RALPH_BASH_LIB/graph/graph-compile.sh"
@@ -35,6 +41,10 @@ source "$RALPH_BASH_LIB/graph/graph-run-base.sh"
 source "$RALPH_BASH_LIB/graph/graph-publish.sh"
 # shellcheck source=bash-lib/graph/graph-operator-records.sh
 source "$RALPH_BASH_LIB/graph/graph-operator-records.sh"
+# shellcheck source=bash-lib/workflow/workflow-engine-dependency.sh
+source "$RALPH_BASH_LIB/workflow/workflow-engine-dependency.sh"
+# shellcheck source=bash-lib/workflow/workflow-operator-view.sh
+source "$RALPH_BASH_LIB/workflow/workflow-operator-view.sh"
 # shellcheck source=bash-lib/graph/graph-approval-policy.sh
 source "$RALPH_BASH_LIB/graph/graph-approval-policy.sh"
 # shellcheck source=bash-lib/graph/graph-logs.sh
@@ -46,115 +56,126 @@ source "$RALPH_BASH_LIB/graph/graph-preflight.sh"
 # shellcheck source=bash-lib/graph/graph-successor.sh
 source "$RALPH_BASH_LIB/graph/graph-successor.sh"
 
+GRAPH_RUN_WORKFLOW_SIGNAL=""
+GRAPH_RUN_WORKFLOW_TEARDOWN_DONE=0
+
+graph_run_workflow_signal_handler() {
+  local signal="${1:-INT}"
+  [[ "${GRAPH_RUN_WORKFLOW_TEARDOWN_DONE:-0}" -eq 1 ]] && return 0
+  GRAPH_RUN_WORKFLOW_TEARDOWN_DONE=1
+  GRAPH_RUN_WORKFLOW_SIGNAL="$signal"
+  trap '' INT TERM HUP
+  if [[ "$signal" == "TERM" || "$signal" == "HUP" ]]; then
+    workflow_dep_operator_cancel "${RALPH_WORKFLOW_REGISTRY_RUN:-}" \
+      "${RALPH_PLAN_WORKSPACE_ROOT:-${RALPH_GRAPH_STATE_ROOT:-}}" || true
+  fi
+  # This is the scheduler's established child teardown path. It intentionally
+  # does not kill the scheduler process group.
+  _graph_schedule_cancel_inflight_children || true
+  if [[ "$signal" == "INT" ]]; then
+    workflow_dep_operator_interrupt_checkpoint "${RALPH_WORKFLOW_REGISTRY_RUN:-}" \
+      "${RALPH_PLAN_WORKSPACE_ROOT:-${RALPH_GRAPH_STATE_ROOT:-}}" || true
+  fi
+  case "$signal" in
+    INT) exit 130 ;;
+    TERM) exit 143 ;;
+    HUP) exit 129 ;;
+    *) exit 1 ;;
+  esac
+}
+
 graph_run_usage() {
-  cat <<'EOF' >&2
-Usage: graph-run.sh <verb> [options]
+  {
+    ralph_help_title 'Usage: graph-run.sh <verb> [options]'
+    ralph_help_note 'Internal engine entrypoint; operators use ralph workflow verbs. Use preflight before run; each verb has --help for details.'
+    ralph_help_section 'Read-only verbs'
+    ralph_help_note 'compile, preflight, status, render, actions list, logs, attach, approvals list, successor'
+    ralph_help_section 'Run-state mutation verbs'
+    ralph_help_note 'run, resume, actions respond, recover, successor --create'
+    ralph_help_section 'Project-policy mutation verb'
+    ralph_help_note 'actions approvals revoke'
+    ralph_help_section 'Viewer verb'
+    ralph_help_note 'tui'
+    ralph_help_section 'Example: create, inspect, run'
+    ralph_help_command 'ralph create workflow --mode dependency' 'Create a dependency-mode workflow interactively.'
+    ralph_help_command 'ralph workflow inspect --file <path>' 'Validate and preview a workflow without creating a run.'
+    ralph_help_command 'ralph workflow start --file <path> --task "<text>"' 'Compile and execute a workflow.'
+    ralph_help_section 'Read-only commands'
+    ralph_help_command 'compile <plan> [--render mermaid|dot|ascii]' 'Validate and cache the compiled graph.'
+    ralph_help_command 'preflight <plan> [--json]' 'Preview runtime admission, topology, and required acknowledgements.'
+    ralph_help_command 'status --namespace <ns> --run <id|latest>' 'Show a run summary and node states.'
+    ralph_help_command 'render <plan> [--format mermaid|dot|ascii]' 'Render the graph shape without running it.'
+    ralph_help_command 'logs --namespace <ns> --run <id> --node <id>' 'Read one node attempt log; add --follow for live output.'
+    ralph_help_command 'attach --namespace <ns> --run <id>' 'Read-only live status and event view.'
+    ralph_help_command 'tui --namespace <ns> [--run <id|latest>]' 'Open the interactive viewer, with a text fallback.'
+    ralph_help_section 'Run and recovery commands'
+    ralph_help_command 'run <plan> [--namespace <ns>] [--yes]' 'Compile, preflight, and execute a new run; creates or advances a run in the durable run-state ledger.'
+    ralph_help_command 'resume <plan> --namespace <ns> --run <id|latest>' 'Resume a durable run after interruption.'
+    ralph_help_command 'recover --namespace <ns> --run <id|latest>' 'Recover a stale or orphaned run explicitly.'
+    ralph_help_command 'successor --from <run> --plan <plan> [--create]' 'Preview (dry-run by default) or create a successor that reuses eligible evidence.'
+    ralph_help_section 'Operator actions'
+    ralph_help_command 'actions list|respond|approvals' 'Inspect or respond to pending requests and manage project approvals.'
+    ralph_help_note 'For detailed flags: graph-run.sh <verb> --help'
+  } >&2
+}
 
-Verbs:
-  compile <plan-path> [--render mermaid|dot|ascii] [--out <path>] [--force]
-      Compile a graph-mode plan into .graph.json, validate it, and cache the
-      result beside the plan. See `graph-run.sh compile --help`.
+# graph_run_levenshtein computes the Levenshtein edit distance between two
+# short strings using pure bash (no python3/awk dependency). Verb names are
+# short enough that the O(len1*len2) dynamic-programming table is cheap.
+graph_run_levenshtein() {
+  local s1="$1" s2="$2"
+  local len1=${#s1} len2=${#s2}
+  local -a prev cur
+  local i j c1 c2 cost del ins sub min
 
-  preflight <plan-path> [--json] [--workspace <dir>]
-      Compile a graph plan into a temporary frozen graph and print the
-      read-only preflight report. --json emits the report object; omit it
-      for the concise table. Hard failures exit non-zero. Warnings do not;
-      they require only the acknowledgements already declared on the graph.
+  for ((j = 0; j <= len2; j++)); do
+    prev[j]=$j
+  done
 
-  run <plan-path> [--namespace <ns>] [--max-parallel <n>] [--workspace <dir>]
-      [--tui|--no-tui]
-      Compile and run a graph plan to completion, recording the durable
-      run-state ledger under .ralph-workspace/graph-runs/<namespace>/.
-      The same preflight as `preflight --json` runs first. Hard failures
-      stop before a run is created or a model is invoked. Warnings proceed
-      when the graph already carries the required acknowledgements.
-      --tui optionally launches the interactive viewer after the run is
-      created; when Python, curses, or a suitable TTY is unavailable it
-      falls back to concise streaming status. --no-tui keeps the headless
-      scheduler in the foreground.
+  for ((i = 1; i <= len1; i++)); do
+    cur[0]=$i
+    c1="${s1:i-1:1}"
+    for ((j = 1; j <= len2; j++)); do
+      c2="${s2:j-1:1}"
+      if [[ "$c1" == "$c2" ]]; then
+        cost=0
+      else
+        cost=1
+      fi
+      del=$((prev[j] + 1))
+      ins=$((cur[j - 1] + 1))
+      sub=$((prev[j - 1] + cost))
+      min=$del
+      ((ins < min)) && min=$ins
+      ((sub < min)) && min=$sub
+      cur[j]=$min
+    done
+    prev=("${cur[@]}")
+  done
 
-  resume <plan-path> --namespace <ns> --run <run-id|latest>
-      [--accept-graph-change]
-      Resume a graph run. Recompiles the plan and compares graphSha; refuses
-      when the graph changed unless --accept-graph-change is supplied, in
-      which case affected nodes are invalidated. Succeeded nodes are skipped;
-      an orphaned in-flight node is adopted when its StageOutcomeReport is
-      present, otherwise reset to pending; failed/cancelled/blocked nodes
-      reset to pending.
+  printf '%s\n' "${prev[len2]}"
+}
 
-  status --namespace <ns> --run <run-id|latest> [--workspace <dir>]
-      [--details] [--mermaid]
-      Display the current state of a graph run.  Read-only; safe to call
-      against a live in-progress run.  By default outputs the run summary
-      plus a table (node, type, runtime, state, unique attempt count,
-      duration). --details adds verbose per-node/per-attempt metadata
-      (workspace mode, write scopes, gate outcome, consensus per-voter
-      provenance and confidence, brokered children, native subagent
-      events). --mermaid adds a flowchart with per-state class definitions.
+# graph_run_nearest_verb prints the single closest known top-level verb to an
+# unrecognized input, or nothing when no verb is close enough to be a useful
+# suggestion (avoids suggesting an unrelated verb for wildly different input).
+graph_run_nearest_verb() {
+  local input="$1"
+  local -a verbs=(compile preflight run resume status render actions logs attach tui recover successor)
+  local best="" best_dist=999 v d threshold
 
-  render <plan-path> [--format mermaid|dot|ascii] [--out <path>]
-      Render a compiled graph as mermaid, dot, or ascii.  This is a
-      pre-run static view of the graph shape, not the live run state.
+  for v in "${verbs[@]}"; do
+    d="$(graph_run_levenshtein "$input" "$v")"
+    if ((d < best_dist)); then
+      best_dist=$d
+      best="$v"
+    fi
+  done
 
-  actions list --namespace <ns> --run <run-id|latest> [--workspace <dir>]
-      [--json]
-      List pending operator requests for one run. Namespace and run
-      selectors are required. Prints request ID, node, runtime, action,
-      resource, effect, and choices as concise text, or JSON with --json.
-
-  actions respond <request-id> --decision allow-once|allow-run|allow-always|deny
-      [--namespace <ns>] [--run <run-id|latest>] [--workspace <dir>]
-      [--confirm-rule <rule-id>] [--json]
-      Record an operator decision. Namespace and run selectors are required
-      when the request id matches more than one run. allow-always requires
-      --confirm-rule with the exact normalized rule id.
-
-  actions approvals list [--workspace <dir>] [--json]
-      List project allow-always rules for the selected workspace. Prints
-      exact normalized scope (runtime, action, resource, effect) and
-      revocation state. Never edits runtime-global configuration.
-
-  actions approvals revoke --runtime <rt> --action <name> --resource <path>
-      --effect <effect> [--workspace <dir>] [--json]
-      Revoke one exact project allow-always rule. Repeating the same
-      revoke is idempotent. Never edits runtime-global configuration.
-
-  logs --namespace <ns> --run <run-id|latest> --node <id> [--workspace <dir>]
-      [--attempt <id>] [--stream runner|agent|usage] [--tail N] [--follow]
-      Print one attempt log stream. Paths come from the node ledger
-      logPaths and are resolved only when contained in the run-dir.
-      A missing v2 file may fall back to a historical v1 namespace
-      file. Default stream is agent. --follow waits for new bytes,
-      handles rotation/truncation, and exits when the attempt is
-      terminal or on SIGINT/SIGTERM. Missing logs are explicit but
-      nonfatal for an active attempt. Read-only.
-
-  attach --namespace <ns> --run <run-id|latest> [--workspace <dir>]
-      Read-only live view of run status and the event journal. Detaching
-      (SIGINT/SIGTERM) never cancels the supervisor or mutates the
-      ledger. Missing events are explicit but nonfatal for an active run.
-      Never recovers a run.
-
-  tui --namespace <ns> --run <run-id|latest> [--workspace <dir>] [--no-tui]
-      Launch the interactive TUI for one run. Falls back to concise
-      streaming status when python3, curses, or a suitable TTY is
-      unavailable. Restores terminal settings on normal exit, exception,
-      SIGINT, and SIGTERM. --no-tui forces the streaming-status path.
-
-  recover --namespace <ns> --run <run-id|latest> [--workspace <dir>]
-      Recover a stale or orphaned graph run. Namespace and run selectors
-      are required. Delegates to the recovery module, prints that
-      module's refusal reason when recovery is not allowed, and never
-      runs as a side effect of status or attach.
-
-  successor --from <run> --plan <path> [--namespace <ns>] [--workspace <dir>]
-      [--create] [--run-id <id>] [--json]
-      Compare a predecessor run with a newly compiled plan. Default is a
-      read-only dry-run reuse report. --create writes a new successor
-      run and copies only reusable evidence. The predecessor is never
-      mutated. --from latest and a run id present in more than one
-      namespace require --namespace.
-EOF
+  threshold=$((${#input} / 2 + 1))
+  if [[ -n "$best" ]] && ((best_dist <= threshold)); then
+    printf '%s\n' "$best"
+  fi
 }
 
 main() {
@@ -178,6 +199,9 @@ main() {
       ;;
     resume)
       graph_run_resume_cli "$@"
+      ;;
+    resume-from-registry)
+      graph_run_resume_from_registry "$@"
       ;;
     status)
       graph_status_cli "$@"
@@ -211,6 +235,11 @@ main() {
       ;;
     *)
       echo "Error: unknown graph verb '$verb'" >&2
+      local suggestion
+      suggestion="$(graph_run_nearest_verb "$verb")"
+      if [[ -n "$suggestion" ]]; then
+        echo "Did you mean: $suggestion?" >&2
+      fi
       graph_run_usage
       exit 1
       ;;
@@ -252,6 +281,113 @@ graph_run_preflight_refuse() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# G03/G04: preview-before-mutation confirmation gate shared by `run` and
+# `resume`. Consumes the pure preview builder from graph-preflight.sh; this
+# module owns only the CLI-level TTY/--yes decision and the typed-word
+# prompt. Nothing here writes a ledger, workspace, session, or config file.
+# ---------------------------------------------------------------------------
+
+# graph_run_confirm_or_refuse <operation> <plan-path> <graph-json> \
+#     <project-root> <state-root> <agent-workspace> <yes-flag> \
+#     [preflight-report-json] [extra-note] [command-argv-json]
+#
+# Prints the resolved plan/namespace/roots, node/runtime/agent/model/
+# workspace table, parallelism, policies, the exact command, and the
+# confirmation id -- then gates on confirmation. A TTY (stdin) requires
+# typing the literal word `run`; a bare newline or EOF is decline. A
+# non-TTY invocation requires --yes and never reads stdin. Returns 0 only
+# when confirmed; returns 1 on decline, EOF, or a missing --yes with no
+# TTY, in every case before any caller has created a run, session, log, or
+# workspace.
+graph_run_confirm_or_refuse() {
+  local operation="$1" plan_path="$2" graph_json="$3"
+  local project_root="$4" state_root="$5" agent_workspace="$6" yes_flag="${7:-0}"
+  local report_json="${8:-}" extra_note="${9:-}" command_argv_json="${10:-}"
+
+  local invocation_mode
+  # An explicit --yes is authoritative even when stdin happens to be a TTY
+  # (for example a copied recovery command launched from an interactive shell
+  # but intentionally redirected through an operator/test wrapper).  Checking
+  # TTY first silently turns --yes back into a blocking prompt.
+  if [[ "$yes_flag" -eq 1 ]]; then
+    invocation_mode="confirmed-noninteractive"
+  elif [[ -t 0 ]]; then
+    invocation_mode="interactive-cli"
+  else
+    echo "Error: non-interactive graph $operation requires --yes (no TTY available to confirm)" >&2
+    return 1
+  fi
+
+  local preview
+  preview="$(graph_preflight_build_preview "$operation" "$invocation_mode" "$plan_path" "$graph_json" \
+    "$project_root" "$state_root" "$agent_workspace")" || {
+    echo "Error: failed to build the $operation invocation preview" >&2
+    return 1
+  }
+  if [[ -n "$command_argv_json" ]]; then
+    local command_text preview_without_id confirmation_id
+    command_text="$(graph_preflight_command_text "$command_argv_json")" || return 1
+    preview_without_id="$(jq -c --argjson argv "$command_argv_json" --arg text "$command_text" \
+      'del(.confirmationId) | .commandArgv = $argv | .commandText = $text' <<<"$preview")" || return 1
+    confirmation_id="$(graph_preflight_confirmation_id "$preview_without_id")" || return 1
+    preview="$(jq -c --arg id "$confirmation_id" '. + {confirmationId: $id}' <<<"$preview_without_id")" || return 1
+  fi
+
+  graph_preflight_format_preview_text "$preview" "$report_json"
+  if [[ -n "$extra_note" ]]; then
+    printf '\n%s\n' "$extra_note"
+  fi
+  printf '\nCommand: %s\n' "$(jq -r '.commandText' <<<"$preview")"
+  printf 'Confirmation id: %s\n' "$(jq -r '.confirmationId' <<<"$preview")"
+
+  if [[ "$invocation_mode" == "confirmed-noninteractive" ]]; then
+    printf '\nConfirmed non-interactively (--yes); proceeding.\n'
+    return 0
+  fi
+
+  local answer=""
+  printf '\nType "run" to confirm, or anything else (including EOF) to cancel: '
+  if ! IFS= read -r answer; then
+    answer=""
+  fi
+  if [[ "$answer" != "run" ]]; then
+    printf 'No run created; no command was run.\n'
+    return 1
+  fi
+  return 0
+}
+
+# graph_run_resume_retry_set_text <workspace> <namespace> <run-id> <graph-json>
+#
+# Read-only. Lists every node id from the (possibly recompiled) graph next
+# to its current ledger status and reports how many are not yet succeeded
+# -- the set resume will retry, adopt, or invalidate. Never mutates the
+# ledger; graph_schedule_resume performs the actual reconciliation after
+# confirmation.
+graph_run_resume_retry_set_text() {
+  local workspace="$1" namespace="$2" run_id="$3" graph_json="$4"
+  local id status total=0 retry_count=0
+  local -a lines=()
+
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    total=$((total + 1))
+    status="$(graph_state_node_status "$workspace" "$namespace" "$run_id" "$id" 2>/dev/null || true)"
+    [[ -n "$status" ]] || status="pending"
+    if [[ "$status" != "succeeded" ]]; then
+      retry_count=$((retry_count + 1))
+    fi
+    lines+=("$(printf '  %-30s %s' "$id" "$status")")
+  done < <(jq -r '.nodes[].id' "$graph_json")
+
+  printf 'Retry set: %s of %s nodes not yet succeeded\n' "$retry_count" "$total"
+  local line
+  for line in "${lines[@]}"; do
+    printf '%s\n' "$line"
+  done
+}
+
 # graph_run_preflight_cli <plan-path> [--json] [--workspace <dir>]
 # Read-only: compile to a temp graph, print the same report `run` uses, and
 # never create a ledger or start a model session.
@@ -289,7 +425,7 @@ graph_run_preflight_cli() {
     return 1
   fi
 
-  local invocation roots_json workspace state_root graph_json report rc=0
+  local invocation roots_json workspace state_root agent_workspace graph_json report preview rc=0
   invocation="${workspace_opt:-$(pwd)}"
   if [[ -n "$workspace_opt" ]]; then
     export RALPH_PROJECT_ROOT="$workspace_opt"
@@ -297,16 +433,32 @@ graph_run_preflight_cli() {
   roots_json="$(graph_run_base_resolve_roots "$invocation")" || return 1
   workspace="$(printf '%s' "$roots_json" | jq -r '.projectRoot')"
   state_root="$(printf '%s' "$roots_json" | jq -r '.stateRoot')"
+  agent_workspace="$(printf '%s' "$roots_json" | jq -r '.agentWorkspace')"
   graph_json="$(mktemp "$state_root/graph-preflight.XXXXXX")" || return 1
   if ! graph_compile_plan "$plan_path" "$graph_json" 1 >/dev/null; then
     rm -f "$graph_json"
     return 1
   fi
   report="$(graph_run_preflight_evaluate "$graph_json" "$workspace")" || rc=$?
+  preview="$(graph_preflight_build_preview "run" "interactive-cli" "$plan_path" "$graph_json" \
+    "$workspace" "$state_root" "$agent_workspace" 2>/dev/null)" || preview=""
   rm -f "$graph_json"
+  if [[ -n "$report" ]]; then
+    report="$(jq -c --argjson roots "$roots_json" '. + {roots: $roots}' <<<"$report" 2>/dev/null || printf '%s' "$report")"
+  fi
   if [[ "$json" -eq 1 ]]; then
     [[ -n "$report" ]] && printf '%s\n' "$report"
   else
+    if [[ -n "$preview" ]]; then
+      graph_preflight_format_preview_text "$preview"
+      printf '\n'
+    else
+      printf 'Roots:\n'
+      printf '  projectRoot:    %s\n' "$workspace"
+      printf '  stateRoot:      %s\n' "$state_root"
+      printf '  agentWorkspace: %s\n' "$agent_workspace"
+      printf '\n'
+    fi
     if [[ -n "$report" ]] && printf '%s' "$report" | jq -e 'type == "object"' >/dev/null 2>&1; then
       graph_preflight_format_table "$report"
     elif [[ -n "$report" ]]; then
@@ -317,9 +469,9 @@ graph_run_preflight_cli() {
 }
 
 # graph_run_run_cli <plan-path> [--namespace <ns>] [--max-parallel <n>]
-#   [--workspace <dir>] [--tui|--no-tui]
+#   [--workspace <dir>] [--tui|--no-tui] [--yes]
 graph_run_run_cli() {
-  local plan_path="" namespace="" max_parallel="" workspace_opt="" tui_mode=""
+  local plan_path="" namespace="" max_parallel="" workspace_opt="" tui_mode="" yes_flag=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --namespace) namespace="$2"; shift 2 ;;
@@ -330,9 +482,19 @@ graph_run_run_cli() {
       --workspace=*) workspace_opt="${1#--workspace=}"; shift ;;
       --tui) tui_mode="tui"; shift ;;
       --no-tui) tui_mode="no-tui"; shift ;;
+      --yes) yes_flag=1; shift ;;
+      --model|--model=*)
+        echo "Error: graph run does not accept --model; configure models per stage or voter." >&2
+        return 1
+        ;;
       -h|--help)
         cat <<'EOF' >&2
-Usage: graph-run.sh run <plan-path> [--namespace <ns>] [--max-parallel <n>] [--workspace <dir>] [--tui|--no-tui]
+Usage: graph-run.sh run <plan-path> [--namespace <ns>] [--max-parallel <n>] [--workspace <dir>] [--tui|--no-tui] [--yes]
+
+Before creating a run-state ledger or invoking a model, prints the
+resolved plan/namespace/roots, node table, parallelism, policies, the
+exact command, and the confirmation id, then requires confirmation:
+typing "run" at a TTY, or --yes with no TTY (which never reads stdin).
 EOF
         return 0
         ;;
@@ -402,15 +564,44 @@ EOF
     rm -f "$graph_json"
     return 1
   fi
+  local -a preview_argv=(bash .ralph/graph-run.sh run "$plan_path" --namespace "$namespace" --workspace "$workspace")
+  if [[ -n "$max_parallel" ]]; then
+    preview_argv+=(--max-parallel "$max_parallel")
+  fi
+  case "$tui_mode" in
+    tui) preview_argv+=(--tui) ;;
+    no-tui) preview_argv+=(--no-tui) ;;
+  esac
+  if [[ "$yes_flag" -eq 1 ]]; then
+    preview_argv+=(--yes)
+  fi
+  local preview_argv_json
+  preview_argv_json="$(printf '%s\n' "${preview_argv[@]}" | jq -R . | jq -sc .)"
+  if ! graph_run_confirm_or_refuse run "$plan_path" "$graph_json" "$workspace" "$state_root" "$agent_workspace" \
+    "$yes_flag" "$preflight_json" "" "$preview_argv_json"; then
+    rm -f "$graph_json"
+    return 1
+  fi
   local run_id
-  run_id="$(graph_state_mint_run_id)"
+  # Dependency workflow adapters pass the common outer registry run ID via
+  # RALPH_WORKFLOW_RUN_ID so graph-runs/<ns>/<run-id> shares that identity.
+  # Standalone graph runs still mint. Do not change operator-facing copy here.
+  if [[ -n "${RALPH_WORKFLOW_RUN_ID:-}" ]]; then
+    run_id="$RALPH_WORKFLOW_RUN_ID"
+  else
+    run_id="$(graph_state_mint_run_id)"
+  fi
   local max_p=2
   if [[ -n "$max_parallel" ]]; then
     max_p="$max_parallel"
   else
     max_p="$(jq -r '.maxParallel // 2' "$graph_json")"
   fi
-  if ! graph_state_init_run "$workspace" "$namespace" "$run_id" "$plan_path" "$graph_json" "$max_p"; then
+  # Public runs use the canonical ledger so status and recovery can prove
+  # supervisor ownership and heartbeat health. Optional
+  # RALPH_WORKFLOW_REGISTRY_RUN is recorded as registryRunPath on run.json.
+  if ! graph_state_init_run "$workspace" "$namespace" "$run_id" "$plan_path" "$graph_json" "$max_p" \
+    "${RALPH_WORKFLOW_REGISTRY_RUN:-}"; then
     rm -f "$graph_json"
     return 1
   fi
@@ -433,12 +624,49 @@ EOF
   local schedule_rc=0 publish_rc=0
   if [[ "$tui_mode" == "tui" ]]; then
     graph_run_tui_with_schedule "$graph_json" "$run_id" "$workspace" "$run_dir" "$namespace" || schedule_rc=$?
+    if [[ "${GRAPH_RUN_TUI_DETACHED:-0}" -eq 1 ]]; then
+      # The background scheduler owns completion, publication, and cleanup.
+      # Returning here gives the operator their terminal back after q/Ctrl-C.
+      return 0
+    fi
   else
+    # The viewer owns its later Ctrl-C policy. Headless workflow execution
+    # installs the supervisor checkpoint handler only around the scheduler.
+    if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+      trap 'graph_run_workflow_signal_handler INT' INT
+      trap 'graph_run_workflow_signal_handler TERM' TERM
+      trap 'graph_run_workflow_signal_handler HUP' HUP
+    fi
     graph_schedule_run "$graph_json" "$run_id" "$workspace" "$run_dir" || schedule_rc=$?
+    if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+      trap - INT TERM HUP
+    fi
   fi
-  graph_publish_finalize "$run_dir" "$graph_json" "$workspace" || publish_rc=$?
-  if [[ "$schedule_rc" -eq 0 && "$publish_rc" -ne 0 ]]; then
-    schedule_rc="$publish_rc"
+  if [[ "$schedule_rc" -eq 0 && "$(jq -r '.status // empty' "$run_dir/run.json")" == "succeeded" ]]; then
+    graph_publish_finalize "$run_dir" "$graph_json" "$workspace" || publish_rc=$?
+    if [[ "$publish_rc" -ne 0 ]]; then
+      schedule_rc="$publish_rc"
+    fi
+  else
+    printf '\nGraph run stopped before publish.\n' >&2
+    if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "${RALPH_WORKFLOW_RUN_ID:-}" ]]; then
+      if declare -F workflow_operator_render_status >/dev/null 2>&1; then
+        local _wf_state_root _wf_status_json
+        _wf_state_root="$(cd "$(dirname "$(dirname "$RALPH_WORKFLOW_REGISTRY_RUN")")" && pwd -P)"
+        if _wf_status_json="$(workflow_operator_view_load "$_wf_state_root" "$RALPH_WORKFLOW_RUN_ID" 2>/dev/null)"; then
+          workflow_operator_render_status "$_wf_status_json" stderr
+        else
+          printf 'Status: ralph workflow status %s\n' "$RALPH_WORKFLOW_RUN_ID" >&2
+          printf 'Logs: ralph workflow logs %s\n' "$RALPH_WORKFLOW_RUN_ID" >&2
+        fi
+      else
+        printf 'Status: ralph workflow status %s\n' "$RALPH_WORKFLOW_RUN_ID" >&2
+        printf 'Logs: ralph workflow logs %s\n' "$RALPH_WORKFLOW_RUN_ID" >&2
+      fi
+    else
+      printf 'Inspect: ralph workflow status %q\n' "$run_id" >&2
+      printf 'Watch: ralph workflow watch %q\n' "$run_id" >&2
+    fi
   fi
   case "$(jq -r '.status // empty' "$run_dir/run.json")" in
     succeeded|failed|cancelled)
@@ -453,9 +681,9 @@ EOF
 }
 
 # graph_run_resume_cli <plan-path> --namespace <ns> --run <run-id|latest>
-#   [--accept-graph-change]
+#   [--accept-graph-change] [--yes]
 graph_run_resume_cli() {
-  local plan_path="" namespace="" run_token="" accept_change=0
+  local plan_path="" namespace="" run_token="" accept_change=0 yes_flag=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --namespace) namespace="$2"; shift 2 ;;
@@ -463,9 +691,16 @@ graph_run_resume_cli() {
       --run) run_token="$2"; shift 2 ;;
       --run=*) run_token="${1#--run=}"; shift ;;
       --accept-graph-change) accept_change=1; shift ;;
+      --yes) yes_flag=1; shift ;;
       -h|--help)
         cat <<'EOF' >&2
-Usage: graph-run.sh resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change]
+Usage: graph-run.sh resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change] [--yes]
+
+Before advancing the run-state ledger or invoking a model, previews the
+resume retry set (every node id and its current status) plus the same
+plan/namespace/roots/table/policies/command/confirmation id as `run`, then
+requires confirmation: typing "run" at a TTY, or --yes with no TTY (which
+never reads stdin).
 EOF
         return 0
         ;;
@@ -485,6 +720,10 @@ EOF
     echo "Error: graph resume requires <plan-path> --namespace <ns> --run <run-id|latest>" >&2
     return 1
   fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for graph resume" >&2
+    return 1
+  fi
   local extra=()
   if [[ "$accept_change" -eq 1 ]]; then
     extra+=(--accept-graph-change)
@@ -501,12 +740,60 @@ EOF
   local resolved_run_id resume_run_dir resume_rc=0 publish_rc=0 frozen_graph
   resolved_run_id="$(graph_state_resolve_run_id "$workspace" "$namespace" "$run_token")" || return 1
   resume_run_dir="$(graph_state_run_dir "$workspace" "$namespace" "$resolved_run_id")"
+
+  # Preview-before-mutation: recompile the plan into a scratch file purely
+  # to build the preview and retry-set text. graph_schedule_resume performs
+  # its own authoritative recompile/compare/mutate after confirmation; this
+  # copy is never used to advance the ledger.
+  local preview_graph_tmp retry_set_text
+  preview_graph_tmp="$(mktemp "$state_root/graph-resume-preview.XXXXXX")" || return 1
+  if ! graph_compile_plan "$plan_path" "$preview_graph_tmp" 1 >/dev/null; then
+    rm -f "$preview_graph_tmp"
+    return 1
+  fi
+  if [[ "$(jq -r '.namespace // empty' "$preview_graph_tmp")" != "$namespace" ]]; then
+    local preview_graph_ns
+    preview_graph_ns="$(mktemp "$state_root/graph-resume-preview-ns.XXXXXX")" || {
+      rm -f "$preview_graph_tmp"
+      return 1
+    }
+    jq --arg namespace "$namespace" '.namespace = $namespace' "$preview_graph_tmp" >"$preview_graph_ns" || {
+      rm -f "$preview_graph_tmp" "$preview_graph_ns"
+      return 1
+    }
+    mv -f "$preview_graph_ns" "$preview_graph_tmp"
+  fi
+  retry_set_text="$(graph_run_resume_retry_set_text "$workspace" "$namespace" "$resolved_run_id" "$preview_graph_tmp")"
+  local -a preview_argv=(bash .ralph/graph-run.sh resume "$plan_path" --namespace "$namespace" --run "$resolved_run_id")
+  if [[ "$accept_change" -eq 1 ]]; then
+    preview_argv+=(--accept-graph-change)
+  fi
+  if [[ "$yes_flag" -eq 1 ]]; then
+    preview_argv+=(--yes)
+  fi
+  local preview_argv_json
+  preview_argv_json="$(printf '%s\n' "${preview_argv[@]}" | jq -R . | jq -sc .)"
+  if ! graph_run_confirm_or_refuse resume "$plan_path" "$preview_graph_tmp" "$workspace" "$state_root" "$agent_workspace" \
+    "$yes_flag" "" "$retry_set_text" "$preview_argv_json"; then
+    rm -f "$preview_graph_tmp"
+    return 1
+  fi
+  rm -f "$preview_graph_tmp"
+
+  printf 'graph-resume: confirmation accepted; starting scheduler\n' >&2
   graph_schedule_resume "$workspace" "$namespace" "$run_token" "$plan_path" "${extra[@]}" || resume_rc=$?
+  printf 'graph-resume: scheduler returned exit=%s\n' "$resume_rc" >&2
   frozen_graph="$resume_run_dir/graph.json"
   if [[ -f "$resume_run_dir/run.json" && -f "$frozen_graph" ]]; then
-    graph_publish_finalize "$resume_run_dir" "$frozen_graph" "$workspace" || publish_rc=$?
-    if [[ "$resume_rc" -eq 0 && "$publish_rc" -ne 0 ]]; then
-      resume_rc="$publish_rc"
+    if [[ "$resume_rc" -eq 0 && "$(jq -r '.status // empty' "$resume_run_dir/run.json")" == "succeeded" ]]; then
+      graph_publish_finalize "$resume_run_dir" "$frozen_graph" "$workspace" || publish_rc=$?
+      if [[ "$publish_rc" -ne 0 ]]; then
+        resume_rc="$publish_rc"
+      fi
+    else
+      printf '\nGraph run stopped before publish.\n' >&2
+      printf 'Inspect: ralph workflow status %q\n' "$resolved_run_id" >&2
+      printf 'Watch: ralph workflow watch %q\n' "$resolved_run_id" >&2
     fi
   fi
   if [[ -f "$resume_run_dir/run.json" ]]; then
@@ -522,6 +809,50 @@ EOF
     esac
   fi
   return "$resume_rc"
+}
+
+# graph_run_resume_from_registry --state-root <path> --run-id <exact-id>
+#   [--workspace <dir>] [--yes]
+#
+# Workflow-facing Dependency resume continuation. Resolves immutable input,
+# namespace, and frozen graph from the common registry run (no plan/namespace
+# operator arguments). Confirmation is owned by `ralph workflow resume`; this
+# helper assumes mutations already applied and continues the scheduler.
+graph_run_resume_from_registry() {
+  local state_root="" run_id="" workspace="" yes_flag=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state-root) state_root="${2:-}"; shift 2 ;;
+      --run-id) run_id="${2:-}"; shift 2 ;;
+      --workspace) workspace="${2:-}"; shift 2 ;;
+      --yes) yes_flag=1; shift ;;
+      -h|--help)
+        cat <<'EOF' >&2
+Usage: graph-run.sh resume-from-registry --state-root <path> --run-id <exact-id> [--workspace <dir>] [--yes]
+
+Resolves frozen graph and immutable input from the workflow registry. Does not
+accept plan or namespace arguments.
+EOF
+        return 0
+        ;;
+      *)
+        echo "Error: unknown option for resume-from-registry: $1" >&2
+        return 1
+        ;;
+    esac
+  done
+  [[ -n "$state_root" && -n "$run_id" ]] || {
+    echo "Error: resume-from-registry requires --state-root and --run-id" >&2
+    return 1
+  }
+  if ! declare -F workflow_dep_continue_after_resume >/dev/null 2>&1; then
+    # shellcheck source=bash-lib/workflow/workflow-engine-dependency.sh
+    source "$SCRIPT_DIR/bash-lib/workflow/workflow-engine-dependency.sh"
+  fi
+  workflow_dep_continue_after_resume \
+    --state-root "$state_root" \
+    --run-id "$run_id" \
+    ${workspace:+--workspace "$workspace"}
 }
 
 graph_run_actions_usage() {
@@ -1342,7 +1673,10 @@ graph_run_logs_usage() {
   cat <<'EOF' >&2
 Usage: graph-run.sh logs --namespace <ns> --run <run-id|latest> --node <id>
        [--workspace <dir>] [--attempt <id>] [--stream runner|agent|usage]
-       [--tail N] [--follow]
+       [--tail N] [--follow|--no-follow]
+
+Starts at the most recent 80 lines and follows live output by default.
+Add --no-follow for one-shot output.
 EOF
 }
 
@@ -1416,6 +1750,19 @@ graph_run_logs_attempt_is_active() {
     succeeded|failed|cancelled|skipped) return 1 ;;
   esac
   return 0
+}
+
+# graph_run_logs_attempt_is_running <node_json>
+# True only when the node's runtime process is actively executing (status
+# running). Operator-blocked and other non-terminal-but-idle states (for
+# example awaiting-operator) are active per graph_run_logs_attempt_is_active
+# but must not trigger an unbounded default follow, since nothing will
+# append to the log until an operator or scheduler acts.
+graph_run_logs_attempt_is_running() {
+  local node_json="$1" status=""
+  [[ -n "$node_json" ]] || return 1
+  status="$(printf '%s' "$node_json" | jq -r '.status // empty' 2>/dev/null || true)"
+  [[ "$status" == "running" ]]
 }
 
 # graph_run_is_terminal_status <status>
@@ -1495,7 +1842,7 @@ graph_run_follow_loop() {
 
   while [[ "${GRAPH_RUN_FOLLOW_INTERRUPTED:-0}" -eq 0 ]]; do
     if [[ "$kind" == "attempt" ]]; then
-      node_json="$(graph_state_read_node_v2 "$workspace" "$namespace" "$run_id" "$node_id" 2>/dev/null || true)"
+      node_json="$(graph_state_read_node "$workspace" "$namespace" "$run_id" "$node_id" 2>/dev/null || true)"
       if [[ -z "$node_json" ]]; then
         echo "Error: graph logs could not read node '$node_id'" >&2
         trap - INT TERM
@@ -1557,11 +1904,12 @@ graph_run_follow_loop() {
 
 # graph_run_logs_cli [options]
 # Read-only log selection. Resolves only ledger-owned contained paths and
-# supports v1 namespace reads when the v2 file is absent. --follow waits
+# supports contained namespace reads when the attempt file is absent. --follow waits
 # for new bytes until the attempt is terminal or interrupted.
 graph_run_logs_cli() {
-  local namespace="" run_token="" workspace="" node_id="" attempt_id="" stream="agent" tail_n=""
-  local follow=0
+  local namespace="" run_token="" workspace="" node_id="" attempt_id="" stream="agent"
+  local tail_n="${RALPH_GRAPH_LOG_TAIL_LINES:-80}"
+  local follow=1 follow_explicit=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1579,7 +1927,8 @@ graph_run_logs_cli() {
       --stream=*) stream="${1#--stream=}"; shift ;;
       --tail) tail_n="$2"; shift 2 ;;
       --tail=*) tail_n="${1#--tail=}"; shift ;;
-      --follow) follow=1; shift ;;
+      --follow) follow=1; follow_explicit=1; shift ;;
+      --no-follow) follow=0; follow_explicit=1; shift ;;
       -h|--help)
         graph_run_logs_usage
         return 0
@@ -1625,12 +1974,14 @@ graph_run_logs_cli() {
     return 1
   fi
   run_dir="$(graph_state_run_dir "$workspace" "$namespace" "$run_id")" || return 1
-  if ! node_json="$(graph_state_read_node_v2 "$workspace" "$namespace" "$run_id" "$node_id")"; then
+  if ! node_json="$(graph_state_read_node "$workspace" "$namespace" "$run_id" "$node_id")"; then
     echo "Error: graph logs could not read node '$node_id'" >&2
     return 1
   fi
   state_root="$(graph_state_state_root "$workspace")" || return 1
   resolved_attempt="$(graph_logs_ledger_attempt_id "$node_json" "$attempt_id")" || return 1
+
+  graph_logs_operator_context_print "$workspace" "$namespace" "$run_id" "$node_id" "$stream" >&2
 
   errf="$(mktemp "${TMPDIR:-/tmp}/graph-logs.XXXXXX")" || return 1
   abs=""
@@ -1643,7 +1994,7 @@ graph_run_logs_cli() {
     if [[ "$select_err" == *"not found"* ]] && \
       graph_run_logs_attempt_is_active "$node_json" "$resolved_attempt"; then
       abs=""
-      if [[ "$follow" -eq 0 ]]; then
+      if [[ "$follow" -eq 0 || "$follow_explicit" -eq 0 ]]; then
         echo "graph log not found for stream '$stream' (attempt is still active)" >&2
         return 0
       fi
@@ -1661,6 +2012,12 @@ graph_run_logs_cli() {
   fi
 
   if [[ -n "$abs" ]] && ! graph_run_logs_attempt_is_active "$node_json" "$resolved_attempt"; then
+    graph_logs_print_file "$abs" "$tail_n"
+    return $?
+  fi
+
+  if [[ -n "$abs" && "$follow_explicit" -eq 0 ]] && \
+    ! graph_run_logs_attempt_is_running "$node_json"; then
     graph_logs_print_file "$abs" "$tail_n"
     return $?
   fi
@@ -1725,7 +2082,7 @@ graph_run_attach_cli() {
   }
   run_status="$(printf '%s' "$run_json" | jq -r '.status // empty' 2>/dev/null || true)"
 
-  graph_status_run "$workspace" "$namespace" "$run_id" || return 1
+  graph_attach_operator_context_print "$workspace" "$namespace" "$run_id" || return 1
 
   events_rel="$(graph_events_rel 2>/dev/null || printf 'events.jsonl\n')"
   events_abs="$(graph_logs_resolve "$run_dir" "$events_rel" 2>/dev/null || true)"
@@ -1964,7 +2321,7 @@ graph_run_successor_cli() {
     return 1
   fi
 
-  local graph_json report result
+  local graph_json report result create_argv_json create_command
   graph_json="$(mktemp "$state_root/graph-successor.XXXXXX")" || return 1
   if ! graph_compile_plan "$plan_path" "$graph_json" 1 >/dev/null; then
     rm -f "$graph_json"
@@ -1980,8 +2337,13 @@ graph_run_successor_cli() {
       return 1
     }
     rm -f "$graph_json"
+    create_argv_json="$(printf '%s\n' \
+      bash .ralph/graph-run.sh successor --from "$pred_run_id" --namespace "$pred_namespace" \
+      --plan "$plan_path" --workspace "$workspace" --create | jq -R . | jq -sc .)" || return 1
+    create_command="$(graph_preflight_command_text "$create_argv_json")" || return 1
     result="$(jq -nS --argjson report "$report" \
-      '$report + {dryRun: true, create: false}')" || return 1
+      --arg nextCommand "$create_command" --argjson nextCommandArgv "$create_argv_json" \
+      '$report + {dryRun: true, create: false, nextCommand: $nextCommand, nextCommandArgv: $nextCommandArgv, nextEffect: "creates a successor run; predecessor remains unchanged"}')" || return 1
     printf '%s\n' "$result"
     return 0
   fi
@@ -1999,7 +2361,12 @@ graph_run_successor_cli() {
 
 graph_run_tui_usage() {
   cat <<'EOF' >&2
-Usage: graph-run.sh tui --namespace <ns> --run <run-id|latest> [--workspace <dir>] [--no-tui]
+Usage: graph-run.sh tui --namespace <ns> [--run <run-id|latest>] [--workspace <dir>] [--no-tui]
+
+When --run is omitted, the latest run in the namespace is opened.
+When the graph ledger belongs to a public workflow registry run, this routes to
+the workflow viewer for that exact public run ID. Namespace/latest selectors
+remain internal to graph-run and are not exposed through ralph workflow.
 EOF
 }
 
@@ -2007,6 +2374,56 @@ EOF
 # Path to the standard-library TUI module shipped beside this entrypoint.
 graph_run_tui_script() {
   printf '%s\n' "$SCRIPT_DIR/python/graph_tui.py"
+}
+
+# graph_run_tui_public_run_id <run-dir>
+# Prints the exact public workflow run ID when this graph ledger belongs to a
+# registry run. Returns non-zero for standalone internal graphs.
+graph_run_tui_public_run_id() {
+  local run_dir="${1:-}"
+  local registry_path run_id
+  [[ -n "$run_dir" && -f "$run_dir/run.json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  registry_path="$(jq -r '.registryRunPath // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  [[ -n "$registry_path" && -d "$registry_path" && -f "$registry_path/run.json" ]] || return 1
+  run_id="$(jq -r '.runId // empty' "$registry_path/run.json" 2>/dev/null || true)"
+  if [[ -z "$run_id" ]]; then
+    run_id="$(jq -r '.runId // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  fi
+  [[ -n "$run_id" && "$run_id" != "null" ]] || return 1
+  printf '%s\n' "$run_id"
+}
+
+# graph_run_tui_public_state_root <run-dir>
+# Derive the workflow state root from registryRunPath
+# (<state-root>/workflow-runs/<run-id>).
+graph_run_tui_public_state_root() {
+  local run_dir="${1:-}"
+  local registry_path
+  [[ -n "$run_dir" && -f "$run_dir/run.json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  registry_path="$(jq -r '.registryRunPath // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  [[ -n "$registry_path" && -d "$registry_path" ]] || return 1
+  dirname -- "$(dirname -- "$registry_path")"
+}
+
+# graph_run_tui_route_public <run-dir> <mode>
+# Route a registry-backed graph to the public workflow viewer. Returns 0 on
+# success, 1 on viewer failure, and 2 when the graph is not public-backed so
+# the caller should keep the standalone internal viewer.
+graph_run_tui_route_public() {
+  local run_dir="$1" mode="${2:-auto}"
+  local public_run_id="" state_root="" plain=0 rc=0
+  public_run_id="$(graph_run_tui_public_run_id "$run_dir")" || return 2
+  state_root="$(graph_run_tui_public_state_root "$run_dir")" || return 2
+  case "$mode" in
+    no-tui) plain=1 ;;
+  esac
+  if ! declare -F workflow_operator_watch >/dev/null 2>&1; then
+    return 2
+  fi
+  workflow_operator_watch "$state_root" "$public_run_id" "$plain" || rc=$?
+  return "$rc"
 }
 
 # graph_run_tui_python_ok
@@ -2073,15 +2490,24 @@ graph_run_tui_stream_status_bash() {
 # Launch curses when available; otherwise stream concise status. Python
 # restores terminal settings; this wrapper keeps SIGINT/SIGTERM from
 # cancelling a headless supervisor started by --tui.
+# Registry-backed graphs route to the public workflow viewer first.
 graph_run_tui_launch() {
   local run_dir="$1" workspace="$2" mode="${3:-auto}"
   local namespace="${4:-}" run_id="${5:-}"
-  local script rc=0
+  local script rc=0 route_rc=0
   script="$(graph_run_tui_script)"
   if [[ ! -f "$script" ]]; then
     echo "Error: graph tui module not found: $script" >&2
     return 1
   fi
+
+  # Public workflow-backed graphs use the engine-neutral viewer. Standalone
+  # internal graphs keep the graph-specific model below.
+  graph_run_tui_route_public "$run_dir" "$mode" || route_rc=$?
+  if [[ "$route_rc" -ne 2 ]]; then
+    return "$route_rc"
+  fi
+
   if graph_run_tui_python_ok; then
     python3 "$script" \
       --run-dir "$run_dir" \
@@ -2099,24 +2525,44 @@ graph_run_tui_launch() {
 }
 
 # graph_run_tui_with_schedule <graph-json> <run-id> <workspace> <run-dir> <namespace>
-# Optional interactive launch: keep the supervisor headless in the background
-# so detaching the TUI does not stop execution.
+# Optional interactive launch: keep the scheduler in the background so leaving
+# the viewer returns the operator to their shell without stopping execution.
 graph_run_tui_with_schedule() {
   local graph_json="$1" run_id="$2" workspace="$3" run_dir="$4" namespace="$5"
-  local log_rel log_abs schedule_pid=0 schedule_rc=0
+  local log_rel log_abs schedule_pid=0 tui_rc=0
+  GRAPH_RUN_TUI_DETACHED=0
   log_rel="$(graph_logs_supervisor_rel 2>/dev/null || printf 'logs/supervisor.log\n')"
   mkdir -p "$run_dir/logs"
   log_abs="$run_dir/$log_rel"
-  trap '' INT TERM
-  graph_schedule_run "$graph_json" "$run_id" "$workspace" "$run_dir" >>"$log_abs" 2>&1 &
+
+  # The scheduler must not inherit the terminal's interrupt signal: q and
+  # Ctrl-C leave the viewer, they do not cancel the graph. Keep that policy in
+  # the background child rather than making the foreground command unkillable.
+  (
+    trap '' HUP INT TERM
+    graph_schedule_run "$graph_json" "$run_id" "$workspace" "$run_dir"
+  ) >>"$log_abs" 2>&1 &
   schedule_pid=$!
-  graph_run_tui_launch "$run_dir" "$workspace" "tui" "$namespace" "$run_id" || true
-  wait "$schedule_pid" || schedule_rc=$?
+
+  graph_run_tui_on_signal() {
+    GRAPH_RUN_TUI_DETACHED=1
+  }
+  trap 'graph_run_tui_on_signal' INT TERM
+  graph_run_tui_launch "$run_dir" "$workspace" "tui" "$namespace" "$run_id" || tui_rc=$?
   trap - INT TERM
-  return "$schedule_rc"
+
+  GRAPH_RUN_TUI_DETACHED=1
+  if [[ "$tui_rc" -ne 0 && "$tui_rc" -ne 130 ]]; then
+    printf 'Graph viewer exited with status %s; the graph continues in the background.\n' "$tui_rc" >&2
+  else
+    printf 'Viewer detached; graph continues in the background.\n' >&2
+  fi
+  printf 'Status: ralph workflow status %q\n' "$run_id" >&2
+  printf 'Reopen: ralph workflow watch %q\n' "$run_id" >&2
+  return 0
 }
 
-# graph_run_tui_cli --namespace <ns> --run <run-id|latest> [--workspace <dir>]
+# graph_run_tui_cli --namespace <ns> [--run <run-id|latest>] [--workspace <dir>]
 #   [--no-tui]
 graph_run_tui_cli() {
   local namespace="" run_token="" workspace="" mode="auto"
@@ -2153,11 +2599,7 @@ graph_run_tui_cli() {
     graph_run_tui_usage
     return 1
   fi
-  if [[ -z "$run_token" ]]; then
-    echo "Error: graph tui requires --run <run-id|latest>" >&2
-    graph_run_tui_usage
-    return 1
-  fi
+  [[ -n "$run_token" ]] || run_token="latest"
 
   command -v jq >/dev/null 2>&1 || {
     echo "Error: jq is required for graph tui" >&2

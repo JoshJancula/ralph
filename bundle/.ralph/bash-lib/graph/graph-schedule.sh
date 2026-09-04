@@ -5,7 +5,7 @@
 # .graph.json (parallel indexed arrays + id->index map). Every node still runs
 # as a fresh orchestrator.sh --single-stage process. The child reaper and the
 # Kahn ready-set scheduling loop live in this file as centralized helpers.
-# Global and per-runtime concurrency caps (plus subagents=on reservation) and
+# Global and per-runtime concurrency caps (parent-process admission only) and
 # failurePolicy drain/cancel semantics live here.
 # Do not route work through the in-process orch loop.
 
@@ -36,13 +36,13 @@ if ! declare -F graph_ui_node >/dev/null 2>&1; then
   # shellcheck source=graph-ui.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-ui.sh"
 fi
-if ! declare -F ralph_agent_resolve_source >/dev/null 2>&1; then
-  # shellcheck source=../agent-source/resolve-source.sh
-  source "$GRAPH_SCHEDULE_SCRIPT_DIR/../agent-source/resolve-source.sh"
+if ! declare -F ralph_model_store_default >/dev/null 2>&1; then
+  # shellcheck source=../select-model/model-store.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/../select-model/model-store.sh"
 fi
-if ! declare -F agent_source_fm_model >/dev/null 2>&1; then
-  # shellcheck source=../agent-source/frontmatter.sh
-  source "$GRAPH_SCHEDULE_SCRIPT_DIR/../agent-source/frontmatter.sh"
+if ! declare -F ralph_resolve_staged_plan_model >/dev/null 2>&1; then
+  # shellcheck source=../select-model/select-model-common.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/../select-model/select-model-common.sh"
 fi
 if ! declare -F graph_state_write_node >/dev/null 2>&1; then
   # shellcheck source=graph-state.sh
@@ -64,6 +64,10 @@ if ! declare -F graph_integration_run >/dev/null 2>&1; then
   # shellcheck source=graph-integration.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-integration.sh"
 fi
+if ! declare -F ralph_evaluator_parse_status >/dev/null 2>&1; then
+  # shellcheck source=../review-status.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/../review-status.sh"
+fi
 if ! declare -F graph_gate_run >/dev/null 2>&1; then
   # shellcheck source=graph-gate.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-gate.sh"
@@ -80,6 +84,10 @@ if ! declare -F graph_delegation_child_run >/dev/null 2>&1; then
   # shellcheck source=graph-delegation-runner.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-delegation-runner.sh"
 fi
+if ! declare -F graph_delegation_completion_verify_success >/dev/null 2>&1; then
+  # shellcheck source=graph-delegation-completion.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-delegation-completion.sh"
+fi
 if ! declare -F graph_runtime_same_runtime_parallel_safe >/dev/null 2>&1; then
   # shellcheck source=graph-runtime-capabilities.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-runtime-capabilities.sh"
@@ -87,6 +95,10 @@ fi
 if ! declare -F plan_pipeline_graph_json >/dev/null 2>&1; then
   # shellcheck source=../plan-todo.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/../plan-todo.sh"
+fi
+if ! declare -F graph_compile_plan >/dev/null 2>&1; then
+  # shellcheck source=graph-compile.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-compile.sh"
 fi
 # consensus-barrier nodes are dispatched synchronously in-process (see
 # _graph_schedule_handle_consensus_barrier_node) rather than as an
@@ -126,8 +138,7 @@ GRAPH_SUCCESSOR_DELIM='|'
 GRAPH_NODE_IDS=()
 GRAPH_NODE_TYPES=()
 GRAPH_NODE_RUNTIMES=()
-GRAPH_NODE_SUBAGENTS=()
-GRAPH_NODE_NATIVE_PARALLEL=()
+GRAPH_NODE_NATIVE_SUBAGENTS=()
 GRAPH_NODE_INDEGREES=()
 GRAPH_NODE_SUCCESSORS=()
 # Conditional successors: pipe-delimited "condition:node_id" pairs.
@@ -175,7 +186,6 @@ GRAPH_NODE_INDEX_VALS=()
 # Per-runtime occupancy (bash 3.2 parallel arrays; no associative arrays).
 GRAPH_RUNTIME_KEYS=()
 GRAPH_RUNTIME_USED_SLOTS=()
-GRAPH_RUNTIME_EXCLUSIVE_NODE=()
 # Set by _graph_schedule_runtime_map_index / _graph_schedule_runtime_ensure.
 GRAPH_RUNTIME_LOOKUP_IDX=""
 
@@ -193,6 +203,10 @@ GRAPH_SCHEDULE_WORKSPACE=""
 GRAPH_SCHEDULE_EXIT_CODE=0
 GRAPH_SCHEDULE_FAILED_NODE=""
 GRAPH_SCHEDULE_STOP_DISPATCH=0
+# Set when a child exits from an interrupt signal before it can persist its
+# StageOutcomeReport. The run remains resumable; this must not be collapsed
+# into the permanent missing-report failure path.
+GRAPH_SCHEDULE_INTERRUPTED=0
 # failurePolicy from .graph.json: drain (default) or cancel.
 GRAPH_SCHEDULE_FAILURE_POLICY="drain"
 # Set when cancel has signalled in-flight children (idempotent).
@@ -215,13 +229,6 @@ GRAPH_SCHEDULE_SPAWN_OPERATOR_PATH_KIND=""
 # behaviorally unchanged).
 GRAPH_SCHEDULE_LEDGER_RUN_DIR=""
 GRAPH_SCHEDULE_LEDGER_NAMESPACE=""
-# schemaVersion of run.json for this run, memoized on first ledger write by
-# _graph_schedule_ledger_record. Empty means "not yet determined"; reset
-# alongside GRAPH_SCHEDULE_LEDGER_RUN_DIR whenever a new run is initialized
-# or resumed so a stale version never leaks across runs in the same process.
-# schemaVersion 1 runs keep calling graph_state_write_node exactly as
-# before; schemaVersion 2+ runs call graph_state_write_node_v2.
-GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
 # Path to the structured transition log for this run.  Set by graph_schedule_run
 # once GRAPH_SCHEDULE_WORKSPACE and GRAPH_SCHEDULE_NAMESPACE are known.  Uses
 # the same format as the orchestrator log ([YYYY-MM-DD HH:MM:SS] message) so
@@ -279,23 +286,48 @@ _graph_schedule_reap_delegated_children() {
   done
 }
 
+# Verification profiles are a frozen part of the compiled graph, but this was
+# re-read with a fresh jq fork on every scheduler drain tick -- 26 identical
+# reads in a five-node test, most of them on ticks that admitted no child at
+# all. Memoize per graph path (keyed by path so a process that schedules more
+# than one graph stays correct).
+_graph_schedule_verification_profiles() {
+  local graph_json="${GRAPH_SCHEDULE_GRAPH_JSON:-}"
+  local cache_name
+  [[ -n "$graph_json" ]] || { printf '%s\n' '[]'; return 0; }
+  cache_name="_GRAPH_SCHEDULE_VPROFILES_${graph_json}"
+  cache_name="${cache_name//[^A-Za-z0-9_]/_}"
+  if [[ -z "${!cache_name+set}" ]]; then
+    printf -v "$cache_name" '%s' \
+      "$(jq -c '.verificationProfiles // []' "$graph_json" 2>/dev/null || echo '[]')"
+  fi
+  printf '%s\n' "${!cache_name}"
+}
+
 # Start queued broker work in its own session while a parent graph node remains
 # live.  The status ledger, not this shell PID, is the source of truth.
 graph_schedule_drain_delegated_children() {
   local workspace="$GRAPH_SCHEDULE_WORKSPACE" ns="$GRAPH_SCHEDULE_NAMESPACE" run_id="$GRAPH_SCHEDULE_RUN_ID" entry parent did pid cap profiles runtime slots token_slots
-  local project_root state_root parent_workspace run_file node_file delegation_runner
+  local project_root state_root parent_workspace run_file node_file delegation_runner parent_runtime runtime_active
   [[ -n "$workspace" && -n "$ns" && -n "$run_id" ]] || return 0
   _graph_schedule_reap_delegated_children
   cap=$(( GRAPH_SCHEDULE_MAX_PARALLEL - $(_graph_schedule_count_active_invocations) )); [[ "$cap" -gt 0 ]] || return 0
-  profiles="$(jq -c '.verificationProfiles // []' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null || echo '[]')"
+  profiles="$(_graph_schedule_verification_profiles)"
   while [[ "$cap" -gt 0 ]]; do
     GRAPH_DELEGATION_ADMITTED_ENTRY=""
     graph_schedule_admit_delegated_child "$workspace" "$ns" "$run_id" "$cap" "$GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME" || break
     entry="$GRAPH_DELEGATION_ADMITTED_ENTRY"
-    parent="$(jq -r .parentNodeId <<<"$entry")"; did="$(jq -r .delegationId <<<"$entry")"
+    parent="$(jq -r .parentNodeId <<<"$entry")"; did="$(jq -r '.delegatedRunId // .delegationId // empty' <<<"$entry")"
     runtime="$(jq -r .runtime <<<"$entry")"
+    parent_runtime="$(graph_schedule_node_runtime_by_id "$parent" 2>/dev/null || true)"
     slots="${GRAPH_DELEGATION_ADMITTED_RUNTIME_SLOTS:-1}"
     token_slots="${GRAPH_DELEGATION_ADMITTED_TOKEN_SLOTS:-1}"
+    runtime_active=""
+    if _graph_schedule_runtime_map_index "$runtime"; then
+      runtime_active="${GRAPH_RUNTIME_USED_SLOTS[$GRAPH_RUNTIME_LOOKUP_IDX]:-1}"
+      runtime_active=$((runtime_active - slots))
+      [[ "$runtime_active" -ge 0 ]] || runtime_active=0
+    fi
     project_root="$workspace"
     state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$workspace/.ralph-workspace}"
     parent_workspace="$workspace"
@@ -316,6 +348,9 @@ graph_schedule_drain_delegated_children() {
     fi
     delegation_runner="${RALPH_DELEGATION_RUN_PLAN:-$GRAPH_SCHEDULE_SCRIPT_DIR/../../run-plan.sh}"
     (
+      export RALPH_GRAPH_DELEGATION_PARENT_RUNTIME="$parent_runtime"
+      export RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME="$GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME"
+      [[ -z "$runtime_active" ]] || export RALPH_GRAPH_RUNTIME_ACTIVE_SLOTS="$runtime_active"
       if command -v python3 >/dev/null 2>&1; then
         RALPH_DELEGATION_RUN_PLAN="$delegation_runner" exec python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
           bash -c 'source "$1"; graph_delegation_child_run "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"' \
@@ -335,16 +370,24 @@ graph_schedule_drain_delegated_children() {
 # Restart reconciliation adopts terminal ledger outcomes, retains live child
 # sessions, and only requeues a dead process with no terminal outcome.
 graph_schedule_recover_delegated_children() {
-  local entry parent did status runtime process_file pid
+  local entry parent did status runtime pid status_json
   while IFS= read -r entry; do
-    parent="$(jq -r .parentNodeId <<<"$entry")"; did="$(jq -r .delegationId <<<"$entry")"
-    status="$(graph_delegation_ledger_read_status "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$parent" "$did" 2>/dev/null | jq -r '.status // empty')"
-    case "$status" in succeeded|failed|cancelled|awaiting-ack) graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "adopt delegation=$did status=$status";;
+    parent="$(jq -r .parentNodeId <<<"$entry")"; did="$(jq -r '.delegatedRunId // .delegationId // empty' <<<"$entry")"
+    status_json="$(graph_delegation_ledger_read_status "$GRAPH_SCHEDULE_WORKSPACE" "$did" 2>/dev/null)" || { graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "ignore delegation=$did unreadable-ledger"; continue; }
+    status="$(jq -r '.status // empty' <<<"$status_json")"
+    case "$status" in
+      succeeded)
+        if graph_delegation_completion_verify_success "$GRAPH_SCHEDULE_WORKSPACE" "$did" "$status_json"; then
+          graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "adopt delegation=$did status=succeeded verified=true"
+        else
+          graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "reject adoption delegation=$did status=succeeded verified=false"
+        fi
+        ;;
+      failed|cancelled) graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "retain delegation=$did status=$status";;
       running)
-        if graph_delegation_child_process_alive "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$parent" "$did"; then
+        if graph_delegation_child_process_alive "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID" "$parent" "$did"; then
           runtime="$(jq -r '.runtime' <<<"$entry")"
-          process_file="$(graph_delegation_ledger_process_file "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$parent" "$did")"
-          pid="$(jq -r '.pid // empty' "$process_file" 2>/dev/null)"
+          pid="$(jq -r '.runner.pid // empty' <<<"$status_json")"
           if [[ "$pid" =~ ^[0-9]+$ ]] && _graph_schedule_runtime_can_admit "$runtime" off 1; then
             _graph_schedule_runtime_reserve_slots "$runtime" 1 1
             GRAPH_DELEGATION_CHILD_PIDS+=("$pid"); GRAPH_DELEGATION_CHILD_PARENTS+=("$parent"); GRAPH_DELEGATION_CHILD_IDS+=("$did")
@@ -354,12 +397,12 @@ graph_schedule_recover_delegated_children() {
             graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "defer adoption delegation=$did runtime=$runtime capacity unavailable"
           fi
         else
-          graph_delegation_ledger_transition "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$parent" "$did" queued recovery '' '{}' null 'scheduler recovery: dead child without outcome' || true
+          graph_delegation_queue_requeue_crashed "$GRAPH_SCHEDULE_WORKSPACE" "$did" 'scheduler recovery: dead child without outcome' || true
           graph_delegation_runner_log "$GRAPH_SCHEDULE_WORKSPACE" "reset delegation=$did dead-process"
         fi
         ;;
     esac
-  done < <(graph_delegation_queue_pending "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID")
+  done < <(graph_delegation_queue_entries "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID")
 }
 
 # _graph_schedule_log_transition <message>
@@ -394,7 +437,7 @@ _graph_schedule_bind_run_logs() {
   if [[ -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" ]]; then
     run_dir="$GRAPH_SCHEDULE_LEDGER_RUN_DIR"
   else
-    run_dir="$(graph_state_run_dir "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$run_id")" || return 1
+    run_dir="$(graph_state_run_dir "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$run_id")" || return 1
   fi
   mkdir -p "$run_dir" || return 1
   GRAPH_SCHEDULE_LOG_RUN_DIR="$run_dir"
@@ -430,21 +473,21 @@ _graph_schedule_events_log_file() {
 }
 
 # _graph_schedule_log_observability <event> <node-id> <attempt-id> <runtime>
-#   <subagents> <details-json>
+#   <nativeSubagents> <details-json>
 # Append a schemaVersion 1 event to the run event journal.  No-op when there is
 # no ledger run.  All writes go through graph_events_append so concurrent node
 # children are serialized and sequence numbers stay monotonic.  Full prompts and
 # full tool output are forbidden in details; callers must reference ledger-
 # relative log/artifact paths instead.
 _graph_schedule_log_observability() {
-  local event="$1" node_id="$2" attempt_id="$3" runtime="$4" subagents="$5" details_json="${6:-}"
+  local event="$1" node_id="$2" attempt_id="$3" runtime="$4" native_subagents="$5" details_json="${6:-}"
   if [[ -z "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" || -z "${GRAPH_SCHEDULE_RUN_ID:-}" ]]; then
     return 0
   fi
   if [[ -z "$details_json" ]]; then
     details_json='{}'
   fi
-  # Convert legacy scheduler event names to schema-v1 event names when needed.
+  # Normalize scheduler event names for the event journal.
   local mapped="$event"
   case "$event" in
     node-spawn) mapped="node-spawn" ;;
@@ -452,15 +495,13 @@ _graph_schedule_log_observability() {
     integration-start|integration-complete|integration-failed) ;;
     gate-passed|gate-changes-required|gate-error) ;;
     *)
-      # Unknown/legacy names we still allow through the schema validator by
-      # mapping them to a generic category when not recognized.  The events
-      # module will reject truly invalid names.
+      # Unknown names pass through the schema validator unchanged.
       ;;
   esac
   graph_events_append "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$GRAPH_SCHEDULE_RUN_ID" "$mapped" "$node_id" "$attempt_id" "$details_json" >/dev/null 2>&1 || true
 }
 
-# A parent that waits for a brokered child occupies one graph slot.  Graph v1
+# A parent that waits for a brokered child occupies one graph slot. It
 # therefore needs a second, cross-runtime slot before accepting such a policy;
 # otherwise the first waiting parent can permanently starve its only child.
 graph_schedule_delegation_preflight() {
@@ -473,17 +514,12 @@ graph_schedule_delegation_preflight() {
   return 0
 }
 
+# Native subagents are opaque and parent-owned; Ralph no longer reserves
+# child-count slots. Kept as a no-op so call sites stay stable.
 graph_schedule_native_budget_preflight() {
-  local graph="$1" node runtime subagents native_parallel required cap
-  while IFS=$'\034' read -r node runtime subagents native_parallel || [[ -n "$node" ]]; do
-    [[ "$subagents" == "on" && "$native_parallel" =~ ^[1-9][0-9]*$ ]] || continue
-    required=$(( native_parallel + 1 ))
-    cap="$(_graph_schedule_runtime_cap "$runtime")"
-    if [[ "$required" -gt "$cap" || "$required" -gt "$GRAPH_SCHEDULE_TOKEN_CAP" ]]; then
-      echo "Error: native subagent allowance cannot be admitted for node $node: parent+native.maxParallel requires $required runtime/token slots, effective runtime cap is $cap and token cap is $GRAPH_SCHEDULE_TOKEN_CAP" >&2
-      return 1
-    fi
-  done < <(jq -jr '.nodes[] | ([.id, (.stage.runtime // ""), (.stage.subagents // "inherit"), (.stage.delegation.native.maxParallel // 0)] | map(tostring) | join("\u001c")) + "\n"' "$graph")
+  local graph="$1"
+  [[ -n "$graph" ]] || return 0
+  return 0
 }
 
 # Emit one FS-separated row per node: id, runtime, agent, stage model override.
@@ -499,47 +535,15 @@ _graph_schedule_preflight_rows() {
 # this the operator cannot see which model a node will use until after it has
 # already failed - and a stale model id fails every node that shares it.
 #
-# This is reporting, not validation, and never fails the run:
-#
-#   - It does NOT check the model against the provider's catalog. That needs a
-#     live call per runtime CLI, each with a different (or absent) listing
-#     interface. A retired or renamed model id surfaces at node failure instead,
-#     where the cause line now reports the provider's own error.
-#   - A model it cannot read is shown as "(unresolved)", not treated as missing.
-#     Agents resolve through several probe locations and each node runs in its
-#     own workspace, so absence here does not prove absence at spawn time.
-
-# _graph_schedule_preflight_agent_model <agent> <runtime> <workspace>
-#
-# Read an agent's configured model without invoking anything. Uses the same
-# resolver run-plan uses, so the single-file canonical path (.ralph/agents/<id>.md)
-# resolves here exactly as it will at spawn time; a bare
-# <runtime>/agents/<id>/config.json is only one of the probe locations. Prints
-# empty when the model cannot be determined, which is informational, not an error.
-_graph_schedule_preflight_agent_model() {
-  local agent="$1" runtime="$2" workspace="$3"
-  local resolved kind path
-
-  resolved="$(ralph_agent_resolve_source "$agent" "$runtime" "$workspace" 2>/dev/null)" || return 0
-  kind="${resolved%%$'\t'*}"
-  path="${resolved#*$'\t'}"
-  [[ -n "$path" && -r "$path" ]] || return 0
-
-  case "$kind" in
-    classic-config)
-      jq -r '.model // empty' "$path" 2>/dev/null
-      ;;
-    *)
-      # Ralph-native markdown: per-runtime model lives in the models: block.
-      agent_source_fm_model "$path" "$runtime" 2>/dev/null
-      ;;
-  esac
-}
+# Precedence matches staged run-plan resolution: stage/voter model: > saved
+# (claude/codex) > runtime-native default. Profile/agent-config models are not
+# consulted. This is reporting, not validation, and never fails the run.
 
 graph_schedule_agent_model_preflight() {
   local graph="$1" workspace="$2"
   local node runtime agent stage_model model problems=0
   local rows_tmp width=4
+  local prev_ni="${NON_INTERACTIVE_FLAG:-}"
 
   graph_ui_init
   rows_tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-preflight.XXXXXX")" || return 1
@@ -555,36 +559,36 @@ graph_schedule_agent_model_preflight() {
   graph_ui_section "Node agents"
   printf '  %b%-*s %-9s %-14s %s%b\n' "$GRAPH_UI_DIM" "$width" "NODE" "RUNTIME" "AGENT" "MODEL" "$GRAPH_UI_RST" >&2
 
+  # Non-interactive so preflight never opens a model picker.
+  export NON_INTERACTIVE_FLAG=1
   while IFS=$'\034' read -r node runtime agent stage_model || [[ -n "$node" ]]; do
     [[ -n "$node" ]] || continue
-    model="$stage_model"
-    if [[ -n "$agent" && -z "$model" ]]; then
-      model="$(_graph_schedule_preflight_agent_model "$agent" "$runtime" "$workspace")"
-      if [[ -z "$model" ]]; then
-        # Unresolved is reported, never fatal. Agents resolve through several
-        # probe locations (workspace override, .ralph/agents/<id>.md, native md,
-        # classic config.json) and the node also inherits its own snapshot
-        # workspace, so the scheduler cannot conclude from here that the agent is
-        # actually missing - only that it could not read a model up front.
-        model="(unresolved)"
-        problems=$((problems + 1))
-      fi
-    fi
     if [[ -z "$runtime" ]]; then
       # Gate, integration, and checkpoint nodes are executed by the scheduler
       # itself. Naming that is clearer than leaving the columns blank.
       printf '  %-*s %b%-9s%b %-14s %s\n' "$width" "$node" "$GRAPH_UI_DIM" "scheduler" "$GRAPH_UI_RST" "-" "no model invoked" >&2
       continue
     fi
-    # An empty model is legal and means "let the runtime CLI pick its default".
+    model="$(ralph_resolve_staged_plan_model "$runtime" "$stage_model" 2>/dev/null)" || model=""
+    # An empty model means "let the runtime CLI pick its default" -- but only
+    # where the runtime actually has one it can use unattended. Graph nodes
+    # always run run-plan.sh --non-interactive, and that path refuses to start
+    # when it cannot resolve a model, so for those runtimes an empty model is
+    # not a default: it is a node that is going to fail after dispatch. Say so
+    # here, where the operator is still looking, instead of letting them wait
+    # for the stage to die. Mirrors run-plan-agent.sh's
+    # ralph_run_plan_non_interactive_model_preflight_ok, reusing the same
+    # resolvers from select-model-common.sh rather than restating its rules.
     [[ -n "$model" ]] || model="(runtime default)"
     printf '  %-*s %b%-9s%b %-14s %s\n' "$width" "$node" "$GRAPH_UI_C" "$runtime" "$GRAPH_UI_RST" "${agent:-(none)}" "$model" >&2
   done <"$rows_tmp"
   rm -f "$rows_tmp"
-
-  if [[ "$problems" -gt 0 ]]; then
-    graph_ui_warn "$problems node(s) had no model resolvable up front; the runtime default or agent source applies at spawn"
+  if [[ -n "$prev_ni" ]]; then
+    export NON_INTERACTIVE_FLAG="$prev_ni"
+  else
+    unset NON_INTERACTIVE_FLAG
   fi
+
   return 0
 }
 
@@ -595,12 +599,12 @@ graph_schedule_admit_delegated_child() {
   local entry parent did runtime slots token_slots
   entry="$(graph_delegation_queue_admit_one "$workspace" "$ns" "$run_id" "$child_cap" "$runtime_cap")" || return $?
   parent="$(jq -r .parentNodeId <<<"$entry")"
-  did="$(jq -r .delegationId <<<"$entry")"
+  did="$(jq -r '.delegatedRunId // .delegationId // empty' <<<"$entry")"
   runtime="$(jq -r .runtime <<<"$entry")"
   slots=1
   token_slots=1
   if ! _graph_schedule_runtime_can_admit "$runtime" "off" "$token_slots"; then
-    graph_delegation_ledger_transition "$workspace" "$ns" "$run_id" "$parent" "$did" queued "scheduler-${run_id}" "" '{}' null 'runtime/token admission deferred' || true
+    graph_delegation_queue_requeue_crashed "$workspace" "$did" 'runtime/token admission deferred' || true
     _graph_schedule_log_admission "denied" "broker-child" "$did" "$runtime" "off" "$slots" "$token_slots" "runtime-or-token-cap"
     return 2
   fi
@@ -617,10 +621,14 @@ graph_schedule_admit_delegated_child() {
 # can reach this call.
 graph_schedule_run_delegated_child() {
   local workspace="$1" ns="$2" run_id="$3" child_cap="$4" runtime_cap="$5" project_root="$6" state_root="$7" agent_workspace="$8" profiles="${9:-[]}"
-  local entry parent did
+  local entry parent did parent_runtime
   entry="$(graph_delegation_queue_admit_one "$workspace" "$ns" "$run_id" "$child_cap" "$runtime_cap")" || return $?
-  parent="$(jq -r '.parentNodeId' <<<"$entry")"; did="$(jq -r '.delegationId' <<<"$entry")"
-  graph_delegation_child_run "$workspace" "$ns" "$run_id" "$parent" "$did" "$project_root" "$state_root" "$agent_workspace" "$profiles"
+  parent="$(jq -r '.parentNodeId' <<<"$entry")"; did="$(jq -r '.delegatedRunId // .delegationId // empty' <<<"$entry")"
+  parent_runtime="$(graph_schedule_node_runtime_by_id "$parent" 2>/dev/null || true)"
+  RALPH_GRAPH_DELEGATION_PARENT_RUNTIME="$parent_runtime" \
+    RALPH_GRAPH_MAX_PARALLEL="$child_cap" RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME="$runtime_cap" \
+    RALPH_GRAPH_ACTIVE_SLOTS=1 RALPH_GRAPH_RUNTIME_ACTIVE_SLOTS=1 \
+    graph_delegation_child_run "$workspace" "$ns" "$run_id" "$parent" "$did" "$project_root" "$state_root" "$agent_workspace" "$profiles"
 }
 
 graph_schedule_index_map_set() {
@@ -678,13 +686,13 @@ graph_schedule_node_runtime_at() {
   printf '%s\n' "${GRAPH_NODE_RUNTIMES[$idx]}"
 }
 
-graph_schedule_node_subagents_at() {
+graph_schedule_node_native_subagents_at() {
   local idx="$1"
-  if [[ -z "$idx" || "$idx" -lt 0 || "$idx" -ge ${#GRAPH_NODE_SUBAGENTS[@]} ]]; then
+  if [[ -z "$idx" || "$idx" -lt 0 || "$idx" -ge ${#GRAPH_NODE_NATIVE_SUBAGENTS[@]} ]]; then
     echo "Error: graph node index out of range: ${idx:-}" >&2
     return 1
   fi
-  printf '%s\n' "${GRAPH_NODE_SUBAGENTS[$idx]}"
+  printf '%s\n' "${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]}"
 }
 
 graph_schedule_node_indegree_at() {
@@ -724,13 +732,13 @@ graph_schedule_node_runtime_by_id() {
   graph_schedule_node_runtime_at "$idx"
 }
 
-graph_schedule_node_subagents_by_id() {
+graph_schedule_node_native_subagents_by_id() {
   local node_id="$1" idx
   if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
     echo "Error: unknown graph node id: $node_id" >&2
     return 1
   fi
-  graph_schedule_node_subagents_at "$idx"
+  graph_schedule_node_native_subagents_at "$idx"
 }
 
 graph_schedule_node_indegree_by_id() {
@@ -770,6 +778,80 @@ graph_schedule_node_cond_successors_by_id() {
   graph_schedule_node_cond_successors_at "$idx"
 }
 
+# _graph_schedule_agent_conditional_outcome <node_id> <graph_json> <state_root> <namespace>
+# Resolves an agent node's review verdict via its stage-declared loop-check
+# artifact and prints one of: passed | changes-required | error.
+#
+# - No .stage.loopCheck.path on the node -> "passed" (preserves default behavior
+#   for nodes that do not declare a loop check). Roles never invent loopCheck,
+#   evaluator verdicts, or rework evidence paths.
+# - loopCheck.path present -> expand {{ARTIFACT_NS}}/{{STAGE_ID}} the same way
+#   _graph_dispatch_render_inline_stage_plan does, resolve against state_root,
+#   then validate the artifact via ralph_evaluator_parse_status against the
+#   evaluator verdict schema. approved -> passed, changes-required -> changes-required.
+# - Missing/unreadable/empty/invalid artifact -> "error" (never falls back to passed).
+_graph_schedule_agent_conditional_outcome() {
+  local node_id="$1" graph_json="$2" state_root="$3" namespace="$4"
+  local loop_check_path
+  loop_check_path="$(printf '%s' "$graph_json" | jq -r --arg id "$node_id" \
+    '.nodes[] | select(.id == $id) | .stage.loopCheck.path // empty' 2>/dev/null)" || loop_check_path=""
+
+  if [[ -z "$loop_check_path" ]]; then
+    echo "passed"
+    return 0
+  fi
+
+  local stage_id_sub="${node_id//:/_}"
+  local resolved_path="$loop_check_path"
+  resolved_path="${resolved_path//\{\{ARTIFACT_NS\}\}/$namespace}"
+  resolved_path="${resolved_path//\{\{STAGE_ID\}\}/$stage_id_sub}"
+  if [[ "$resolved_path" == .ralph-workspace/* && -n "$state_root" ]]; then
+    resolved_path="$state_root/${resolved_path#.ralph-workspace/}"
+  fi
+
+  if ! declare -F ralph_evaluator_parse_status >/dev/null 2>&1; then
+    # shellcheck source=../review-status.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../review-status.sh"
+  fi
+
+  local schema_path="$GRAPH_SCHEDULE_SCRIPT_DIR/../../schemas/evaluator-verdict.schema.json"
+  local parsed_status
+  if ! parsed_status="$(ralph_evaluator_parse_status "$resolved_path" "$schema_path" 2>/dev/null)"; then
+    echo "error"
+    return 1
+  fi
+
+  case "$parsed_status" in
+    approved)
+      echo "passed"
+      return 0
+      ;;
+    changes-required)
+      # Stall detection: a blocking finding that has survived repeated rework
+      # rounds will not be fixed by spending the remaining iterations on the
+      # same loop. Stop with a precise reason instead of exhausting silently.
+      local stalled=""
+      if declare -F ralph_evaluator_stalled_findings >/dev/null 2>&1; then
+        stalled="$(ralph_evaluator_stalled_findings "$resolved_path" 2>/dev/null)" || stalled=""
+      fi
+      if [[ -n "$stalled" ]]; then
+        echo "graph-schedule: node=$node_id rework stalled; blocking findings unresolved across rounds:" >&2
+        printf '%s\n' "$stalled" | while IFS=$'\t' read -r fid rounds; do
+          [[ -n "$fid" ]] && echo "graph-schedule:   finding=$fid roundsOpen=$rounds" >&2
+        done
+        echo "changes-required"
+        return 3
+      fi
+      echo "changes-required"
+      return 0
+      ;;
+    *)
+      echo "error"
+      return 1
+      ;;
+  esac
+}
+
 _graph_schedule_append_successor() {
   local from_idx="$1"
   local to_id="$2"
@@ -797,7 +879,6 @@ _graph_schedule_append_cond_successor() {
 _graph_schedule_reset_runtime_occupancy() {
   GRAPH_RUNTIME_KEYS=()
   GRAPH_RUNTIME_USED_SLOTS=()
-  GRAPH_RUNTIME_EXCLUSIVE_NODE=()
   GRAPH_RUNTIME_LOOKUP_IDX=""
   GRAPH_SCHEDULE_USED_TOKEN_SLOTS=0
 }
@@ -806,8 +887,7 @@ _graph_schedule_reset_index() {
   GRAPH_NODE_IDS=()
   GRAPH_NODE_TYPES=()
   GRAPH_NODE_RUNTIMES=()
-  GRAPH_NODE_SUBAGENTS=()
-  GRAPH_NODE_NATIVE_PARALLEL=()
+  GRAPH_NODE_NATIVE_SUBAGENTS=()
   GRAPH_NODE_INDEGREES=()
   GRAPH_NODE_SUCCESSORS=()
   GRAPH_NODE_COND_SUCCESSORS=()
@@ -843,6 +923,7 @@ _graph_schedule_reset_index() {
   GRAPH_SCHEDULE_EXIT_CODE=0
   GRAPH_SCHEDULE_FAILED_NODE=""
   GRAPH_SCHEDULE_STOP_DISPATCH=0
+  GRAPH_SCHEDULE_INTERRUPTED=0
   GRAPH_SCHEDULE_FAILURE_POLICY="drain"
   GRAPH_SCHEDULE_CANCEL_REQUESTED=0
   GRAPH_SCHEDULE_AWAITING_ACK=0
@@ -851,10 +932,10 @@ _graph_schedule_reset_index() {
   GRAPH_SCHEDULE_OPERATOR_DECISION_PATH=""
   GRAPH_SCHEDULE_LEDGER_RUN_DIR=""
   GRAPH_SCHEDULE_LEDGER_NAMESPACE=""
-  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
   GRAPH_SCHEDULE_LOG_FILE=""
   GRAPH_SCHEDULE_ADMISSION_LOG_FILE=""
   GRAPH_SCHEDULE_LOG_RUN_DIR=""
+  _graph_schedule_live_progress_reset
 }
 
 # graph_schedule_load_index <graph_json_path>
@@ -865,7 +946,7 @@ _graph_schedule_reset_index() {
 # edge references an unknown node (offending edge named in the error).
 graph_schedule_load_index() {
   local graph_json_path="$1"
-  local node_line edge_line node_id node_type node_runtime node_subagents node_native_parallel
+  local node_line edge_line node_id node_type node_runtime node_native_subagents
   local from_id to_id from_idx to_idx idx
   local nodes_tmp edges_tmp edges_cond_tmp
 
@@ -894,7 +975,7 @@ graph_schedule_load_index() {
 
   # Use a non-whitespace separator so Bash read preserves an empty runtime on
   # scheduler-owned nodes (integrate/checkpoint/barrier).
-  if ! jq -jr '.nodes[] | ([.id, .type, (.stage.runtime // ""), (.stage.subagents // "inherit"), (.stage.delegation.native.maxParallel // 0)] | map(tostring) | join("\u001c")) + "\n"' \
+  if ! jq -jr '.nodes[] | ([.id, .type, (.stage.runtime // ""), (.stage.nativeSubagents // "off")] | map(tostring) | join("\u001c")) + "\n"' \
       "$graph_json_path" >"$nodes_tmp"; then
     echo "Error: failed to parse nodes from $graph_json_path" >&2
     rm -f "$nodes_tmp" "$edges_tmp"
@@ -916,7 +997,7 @@ graph_schedule_load_index() {
   fi
 
   idx=0
-  while IFS=$'\034' read -r node_id node_type node_runtime node_subagents node_native_parallel || [[ -n "$node_id" ]]; do
+  while IFS=$'\034' read -r node_id node_type node_runtime node_native_subagents || [[ -n "$node_id" ]]; do
     [[ -z "$node_id" ]] && continue
     if [[ "$node_id" == *"${GRAPH_SUCCESSOR_DELIM}"* ]]; then
       echo "Error: node id contains successor delimiter '${GRAPH_SUCCESSOR_DELIM}': $node_id" >&2
@@ -930,11 +1011,11 @@ graph_schedule_load_index() {
       _graph_schedule_reset_index
       return 1
     fi
-    case "$node_subagents" in
-      inherit|on|off) ;;
-      "") node_subagents="inherit" ;;
+    case "$node_native_subagents" in
+      inherit|off) ;;
+      "") node_native_subagents="off" ;;
       *)
-        echo "Error: invalid subagents value for node $node_id: $node_subagents" >&2
+        echo "Error: invalid nativeSubagents value for node $node_id: $node_native_subagents" >&2
         rm -f "$nodes_tmp" "$edges_tmp" "$edges_cond_tmp"
         _graph_schedule_reset_index
         return 1
@@ -943,9 +1024,7 @@ graph_schedule_load_index() {
     GRAPH_NODE_IDS+=("$node_id")
     GRAPH_NODE_TYPES+=("$node_type")
     GRAPH_NODE_RUNTIMES+=("$node_runtime")
-    GRAPH_NODE_SUBAGENTS+=("$node_subagents")
-    [[ "$node_native_parallel" =~ ^[0-9]+$ ]] || node_native_parallel=0
-    GRAPH_NODE_NATIVE_PARALLEL+=("$node_native_parallel")
+    GRAPH_NODE_NATIVE_SUBAGENTS+=("$node_native_subagents")
     GRAPH_NODE_INDEGREES+=("0")
     GRAPH_NODE_SUCCESSORS+=("")
     GRAPH_NODE_COND_SUCCESSORS+=("")
@@ -1302,7 +1381,7 @@ _graph_schedule_reap_poll_once() {
 #   2  harvested; report missing (failure — SIGKILL or writer bug)
 #   1  no tracked children / internal error
 graph_schedule_reap_one() {
-  local poll_interval rc
+  local poll_interval rc use_wait_n=0
 
   if [[ ${#GRAPH_CHILD_PIDS[@]} -eq 0 ]]; then
     echo "Error: graph_schedule_reap_one called with no tracked children" >&2
@@ -1311,10 +1390,16 @@ graph_schedule_reap_one() {
 
   poll_interval="${GRAPH_REAP_POLL_INTERVAL:-0.25}"
 
-  # wait -n cannot be interrupted to admit broker work. When delegation is
-  # enabled use the portable poll path so a live parent can wait while its
-  # child is admitted and reaped by the same scheduler.
-  if _graph_schedule_reap_supports_wait_n && [[ "${GRAPH_SCHEDULE_DELEGATION_ACTIVE:-0}" -eq 0 ]]; then
+  # wait -n blocks until a child exits, so live progress / run heartbeats cannot
+  # emit during a slow agent. Prefer the portable poll path whenever live
+  # progress is enabled (default), when delegation is active, or when forced.
+  if _graph_schedule_reap_supports_wait_n \
+    && [[ "${GRAPH_SCHEDULE_DELEGATION_ACTIVE:-0}" -eq 0 ]] \
+    && [[ "${GRAPH_LIVE_PROGRESS:-1}" == "0" ]]; then
+    use_wait_n=1
+  fi
+
+  if [[ "$use_wait_n" -eq 1 ]]; then
     while [[ ${#GRAPH_CHILD_PIDS[@]} -gt 0 ]]; do
       rc=0
       _graph_schedule_reap_wait_n_fast || rc=$?
@@ -1333,8 +1418,12 @@ graph_schedule_reap_one() {
     return 1
   fi
 
-  # Portable bash 3.2 path (and GRAPH_REAP_FORCE_POLL=1).
+  # Portable bash 3.2 path, GRAPH_REAP_FORCE_POLL=1, and default live-progress
+  # mode. Tick heartbeat + operator progress between polls so a slow fake/agent
+  # still surfaces within the 15-second G09 bucket.
   while [[ ${#GRAPH_CHILD_PIDS[@]} -gt 0 ]]; do
+    graph_schedule_tick_heartbeat
+    graph_schedule_tick_live_progress
     graph_schedule_drain_delegated_children
     rc=0
     _graph_schedule_reap_poll_once || rc=$?
@@ -1361,10 +1450,10 @@ graph_schedule_run_node() {
 # Ready set = remaining indegree 0 and state pending. Spawn ready nodes in the
 # background up to the global cap (GRAPH_SCHEDULE_MAX_PARALLEL from .graph.json
 # maxParallel, overridable via RALPH_GRAPH_MAX_PARALLEL) and the per-runtime
-# cap (default 1, overridable via RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME). A node
-# with resolved subagents=on consumes its runtime's entire per-runtime
-# allowance for the duration of the node so sibling same-runtime nodes cannot
-# interleave overlay install/restore with uncounted subagent processes. Reap
+# cap (default 1, overridable via RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME). Each
+# graph node consumes one parent-process runtime/token slot for its duration;
+# resolved nativeSubagents (off|inherit) is opaque and does not reserve child
+# slots. Reap
 # with graph_schedule_reap_one, and on StageOutcomeReport success decrement each
 # successor's remaining indegree. Exit 0 only when every node reached a
 # successful terminal state (succeeded or scheduler-owned conditional skip).
@@ -1485,7 +1574,7 @@ GRAPH_HEARTBEAT_INTERVAL_SECONDS="${GRAPH_HEARTBEAT_INTERVAL_SECONDS:-30}"
 # do not cause repeated disk writes. No polling process is spawned.
 graph_schedule_tick_heartbeat() {
   local workspace="${GRAPH_SCHEDULE_WORKSPACE:-}"
-  local namespace="${GRAPH_SCHEDULE_NAMESPACE:-}"
+  local namespace="${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-${GRAPH_SCHEDULE_NAMESPACE:-}}"
   local run_id="${GRAPH_SCHEDULE_RUN_ID:-}"
   local interval now_epoch last_tick i node_id attempt_id
 
@@ -1518,6 +1607,348 @@ graph_schedule_tick_heartbeat() {
   done
 
   GRAPH_HEARTBEAT_LAST_TICK_EPOCH="$now_epoch"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# G09 bounded live progress
+#
+# Operator heartbeat for running nodes only. Emits at most once per 15-second
+# bucket, and immediately when node/runtime/model/TODO/log-line identity
+# changes. Never lists unchanged pending nodes. Lines are redacted with the
+# same credential rules as failure summaries and never carry chain-of-thought,
+# hidden prompts, or raw tool arguments. Repeated identical progress is
+# suppressed. GRAPH_LIVE_PROGRESS=0 disables emission.
+# ---------------------------------------------------------------------------
+
+GRAPH_LIVE_PROGRESS_INTERVAL_SECONDS="${GRAPH_LIVE_PROGRESS_INTERVAL_SECONDS:-15}"
+GRAPH_LIVE_PROGRESS_LINE_MAX="${GRAPH_LIVE_PROGRESS_LINE_MAX:-200}"
+# Per-node last emitted change key and full progress signature (parallel arrays).
+GRAPH_LIVE_PROGRESS_NODE_IDS=()
+GRAPH_LIVE_PROGRESS_CHANGE_KEYS=()
+GRAPH_LIVE_PROGRESS_SIGNATURES=()
+GRAPH_LIVE_PROGRESS_LAST_EMIT_EPOCH=()
+# Per-node last-checked epoch: gates how often the expensive detection path
+# (jq/tail/sed subprocesses) runs at all, independent of whether it emits.
+# Without this, a computation that itself takes longer than the interval
+# (e.g. under process-spawn-heavy conditions) re-triggers on the very next
+# poll, defeating the interval bound.
+GRAPH_LIVE_PROGRESS_LAST_CHECK_EPOCH=()
+# Per-node log-path cache, keyed by the attempt id they were resolved for.
+# graph_logs_attempt_rel claims/persists an id mapping (jq read + write), so
+# resolving it fresh on every ~0.2s poll tick is expensive enough to starve
+# the reaper of a slow node. Resolve once per attempt and reuse until the
+# node's attempt id changes.
+GRAPH_LIVE_PROGRESS_CACHE_ATTEMPT_IDS=()
+GRAPH_LIVE_PROGRESS_CACHE_AGENT_PATHS=()
+GRAPH_LIVE_PROGRESS_CACHE_RUNNER_PATHS=()
+
+_graph_schedule_live_progress_reset() {
+  GRAPH_LIVE_PROGRESS_NODE_IDS=()
+  GRAPH_LIVE_PROGRESS_CHANGE_KEYS=()
+  GRAPH_LIVE_PROGRESS_SIGNATURES=()
+  GRAPH_LIVE_PROGRESS_LAST_EMIT_EPOCH=()
+  GRAPH_LIVE_PROGRESS_LAST_CHECK_EPOCH=()
+  GRAPH_LIVE_PROGRESS_CACHE_ATTEMPT_IDS=()
+  GRAPH_LIVE_PROGRESS_CACHE_AGENT_PATHS=()
+  GRAPH_LIVE_PROGRESS_CACHE_RUNNER_PATHS=()
+}
+
+_graph_schedule_live_progress_slot() {
+  local node_id="$1" i
+  for ((i = 0; i < ${#GRAPH_LIVE_PROGRESS_NODE_IDS[@]}; i++)); do
+    if [[ "${GRAPH_LIVE_PROGRESS_NODE_IDS[$i]}" == "$node_id" ]]; then
+      printf '%s\n' "$i"
+      return 0
+    fi
+  done
+  GRAPH_LIVE_PROGRESS_NODE_IDS+=("$node_id")
+  GRAPH_LIVE_PROGRESS_CHANGE_KEYS+=("")
+  GRAPH_LIVE_PROGRESS_SIGNATURES+=("")
+  GRAPH_LIVE_PROGRESS_LAST_EMIT_EPOCH+=("0")
+  GRAPH_LIVE_PROGRESS_LAST_CHECK_EPOCH+=("0")
+  GRAPH_LIVE_PROGRESS_CACHE_ATTEMPT_IDS+=("")
+  GRAPH_LIVE_PROGRESS_CACHE_AGENT_PATHS+=("")
+  GRAPH_LIVE_PROGRESS_CACHE_RUNNER_PATHS+=("")
+  printf '%s\n' "$((${#GRAPH_LIVE_PROGRESS_NODE_IDS[@]} - 1))"
+}
+
+# _graph_schedule_live_progress_redact <text>
+# Credential redaction + length cap + reject CoT / prompt / tool-arg shapes.
+_graph_schedule_live_progress_redact() {
+  local text="${1:-}" lower
+  text="$(printf '%s' "$text" | tr '\n\r\t' ' ' | tr -s ' ')"
+  text="${text# }"
+  text="${text% }"
+  [[ -n "$text" ]] || return 0
+  lower="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *'<thinking>'*|*'</thinking>'*|*chain-of-thought*|*chain\ of\ thought*)
+      return 0
+      ;;
+    *hidden\ prompt*|*system\ prompt*|*tool_use*|*tool\ call\ args*|*\"arguments\"*|*raw\ tool*)
+      return 0
+      ;;
+    thinking:*|reasoning:*|scratchpad:*|internal\ monologue:*)
+      return 0
+      ;;
+  esac
+  if declare -F graph_failure_redact_text >/dev/null 2>&1; then
+    text="$(graph_failure_redact_text "$text")"
+    text="${text%$'\n'}"
+  fi
+  if declare -F graph_failure_bound_summary >/dev/null 2>&1; then
+    text="$(GRAPH_FAILURE_SUMMARY_MAX="${GRAPH_LIVE_PROGRESS_LINE_MAX:-200}" graph_failure_bound_summary "$text")"
+    text="${text%$'\n'}"
+  fi
+  printf '%s\n' "$text"
+}
+
+# _graph_schedule_live_progress_follow_command <node_id> [attempt_id]
+# Exact operator follow-log command (G08 running action).
+_graph_schedule_live_progress_follow_command() {
+  local node_id="$1" attempt_id="${2:-}"
+  local ns="${GRAPH_SCHEDULE_NAMESPACE:-}" run_id="${GRAPH_SCHEDULE_RUN_ID:-}"
+  local -a argv=(ralph workflow logs "$run_id" --stage "$node_id")
+  local attempt_number=""
+  if [[ "$attempt_id" =~ __([0-9]+)$ ]]; then
+    attempt_number="${BASH_REMATCH[1]}"
+  elif [[ "$attempt_id" =~ ^[0-9]+$ ]]; then
+    attempt_number="$attempt_id"
+  fi
+  if [[ -n "$attempt_number" ]]; then
+    argv+=(--attempt "$attempt_number")
+  fi
+  local text="" part
+  for part in "${argv[@]}"; do
+    [[ -n "$text" ]] && text+=" "
+    text+="$(printf '%q' "$part")"
+  done
+  printf '%s\n' "$text"
+}
+
+# _graph_schedule_live_progress_model <node_id>
+# Stage model override from the frozen graph when present.
+_graph_schedule_live_progress_model() {
+  local node_id="$1" model=""
+  [[ -n "${GRAPH_SCHEDULE_GRAPH_JSON:-}" && -f "${GRAPH_SCHEDULE_GRAPH_JSON:-}" ]] || return 0
+  model="$(jq -r --arg id "$node_id" '
+    (.nodes // []) | map(select(.id == $id)) | first | .stage.model // empty
+  ' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null)" || model=""
+  printf '%s\n' "$model"
+}
+
+# _graph_schedule_live_progress_extract_todo <line>
+# Prints a TODO id when the line carries a structured marker.
+_graph_schedule_live_progress_extract_todo() {
+  local line="$1" todo=""
+  todo="$(printf '%s' "$line" | sed -nE 's/.*"currentTodoId"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+  if [[ -z "$todo" ]]; then
+    todo="$(printf '%s' "$line" | sed -nE 's/.*currentTodoId=([A-Za-z0-9._-]+).*/\1/p')"
+  fi
+  if [[ -z "$todo" ]]; then
+    todo="$(printf '%s' "$line" | sed -nE 's/.*RALPH_CURRENT_TODO_ID=([A-Za-z0-9._-]+).*/\1/p')"
+  fi
+  if [[ -z "$todo" ]]; then
+    todo="$(printf '%s' "$line" | sed -nE 's/.*TODO id=([A-Za-z0-9._-]+).*/\1/p')"
+  fi
+  if [[ -z "$todo" ]]; then
+    todo="$(printf '%s' "$line" | sed -nE 's/.*\bid=([A-Za-z0-9._-]+).*TODO \(line.*/\1/p')"
+  fi
+  printf '%s\n' "$todo"
+}
+
+# _graph_schedule_live_progress_current_todo <log-path...>
+# Prefer structured runner markers when present.
+_graph_schedule_live_progress_current_todo() {
+  local path line todo="" found=""
+  for path in "$@"; do
+    [[ -n "$path" && -f "$path" && ! -L "$path" ]] || continue
+    found=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      todo="$(_graph_schedule_live_progress_extract_todo "$line")"
+      [[ -n "$todo" ]] && found="$todo"
+    done < <(tail -n 80 "$path" 2>/dev/null || true)
+    if [[ -n "$found" ]]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# _graph_schedule_live_progress_last_safe_line <agent-log-path>
+# Last nonempty operator-safe agent-log line (no CoT / credentials).
+_graph_schedule_live_progress_last_safe_line() {
+  local log_path="$1" raw candidate="" safe=""
+  [[ -n "$log_path" && -f "$log_path" && ! -L "$log_path" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    [[ -n "${raw//[[:space:]]/}" ]] || continue
+    case "$raw" in
+      [+#|=]*) continue ;;
+      ---*) continue ;;
+    esac
+    [[ "$raw" =~ ^[[:space:]]*\[[0-9]{4}- ]] && continue
+    candidate="$(_graph_schedule_live_progress_redact "$raw")" || candidate=""
+    [[ -n "$candidate" ]] || continue
+    safe="$candidate"
+  done < <(tail -n 80 "$log_path" 2>/dev/null || true)
+  printf '%s\n' "$safe"
+}
+
+# _graph_schedule_live_progress_fmt_elapsed <seconds>
+_graph_schedule_live_progress_fmt_elapsed() {
+  local seconds="${1:-0}" minutes hours
+  [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=0
+  if [[ "$seconds" -lt 60 ]]; then
+    printf '%ss\n' "$seconds"
+    return 0
+  fi
+  minutes=$((seconds / 60))
+  if [[ "$minutes" -lt 60 ]]; then
+    printf '%sm%02ds\n' "$minutes" "$((seconds % 60))"
+    return 0
+  fi
+  hours=$((minutes / 60))
+  printf '%sh%02dm\n' "$hours" "$((minutes % 60))"
+}
+
+# _graph_schedule_live_progress_emit_node <node_id>
+# Build and maybe print one progress block for a running node.
+_graph_schedule_live_progress_emit_node() {
+  local node_id="$1"
+  local idx slot runtime model attempt_id elapsed todo last_line follow_cmd
+  local run_dir agent_rel runner_rel agent_path runner_path
+  local change_key signature now_epoch last_emit last_check interval force=0
+  local last_change last_sig heartbeat_interval attempt_number elapsed_text
+
+  if ! idx="$(graph_schedule_index_map_get "$node_id" 2>/dev/null)"; then
+    return 0
+  fi
+  if [[ "${GRAPH_NODE_STATES[$idx]:-}" != "running" ]]; then
+    return 0
+  fi
+
+  slot="$(_graph_schedule_live_progress_slot "$node_id")"
+  interval="$(_graph_schedule_positive_int_or_default "${GRAPH_LIVE_PROGRESS_INTERVAL_SECONDS:-}" 15)"
+  now_epoch="${GRAPH_LIVE_PROGRESS_NOW_EPOCH:-${GRAPH_HEARTBEAT_NOW_EPOCH:-$(date +%s)}}"
+  [[ "$now_epoch" =~ ^[0-9]+$ ]] || now_epoch="$(date +%s)"
+  last_check="${GRAPH_LIVE_PROGRESS_LAST_CHECK_EPOCH[$slot]:-0}"
+  [[ "$last_check" =~ ^[0-9]+$ ]] || last_check=0
+  # The full detection path below spawns several jq/tail/sed subprocesses per
+  # node; running it on every ~0.2s reap poll (rather than once per bucket)
+  # is expensive enough to starve the reaper and blow the G09 15-second
+  # bound. Sample it at most once per interval, gated on when it was last
+  # attempted (not last emitted) so a computation that itself runs long does
+  # not immediately retrigger on the next poll. A node is still checked
+  # immediately the first time it is seen running (last_check=0).
+  if [[ "$last_check" -ne 0 && "$((now_epoch - last_check))" -lt "$interval" ]]; then
+    return 0
+  fi
+  GRAPH_LIVE_PROGRESS_LAST_CHECK_EPOCH[$slot]="$now_epoch"
+
+  runtime="${GRAPH_NODE_RUNTIMES[$idx]:-}"
+  model="$(_graph_schedule_live_progress_model "$node_id")"
+  attempt_id="$(graph_state_node_last_attempt_id \
+    "${GRAPH_SCHEDULE_WORKSPACE:-}" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-${GRAPH_SCHEDULE_NAMESPACE:-}}" \
+    "${GRAPH_SCHEDULE_RUN_ID:-}" "$node_id" 2>/dev/null || true)"
+  if [[ -z "$attempt_id" ]]; then
+    local attempt_number="${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]:-}"
+    if [[ -n "$attempt_number" && "$attempt_number" != "0" ]]; then
+      attempt_id="$(graph_dispatch_mint_attempt_id "$node_id" "$GRAPH_SCHEDULE_RUN_ID" "$attempt_number" 2>/dev/null || true)"
+    fi
+  fi
+  elapsed="$(graph_schedule_node_active_seconds "$node_id" 2>/dev/null || printf '0\n')"
+  [[ "$elapsed" =~ ^[0-9]+$ ]] || elapsed=0
+
+  # graph_logs_attempt_rel claims/persists an id mapping (jq read + write on
+  # every call), so it is too expensive to re-resolve on every ~0.2s poll
+  # tick. Resolve the log paths once per attempt id and cache them; a slow
+  # node's heartbeat then costs one cheap file read per tick instead of four
+  # claim round-trips.
+  run_dir="${GRAPH_SCHEDULE_LOG_RUN_DIR:-${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}}"
+  if [[ -n "$attempt_id" && "$attempt_id" == "${GRAPH_LIVE_PROGRESS_CACHE_ATTEMPT_IDS[$slot]:-}" ]]; then
+    agent_path="${GRAPH_LIVE_PROGRESS_CACHE_AGENT_PATHS[$slot]:-}"
+    runner_path="${GRAPH_LIVE_PROGRESS_CACHE_RUNNER_PATHS[$slot]:-}"
+  else
+    agent_path=""
+    runner_path=""
+    if [[ -n "$run_dir" && -n "$attempt_id" ]]; then
+      agent_rel="$(graph_logs_attempt_rel "$run_dir" "$node_id" "$attempt_id" "agent.log" 2>/dev/null || true)"
+      runner_rel="$(graph_logs_attempt_rel "$run_dir" "$node_id" "$attempt_id" "runner.log" 2>/dev/null || true)"
+      [[ -n "$agent_rel" ]] && agent_path="$(graph_logs_read "$run_dir" "$agent_rel" 2>/dev/null || true)"
+      [[ -n "$runner_rel" ]] && runner_path="$(graph_logs_read "$run_dir" "$runner_rel" 2>/dev/null || true)"
+    fi
+    GRAPH_LIVE_PROGRESS_CACHE_ATTEMPT_IDS[$slot]="$attempt_id"
+    GRAPH_LIVE_PROGRESS_CACHE_AGENT_PATHS[$slot]="$agent_path"
+    GRAPH_LIVE_PROGRESS_CACHE_RUNNER_PATHS[$slot]="$runner_path"
+  fi
+
+  todo="$(_graph_schedule_live_progress_current_todo "$runner_path" "$agent_path")"
+  last_line="$(_graph_schedule_live_progress_last_safe_line "$agent_path")"
+  follow_cmd="$(_graph_schedule_live_progress_follow_command "$node_id" "$attempt_id")"
+
+  change_key="${node_id}|${runtime}|${model}|${attempt_id}|${todo}|${last_line}"
+  signature="${change_key}|${elapsed}|${follow_cmd}"
+
+  last_change="${GRAPH_LIVE_PROGRESS_CHANGE_KEYS[$slot]:-}"
+  last_sig="${GRAPH_LIVE_PROGRESS_SIGNATURES[$slot]:-}"
+  last_emit="${GRAPH_LIVE_PROGRESS_LAST_EMIT_EPOCH[$slot]:-0}"
+  [[ "$last_emit" =~ ^[0-9]+$ ]] || last_emit=0
+
+  heartbeat_interval="$(_graph_schedule_positive_int_or_default "${GRAPH_LIVE_PROGRESS_HEARTBEAT_SECONDS:-}" 60)"
+  if [[ "$change_key" != "$last_change" ]]; then
+    force=1
+  elif [[ "$((now_epoch - last_emit))" -ge "$heartbeat_interval" ]]; then
+    force=1
+  fi
+  [[ "$force" -eq 1 ]] || return 0
+  # Identical full line (including elapsed) is suppressed even when the bucket
+  # elapsed, so a quiet agent does not flood unchanged heartbeats.
+  if [[ "$signature" == "$last_sig" ]]; then
+    return 0
+  fi
+
+  graph_ui_init
+  attempt_number="${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]:-1}"
+  elapsed_text="$(_graph_schedule_live_progress_fmt_elapsed "$elapsed")"
+  printf '%b%s%b %b%s%b' \
+    "$GRAPH_UI_C" "~~" "$GRAPH_UI_RST" \
+    "$GRAPH_UI_BOLD" "$node_id" "$GRAPH_UI_RST" >&2
+  printf ' runtime=%s' "$runtime" >&2
+  [[ -n "$model" ]] && printf ' model=%s' "$model" >&2
+  printf ' attempt=%s' "$attempt_number" >&2
+  printf ' elapsed=%s' "$elapsed_text" >&2
+  [[ -n "$todo" ]] && printf ' todo=%s' "$todo" >&2
+  printf '\n' >&2
+  if [[ "$change_key" != "$last_change" ]]; then
+    [[ -n "$last_line" ]] && graph_ui_detail "last: $last_line"
+    graph_ui_detail "logs: $follow_cmd"
+  fi
+
+  GRAPH_LIVE_PROGRESS_CHANGE_KEYS[$slot]="$change_key"
+  GRAPH_LIVE_PROGRESS_SIGNATURES[$slot]="$signature"
+  GRAPH_LIVE_PROGRESS_LAST_EMIT_EPOCH[$slot]="$now_epoch"
+  return 0
+}
+
+# graph_schedule_tick_live_progress
+# Emit bounded operator progress for currently running nodes only.
+graph_schedule_tick_live_progress() {
+  local i node_id
+  if [[ "${GRAPH_LIVE_PROGRESS:-1}" == "0" ]]; then
+    return 0
+  fi
+  if [[ -z "${GRAPH_SCHEDULE_NAMESPACE:-}" || -z "${GRAPH_SCHEDULE_RUN_ID:-}" ]]; then
+    return 0
+  fi
+  for ((i = 0; i < ${#GRAPH_NODE_IDS[@]}; i++)); do
+    if [[ "${GRAPH_NODE_STATES[$i]:-}" != "running" ]]; then
+      continue
+    fi
+    node_id="${GRAPH_NODE_IDS[$i]}"
+    _graph_schedule_live_progress_emit_node "$node_id" || true
+  done
   return 0
 }
 
@@ -1634,13 +2065,15 @@ graph_schedule_write_correction_record() {
       elif type == "string" and . != "" then [.]
       else [] end;
     {
-      component: ((.failedCompletionComponent // .completionComponent // .component // "") | tostring),
-      kind: ((.kind // .category // .failureKind // "") | tostring),
-      reason: ((.reason // "") | tostring),
-      verificationResultPath: ((.verificationResultPath // .verificationResult // .verificationResultFile // "") | tostring),
+      component: ((.failedCompletionComponent // .completionComponent // .component // .failure.cause // "") | tostring),
+      kind: ((.kind // .category // .failureKind // .failure.cause // "") | tostring),
+      reason: ((.reason // .failure.cause // "") | tostring),
+      verificationResultPath: ((.verificationResultPath // .verificationResult // .verificationResultFile // .failure.verificationResultPath // "") | tostring),
       offendingPaths: (
         ((.offendingPaths | as_paths)
          + (.missingArtifacts | as_paths)
+         + (.failure.offendingPaths | as_paths)
+         + (.failure.missingArtifacts | as_paths)
          + (.undeclaredPaths | as_paths)
          + (.outOfScope | as_paths)
          + (.paths | as_paths)
@@ -1848,11 +2281,11 @@ _graph_schedule_retry_context_required_artifacts() {
 }
 
 # _graph_schedule_retry_context_node_identity <graph_json> <node_id>
-# Compact identity: nodeId plus runtime/agent when present. No todos or prompts.
+# Compact identity: nodeId plus runtime/role when present. No todos or prompts.
 _graph_schedule_retry_context_node_identity() {
   local graph_json="$1" node_id="$2"
   if [[ -z "$graph_json" || ! -f "$graph_json" || -z "$node_id" ]]; then
-    jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",agent:""}'
+    jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",role:""}'
     return 0
   fi
   jq -c --arg id "$node_id" '
@@ -1860,9 +2293,9 @@ _graph_schedule_retry_context_node_identity() {
     {
       nodeId: $id,
       runtime: (($stage.runtime // "") | tostring),
-      agent: (($stage.agent // "") | tostring)
+      role: (($stage.role // "") | tostring)
     }
-  ' "$graph_json" 2>/dev/null || jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",agent:""}'
+  ' "$graph_json" 2>/dev/null || jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",role:""}'
 }
 
 # _graph_schedule_retry_context_previous_logs <run_dir> <node_id> <previous_attempt_id>
@@ -2022,7 +2455,7 @@ graph_schedule_build_retry_context() {
   [[ -n "$artifacts" ]] || artifacts='[]'
   [[ -n "$logs" ]] || logs='{}'
   [[ -n "$correction" ]] || correction='null'
-  [[ -n "$identity" ]] || identity="$(jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",agent:""}')"
+  [[ -n "$identity" ]] || identity="$(jq -cn --arg id "$node_id" '{nodeId:$id,runtime:"",role:""}')"
 
   attempt_n=""
   if [[ "$correction" != "null" ]]; then
@@ -2693,17 +3126,9 @@ _graph_schedule_budget_nonneg_limit() {
 # _graph_schedule_empty_usage_json
 # Unavailable aggregate. Missing usage is not represented as zero.
 _graph_schedule_empty_usage_json() {
-  jq -nc '{
-    inputTokens: null,
-    outputTokens: null,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
-    estimatedCostUsd: null,
-    reliability: "unavailable",
-    missingAttempts: 0,
-    countedAttemptIds: [],
-    warned: false
-  }'
+  # Compile-time constant: emit directly instead of forking jq to render a
+  # fixed literal (26 of 683 jq forks in a five-node scheduler test).
+  printf '%s\n' '{"inputTokens":null,"outputTokens":null,"cacheReadTokens":null,"cacheWriteTokens":null,"estimatedCostUsd":null,"reliability":"unavailable","missingAttempts":0,"countedAttemptIds":[],"warned":false}'
 }
 
 # _graph_schedule_node_usage_stored <node_id>
@@ -2876,7 +3301,7 @@ graph_schedule_pause_active_clock() {
 
 # graph_schedule_active_time_exhausted [node_id]
 # True when the node or run committed+open active time meets a configured limit.
-# Null ceilings (legacy omitted budgets) never exhaust.
+# Null ceilings never exhaust.
 graph_schedule_active_time_exhausted() {
   local node_id="${1:-}" budgets limit used run_limit run_used
   if [[ -n "$node_id" ]]; then
@@ -3696,7 +4121,7 @@ graph_schedule_persist_operator_request() {
 # drain/cancel failure policy.
 graph_schedule_apply_operator_permission() {
   local node_id="$1" exit_code="$2" reason="${3:-operator-permission}" attempt_id="${4:-}" result="${5:-}"
-  local idx request_id extra_json request_path="" runtime="" subagents=""
+  local idx request_id extra_json request_path="" runtime="" native_subagents=""
   if [[ -z "$node_id" ]]; then
     echo "Error: graph_schedule_apply_operator_permission requires node_id" >&2
     return 1
@@ -3726,7 +4151,7 @@ graph_schedule_apply_operator_permission() {
   graph_schedule_pause_active_clock "$node_id" || true
   GRAPH_SCHEDULE_STOP_DISPATCH=0
   runtime="${GRAPH_NODE_RUNTIMES[$idx]:-}"
-  subagents="${GRAPH_NODE_SUBAGENTS[$idx]:-}"
+  native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]:-}"
   extra_json="{}"
   if [[ -n "$request_id" ]]; then
     extra_json="$(jq -cn --arg rid "$request_id" '{operatorRequestId:$rid}')" || extra_json="{}"
@@ -3735,11 +4160,11 @@ graph_schedule_apply_operator_permission() {
   if [[ -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" ]]; then
     _graph_schedule_ledger_record "$node_id" "awaiting-operator" \
       "$attempt_id" "awaiting-operator" "$exit_code" "" "$(graph_state_now_iso)" \
-      "$runtime" "$subagents" "$reason" "$extra_json"
+      "$runtime" "$native_subagents" "$reason" "$extra_json"
   fi
   if [[ -n "$request_id" && -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" ]]; then
     _graph_schedule_log_observability "operator-request" "$node_id" "$attempt_id" \
-      "$runtime" "$subagents" "$(jq -cn --arg rid "$request_id" '{requestId:$rid}')"
+      "$runtime" "$native_subagents" "$(jq -cn --arg rid "$request_id" '{requestId:$rid}')"
   fi
   graph_ui_node "awaiting-operator" "$node_id" "reason=$reason request=${request_id:-}"
   _graph_schedule_mark_blocked_descendants "$node_id"
@@ -3770,10 +4195,10 @@ _graph_schedule_print_operator_request_notice() {
       "$node_id" "$([[ -n "$runtime" ]] && printf ' (runtime %s)' "$runtime")"
     printf '  Reason: %s\n\n' "${reason:-permission}"
     printf '  Answer from another terminal; this run picks it up and continues:\n'
-    printf '    ralph graph actions respond %s --decision allow-once%s\n' "$request_id" "$scope"
-    printf '    ralph graph actions respond %s --decision deny%s\n\n' "$request_id" "$scope"
+    printf '    ralph workflow actions respond %s %s --decision allow-once\n' "$run_id" "$request_id"
+    printf '    ralph workflow actions respond %s %s --decision deny\n\n' "$run_id" "$request_id"
     printf '  Other decisions: allow-run (rest of this run), allow-always (persist a rule).\n'
-    printf '  See every open request:  ralph graph actions list%s\n\n' "$scope"
+    printf '  See every open request:  ralph workflow actions list %s\n\n' "$run_id"
   } >&2
 }
 
@@ -4302,8 +4727,10 @@ graph_schedule_apply_plan_contract() {
 # After the failed attempt is already in the ledger and a correction record
 # has been attempted: pause operator-permission, map plan-contract to
 # needs-plan-repair, grant ordinary retry (retry-wait + backoff) for
-# transient-runtime and agent-correctable within configured limits, fall
-# back to legacy in-place corrective requeue, or apply ordinary failure.
+# transient-runtime and agent-correctable within configured limits, or apply
+# ordinary failure. Corrective retries are governed only by the
+# frozen resilience.correctiveRetries budget; an omitted or zero budget is
+# deliberately fail-fast.
 # Configuration, integrity, and cancelled never enter ordinary retry.
 _graph_schedule_finish_failed_or_requeue() {
   local exit_code="$1" reason="$2" reap_attempt="${3:-}" result="${4:-}"
@@ -4333,9 +4760,6 @@ _graph_schedule_finish_failed_or_requeue() {
   fi
   if graph_schedule_try_ordinary_retry "$GRAPH_REAP_NODE" "$exit_code" \
     "$reason" "$reap_attempt" "$result"; then
-    return 0
-  fi
-  if _graph_schedule_try_requeue_corrective_node "$GRAPH_REAP_NODE" "$reap_attempt"; then
     return 0
   fi
   _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" "$exit_code" "$reason"
@@ -4395,7 +4819,6 @@ _graph_schedule_runtime_ensure() {
   fi
   GRAPH_RUNTIME_KEYS+=("$runtime")
   GRAPH_RUNTIME_USED_SLOTS+=("0")
-  GRAPH_RUNTIME_EXCLUSIVE_NODE+=("")
   GRAPH_RUNTIME_LOOKUP_IDX=$(( ${#GRAPH_RUNTIME_KEYS[@]} - 1 ))
   return 0
 }
@@ -4413,21 +4836,10 @@ _graph_schedule_runtime_cap() {
   fi
 }
 
-# Native-subagent parents reserve the runtime's entire effective allowance.
-# Other nodes and broker children consume one slot.
+# Each graph node admits as one parent-process slot. Resolved nativeSubagents
+# is opaque and does not change slot count.
 _graph_schedule_slots_for_node() {
-  local runtime="$1" subagents="$2" native_parallel="${3:-0}"
-  if [[ "$subagents" == "on" ]]; then
-    if [[ "$native_parallel" =~ ^[1-9][0-9]*$ ]]; then
-      # The parent is one model invocation in addition to its declared child
-      # concurrency. Admission preflight rejects an allowance that cannot fit.
-      printf '%s\n' $(( native_parallel + 1 ))
-    else
-      _graph_schedule_runtime_cap "$runtime"
-    fi
-  else
-    printf '1\n'
-  fi
+  printf '1\n'
 }
 
 _graph_schedule_runtime_reserve_slots() {
@@ -4451,7 +4863,7 @@ _graph_schedule_runtime_release_slots() {
 # JSONL audit for every admitted, denied, and released model invocation.
 # tokenSlots represent concurrent token streams, not predicted final usage.
 _graph_schedule_log_admission() {
-  local decision="$1" kind="$2" owner="$3" runtime="$4" subagents="$5" slots="$6" token_slots="$7" reason="$8"
+  local decision="$1" kind="$2" owner="$3" runtime="$4" native_subagents="$5" slots="$6" token_slots="$7" reason="$8"
   local safe=false effective isolation used=0 line
   if [[ -z "${GRAPH_SCHEDULE_LOG_RUN_DIR:-}" && -z "${GRAPH_SCHEDULE_ADMISSION_LOG_FILE:-}" ]]; then
     return 0
@@ -4461,12 +4873,12 @@ _graph_schedule_log_admission() {
   isolation="$(graph_runtime_overlay_isolation "$runtime")"
   if _graph_schedule_runtime_map_index "$runtime"; then used="${GRAPH_RUNTIME_USED_SLOTS[$GRAPH_RUNTIME_LOOKUP_IDX]:-0}"; fi
   line="$(jq -cn --arg ts "$(graph_state_now_iso)" --arg event admission --arg decision "$decision" \
-    --arg workKind "$kind" --arg ownerId "$owner" --arg runtime "$runtime" --arg subagents "$subagents" \
+    --arg workKind "$kind" --arg ownerId "$owner" --arg runtime "$runtime" --arg nativeSubagents "$native_subagents" \
     --arg isolation "$isolation" --arg reason "$reason" --argjson sameRuntimeParallelSafe "$safe" \
     --argjson requestedRuntimeCap "$GRAPH_SCHEDULE_MAX_PARALLEL_PER_RUNTIME" --argjson effectiveRuntimeCap "$effective" \
     --argjson runtimeUsed "$used" --argjson runtimeSlots "$slots" --argjson tokenUsed "$GRAPH_SCHEDULE_USED_TOKEN_SLOTS" \
     --argjson tokenSlots "$token_slots" --argjson tokenCap "$GRAPH_SCHEDULE_TOKEN_CAP" \
-    '{timestamp:$ts,event:$event,decision:$decision,workKind:$workKind,ownerId:$ownerId,runtime:$runtime,subagents:$subagents,sameRuntimeParallelSafe:$sameRuntimeParallelSafe,overlayIsolation:$isolation,requestedRuntimeCap:$requestedRuntimeCap,effectiveRuntimeCap:$effectiveRuntimeCap,runtimeUsed:$runtimeUsed,runtimeSlots:$runtimeSlots,tokenUsed:$tokenUsed,tokenSlots:$tokenSlots,tokenCap:$tokenCap,reason:$reason}')" || return 0
+    '{timestamp:$ts,event:$event,decision:$decision,workKind:$workKind,ownerId:$ownerId,runtime:$runtime,nativeSubagents:$nativeSubagents,sameRuntimeParallelSafe:$sameRuntimeParallelSafe,overlayIsolation:$isolation,requestedRuntimeCap:$requestedRuntimeCap,effectiveRuntimeCap:$effectiveRuntimeCap,runtimeUsed:$runtimeUsed,runtimeSlots:$runtimeSlots,tokenUsed:$tokenUsed,tokenSlots:$tokenSlots,tokenCap:$tokenCap,reason:$reason}')" || return 0
   if [[ -n "${GRAPH_SCHEDULE_LOG_RUN_DIR:-}" ]]; then
     graph_logs_append "$GRAPH_SCHEDULE_LOG_RUN_DIR" "$(graph_logs_admission_rel)" "$line" 2>/dev/null || true
     return 0
@@ -4476,14 +4888,12 @@ _graph_schedule_log_admission() {
 
 # Returns 0 when the node can be admitted under runtime and token-stream caps.
 _graph_schedule_runtime_can_admit() {
-  local runtime="$1" subagents="$2" token_slots="${3:-}" native_parallel="${4:-0}"
-  local used exclusive slots_needed effective_cap
+  local runtime="$1" native_subagents="$2" token_slots="${3:-}"
+  local used slots_needed effective_cap
 
   _graph_schedule_runtime_ensure "$runtime" || return 1
   used="${GRAPH_RUNTIME_USED_SLOTS[$GRAPH_RUNTIME_LOOKUP_IDX]:-0}"
-  exclusive="${GRAPH_RUNTIME_EXCLUSIVE_NODE[$GRAPH_RUNTIME_LOOKUP_IDX]:-}"
-  [[ -z "$exclusive" ]] || return 1
-  slots_needed="$(_graph_schedule_slots_for_node "$runtime" "$subagents" "$native_parallel")"
+  slots_needed="$(_graph_schedule_slots_for_node)"
   [[ "$token_slots" =~ ^[1-9][0-9]*$ ]] || token_slots="$slots_needed"
   effective_cap="$(_graph_schedule_runtime_cap "$runtime")"
   [[ $(( used + slots_needed )) -le "$effective_cap" ]] || return 1
@@ -4494,30 +4904,23 @@ _graph_schedule_runtime_can_admit() {
 _graph_schedule_runtime_reserve() {
   local node_id="$1"
   local runtime="$2"
-  local subagents="$3"
-  local slots_needed idx native_parallel=0
+  local native_subagents="$3"
+  local slots_needed idx
 
-  if idx="$(graph_schedule_index_map_get "$node_id")"; then
-    native_parallel="${GRAPH_NODE_NATIVE_PARALLEL[$idx]:-0}"
-  fi
-  if ! _graph_schedule_runtime_can_admit "$runtime" "$subagents" "" "$native_parallel"; then
-    echo "Error: runtime $runtime cannot admit node $node_id (subagents=$subagents)" >&2
+  if ! _graph_schedule_runtime_can_admit "$runtime" "$native_subagents" ""; then
+    echo "Error: runtime $runtime cannot admit node $node_id (nativeSubagents=$native_subagents)" >&2
     return 1
   fi
   _graph_schedule_runtime_ensure "$runtime" || return 1
-  slots_needed="$(_graph_schedule_slots_for_node "$runtime" "$subagents" "$native_parallel")"
+  slots_needed="$(_graph_schedule_slots_for_node)"
   _graph_schedule_runtime_reserve_slots "$runtime" "$slots_needed" "$slots_needed" || return 1
-  if [[ "$subagents" == "on" ]]; then
-    GRAPH_RUNTIME_EXCLUSIVE_NODE[$GRAPH_RUNTIME_LOOKUP_IDX]="$node_id"
-    echo "graph-schedule: node=$node_id subagents=on reserves runtime=$runtime allowance=$slots_needed" >&2
-  fi
-  if [[ -z "$idx" ]]; then
+  if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
     echo "Error: unknown graph node id: $node_id" >&2
     return 1
   fi
   GRAPH_NODE_HELD_SLOTS[$idx]="$slots_needed"
   GRAPH_NODE_HELD_TOKEN_SLOTS[$idx]="$slots_needed"
-  _graph_schedule_log_admission "admitted" "graph-node" "$node_id" "$runtime" "$subagents" "$slots_needed" "$slots_needed" "runtime-and-token-cap"
+  _graph_schedule_log_admission "admitted" "graph-node" "$node_id" "$runtime" "$native_subagents" "$slots_needed" "$slots_needed" "runtime-and-token-cap"
   return 0
 }
 
@@ -4526,7 +4929,7 @@ _graph_schedule_runtime_reserve() {
 # held zero slots.
 _graph_schedule_runtime_release() {
   local node_id="$1"
-  local idx runtime held held_tokens exclusive
+  local idx runtime held held_tokens
 
   if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
     return 0
@@ -4543,13 +4946,9 @@ _graph_schedule_runtime_release() {
     return 0
   fi
   _graph_schedule_runtime_release_slots "$runtime" "$held" "$held_tokens"
-  exclusive="${GRAPH_RUNTIME_EXCLUSIVE_NODE[$GRAPH_RUNTIME_LOOKUP_IDX]:-}"
-  if [[ "$exclusive" == "$node_id" ]]; then
-    GRAPH_RUNTIME_EXCLUSIVE_NODE[$GRAPH_RUNTIME_LOOKUP_IDX]=""
-  fi
   GRAPH_NODE_HELD_SLOTS[$idx]="0"
   GRAPH_NODE_HELD_TOKEN_SLOTS[$idx]="0"
-  _graph_schedule_log_admission "released" "graph-node" "$node_id" "$runtime" "${GRAPH_NODE_SUBAGENTS[$idx]}" "$held" "$held_tokens" "terminal-state"
+  _graph_schedule_log_admission "released" "graph-node" "$node_id" "$runtime" "${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]}" "$held" "$held_tokens" "terminal-state"
   return 0
 }
 
@@ -5171,10 +5570,10 @@ _graph_schedule_cancel_inflight_children() {
   # child cancellation is narrower and never reaches this parent PGID.
   local child_entry child_parent child_did child_status
   while IFS= read -r child_entry; do
-    child_parent="$(jq -r .parentNodeId <<<"$child_entry")"; child_did="$(jq -r .delegationId <<<"$child_entry")"
-    child_status="$(graph_delegation_ledger_read_status "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$child_parent" "$child_did" 2>/dev/null | jq -r '.status // empty')"
-    [[ "$child_status" == queued || "$child_status" == running ]] && graph_delegation_child_cancel "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$child_parent" "$child_did" || true
-  done < <(graph_delegation_queue_pending "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID")
+    child_parent="$(jq -r .parentNodeId <<<"$child_entry")"; child_did="$(jq -r '.delegatedRunId // .delegationId // empty' <<<"$child_entry")"
+    child_status="$(graph_delegation_ledger_read_status "$GRAPH_SCHEDULE_WORKSPACE" "$child_did" 2>/dev/null | jq -r '.status // empty')"
+    [[ "$child_status" == queued || "$child_status" == running ]] && graph_delegation_child_cancel "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID" "$child_parent" "$child_did" || true
+  done < <(graph_delegation_queue_pending "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID")
   # If this shell owns a process-run registry, stop active scopes too. Child
   # orchestrators that own their own runs still close via their EXIT traps.
   if [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
@@ -5204,7 +5603,7 @@ _graph_schedule_newest_file() {
 # node key). Prints nothing when neither exists.
 _graph_schedule_node_failure_log() {
   local node_id="$1"
-  local run_dir attempt_id="" rel candidate="" state_root v1_dir
+  local run_dir attempt_id="" rel candidate=""
 
   run_dir="${GRAPH_SCHEDULE_LOG_RUN_DIR:-${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}}"
   if [[ -n "$run_dir" ]]; then
@@ -5215,7 +5614,7 @@ _graph_schedule_node_failure_log() {
       attempt_id="$(graph_dispatch_mint_attempt_id "$node_id" "$GRAPH_SCHEDULE_RUN_ID" "$attempt_number" 2>/dev/null || true)"
     fi
     if [[ -z "$attempt_id" ]]; then
-      node_file="$(graph_state_node_file "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$node_id" 2>/dev/null || true)"
+      node_file="$(graph_state_node_file "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID" "$node_id" 2>/dev/null || true)"
       if [[ -n "$node_file" && -f "$node_file" ]]; then
         attempt_id="$(jq -r '.lastAttemptId // empty' "$node_file" 2>/dev/null || true)"
       fi
@@ -5229,14 +5628,6 @@ _graph_schedule_node_failure_log() {
       fi
     fi
   fi
-  if [[ -z "$candidate" ]]; then
-    state_root="$(graph_state_state_root "$GRAPH_SCHEDULE_WORKSPACE" 2>/dev/null)" || return 0
-    v1_dir="$(graph_logs_v1_node_dir "$state_root" "$GRAPH_SCHEDULE_NAMESPACE" "$node_id" 2>/dev/null || true)"
-    if [[ -n "$v1_dir" ]]; then
-      candidate="$(_graph_schedule_newest_file "$v1_dir"/plan-runner-*-output.log)"
-      [[ -z "$candidate" ]] && candidate="$(_graph_schedule_newest_file "$v1_dir"/attempt-*.log)"
-    fi
-  fi
   printf '%s\n' "$candidate"
 }
 
@@ -5246,6 +5637,20 @@ _graph_schedule_node_failure_log() {
 # as plain text amid Ralph's banners and summary tables, so skip decoration
 # (table borders, rules, timestamped runner lines) and take the last real line.
 # Truncated hard: provider errors like "Cannot use this model" append the entire
+# _graph_schedule_node_failure_recorded_cause
+# Cause the stage recorded for itself, from the just-reaped attempt's outcome
+# report. Prints nothing when there is no report or no recorded reason, which
+# leaves the caller on its log-scraping fallback.
+_graph_schedule_node_failure_recorded_cause() {
+  local report="${GRAPH_REAP_REPORT_PATH:-}"
+  [[ -n "$report" && -f "$report" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r '(.failure.summary // "") as $s
+    | (.reason // "") as $r
+    | if $s != "" then $s elif $r != "" then $r else "" end' \
+    "$report" 2>/dev/null | head -n 1
+}
+
 # model catalog, which must never reach the scheduler's stderr.
 _graph_schedule_node_failure_cause() {
   local log_path="$1"
@@ -5282,12 +5687,18 @@ _graph_schedule_apply_node_failure() {
   # has to hunt for the node log to learn that (for example) the configured
   # model no longer exists.
   local _fail_log _fail_cause
+  # Prefer what the stage recorded about itself. The log fallback below is a
+  # heuristic -- it prints the last non-boilerplate line -- so when a stage ends
+  # without a tidy final error it can surface an unrelated fragment (an echoed
+  # TODO line, say) as the cause. The stage outcome carries the reason the
+  # runner actually decided on, so use it whenever one exists.
+  _fail_cause="$(_graph_schedule_node_failure_recorded_cause)"
   _fail_log="$(_graph_schedule_node_failure_log "$node_id")"
-  if [[ -n "$_fail_log" ]]; then
+  if [[ -z "$_fail_cause" && -n "$_fail_log" ]]; then
     _fail_cause="$(_graph_schedule_node_failure_cause "$_fail_log")"
-    [[ -n "$_fail_cause" ]] && graph_ui_cause "$_fail_cause"
-    graph_ui_detail "log: $_fail_log"
   fi
+  [[ -n "$_fail_cause" ]] && graph_ui_cause "$_fail_cause"
+  [[ -n "$_fail_log" ]] && graph_ui_detail "log: $_fail_log"
   _graph_schedule_mark_blocked_descendants "$node_id"
   if [[ "$GRAPH_SCHEDULE_FAILURE_POLICY" == "cancel" ]]; then
     _graph_schedule_cancel_inflight_children
@@ -5368,6 +5779,16 @@ _graph_schedule_handle_checkpoint_node() {
 
   echo "graph-schedule: checkpoint node=$node_id ack_path=$ack_path" >&2
 
+  # graph_state_validate_node_transition has no direct pending->succeeded or
+  # pending->awaiting-ack edge (every other node type passes through
+  # running/ready first); record that intermediate "running" transition here
+  # so the terminal writes below are legal and actually persist, instead of
+  # being silently rejected and leaving the node stuck at "pending" on disk
+  # forever (which then blocks manual publish even after this checkpoint
+  # truly succeeded).
+  _graph_schedule_ledger_record "$node_id" "running" \
+    "" "" "" "$(graph_state_now_iso)" "" "" "" "checkpoint-dispatch"
+
   if [[ -f "$ack_path" ]]; then
     # Human acknowledged: checkpoint succeeds immediately.
     GRAPH_NODE_STATES[$idx]="succeeded"
@@ -5395,6 +5816,240 @@ _graph_schedule_handle_checkpoint_node() {
   echo "graph-schedule: node=$node_id awaiting-ack (checkpoint; create $ack_path to proceed)" >&2
   _graph_schedule_mark_blocked_descendants "$node_id"
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# Public Dependency approval node (type: approval)
+#
+# Distinct from legacy checkpoint/file acknowledgement: creates one common
+# workflow action request (kind=approval), freezes evidence hashes, parks the
+# node/run as awaiting-operator / waiting, releases scheduler ownership, and
+# returns through the schedule loop with exit 3. Never spawns an agent and
+# never consumes runtime/concurrency budget. Resume consumes approve exactly
+# once; request-changes blocks with exact changesTarget reset argv; cancel
+# records durable cancel intent.
+# ---------------------------------------------------------------------------
+
+# _graph_schedule_handle_approval_node <node_id>
+# Synchronous supervisor gate. No subprocess, no runtime admission.
+_graph_schedule_handle_approval_node() {
+  local node_id="$1" idx started attempt_id attempt_number activation extra_json
+  local registry_run state_root request_id blocker
+
+  if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
+    echo "Error: _graph_schedule_handle_approval_node: unknown node id: $node_id" >&2
+    return 1
+  fi
+  if [[ "${GRAPH_NODE_TYPES[$idx]:-}" != "approval" ]]; then
+    echo "Error: node $node_id is not type approval" >&2
+    return 1
+  fi
+  if [[ "${GRAPH_NODE_STATES[$idx]}" != "pending" ]]; then
+    echo "Error: approval node $node_id not in pending state: ${GRAPH_NODE_STATES[$idx]}" >&2
+    return 1
+  fi
+  [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]] || {
+    _graph_schedule_apply_node_failure "$node_id" 1 "approval-requires-ledger"
+    return 1
+  }
+  [[ -n "${GRAPH_SCHEDULE_GRAPH_JSON:-}" && -f "$GRAPH_SCHEDULE_GRAPH_JSON" ]] || {
+    _graph_schedule_apply_node_failure "$node_id" 1 "approval-requires-graph"
+    return 1
+  }
+
+  if ! declare -F workflow_dep_approval_activate >/dev/null 2>&1; then
+    # shellcheck source=../workflow/workflow-engine-dependency.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../workflow/workflow-engine-dependency.sh"
+  fi
+
+  started="$(graph_state_now_iso)"
+  attempt_number=$(( ${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]:-0} + 1 ))
+  GRAPH_NODE_ATTEMPT_NUMBERS[$idx]="$attempt_number"
+  attempt_id="$(graph_dispatch_mint_attempt_id "$node_id" "$GRAPH_SCHEDULE_RUN_ID" "$attempt_number")" || {
+    _graph_schedule_apply_node_failure "$node_id" 1 "approval-attempt-id"
+    return 1
+  }
+
+  # Legal hop pending -> running before awaiting-operator (no agent spawn).
+  GRAPH_NODE_STATES[$idx]="running"
+  _graph_schedule_ledger_record "$node_id" "running" "$attempt_id" "" "" \
+    "$started" "" "" "" "approval-dispatch"
+
+  # Approval time must not charge runtime/concurrency/active-time budgets.
+  graph_schedule_pause_active_clock "$node_id" || true
+  GRAPH_SCHEDULE_STOP_DISPATCH=0
+
+  # Workflow-backed graph ledgers carry registryRunPath rather than .roots, so
+  # derive the workflow state root (<state-root>/workflow-runs/<run-id>) before
+  # falling back to the plain-graph roots or the raw workspace.
+  state_root="$(jq -r '.roots.stateRoot // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null || true)"
+  if [[ -z "$state_root" ]]; then
+    local _sched_registry_run
+    _sched_registry_run="$(jq -r '.registryRunPath // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null || true)"
+    if [[ -n "$_sched_registry_run" ]]; then
+      state_root="$(dirname -- "$(dirname -- "$_sched_registry_run")")"
+    fi
+  fi
+  [[ -n "$state_root" ]] || state_root="${RALPH_GRAPH_STATE_ROOT:-${RALPH_PLAN_WORKSPACE_ROOT:-}}"
+  [[ -n "$state_root" ]] || state_root="${GRAPH_SCHEDULE_WORKSPACE}"
+
+  if ! activation="$(workflow_dep_approval_activate \
+      --workspace "$GRAPH_SCHEDULE_WORKSPACE" \
+      --namespace "$GRAPH_SCHEDULE_NAMESPACE" \
+      --run-id "$GRAPH_SCHEDULE_RUN_ID" \
+      --graph-json "$GRAPH_SCHEDULE_GRAPH_JSON" \
+      --node-id "$node_id" \
+      --attempt-id "$attempt_id" \
+      --graph-run-dir "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" \
+      --state-root "$state_root")"; then
+    echo "Error: approval activation failed for $node_id (missing/mutated evidence or duplicate request)" >&2
+    _graph_schedule_apply_node_failure "$node_id" 1 "approval-activate-failed"
+    return 1
+  fi
+
+  request_id="$(printf '%s' "$activation" | jq -r '.requestId // empty')"
+  blocker="$(printf '%s' "$activation" | jq -c '.blocker // null')"
+  registry_run="$(printf '%s' "$activation" | jq -r '.registryRun // empty')"
+  extra_json="$(jq -cn \
+    --arg rid "$request_id" \
+    --argjson blocker "$blocker" \
+    --arg registryRun "$registry_run" \
+    --argjson evidence "$(printf '%s' "$activation" | jq -c '.evidence // []')" \
+    '{
+      operatorRequestId: $rid,
+      workflowActionKind: "approval",
+      blocker: $blocker,
+      registryRunPath: $registryRun,
+      approvalEvidence: $evidence
+    }')" || extra_json="{}"
+
+  GRAPH_NODE_STATES[$idx]="awaiting-operator"
+  GRAPH_SCHEDULE_AWAITING_OPERATOR=1
+  if [[ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]]; then
+    GRAPH_SCHEDULE_EXIT_CODE=3
+  fi
+  _graph_schedule_ledger_record "$node_id" "awaiting-operator" \
+    "$attempt_id" "awaiting-operator" "3" "$started" "$(graph_state_now_iso)" \
+    "" "" "human-approval" "$extra_json"
+  _graph_schedule_log_observability "operator-request" "$node_id" "$attempt_id" "" "" \
+    "$(jq -cn --arg rid "$request_id" --arg kind approval '{requestId:$rid,kind:$kind}')"
+  _graph_schedule_mark_blocked_descendants "$node_id"
+  echo "graph-schedule: node=$node_id awaiting-operator (Dependency approval; exit 3; no runtime) request=$request_id" >&2
+  return 0
+}
+
+# _graph_schedule_resume_approval_node <node_id>
+# Consume a common approval decision once while parked awaiting-operator.
+# Returns 0 when still waiting / terminalized; 1 when the node should continue
+# scheduling (should not happen for approval — approve succeeds the gate).
+_graph_schedule_resume_approval_node() {
+  local node_id="$1" idx run_dir registry_run request_id result outcome
+  local started finished extra_json state_root
+
+  if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
+    return 1
+  fi
+  [[ "${GRAPH_NODE_TYPES[$idx]:-}" == "approval" ]] || return 1
+  [[ "${GRAPH_NODE_STATES[$idx]}" == "awaiting-operator" ]] || return 1
+  run_dir="${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}"
+  [[ -n "$run_dir" && -d "$run_dir" ]] || return 1
+
+  if ! declare -F workflow_dep_approval_apply_decision >/dev/null 2>&1; then
+    # shellcheck source=../workflow/workflow-engine-dependency.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../workflow/workflow-engine-dependency.sh"
+  fi
+  if ! declare -F workflow_dep_registry_run_from_graph >/dev/null 2>&1; then
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../workflow/workflow-engine-dependency.sh"
+  fi
+
+  registry_run="$(workflow_dep_registry_run_from_graph "$run_dir")" || return 1
+  request_id="$(jq -r --arg id "$node_id" '
+      .blocker.requestId // .operatorRequestId // empty
+    ' "$(graph_state_node_file "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$node_id")" 2>/dev/null || true)"
+  if [[ -z "$request_id" ]]; then
+    # Fall back to listing common approval requests for this stage.
+    request_id="$(workflow_action_list "$registry_run" 2>/dev/null \
+      | jq -r --arg sid "$node_id" \
+        '[.[] | select(.kind=="approval" and .stageId==$sid and .consumed==null)][0].requestId // empty')"
+  fi
+  if [[ -z "$request_id" ]]; then
+    echo "graph-resume: node=$node_id Dependency approval still waiting (no decision)" >&2
+    GRAPH_SCHEDULE_AWAITING_OPERATOR=1
+    return 0
+  fi
+
+  state_root="$(jq -r '.roots.stateRoot // empty' "$run_dir/run.json" 2>/dev/null || true)"
+  [[ -n "$state_root" ]] || state_root="${GRAPH_SCHEDULE_WORKSPACE}"
+
+  result="$(workflow_dep_approval_apply_decision \
+    --registry-run "$registry_run" \
+    --request-id "$request_id" \
+    --run-id "$GRAPH_SCHEDULE_RUN_ID" \
+    --state-root "$state_root")" || {
+    local rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+      echo "graph-resume: node=$node_id Dependency approval unresolved; staying awaiting-operator" >&2
+      GRAPH_SCHEDULE_AWAITING_OPERATOR=1
+      return 0
+    fi
+    echo "Error: Dependency approval decision refused for $node_id ($request_id)" >&2
+    _graph_schedule_apply_node_failure "$node_id" 1 "approval-decision-refused"
+    return 1
+  }
+
+  outcome="$(printf '%s' "$result" | jq -r '.outcome // empty')"
+  started="$(graph_state_now_iso)"
+  finished="$started"
+  extra_json="$(jq -cn --argjson r "$result" --arg rid "$request_id" \
+    '$r + {operatorRequestId:$rid,workflowActionKind:"approval"}')"
+
+  case "$outcome" in
+    approved)
+      # awaiting-operator -> running -> succeeded (legal hop).
+      _graph_schedule_ledger_record "$node_id" "running" \
+        "" "" "" "$started" "" "" "" "approval-resume"
+      GRAPH_NODE_STATES[$idx]="succeeded"
+      _graph_schedule_ledger_record "$node_id" "succeeded" \
+        "" "success" "0" "$started" "$finished" "" "" "approval-approved" "$extra_json"
+      _graph_schedule_log_observability "operator-decision" "$node_id" "" "" "" \
+        "$(jq -cn --arg rid "$request_id" '{requestId:$rid,decision:"approve"}')"
+      _graph_schedule_restore_blocked_descendants "$node_id" || true
+      _graph_schedule_release_successors "$node_id" || true
+      echo "graph-resume: node=$node_id Dependency approval approved; gate succeeded (consumed once)" >&2
+      return 0
+      ;;
+    changes-requested)
+      _graph_schedule_ledger_record "$node_id" "running" \
+        "" "" "" "$started" "" "" "" "approval-resume"
+      GRAPH_NODE_STATES[$idx]="blocked"
+      _graph_schedule_ledger_record "$node_id" "blocked" \
+        "" "blocked" "1" "$started" "$finished" "" "" "human-changes-requested" "$extra_json"
+      _graph_schedule_log_observability "operator-decision" "$node_id" "" "" "" \
+        "$(jq -cn --arg rid "$request_id" '{requestId:$rid,decision:"request-changes"}')"
+      _graph_schedule_mark_blocked_descendants "$node_id"
+      if [[ -z "$GRAPH_SCHEDULE_FAILED_NODE" ]]; then
+        GRAPH_SCHEDULE_FAILED_NODE="$node_id"
+      fi
+      GRAPH_SCHEDULE_EXIT_CODE=1
+      echo "graph-resume: node=$node_id Dependency approval request-changes; blocked with changesTarget reset argv" >&2
+      return 0
+      ;;
+    cancelled)
+      GRAPH_NODE_STATES[$idx]="cancelled"
+      _graph_schedule_ledger_record "$node_id" "cancelled" \
+        "" "cancelled" "1" "$started" "$finished" "" "" "approval-cancelled" "$extra_json"
+      _graph_schedule_log_observability "operator-decision" "$node_id" "" "" "" \
+        "$(jq -cn --arg rid "$request_id" '{requestId:$rid,decision:"cancel"}')"
+      _graph_schedule_mark_blocked_descendants "$node_id"
+      GRAPH_SCHEDULE_EXIT_CODE=1
+      echo "graph-resume: node=$node_id Dependency approval cancelled; durable cancel intent recorded" >&2
+      return 0
+      ;;
+    *)
+      echo "Error: unknown approval resume outcome: $outcome" >&2
+      return 1
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -5542,7 +6197,7 @@ _graph_schedule_handle_consensus_barrier_node() {
   # graph_consensus_run_join already recorded the ledger outcome and consensus
   # result artifact; this is a semantic decision (blocked/escalated), not an
   # infrastructure error, but until conditional repair edges exist (see
-  # v2-conditional-outcomes) it propagates through failurePolicy like any
+  # conditional-outcomes) it propagates through failurePolicy like any
   # other node failure.
   _graph_schedule_apply_node_failure "$node_id" "$join_rc" "consensus-decision-not-approved"
   return 1
@@ -5553,7 +6208,7 @@ _graph_schedule_handle_consensus_barrier_node() {
 # loop); nodes with a runtime fall through to ordinary agent dispatch.
 _graph_schedule_handle_join_node() {
   local node_id="$1"
-  local idx
+  local idx now
 
   if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
     echo "Error: _graph_schedule_handle_join_node: unknown node id: $node_id" >&2
@@ -5564,9 +6219,16 @@ _graph_schedule_handle_join_node() {
     return 1
   fi
 
+  now="$(graph_state_now_iso)"
+  # graph_state_validate_node_transition rejects pending->succeeded (same trap
+  # as checkpoint). Record the intermediate running write so the terminal
+  # succeeded status actually persists; otherwise the in-memory join looks
+  # done while the on-disk ledger stays pending and publish refuses the run.
+  _graph_schedule_ledger_record "$node_id" "running" \
+    "" "" "" "$now" "" "" "" "join-passthrough"
   GRAPH_NODE_STATES[$idx]="succeeded"
   _graph_schedule_ledger_record "$node_id" "succeeded" \
-    "" "success" "0" "$(graph_state_now_iso)" "$(graph_state_now_iso)" "" "" "join-passthrough"
+    "" "success" "0" "$now" "$now" "" "" "join-passthrough"
   echo "graph-schedule: node=$node_id join passthrough succeeded (no declared runtime; reflects upstream aggregation)" >&2
   _graph_schedule_release_successors "$node_id" || {
     _graph_schedule_apply_node_failure "$node_id" 1 "successor-release"
@@ -5788,7 +6450,7 @@ _graph_schedule_cond_successor_nodes_for() {
 }
 
 # _graph_schedule_ledger_record <node_id> <state> [attempt_id] [outcome]
-#   [exit_code] [started_at] [finished_at] [runtime] [subagents] [reason]
+#   [exit_code] [started_at] [finished_at] [runtime] [nativeSubagents] [reason]
 #   [extra_json]
 #
 # Records a node state transition (and optionally an attempt) into the durable
@@ -5802,14 +6464,14 @@ _graph_schedule_cond_successor_nodes_for() {
 # separation is the load-bearing reason the loop and graph hybrid works.
 #
 # extra_json is a JSON object string merged into the node ledger entry (and
-# into the attempt when one is supplied). It is used to record v2 observability
+# into the attempt when one is supplied). It records observability
 # metadata produced during admission, workspace setup, gate execution,
 # integration, delegation, repair, and publish.
 _graph_schedule_ledger_record() {
   [[ -z "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]] && return 0
   local node_id="$1" state="$2" attempt_id="${3:-}" outcome="${4:-}"
   local exit_code="${5:-}" started_at="${6:-}" finished_at="${7:-}"
-  local runtime="${8:-}" subagents="${9:-}" reason="${10:-}"
+  local runtime="${8:-}" native_subagents="${9:-}" reason="${10:-}"
   local extra_json="${11:-}"
   local budget_extra merged_extra
   budget_extra="$(_graph_schedule_budget_extra_json "$node_id" 2>/dev/null || true)"
@@ -5820,29 +6482,17 @@ _graph_schedule_ledger_record() {
     fi
   fi
 
-  # Memoize the run's ledger schema version on first use so a hot-path write
-  # does not re-read run.json every call. A v1 run (schemaVersion missing or
-  # 1, which covers every run created before p4-state-v2) keeps calling
-  # graph_state_write_node exactly as before -- byte-for-byte unchanged
-  # behavior. A v2+ run calls the attempt-upserting graph_state_write_node_v2
-  # so one attemptId produces one attempts[] object instead of one record
-  # per transition.
-  if [[ -z "${GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION:-}" ]]; then
-    GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION="$(jq -r '.schemaVersion // 1' \
-      "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null)"
-    [[ "$GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION" =~ ^[0-9]+$ ]] || GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=1
-  fi
-
-  if [[ "$GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION" -ge 2 ]]; then
-    local attempt_fields_json='{}' log_paths_json=""
-    if [[ -n "$attempt_id" ]]; then
-      if [[ -n "${GRAPH_SCHEDULE_LOG_RUN_DIR:-}" ]]; then
-        log_paths_json="$(graph_logs_attempt_paths_json "$GRAPH_SCHEDULE_LOG_RUN_DIR" "$node_id" "$attempt_id" 2>/dev/null || true)"
-      fi
-      [[ -n "$log_paths_json" ]] || log_paths_json="null"
-      attempt_fields_json="$(jq -cn \
+  # Graph runs have one canonical ledger shape. Never branch on an old
+  # schema or emit a second attempt representation.
+  local attempt_fields_json='{}' log_paths_json=""
+  if [[ -n "$attempt_id" ]]; then
+    if [[ -n "${GRAPH_SCHEDULE_LOG_RUN_DIR:-}" ]]; then
+      log_paths_json="$(graph_logs_attempt_paths_json "$GRAPH_SCHEDULE_LOG_RUN_DIR" "$node_id" "$attempt_id" 2>/dev/null || true)"
+    fi
+    [[ -n "$log_paths_json" ]] || log_paths_json="null"
+    attempt_fields_json="$(jq -cn \
         --arg outcome "$outcome" --arg startedAt "$started_at" --arg finishedAt "$finished_at" \
-        --arg runtime "$runtime" --arg subagents "$subagents" --arg reason "$reason" \
+        --arg runtime "$runtime" --arg nativeSubagents "$native_subagents" --arg reason "$reason" \
         --arg exitCode "$exit_code" \
         --argjson logPaths "$log_paths_json" \
         '{}
@@ -5850,24 +6500,17 @@ _graph_schedule_ledger_record() {
          + (if $startedAt == "" then {} else {startedAt: $startedAt} end)
          + (if $finishedAt == "" then {} else {finishedAt: $finishedAt} end)
          + (if $runtime == "" then {} else {runtime: $runtime} end)
-         + (if $subagents == "" then {} else {subagents: $subagents} end)
+         + (if $nativeSubagents == "" then {} else {nativeSubagents: $nativeSubagents} end)
          + (if $reason == "" then {} else {reason: $reason} end)
          + (if ($exitCode | test("^-?[0-9]+$")) then {exitCode: ($exitCode | tonumber)} else {} end)
          + (if $logPaths == null then {} else {logPaths: $logPaths} end)' \
-        2>/dev/null)" || attempt_fields_json='{}'
-    fi
-    graph_state_write_node_v2 \
-      "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" \
-      "$GRAPH_SCHEDULE_RUN_ID" "$node_id" "$state" \
-      "$attempt_id" "$attempt_fields_json" "$extra_json" 2>/dev/null || true
-  else
-    graph_state_write_node \
-      "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" \
-      "$GRAPH_SCHEDULE_RUN_ID" "$node_id" "$state" \
-      "$attempt_id" "$outcome" "$exit_code" "$started_at" "$finished_at" \
-      "$runtime" "$subagents" "$reason" "$extra_json" 2>/dev/null || true
+      2>/dev/null)" || attempt_fields_json='{}'
   fi
-  # Emit a corresponding schema-v1 event to the run journal. The event type
+  graph_state_write_node \
+    "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" \
+    "$GRAPH_SCHEDULE_RUN_ID" "$node_id" "$state" \
+    "$attempt_id" "$attempt_fields_json" "$extra_json" 2>/dev/null || true
+  # Emit a corresponding event to the run journal. The event type
   # is derived from the node state; terminal states carry outcome/exitCode in
   # details so status/render/TUI can build a timeline without parsing text logs.
   local event_type="" event_details='{}'
@@ -5896,7 +6539,7 @@ _graph_schedule_ledger_record() {
     if [[ -n "$extra_json" ]] && printf '%s' "$extra_json" | jq -e . >/dev/null 2>&1; then
       event_details="$(printf '%s\n%s\n' "$event_details" "$extra_json" | jq -cs 'reduce .[] as $o ({}; . + $o)' 2>/dev/null)" || event_details='{}'
     fi
-    _graph_schedule_log_observability "$event_type" "$node_id" "$attempt_id" "$runtime" "$subagents" "$event_details"
+    _graph_schedule_log_observability "$event_type" "$node_id" "$attempt_id" "$runtime" "$native_subagents" "$event_details"
   fi
 
   # Emit one structured log line per state transition in the orchestrator log
@@ -5955,6 +6598,12 @@ _graph_schedule_artifact_local_path() {
     # Absolute graph artifacts are accepted only inside state_root by the
     # exchange resolver and are supervisor-visible, not staged for the model.
     printf '%s\n' "$declared"
+  elif [[ "$declared" == .ralph-workspace/* ]]; then
+    # .ralph-workspace is a control root and is never part of an isolated
+    # node's snapshot; agents always write these paths straight into the
+    # shared state root (matching _graph_schedule_artifact_exchange_path),
+    # so there is no separate node-local copy to stage or look for.
+    printf '%s/%s\n' "$state_root" "${declared#.ralph-workspace/}"
   else
     printf '%s/%s\n' "$node_workspace" "$declared"
   fi
@@ -6015,6 +6664,7 @@ _graph_schedule_stage_inputs() {
   [[ "$node_workspace" != "$GRAPH_SCHEDULE_WORKSPACE" ]] || return 0
   while IFS=$'\t' read -r declared required || [[ -n "$declared" ]]; do
     [[ -n "$declared" ]] || continue
+    declared="${declared//\{\{ARTIFACT_NS\}\}/$GRAPH_SCHEDULE_NAMESPACE}"
     canonical="$(_graph_schedule_artifact_exchange_path "$declared" "$state_root" "$GRAPH_SCHEDULE_NAMESPACE")" || return 1
     local_path="$(_graph_schedule_artifact_local_path "$declared" "$node_workspace" "$state_root")" || return 1
     if [[ "$local_path" == "$canonical" ]]; then
@@ -6045,6 +6695,7 @@ _graph_schedule_publish_stage_artifacts() {
   [[ "$node_workspace" != "$GRAPH_SCHEDULE_WORKSPACE" ]] || return 0
   while IFS=$'\t' read -r declared required || [[ -n "$declared" ]]; do
     [[ -n "$declared" ]] || continue
+    declared="${declared//\{\{ARTIFACT_NS\}\}/$GRAPH_SCHEDULE_NAMESPACE}"
     canonical="$(_graph_schedule_artifact_exchange_path "$declared" "$state_root" "$GRAPH_SCHEDULE_NAMESPACE")" || return 1
     local_path="$(_graph_schedule_artifact_local_path "$declared" "$node_workspace" "$state_root")" || return 1
     if [[ "$local_path" == "$canonical" ]]; then
@@ -6079,9 +6730,11 @@ _graph_schedule_publish_stage_artifacts() {
 _graph_schedule_spawn_node() {
   local node_id="$1"
   local idx attempt_number attempt_id report_path log_dir log_path pid
-  local node_orch_dir node_orch_path session_key runtime subagents node_policy
+  local node_orch_dir node_orch_path session_key runtime native_subagents node_policy
   local node_workspace state_root node_plan_rel node_plan_source node_plan_target node_path_key tooling_root
   local changeset_baseline="" changeset_scopes="" changeset_mode="" changeset_base_identity=""
+  local planfrom_planner="" planfrom_binding="" registry_run_path="" planfrom_force_fresh=0
+  local provided_kind="" provided_binding="" provided_force_fresh=0
 
   if [[ -z "$node_id" ]]; then
     echo "Error: graph_schedule_spawn_node requires node_id" >&2
@@ -6105,7 +6758,7 @@ _graph_schedule_spawn_node() {
   fi
 
   runtime="${GRAPH_NODE_RUNTIMES[$idx]}"
-  subagents="${GRAPH_NODE_SUBAGENTS[$idx]}"
+  native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]}"
   node_path_key="$(graph_workspace_node_key "$node_id")" || return 1
   node_policy="$(jq -c --arg id "$node_id" '
     .nodes[] | select(.id == $id) | .stage as $stage |
@@ -6114,7 +6767,106 @@ _graph_schedule_spawn_node() {
       parentWriteScopes: ($stage.writeScopes // [])
     })
   ' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null)" || node_policy='{}'
-  _graph_schedule_runtime_reserve "$node_id" "$runtime" "$subagents" || return 1
+
+  # Ordinary planFrom consumers: validate immutable source + create/reuse the
+  # control copy before runtime or workspace admission. Missing/stale evidence
+  # must fail closed here. Generated-plan rework clones always get a fresh
+  # control from the same frozen planner source (review edge is feedback only).
+  planfrom_planner="$(graph_dispatch_node_planfrom_id "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id")"
+  provided_kind="$(graph_dispatch_node_provided_plan_kind "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id")"
+  attempt_number=$(( ${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]} + 1 ))
+  if [[ -n "$planfrom_planner" ]]; then
+    if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" && -f "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" ]]; then
+      registry_run_path="$(jq -r '.registryRunPath // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json")"
+    fi
+    if [[ -z "$registry_run_path" ]]; then
+      registry_run_path="${RALPH_WORKFLOW_REGISTRY_RUN:-}"
+    fi
+    if [[ -z "$registry_run_path" || ! -d "$registry_run_path" ]]; then
+      echo "Error: planFrom node $node_id requires a workflow registry run before admission" >&2
+      return 1
+    fi
+    if ! declare -F workflow_state_bind_generated_plan_control >/dev/null 2>&1; then
+      # shellcheck source=../workflow/workflow-state.sh
+      source "$GRAPH_SCHEDULE_SCRIPT_DIR/../workflow/workflow-state.sh"
+    fi
+    planfrom_force_fresh=0
+    if [[ "$(jq -r --arg id "$node_id" '
+        .nodes[] | select(.id == $id) | .derivedFrom // empty
+      ' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null)" == "rework" ]]; then
+      planfrom_force_fresh=1
+    fi
+    planfrom_binding="$(
+      if [[ "$planfrom_force_fresh" -eq 1 ]]; then
+        workflow_state_bind_generated_plan_control \
+          --registry-run "$registry_run_path" \
+          --consumer-stage-id "$node_id" \
+          --consumer-attempt "$attempt_number" \
+          --planner-stage-id "$planfrom_planner" \
+          --graph-workspace "$GRAPH_SCHEDULE_WORKSPACE" \
+          --namespace "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" \
+          --run-id "$GRAPH_SCHEDULE_RUN_ID" \
+          --plan-run-id "${node_id}__${GRAPH_SCHEDULE_RUN_ID}__${attempt_number}" \
+          --force-fresh
+      else
+        workflow_state_bind_generated_plan_control \
+          --registry-run "$registry_run_path" \
+          --consumer-stage-id "$node_id" \
+          --consumer-attempt "$attempt_number" \
+          --planner-stage-id "$planfrom_planner" \
+          --graph-workspace "$GRAPH_SCHEDULE_WORKSPACE" \
+          --namespace "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" \
+          --run-id "$GRAPH_SCHEDULE_RUN_ID" \
+          --plan-run-id "${node_id}__${GRAPH_SCHEDULE_RUN_ID}__${attempt_number}"
+      fi
+    )" || {
+      echo "Error: planFrom evidence missing/invalid/stale for $node_id (blocked before workspace/runtime admission)" >&2
+      return 1
+    }
+  elif [[ "$provided_kind" == "provided" ]]; then
+    if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" && -f "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" ]]; then
+      registry_run_path="$(jq -r '.registryRunPath // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json")"
+    fi
+    if [[ -z "$registry_run_path" ]]; then
+      registry_run_path="${RALPH_WORKFLOW_REGISTRY_RUN:-}"
+    fi
+    if [[ -z "$registry_run_path" || ! -d "$registry_run_path" ]]; then
+      echo "Error: provided-plan node $node_id requires a workflow registry run before admission" >&2
+      return 1
+    fi
+    if ! declare -F workflow_state_bind_provided_plan_control >/dev/null 2>&1; then
+      # shellcheck source=../workflow/workflow-state.sh
+      source "$GRAPH_SCHEDULE_SCRIPT_DIR/../workflow/workflow-state.sh"
+    fi
+    # Rework clones always receive a fresh control from the frozen source.
+    if [[ "$(jq -r --arg id "$node_id" '
+        .nodes[] | select(.id == $id) | .derivedFrom // empty
+      ' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null)" == "rework" ]]; then
+      provided_force_fresh=1
+    fi
+    provided_binding="$(
+      if [[ "$provided_force_fresh" -eq 1 ]]; then
+        workflow_state_bind_provided_plan_control \
+          --registry-run "$registry_run_path" \
+          --consumer-stage-id "$node_id" \
+          --consumer-attempt "$attempt_number" \
+          --plan-run-id "${node_id}__${GRAPH_SCHEDULE_RUN_ID}__${attempt_number}" \
+          --force-fresh
+      else
+        workflow_state_bind_provided_plan_control \
+          --registry-run "$registry_run_path" \
+          --consumer-stage-id "$node_id" \
+          --consumer-attempt "$attempt_number" \
+          --plan-run-id "${node_id}__${GRAPH_SCHEDULE_RUN_ID}__${attempt_number}"
+      fi
+    )" || {
+      echo "Error: provided-plan input missing/invalid/corrupt for $node_id (blocked before workspace/runtime admission)" >&2
+      return 1
+    }
+  fi
+
+  _graph_schedule_runtime_reserve "$node_id" "$runtime" "$native_subagents" || return 1
+  _graph_schedule_log_transition "graph-schedule: node=$node_id phase=admitted"
   node_workspace="$GRAPH_SCHEDULE_WORKSPACE"
   state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace}"
   if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" \
@@ -6127,12 +6879,12 @@ _graph_schedule_spawn_node() {
       }
     state_root="$(jq -r '.roots.stateRoot' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json")"
   fi
+  _graph_schedule_log_transition "graph-schedule: node=$node_id phase=workspace-ready"
   _graph_schedule_stage_inputs "$node_id" "$node_workspace" "$state_root" || {
     _graph_schedule_runtime_release "$node_id"
     return 1
   }
 
-  attempt_number=$(( ${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]} + 1 ))
   GRAPH_NODE_ATTEMPT_NUMBERS[$idx]="$attempt_number"
   attempt_id="$(graph_dispatch_mint_attempt_id "$node_id" "$GRAPH_SCHEDULE_RUN_ID" "$attempt_number")" || {
     _graph_schedule_runtime_release "$node_id"
@@ -6174,15 +6926,65 @@ _graph_schedule_spawn_node() {
     _graph_schedule_runtime_release "$node_id"
     return 1
   }
+  if [[ -n "$planfrom_binding" ]]; then
+    if ! graph_dispatch_apply_planfrom_to_orch "$node_orch_path" "$node_id" \
+      "$(printf '%s' "$planfrom_binding" | jq -r '.controlPlanPath')"; then
+      _graph_schedule_runtime_release "$node_id"
+      return 1
+    fi
+    if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]]; then
+      graph_state_persist_plan_progress \
+        "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" \
+        "$GRAPH_SCHEDULE_RUN_ID" "$node_id" "$planfrom_binding" || {
+          _graph_schedule_runtime_release "$node_id"
+          return 1
+        }
+    fi
+  elif [[ -n "$provided_binding" ]]; then
+    if ! graph_dispatch_apply_provided_to_orch "$node_orch_path" "$node_id" \
+      "$(printf '%s' "$provided_binding" | jq -r '.controlPlanPath')"; then
+      _graph_schedule_runtime_release "$node_id"
+      return 1
+    fi
+    if ! graph_dispatch_apply_provided_routing_order "$node_orch_path" "$node_id" \
+      "$(printf '%s' "$provided_binding" | jq -r '.sourcePlanPath')"; then
+      _graph_schedule_runtime_release "$node_id"
+      return 1
+    fi
+    if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]]; then
+      graph_state_persist_plan_progress \
+        "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" \
+        "$GRAPH_SCHEDULE_RUN_ID" "$node_id" "$provided_binding" || {
+          _graph_schedule_runtime_release "$node_id"
+          return 1
+        }
+    fi
+  fi
   # Ledger-backed graph runs materialize inline plans under the durable run
   # directory and pass an absolute read path. Never copy those scheduler-owned
   # plans into a model-writable isolated workspace.
   node_plan_rel="$(jq -r --arg id "$node_id" '.stages[] | select(.id == $id) | .plan // empty' "$node_orch_path")"
+  # A planFrom / provided control copy is already durable, per-attempt, and
+  # outside the node workspace, and it lives under the workflow registry run
+  # dir rather than the graph ledger run dir.  The ledger reads TODO progress
+  # back from that exact path, so copying it again under
+  # orchestration-plans/nodes/ would strand every runner-owned status
+  # transition in the copy and leave `ralph workflow status` and resume
+  # reading a pristine 0/N control plan for a stage that actually finished.
+  local node_plan_is_control=0 _node_plan_binding _node_plan_control
+  for _node_plan_binding in "${planfrom_binding:-}" "${provided_binding:-}"; do
+    [[ -n "$_node_plan_binding" ]] || continue
+    _node_plan_control="$(printf '%s' "$_node_plan_binding" | jq -r '.controlPlanPath // empty')"
+    if [[ -n "$_node_plan_control" && "$_node_plan_control" == "$node_plan_rel" ]]; then
+      node_plan_is_control=1
+      break
+    fi
+  done
   # Explicit planFile stages are loop state, not project output.  Run them from
   # a durable per-node control copy so runner-owned checkbox transitions never
   # enter the node workspace or its changeset.  Preserve an existing copy on
   # resume: completed TODOs are the idempotency checkpoint inside the node.
-  if [[ -n "$node_plan_rel" \
+  if [[ -n "$node_plan_rel" && "$node_plan_is_control" -eq 0 \
     && ( -z "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" || "$node_plan_rel" != "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/"* ) ]]; then
     if [[ "$node_plan_rel" == /* ]]; then
       node_plan_source="$node_plan_rel"
@@ -6248,6 +7050,22 @@ _graph_schedule_spawn_node() {
   _graph_schedule_prepare_corrective_retry_spawn "$node_id" "$attempt_number" "$node_orch_path"
   _graph_schedule_prepare_operator_decision_spawn "$node_id" "$attempt_number" "$node_orch_path"
   _graph_schedule_prepare_retry_context_spawn "$node_id" "$attempt_number"
+  local inject_plan_root="$GRAPH_SCHEDULE_WORKSPACE"
+  if [[ -n "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" ]]; then
+    inject_plan_root="$GRAPH_SCHEDULE_LEDGER_RUN_DIR"
+  fi
+  _graph_dispatch_inject_rework_feedback \
+    "$GRAPH_SCHEDULE_GRAPH_JSON" \
+    "$node_id" \
+    "$GRAPH_SCHEDULE_WORKSPACE" \
+    "$GRAPH_SCHEDULE_NAMESPACE" \
+    "$state_root" \
+    "$inject_plan_root" \
+    "$node_orch_path" \
+    "$GRAPH_SCHEDULE_RUN_ID" || {
+    _graph_schedule_runtime_release "$node_id"
+    return 1
+  }
   # Pin the child to this already-loaded Ralph tree.  The isolated workspace
   # remains the project/config and agent root, but its .ralph directory is
   # model-writable and cannot supply supervisor scripts.
@@ -6261,12 +7079,12 @@ _graph_schedule_spawn_node() {
     _graph_schedule_runtime_release "$node_id"
     return 1
   }
+  _graph_schedule_log_transition "graph-schedule: node=$node_id phase=command-ready"
 
-  # Per-attempt log root under the run-dir. Never write to the v1
-  # namespace-only .ralph-workspace/logs/<namespace>/nodes/ tree.
+  # Per-attempt log root under the run directory.
   local log_rel log_paths_json agent_rel usage_rel
   if [[ -z "${GRAPH_SCHEDULE_LOG_RUN_DIR:-}" ]]; then
-    GRAPH_SCHEDULE_LOG_RUN_DIR="$(graph_state_run_dir "$GRAPH_SCHEDULE_WORKSPACE" "$GRAPH_SCHEDULE_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID")" || return 1
+    GRAPH_SCHEDULE_LOG_RUN_DIR="$(graph_state_run_dir "$GRAPH_SCHEDULE_WORKSPACE" "${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}" "$GRAPH_SCHEDULE_RUN_ID")" || return 1
     mkdir -p "$GRAPH_SCHEDULE_LOG_RUN_DIR" || return 1
   fi
   log_paths_json="$(graph_logs_attempt_paths_json "$GRAPH_SCHEDULE_LOG_RUN_DIR" "$node_id" "$attempt_id")" || {
@@ -6311,6 +7129,11 @@ _graph_schedule_spawn_node() {
     export RALPH_PLAN_KEY="$session_key"
     export RALPH_GRAPH_NODE_ID="$node_id"
     export RALPH_GRAPH_NAMESPACE="$GRAPH_SCHEDULE_NAMESPACE"
+    # Ledger-backed runs key node state by the ledger namespace ("workflow"),
+    # which is not the artifact/orchestration namespace above.  Children that
+    # write node state back (plan-progress refresh) must address the ledger,
+    # not the artifact NS, or the write lands on a node file nobody reads.
+    export RALPH_GRAPH_LEDGER_NAMESPACE="${GRAPH_SCHEDULE_LEDGER_NAMESPACE:-$GRAPH_SCHEDULE_NAMESPACE}"
     export RALPH_GRAPH_RUN_ID="$GRAPH_SCHEDULE_RUN_ID"
     export RALPH_GRAPH_ATTEMPT_ID="$attempt_id"
     export RALPH_GRAPH_NODE_RUNTIME="$runtime"
@@ -6373,6 +7196,8 @@ os.execvp(sys.argv[1], sys.argv[1:])' "${GRAPH_DISPATCH_ARGV[@]}"
     fi
   ) >"$log_path" 2>&1 &
   pid=$!
+  _graph_schedule_log_transition "graph-schedule: node=$node_id phase=child-launched pid=$pid"
+  printf 'graph-schedule: node=%s state=starting-runtime pid=%s\n' "$node_id" "$pid" >&2
   # With exec setsid / exec python3+setsid the tracked pid is the session leader.
   pgid="$pid"
   if ! graph_schedule_track_child "$pid" "$node_id" "$report_path" "$pgid"; then
@@ -6388,8 +7213,8 @@ os.execvp(sys.argv[1], sys.argv[1:])' "${GRAPH_DISPATCH_ARGV[@]}"
   spawn_started="$(graph_schedule_active_now_iso)"
   graph_schedule_start_active_clock "$node_id" "$spawn_started"
   _graph_schedule_ledger_record "$node_id" "running" \
-    "$attempt_id" "" "" "$spawn_started" "" "$runtime" "$subagents" "" "$spawn_context_json"
-  _graph_schedule_log_observability "node-spawn" "$node_id" "$attempt_id" "$runtime" "$subagents" "$spawn_context_json"
+    "$attempt_id" "" "" "$spawn_started" "" "$runtime" "$native_subagents" "" "$spawn_context_json"
+  _graph_schedule_log_observability "node-spawn" "$node_id" "$attempt_id" "$runtime" "$native_subagents" "$spawn_context_json"
   # Runtime only, from the in-memory index. The spawn path must stay free of
   # subprocesses: an extra jq here delays the next spawn and measurably narrows
   # the window in which sibling nodes actually overlap. The node's agent and
@@ -6409,9 +7234,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' "${GRAPH_DISPATCH_ARGV[@]}"
 # states or gate outcomes; those are attached later when known.
 _graph_schedule_node_observability_json() {
   local node_id="$1" workspace="$2" mode="${3:-}" scopes_json="${4:-}" base_identity="${5:-}" baseline="${6:-}"
-  local policy_json native_mode cross_mode
+  local policy_json native_mode cross_mode idx
   policy_json="$(jq -c --arg id "$node_id" '.nodes[] | select(.id == $id) | (.stage.delegation // {})' "${GRAPH_SCHEDULE_GRAPH_JSON:-}" 2>/dev/null)" || policy_json='{}'
-  native_mode="$(printf '%s' "$policy_json" | jq -r '.native.mode // "off"')"
+  native_mode="off"
+  if idx="$(graph_schedule_index_map_get "$node_id" 2>/dev/null)"; then
+    native_mode="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]:-off}"
+  else
+    native_mode="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.nativeSubagents // "off"' "${GRAPH_SCHEDULE_GRAPH_JSON:-}" 2>/dev/null)" || native_mode="off"
+  fi
   cross_mode="$(printf '%s' "$policy_json" | jq -r '.crossRuntime.mode // "off"')"
   if [[ -z "$mode" ]]; then
     mode="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.workspaceMode // "shared"' "${GRAPH_SCHEDULE_GRAPH_JSON:-}" 2>/dev/null)" || mode="shared"
@@ -6443,13 +7273,13 @@ _graph_schedule_node_spawn_context_json() {
   _graph_schedule_node_observability_json "$@"
 }
 
-# _graph_schedule_admission_summary_json <node-id> <runtime> <subagents> [reason]
+# _graph_schedule_admission_summary_json <node-id> <runtime> <nativeSubagents> [reason]
 # Build a compact admission summary object from the scheduler's current
 # capacity counters.  The reason defaults to the last recorded decision reason.
 _graph_schedule_admission_summary_json() {
-  local node_id="$1" runtime="$2" subagents="$3" reason="${4:-}"
+  local node_id="$1" runtime="$2" native_subagents="$3" reason="${4:-}"
   local requested effective used slots token_used token_cap
-  requested="$(_graph_schedule_slots_for_node "$runtime" "$subagents" 0)"
+  requested="$(_graph_schedule_slots_for_node)"
   effective="$(_graph_schedule_runtime_cap "$runtime")"
   if _graph_schedule_runtime_map_index "$runtime" 2>/dev/null; then
     used="${GRAPH_RUNTIME_USED_SLOTS[$GRAPH_RUNTIME_LOOKUP_IDX]:-0}"
@@ -6482,11 +7312,11 @@ _graph_schedule_admission_summary_json() {
 }
 
 # _graph_schedule_usage_snapshot_from_report <attempt-id> [node-id]
-# Return the attempt usage.json (v2) or a readable v1 plan-usage-summary.json.
-# Brokered child usage lives in their own ledgers and must not be merged here.
+# Return the attempt usage.json from the run-owned ledger path. Brokered child
+# usage lives in their own ledgers and must not be merged here.
 _graph_schedule_usage_snapshot_from_report() {
   local attempt_id="$1" node_id="${2:-}"
-  local run_dir rel candidate report_path node_log_dir state_root v1_dir
+  local run_dir rel candidate report_path node_log_dir
   run_dir="${GRAPH_SCHEDULE_LOG_RUN_DIR:-${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}}"
   if [[ -n "$run_dir" && -n "$node_id" ]]; then
     rel="$(graph_logs_attempt_rel "$run_dir" "$node_id" "$attempt_id" "usage.json" 2>/dev/null || true)"
@@ -6507,14 +7337,6 @@ _graph_schedule_usage_snapshot_from_report() {
     jq -c . "$candidate" 2>/dev/null || true
     return 0
   fi
-  if [[ -n "$node_id" ]]; then
-    state_root="$(graph_state_state_root "$GRAPH_SCHEDULE_WORKSPACE" 2>/dev/null || true)"
-    v1_dir="$(graph_logs_v1_node_dir "$state_root" "$GRAPH_SCHEDULE_NAMESPACE" "$node_id" 2>/dev/null || true)"
-    if [[ -n "$v1_dir" && -f "$v1_dir/plan-usage-summary.json" ]]; then
-      jq -c . "$v1_dir/plan-usage-summary.json" 2>/dev/null || true
-      return 0
-    fi
-  fi
   candidate="$(dirname "$report_path")/plan-usage-summary.json"
   [[ -f "$candidate" ]] || return 0
   jq -c . "$candidate" 2>/dev/null || true
@@ -6529,7 +7351,7 @@ _graph_schedule_usage_snapshot_from_report() {
 # delegation ledger under the parent node.
 _graph_schedule_node_success_observability_json() {
   local node_id="$1" attempt_id="$2" workspace="$3" state_root="$4"
-  local extra_json changeset_manifest changeset_hash publish_readiness usage_json idx node_runtime node_subagents admission_summary
+  local extra_json changeset_manifest changeset_hash publish_readiness usage_json idx node_runtime node_native_subagents admission_summary
   extra_json="$(_graph_schedule_node_observability_json "$node_id" "$workspace" "")"
   changeset_manifest=""
   changeset_hash=""
@@ -6543,8 +7365,8 @@ _graph_schedule_node_success_observability_json() {
   usage_json="$(_graph_schedule_usage_snapshot_from_report "$attempt_id" "$node_id")"
   idx="$(graph_schedule_index_map_get "$node_id" 2>/dev/null)" || idx=""
   node_runtime="${GRAPH_NODE_RUNTIMES[$idx]:-}"
-  node_subagents="${GRAPH_NODE_SUBAGENTS[$idx]:-}"
-  admission_summary="$(_graph_schedule_admission_summary_json "$node_id" "$node_runtime" "$node_subagents" "admitted")"
+  node_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]:-}"
+  admission_summary="$(_graph_schedule_admission_summary_json "$node_id" "$node_runtime" "$node_native_subagents" "admitted")"
   local usage_reliable="false" usage_norm=""
   usage_norm="$(graph_schedule_normalize_usage "${usage_json:-}" "")"
   if [[ "$(printf '%s' "$usage_norm" | jq -r '.reliability // empty' 2>/dev/null)" == "authoritative" ]]; then
@@ -6696,10 +7518,11 @@ graph_schedule_try_accept_denied_nonessential_diagnostic() {
 
 _graph_schedule_handle_reaped_node() {
   # Uses GRAPH_REAP_* globals from graph_schedule_reap_one. Returns 0 when the
-  # node succeeded or was a non-blocking awaiting-ack / expected cancel, 1 when
-  # it was an ordinary failure (also sets GRAPH_SCHEDULE_STOP_DISPATCH).
+  # node succeeded or was a non-blocking awaiting-ack / expected cancel / clean
+  # interruption, 1 when it was an ordinary failure (also sets
+  # GRAPH_SCHEDULE_STOP_DISPATCH).
   # Always releases per-runtime slots so failure/cancellation cannot leak a
-  # subagents reservation.
+  # parent-process runtime admission.
   local idx reap_rc="$1"
   local outcome_ok=0 effective_ec outcome
   # Attempt id is the report filename stem; used to append the attempt to the
@@ -6709,10 +7532,10 @@ _graph_schedule_handle_reaped_node() {
     attempt_id="$(basename "$GRAPH_REAP_REPORT_PATH")"
     attempt_id="${attempt_id%.json}"
   fi
-  local node_runtime="" node_subagents=""
+  local node_runtime="" node_native_subagents=""
   if idx="$(graph_schedule_index_map_get "$GRAPH_REAP_NODE" 2>/dev/null)"; then
     node_runtime="${GRAPH_NODE_RUNTIMES[$idx]:-}"
-    node_subagents="${GRAPH_NODE_SUBAGENTS[$idx]:-}"
+    node_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]:-}"
   fi
   local finished_at
   finished_at="$(graph_schedule_active_now_iso)"
@@ -6736,7 +7559,7 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_mark_blocked_descendants "$GRAPH_REAP_NODE"
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "cancelled" \
         "$attempt_id" "cancelled" "$GRAPH_REAP_EXIT_CODE" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "missing-report-after-cancel"
+        "$node_runtime" "$node_native_subagents" "missing-report-after-cancel"
       echo "graph-schedule: node=$GRAPH_REAP_NODE cancelled (missing report after cancel signal)" >&2
       return 0
     fi
@@ -6747,7 +7570,7 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_mark_blocked_descendants "$GRAPH_REAP_NODE"
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "cancelled" \
         "$attempt_id" "$outcome" "$GRAPH_REAP_EXIT_CODE" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "cancel-outcome=$outcome"
+        "$node_runtime" "$node_native_subagents" "cancel-outcome=$outcome"
       echo "graph-schedule: node=$GRAPH_REAP_NODE cancelled outcome=$outcome" >&2
       return 0
     fi
@@ -6766,15 +7589,33 @@ _graph_schedule_handle_reaped_node() {
       fi
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "awaiting-ack" \
         "$attempt_id" "awaiting" "$effective_ec" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "missing-report"
+        "$node_runtime" "$node_native_subagents" "missing-report"
       echo "graph-schedule: node=$GRAPH_REAP_NODE awaiting-ack exit=3 (missing report)" >&2
+      return 0
+    fi
+    # SIGINT/SIGTERM can stop the stage wrapper before its EXIT trap writes a
+    # StageOutcomeReport. That is a resumable interruption, not evidence that
+    # the stage itself failed or omitted its report. Keep descendants pending
+    # and stop new dispatch so resume can retry this same node cleanly.
+    if [[ "$effective_ec" -eq 130 || "$effective_ec" -eq 143 ]]; then
+      GRAPH_NODE_STATES[$idx]="interrupted"
+      _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
+      GRAPH_SCHEDULE_INTERRUPTED=1
+      GRAPH_SCHEDULE_STOP_DISPATCH=1
+      if [[ "$GRAPH_SCHEDULE_EXIT_CODE" -eq 0 ]]; then
+        GRAPH_SCHEDULE_EXIT_CODE="$effective_ec"
+      fi
+      _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "interrupted" \
+        "$attempt_id" "interrupted" "$effective_ec" "" "$finished_at" \
+        "$node_runtime" "$node_native_subagents" "signal-exit-without-report"
+      echo "graph-schedule: node=$GRAPH_REAP_NODE interrupted exit=$effective_ec (report not persisted; run is resumable)" >&2
       return 0
     fi
     GRAPH_NODE_STATES[$idx]="failed"
     _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
       "$attempt_id" "failed" "$effective_ec" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "missing-report"
+      "$node_runtime" "$node_native_subagents" "missing-report"
     _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" "$effective_ec" "missing-report"
     return 1
   fi
@@ -6809,7 +7650,7 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
         "$attempt_id" "failed" "1" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "changeset-verification-failed"
+        "$node_runtime" "$node_native_subagents" "changeset-verification-failed"
       _graph_schedule_try_write_correction_record "$GRAPH_REAP_NODE" "$attempt_id" \
         "$(_graph_schedule_correction_result_for_reason "changeset-verification-failed")"
       _graph_schedule_finish_failed_or_requeue 1 "changeset-verification-failed" "$attempt_id"
@@ -6825,7 +7666,7 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
         "$attempt_id" "failed" "1" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "artifact-publish-failed"
+        "$node_runtime" "$node_native_subagents" "artifact-publish-failed"
       _graph_schedule_try_write_correction_record "$GRAPH_REAP_NODE" "$attempt_id" \
         "$(_graph_schedule_correction_result_for_reason "artifact-publish-failed:${GRAPH_SCHEDULE_LAST_MISSING_ARTIFACT:-}" "$publish_paths")"
       _graph_schedule_finish_failed_or_requeue 1 "artifact-publish-failed" "$attempt_id"
@@ -6834,8 +7675,8 @@ _graph_schedule_handle_reaped_node() {
     # A successful subprocess report is only one part of graph-node success.
     # Validate all durable scheduler-owned evidence before publishing the
     # ledger transition that makes descendants runnable.
-    # Opt-in keeps existing graph plans byte-compatible; graph v2 callers set
-    # RALPH_GRAPH_COMPOSITE_SUCCESS=1 to make the stronger invariant active.
+    # RALPH_GRAPH_COMPOSITE_SUCCESS=1 enables the stronger completion-evidence
+    # invariant for this run.
     # A denied nonessential diagnostic is accepted only after that same
     # evidence is already satisfied; the exception does not apply before
     # completion.
@@ -6863,7 +7704,7 @@ _graph_schedule_handle_reaped_node() {
           _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
           _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
             "$attempt_id" "failed" "1" "" "$finished_at" \
-            "$node_runtime" "$node_subagents" "composite-success-failed:${composite_reason}"
+            "$node_runtime" "$node_native_subagents" "composite-success-failed:${composite_reason}"
           _graph_schedule_try_write_correction_record "$GRAPH_REAP_NODE" "$attempt_id" \
             "$(_graph_schedule_correction_result_for_reason "$composite_reason" "$composite_paths")"
           _graph_schedule_finish_failed_or_requeue 1 "composite-success-failed" "$attempt_id"
@@ -6881,7 +7722,7 @@ _graph_schedule_handle_reaped_node() {
         _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
         _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
           "$attempt_id" "failed" "1" "" "$finished_at" \
-          "$node_runtime" "$node_subagents" "composite-success-failed:${composite_reason}"
+          "$node_runtime" "$node_native_subagents" "composite-success-failed:${composite_reason}"
         _graph_schedule_try_write_correction_record "$GRAPH_REAP_NODE" "$attempt_id" \
           "$(_graph_schedule_correction_result_for_reason "$composite_reason" "$composite_paths")"
         _graph_schedule_finish_failed_or_requeue 1 "composite-success-failed" "$attempt_id"
@@ -6896,14 +7737,76 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
       _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
         "$attempt_id" "failed" "1" "" "$finished_at" \
-        "$node_runtime" "$node_subagents" "composite-success-failed:missing-required-evidence"
+        "$node_runtime" "$node_native_subagents" "composite-success-failed:missing-required-evidence"
       _graph_schedule_finish_failed_or_requeue 1 "composite-success-failed" "$attempt_id"
       return $?
     fi
+    # Resolve the node's semantic review outcome before touching any
+    # succeeded state. A regular agent node with no declared loopCheck
+    # resolves "passed" unconditionally; a review node's outcome comes from
+    # validating its stage-declared loopCheck artifact (never a role
+    # profile). An invalid/missing verdict is a terminal failure of this
+    # node and must never pass through "succeeded".
+    local agent_review_outcome agent_review_rc=0 agent_review_graph_content=""
+    if [[ -n "$GRAPH_SCHEDULE_GRAPH_JSON" && -f "$GRAPH_SCHEDULE_GRAPH_JSON" ]]; then
+      agent_review_graph_content="$(cat "$GRAPH_SCHEDULE_GRAPH_JSON")"
+    fi
+    agent_review_outcome="$(_graph_schedule_agent_conditional_outcome \
+      "$GRAPH_REAP_NODE" "$agent_review_graph_content" "$succeeded_state_root" "$GRAPH_SCHEDULE_NAMESPACE")" || agent_review_rc=$?
+    if [[ "$agent_review_rc" -eq 1 ]]; then
+      _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
+      GRAPH_NODE_STATES[$idx]="failed"
+      _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
+        "$attempt_id" "failed" "1" "" "$finished_at" \
+        "$node_runtime" "$node_native_subagents" "review-verdict-invalid"
+      _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" 1 "review-verdict-invalid"
+      return 1
+    fi
+    if [[ "$agent_review_rc" -eq 3 ]]; then
+      # A valid verdict, but the same blocking finding has outlived the rework
+      # budget's usefulness. Fail with a distinct reason so the operator sees
+      # "this loop is not converging" rather than a generic exhaustion.
+      _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
+      GRAPH_NODE_STATES[$idx]="failed"
+      _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
+        "$attempt_id" "failed" "2" "" "$finished_at" \
+        "$node_runtime" "$node_native_subagents" "rework-stalled"
+      _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" 2 "rework-stalled"
+      return 1
+    fi
+
+    # Release unconditional + conditional(<outcome>) successors and skip
+    # non-matching conditional branches before this node is allowed to
+    # transition to "succeeded". Every failure below must transition this
+    # node from "running", never from "succeeded".
+    local cond_outcome_rc=0
+    _graph_schedule_apply_conditional_outcome "$GRAPH_REAP_NODE" "$agent_review_outcome" || cond_outcome_rc=$?
+    if [[ "$cond_outcome_rc" -ne 0 ]]; then
+      local cond_fail_reason="successor-release" cond_fail_exit=1
+      if [[ "$cond_outcome_rc" -eq 2 && "$agent_review_outcome" == "changes-required" ]]; then
+        # Fail-closed exhaustion path: a valid changes-required verdict with
+        # no matching conditional(changes-required) edge cannot proceed.
+        cond_fail_reason="review-changes-required-no-edge"
+        cond_fail_exit=2
+      fi
+      _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
+      GRAPH_NODE_STATES[$idx]="failed"
+      _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
+        "$attempt_id" "failed" "$cond_fail_exit" "" "$finished_at" \
+        "$node_runtime" "$node_native_subagents" "$cond_fail_reason"
+      _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" "$cond_fail_exit" "$cond_fail_reason"
+      return 1
+    fi
+
+    # Executor success and semantic review outcome are distinct: a valid
+    # "changes-required" verdict is still a succeeded executor attempt, but
+    # observability records the semantic outcome rather than calling it
+    # "passed".
     GRAPH_NODE_STATES[$idx]="succeeded"
     _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
     local success_extra_json diag_ev
     success_extra_json="$(_graph_schedule_node_success_observability_json "$GRAPH_REAP_NODE" "$attempt_id" "$succeeded_workspace" "$succeeded_state_root")"
+    success_extra_json="$(printf '%s' "$success_extra_json" | jq -c --arg outcome "$agent_review_outcome" '. + {semanticOutcome: $outcome}')"
     if [[ -n "${GRAPH_COMPOSITE_SUCCESS_RECORD:-}" && -s "$GRAPH_COMPOSITE_SUCCESS_RECORD" ]]; then
       diag_ev="$(jq -c '.diagnosticEvidence // empty' "$GRAPH_COMPOSITE_SUCCESS_RECORD" 2>/dev/null || true)"
       if [[ -n "$diag_ev" && "$diag_ev" != "null" ]]; then
@@ -6912,18 +7815,9 @@ _graph_schedule_handle_reaped_node() {
     fi
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "succeeded" \
       "$attempt_id" "success" "0" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "" "$success_extra_json"
-    _graph_schedule_log_observability "node-succeeded" "$GRAPH_REAP_NODE" "$attempt_id" "$node_runtime" "$node_subagents" "$success_extra_json"
-    graph_ui_node "passed" "$GRAPH_REAP_NODE" "$node_runtime"
-    # Release unconditional + conditional(passed) successors; skip conditional
-    # (changes-required/error) branches. Regular agent nodes always produce
-    # "passed" on success.
-    local cond_outcome_rc=0
-    _graph_schedule_apply_conditional_outcome "$GRAPH_REAP_NODE" "passed" || cond_outcome_rc=$?
-    if [[ "$cond_outcome_rc" -ne 0 && "$cond_outcome_rc" -ne 2 ]]; then
-      _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" 1 "successor-release"
-      return 1
-    fi
+      "$node_runtime" "$node_native_subagents" "" "$success_extra_json"
+    _graph_schedule_log_observability "node-succeeded" "$GRAPH_REAP_NODE" "$attempt_id" "$node_runtime" "$node_native_subagents" "$success_extra_json"
+    graph_ui_node "$agent_review_outcome" "$GRAPH_REAP_NODE" "$node_runtime"
     # Router nodes: resolve decision artifact and skip unselected branches.
     if [[ "${GRAPH_NODE_TYPES[$idx]:-}" == "router" && -n "${GRAPH_SCHEDULE_GRAPH_JSON:-}" ]]; then
       _graph_schedule_apply_router_decision \
@@ -6952,7 +7846,7 @@ _graph_schedule_handle_reaped_node() {
     fi
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "awaiting-ack" \
       "$attempt_id" "$outcome" "$effective_ec" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "exit-3"
+      "$node_runtime" "$node_native_subagents" "exit-3"
     echo "graph-schedule: node=$GRAPH_REAP_NODE awaiting-ack exit=3" >&2
     return 0
   fi
@@ -6967,7 +7861,7 @@ _graph_schedule_handle_reaped_node() {
     GRAPH_NODE_STATES[$idx]="cancelled"
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "cancelled" \
       "$attempt_id" "cancelled" "$effective_ec" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "outcome=cancelled"
+      "$node_runtime" "$node_native_subagents" "outcome=cancelled"
   elif _graph_schedule_result_is_operator_permission "$GRAPH_REAP_REPORT_PATH" "outcome=$outcome"; then
     graph_schedule_apply_operator_permission "$GRAPH_REAP_NODE" "$effective_ec" \
       "operator-permission" "$attempt_id" "$GRAPH_REAP_REPORT_PATH"
@@ -6976,7 +7870,7 @@ _graph_schedule_handle_reaped_node() {
     GRAPH_NODE_STATES[$idx]="needs-plan-repair"
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "needs-plan-repair" \
       "$attempt_id" "$outcome" "$effective_ec" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "plan-contract"
+      "$node_runtime" "$node_native_subagents" "plan-contract"
     _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
     graph_schedule_apply_plan_contract "$GRAPH_REAP_NODE" "$effective_ec" \
       "plan-contract" "$attempt_id"
@@ -6985,7 +7879,7 @@ _graph_schedule_handle_reaped_node() {
     GRAPH_NODE_STATES[$idx]="failed"
     _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" \
       "$attempt_id" "$outcome" "$effective_ec" "" "$finished_at" \
-      "$node_runtime" "$node_subagents" "outcome=$outcome"
+      "$node_runtime" "$node_native_subagents" "outcome=$outcome"
     _graph_schedule_try_write_correction_record "$GRAPH_REAP_NODE" "$attempt_id" \
       "$GRAPH_REAP_REPORT_PATH"
   fi
@@ -7011,7 +7905,7 @@ graph_schedule_run() {
   local workspace="$3"
   local ledger_run_dir="${4:-}"
   local i max_parallel per_runtime ready_id running_count reap_rc spawn_budget
-  local ready_tmp ready_idx ready_runtime ready_subagents ready_native_parallel
+  local ready_tmp ready_idx ready_runtime ready_native_subagents
 
   if [[ -z "$graph_json_path" || -z "$run_id" || -z "$workspace" ]]; then
     echo "Error: graph_schedule_run requires graph_json_path, run_id, and workspace" >&2
@@ -7088,6 +7982,7 @@ graph_schedule_run() {
   GRAPH_SCHEDULE_EXIT_CODE=0
   GRAPH_SCHEDULE_FAILED_NODE=""
   GRAPH_SCHEDULE_STOP_DISPATCH=0
+  GRAPH_SCHEDULE_INTERRUPTED=0
   GRAPH_SCHEDULE_CANCEL_REQUESTED=0
   GRAPH_SCHEDULE_AWAITING_ACK=0
   GRAPH_SCHEDULE_AWAITING_OPERATOR=0
@@ -7098,7 +7993,6 @@ graph_schedule_run() {
   GRAPH_HEARTBEAT_LAST_TICK_EPOCH=0
   GRAPH_SCHEDULE_LEDGER_RUN_DIR="$ledger_run_dir"
   GRAPH_SCHEDULE_LEDGER_NAMESPACE=""
-  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
 
   # failurePolicy: drain (default) or cancel. Invalid values fall back to drain.
   GRAPH_SCHEDULE_FAILURE_POLICY="$(jq -r '.failurePolicy // "drain"' "$graph_json_path" 2>/dev/null || echo drain)"
@@ -7118,12 +8012,47 @@ graph_schedule_run() {
   if [[ -z "$GRAPH_SCHEDULE_NAMESPACE" ]]; then
     GRAPH_SCHEDULE_NAMESPACE="$(basename "$GRAPH_SCHEDULE_ORCH_PATH" .orch.json)"
   fi
+  # GRAPH_SCHEDULE_NAMESPACE is the plan/artifact namespace: it is what
+  # {{ARTIFACT_NS}} expands to and what spawn_node exports as RALPH_ARTIFACT_NS.
+  # It must keep tracking the orchestration plan ("input" for a workflow run).
   GRAPH_SCHEDULE_PLAN_KEY="$GRAPH_SCHEDULE_NAMESPACE"
+
+  # The LEDGER namespace is a different thing: it addresses the durable run
+  # state under graph-runs/<ns>/<run-id>. For a plain graph run the two agree.
+  # For a workflow run they do not -- the ledger is graph-runs/workflow/<id>
+  # while the plan namespace stays "input" -- and defaulting the ledger to the
+  # plan namespace aimed every graph_state_* write at graph-runs/input/<id>, a
+  # shadow directory holding nothing but nodes/. The real ledger's run.json then
+  # kept saying "running" with every node "pending" no matter what happened,
+  # because graph_state_set_run_status failed its [[ -f "$run_file" ]] guard
+  # silently under `2>/dev/null || true`. Derive it from the ledger dir, which
+  # logs, events, and orchestration plans already treat as authoritative.
   GRAPH_SCHEDULE_LEDGER_NAMESPACE="$GRAPH_SCHEDULE_NAMESPACE"
+  if [[ -n "$ledger_run_dir" ]]; then
+    local _ledger_ns _ledger_ns_dir
+    _ledger_ns="$(basename -- "$(dirname -- "$ledger_run_dir")")"
+    _ledger_ns_dir="$(graph_state_run_dir "$workspace" "$_ledger_ns" "$run_id" 2>/dev/null || true)"
+    if [[ -n "$_ledger_ns" && "$_ledger_ns_dir" == "$ledger_run_dir" ]]; then
+      GRAPH_SCHEDULE_LEDGER_NAMESPACE="$_ledger_ns"
+    else
+      # Not addressable as graph-runs/<ns>/<run-id> under this workspace. Keep
+      # the plan namespace rather than aiming state writes somewhere new, and
+      # say so instead of failing silently.
+      echo "graph-schedule: warning: ledger dir $ledger_run_dir is not addressable as <namespace>/${run_id}; run state may not be durable" >&2
+    fi
+  fi
+
+  # Public viewer-attached starts create the ledger before they launch this
+  # isolated supervisor. Bind durable ownership to this scheduler process,
+  # replacing the short-lived startup CLI identity written during init.
+  if [[ -n "$ledger_run_dir" ]]; then
+    local _scheduler_pid="${GRAPH_STATE_SUPERVISOR_PID:-${BASHPID:-$$}}"
+    graph_state_rebind_run_owner \
+      "$workspace" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$run_id" "$_scheduler_pid" || return 1
+  fi
 
   # Structured transition log in the same format as the orchestrator log so the
-  # logs directory stays greppable.  One line per state transition. Always
-  # owned by the run-dir; never append to v1 namespace-only paths.
+  # logs directory stays greppable. One line per state transition.
   _graph_schedule_bind_run_logs "$run_id" create
 
   # Seed the run event journal with a run-started record so sequence numbers
@@ -7149,6 +8078,7 @@ graph_schedule_run() {
 
   while true; do
     graph_schedule_tick_heartbeat
+    graph_schedule_tick_live_progress
     graph_schedule_enforce_active_time_budgets
     graph_schedule_enforce_usage_budgets
     graph_schedule_release_due_retry_waits
@@ -7173,12 +8103,17 @@ graph_schedule_run() {
           continue
         fi
         ready_runtime="${GRAPH_NODE_RUNTIMES[$ready_idx]}"
-        ready_subagents="${GRAPH_NODE_SUBAGENTS[$ready_idx]}"
-        ready_native_parallel="${GRAPH_NODE_NATIVE_PARALLEL[$ready_idx]:-0}"
+        ready_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$ready_idx]}"
         # Checkpoint nodes are handled synchronously without spawning a process.
         # They do not consume the spawn budget or go through runtime admission.
         if [[ "${GRAPH_NODE_TYPES[$ready_idx]:-}" == "checkpoint" ]]; then
           _graph_schedule_handle_checkpoint_node "$ready_id" || true
+          continue
+        fi
+        # Public Dependency approval: common action request, exit 3, no agent,
+        # no runtime/concurrency budget.
+        if [[ "${GRAPH_NODE_TYPES[$ready_idx]:-}" == "approval" ]]; then
+          _graph_schedule_handle_approval_node "$ready_id" || true
           continue
         fi
         # consensus-barrier nodes never have a runtime/agent; they always
@@ -7206,14 +8141,14 @@ graph_schedule_run() {
           _graph_schedule_handle_join_node "$ready_id" || true
           continue
         fi
-        # Per-runtime / subagents reservation may block this node while another
+        # Per-runtime capacity may block this node while another
         # ready node on a different runtime remains eligible -- continue, do not break.
-        if ! _graph_schedule_runtime_can_admit "$ready_runtime" "$ready_subagents" "" "$ready_native_parallel"; then
-          _graph_schedule_log_admission "denied" "graph-node" "$ready_id" "$ready_runtime" "$ready_subagents" \
-            "$(_graph_schedule_slots_for_node "$ready_runtime" "$ready_subagents" "$ready_native_parallel")" "$(_graph_schedule_slots_for_node "$ready_runtime" "$ready_subagents" "$ready_native_parallel")" "runtime-or-token-cap"
+        if ! _graph_schedule_runtime_can_admit "$ready_runtime" "$ready_native_subagents" ""; then
+          _graph_schedule_log_admission "denied" "graph-node" "$ready_id" "$ready_runtime" "$ready_native_subagents" \
+            "$(_graph_schedule_slots_for_node)" "$(_graph_schedule_slots_for_node)" "runtime-or-token-cap"
           local denied_summary
-          denied_summary="$(_graph_schedule_admission_summary_json "$ready_id" "$ready_runtime" "$ready_subagents" "runtime-or-token-cap")"
-          _graph_schedule_ledger_record "$ready_id" "ready" "" "" "" "" "" "" "$ready_runtime" "$ready_subagents" "admission-denied" "$denied_summary"
+          denied_summary="$(_graph_schedule_admission_summary_json "$ready_id" "$ready_runtime" "$ready_native_subagents" "runtime-or-token-cap")"
+          _graph_schedule_ledger_record "$ready_id" "ready" "" "" "" "" "" "" "$ready_runtime" "$ready_native_subagents" "admission-denied" "$denied_summary"
           continue
         fi
         if graph_schedule_active_time_exhausted "$ready_id"; then
@@ -7282,6 +8217,8 @@ graph_schedule_run() {
   if _graph_schedule_all_succeeded; then
     GRAPH_SCHEDULE_EXIT_CODE=0
     final_status="succeeded"
+  elif [[ "$GRAPH_SCHEDULE_INTERRUPTED" -eq 1 && -z "$GRAPH_SCHEDULE_FAILED_NODE" ]]; then
+    final_status="interrupted"
   elif [[ -z "$GRAPH_SCHEDULE_FAILED_NODE" ]] \
     && ! _graph_schedule_has_runnable_or_running \
     && _graph_schedule_has_unresolved_wait; then
@@ -7304,14 +8241,16 @@ graph_schedule_run() {
       "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$final_status" 2>/dev/null || true
     graph_events_append "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$GRAPH_SCHEDULE_RUN_ID" "run-status-changed" "" "" "{\"status\":\"$final_status\",\"exitCode\":$GRAPH_SCHEDULE_EXIT_CODE}" 2>/dev/null || true
   fi
-  if [[ -n "$GRAPH_SCHEDULE_FAILED_NODE" ]]; then
+  # final_status is only ever succeeded, failed, interrupted, awaiting-ack, or
+  # awaiting-operator.
+  if [[ "$final_status" == "failed" ]]; then
     _graph_schedule_print_summary "failed"
-  elif [[ "$GRAPH_SCHEDULE_AWAITING_OPERATOR" -eq 1 ]]; then
+  elif [[ "$final_status" == "awaiting-operator" ]]; then
     _graph_schedule_print_summary "awaiting-operator"
-  elif [[ "$GRAPH_SCHEDULE_AWAITING_ACK" -eq 1 ]]; then
+  elif [[ "$final_status" == "awaiting-ack" ]]; then
     _graph_schedule_print_summary "awaiting-ack"
   else
-    _graph_schedule_print_summary "incomplete"
+    _graph_schedule_print_summary "$final_status"
   fi
   return "$GRAPH_SCHEDULE_EXIT_CODE"
 }
@@ -7366,7 +8305,7 @@ graph_schedule_run() {
 _graph_schedule_reconcile_node() {
   local node_id="$1" frozen_graph="$2"
   local idx status last_attempt_id report_path outcome exit_code
-  local node_runtime node_subagents finished_at node_file durable_attempt_number
+  local node_runtime node_native_subagents finished_at node_file durable_attempt_number
 
   if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
     echo "Error: reconcile: unknown node id: $node_id" >&2
@@ -7378,7 +8317,7 @@ _graph_schedule_reconcile_node() {
   [[ -z "$status" ]] && status="pending"
 
   node_runtime="${GRAPH_NODE_RUNTIMES[$idx]}"
-  node_subagents="${GRAPH_NODE_SUBAGENTS[$idx]}"
+  node_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]}"
   node_file="$(graph_state_node_file "$GRAPH_SCHEDULE_WORKSPACE" \
     "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$node_id" 2>/dev/null || true)"
   durable_attempt_number=0
@@ -7391,7 +8330,7 @@ _graph_schedule_reconcile_node() {
   case "$status" in
     succeeded)
       # Composite records are written only by newer ledger-backed runs.  Their
-      # absence is a backward-compatible legacy success; when present, a hash
+      # absence is accepted; when present, a hash
       # mismatch invalidates this node and descendants, not unrelated lanes.
       last_attempt_id="$(graph_state_node_last_attempt_id "$GRAPH_SCHEDULE_WORKSPACE" \
         "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$GRAPH_SCHEDULE_RUN_ID" "$node_id" 2>/dev/null)" || last_attempt_id=""
@@ -7442,7 +8381,7 @@ _graph_schedule_reconcile_node() {
       GRAPH_NODE_STATES[$idx]="succeeded"
       # Decrement successors so descendants become ready as if the node ran.
       # A node with conditional successors (gate/regate nodes in particular,
-      # e.g. inside a v2-repair-epochs round) must replay its recorded
+      # e.g. inside a repair-epochs round) must replay its recorded
       # semantic outcome through apply_conditional_outcome rather than just
       # releasing unconditional successors, or the correct branch (and the
       # skip-cascade of the branches not taken) never happens on resume and
@@ -7483,6 +8422,14 @@ _graph_schedule_reconcile_node() {
         if [[ -n "$ck_ack_path" && -f "$ck_ack_path" ]]; then
           GRAPH_NODE_STATES[$idx]="succeeded"
           _graph_schedule_release_successors "$node_id" || true
+          # graph_state_validate_node_transition has no direct
+          # awaiting-ack->succeeded edge; record the legal awaiting-ack->
+          # running->succeeded hop so this write actually persists instead
+          # of being silently rejected and leaving the node stuck at
+          # "awaiting-ack" on disk forever (blocking manual publish even
+          # though the run itself reports succeeded).
+          _graph_schedule_ledger_record "$node_id" "running" \
+            "" "" "" "$(graph_state_now_iso)" "" "" "" "checkpoint-resume"
           _graph_schedule_ledger_record "$node_id" "succeeded" \
             "" "success" "0" "" "$(graph_state_now_iso)" "" "" "checkpoint-ack-received"
           echo "graph-resume: node=$node_id checkpoint ack received; transitioning to succeeded" >&2
@@ -7498,6 +8445,19 @@ _graph_schedule_reconcile_node() {
     awaiting-operator)
       GRAPH_NODE_STATES[$idx]="awaiting-operator"
       GRAPH_SCHEDULE_AWAITING_OPERATOR=1
+      # Public Dependency approval uses common workflow actions, not graph
+      # operator/ permission records.
+      if [[ "${GRAPH_NODE_TYPES[$idx]:-}" == "approval" ]]; then
+        _graph_schedule_resume_approval_node "$node_id" || true
+        if [[ "${GRAPH_NODE_STATES[$idx]}" == "succeeded" ]]; then
+          return 0
+        fi
+        if [[ "${GRAPH_NODE_STATES[$idx]}" == "blocked" || "${GRAPH_NODE_STATES[$idx]}" == "cancelled" || "${GRAPH_NODE_STATES[$idx]}" == "failed" ]]; then
+          return 1
+        fi
+        echo "graph-resume: node=$node_id Dependency approval awaiting-operator; skipping" >&2
+        return 0
+      fi
       if [[ -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" ]]; then
         local alt_rel alt_abs op_request_id
         alt_rel="$(graph_schedule_operator_alternative_rel "$node_id" 2>/dev/null || true)"
@@ -7562,7 +8522,7 @@ _graph_schedule_reconcile_node() {
                   GRAPH_NODE_STATES[$idx]="pending"
                   _graph_schedule_ledger_record "$node_id" "failed" \
                     "$last_attempt_id" "failed" "1" "" "$finished_at" \
-                    "$node_runtime" "$node_subagents" "orphan-workspace-reopen-failed"
+                    "$node_runtime" "$node_native_subagents" "orphan-workspace-reopen-failed"
                   echo "graph-resume: node=$node_id orphan finalization failed reopening workspace; resetting to pending" >&2
                   return 1
                 }
@@ -7573,7 +8533,7 @@ _graph_schedule_reconcile_node() {
               GRAPH_NODE_STATES[$idx]="pending"
               _graph_schedule_ledger_record "$node_id" "failed" \
                 "$last_attempt_id" "failed" "1" "" "$finished_at" \
-                "$node_runtime" "$node_subagents" "orphan-changeset-verification-failed"
+                "$node_runtime" "$node_native_subagents" "orphan-changeset-verification-failed"
               echo "graph-resume: node=$node_id orphan changeset finalization failed; resetting to pending" >&2
               return 1
             fi
@@ -7582,7 +8542,7 @@ _graph_schedule_reconcile_node() {
               GRAPH_NODE_STATES[$idx]="pending"
               _graph_schedule_ledger_record "$node_id" "failed" \
                 "$last_attempt_id" "failed" "1" "" "$finished_at" \
-                "$node_runtime" "$node_subagents" "orphan-artifact-publish-failed"
+                "$node_runtime" "$node_native_subagents" "orphan-artifact-publish-failed"
               echo "graph-resume: node=$node_id orphan artifact finalization failed; resetting to pending" >&2
               return 1
             fi
@@ -7591,7 +8551,7 @@ _graph_schedule_reconcile_node() {
               "$node_id" "$last_attempt_id" "$adopted_workspace" "$adopted_state_root")"
             _graph_schedule_ledger_record "$node_id" "succeeded" \
               "$last_attempt_id" "success" "0" "" "$finished_at" \
-              "$node_runtime" "$node_subagents" "adopted-orphan-report" "$adopted_extra_json"
+              "$node_runtime" "$node_native_subagents" "adopted-orphan-report" "$adopted_extra_json"
             _graph_schedule_apply_conditional_outcome "$node_id" "passed" || true
             echo "graph-resume: node=$node_id running -> adopted orphaned report (success); skipping" >&2
             return 0
@@ -7600,7 +8560,7 @@ _graph_schedule_reconcile_node() {
           GRAPH_NODE_STATES[$idx]="failed"
           _graph_schedule_ledger_record "$node_id" "failed" \
             "$last_attempt_id" "$outcome" "$exit_code" "" "$finished_at" \
-            "$node_runtime" "$node_subagents" "adopted-orphan-report"
+            "$node_runtime" "$node_native_subagents" "adopted-orphan-report"
           echo "graph-resume: node=$node_id running -> adopted orphaned report (outcome=$outcome); resetting to pending" >&2
           # Fall through to reset path below by treating as a non-terminal state.
           GRAPH_NODE_STATES[$idx]="pending"
@@ -7710,6 +8670,10 @@ graph_schedule_resume() {
     echo "Error: graph_schedule_resume run not found: $run_id" >&2
     return 1
   fi
+  # Fail closed on a stale run or node ledger rather than misreading it.
+  if ! graph_state_require_run_schema "$workspace" "$namespace" "$run_id"; then
+    return 1
+  fi
   local current_status
   current_status="$(jq -r '.status // empty' "$run_file" 2>/dev/null)"
   if ! graph_schedule_run_status_is_resumable "$current_status"; then
@@ -7726,16 +8690,57 @@ graph_schedule_resume() {
     return 1
   fi
 
+  local resume_node_id
+  while IFS= read -r resume_node_id || [[ -n "$resume_node_id" ]]; do
+    [[ -z "$resume_node_id" ]] && continue
+    if [[ -f "$(graph_state_node_file "$workspace" "$namespace" "$run_id" "$resume_node_id")" ]]; then
+      if ! graph_state_require_node_schema "$workspace" "$namespace" "$run_id" "$resume_node_id"; then
+        return 1
+      fi
+    fi
+  done < <(jq -r '.nodes[]?.id // empty' "$frozen_graph" 2>/dev/null)
+
   old_sha="$(graph_state_field "$run_file" "graphSha")" || old_sha=""
 
   # Recompile the plan and compare graphSha. Use a temp file so the cached
   # graph beside the plan is not disturbed.
+  #
+  # The recompile has to reproduce what was frozen, not re-derive it from
+  # scratch. A workflow run's artifact namespace is minted once at start and
+  # baked into the frozen graph; recompiling without it yields the plan-basename
+  # default, a different namespace, and therefore a different graphSha -- so
+  # resume would refuse a run whose plan never changed. Replay the frozen
+  # namespace over the recompile. Runs whose namespace already matches the
+  # default are unaffected, since the override reproduces the same value.
+  local _frozen_ns _prev_ns_override _had_ns_override=0
+  _frozen_ns="$(jq -r '.namespace // empty' "$frozen_graph" 2>/dev/null || true)"
+  if [[ -n "${RALPH_ARTIFACT_NS_OVERRIDE+x}" ]]; then
+    _had_ns_override=1
+    _prev_ns_override="$RALPH_ARTIFACT_NS_OVERRIDE"
+  fi
+  if [[ -n "$_frozen_ns" ]]; then
+    export RALPH_ARTIFACT_NS_OVERRIDE="$_frozen_ns"
+  fi
   new_graph="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-resume.XXXXXX")" || return 1
-  if ! plan_pipeline_graph_json "$plan_path" >"$new_graph" 2>/dev/null; then
+  if ! graph_compile_plan "$plan_path" "$new_graph" 1 >/dev/null; then
     rm -f "$new_graph"
+    if [[ "$_had_ns_override" == "1" ]]; then
+      export RALPH_ARTIFACT_NS_OVERRIDE="$_prev_ns_override"
+    else
+      unset RALPH_ARTIFACT_NS_OVERRIDE
+    fi
     echo "Error: graph_schedule_resume failed to recompile plan: $plan_path" >&2
     return 1
   fi
+  if [[ "$_had_ns_override" == "1" ]]; then
+    export RALPH_ARTIFACT_NS_OVERRIDE="$_prev_ns_override"
+  else
+    unset RALPH_ARTIFACT_NS_OVERRIDE
+  fi
+  new_sha="$(graph_state_compute_graph_sha "$new_graph")" || {
+    rm -f "$new_graph"
+    return 1
+  }
   if [[ "$(jq -r '.namespace // empty' "$new_graph")" != "$namespace" ]]; then
     local namespaced_graph
     namespaced_graph="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-resume-namespace.XXXXXX")" || {
@@ -7748,10 +8753,6 @@ graph_schedule_resume() {
     }
     mv -f "$namespaced_graph" "$new_graph"
   fi
-  new_sha="$(graph_state_compute_graph_sha "$new_graph")" || {
-    rm -f "$new_graph"
-    return 1
-  }
 
   if [[ "$old_sha" != "$new_sha" ]]; then
     if [[ "$accept_change" -ne 1 ]]; then
@@ -7809,6 +8810,7 @@ graph_schedule_resume() {
   GRAPH_SCHEDULE_EXIT_CODE=0
   GRAPH_SCHEDULE_FAILED_NODE=""
   GRAPH_SCHEDULE_STOP_DISPATCH=0
+  GRAPH_SCHEDULE_INTERRUPTED=0
   GRAPH_SCHEDULE_CANCEL_REQUESTED=0
   GRAPH_SCHEDULE_AWAITING_ACK=0
   GRAPH_SCHEDULE_AWAITING_OPERATOR=0
@@ -7818,7 +8820,6 @@ graph_schedule_resume() {
   GRAPH_SCHEDULE_SPAWN_OPERATOR_PATH_KIND=""
   GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$namespace" "$run_id")"
   GRAPH_SCHEDULE_LEDGER_NAMESPACE="$namespace"
-  GRAPH_SCHEDULE_LEDGER_SCHEMA_VERSION=""
 
   local max_parallel per_runtime
   max_parallel="$(jq -r '.maxParallel // 2' "$frozen_graph")"
@@ -7856,7 +8857,6 @@ graph_schedule_resume() {
   GRAPH_SCHEDULE_LEDGER_NAMESPACE="$namespace"
 
   # Structured transition log (append to the run-owned supervisor log).
-  # Never reopen v1 namespace-only graph-schedule-*.log files for append.
   _graph_schedule_bind_run_logs "$run_id" resume
   graph_schedule_recover_delegated_children
 
@@ -8000,12 +9000,13 @@ _graph_schedule_invalidate_changed_nodes() {
 _graph_schedule_resume_loop() {
   local graph_json_path="$1" run_id="$2" workspace="$3"
   local running_count reap_rc spawn_budget ready_id ready_idx
-  local ready_runtime ready_subagents ready_native_parallel ready_tmp
+  local ready_runtime ready_native_subagents ready_tmp
 
   ready_tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-resume-ready.XXXXXX")" || return 1
 
   while true; do
     graph_schedule_tick_heartbeat
+    graph_schedule_tick_live_progress
     graph_schedule_enforce_active_time_budgets
     graph_schedule_enforce_usage_budgets
     graph_schedule_release_due_retry_waits
@@ -8029,11 +9030,16 @@ _graph_schedule_resume_loop() {
           continue
         fi
         ready_runtime="${GRAPH_NODE_RUNTIMES[$ready_idx]}"
-        ready_subagents="${GRAPH_NODE_SUBAGENTS[$ready_idx]}"
-        ready_native_parallel="${GRAPH_NODE_NATIVE_PARALLEL[$ready_idx]:-0}"
+        ready_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$ready_idx]}"
         # Checkpoint nodes are handled synchronously without spawning a process.
         if [[ "${GRAPH_NODE_TYPES[$ready_idx]:-}" == "checkpoint" ]]; then
           _graph_schedule_handle_checkpoint_node "$ready_id" || true
+          continue
+        fi
+        # Public Dependency approval: common action request, exit 3, no agent,
+        # no runtime/concurrency budget (mirrors main schedule loop).
+        if [[ "${GRAPH_NODE_TYPES[$ready_idx]:-}" == "approval" ]]; then
+          _graph_schedule_handle_approval_node "$ready_id" || true
           continue
         fi
         # consensus-barrier nodes never have a runtime/agent; they always
@@ -8059,12 +9065,12 @@ _graph_schedule_resume_loop() {
           _graph_schedule_handle_join_node "$ready_id" || true
           continue
         fi
-        if ! _graph_schedule_runtime_can_admit "$ready_runtime" "$ready_subagents" "" "$ready_native_parallel"; then
-          _graph_schedule_log_admission "denied" "graph-node" "$ready_id" "$ready_runtime" "$ready_subagents" \
-            "$(_graph_schedule_slots_for_node "$ready_runtime" "$ready_subagents" "$ready_native_parallel")" "$(_graph_schedule_slots_for_node "$ready_runtime" "$ready_subagents" "$ready_native_parallel")" "runtime-or-token-cap"
+        if ! _graph_schedule_runtime_can_admit "$ready_runtime" "$ready_native_subagents" ""; then
+          _graph_schedule_log_admission "denied" "graph-node" "$ready_id" "$ready_runtime" "$ready_native_subagents" \
+            "$(_graph_schedule_slots_for_node)" "$(_graph_schedule_slots_for_node)" "runtime-or-token-cap"
           local denied_summary
-          denied_summary="$(_graph_schedule_admission_summary_json "$ready_id" "$ready_runtime" "$ready_subagents" "runtime-or-token-cap")"
-          _graph_schedule_ledger_record "$ready_id" "ready" "" "" "" "" "" "" "$ready_runtime" "$ready_subagents" "admission-denied" "$denied_summary"
+          denied_summary="$(_graph_schedule_admission_summary_json "$ready_id" "$ready_runtime" "$ready_native_subagents" "runtime-or-token-cap")"
+          _graph_schedule_ledger_record "$ready_id" "ready" "" "" "" "" "" "" "$ready_runtime" "$ready_native_subagents" "admission-denied" "$denied_summary"
           continue
         fi
         if graph_schedule_active_time_exhausted "$ready_id"; then
@@ -8130,6 +9136,8 @@ _graph_schedule_resume_loop() {
   if _graph_schedule_all_succeeded; then
     GRAPH_SCHEDULE_EXIT_CODE=0
     final_status="succeeded"
+  elif [[ "$GRAPH_SCHEDULE_INTERRUPTED" -eq 1 && -z "$GRAPH_SCHEDULE_FAILED_NODE" ]]; then
+    final_status="interrupted"
   elif [[ -z "$GRAPH_SCHEDULE_FAILED_NODE" ]] \
     && ! _graph_schedule_has_runnable_or_running \
     && _graph_schedule_has_unresolved_wait; then
@@ -8149,14 +9157,16 @@ _graph_schedule_resume_loop() {
   fi
   graph_state_set_run_status "$workspace" "$GRAPH_SCHEDULE_LEDGER_NAMESPACE" "$run_id" "$final_status" 2>/dev/null || true
   graph_events_append "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$run_id" "run-status-changed" "" "" "{\"status\":\"$final_status\",\"exitCode\":$GRAPH_SCHEDULE_EXIT_CODE}" 2>/dev/null || true
-  if [[ -n "$GRAPH_SCHEDULE_FAILED_NODE" ]]; then
+  # final_status is only ever succeeded, failed, interrupted, awaiting-ack, or
+  # awaiting-operator.
+  if [[ "$final_status" == "failed" ]]; then
     _graph_schedule_print_summary "failed"
-  elif [[ "$GRAPH_SCHEDULE_AWAITING_OPERATOR" -eq 1 ]]; then
+  elif [[ "$final_status" == "awaiting-operator" ]]; then
     _graph_schedule_print_summary "awaiting-operator"
-  elif [[ "$GRAPH_SCHEDULE_AWAITING_ACK" -eq 1 ]]; then
+  elif [[ "$final_status" == "awaiting-ack" ]]; then
     _graph_schedule_print_summary "awaiting-ack"
   else
-    _graph_schedule_print_summary "incomplete"
+    _graph_schedule_print_summary "$final_status"
   fi
   return "$GRAPH_SCHEDULE_EXIT_CODE"
 }

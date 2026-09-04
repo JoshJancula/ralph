@@ -1,0 +1,380 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "Ralph fixture-seq-running",
+    "bug-fix | Sequential",
+    "RUNNING  Fix the timeout",
+    "1/2 stages  2m 0s",
+    "+- Logs (focused) -------------------------------------------------------------+",
+    "| LOG  stream=agent  stage=implement  attempt=1  path=logs/stages/implement/1\u2026 |",
+    "| 12:00:01 model loaded                                                        |",
+    "| 12:00:02 implementing semantic canvas                                        |",
+    "| 12:00:03 waiting for verification                                            |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "+------------------------------------------------------------------------------+",
+    "Esc back  s stream (agent)  f follow on  p pause  r refresh  ? help  q detach"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-running",
+        "role": "path",
+        "width": 19
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "bug-fix | Sequential",
+        "role": "muted",
+        "width": 20
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "RUNNING",
+        "role": "accent",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Fix the timeout                                                        ",
+        "role": "default",
+        "width": 73
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "1/2 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "2m 0s",
+        "role": "muted",
+        "width": 5
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Logs (focused) ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-------------------------------------------------------------+",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "LOG  stream=agent  stage=implement  attempt=1  path=logs/stages/implement/1\u2026",
+        "role": "muted",
+        "width": 76
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "12:00:01 model loaded",
+        "role": "path",
+        "width": 21
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "12:00:02 implementing semantic canvas",
+        "role": "path",
+        "width": 37
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "12:00:03 waiting for verification",
+        "role": "path",
+        "width": 33
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Esc back  s stream (agent)  f follow on  p pause  r refresh  ? help  q detach   ",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}

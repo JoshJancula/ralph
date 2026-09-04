@@ -373,6 +373,74 @@ require_python3() {
   [ "$(printf '%s' "$captured" | jq -r '.permission')" = "external_directory" ]
 }
 
+@test "opencode G15 permission parser preserves actionable identity and rejects generics" {
+  local repo_root fixture parsed
+  repo_root="$BATS_TEST_DIRNAME/../../.."
+  fixture="$repo_root/.ralph-workspace/artifacts/graph-mode-recovery/fixtures/generic-opencode-request.json"
+  [ -f "$fixture" ]
+
+  # read
+  run run_plan_invoke_opencode_graph_approval_parse_permission "$(permission_event_json ses-r perm-r read src/app.ts)"
+  [ "$status" -eq 0 ]
+  parsed="$output"
+  [ "$(printf '%s' "$parsed" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.runtime')" = "opencode" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.sessionId')" = "ses-r" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.nativeRequestId')" = "perm-r" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.tool')" = "read" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.action')" = "read" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.resource')" = "src/app.ts" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.effect')" = "read" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.effect')" != "write" ]
+  [ "$(printf '%s' "$parsed" | jq -c '.choices')" = '["allow-once","allow-run","allow-always","deny"]' ]
+  [ "$(printf '%s' "$parsed" | jq -c '.lifetimes')" = '["once","run","always-policy"]' ]
+  [ "$(printf '%s' "$parsed" | jq -r '.expiresAt')" = "null" ]
+  [ -n "$(printf '%s' "$parsed" | jq -r '.reason')" ]
+  [ "$(printf '%s' "$parsed" | jq -r '.reason | length')" -le 200 ]
+
+  # edit -> write effect, never invents a broader resource
+  run run_plan_invoke_opencode_graph_approval_parse_permission "$(permission_event_json ses-e perm-e edit src/app.ts)"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "edit" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" = "write" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "src/app.ts" ]
+
+  # bash -> execute/write with exact command
+  run run_plan_invoke_opencode_graph_approval_parse_permission "$(permission_event_json ses-b perm-b bash 'npm test -- focused')"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "bash" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "execute" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" = "write" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "npm test -- focused" ]
+
+  # external_directory read must not broaden to write
+  run run_plan_invoke_opencode_graph_approval_parse_permission "$(permission_event_json ses-x perm-x external_directory /tmp/ws/notes.md read)"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "true" ]
+  [ "$(printf '%s' "$output" | jq -r '.sessionId')" = "ses-x" ]
+  [ "$(printf '%s' "$output" | jq -r '.nativeRequestId')" = "perm-x" ]
+  [ "$(printf '%s' "$output" | jq -r '.tool')" = "read" ]
+  [ "$(printf '%s' "$output" | jq -r '.action')" = "read" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" = "read" ]
+  [ "$(printf '%s' "$output" | jq -r '.effect')" != "write" ]
+  [ "$(printf '%s' "$output" | jq -r '.resource')" = "/tmp/ws/notes.md" ]
+
+  # generic permission/permission/write is non-actionable
+  run run_plan_invoke_opencode_graph_approval_parse_permission '{"tool":"permission","action":"permission","effect":"write"}'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.classification')" = "unknown" ]
+
+  # real generic failure fixture is non-actionable (no native identity)
+  run run_plan_invoke_opencode_graph_approval_parse_permission "$(cat "$fixture")"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.actionable')" = "false" ]
+  [ "$(printf '%s' "$output" | jq -r '.classification')" = "unknown" ]
+}
+
 @test "opencode approval request ignores non-permission events" {
   run run_plan_invoke_opencode_serve_capture_request '{"type":"server.connected","properties":{}}'
   [ "$status" -ne 0 ]

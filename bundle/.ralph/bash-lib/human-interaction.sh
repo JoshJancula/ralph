@@ -9,6 +9,7 @@ RALPH_HUMAN_INTERACTION_HELPERS_LOADED=1
 #   ralph_optional_log -- forwards to orchestrator `log` when defined.
 #   ralph_human_ack_tool_path -- resolves .ralph/orchestrator.sh for --human-ack.
 #   ralph_forward_human_question_to_orchestrator -- invokes orchestrator with a question file.
+#   ralph_forward_human_question_to_workflow_action -- workflow-run common action request.
 #   ralph_record_interactive_reply, ralph_interactive_history_block -- TTY Q&A capture for prompts.
 #   ralph_persist_human_exchange -- append exchange to human-replies.md when configured.
 #   ralph_human_recovery_page -- compact graph permission-wait recovery page.
@@ -40,11 +41,57 @@ ralph_human_ack_tool_path() {
   return 1
 }
 
+# ralph_forward_human_question_to_workflow_action <question-file>
+# For workflow-owned runs: create a common kind=input action request instead of
+# the transient human-ack / pending-human bridge. Standalone plans cannot use this.
+ralph_forward_human_question_to_workflow_action() {
+  local question_file="${1:-}" question details="" nonce
+  [[ -n "$question_file" && -f "$question_file" ]] || return 1
+  if [[ -z "${RALPH_WORKFLOW_REGISTRY_RUN:-}" || ! -d "${RALPH_WORKFLOW_REGISTRY_RUN}" \
+      || -z "${RALPH_WORKFLOW_RUN_ID:-}" \
+      || -z "${RALPH_WORKFLOW_STAGE_ID:-}" \
+      || -z "${RALPH_WORKFLOW_STAGE_ATTEMPT:-}" ]]; then
+    return 1
+  fi
+  if ! declare -F workflow_action_stage_request_create >/dev/null 2>&1; then
+    local lib
+    lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workflow/workflow-actions.sh"
+    [[ -f "$lib" ]] || return 1
+    # shellcheck source=/dev/null
+    source "$lib"
+  fi
+  question="$(tr -d '\r' <"$question_file" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [[ -n "$question" ]] || return 1
+  nonce="${RALPH_WORKFLOW_ACTION_NONCE:-}"
+  if [[ -z "$nonce" && -n "${RALPH_WORKFLOW_ACTION_CAPABILITY:-}" && -f "${RALPH_WORKFLOW_ACTION_CAPABILITY}" ]]; then
+    nonce="$(jq -r '.nonce // empty' "$RALPH_WORKFLOW_ACTION_CAPABILITY" 2>/dev/null || true)"
+  fi
+  [[ -n "$nonce" ]] || return 1
+  workflow_action_stage_request_create \
+    --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN" \
+    --run-id "$RALPH_WORKFLOW_RUN_ID" \
+    --stage-id "$RALPH_WORKFLOW_STAGE_ID" \
+    --attempt-id "$RALPH_WORKFLOW_STAGE_ATTEMPT" \
+    --nonce "$nonce" \
+    --question "$question" \
+    --details "$details" >/dev/null || return 1
+  ralph_optional_log "workflow action request created for operator input (nonce omitted from logs)"
+  return 0
+}
+
 ralph_forward_human_question_to_orchestrator() {
   local question_file="$1"
   local plan_path="${2:-${PLAN_PATH:-}}"
   if [[ -z "$question_file" || ! -f "$question_file" ]]; then
     return 1
+  fi
+  # Workflow-owned ordinary stages use common action requests, not the legacy
+  # transient human-ack bridge. Permission pauses still use the orchestrator path.
+  if [[ "${RALPH_HUMAN_QUESTION_KIND:-}" != "permission" ]] \
+    && declare -F ralph_forward_human_question_to_workflow_action >/dev/null 2>&1; then
+    if ralph_forward_human_question_to_workflow_action "$question_file"; then
+      return 0
+    fi
   fi
   local tool
   tool="$(ralph_human_ack_tool_path)" || return 1
@@ -345,8 +392,8 @@ ralph_human_recovery_page() {
     printf '\n'
     printf '%s\n' "Respond"
     for choice in "${choices[@]}"; do
-      printf '  ralph graph actions respond %q --decision %q --namespace %q --run %q\n' \
-        "$request_id" "$choice" "$namespace" "$run_id"
+      printf '  ralph workflow actions respond %q %q --decision %q\n' \
+        "$run_id" "$request_id" "$choice"
     done
   )"
 

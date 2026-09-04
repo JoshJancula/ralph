@@ -2,14 +2,24 @@
 
 `ralph-orchestrator` is a repository-hosted beta plugin package for Claude
 Code, Codex, Cursor, OpenCode, and Antigravity. This package is version
-`0.1.0-beta.1`. It is not GA, is not published to a marketplace, and does
+`0.1.0-beta.1`. It is not GA, is not published to a public marketplace, and does
 not include a second Ralph execution engine. The host adapters call one
 independently installed `ralph` CLI.
 
-## Install from this repository
+## Packaged assets versus host install
 
-Keep the checkout at a stable path because the host plugin is loaded from the
-checkout. From a shell:
+Two layers stay separate:
+
+| Layer | Location | Who writes it |
+| --- | --- | --- |
+| Packaged assets | `$RALPH_HOME/plugins/ralph-orchestrator/<runtime>/` | `install.sh` / `ralph install` copies and updates; never host-installs |
+| Host registration | Runtime-specific (marketplace, local plugin dir, project `.opencode/`) | `ralph plugin install` / `remove` only |
+| Journals | `$RALPH_HOME/plugin-installs/<runtime>.json` (user scope); `<state-root>/plugin-installs/opencode.json` (OpenCode) | `ralph plugin` only |
+
+Installing Ralph never registers a plugin with Claude, Codex, Cursor, OpenCode,
+or Antigravity. Host install is always an explicit `ralph plugin` step.
+
+## Install from this repository
 
 ```bash
 git clone <repository-url> /path/to/ralph
@@ -19,71 +29,41 @@ bash ./install.sh --global
 ```
 
 `sync-plugin-assets.sh` regenerates the five host packages under this
-directory. `bash ./install.sh --global` installs the Ralph CLI and bundle for
-use by projects; it is the engine installation required by the plugin. The
-plugin itself does not silently install it. Before installing a generated
-package into a host, choose the matching directory:
+directory (and the installer copies them under `$RALPH_HOME/plugins/...`).
+`bash ./install.sh --global` installs the Ralph CLI and bundle.
 
-| Host | Package |
-| --- | --- |
-| Claude Code | [`claude/`](./claude) |
-| Codex | [`codex/`](./codex) |
-| Cursor | [`cursor/`](./cursor) |
-| OpenCode | [`opencode/`](./opencode) |
-| Antigravity | [`antigravity/`](./antigravity) |
-
-Install the matching package with the host-native flow below. Replace
-`/path/to/ralph` with the absolute checkout path.
-
-Claude Code:
+### Host lifecycle (`ralph plugin`)
 
 ```bash
-claude plugin marketplace add /path/to/ralph/plugins/ralph-orchestrator/claude
-claude plugin install ralph-orchestrator@ralph-plugins
+ralph plugin list
+ralph plugin status --runtime claude
+ralph plugin install --runtime claude --dry-run
+ralph plugin install --runtime claude              # TTY confirm
+ralph plugin install --runtime claude --yes        # non-TTY approved mutation
+ralph plugin install --runtime opencode --workspace /path/to/project
+ralph plugin remove --runtime cursor --yes
 ```
 
-Codex:
+| Runtime | Default scope | Host install method (via CLI) |
+| --- | --- | --- |
+| Claude | `user` | Marketplace add then `ralph-orchestrator@ralph-plugins` install |
+| Codex | `user` | Marketplace add then `ralph-orchestrator@ralph-plugins` add |
+| Cursor | `user` | Owned copy to `$HOME/.cursor/plugins/local/ralph-orchestrator` |
+| OpenCode | `project` | Owned files under `<project>/.opencode/{plugins,skills}` |
+| Antigravity | `user` | `agy plugin install` of the packaged directory |
 
-```bash
-codex plugin marketplace add /path/to/ralph/plugins/ralph-orchestrator
-codex plugin add ralph-orchestrator@ralph-plugins
-codex plugin list
-```
+Default scope is the sole supported scope; any other scope exits 2. Preview is
+mandatory. `--dry-run` never mutates. Non-TTY mutation requires `--yes`.
 
-Cursor currently loads repository-local packages by copying the real package
-directory into its local plugin root. Do not use a symlink:
+States: `absent` (not on host), `current` (host + journal match packaged
+version/source), `drifted` (installed without a matching journal, or digest
+mismatch), `unverifiable` (host list/command failed). Removal refuses
+`drifted` installs. Cursor refuses an existing unjournaled target. OpenCode
+never overwrites an unjournaled differing file. Reinstall may replace only
+paths owned by the matching journal. A marketplace registration is removed
+only when the Ralph journal proves Ralph created it.
 
-```bash
-mkdir -p "$HOME/.cursor/plugins/local"
-cp -R /path/to/ralph/plugins/ralph-orchestrator/cursor \
-  "$HOME/.cursor/plugins/local/ralph-orchestrator"
-```
-
-Reload Cursor after copying. OpenCode discovers local project extensions from
-`.opencode`; copy the generated module, skills, and agents into the target
-project:
-
-```bash
-project=/absolute/path/to/project
-package=/path/to/ralph/plugins/ralph-orchestrator/opencode
-mkdir -p "$project/.opencode/plugins" "$project/.opencode/skills" "$project/.opencode/agents"
-cp "$package/plugins/ralph-runtime-hooks.ts" "$project/.opencode/plugins/ralph-runtime-hooks.ts"
-cp -R "$package/skills/." "$project/.opencode/skills/"
-cp -R "$package/agents/." "$project/.opencode/agents/"
-```
-
-Antigravity has a native local-directory plugin installer:
-
-```bash
-agy plugin install /path/to/ralph/plugins/ralph-orchestrator/antigravity
-agy plugin list
-```
-
-There is intentionally no cross-host installer. Keep each package intact so
-its native manifest, skills, agents, shared gate, and host-specific files stay
-together.
-
-For a generated-package check without changing files, run:
+For a generated-package check without changing files:
 
 ```bash
 bash scripts/sync-plugin-assets.sh --check
@@ -173,8 +153,8 @@ consent.
 
 ## Removing legacy Ralph setup and rolling back
 
-There is one removal path: the existing `ralph setup` command. Preview the
-mutation set first:
+There is one removal path for durable hooks/MCP setup: the existing
+`ralph setup` command. Preview the mutation set first:
 
 ```bash
 ralph setup --runtime claude --runtime-dir /path/to/project/.claude --remove --all --dry-run
@@ -199,6 +179,9 @@ installation removal, use the repository installer with
 `--remove-installed` after its dry-run, following [`install.sh`](../../install.sh)
 and [`docs/INSTALL.md`](../../docs/INSTALL.md).
 
+To remove a host plugin registration installed by Ralph, use
+`ralph plugin remove --runtime <runtime>` (not manual file deletes).
+
 ## Supported host versions and beta limits
 
 This is a beta qualification matrix, not a GA support promise:
@@ -219,8 +202,42 @@ GA.
 
 ## Troubleshooting
 
+Prefer `ralph plugin status --runtime <runtime>` and `ralph plugin list` before
+hand-editing host state. Manual host commands below are for diagnosis when the
+CLI cannot talk to the host, or when recovering from a pre-CLI install.
+
 - `ralph` is missing: run the read-only workflow, confirm the printed
   repository path, then run `bash /path/to/ralph/install.sh --global`.
+- Packaged assets missing under `$RALPH_HOME/plugins/...`: re-run
+  `bash ./install.sh --global` from a current checkout (after
+  `scripts/sync-plugin-assets.sh` if you are regenerating).
+- Host shows `drifted` or remove refuses: stop; inspect the journal under
+  `$RALPH_HOME/plugin-installs/` (or the OpenCode project journal). Do not
+  delete host files by hand until you understand ownership.
+- Claude marketplace / install (manual fallback):
+  `claude plugin marketplace add --scope user <claude-package-root>` then
+  `claude plugin install --scope user ralph-orchestrator@ralph-plugins`
+  (add `--yes` for approved non-TTY). Status/remove:
+  `claude plugin list --json`,
+  `claude plugin uninstall --scope user ralph-orchestrator@ralph-plugins`,
+  `claude plugin marketplace remove --scope user ralph-plugins` only when
+  Ralph's journal proves Ralph created that marketplace registration.
+- Codex (manual fallback):
+  `codex plugin marketplace add <codex-marketplace-root> --json` then
+  `codex plugin add ralph-orchestrator@ralph-plugins --json`.
+  Status/remove via `codex plugin list --json` /
+  `codex plugin remove ralph-orchestrator@ralph-plugins --json` /
+  `codex plugin marketplace remove ralph-plugins --json` with the same
+  journal rule for marketplace removal.
+- Cursor (manual fallback): copy the packaged `cursor/` tree to
+  `$HOME/.cursor/plugins/local/ralph-orchestrator` (no symlink). Prefer
+  `ralph plugin` so digests are journaled.
+- OpenCode (manual fallback): copy packaged plugins/skills into the project
+  `.opencode/` tree. Prefer `ralph plugin` so digests are journaled; never
+  overwrite an unjournaled differing file.
+- Antigravity (manual fallback):
+  `agy plugin install <antigravity-package>`;
+  `agy plugin list` / `agy plugin uninstall ralph-orchestrator`.
 - The probe reports `legacy`, `too-old`, or a missing marker: reinstall from
   the same repository checkout and run the read-only workflow again.
 - The probe reports `incompatible`: preserve the reported path and value for
@@ -238,5 +255,6 @@ GA.
   contract and package files in the repository before changing versions.
 
 For repository details, see the [main README](../../README.md),
-[installation guide](../../docs/INSTALL.md), and
+[installation guide](../../docs/INSTALL.md),
+[security / `ralph safety`](../../docs/SECURITY.md), and
 [`sync-plugin-assets.sh`](../../scripts/sync-plugin-assets.sh).

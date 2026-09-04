@@ -6,6 +6,8 @@ PLUGIN_ROOT="$REPO_ROOT/plugins/ralph-orchestrator/opencode"
 CONTRACT="$REPO_ROOT/bundle/.ralph/plugin-inputs/contracts/opencode.json"
 DECLARATION="$REPO_ROOT/bundle/.opencode/node_modules/@opencode-ai/plugin/dist/index.d.ts"
 GENERATOR="$REPO_ROOT/bundle/.ralph/python/sync_plugin_assets.py"
+CANONICAL_WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
+OBSOLETE_WORKFLOWS=(ralph-agents ralph-graph ralph-orchestrate)
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -20,12 +22,17 @@ teardown() {
   [ -f "$PLUGIN_ROOT/plugins/ralph-runtime-hooks.ts" ]
   [ -f "$PLUGIN_ROOT/.ralph-plugin-generated.json" ]
 
-  local id workflow
-  for id in architect code-review implementation qa research security; do
-    [ -f "$PLUGIN_ROOT/agents/$id.md" ]
-  done
-  for workflow in ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status; do
+  [ ! -d "$PLUGIN_ROOT/agents" ]
+  [ ! -d "$PLUGIN_ROOT/roles" ]
+
+  local workflow
+  for workflow in "${CANONICAL_WORKFLOWS[@]}"; do
     [ -f "$PLUGIN_ROOT/workflows/$workflow.md" ]
+    [ -f "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
+  done
+  for workflow in "${OBSOLETE_WORKFLOWS[@]}"; do
+    [ ! -e "$PLUGIN_ROOT/workflows/$workflow.md" ]
+    [ ! -e "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
   done
 
   jq -e '
@@ -115,4 +122,26 @@ EOF
   [ "$(shasum -a 256 "$project_config" | awk '{print $1}')" = "$project_before" ]
   grep -Fq 'operator-owned global comment' "$global_config"
   grep -Fq 'operator-owned project comment' "$project_config"
+}
+
+@test "OpenCode owned copy install and remove preserve unrelated project files" {
+  local project="$TEST_TMPDIR/project"
+  local target="$project/.opencode"
+  local keep="$target/custom/user-config.json"
+
+  mkdir -p "$target/plugins" "$target/skills" "$target/custom"
+  printf 'keep-me\n' >"$keep"
+
+  cp "$PLUGIN_ROOT/plugins/ralph-runtime-hooks.ts" "$target/plugins/ralph-runtime-hooks.ts"
+  cp -R "$PLUGIN_ROOT/skills/." "$target/skills/"
+  [ -f "$target/plugins/ralph-runtime-hooks.ts" ]
+  [ -f "$target/skills/ralph-workflow/SKILL.md" ]
+  [ ! -e "$target/agents" ]
+  [ "$(cat "$keep")" = "keep-me" ]
+
+  # Modified copied skill must not force removal of unrelated operator files.
+  printf 'operator-edit\n' >>"$target/skills/ralph-plan/SKILL.md"
+  rm -rf "$target/plugins" "$target/skills"
+  [ -f "$keep" ]
+  [ "$(cat "$keep")" = "keep-me" ]
 }

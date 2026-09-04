@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
-# Run-owned graph log containment: v2 paths live under <run-dir>/logs/,
-# two runs with the same node/attempt numbers never share files, v1
-# namespace paths stay readable, and traversal/symlink inputs fail.
+# Run-owned graph log containment: paths live under <run-dir>/logs/, two runs
+# with the same node/attempt numbers never share files, and traversal/symlink
+# inputs fail.
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/atomic-json.sh"
@@ -43,7 +43,7 @@ setup_dispatch_workspace() {
 write_one_node_graph() {
   local path="$1" namespace="$2" node_id="$3"
   cat >"$path" <<EOF
-{"schemaVersion":1,"ralphVersion":"test","name":"$namespace","namespace":"$namespace","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"$node_id","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"$node_id","runtime":"cursor","agent":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}]}}],"edges":[]}
+{"schemaVersion":2,"ralphVersion":"test","name":"$namespace","namespace":"$namespace","maxParallel":1,"failurePolicy":"drain","nodes":[{"id":"$node_id","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"$node_id","runtime":"cursor","role":"implementation","_inlineTodos":[{"id":"t","content":"Do it","status":"pending"}]}}],"edges":[]}
 EOF
 }
 
@@ -98,24 +98,25 @@ init_run_dir() {
   [[ "$abs" == "$run_real/logs/supervisor.log" ]]
 }
 
-@test "v1 namespace paths remain readable and are never appended" {
-  local run_dir state_root ns run_id v1_file v2_file
+@test "namespace-only historical paths are never read or appended" {
+  local run_dir state_root ns run_id historical_file v2_file
   state_root="$TMPD/state"
   ns="hist-ns"
   run_id="run-hist-1"
   run_dir="$state_root/graph-runs/$ns/$run_id"
   init_run_dir "$run_dir"
-  v1_file="$(graph_logs_v1_supervisor "$state_root" "$ns" "$run_id")"
-  mkdir -p "$(dirname "$v1_file")"
-  printf 'historical supervisor\n' >"$v1_file"
+  historical_file="$state_root/logs/$ns/graph-schedule-$run_id.log"
+  mkdir -p "$(dirname "$historical_file")"
+  printf 'historical supervisor\n' >"$historical_file"
 
-  [ "$(graph_logs_read "$run_dir" "$(graph_logs_supervisor_rel)" "$v1_file")" = "$v1_file" ]
+  run graph_logs_read "$run_dir" "$(graph_logs_supervisor_rel)"
+  [ "$status" -ne 0 ]
 
   graph_logs_append "$run_dir" "$(graph_logs_supervisor_rel)" "new-run-line"
   v2_file="$(graph_logs_resolve "$run_dir" "$(graph_logs_supervisor_rel)")"
-  [ "$(cat "$v1_file")" = "historical supervisor" ]
+  [ "$(cat "$historical_file")" = "historical supervisor" ]
   grep -qx 'new-run-line' "$v2_file"
-  [ "$(graph_logs_read "$run_dir" "$(graph_logs_supervisor_rel)" "$v1_file")" = "$v2_file" ]
+  [ "$(graph_logs_read "$run_dir" "$(graph_logs_supervisor_rel)")" = "$v2_file" ]
 }
 
 @test "absolute paths, dot-dot, and empty components are rejected" {
@@ -229,7 +230,7 @@ STUB
 }
 
 @test "retention removes only files owned by the pruned run ledger" {
-  local workspace ns_dir stage_dir state_root decoy v1_pruned v1_kept
+  local workspace ns_dir stage_dir state_root
   workspace="$TMPD/ws"
   ns_dir="$workspace/.ralph-workspace/graph-runs/myns"
   stage_dir="$workspace/.ralph-workspace/artifacts/myns/stage-outcomes"
@@ -237,23 +238,16 @@ STUB
   mkdir -p "$ns_dir/run-pruned/logs/nodes/shared/shared__run-pruned__1" \
     "$ns_dir/run-kept/logs/nodes/shared/shared__run-kept__1" \
     "$ns_dir/run-pruned/nodes" "$ns_dir/run-kept/nodes" \
-    "$state_root/logs/myns/nodes/shared" \
     "$stage_dir"
-  printf '{"schemaVersion":2,"runId":"run-pruned","status":"succeeded"}\n' >"$ns_dir/run-pruned/run.json"
-  printf '{"schemaVersion":2,"runId":"run-kept","status":"succeeded"}\n' >"$ns_dir/run-kept/run.json"
+  printf '{"schemaVersion":3,"runId":"run-pruned","status":"succeeded"}\n' >"$ns_dir/run-pruned/run.json"
+  printf '{"schemaVersion":3,"runId":"run-kept","status":"succeeded"}\n' >"$ns_dir/run-kept/run.json"
   printf 'pruned-runner\n' >"$ns_dir/run-pruned/logs/nodes/shared/shared__run-pruned__1/runner.log"
   printf 'kept-runner\n' >"$ns_dir/run-kept/logs/nodes/shared/shared__run-kept__1/runner.log"
-  printf '{"schemaVersion":2,"nodeId":"shared","status":"succeeded","attempts":[{"attemptId":"shared__run-pruned__1","logPaths":{"runner":"logs/nodes/shared/shared__run-pruned__1/runner.log"}}]}\n' \
+  printf '{"schemaVersion":3,"nodeId":"shared","status":"succeeded","attempts":[{"attemptId":"shared__run-pruned__1","logPaths":{"runner":"logs/nodes/shared/shared__run-pruned__1/runner.log"}}]}\n' \
     >"$ns_dir/run-pruned/nodes/shared.json"
-  printf '{"schemaVersion":2,"nodeId":"shared","status":"succeeded","attempts":[{"attemptId":"shared__run-kept__1","logPaths":{"runner":"logs/nodes/shared/shared__run-kept__1/runner.log"}}]}\n' \
+  printf '{"schemaVersion":3,"nodeId":"shared","status":"succeeded","attempts":[{"attemptId":"shared__run-kept__1","logPaths":{"runner":"logs/nodes/shared/shared__run-kept__1/runner.log"}}]}\n' \
     >"$ns_dir/run-kept/nodes/shared.json"
 
-  decoy="$state_root/logs/myns/nodes/shared/attempt-1.log"
-  printf 'shared-v1-decoy\n' >"$decoy"
-  v1_pruned="$state_root/logs/myns/graph-schedule-run-pruned.log"
-  v1_kept="$state_root/logs/myns/graph-schedule-run-kept.log"
-  printf 'v1-pruned\n' >"$v1_pruned"
-  printf 'v1-kept\n' >"$v1_kept"
   ln -sfn "run-kept" "$ns_dir/latest"
 
   RALPH_GRAPH_RUN_MAX_AGE_DAYS=9999 RALPH_GRAPH_RUN_MAX_COUNT=0 \
@@ -262,8 +256,4 @@ STUB
   [ ! -d "$ns_dir/run-pruned" ]
   [ -d "$ns_dir/run-kept" ]
   [ -f "$ns_dir/run-kept/logs/nodes/shared/shared__run-kept__1/runner.log" ]
-  [ -f "$decoy" ]
-  [ "$(cat "$decoy")" = "shared-v1-decoy" ]
-  [ ! -f "$v1_pruned" ]
-  [ -f "$v1_kept" ]
 }

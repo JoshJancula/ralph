@@ -4,7 +4,6 @@ pipeline:
   stages:
     - id: implement
       runtime: cursor
-      agent: implementation
       produces:
         - path: shared/output.md
   repairRounds:
@@ -22,12 +21,10 @@ pipeline:
         - path: shared/fix-integrated.md
     diagnose:
       runtime: cursor
-      agent: implementation
       content: diagnose gate failures and route to owning repair lanes
     lanes:
       - id: lane-a
         runtime: cursor
-        agent: implementation
         content: repair lane a scope
     reintegrate:
       produces:

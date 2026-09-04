@@ -9,18 +9,19 @@ import { CommonModule } from '@angular/common';
 import { IonSpinner } from '@ionic/angular/standalone';
 import {
   ApiService,
-  BrokeredChildState,
+  DelegatedRunRecord,
   GraphNodeAttempt,
   GraphNodeState,
   GraphRunDetail,
   GraphRunSummary,
-  NativeSubagentEvent,
 } from '../../services/api.service';
 
 interface GraphNodeRow {
   nodeId: string;
   type: string;
   runtime: string;
+  role?: string;
+  modelSource?: string;
   status: string;
   attempts: number;
   duration: string;
@@ -28,7 +29,7 @@ interface GraphNodeRow {
   frozenBase?: string;
   scopes?: string;
   gateOutcome?: string;
-  nativeSubagentMode?: string;
+  nativeSubagents?: string;
   crossRuntimeMode?: string;
   repairEpoch?: string;
   integrationInputs?: string[];
@@ -38,8 +39,7 @@ interface GraphNodeRow {
   conflictArtifact?: string;
   admissionSummary?: Record<string, unknown>;
   publishReadiness?: Record<string, unknown>;
-  brokeredChildren?: BrokeredChildState[];
-  nativeSubagentEvents?: NativeSubagentEvent[];
+  delegatedRuns?: DelegatedRunRecord[];
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -50,7 +50,7 @@ const STATE_COLORS: Record<string, string> = {
   failed: '#bb2222',
   blocked: '#cc7700',
   skipped: '#aaaaaa',
-  'awaiting-ack': '#ddbb00',
+  queued: '#aa77cc',
   cancelled: '#555',
 };
 
@@ -108,10 +108,13 @@ function buildMermaid(detail: GraphRunDetail): string {
     const id = String(gn['id'] ?? '');
     const type = String(gn['type'] ?? 'stage');
     const stage = (gn['stage'] as Record<string, unknown>) ?? {};
-    const runtime = String(stage['runtime'] ?? '');
     const safeId = sanitizeMermaidId(id);
     const meta = metadataByNodeId.get(id);
+    const runtime = String(meta?.runtime ?? stage['runtime'] ?? '');
+    const role = meta?.role ?? (typeof stage['role'] === 'string' ? stage['role'] : undefined);
     const extraLines: string[] = [];
+    extraLines.push(role ? `project role=${role}` : 'roleless');
+    if (meta?.modelSource) extraLines.push(`model=${meta.modelSource}`);
     if (meta?.workspaceMode) extraLines.push(`mode=${meta.workspaceMode}`);
     if (meta?.frozenBase) extraLines.push(`base=${meta.frozenBase.slice(0, 16)}`);
     if (meta?.writeScopes?.length) extraLines.push(`scopes=${meta.writeScopes[0]}${meta.writeScopes.length > 1 ? '+' : ''}`);
@@ -121,9 +124,7 @@ function buildMermaid(detail: GraphRunDetail): string {
   if (meta?.conflictArtifact) extraLines.push(`conflict=${meta.conflictArtifact.split('/').pop() ?? meta.conflictArtifact}`);
   if (meta?.admissionSummary?.['reason']) extraLines.push(`admission=${String(meta.admissionSummary['reason'])}`);
   if (meta?.publishReadiness?.['status']) extraLines.push(`publish=${String(meta.publishReadiness['status'])}`);
-  if (meta?.brokeredChildren && meta.brokeredChildren.length > 0) {
-    extraLines.push(`children=${meta.brokeredChildren.length}`);
-  }
+    if (meta?.nativeSubagents) extraLines.push(`nativeSubagents=${meta.nativeSubagents}`);
   const label = `"${id}\\n${runtime}${extraLines.length ? '\\n' + extraLines.join('\\n') : ''}"`;
     const state = stateByNodeId.get(id) ?? 'pending';
     const cls = `state_${state.replace(/-/g, '_')}`;
@@ -142,22 +143,17 @@ function buildMermaid(detail: GraphRunDetail): string {
     }
   }
 
-  // These are observation-only children, deliberately outside graphNodes so
-  // neither native helpers nor brokered runs become peers in the frozen DAG.
+  // Delegated runs are observation-only and deliberately outside graphNodes so
+  // they do not become peers in the frozen DAG. Native inherited work has no
+  // child record and must not be represented as a graph child.
   for (const node of detail.nodes) {
     const parent = sanitizeMermaidId(node.nodeId);
-    const children = [
-      ...(node.nativeSubagentEvents ?? []).map((event, index) => ({
-        id: `${parent}_native_${index}`,
-        label: `native helper\\n${event.event}`,
-      })),
-      ...(node.brokeredChildren ?? []).map((child) => ({
-        id: `${parent}_brokered_${sanitizeMermaidId(child.delegationId)}`,
-        label: `brokered child\\n${child.runtime ?? '-'} / ${child.status}`,
-      })),
-    ];
+    const children = (node.delegatedRuns ?? []).map((run) => ({
+      id: `${parent}_delegated_${sanitizeMermaidId(run.delegatedRunId)}`,
+      label: `delegated run\\n${run.runtime} / ${run.status}`,
+    }));
     if (children.length === 0) continue;
-    lines.push(`  subgraph ${parent}_children["${node.nodeId} children (ledger/runtime-owned)"]`);
+    lines.push(`  subgraph ${parent}_delegated["${node.nodeId} delegated runs (ledger-owned)"]`);
     for (const child of children) {
       lines.push(`    ${child.id}(["${child.label}"])`);
       lines.push(`    ${parent} -.-> ${child.id}`);
@@ -239,7 +235,7 @@ function buildMermaid(detail: GraphRunDetail): string {
             @if (detail.usage || detail.concurrencyReductions?.length) {
               <div class="run-observability">
                 @if (detail.usage) {
-                  <span><strong>usage:</strong> parent={{ detail.usage.parent | json }}, brokered={{ detail.usage.brokeredChildren | json }}, total={{ detail.usage.total | json }}</span>
+                  <span><strong>usage:</strong> parent={{ formatUsage(detail.usage.parent) }}, delegated runs={{ formatUsage(detail.usage.delegatedRuns ?? {}) }}, total={{ formatUsage(detail.usage.total) }}</span>
                 }
                 @if (detail.concurrencyReductions?.length) {
                   <span><strong>concurrency reduced by:</strong> {{ detail.concurrencyReductions!.join(', ') }}</span>
@@ -254,6 +250,8 @@ function buildMermaid(detail: GraphRunDetail): string {
                     <th>Node</th>
                     <th>Type</th>
                     <th>Runtime</th>
+                    <th>Role</th>
+                    <th>Model source</th>
                     <th>State</th>
                     <th>Attempts</th>
                     <th>Duration</th>
@@ -268,6 +266,8 @@ function buildMermaid(detail: GraphRunDetail): string {
                       <td class="cell-mono">{{ row.nodeId }}</td>
                       <td>{{ row.type }}</td>
                       <td>{{ row.runtime || '-' }}</td>
+                      <td>{{ row.role ? 'project role: ' + row.role : 'roleless' }}</td>
+                      <td>{{ row.modelSource || '-' }}</td>
                       <td>
                         <span class="state-badge" [style.background]="statusColor(row.status)">{{ row.status }}</span>
                       </td>
@@ -287,7 +287,7 @@ function buildMermaid(detail: GraphRunDetail): string {
                     </tr>
                     @if (row.integrationInputs?.length) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
+                        <td colspan="11" class="nested-cell">
                           <strong>integration inputs:</strong>
                           @for (input of row.integrationInputs; track input) {
                             <code class="nested-code">{{ input | slice:input.lastIndexOf('/') + 1 }}</code>
@@ -295,11 +295,11 @@ function buildMermaid(detail: GraphRunDetail): string {
                         </td>
                       </tr>
                     }
-                    @if (row.workspacePath || row.nativeSubagentMode || row.crossRuntimeMode || row.repairEpoch) {
+                    @if (row.workspacePath || row.nativeSubagents || row.crossRuntimeMode || row.repairEpoch) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
-                          @if (row.workspacePath) { <strong>workspace:</strong> <code class="nested-code">{{ row.workspacePath }}</code> }
-                          @if (row.nativeSubagentMode) { <span>native={{ row.nativeSubagentMode }}</span> }
+                        <td colspan="11" class="nested-cell">
+                          @if (row.workspacePath) { <strong>agent workspace:</strong> <code class="nested-code">{{ row.workspacePath }}</code> }
+                          @if (row.nativeSubagents) { <span>native subagents={{ row.nativeSubagents }}</span> }
                           @if (row.crossRuntimeMode) { <span>cross-runtime={{ row.crossRuntimeMode }}</span> }
                           @if (row.repairEpoch) { <span>repair epoch={{ row.repairEpoch }}</span> }
                         </td>
@@ -307,7 +307,7 @@ function buildMermaid(detail: GraphRunDetail): string {
                     }
                     @if (row.changesetManifest) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
+                        <td colspan="11" class="nested-cell">
                           <strong>changeset:</strong>
                           <code class="nested-code">{{ row.changesetManifest | slice:row.changesetManifest.lastIndexOf('/') + 1 }}</code>
                           @if (row.changesetHash) {
@@ -321,7 +321,7 @@ function buildMermaid(detail: GraphRunDetail): string {
                     }
                     @if (row.conflictArtifact) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
+                        <td colspan="11" class="nested-cell">
                           <strong>conflict:</strong>
                           <code class="nested-code">{{ row.conflictArtifact | slice:row.conflictArtifact.lastIndexOf('/') + 1 }}</code>
                         </td>
@@ -329,7 +329,7 @@ function buildMermaid(detail: GraphRunDetail): string {
                     }
                     @if (row.admissionSummary) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
+                        <td colspan="11" class="nested-cell">
                           <strong>admission:</strong>
                           runtime={{ row.admissionSummary['runtime'] ?? '-' }},
                           requested={{ row.admissionSummary['requestedSlots'] ?? '-' }},
@@ -339,26 +339,18 @@ function buildMermaid(detail: GraphRunDetail): string {
                         </td>
                       </tr>
                     }
-                    @if (row.brokeredChildren?.length) {
+                    @if (row.delegatedRuns?.length) {
                       <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
-                          <strong>brokered children:</strong>
-                          @for (child of row.brokeredChildren; track child.delegationId) {
+                        <td colspan="11" class="nested-cell">
+                          <strong>delegated runs:</strong>
+                          @for (run of row.delegatedRuns; track run.delegatedRunId) {
                             <span class="child-badge">
-                              {{ child.delegationId | slice:child.delegationId.lastIndexOf('-') + 1 }}
-                              <span class="child-runtime">{{ child.runtime ?? '-' }}</span>
-                              <span class="child-status">{{ child.status }}</span>
+                              {{ run.delegatedRunId | slice:run.delegatedRunId.lastIndexOf('-') + 1 }}
+                              <span class="child-runtime">{{ run.runtime }} / {{ run.role ? 'project role: ' + run.role : 'roleless' }} / {{ run.workspaceMode }}</span>
+                              <span class="child-status">{{ run.status }}</span>
+                              @if (run.verification) { <span>verification={{ run.verification }}</span> }
+                              <span>usage={{ formatUsage(run.usage) }}</span>
                             </span>
-                          }
-                        </td>
-                      </tr>
-                    }
-                    @if (row.nativeSubagentEvents?.length) {
-                      <tr class="row-nested">
-                        <td colspan="9" class="nested-cell">
-                          <strong>native helpers:</strong>
-                          @for (event of row.nativeSubagentEvents; track event.event + (event.timestamp ?? '')) {
-                            <span class="child-badge">{{ event.event }} {{ event.timestamp ?? '' }}</span>
                           }
                         </td>
                       </tr>
@@ -661,6 +653,11 @@ export class GraphHubComponent implements OnInit {
     return String(this.detail.run['status'] ?? 'unknown');
   }
 
+  formatUsage(usage: Record<string, number>): string {
+    const entries = Object.entries(usage);
+    return entries.length === 0 ? '-' : entries.map(([key, value]) => `${key}=${value}`).join(', ');
+  }
+
   statusColor(status: string): string {
     return STATE_COLORS[status] ?? '#888';
   }
@@ -705,8 +702,10 @@ export class GraphHubComponent implements OnInit {
       const lastAttempt = ns?.attempts[ns.attempts.length - 1];
       rows.push({
         nodeId: id,
-        type: typeByNodeId.get(id) ?? 'stage',
-        runtime: runtimeByNodeId.get(id) ?? '',
+        type: this.displayNodeType(typeByNodeId.get(id) ?? 'stage'),
+        runtime: ns?.runtime ?? runtimeByNodeId.get(id) ?? '',
+        role: ns?.role ?? this.roleByNodeId(graphNodes, id),
+        modelSource: ns?.modelSource,
         status: ns?.status ?? 'pending',
         attempts: ns?.attempts.length ?? 0,
         duration: fmtDuration(lastAttempt),
@@ -715,7 +714,7 @@ export class GraphHubComponent implements OnInit {
         frozenBase: ns?.frozenBase,
         scopes: ns?.writeScopes?.length ? `${ns.writeScopes[0]}${ns.writeScopes.length > 1 ? ` +${ns.writeScopes.length - 1}` : ''}` : undefined,
         gateOutcome: ns?.gateOutcome,
-        nativeSubagentMode: ns?.nativeSubagentMode,
+        nativeSubagents: ns?.nativeSubagents,
         crossRuntimeMode: ns?.crossRuntimeMode,
         repairEpoch: ns?.repairEpoch,
         integrationInputs: ns?.integrationInputs,
@@ -724,8 +723,7 @@ export class GraphHubComponent implements OnInit {
         conflictArtifact: ns?.conflictArtifact,
         admissionSummary: ns?.admissionSummary,
         publishReadiness: ns?.publishReadiness,
-        brokeredChildren: ns?.brokeredChildren,
-        nativeSubagentEvents: ns?.nativeSubagentEvents,
+        delegatedRuns: ns?.delegatedRuns,
       });
     }
 
@@ -737,8 +735,10 @@ export class GraphHubComponent implements OnInit {
       const lastAttempt = n.attempts[n.attempts.length - 1];
       rows.push({
         nodeId: n.nodeId,
-        type: typeByNodeId.get(n.nodeId) ?? 'stage',
-        runtime: runtimeByNodeId.get(n.nodeId) ?? '',
+        type: this.displayNodeType(typeByNodeId.get(n.nodeId) ?? 'stage'),
+        runtime: n.runtime ?? runtimeByNodeId.get(n.nodeId) ?? '',
+        role: n.role ?? this.roleByNodeId(graphNodes, n.nodeId),
+        modelSource: n.modelSource,
         status: n.status,
         attempts: n.attempts.length,
         duration: fmtDuration(lastAttempt),
@@ -747,7 +747,7 @@ export class GraphHubComponent implements OnInit {
         frozenBase: n.frozenBase,
         scopes: n.writeScopes?.length ? `${n.writeScopes[0]}${n.writeScopes.length > 1 ? ` +${n.writeScopes.length - 1}` : ''}` : undefined,
         gateOutcome: n.gateOutcome,
-        nativeSubagentMode: n.nativeSubagentMode,
+        nativeSubagents: n.nativeSubagents,
         crossRuntimeMode: n.crossRuntimeMode,
         repairEpoch: n.repairEpoch,
         integrationInputs: n.integrationInputs,
@@ -756,11 +756,25 @@ export class GraphHubComponent implements OnInit {
         conflictArtifact: n.conflictArtifact,
         admissionSummary: n.admissionSummary,
         publishReadiness: n.publishReadiness,
-        brokeredChildren: n.brokeredChildren,
-        nativeSubagentEvents: n.nativeSubagentEvents,
+        delegatedRuns: n.delegatedRuns,
       });
     }
 
     return rows;
+  }
+
+  private displayNodeType(type: string): string {
+    return type === 'agent' ? 'agent node' : type;
+  }
+
+  private roleByNodeId(
+    graphNodes: Array<Record<string, unknown>>,
+    nodeId: string,
+  ): string | undefined {
+    const graphNode = graphNodes.find((node) => String(node['id'] ?? '') === nodeId);
+    const stage = graphNode?.['stage'];
+    return stage && typeof stage === 'object' && typeof (stage as Record<string, unknown>)['role'] === 'string'
+      ? String((stage as Record<string, unknown>)['role'])
+      : undefined;
   }
 }

@@ -58,7 +58,7 @@ _wizard_parallel_wave_csv_contains_id() {
 
 configure_stage_input_dependencies() {
   stage_input_sources=()
-  print_step "5/7" "Stage input dependencies"
+  print_info "Stage input dependencies"
   print_info "Choose stage inputs (writes to: inputArtifacts in the JSON)"
   print_hint "- Use this so a stage knows which earlier artifacts to read."
   print_hint "- This is how one agent uses output from a previous agent."
@@ -113,7 +113,7 @@ configure_parallel_stages() {
   parallel_stage_waves=()
   parallel_stages_enabled="false"
 
-  print_step "4/7" "Parallel stages (optional)"
+  print_info "Parallel stages (optional)"
   print_hint "- Use this to run independent stages in parallel waves."
   print_hint "- Each wave runs all listed stages concurrently; waves run in order."
   print_hint "- parallelStages in JSON is a string array: one JSON string per wave, comma-separated stage ids (same wave order as below)."
@@ -230,7 +230,7 @@ configure_loop_rules() {
   loop_sources=()
   loop_targets=()
   loop_max_iterations=()
-  print_step "6/7" "Optional loop rules"
+  print_info "Optional loop rules"
   print_hint "- Use loop rules for review/testing stages that may find issues."
   print_hint "- If a review/test stage finds a problem, it can send work back."
   print_hint "- If review/test says everything is good, pipeline moves forward."
@@ -304,4 +304,97 @@ configure_loop_rules() {
       done
     fi
   fi
+}
+
+# configure_sequential_parallel_waves
+# Same wave collection as configure_parallel_stages, but prompts use public
+# Sequential vocabulary (parallel waves) and never mention graph/orchestration JSON.
+configure_sequential_parallel_waves() {
+  parallel_stage_waves=()
+  parallel_stages_enabled="false"
+
+  print_info "Parallel waves (optional)"
+  print_hint "- Declare parallel waves of independent ordered stages."
+  print_hint "- Each wave runs listed stages concurrently; waves run in order."
+  print_hint "- Enter one wave per line as comma-separated stage ids (example: research,implementation)."
+  print_hint "- Press Enter on an empty line to use all remaining stages for the current wave."
+
+  local parallel_choice
+  parallel_choice="$(ralph_prompt_yesno "Enable declared parallel waves" "n")"
+  if [[ "$parallel_choice" == "n" ]]; then
+    return 0
+  fi
+
+  parallel_stages_enabled="true"
+
+  local available_stages=()
+  local s
+  for s in "${stage_ids[@]}"; do
+    available_stages+=("$s")
+  done
+
+  local wave_num=1
+  while (( ${#available_stages[@]} > 0 )); do
+    local known_csv=""
+    local IFS=','
+    known_csv="${available_stages[*]}"
+    unset IFS
+
+    local wave_result
+    wave_result="$(ralph_prompt_list "Wave $wave_num stages" "$known_csv" "$known_csv")"
+    if [[ -z "$wave_result" ]]; then
+      wave_result="$known_csv"
+    fi
+
+    _wizard_parallel_wave_split "$wave_result"
+    if ((${#_wizard_parallel_wave_toks[@]} == 0)); then
+      print_hint "No stages selected; using remaining stages for this wave."
+      wave_result="$known_csv"
+      _wizard_parallel_wave_split "$wave_result"
+    fi
+    if _wizard_parallel_wave_toks_have_duplicates; then
+      ralph_die "parallel waves: duplicate stage id in wave $wave_num"
+    fi
+
+    local rendered="" t
+    local -a still_available=()
+    for t in "${_wizard_parallel_wave_toks[@]}"; do
+      local found=0 a
+      for a in "${available_stages[@]}"; do
+        if [[ "$a" == "$t" ]]; then
+          found=1
+          break
+        fi
+      done
+      [[ "$found" == "1" ]] || ralph_die "parallel waves: unknown stage id \"$t\" in wave $wave_num"
+      if [[ -n "$rendered" ]]; then
+        rendered+=",$t"
+      else
+        rendered="$t"
+      fi
+    done
+    for a in "${available_stages[@]}"; do
+      if ! _wizard_parallel_wave_csv_contains_id "$a" "$rendered"; then
+        still_available+=("$a")
+      fi
+    done
+    parallel_stage_waves+=("$rendered")
+    available_stages=("${still_available[@]+"${still_available[@]}"}")
+    wave_num=$((wave_num + 1))
+  done
+}
+
+# wizard_sequential_text_has_forbidden_vocab <text>
+# Return 0 when text contains internal graph/orchestration/humanAck vocabulary.
+wizard_sequential_text_has_forbidden_vocab() {
+  local text="${1-}"
+  printf '%s' "$text" | grep -Eiq 'orchestration|graph mode|humanAck|ORCHESTRATOR_HUMAN_ACK|engine: (graph|orchestration)'
+}
+
+# wizard_dependency_text_has_forbidden_vocab <text>
+# Return 0 when Dependency render leaked engine/orchestration/humanAck vocabulary.
+# Allows supervisor type checkpoint (distinct from public approval) and normal dependsOn prose.
+wizard_dependency_text_has_forbidden_vocab() {
+  local text="${1-}"
+  printf '%s' "$text" | grep -Eiq 'orchestration|graph mode|humanAck|ORCHESTRATOR_HUMAN_ACK|^engine: |^[[:space:]]*engine: '
 }

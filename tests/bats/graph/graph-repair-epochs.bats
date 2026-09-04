@@ -322,6 +322,8 @@ teardown() {
   # succeeded via the changes-required/repair-edge path, then died before
   # applying the conditional outcome in-memory (the crash this test targets:
   # ledger says done, but the round-1 branch was never actually released).
+  _graph_schedule_ledger_record "fix-gate" "running" "att-1" "" "" \
+    "2026-01-01T00:00:00Z" "" "" "" ""
   _graph_schedule_ledger_record "fix-gate" "succeeded" "att-1" "success" "2" \
     "2026-01-01T00:00:00Z" "2026-01-01T00:00:01Z" "" "" "gate-changes-required-repair-edge"
 
@@ -361,6 +363,8 @@ teardown() {
   GRAPH_SCHEDULE_LEDGER_NAMESPACE="$ns"
   GRAPH_SCHEDULE_LEDGER_RUN_DIR="$(graph_state_run_dir "$workspace" "$ns" "$run_id")"
 
+  _graph_schedule_ledger_record "fix-gate" "running" "att-1" "" "" \
+    "2026-01-01T00:00:00Z" "" "" "" ""
   _graph_schedule_ledger_record "fix-gate" "succeeded" "att-1" "success" "0" \
     "2026-01-01T00:00:00Z" "2026-01-01T00:00:01Z" "" "" "gate-passed"
 
@@ -373,4 +377,67 @@ teardown() {
   r1_diag_idx="$(graph_schedule_index_map_get fix-r1-diagnose)"
   [ "${GRAPH_NODE_REMAINING_INDEGREE[$join_idx]}" -eq 0 ]
   [ "${GRAPH_NODE_STATES[$r1_diag_idx]}" = "skipped" ]
+}
+
+
+# --- repair role compile ---
+
+
+@test "role: roleless repair diagnose and lanes omit role and agent" {
+  command -v jq >/dev/null || skip "jq required"
+  local out="$TMPD/repair-roleless.graph.json"
+  run compile_fixture_to "graph-repair-roleless.plan.md" "$TMPD" "$out"
+  [ "$status" -eq 0 ]
+
+  [ "$(jq -r '.nodes[] | select(.id=="fix-r1-diagnose") | .stage | has("role")' "$out")" = "false" ]
+  [ "$(jq -r '.nodes[] | select(.id=="fix-r1-repair-lane-a") | .stage | has("role")' "$out")" = "false" ]
+  [ "$(jq -r '.nodes[] | select(.id=="fix-r1-diagnose") | .stage | has("agent")' "$out")" = "false" ]
+  [ "$(jq -r '.nodes[] | select(.id=="fix-r1-repair-lane-a") | .stage | has("agent")' "$out")" = "false" ]
+}
+
+
+@test "role: rejects removed repair lane agent with migration guidance" {
+  command -v jq >/dev/null || skip "jq required"
+  local plan_file="$TMPD/repair-lane-agent.plan.md"
+  cat >"$plan_file" <<'EOF'
+---
+execution: graph
+pipeline:
+  stages:
+    - id: implement
+      runtime: cursor
+      produces:
+        - path: shared/output.md
+  repairRounds:
+    id: fix
+    rounds: 1
+    dependsOn:
+      - implement
+    integrate:
+      requires:
+        - path: shared/output.md
+    gate:
+      requires:
+        - path: shared/output.md
+    diagnose:
+      runtime: cursor
+      content: diagnose
+    lanes:
+      - id: lane-a
+        runtime: cursor
+        agent: implementation
+        content: repair
+todos:
+  - id: implement-1
+    stage: implement
+    content: implement
+    status: pending
+---
+EOF
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"lane-a"* ]]
+  [[ "$output" == *"agent: was removed"* ]]
+  [[ "$output" != *"ralph migrate"* ]]
 }

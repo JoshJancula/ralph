@@ -17,6 +17,29 @@ CHECKPOINT_PLAN="$BATS_TEST_DIRNAME/../../fixtures/graph/graph-checkpoint.plan.m
 # Helpers
 # ---------------------------------------------------------------------------
 
+set_checkpoint_state() {
+  local ws="$1" ns="$2" run_id="$3" node_id="$4" state="$5"
+  local aid="${node_id}__${run_id}__1"
+  case "$state" in
+    running)
+      graph_state_write_node "$ws" "$ns" "$run_id" "$node_id" running "$aid" \
+        '{"startedAt":"2026-01-01T00:00:00Z"}' >/dev/null
+      ;;
+    succeeded|awaiting-ack)
+      graph_state_write_node "$ws" "$ns" "$run_id" "$node_id" running "$aid" \
+        '{"startedAt":"2026-01-01T00:00:00Z"}' >/dev/null
+      graph_state_write_node "$ws" "$ns" "$run_id" "$node_id" "$state" "$aid" \
+        "{\"outcome\":\"$state\",\"finishedAt\":\"2026-01-01T00:01:00Z\"}" >/dev/null
+      ;;
+    blocked)
+      graph_state_write_node "$ws" "$ns" "$run_id" "$node_id" blocked >/dev/null
+      ;;
+    *)
+      graph_state_write_node "$ws" "$ns" "$run_id" "$node_id" "$state" >/dev/null
+      ;;
+  esac
+}
+
 # Write a checkpoint graph JSON to out_path.
 # Graph structure:
 #   gate       - checkpoint node (blocks after-gate)
@@ -29,7 +52,7 @@ write_checkpoint_graph() {
 import json, sys
 out_path, ns, max_parallel = sys.argv[1], sys.argv[2], int(sys.argv[3])
 doc = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "ralphVersion": "1.0.0",
     "name": ns,
     "namespace": ns,
@@ -51,7 +74,6 @@ doc = {
             "stage": {
                 "id": "independent",
                 "runtime": "claude",
-                "agent": "research",
                 "_inlineTodos": [
                     {"id": "independent-1", "content": "work independent",
                      "verification": "ok", "status": "pending"}
@@ -66,7 +88,6 @@ doc = {
             "stage": {
                 "id": "after-gate",
                 "runtime": "claude",
-                "agent": "research",
                 "_inlineTodos": [
                     {"id": "after-gate-1", "content": "work after gate",
                      "verification": "ok", "status": "pending"}
@@ -275,9 +296,9 @@ EOF
   # Initialize the ledger with checkpoint awaiting-ack state (simulating a
   # prior run that stopped at the checkpoint).
   graph_state_init_run "$ws" "$ns" "$run_id" "$plan_file" "$graph_file" 3 2>/dev/null || true
-  graph_state_write_node "$ws" "$ns" "$run_id" "gate" "awaiting-ack" "" "" "" "" "" "" "" ""
-  graph_state_write_node "$ws" "$ns" "$run_id" "independent" "succeeded" "" "" "" "" "" "" "" ""
-  graph_state_write_node "$ws" "$ns" "$run_id" "after-gate" "blocked" "" "" "" "" "" "" "" ""
+  set_checkpoint_state "$ws" "$ns" "$run_id" gate awaiting-ack
+  set_checkpoint_state "$ws" "$ns" "$run_id" independent succeeded
+  set_checkpoint_state "$ws" "$ns" "$run_id" after-gate blocked
 
   # Resume without creating the ack file: should be a clean no-op.
   rc2=0
@@ -319,9 +340,9 @@ EOF
 
   # Initialize ledger with the prior awaiting-ack state.
   graph_state_init_run "$ws" "$ns" "$run_id" "$plan_file" "$graph_file" 3 2>/dev/null || true
-  graph_state_write_node "$ws" "$ns" "$run_id" "gate" "awaiting-ack" "" "" "" "" "" "" "" ""
-  graph_state_write_node "$ws" "$ns" "$run_id" "independent" "succeeded" "" "" "" "" "" "" "" ""
-  graph_state_write_node "$ws" "$ns" "$run_id" "after-gate" "blocked" "" "" "" "" "" "" "" ""
+  set_checkpoint_state "$ws" "$ns" "$run_id" gate awaiting-ack
+  set_checkpoint_state "$ws" "$ns" "$run_id" independent succeeded
+  set_checkpoint_state "$ws" "$ns" "$run_id" after-gate blocked
 
   # Create the ack file to simulate human acknowledgement.
   # The ack path is derived from the namespace used by the scheduler.

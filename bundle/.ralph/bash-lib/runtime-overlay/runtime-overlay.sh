@@ -33,6 +33,8 @@ RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE=""
 RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED=""
 RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID=""
 RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
+RUNTIME_OVERLAY_SUMMARY_BG_TIER=""
+RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON=""
 RUNTIME_OVERLAY_GENERATED_FILES=()
 RUNTIME_OVERLAY_MUTATED_FILES=()
 RUNTIME_OVERLAY_MUTATED_BACKUPS=()
@@ -595,6 +597,8 @@ runtime_overlay_init_state() {
   RUNTIME_OVERLAY_SUMMARY_MCP_FAILURE_REASON=""
   RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE=""
   RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER=""
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON=""
   RUNTIME_OVERLAY_GENERATED_FILES=()
   RUNTIME_OVERLAY_MUTATED_FILES=()
   RUNTIME_OVERLAY_MUTATED_BACKUPS=()
@@ -800,6 +804,16 @@ runtime_overlay_set_overlay_mode() {
   runtime_overlay_log_decision "overlay_mode" "$1"
 }
 
+runtime_overlay_set_bg_tier() {
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER="$1"
+  runtime_overlay_log_decision "bg_tier" "$1"
+}
+
+runtime_overlay_set_bg_tier_reason() {
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON="$1"
+  runtime_overlay_log_decision "bg_tier_reason" "$1"
+}
+
 runtime_overlay_add_capability() {
   local cap="$1"
   RUNTIME_OVERLAY_CAPABILITIES+=("$cap")
@@ -827,6 +841,41 @@ runtime_overlay_run_cleanup() {
       runtime_overlay_add_warning "Cleanup command failed: $cleanup_cmd"
     fi
   done
+  # Always restore journaled native originals after registered cleanup cmds.
+  # Signal paths clear the EXIT trap before exit, so EXIT-chained MCP/hooks
+  # cleanups may not run; this keeps byte-exact restoration on success,
+  # failure, timeout, and signal. Callers that intentionally keep a durable
+  # install must runtime_overlay_forget_recorded_file first.
+  if declare -F runtime_overlay_restore_recorded_files >/dev/null 2>&1; then
+    runtime_overlay_restore_recorded_files || true
+  fi
+}
+
+# runtime_overlay_forget_recorded_file <abs-or-rel-path>
+# Drop a path from the in-process mutated-file restore list (e.g. durable hook
+# installs that must survive cleanup). Idempotent; missing entries are a no-op.
+runtime_overlay_forget_recorded_file() {
+  local target="${1:-}"
+  local abs idx
+  local kept_files=() kept_backups=() kept_existed=()
+  if [[ -z "$target" ]]; then
+    return 0
+  fi
+  abs="$(_runtime_overlay_abs_path "$target")"
+  if [[ ${#RUNTIME_OVERLAY_MUTATED_FILES[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for ((idx=0; idx<${#RUNTIME_OVERLAY_MUTATED_FILES[@]}; idx++)); do
+    if [[ "${RUNTIME_OVERLAY_MUTATED_FILES[idx]}" == "$abs" ]]; then
+      continue
+    fi
+    kept_files+=("${RUNTIME_OVERLAY_MUTATED_FILES[idx]}")
+    kept_backups+=("${RUNTIME_OVERLAY_MUTATED_BACKUPS[idx]:-}")
+    kept_existed+=("${RUNTIME_OVERLAY_MUTATED_EXISTED[idx]:-0}")
+  done
+  RUNTIME_OVERLAY_MUTATED_FILES=("${kept_files[@]+"${kept_files[@]}"}")
+  RUNTIME_OVERLAY_MUTATED_BACKUPS=("${kept_backups[@]+"${kept_backups[@]}"}")
+  RUNTIME_OVERLAY_MUTATED_EXISTED=("${kept_existed[@]+"${kept_existed[@]}"}")
 }
 
 # runtime_overlay_restore_file <target> <backup> <existed>
@@ -1010,6 +1059,8 @@ runtime_overlay_write_summary() {
   export RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_VALUE="${RALPH_OPENCODE_CACHE_KEY_INJECTED:-${RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED:-}}"
   export RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID_VALUE="${RALPH_OPENCODE_CACHE_KEY_PROVIDER_ID:-${RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID:-}}"
   export RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE="${RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE:-}"
+  export RUNTIME_OVERLAY_SUMMARY_BG_TIER_VALUE="${RUNTIME_OVERLAY_SUMMARY_BG_TIER:-}"
+  export RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON_VALUE="${RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON:-}"
   export RUNTIME_OVERLAY_ARRAY_GENERATED_FILES="$(printf '%s\n' "${RUNTIME_OVERLAY_GENERATED_FILES[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_MUTATED_FILES="$(printf '%s\n' "${RUNTIME_OVERLAY_MUTATED_FILES[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_WARNINGS="$(printf '%s\n' "${RUNTIME_OVERLAY_WARNINGS[@]-}")"

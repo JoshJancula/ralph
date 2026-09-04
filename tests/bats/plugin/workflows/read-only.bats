@@ -4,7 +4,7 @@ source "$BATS_TEST_DIRNAME/../../helper/load-lib.bash"
 
 INPUT_ROOT="$REPO_ROOT/bundle/.ralph/plugin-inputs"
 BOOTSTRAP="$INPUT_ROOT/shared/ralph-plugin-bootstrap.sh"
-WORKFLOW_IDS=(ralph-status ralph-doctor ralph-agents)
+WORKFLOW_IDS=(ralph-status ralph-doctor)
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -73,8 +73,7 @@ Usage: ralph <command> [args]
 Commands:
   run          Run a plan
   create       Create scaffolding
-  graph        Graph-mode plans
-  agent        Manage agent profiles
+  workflow     Manage workflows
 
 Options:
   --bundle-path  Print the bundled .ralph directory (for scripts)
@@ -89,31 +88,18 @@ HELP
     printf '%s\n' "\$bundle"
     exit 0
     ;;
-  agent)
-    if [[ "\${2-}" == "list" || -z "\${2-}" ]]; then
-      printf 'architect\tinstall\t-\n'
-      printf 'code-review\tinstall\t-\n'
-      printf 'implementation\tinstall\t-\n'
-      printf 'qa\tinstall\t-\n'
-      printf 'research\tinstall\t-\n'
-      printf 'security\tinstall\t-\n'
-      exit 0
-    fi
-    printf '%s\n' "forbidden agent subcommand: \$*" >&2
-    exit 99
-    ;;
-  graph)
+  workflow)
     case "\${2-}" in
-      status)
-        printf 'graph status: no active run\n'
+      runs|list)
+        printf 'workflow %s: ok\n' "\$2"
         exit 0
         ;;
-      run|resume)
+      start|resume)
         printf '%s\n' "executing subcommand is forbidden: \$*" >&2
         exit 99
         ;;
       *)
-        printf '%s\n' "unexpected graph invocation: \$*" >&2
+        printf '%s\n' "unexpected workflow invocation: \$*" >&2
         exit 99
         ;;
     esac
@@ -122,7 +108,7 @@ HELP
     printf '%s\n' "executing subcommand is forbidden: \$*" >&2
     exit 99
     ;;
-  doctor|capabilities|hook)
+  doctor|capabilities|hook|graph|role)
     printf '%s\n' "forbidden verb invoked: \$1" >&2
     exit 99
     ;;
@@ -181,13 +167,12 @@ assert_no_executing_subcommand() {
   [ ! -f "$INSTALL_RECORD" ]
   [ ! -f "$EXEC_RECORD" ]
   if [[ -f "$RALPH_RECORD" ]]; then
-    ! grep -Eq '(^|[[:space:]])(run|resume)([[:space:]]|$)' "$RALPH_RECORD"
-    ! grep -Eq '^graph[[:space:]]+(run|resume)([[:space:]]|$)' "$RALPH_RECORD"
-    ! grep -Eq '(^|[[:space:]])(doctor|capabilities|hook)([[:space:]]|$)' "$RALPH_RECORD"
-    ! grep -Eq '^agent[[:space:]]+new([[:space:]]|$)' "$RALPH_RECORD"
+    ! grep -Eq '(^|[[:space:]])(run)([[:space:]]|$)' "$RALPH_RECORD"
+    ! grep -Eq '^workflow[[:space:]]+(start|resume)([[:space:]]|$)' "$RALPH_RECORD"
+    ! grep -Eq '(^|[[:space:]])(doctor|capabilities|hook|graph|role)([[:space:]]|$)' "$RALPH_RECORD"
     while IFS= read -r line; do
       case "$line" in
-        --help|--bundle-path|"agent list"|agent|"graph status --namespace plugin-doctor --run latest") ;;
+        --help|--bundle-path|"workflow runs --all"|"workflow list") ;;
         *) echo "unexpected recorded invocation: $line" >&2; return 1 ;;
       esac
     done <"$RALPH_RECORD"
@@ -212,12 +197,12 @@ assert_no_inspect_beyond_probe() {
     grep -q 'Never call `ensure`' "$INPUT_ROOT/workflows/${id}.md"
     ! grep -Eq 'bootstrap\.sh ensure|ralph-plugin-exec\.sh execute|install\.sh --global' \
       "$INPUT_ROOT/workflows/${id}.md"
-    ! grep -Eq 'ralph (run|graph run|graph resume)' "$INPUT_ROOT/workflows/${id}.md"
+    ! grep -Eq 'ralph (run|workflow start|workflow resume)' "$INPUT_ROOT/workflows/${id}.md"
   done
   grep -q 'ralph --bundle-path' "$INPUT_ROOT/workflows/ralph-doctor.md"
-  grep -q 'ralph graph status' "$INPUT_ROOT/workflows/ralph-doctor.md"
-  grep -q 'ralph agent list' "$INPUT_ROOT/workflows/ralph-doctor.md"
-  grep -q 'ralph agent list' "$INPUT_ROOT/workflows/ralph-agents.md"
+  grep -q 'ralph workflow runs' "$INPUT_ROOT/workflows/ralph-doctor.md"
+  grep -q 'ralph workflow list' "$INPUT_ROOT/workflows/ralph-doctor.md"
+  [ ! -f "$INPUT_ROOT/workflows/ralph-agents.md" ]
 }
 
 @test "healthy CLI: each read-only workflow completes without executing" {
@@ -234,8 +219,6 @@ assert_no_inspect_beyond_probe() {
     assert_probe_only_bootstrap
     assert_no_executing_subcommand
   done
-  [[ "$output" == *"architect"* ]]
-  [[ "$output" == *"security"* ]]
 }
 
 @test "missing CLI: each workflow prints remediation, skips install, and does not execute" {

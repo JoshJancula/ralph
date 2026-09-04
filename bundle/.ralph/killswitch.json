@@ -13,6 +13,7 @@
     "~/.aws/**"
   ],
   "allowed_paths": [],
+  "allowed_commands": [],
   "allowed_patterns": [],
   "denied_argument_patterns": [],
   "custom_rules": [

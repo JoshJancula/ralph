@@ -223,7 +223,6 @@ nodes = [
         "stage": {
             "id": "router",
             "runtime": "cursor",
-            "agent": "research",
             "router": {
                 "allowedTargets": ["branch-a", "branch-b"],
                 "defaultTarget": "branch-a",
@@ -239,7 +238,7 @@ nodes = [
         "type": "agent",
         "dependsOn": ["router"],
         "derivedFrom": "stage",
-        "stage": {"id": "branch-a", "runtime": "cursor", "agent": "research",
+        "stage": {"id": "branch-a", "runtime": "cursor", "role": "research",
                   "_inlineTodos": []},
     },
     {
@@ -247,7 +246,7 @@ nodes = [
         "type": "agent",
         "dependsOn": ["router"],
         "derivedFrom": "stage",
-        "stage": {"id": "branch-b", "runtime": "cursor", "agent": "research",
+        "stage": {"id": "branch-b", "runtime": "cursor", "role": "research",
                   "_inlineTodos": []},
     },
     {
@@ -255,7 +254,7 @@ nodes = [
         "type": "agent",
         "dependsOn": ["branch-b"],
         "derivedFrom": "stage",
-        "stage": {"id": "child-of-b", "runtime": "cursor", "agent": "research",
+        "stage": {"id": "child-of-b", "runtime": "cursor", "role": "research",
                   "_inlineTodos": []},
     },
     {
@@ -263,7 +262,7 @@ nodes = [
         "type": "agent",
         "dependsOn": ["branch-a", "branch-b"],
         "derivedFrom": "stage",
-        "stage": {"id": "shared-tail", "runtime": "cursor", "agent": "research",
+        "stage": {"id": "shared-tail", "runtime": "cursor", "role": "research",
                   "_inlineTodos": []},
     },
 ]
@@ -275,7 +274,7 @@ edges = [
     {"from": "branch-b", "to": "shared-tail", "reasons": ["declared"]},
 ]
 doc = {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "ralphVersion": "1.0.0",
     "name": "router-test",
     "namespace": "router-test",

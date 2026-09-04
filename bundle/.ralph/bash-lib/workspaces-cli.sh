@@ -4,9 +4,11 @@ set -euo pipefail
 _workspaces_cli_dir="${BASH_SOURCE[0]%/*}"
 [[ "$_workspaces_cli_dir" == "${BASH_SOURCE[0]}" ]] && _workspaces_cli_dir="."
 _workspaces_registry_py="$_workspaces_cli_dir/../python/workspace-registry.py"
+# shellcheck source=help-render.sh
+source "$_workspaces_cli_dir/help-render.sh"
 
 workspaces_usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph workspaces <command> [args]
 
 Commands:

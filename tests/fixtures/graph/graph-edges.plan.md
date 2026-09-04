@@ -4,12 +4,10 @@ pipeline:
   stages:
     - id: source
       runtime: cursor
-      agent: research
       produces:
         - path: shared/input.md
     - id: transform
       runtime: cursor
-      agent: implementation
       dependsOn:
         - source
       requires:
@@ -18,7 +16,6 @@ pipeline:
         - path: shared/output.md
     - id: sink
       runtime: cursor
-      agent: implementation
       dependsOn:
         - transform
       requires:

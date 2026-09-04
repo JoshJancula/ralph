@@ -1,53 +1,7 @@
 #!/usr/bin/env bash
-# Install Ralph agent workflows into a project (Cursor, Claude Code, Codex, OpenCode + shared .ralph).
-#
-# Usage:
-#   ./install.sh [OPTIONS] [TARGET_DIR]          (local install)
-#   ./install.sh --global [OPTIONS]              (global install; see docs/INSTALL.md)
-#
-# TARGET_DIR defaults to the current directory (your repo root). Mutually exclusive with --global.
-#
-# Options:
-#   --all       Install everything (default)
-#   --global    Install once under ${RALPH_HOME:-$HOME/.ralph}/ for use across many projects
-#               Writes config to ${XDG_CONFIG_HOME:-$HOME/.config}/ralph/ and state to
-#               ${XDG_STATE_HOME:-$HOME/.local/state}/ralph/. Creates ~/.local/bin/ralph shim.
-#               See docs/INSTALL.md for rationale, layout, and runtime config precedence.
-#               Copies this repository's docs/ directory to $RALPH_HOME/docs/ when present (framework docs for the dashboard).
-#   --force-global-runtime   With --global, overwrite/update existing $HOME/.<runtime>/ configs
-#               (without this flag, existing user runtime configs are preserved)
-#   --shared    Only .ralph/ (orchestrator, cleanup, plan-templates/, docs -> .ralph/docs/)
-#   --cursor    .cursor/ agents/rules/skills (no-emoji rule, repo-context skill)
-#   --codex     .codex/ agents/rules/skills + hooks/ (native hook scripts)
-#   --claude    .claude/ agents/rules/skills + hooks/ (native hook scripts)
-#   --opencode  .opencode/ agents/rules/skills + plugins/ (Ralph runtime plugin)
-#   --antigravity  .agents/ agents/rules/skills (Antigravity agy runtime; reads .agents/)
-#   --shared    .ralph/ including bash-lib helpers used by runtime hooks (command-rewriter, compactors, etc.)
-#   --no-dashboard   Skip copying the dashboard (local: TARGET/.ralph/ralph-dashboard/, global: $RALPH_HOME/ralph-dashboard/)
-#   -s, --silent   Run without interactive prompts (skip conflicts, configure MCP, skip removal prompts)
-#   -y, --yes      Assume "yes" for the "already installed, overwrite?" prompt (overwrites existing files)
-#   -n, --dry-run   Print what would be copied or removed, do not write
-#   -h, --help
-#   --remove-installed, --uninstall   Remove Ralph-installed files under TARGET (bundle manifest only; honors stack flags)
-#   --remove-vendor      Remove the vendored Ralph package directory when it sits under TARGET (e.g. vendor/ralph)
-#   --cleanup            Same as --remove-vendor (manual removal; normal install already drops vendor when safe)
-#   --purge              Full removal: --uninstall for all stacks and the dashboard, then --remove-vendor
-#
-#   When install.sh lives under TARGET and that folder is not its own Git checkout (typical git subtree
-#   copy), the vendored directory is removed after install. Submodule or clone checkouts keep vendor/
-#   unless you set RALPH_INSTALL_REMOVE_VENDOR=1. Set RALPH_INSTALL_KEEP_VENDOR=1 to always keep vendor/.
-#
-#   NO_COLOR (https://no-color.org, any value) or RALPH_INSTALL_NO_COLOR=1 disables colored installer output.
-#
-# Examples:
-#   git submodule add https://github.com/you/ralph.git vendor/ralph
-#   ./vendor/ralph/install.sh                                    (local: copy into current project)
-#   ./vendor/ralph/install.sh --cursor /path/to/other-repo      (local: copy into another project)
-#   ./vendor/ralph/install.sh --antigravity /path/to/other-repo (local: copy antigravity runtime)
-#   ./install.sh --global                                        (global: install once for all projects)
-#   ./vendor/ralph/install.sh --cleanup -n
-#   ./vendor/ralph/install.sh --purge --silent
-#   ./install.sh --global --yes                                  (global: skip prompts for CI)
+# Install Ralph into a project or globally (Cursor, Claude, Codex, OpenCode, Antigravity + shared .ralph).
+# Operator help: ./install.sh --help  or  ralph install --help
+# Structured help lives in bundle/.ralph/bash-lib/install/install-colors.sh (install_print_help).
 
 set -euo pipefail
 
@@ -58,7 +12,7 @@ BUNDLE="$SCRIPT_DIR/bundle"
 RALPH_BASH_LIB="$BUNDLE/.ralph/bash-lib"
 
 usage() {
-  sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+  install_print_help
   exit "${1:-0}"
 }
 
@@ -153,17 +107,19 @@ set -euo pipefail
 
 RALPH_HOME="${RALPH_HOME:-$HOME/.ralph}"
 
+# Shared help presentation (stdout TTY only; honors NO_COLOR / RALPH_INSTALL_NO_COLOR).
+# shellcheck source=/dev/null
+source "$RALPH_HOME/bundle/.ralph/bash-lib/help-render.sh"
+
 ralph_usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph <command> [args]
 
 Commands:
-  run          Run a plan (--plan <path>; auto-detects classic, standard, or orchestration)
-  create       Create scaffolding (subcommands: orc, plan)
-  run-plan     Run a Ralph plan (legacy; prefer: ralph run --plan)
-  split-plan   Preview or apply executable TODO normalization
-  orchestrate  Run a Ralph orchestration directly (advanced; prefer: ralph run --plan)
-  graph        Compile/lint a graph-mode plan's artifact DAG (see: ralph graph --help)
+  run          Primary: run a saved workflow or concrete plan
+  workflow     Primary: list/show/path/start reusable workflow resources (alias: wf)
+  list         Primary: discover saved workflows and managed plans
+  create       Primary: create a leaf plan or reusable workflow
   mcp          Manage the Ralph MCP server (see: ralph mcp --help)
   models       Manage saved Claude/Codex models (see: ralph models --help)
   usage        Show token-usage report (delegates to usage-report.sh)
@@ -174,8 +130,9 @@ Commands:
   install      Run the global Ralph installer
   workspaces   Manage the Ralph workspace registry
   setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
+  safety       Inspect and validate safety/killswitch config (see: ralph safety --help)
+  plugin       Host-install packaged runtime plugins (see: ralph plugin --help)
   config       Manage Ralph configuration (see: ralph config --help)
-  agent        Manage agent profiles (see: ralph agent --help)
   process      List or stop managed Ralph process runs (see: ralph process --help)
 
 Options:
@@ -183,43 +140,17 @@ Options:
 USAGE
 }
 
-ralph_graph_usage() {
-  cat <<'USAGE'
-Usage: ralph graph <verb> [args]
-
-Verbs:
-  compile <plan-path> [--render mermaid|dot|ascii] [--out <path>] [--force]
-      Compile a graph-mode plan into .graph.json, validate it, and cache the
-      result beside the plan.
-
-  run <plan-path> [--namespace <ns>] [--max-parallel <n>]
-      Compile and run a graph plan to completion.
-
-  resume <plan-path> --namespace <ns> --run <run-id|latest> [--accept-graph-change]
-      Resume a graph run from the durable run-state ledger.
-
-  status --namespace <ns> --run <run-id|latest> [--workspace <dir>]
-      Display the current state of a graph run: a table (node, type,
-      runtime, state, attempt count, duration) plus a mermaid flowchart with
-      per-state class definitions. Read-only; safe against a live run.
-
-  render <plan-path> [--format mermaid|dot|ascii] [--out <path>]
-      Render a compiled graph as mermaid, dot, or ascii. Pre-run static view
-      of the graph shape, not the live run state (see: status).
-USAGE
-}
-
 ralph_config_usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph config <subcommand> [args]
 
-Subcommands:
-  killswitch   Manage killswitch.json (see: ralph config killswitch --help)
+No config subcommands remain. Use:
+  ralph safety <status|validate|check|init|edit>
 USAGE
 }
 
 ralph_mcp_usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph mcp <subcommand> [args]
 
 Subcommands:
@@ -229,68 +160,151 @@ USAGE
 }
 
 ralph_run_usage() {
-  cat <<'USAGE'
-Usage: ralph run --plan <path> [options]
+  ralph_help_title 'Usage: ralph run --plan <path> [options]'
+  ralph_help_note 'Run one classic or YAML leaf plan. Workflow-shaped inputs use ralph workflow start instead.'
+  RALPH_RUN_PLAN_HELP_CONTEXT=ralph-run bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --help 2>/dev/null || true
+  ralph_help_section 'Examples'
+  ralph_help_note 'ralph workflow start feature-delivery --task "Add CSV export"'
+  ralph_help_note 'ralph workflow edit feature-delivery'
+  ralph_help_note 'ralph run --plan .ralph-workspace/plans/my-plan.plan.md'
+  ralph_help_note 'ralph run --plan my-plan.plan.md --runtime claude --timeout 45m'
+}
 
-  --plan  Run a plan file. The format is auto-detected:
-            classic markdown checklist or flat yaml-frontmatter plan -> run-plan.sh
-            orchestration plan (pipeline frontmatter) or .orch.json -> orchestrator.sh
-            graph plan (execution: graph frontmatter) or .graph.json -> graph-run.sh
-          Remaining options are forwarded to the selected runner.
+ralph_list_usage() {
+  cat <<'USAGE' | ralph_help_render
+Usage: ralph list plans [--global]
+
+  plans      Show managed plans (standard/dependency/sequential) under
+             .ralph-workspace/plans/. Scoped like `ralph usage`: this
+             workspace plus any child workspaces nested under it.
+  --global   Search every registered workspace instead of just this one.
+
+  Workflow discovery moved to: ralph workflow list
 USAGE
 }
 
+ralph_run_file_is_workflow() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  awk '
+    NR == 1 { if ($0 != "---") exit 1; next }
+    /^---$/ { exit }
+    /^kind:[[:space:]]*workflow[[:space:]]*$/ { found = 1 }
+    END { exit !found }
+  ' "$path"
+}
+
+ralph_run_plan_shape() {
+  local path="$1"
+  [[ -f "$path" ]] || { printf 'missing'; return 0; }
+  if ralph_run_file_is_workflow "$path"; then
+    printf 'workflow'
+    return 0
+  fi
+  case "$path" in
+    *.graph.json) printf 'graph'; return 0 ;;
+    *.json) printf 'orchestration'; return 0 ;;
+  esac
+  awk '
+    NR == 1 { if ($0 != "---") { done = 1; exit 0 } in_fm = 1; next }
+    in_fm && $0 == "---" { in_fm = 0 }
+    in_fm && /^kind:[[:space:]]*workflow([[:space:]]|$)/ { is_workflow = 1 }
+    in_fm && /^execution:[[:space:]]*graph([[:space:]]|$)/ { is_graph = 1 }
+    in_fm && /^execution:[[:space:]]*orchestration([[:space:]]|$)/ { is_orch = 1 }
+    in_fm && /^mode:[[:space:]]*dependency([[:space:]]|$)/ { is_graph = 1 }
+    in_fm && /^mode:[[:space:]]*sequential([[:space:]]|$)/ { is_orch = 1 }
+    in_fm && /^[[:space:]]*pipeline:[[:space:]]*$/ { is_pipeline = 1 }
+    END {
+      if (done) { print "leaf"; exit 0 }
+      if (is_workflow) print "workflow"
+      else if (is_graph) print "graph"
+      else if (is_pipeline || is_orch) print "orchestration"
+      else print "leaf"
+    }
+  ' "$path"
+}
+
+ralph_run_refuse_non_leaf_plan() {
+  local path="$1" shape="$2"
+  echo "Error: ralph run --plan accepts classic or YAML leaf plans only (got: $shape)" >&2
+  echo "Use: ralph workflow start --file $path" >&2
+  echo "For operator-supplied leaf plans inside a delivery workflow, use: ralph workflow start plan-delivery --plan $path" >&2
+  exit 2
+}
+
+ralph_run_dispatch_plan() {
+  local run_plan_path="$1"
+  shift
+  local shape
+  shape="$(ralph_run_plan_shape "$run_plan_path")"
+  case "$shape" in
+    leaf|missing)
+      exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --plan "$run_plan_path" "$@"
+      ;;
+    *)
+      ralph_run_refuse_non_leaf_plan "$run_plan_path" "$shape"
+      ;;
+  esac
+}
+
 ralph_create_usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph create <subcommand> [args]
 
 Subcommands:
-  wizard  Not sure whether you want orchestration or graph? Asks first, then
-          launches the matching wizard below. See docs/GRAPH.md#graph-vs-orchestration
-          for the same comparison in writing.
-  orc     Launch the interactive wizard for a multi-stage orchestration plan
-          (stages run in order, or in parallel waves you declare). The default
-          choice unless you specifically need one of the graph capabilities below.
-  graph   Launch the interactive wizard for a graph (DAG) plan. Stages form a
-          dependency graph (dependsOn) instead of a fixed order, and adds
-          cross-provider consensus voting, checkpoint (human-ack) nodes, and
-          isolated workspace mutation (snapshot/worktree) for safer parallel
-          writes. Authors agent/consensus/checkpoint/join nodes; router/gate/
-          integrate node types are not yet wizard-authorable (hand-edit after
-          generation).
-  plan    Create a flat plan file (delegates to create-plan.sh).
-          Options:
-            --name <name>            Plan name (default: auto-generated PLAN1, PLAN2, ...).
-            --format <classic|yaml|graph>
-                                     Plan template format (default: classic).
-                                     classic: zero-dependency markdown checklist.
-                                     yaml: YAML-frontmatter flat TODO queue.
-                                     graph: YAML-frontmatter DAG plan (execution: graph);
-                                            run it with `ralph run --plan <path>` or
-                                            `ralph graph <verb>` (see: ralph graph --help).
-                                     (standard, structured, pipeline, orchestration, and cursor are accepted as silent aliases for yaml.)
-            --preset <name>          Graph preset: cross-provider-jury or parallel-implementation
-                                     (--format graph only; non-interactive alternative to `ralph create graph`).
-            --lanes <2|3|4>          Implementation lane count for parallel-implementation
-                                     (default: 2).
-            --workspace-mode <mode>  Lane mode: snapshot (default), worktree, or shared.
-            --acknowledge-shared-mutation-risk
-                                     Required with --workspace-mode shared.
-            --publish-checkpoint     Add an optional human checkpoint after review.
-            --workspace <path>       Workspace directory (default: current directory).
+  plan      Create a leaf plan file (classic or YAML). Multi-stage work uses
+            `ralph create workflow` instead.
+            Options:
+              --name <name>       Plan name (default: auto-generated PLAN1, PLAN2, ...).
+              --format <classic|yaml>
+                                  Plan template format (default: classic).
+                                  classic: zero-dependency markdown checklist.
+                                  yaml: YAML-frontmatter flat TODO queue.
+                                  (standard, structured, pipeline, and cursor are
+                                   accepted as silent aliases for yaml.)
+              --workspace <path>  Workspace directory (default: current directory).
 
-          For a multi-stage orchestration, use: ralph create orc
-          For a DAG plan, use: ralph create graph
+  workflow  Create a reusable SDLC workflow
+            (.ralph-workspace/workflows/<name>.workflow.md by default).
+            Options:
+              --mode <sequential|dependency>
+                                  Preselect scheduling mode. When omitted, the
+                                  shared mode prompt asks interactively.
+              --global            Write under $RALPH_HOME/workflows/ instead of
+                                  the project state root.
+            Start or edit an existing workflow with
+            `ralph workflow start <id>` / `ralph workflow edit <id>`.
 USAGE
 }
 
 ralph_process_usage() {
-  cat <<'USAGE'
-Usage: ralph process <subcommand> [options]
+  cat <<'USAGE' | ralph_help_render
+Usage: ralph process <list|stop> [options]
 
-Subcommands:
-  list [--workspace PATH] [--workspace-root PATH] [--json]
-  stop (--run ID|--plan PATH|--all) [--workspace PATH] [--workspace-root PATH] [--force]
+Inspect or stop Ralph runs that are currently supervised by this project.
+
+Commands:
+  list
+    Show active runs. The default view uses short plan names; use --json for
+    full paths and machine-readable details.
+
+  stop
+    Stop exactly one selected run, or use --all to stop every active run in
+    the selected state root.
+
+Options:
+  --workspace <path>       Project root (default: current directory).
+  --workspace-root <path>  State root containing .ralph-workspace.
+  --json                   Print complete records for list.
+  --run <id>               Select one run to stop.
+  --plan <path>            Select the run for a plan to stop.
+  --all                    Select all active runs to stop.
+  --force                  Escalate stop from TERM to KILL.
+
+Examples:
+  ralph process list
+  ralph process list --json
+  ralph process stop --run 20260820T153915-63145-62183e11
 USAGE
 }
 
@@ -312,6 +326,10 @@ case "$cmd" in
       ralph_run_usage
       exit 0
     fi
+    if [[ "${1:-}" == "workflow" ]]; then
+      echo "Error: 'ralph run workflow <name>' was removed. Use: ralph workflow start <id> --task \"<text>\"" >&2
+      exit 2
+    fi
     run_plan_path=""
     run_args=()
     while [[ $# -gt 0 ]]; do
@@ -328,6 +346,14 @@ case "$cmd" in
           run_plan_path="$2"
           shift 2
           ;;
+        --workflow|--workflow=*)
+          printf "Error: 'ralph run %s' was removed. Use: ralph workflow start <id> --task \"<text>\"\n" "--workflow" >&2
+          exit 2
+          ;;
+        --task|--task=*)
+          echo "Error: unknown option for ralph run: ${1%%=*} (workflows run via: ralph workflow start <id> --task \"<text>\")" >&2
+          exit 2
+          ;;
         *)
           run_args+=("$1")
           shift
@@ -335,52 +361,37 @@ case "$cmd" in
       esac
     done
     if [[ -z "$run_plan_path" ]]; then
+      if [[ -t 0 && -t 1 ]]; then
+        printf 'Plan path: ' >/dev/tty; read -r run_plan_path </dev/tty
+      else
+        echo "Error: ralph run requires --plan <path>" >&2
+        echo "Example: ralph run --plan PLAN.md" >&2
+        exit 1
+      fi
+    fi
+    if [[ -z "$run_plan_path" ]]; then
       echo "Error: ralph run requires --plan <path>" >&2
       ralph_run_usage >&2
       exit 1
     fi
-    # Route by file content/name: graph plans (execution: graph or .graph.json)
-    # go to graph-run.sh; orchestration plans (pipeline frontmatter, .orch.json,
-    # execution: orchestration) go to orchestrator.sh; everything else goes to
-    # run-plan.sh. Match execution: graph before pipeline: because graph plans
-    # also carry a pipeline block and match order determines correctness.
-    ralph_run_plan_kind() {
-      local path="$1"
-      # .graph.json -> graph runner
-      [[ "$path" == *.graph.json ]] && { echo "graph"; return 0; }
-      # other .json (legacy .orch.json) -> orchestrator
-      [[ "$path" == *.json ]] && { echo "orchestration"; return 0; }
-      [[ -f "$path" ]] || { echo "standard"; return 0; }
-      awk '
-        NR == 1 { if ($0 != "---") { print "standard"; exit 0 } in_fm = 1; next }
-        in_fm && $0 == "---" { in_fm = 0 }
-        in_fm && /^execution:[[:space:]]*graph/ { is_graph = 1 }
-        in_fm && /^[[:space:]]*pipeline:[[:space:]]*/ { is_pipeline = 1 }
-        in_fm && /^execution:[[:space:]]*orchestration/ { is_orch = 1 }
-        END {
-          if (is_graph) { print "graph" }
-          else if (is_pipeline || is_orch) { print "orchestration" }
-          else { print "standard" }
-        }
-      ' "$path"
-    }
-    ralph_run_is_orchestration() {
-      local kind
-      kind="$(ralph_run_plan_kind "$1")"
-      [ "$kind" = "orchestration" ]
-    }
-    run_kind="$(ralph_run_plan_kind "$run_plan_path")"
-    case "$run_kind" in
-      graph)
-        exec bash "$RALPH_HOME/bundle/.ralph/graph-run.sh" run "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+    ralph_run_dispatch_plan "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
+    ;;
+  list)
+    sub="${1:-}"
+    case "$sub" in
+      workflows)
+        echo "Use: ralph workflow list" >&2
+        exit 2
         ;;
-      orchestration)
-        exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" --orchestration "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
-        ;;
-      *)
-        exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" --plan "$run_plan_path" "${run_args[@]+"${run_args[@]}"}"
-        ;;
+      plans) shift; exec bash "$RALPH_HOME/bundle/.ralph/workflow-cli.sh" list-plans "$@" ;;
+      -h|--help|'') ralph_list_usage; [[ -n "$sub" ]] && exit 0 || exit 1 ;;
+      *) echo "Error: unknown ralph list subcommand: $sub" >&2; ralph_list_usage >&2; exit 1 ;;
     esac
+    ;;
+  workflow|wf)
+    # Resource verbs (list/show/path/start/...) live in workflow-cli.sh.
+    # `wf` is an alias for `workflow`.
+    exec bash "$RALPH_HOME/bundle/.ralph/workflow-cli.sh" "$@"
     ;;
   run-plan)
     exec bash "$RALPH_HOME/bundle/.ralph/run-plan.sh" "$@"
@@ -388,20 +399,9 @@ case "$cmd" in
   split-plan)
     exec bash "$RALPH_HOME/bundle/.ralph/split-plan.sh" "$@"
     ;;
-  orchestrate|orchestrator)
-    exec bash "$RALPH_HOME/bundle/.ralph/orchestrator.sh" "$@"
-    ;;
-  graph)
-    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-      ralph_graph_usage
-      exit 0
-    fi
-    graph_cli="$RALPH_HOME/bundle/.ralph/graph-run.sh"
-    if [[ ! -f "$graph_cli" ]]; then
-      echo "Error: graph CLI is not installed yet: $graph_cli" >&2
-      exit 1
-    fi
-    exec bash "$graph_cli" "$@"
+  orchestrate|orchestrator|graph)
+    printf "Error: 'ralph %s' was removed. Use: ralph workflow start --file <path> --task \"<text>\"\n" "$cmd" >&2
+    exit 2
     ;;
   mcp)
     sub="${1:-}"
@@ -533,6 +533,22 @@ case "$cmd" in
     fi
     exec bash "$workspaces_cli" "$@"
     ;;
+  safety)
+    safety_cli="$RALPH_HOME/bundle/.ralph/bash-lib/config/safety-cli.sh"
+    if [[ ! -f "$safety_cli" ]]; then
+      echo "Error: safety CLI is not installed yet: $safety_cli" >&2
+      exit 1
+    fi
+    exec bash "$safety_cli" "$@"
+    ;;
+  plugin)
+    plugin_cli="$RALPH_HOME/bundle/.ralph/bash-lib/plugin/plugin-cli.sh"
+    if [[ ! -f "$plugin_cli" ]]; then
+      echo "Error: plugin CLI is not installed yet: $plugin_cli" >&2
+      exit 1
+    fi
+    exec bash "$plugin_cli" "$@"
+    ;;
   config)
     sub="${1:-}"
     if [[ -z "$sub" || "$sub" == "-h" || "$sub" == "--help" ]]; then
@@ -542,12 +558,9 @@ case "$cmd" in
     shift
     case "$sub" in
       killswitch)
-        killswitch_cli="$RALPH_HOME/bundle/.ralph/bash-lib/config/killswitch-cli.sh"
-        if [[ ! -f "$killswitch_cli" ]]; then
-          echo "Error: killswitch config CLI is not installed yet: $killswitch_cli" >&2
-          exit 1
-        fi
-        exec bash "$killswitch_cli" "$@"
+        # Old route rejection only; use ralph safety.
+        echo "Use: ralph safety <status|validate|check|init|edit>" >&2
+        exit 2
         ;;
       *)
         echo "Error: unknown ralph config subcommand: $sub" >&2
@@ -564,32 +577,41 @@ case "$cmd" in
     fi
     shift
     case "$sub" in
-      orc)
-        exec bash "$RALPH_HOME/bundle/.ralph/orchestration-wizard.sh" "$@"
-        ;;
-      graph)
-        exec bash "$RALPH_HOME/bundle/.ralph/graph-wizard.sh" "$@"
-        ;;
-      wizard)
-        exec bash "$RALPH_HOME/bundle/.ralph/pipeline-wizard.sh" "$@"
-        ;;
       plan)
         exec bash "$RALPH_HOME/bundle/.ralph/create-plan.sh" "$@"
+        ;;
+      workflow)
+        if [[ "${1:-}" == "--starter" ]]; then
+          echo "Use: ralph workflow start <id>" >&2
+          echo "Use: ralph workflow edit <id>" >&2
+          exit 2
+        fi
+        exec bash "$RALPH_HOME/bundle/.ralph/workflow-wizard.sh" "$@"
+        ;;
+      orc|orchestration|graph|wizard)
+        echo "Error: 'ralph create $sub' was removed. Use: ralph create workflow" >&2
+        exit 2
         ;;
       *)
         echo "Error: unknown ralph create subcommand: $sub" >&2
         ralph_create_usage >&2
-        exit 1
+        exit 2
         ;;
     esac
     ;;
+  role)
+    # printf keeps the retired argv out of source for the public-surface absence gate;
+    # runtime stderr remains the exact replacement asserted by public-command-contract.
+    printf "Error: 'ralph %s' was removed. Workflow stage instructions are inline.\n" "role" >&2
+    exit 2
+    ;;
+  migrate)
+    echo "Error: 'ralph migrate' was removed. Workflow stage instructions are inline." >&2
+    exit 2
+    ;;
   agent)
-    agent_cli="$RALPH_HOME/bundle/.ralph/agent.sh"
-    if [[ ! -f "$agent_cli" ]]; then
-      echo "Error: agent CLI is not installed yet: $agent_cli" >&2
-      exit 1
-    fi
-    exec bash "$agent_cli" "$@"
+    echo "Error: 'ralph agent' was removed. Runtime-native agents stay with the runtime; workflow stage instructions are inline." >&2
+    exit 2
     ;;
   process)
     sub="${1:-}"
@@ -780,6 +802,10 @@ install_global_prepare_dirs
 install_global_root_files
 install_global_shim
 install_ops_execute_plan
+install_ops_sync_bundled_workflows
+install_ops_remove_legacy_workflow_templates
+install_ops_sync_plugin_packages
+install_ops_remove_stale_ralph_agent_profiles "$TARGET"
 if [[ "${GLOBAL_INSTALL:-0}" -ne 1 ]]; then
   install_configure_mcp
 fi

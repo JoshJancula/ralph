@@ -63,6 +63,7 @@ killswitch_path_is_banned() {
 # or any pattern in _KILLSWITCH_BANNED_PATTERNS.
 # Custom rules support plain substring matching (match field) or regex (pattern field).
 # Sets KILLSWITCH_VIOLATION_RULE to the matching rule name on success.
+# Never executes command_str: matching uses bash [[ ]] / Python re against the string only.
 killswitch_command_matches_rule() {
   local command_str="$1"
   KILLSWITCH_VIOLATION_RULE=""
@@ -129,6 +130,16 @@ PY
 
   KILLSWITCH_VIOLATION_RULE="$matched_name"
   return 0
+}
+
+# Print the matched rule name for command_str, or return 1 when no rule matches.
+# Classify-only helper: never executes command_str.
+killswitch_command_matched_rule() {
+  if killswitch_command_matches_rule "${1:-}"; then
+    printf '%s\n' "${KILLSWITCH_VIOLATION_RULE:-custom_rule}"
+    return 0
+  fi
+  return 1
 }
 
 # Takes a comma-separated list of tool names, returns 1 and sets KILLSWITCH_BLOCKED_TOOL

@@ -4,7 +4,6 @@ pipeline:
   stages:
     - id: implement
       runtime: cursor
-      agent: implementation
       produces:
         - path: shared/output.md
   repairRounds:

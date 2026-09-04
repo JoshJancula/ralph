@@ -12,7 +12,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runtime overlay records generated and mutated files plus summary metadata" {

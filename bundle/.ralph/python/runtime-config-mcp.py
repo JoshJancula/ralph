@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve effective runtime MCP catalogs from native sources, agent overrides, and Ralph."""
+"""Resolve effective runtime MCP catalogs from native ambient sources and Ralph."""
 
 from __future__ import annotations
 
@@ -55,7 +55,6 @@ class McpResolveError(Exception):
         message: str,
         *,
         runtime: str = "",
-        agent: str = "",
         reason: str = "",
         server: str = "",
         env_var: str = "",
@@ -65,7 +64,6 @@ class McpResolveError(Exception):
         self.message = message
         self.reason = reason or message
         self.runtime = runtime
-        self.agent = agent
         self.server = server
         self.env_var = env_var
         self.searched_paths = searched_paths or []
@@ -391,98 +389,6 @@ def _merge_ambient(runtime: str, project_root: str, home: str, xdg: str) -> tupl
     return catalog, sources
 
 
-def _agent_entry_to_server(entry: dict[str, Any] | str, ambient: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    if isinstance(entry, str):
-        name = entry.strip()
-        if not name:
-            raise McpResolveError("agent MCP reference cannot be empty")
-        if name == RESERVED_RALPH:
-            raise McpResolveError(f"agent cannot reference reserved MCP server '{RESERVED_RALPH}'", server=name)
-        if name not in ambient:
-            raise McpResolveError(
-                f"missing ambient MCP server '{name}' for agent reference",
-                server=name,
-                reason="missing_ambient_server",
-            )
-        merged = deepcopy(ambient[name])
-        merged["layer"] = "agent"
-        merged["origin"] = "agent-reference"
-        return merged
-    if not isinstance(entry, dict):
-        raise McpResolveError("agent MCP entry must be a string or object")
-    name_value = entry.get("name")
-    if not isinstance(name_value, str) or not name_value.strip():
-        raise McpResolveError("agent MCP object requires a non-empty name")
-    name = name_value.strip()
-    if name == RESERVED_RALPH:
-        raise McpResolveError(f"agent cannot define reserved MCP server '{RESERVED_RALPH}'", server=name)
-    if entry.get("reference") is True:
-        if name not in ambient:
-            raise McpResolveError(
-                f"missing ambient MCP server '{name}' for agent reference",
-                server=name,
-                reason="missing_ambient_server",
-            )
-        merged = deepcopy(ambient[name])
-        merged["layer"] = "agent"
-        merged["origin"] = "agent-reference"
-        return merged
-    transport = entry.get("transport")
-    if transport not in ("stdio", "http"):
-        raise McpResolveError(f"unsupported agent MCP transport '{transport}' for '{name}'", server=name)
-    if transport == "stdio":
-        command = str(entry.get("command") or "").strip()
-        if not command:
-            raise McpResolveError(f"agent MCP stdio server '{name}' requires command", server=name)
-        return {
-            "name": name,
-            "transport": "stdio",
-            "command": command,
-            "args": _as_str_list(entry.get("args")),
-            "env": _as_str_map(entry.get("env")),
-            "headers": {},
-            "url": "",
-            "origin": "agent-definition",
-            "source_path": "",
-            "layer": "agent",
-        }
-    url = str(entry.get("url") or "").strip()
-    if not url:
-        raise McpResolveError(f"agent MCP http server '{name}' requires url", server=name)
-    return {
-        "name": name,
-        "transport": "http",
-        "command": "",
-        "args": [],
-        "env": _as_str_map(entry.get("env")),
-        "headers": _as_str_map(entry.get("headers")),
-        "url": url,
-        "origin": "agent-definition",
-        "source_path": "",
-        "layer": "agent",
-    }
-
-
-def _apply_agent_overrides(
-    catalog: dict[str, dict[str, Any]],
-    ambient: dict[str, dict[str, Any]],
-    agent_entries: list[Any],
-) -> tuple[dict[str, dict[str, Any]], list[str]]:
-    decisions: list[str] = []
-    for entry in agent_entries:
-        server = _agent_entry_to_server(entry, ambient)
-        name = server["name"]
-        if name in catalog:
-            prev = catalog[name]
-            decisions.append(
-                f"agent:{name} overrides {prev.get('layer', 'ambient')}:{prev.get('origin', 'unknown')}"
-            )
-        else:
-            decisions.append(f"agent:{name} added")
-        catalog[name] = server
-    return catalog, decisions
-
-
 def _ralph_server_definition(server_script: str, workspace: str, env_extra: dict[str, str] | None = None) -> dict[str, Any]:
     env = {
         "RALPH_MCP_WORKSPACE": workspace,
@@ -637,8 +543,15 @@ def _needs_ralph(ralph_mode: str, tool_access: str) -> bool:
 def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
     runtime = str(request.get("runtime") or "").strip().lower()
     project_root = os.path.abspath(str(request.get("project_root") or ""))
-    agent = str(request.get("agent") or "").strip()
-    agent_entries = request.get("agent_mcp_servers") or []
+    agent_entries = request.get("agent_mcp_servers")
+    if agent_entries not in (None, [], ""):
+        raise McpResolveError(
+            "agent_mcp_servers / profile MCP layer is removed; "
+            "native ambient MCP then Ralph's protected server. "
+            "Use ralph migrate agents-to-roles",
+            runtime=runtime,
+            reason="removed_profile_mcp_layer",
+        )
     if "ralph_mode" in request:
         ralph_mode = str(request.get("ralph_mode") or "no")
     else:
@@ -653,26 +566,19 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
     xdg = str(request.get("xdg_config_home") or os.environ.get("XDG_CONFIG_HOME") or f"{home}/.config")
 
     if runtime not in RUNTIME_SOURCE_SPECS:
-        raise McpResolveError(f"unsupported runtime '{runtime}'", runtime=runtime, agent=agent)
+        raise McpResolveError(f"unsupported runtime '{runtime}'", runtime=runtime)
     if not project_root:
-        raise McpResolveError("project_root is required", runtime=runtime, agent=agent)
+        raise McpResolveError("project_root is required", runtime=runtime)
 
     ambient, sources = _merge_ambient(runtime, project_root, home, xdg)
     catalog = deepcopy(ambient)
     override_decisions: list[str] = []
-
-    if agent_entries:
-        if not isinstance(agent_entries, list):
-            raise McpResolveError("agent_mcp_servers must be an array", runtime=runtime, agent=agent)
-        catalog, agent_decisions = _apply_agent_overrides(catalog, ambient, agent_entries)
-        override_decisions.extend(agent_decisions)
 
     if _needs_ralph(ralph_mode, tool_access):
         if not server_script:
             raise McpResolveError(
                 "ralph MCP server script path is required when Ralph mode is active",
                 runtime=runtime,
-                agent=agent,
                 reason="missing_ralph_server_script",
                 searched_paths=sources,
             )
@@ -698,7 +604,7 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
                 ralph_env_extra[key] = val
         ralph_def = _ralph_server_definition(server_script, workspace, ralph_env_extra)
         if RESERVED_RALPH in catalog:
-            override_decisions.append("ralph:protected overlay replaces ambient/agent entry")
+            override_decisions.append("ralph:protected overlay replaces ambient entry")
         else:
             override_decisions.append("ralph:protected overlay applied")
         catalog[RESERVED_RALPH] = ralph_def
@@ -716,7 +622,6 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "runtime": runtime,
-        "agent": agent,
         "catalog_redacted": [_redact_server(server) for server in resolved_catalog.values()],
         "runtime_config": runtime_shape,
         "summary": summary,
@@ -724,11 +629,10 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _error_payload(exc: McpResolveError, runtime: str, agent: str, searched: list[str]) -> dict[str, Any]:
+def _error_payload(exc: McpResolveError, runtime: str, searched: list[str]) -> dict[str, Any]:
     return {
         "ok": False,
         "runtime": exc.runtime or runtime,
-        "agent": exc.agent or agent,
         "error": {
             "reason": exc.reason,
             "server": exc.server,
@@ -752,7 +656,6 @@ def cmd_resolve() -> None:
         print(json.dumps({"ok": False, "error": {"reason": "invalid_request", "message": str(exc)}}))
         sys.exit(1)
     runtime = str(request.get("runtime") or "")
-    agent = str(request.get("agent") or "")
     searched: list[str] = []
     try:
         project_root = os.path.abspath(str(request.get("project_root") or ""))
@@ -764,7 +667,7 @@ def cmd_resolve() -> None:
     except McpResolveError as exc:
         if not exc.searched_paths:
             exc.searched_paths = searched
-        print(json.dumps(_error_payload(exc, runtime, agent, searched)))
+        print(json.dumps(_error_payload(exc, runtime, searched)))
         sys.exit(1)
 
 

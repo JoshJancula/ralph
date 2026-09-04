@@ -23,6 +23,11 @@ SETUP_FIXTURES=1
 JOBS=""
 JOBS_EXPLICIT=0
 LIST_SUITE=0
+# Default to the fast tier so the bare command stays usable. CI passes an
+# explicit --tier for each job, so the gates are unaffected; run --tier all
+# locally when you want the slow and acceptance files too.
+TIER="fast"
+TIER_EXPLICIT=0
 BATS_ARGS=()
 USER_PATHS=0
 
@@ -119,6 +124,12 @@ Options:
   -j N, --jobs N        Run up to N tests in parallel. Requires GNU parallel or
                         rush on PATH. When omitted and a parallel runner is
                         available, defaults to min(8, available CPUs).
+  --tier TIER           Select a cost tier from tests/bats/tiers.json:
+                          fast        all but the slow and acceptance files (default)
+                          slow        the manifest's slow files
+                          acceptance  heavy end-to-end replays
+                          all         everything
+                        Cannot be combined with explicit test paths.
   --list-suite          Print the test file paths for the suite and exit.
   --no-setup-fixtures   Skip scripts/setup-test-fixtures.sh
   -h, --help            Show this help
@@ -132,12 +143,42 @@ populate_suite_paths() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     paths+=("$line")
-  done < <(ralph_bats_suite_files "$REPO_ROOT")
+  done < <(ralph_bats_tier_files "$REPO_ROOT" "$TIER")
   if [[ ${#paths[@]} -eq 0 ]]; then
-    echo "run-bats: no test files found" >&2
+    echo "run-bats: no test files found for tier: $TIER" >&2
     return 1
   fi
+  if [[ "$TIER_EXPLICIT" -eq 0 ]]; then
+    echo "run-bats: tier=fast (${#paths[@]} files). Use --tier all for the slow and acceptance files too." >&2
+  fi
+  if [[ "$TIER" == "fast" ]]; then
+    enforce_fast_budget || return 1
+  fi
   BATS_ARGS=("${paths[@]}")
+}
+
+# The fast tier is what CI gates every push on, so a file the checked-in timing
+# baseline records as expensive must not sit in it. This is a manifest lookup,
+# never a timing run: re-measuring is scripts/capture-bats-timing.sh's job.
+# The only sanctioned way to hold an over-budget file is to list it explicitly
+# in the "slow" or "acceptance" array of tests/bats/tiers.json, which removes it
+# from the fast tier by construction.
+enforce_fast_budget() {
+  local violations
+  violations="$(ralph_bats_fast_budget_violations "$REPO_ROOT")" || return 0
+  [[ -n "$violations" ]] || return 0
+  echo "run-bats: --tier fast holds file(s) the timing baseline records as over budget:" >&2
+  local file reason
+  while IFS=$'\t' read -r file reason; do
+    [[ -n "$file" ]] || continue
+    echo "  $file ($reason)" >&2
+  done <<<"$violations"
+  cat >&2 <<'EOF'
+run-bats: move each file into the "slow" or "acceptance" array of
+  tests/bats/tiers.json, or split it so every test stays inside the budget.
+  Raising the budget or deleting the baseline entry is not an exemption.
+EOF
+  return 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -158,6 +199,20 @@ while [[ $# -gt 0 ]]; do
     --suite)
       echo "run-bats: --suite is no longer supported; the extended tier was removed" >&2
       exit 1
+      ;;
+    --tier)
+      if [[ $# -lt 2 ]]; then
+        echo "run-bats: --tier requires an argument (fast|slow|acceptance|all)" >&2
+        exit 1
+      fi
+      case "$2" in
+        fast | slow | acceptance | all) TIER="$2"; TIER_EXPLICIT=1 ;;
+        *)
+          echo "run-bats: unknown tier: $2 (expected fast, slow, acceptance, or all)" >&2
+          exit 1
+          ;;
+      esac
+      shift 2
       ;;
     --list-suite)
       LIST_SUITE=1
@@ -190,9 +245,22 @@ if [[ "$LIST_SUITE" -eq 1 ]]; then
   if [[ "$USER_PATHS" -eq 1 ]]; then
     printf '%s\n' "${BATS_ARGS[@]}"
   else
-    ralph_bats_suite_files "$REPO_ROOT"
+    # An over-budget fast tier is refused here too: --list-suite is how CI and
+    # tooling ask what fast contains, and answering with a tier that must not
+    # run would just move the failure downstream.
+    if [[ "$TIER" == "fast" ]]; then
+      enforce_fast_budget || exit 1
+    fi
+    ralph_bats_tier_files "$REPO_ROOT" "$TIER"
   fi
   exit 0
+fi
+
+# Only an explicitly requested tier conflicts with explicit paths; the default
+# tier must not, or `run-bats.sh <file>` would stop working.
+if [[ "$USER_PATHS" -eq 1 && "$TIER_EXPLICIT" -eq 1 ]]; then
+  echo "run-bats: --tier cannot be combined with explicit test paths" >&2
+  exit 1
 fi
 
 if [[ "$USER_PATHS" -eq 0 ]]; then
@@ -215,7 +283,7 @@ cd "$REPO_ROOT"
 # Start the suite from a clean Ralph runtime state so inherited agent-shell
 # exports do not leak into test subprocesses.
 unset WORKSPACE OUTPUT_LOG LOG_FILE PROMPT_STATIC SESSION_ID_FILE SESSION_ID_FILE_LEGACY USAGE_FILE EXIT_CODE_FILE
-unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_OPTIMIZATION_MODE RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET
+unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET
 unset RALPH_PLAN_SESSION_HOME RALPH_SESSION_DIR RALPH_PLAN_KEY RALPH_ARTIFACT_NS RALPH_PROJECT_ROOT RALPH_AGENT_WORKSPACE RALPH_PLAN_WORKSPACE_ROOT RALPH_RUNTIME_ROOT
 unset RALPH_SHARED_RALPH_DIR RALPH_DIR RALPH_LAUNCHER_PID RALPH_BASH_COMPACT_LOG RALPH_BASH_REWRITE_LOG
 unset RALPH_PROXY_SHELL_COMPACT_LOG RALPH_MCP_PREFLIGHT_PASSED RALPH_NATIVE_SHELL_WRAPPER RALPH_SKIP_MCP_PREFLIGHT
@@ -224,6 +292,9 @@ unset RALPH_PLAN_INVOCATION_TIMEOUT_RAW RALPH_RUN_PLAN_RESET_COMMAND_USED RALPH_
 unset RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED RALPH_PROXY_SHELL_COMPACT RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME
 unset RALPH_MODE RALPH_PLAN_TODO_MAX_ITERATIONS RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID
 unset RALPH_RUN_PLAN_RESUME_BARE RALPH_STRICT_PROXY RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY RALPH_OPENCODE_SET_CACHE_KEY
+unset RALPH_PROCESS_RUN_DIR RALPH_PROCESS_RUN_ID RALPH_PROCESS_RUN_TOKEN RALPH_PROCESS_GUARDIAN_PID
+unset RALPH_PROCESS_RUN_OWNED RALPH_PROCESS_RUN_DEPTH RALPH_PROCESS_ATTACHED_PLAN RALPH_PROCESS_ALLOW_CHILD
+unset RALPH_PROCESS_SCOPE_TOKEN RALPH_PROCESS_SUPERVISOR_LOADED RALPH_ALLOW_NESTED_RUNS
 unset CURSOR_PLAN_CAFFEINATED CURSOR_PLAN_MODEL CURSOR_PLAN_VERBOSE CURSOR_PLAN_NO_COLOR CURSOR_PLAN_MAX_ITER
 unset CURSOR_PLAN_GUTTER_ITER CURSOR_PLAN_PROGRESS_INTERVAL CURSOR_PLAN_NO_CAFFEINATE CURSOR_PLAN_DISABLE_HUMAN_PROMPT
 unset CURSOR_PLAN_NO_OPEN CURSOR_PLAN_LOG CURSOR_PLAN_OUTPUT_LOG

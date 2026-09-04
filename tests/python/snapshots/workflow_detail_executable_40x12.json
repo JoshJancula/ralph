@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-seq-running",
+  "bug-fix | Sequential",
+  "RUNNING  Fix the timeout",
+  "1/2 stages  2m 0s",
+  "> succeeded research",
+  "research  executable  succeeded",
+  "Attempt  1  Duration  30s",
+  "Artifacts  research.md",
+  "",
+  "",
+  "",
+  ""
+]

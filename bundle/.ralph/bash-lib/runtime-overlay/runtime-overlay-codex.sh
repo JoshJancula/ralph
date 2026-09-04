@@ -33,6 +33,12 @@ _runtime_overlay_codex_hooks_dir() {
 
 _RUN_PLAN_INVOKE_CODEX_HOOKS_CONFIG_SUPPORTED_CACHE=""
 
+_run_plan_invoke_codex_hook_timeout() {
+  local timeout="${RALPH_BG_HOOK_TIMEOUT:-5400}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=5400
+  printf '%s\n' "$timeout"
+}
+
 _run_plan_invoke_codex_hooks_config_supported() {
   local cli_name="${1:-${CODEX_PLAN_CLI:-codex}}"
   if [[ -n "${_RUN_PLAN_INVOKE_CODEX_HOOKS_CONFIG_SUPPORTED_CACHE:-}" ]]; then
@@ -59,9 +65,11 @@ _run_plan_invoke_codex_hooks_config_supported() {
     return 1
   fi
 
+  # Codex enables hooks by default (disable via [features] hooks = false). The probe
+  # verifies that per-run hooks.* overrides parse; features.hooks=true is an
+  # idempotent explicit enable for untrusted or hooks-disabled projects.
   stderr_file="$(mktemp "${TMPDIR:-/tmp}/ralph-codex-hooks-probe.XXXXXX")"
   "$cli_name" exec \
-    --config 'features.hooks=true' \
     --config 'hooks.PostToolUse=[]' \
     >/dev/null 2>"$stderr_file" <<< "" || probe_status=$?
   if [[ "$probe_status" -ne 0 ]] && grep -qE 'unknown configuration field|Error parsing -c overrides|missing field' "$stderr_file" 2>/dev/null; then
@@ -84,11 +92,12 @@ _run_plan_invoke_codex_build_post_tool_use_toml() {
 }
 
 _run_plan_invoke_codex_native_hook_paths() {
-  local hooks_dir pre_cmd post_telemetry_cmd post_native_cmd probe_enabled
+  local hooks_dir pre_cmd post_telemetry_cmd post_native_cmd stop_cmd probe_enabled
   hooks_dir="$(_runtime_overlay_codex_hooks_dir)"
   pre_cmd="${hooks_dir}/pre-tool-bash-policy.sh"
   post_telemetry_cmd="${hooks_dir}/post-tool-bash-telemetry.sh"
   post_native_cmd="${hooks_dir}/post-tool-native-result-compact.sh"
+  stop_cmd="${hooks_dir}/stop-continuation.sh"
 
   probe_enabled="${RALPH_CODEX_POST_TOOL_PROBE:-0}"
   if [[ "$probe_enabled" == "1" ]]; then
@@ -102,15 +111,27 @@ _run_plan_invoke_codex_native_hook_paths() {
   if [[ ! -x "$pre_cmd" || ! -x "$post_telemetry_cmd" || ! -x "$post_native_cmd" ]]; then
     return 1
   fi
-  printf '%s\t%s\t%s\n' "$pre_cmd" "$post_telemetry_cmd" "$post_native_cmd"
+  if [[ "${RALPH_BG_JOBS:-0}" != "0" && ! -x "$stop_cmd" ]]; then
+    return 1
+  fi
+  printf '%s\t%s\t%s\t%s\n' "$pre_cmd" "$post_telemetry_cmd" "$post_native_cmd" "$stop_cmd"
 }
 
 _run_plan_invoke_codex_build_hook_group_toml() {
   local matcher="$1"
   local command_path="$2"
+  local timeout="${3:-30}"
   local escaped
   escaped="$(_run_plan_invoke_codex_toml_escape "$command_path")"
-  printf '[{matcher="%s",hooks=[{type="command",command="%s",timeout=30}]}]' "$matcher" "$escaped"
+  printf '[{matcher="%s",hooks=[{type="command",command="%s",timeout=%s}]}]' "$matcher" "$escaped" "$timeout"
+}
+
+_run_plan_invoke_codex_build_stop_hook_toml() {
+  local command_path="$1"
+  local timeout="${2:-5400}"
+  local escaped
+  escaped="$(_run_plan_invoke_codex_toml_escape "$command_path")"
+  printf '[{hooks=[{type="command",command="%s",timeout=%s}]}]' "$escaped" "$timeout"
 }
 
 _run_plan_invoke_codex_build_shell_hook_groups_toml() {
@@ -123,13 +144,15 @@ _run_plan_invoke_codex_build_shell_hook_groups_toml() {
 
 _run_plan_invoke_codex_append_native_hook_config_args() {
   local args_name="$1"
-  local paths pre_cmd post_telemetry_cmd post_native_cmd pre_group post_group
+  local paths pre_cmd post_telemetry_cmd post_native_cmd stop_cmd pre_group post_group hook_timeout stop_group
 
   paths="$(_run_plan_invoke_codex_native_hook_paths)" || return 1
   pre_cmd="${paths%%$'\t'*}"
   paths="${paths#*$'\t'}"
   post_telemetry_cmd="${paths%%$'\t'*}"
-  post_native_cmd="${paths#*$'\t'}"
+  paths="${paths#*$'\t'}"
+  post_native_cmd="${paths%%$'\t'*}"
+  stop_cmd="${paths#*$'\t'}"
 
   pre_group="$(_run_plan_invoke_codex_build_shell_hook_groups_toml "$pre_cmd")"
   post_group="$(_run_plan_invoke_codex_build_post_tool_use_toml "$post_telemetry_cmd" "$post_native_cmd")"
@@ -137,6 +160,11 @@ _run_plan_invoke_codex_append_native_hook_config_args() {
   _run_plan_invoke_codex_append_config "$args_name" 'features.hooks=true'
   _run_plan_invoke_codex_append_config "$args_name" "hooks.PreToolUse=$pre_group"
   _run_plan_invoke_codex_append_config "$args_name" "hooks.PostToolUse=$post_group"
+  if declare -F ralph_bg_tier_stop_hook_enabled >/dev/null 2>&1 && ralph_bg_tier_stop_hook_enabled; then
+    hook_timeout="$(_run_plan_invoke_codex_hook_timeout)"
+    stop_group="$(_run_plan_invoke_codex_build_stop_hook_toml "$stop_cmd" "$hook_timeout")"
+    _run_plan_invoke_codex_append_config "$args_name" "hooks.Stop=$stop_group"
+  fi
 }
 
 run_plan_invoke_codex_native_hooks_cleanup() {
@@ -145,7 +173,7 @@ run_plan_invoke_codex_native_hooks_cleanup() {
 
 run_plan_invoke_codex_native_hooks_prepare() {
   local requested="${RALPH_NATIVE_HOOKS:-}"
-  local overlay_mode="${RALPH_OPTIMIZATION_MODE:-}"
+  local tooling_profile="${RALPH_MODE:-}"
   local cli_name="${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}"
   local wrapper_enabled="${RALPH_NATIVE_SHELL_WRAPPER:-}"
 
@@ -156,8 +184,8 @@ run_plan_invoke_codex_native_hooks_prepare() {
   if declare -F runtime_overlay_set_native_hooks_requested >/dev/null 2>&1; then
     runtime_overlay_set_native_hooks_requested "${requested:-unset}"
   fi
-  if [[ -n "$overlay_mode" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
-    runtime_overlay_set_overlay_mode "$overlay_mode"
+  if [[ -n "$tooling_profile" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
+    runtime_overlay_set_overlay_mode "$tooling_profile"
   fi
 
   if ! ralph_native_hooks_want_activation; then

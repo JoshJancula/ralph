@@ -281,6 +281,295 @@ graph_preflight_format_table() {
   '
 }
 
+# ---------------------------------------------------------------------------
+# G04: invocation preview schema and confirmation identity.
+#
+# graph_preflight_build_preview is the one pure builder of the run/resume
+# invocation preview tuple. It reads only the already-compiled graph.json
+# and the plan file's bytes (for the two sha256 identities); it never
+# writes a ledger, workspace, or ambient config file, and it never invokes
+# a runtime CLI. graph_preflight_format_preview_text is the paired text
+# renderer: plan/namespace, the three roots, node count, parallelism,
+# publication/failure policy, a compact node/runtime/agent/model/workspace
+# table, and -- when a preflight report is also supplied -- every non-pass
+# finding with a copyable, non-mutating remedy. Column widths are fixed
+# rather than read from the terminal, so a narrow terminal truncates
+# cleanly instead of wrapping or erroring.
+# ---------------------------------------------------------------------------
+
+# graph_preflight_sha256_file <path>
+graph_preflight_sha256_file() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$path" | awk '{print $NF}'
+  else
+    echo "Error: no sha256 tool available" >&2
+    return 1
+  fi
+}
+
+# graph_preflight_sha256_string <value>
+graph_preflight_sha256_string() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
+  else
+    echo "Error: no sha256 tool available" >&2
+    return 1
+  fi
+}
+
+# graph_preflight_confirmation_id <preview-json-without-confirmationId>
+#
+# Canonical hashing uses sorted-key, compact JSON and excludes
+# confirmationId itself; the caller must not have added that field yet.
+graph_preflight_confirmation_id() {
+  local json="${1:-}"
+  local canonical
+  canonical="$(printf '%s' "$json" | jq -Sc .)" || return 1
+  graph_preflight_sha256_string "$canonical"
+}
+
+# graph_preflight_command_argv_json <operation> <plan-path> <invocation-mode>
+#
+# interactive-cli omits --yes (the same process collects the typed "run"
+# confirmation). confirmed-noninteractive (MCP or another confirmed caller)
+# includes --yes, so the argv covered by confirmationId, shown to the
+# operator, and eventually invoked is byte-for-byte identical.
+graph_preflight_command_argv_json() {
+  local operation="$1" plan_path="$2" invocation_mode="$3"
+  local -a argv=(bash .ralph/graph-run.sh "$operation" "$plan_path")
+  if [[ "$invocation_mode" == "confirmed-noninteractive" ]]; then
+    argv+=(--yes)
+  fi
+  printf '%s\n' "${argv[@]}" | jq -R . | jq -sc .
+}
+
+# graph_preflight_command_text <commandArgv-json>
+# Shell-escaped, space-joined rendering of commandArgv. No caller builds
+# its own ad hoc command string; this is the one owner.
+graph_preflight_command_text() {
+  local argv_json="${1:-}"
+  local -a argv=()
+  while IFS= read -r item; do
+    argv+=("$item")
+  done < <(printf '%s' "$argv_json" | jq -r '.[]')
+  local text="" part
+  for part in "${argv[@]}"; do
+    [[ -n "$text" ]] && text+=" "
+    text+="$(printf '%q' "$part")"
+  done
+  printf '%s\n' "$text"
+}
+
+# graph_preflight_preview_nodes_json <graph-json>
+# Compact per-node summary: id, type, runtime, role, model, workspaceMode.
+graph_preflight_preview_nodes_json() {
+  local graph="$1"
+  jq -c '[.nodes[] | {
+    id: .id,
+    type: (.type // "agent"),
+    runtime: (.stage.runtime // null),
+    role: (.stage.role // null),
+    model: (.stage.model // null),
+    workspaceMode: (.stage.workspaceMode // "shared")
+  }]' "$graph"
+}
+
+# graph_preflight_build_preview <operation> <invocation-mode> <plan-path> \
+#     <graph-json-path> <project-root> <state-root> <agent-workspace>
+#
+# Pure. Returns the G04 preview JSON object on stdout, including
+# confirmationId. Returns 1 without printing anything when a required input
+# is missing or invocationMode is not one of the two supported values.
+graph_preflight_build_preview() {
+  local operation="${1:-}" invocation_mode="${2:-}" plan_path="${3:-}"
+  local graph_json="${4:-}" project_root="${5:-}" state_root="${6:-}" agent_workspace="${7:-}"
+
+  if [[ -z "$operation" ]]; then
+    echo "Error: graph_preflight_build_preview requires an operation" >&2
+    return 1
+  fi
+  case "$invocation_mode" in
+    interactive-cli | confirmed-noninteractive) ;;
+    *)
+      echo "Error: invocationMode must be interactive-cli or confirmed-noninteractive, got: '$invocation_mode'" >&2
+      return 1
+      ;;
+  esac
+  if [[ ! -f "$plan_path" ]]; then
+    echo "Error: graph_preflight_build_preview requires an existing plan file: $plan_path" >&2
+    return 1
+  fi
+  if [[ ! -f "$graph_json" ]]; then
+    echo "Error: graph_preflight_build_preview requires a compiled graph.json: $graph_json" >&2
+    return 1
+  fi
+
+  local plan_sha graph_sha namespace max_parallel failure_policy publish_mode
+  local nodes_json argv_json command_text side_effects_json without_id confirmation_id
+
+  plan_sha="$(graph_preflight_sha256_file "$plan_path")" || return 1
+  graph_sha="$(graph_preflight_sha256_file "$graph_json")" || return 1
+  namespace="$(jq -r '.namespace' "$graph_json")"
+  max_parallel="$(jq -r '.maxParallel' "$graph_json")"
+  failure_policy="$(jq -r '.failurePolicy' "$graph_json")"
+  publish_mode="$(jq -r '.publishMode // "manual"' "$graph_json")"
+  nodes_json="$(graph_preflight_preview_nodes_json "$graph_json")"
+  argv_json="$(graph_preflight_command_argv_json "$operation" "$plan_path" "$invocation_mode")"
+  command_text="$(graph_preflight_command_text "$argv_json")"
+
+  case "$operation" in
+    run)
+      side_effects_json='["create-run-ledger","create-node-workspaces","invoke-models"]'
+      ;;
+    resume)
+      side_effects_json='["advance-run-ledger","create-node-workspaces","invoke-models"]'
+      ;;
+    *)
+      side_effects_json='[]'
+      ;;
+  esac
+
+  without_id="$(jq -nc \
+    --argjson schema "$GRAPH_PREFLIGHT_SCHEMA_VERSION" \
+    --arg operation "$operation" \
+    --arg invocationMode "$invocation_mode" \
+    --arg planPath "$plan_path" \
+    --arg planSha256 "$plan_sha" \
+    --arg graphSha256 "$graph_sha" \
+    --arg namespace "$namespace" \
+    --arg projectRoot "$project_root" \
+    --arg stateRoot "$state_root" \
+    --arg agentWorkspace "$agent_workspace" \
+    --argjson maxParallel "$max_parallel" \
+    --arg failurePolicy "$failure_policy" \
+    --arg publishMode "$publish_mode" \
+    --argjson nodes "$nodes_json" \
+    --argjson commandArgv "$argv_json" \
+    --arg commandText "$command_text" \
+    --argjson sideEffects "$side_effects_json" \
+    '{
+      schemaVersion: $schema,
+      operation: $operation,
+      invocationMode: $invocationMode,
+      planPath: $planPath,
+      planSha256: $planSha256,
+      graphSha256: $graphSha256,
+      namespace: $namespace,
+      roots: {
+        projectRoot: $projectRoot,
+        stateRoot: $stateRoot,
+        agentWorkspace: $agentWorkspace
+      },
+      maxParallel: $maxParallel,
+      failurePolicy: $failurePolicy,
+      publishMode: $publishMode,
+      nodes: $nodes,
+      commandArgv: $commandArgv,
+      commandText: $commandText,
+      sideEffects: $sideEffects
+    }')" || return 1
+
+  confirmation_id="$(graph_preflight_confirmation_id "$without_id")" || return 1
+
+  jq -c --arg cid "$confirmation_id" '. + {confirmationId: $cid}' <<<"$without_id"
+}
+
+# graph_preflight_format_preview_text <preview-json> [report-json]
+#
+# Human explanation view built only from already-computed JSON (the
+# preview from graph_preflight_build_preview and, optionally, the report
+# from graph_preflight_report). Prints plan/namespace, the three roots,
+# node count, parallelism, publication/failure policy, a compact node
+# table, and -- when a report is supplied -- every non-pass finding with a
+# copyable, non-mutating remedy (login, list models, edit a plan scope;
+# never a command that creates a run or mutates graph/ledger/workspace
+# state).
+graph_preflight_format_preview_text() {
+  local preview_json="${1:-}"
+  local report_json="${2:-}"
+
+  if [[ -z "$preview_json" ]]; then
+    echo "Error: graph_preflight_format_preview_text requires a preview JSON" >&2
+    return 1
+  fi
+
+  local plan_path namespace project_root state_root agent_workspace
+  local node_count max_parallel failure_policy publish_mode operation invocation_mode
+
+  plan_path="$(jq -r '.planPath' <<<"$preview_json")"
+  namespace="$(jq -r '.namespace' <<<"$preview_json")"
+  project_root="$(jq -r '.roots.projectRoot' <<<"$preview_json")"
+  state_root="$(jq -r '.roots.stateRoot' <<<"$preview_json")"
+  agent_workspace="$(jq -r '.roots.agentWorkspace' <<<"$preview_json")"
+  node_count="$(jq -r '.nodes | length' <<<"$preview_json")"
+  max_parallel="$(jq -r '.maxParallel' <<<"$preview_json")"
+  failure_policy="$(jq -r '.failurePolicy' <<<"$preview_json")"
+  publish_mode="$(jq -r '.publishMode' <<<"$preview_json")"
+  operation="$(jq -r '.operation' <<<"$preview_json")"
+  invocation_mode="$(jq -r '.invocationMode' <<<"$preview_json")"
+
+  printf 'Plan: %s\n' "$plan_path"
+  printf 'Namespace: %s\n' "$namespace"
+  printf 'Operation: %s (%s)\n' "$operation" "$invocation_mode"
+  printf 'Roots:\n'
+  printf '  projectRoot:    %s\n' "$project_root"
+  printf '  stateRoot:      %s\n' "$state_root"
+  printf '  agentWorkspace: %s\n' "$agent_workspace"
+  printf 'Nodes: %s\n' "$node_count"
+  printf 'Parallelism: maxParallel=%s failurePolicy=%s\n' "$max_parallel" "$failure_policy"
+  printf 'Publication: publishMode=%s\n' "$publish_mode"
+  printf '\n'
+
+  awk 'BEGIN { printf "%-20s%-12s%-24s%-16s\n", "ID", "RUNTIME", "MODEL", "WORKSPACE" }'
+  jq -r '.nodes[] | [
+      .id,
+      (.runtime // "-"),
+      (.model // "-"),
+      .workspaceMode
+    ] | @tsv' <<<"$preview_json" | awk -F'\t' '
+    BEGIN { w[1]=20; w[2]=12; w[3]=24; w[4]=16 }
+    {
+      for (i=1;i<=4;i++) {
+        s=$i
+        if (length(s) > w[i]) s=substr(s,1,w[i]-1) ">"
+        printf "%-*s", w[i], s
+      }
+      printf "\n"
+    }
+  '
+
+  if [[ -n "$report_json" ]]; then
+    printf '\n'
+    printf 'Findings:\n'
+    local remaining
+    remaining="$(jq -r '[.findings[] | select(.status != "pass")] | length' <<<"$report_json")"
+    if [[ "$remaining" -eq 0 ]]; then
+      printf '  (none; all checks passed)\n'
+    else
+      local id status summary repair status_upper
+      while IFS=$'\034' read -r id status summary repair || [[ -n "$id" ]]; do
+        [[ -n "$id" ]] || continue
+        status_upper="$(printf '%s' "$status" | tr '[:lower:]' '[:upper:]')"
+        printf '  [%s] %s\n' "$status_upper" "$id"
+        printf '      %s\n' "$summary"
+        if [[ -n "$repair" && "$repair" != "null" ]]; then
+          printf '      Remedy (non-mutating, copy/paste): %s\n' "$repair"
+        fi
+      done < <(jq -r '.findings[] | select(.status != "pass") | [.id, .status, .summary, (.repair // "")] | join("")' <<<"$report_json")
+    fi
+  fi
+}
+
 _graph_preflight_check_workspace_node() {
   local findings="$1" node_id="$2" mode="$3" runtime="$4"
   local scopes_json="$5" ack="$6" git_access="$7" caps="$8"

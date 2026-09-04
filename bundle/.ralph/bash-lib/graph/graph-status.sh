@@ -12,7 +12,7 @@
 #   attempt count, duration. With --details, also prints verbose per-node and
 #   per-attempt observability metadata (workspace mode, write scopes, gate
 #   outcome, changeset hash, consensus voter provenance and dissent,
-#   brokered children, native subagent events) plus efficiency signals
+#   delegated runs, native subagent events) plus efficiency signals
 #   (elapsed active/wait time, reliable usage or n/a, retry classification,
 #   repeated-tool-call hints). --json includes the same efficiency fields.
 #   With --mermaid, also prints a mermaid flowchart with a classDef per state
@@ -45,6 +45,10 @@ fi
 if ! declare -F graph_heartbeat_classify_run >/dev/null 2>&1; then
   # shellcheck source=graph-heartbeat.sh
   source "$GRAPH_STATUS_SCRIPT_DIR/graph-heartbeat.sh"
+fi
+if ! declare -F graph_operator_view_build >/dev/null 2>&1; then
+  # shellcheck source=graph-operator-view.sh
+  source "$GRAPH_STATUS_SCRIPT_DIR/graph-operator-view.sh"
 fi
 
 # _graph_status_now_epoch
@@ -211,7 +215,7 @@ _graph_status_attempts_extra() {
     hash="$(jq -r --argjson idx "$i" '.attempts[$idx].changesetHash // empty' "$node_file" 2>/dev/null)"
     conflict="$(jq -r --argjson idx "$i" '.attempts[$idx].conflictArtifact // empty' "$node_file" 2>/dev/null)"
     outcome="$(jq -r --argjson idx "$i" '.attempts[$idx].gateOutcome // empty' "$node_file" 2>/dev/null)"
-    subagent_mode="$(jq -r --argjson idx "$i" '.attempts[$idx].nativeSubagentMode // empty' "$node_file" 2>/dev/null)"
+    subagent_mode="$(jq -r --argjson idx "$i" '.attempts[$idx].nativeSubagents // .attempts[$idx].nativeSubagentMode // empty' "$node_file" 2>/dev/null)"
     cross_mode="$(jq -r --argjson idx "$i" '.attempts[$idx].crossRuntimeMode // empty' "$node_file" 2>/dev/null)"
     integration="$(jq -r --argjson idx "$i" '.attempts[$idx].integrationInputs // empty' "$node_file" 2>/dev/null)"
     usage="$(jq -r --argjson idx "$i" '.attempts[$idx].usageSnapshot // empty' "$node_file" 2>/dev/null)"
@@ -227,7 +231,7 @@ _graph_status_attempts_extra() {
       [[ -n "$hash" ]] && printf ' changesetHash=%s' "${hash:0:16}"
       [[ -n "$conflict" ]] && printf ' conflictArtifact=%s' "$conflict"
       [[ -n "$outcome" ]] && printf ' gateOutcome=%s' "$outcome"
-      [[ -n "$subagent_mode" ]] && printf ' nativeSubagent=%s' "$subagent_mode"
+      [[ -n "$subagent_mode" ]] && printf ' nativeSubagents=%s' "$subagent_mode"
       [[ -n "$cross_mode" ]] && printf ' crossRuntime=%s' "$cross_mode"
       [[ -n "$integration" ]] && printf ' integration=%s' "$integration"
       [[ -n "$usage" ]] && printf ' usage=%s' "$usage"
@@ -241,11 +245,11 @@ _graph_status_attempts_extra() {
 
 # _graph_status_node_extra <node_file>
 # Print per-node metadata (aggregated from the latest attempt or the node
-# entry itself) when it carries v2 observability fields.
+# entry itself) when it carries extended observability fields.
 _graph_status_node_extra() {
   local node_file="$1" node_id="$2"
   [[ -f "$node_file" ]] || return 0
-  jq -e 'has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")' "$node_file" >/dev/null 2>&1 || return 0
+  jq -e 'has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagents") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")' "$node_file" >/dev/null 2>&1 || return 0
   local mode path scopes base baseline hash conflict outcome subagent_mode cross_mode integration usage publish repair_epoch admission verification_classes
   mode="$(jq -r '.workspaceMode // empty' "$node_file" 2>/dev/null)"
   path="$(jq -r '.workspacePath // empty' "$node_file" 2>/dev/null)"
@@ -255,7 +259,7 @@ _graph_status_node_extra() {
   hash="$(jq -r '.changesetHash // empty' "$node_file" 2>/dev/null)"
   conflict="$(jq -r '.conflictArtifact // empty' "$node_file" 2>/dev/null)"
   outcome="$(jq -r '.gateOutcome // empty' "$node_file" 2>/dev/null)"
-  subagent_mode="$(jq -r '.nativeSubagentMode // empty' "$node_file" 2>/dev/null)"
+  subagent_mode="$(jq -r '.nativeSubagents // .nativeSubagentMode // empty' "$node_file" 2>/dev/null)"
   cross_mode="$(jq -r '.crossRuntimeMode // empty' "$node_file" 2>/dev/null)"
   integration="$(jq -r '.integrationInputs // empty' "$node_file" 2>/dev/null)"
   usage="$(jq -r '.usageSnapshot // empty' "$node_file" 2>/dev/null)"
@@ -273,7 +277,7 @@ _graph_status_node_extra() {
     [[ -n "$hash" ]] && printf ' changesetHash=%s' "${hash:0:16}"
     [[ -n "$conflict" ]] && printf ' conflictArtifact=%s' "$conflict"
     [[ -n "$outcome" ]] && printf ' gateOutcome=%s' "$outcome"
-    [[ -n "$subagent_mode" ]] && printf ' nativeSubagent=%s' "$subagent_mode"
+    [[ -n "$subagent_mode" ]] && printf ' nativeSubagents=%s' "$subagent_mode"
     [[ -n "$cross_mode" ]] && printf ' crossRuntime=%s' "$cross_mode"
     [[ -n "$integration" ]] && printf ' integrationInputs=%s' "$integration"
     [[ -n "$usage" ]] && printf ' usage=%s' "$usage"
@@ -361,22 +365,23 @@ _graph_status_consensus_voters() {
   fi
 }
 
-# _graph_status_brokered_children <workspace> <namespace> <run_id> <node_id>
-# Print durable brokered child provenance as nested rows. Brokered children are
+# _graph_status_delegated_runs <workspace> <namespace> <run_id> <node_id>
+# Print durable delegated-run provenance as nested rows. Delegated runs are
 # ledger children of the parent node, not peer nodes in the frozen DAG.
-_graph_status_brokered_children() {
+_graph_status_delegated_runs() {
   local workspace="$1" namespace="$2" run_id="$3" node_id="$4"
   local root dir
-  root="$(graph_delegation_ledger_root "$workspace" "$namespace" "$run_id" "$node_id" 2>/dev/null)" || return 0
+  root="$(graph_delegation_ledger_root "$workspace" 2>/dev/null)" || return 0
   [[ -d "$root" ]] || return 0
-  for dir in "$root"/delegation-*; do
+  for dir in "$root"/delegated-run-*; do
     [[ -d "$dir" && -f "$dir/request.json" && -f "$dir/status.json" ]] || continue
-    local did runtime state result
-    did="$(jq -r '.delegationId // empty' "$dir/request.json" 2>/dev/null)"
+    local did runtime role state
+    did="$(jq -r '.delegatedRunId // empty' "$dir/request.json" 2>/dev/null)"
     runtime="$(jq -r '.runtime // empty' "$dir/request.json" 2>/dev/null)"
+    role="$(jq -r '.role // empty' "$dir/request.json" 2>/dev/null)"
     state="$(jq -r '.status // unknown' "$dir/status.json" 2>/dev/null)"
-    printf '    brokered child=%-22s runtime=%-10s state=%s\n' \
-      "${did:-?}" "${runtime:-?}" "${state:-?}"
+    printf '    delegated run=%-30s runtime=%-10s role=%-14s state=%s\n' \
+      "${did:-?}" "${runtime:-?}" "${role:-none}" "${state:-?}"
   done
 }
 
@@ -418,12 +423,12 @@ _graph_status_subagent_events() {
   printf '%s\n' "$filtered"
 }
 
-# _graph_status_usage_aggregate <nodes-dir>
+# _graph_status_usage_aggregate <nodes-dir> [workspace]
 # Parent summaries are cumulative snapshots, so retain only the latest
-# snapshot per durable node. Brokered children are separate durable attempts:
-# sum their status usage once per child ledger, never through the parent.
+# snapshot per durable node. Delegated runs are separate durable attempts: sum
+# their status usage once per ledger record, never through the parent.
 _graph_status_usage_aggregate() {
-  local nodes_dir="$1" child_files=()
+  local nodes_dir="$1" workspace="${2:-}" child_files=()
   [[ -d "$nodes_dir" ]] || return 0
   local node_usage child_usage
   node_usage="$(jq -cs '
@@ -438,9 +443,14 @@ _graph_status_usage_aggregate() {
       | select(type == "object")
     ] | add_numbers
   ' "$nodes_dir"/*.json 2>/dev/null)" || node_usage='{}'
-  for child in "$nodes_dir"/*/delegations/delegation-*/status.json; do
-    [[ -f "$child" ]] && child_files+=("$child")
-  done
+  # Delegated-run usage lives in the flat state-root ledger, not under the node.
+  local _delegated_root
+  _delegated_root="$(graph_delegation_ledger_root "$workspace" 2>/dev/null || true)"
+  if [[ -n "$_delegated_root" ]]; then
+    for child in "$_delegated_root"/delegated-run-*/status.json; do
+      [[ -f "$child" ]] && child_files+=("$child")
+    done
+  fi
   if [[ "${#child_files[@]}" -gt 0 ]]; then
     child_usage="$(jq -cs '
       def add_numbers: reduce .[] as $o ({}; reduce ($o | to_entries[]? | select(.value | type == "number")) as $e (. ; .[$e.key] = ((.[$e.key] // 0) + $e.value)));
@@ -453,7 +463,7 @@ _graph_status_usage_aggregate() {
   # were spent; show that distinction explicitly instead of an empty object.
   [[ "$node_usage" == "{}" ]] && node_usage="n/a"
   [[ "$child_usage" == "{}" ]] && child_usage="n/a"
-  printf '  usage parent=%s brokered-children=%s\n' "$node_usage" "$child_usage"
+  printf '  usage parent=%s delegated-runs=%s\n' "$node_usage" "$child_usage"
   return 0
 }
 
@@ -472,7 +482,6 @@ _graph_status_concurrency_reductions() {
   reductions="$(printf '%s\n' "$events" | jq -r '
     select(.event == "admission") |
     if .details.workKind == "broker-child" and .details.decision == "denied" then "broker-capacity"
-    elif .details.subagents == "on" then "native-subagent-reservation"
     elif .details.sameRuntimeParallelSafe == false then "runtime-overlay"
     elif ((.details.reason // "") | test("verification|resource"; "i")) then "verification-resource-class"
     else empty end
@@ -496,7 +505,6 @@ _graph_status_concurrency_reductions_json() {
   printf '%s\n' "$events" | jq -r '
     select(.event == "admission") |
     if .details.workKind == "broker-child" and .details.decision == "denied" then "broker-capacity"
-    elif .details.subagents == "on" then "native-subagent-reservation"
     elif .details.sameRuntimeParallelSafe == false then "runtime-overlay"
     elif ((.details.reason // "") | test("verification|resource"; "i")) then "verification-resource-class"
     else empty end
@@ -817,7 +825,7 @@ _graph_status_json_node() {
 #
 # By default, output is the run summary plus the node table only. Verbose
 # per-node/per-attempt metadata (workspace mode, write scopes, gate outcome,
-# changeset hash, consensus voter provenance, brokered children, native
+# changeset hash, consensus voter provenance, delegated runs, native
 # subagent events, efficiency signals, and similar observability detail) is
 # printed only with --details. The mermaid flowchart is printed only with
 # --mermaid. --json emits a structured JSON object including owner-health,
@@ -870,8 +878,23 @@ graph_status_run() {
   started_at="$(jq -r '.startedAt // ""' "$run_file")"
   plan_path="$(jq -r '.planPath // ""' "$run_file")"
   owner_health="$(graph_heartbeat_classify_run "$workspace" "$namespace" "$run_id")" || owner_health="unknown"
+  case "$run_status" in
+    succeeded|failed|cancelled) owner_health="terminal" ;;
+  esac
 
-  if [[ "$show_json" -eq 0 ]]; then
+  local operator_view_json="" operator_default=0
+  operator_view_json="$(graph_operator_view_build "$workspace" "$namespace" "$run_id" 2>/dev/null)" || operator_view_json=""
+
+  if [[ "$show_json" -eq 0 && "$show_details" -eq 0 && -n "$operator_view_json" ]]; then
+    graph_operator_view_format_text "$operator_view_json"
+    operator_default=1
+    if [[ "$show_mermaid" -eq 0 ]]; then
+      return 0
+    fi
+    printf '\n'
+  fi
+
+  if [[ "$show_json" -eq 0 && "$operator_default" -eq 0 ]]; then
     printf '# graph status  run=%s  namespace=%s  status=%s  owner-health=%s\n' \
       "$run_id" "$namespace" "$run_status" "$owner_health"
     if [[ -n "$plan_path" ]]; then
@@ -888,7 +911,7 @@ graph_status_run() {
   events_jsonl="$(_graph_status_read_events_safe "$run_dir")"
 
   if [[ "$show_json" -eq 0 ]]; then
-    _graph_status_usage_aggregate "$nodes_dir"
+    _graph_status_usage_aggregate "$nodes_dir" "$workspace"
     _graph_status_concurrency_reductions "$run_dir" "$events_jsonl"
     printf '\n'
 
@@ -922,12 +945,12 @@ graph_status_run() {
 
     if [[ -f "$node_file" ]]; then
       # Attempt count is the number of unique attemptId values, not the raw
-      # attempts[] record count: a v1 ledger appends one record per
+      # attempts[] record count: the append-only ledger records one entry per
       # transition (running, then terminal), so a single attempt can occupy
       # two records that must collapse to one for display.
       node_fields="$(jq -r '
         (.writeScopes // .attempts[-1].writeScopes // []) as $scopes |
-        [(.status // "pending"), ((.attempts // []) | map(.attemptId) | unique | length), (.attempts[-1].startedAt // ""), (.attempts[-1].finishedAt // ""), (.workspaceMode // .attempts[-1].workspaceMode // "-"), (.frozenBase // .attempts[-1].frozenBase // "-"), (if ($scopes | length) == 0 then "-" elif ($scopes | length) == 1 then $scopes[0] else ($scopes[0] + " +" + (($scopes | length) - 1 | tostring)) end), (if (has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")) then "yes" else "no" end)] | @tsv
+        [(.status // "pending"), ((.attempts // []) | map(.attemptId) | unique | length), (.attempts[-1].startedAt // ""), (.attempts[-1].finishedAt // ""), (.workspaceMode // .attempts[-1].workspaceMode // "-"), (.frozenBase // .attempts[-1].frozenBase // "-"), (if ($scopes | length) == 0 then "-" elif ($scopes | length) == 1 then $scopes[0] else ($scopes[0] + " +" + (($scopes | length) - 1 | tostring)) end), (if (has("workspaceMode") or has("workspacePath") or has("writeScopes") or has("frozenBase") or has("changesetHash") or has("conflictArtifact") or has("gateOutcome") or has("nativeSubagents") or has("nativeSubagentMode") or has("crossRuntimeMode") or has("integrationInputs") or has("usageSnapshot") or has("publishReadiness") or has("repairEpoch") or has("admissionSummary") or has("verificationResourceClasses")) then "yes" else "no" end)] | @tsv
       ' "$node_file" 2>/dev/null)"
       local last_started last_finished
       local has_observability="no"
@@ -939,12 +962,12 @@ graph_status_run() {
     local eff_json
     eff_json="$(_graph_status_efficiency_json "$node_file" "$run_dir")"
 
-    if [[ "$show_json" -eq 0 ]]; then
+    if [[ "$show_json" -eq 0 && "$operator_default" -eq 0 ]]; then
       _graph_status_table_row "$nid" "$ntype" "${runtime:--}" "$node_state" \
         "$attempts_count" "$duration" "$mode" "$base" "$scopes"
 
       if [[ "$show_details" -eq 1 ]]; then
-        # Print v2 per-node metadata (workspace, scopes, gate outcome, etc.).
+        # Print per-node metadata (workspace, scopes, gate outcome, etc.).
         if [[ "${has_observability:-no}" == "yes" ]]; then
           _graph_status_node_extra "$node_file" "$nid"
         fi
@@ -956,7 +979,7 @@ graph_status_run() {
 
         # Brokered children are durable ledger children, not DAG peer nodes.
         if [[ "$ntype" == "agent" || "$ntype" == "stage" ]]; then
-          _graph_status_brokered_children "$workspace" "$namespace" "$run_id" "$nid"
+          _graph_status_delegated_runs "$workspace" "$namespace" "$run_id" "$nid"
         fi
 
         # Best-effort native subagent events (logged when the runtime supports them).
@@ -1007,6 +1030,7 @@ graph_status_run() {
       --arg runId "$run_id" --arg namespace "$namespace" --arg status "$run_status" \
       --arg ownerHealth "$owner_health" --arg startedAt "$started_at" --arg planPath "$plan_path" \
       --argjson reductions "$reductions_json" \
+      --argjson operatorView "${operator_view_json:-null}" \
       '
         def add_num(x; y):
           if (x | type) == "number" and (y | type) == "number" then x + y
@@ -1028,12 +1052,20 @@ graph_status_run() {
           | if . == {} or . == {"reliability":"authoritative"} then "n/a" else . end;
         . as $nodes
         | {
+            schema: (if $operatorView == null then null else $operatorView.schema end),
+            schemaVersion: (if $operatorView == null then null else $operatorView.schemaVersion end),
             runId: $runId,
             namespace: $namespace,
             status: $status,
             ownerHealth: $ownerHealth,
             startedAt: $startedAt,
             planPath: $planPath,
+            run: (if $operatorView == null then null else $operatorView.run end),
+            attention: (if $operatorView == null then [] else $operatorView.attention end),
+            active: (if $operatorView == null then [] else $operatorView.active end),
+            completed: (if $operatorView == null then null else $operatorView.completed end),
+            pending: (if $operatorView == null then null else $operatorView.pending end),
+            nextActions: (if $operatorView == null then [] else $operatorView.nextActions end),
             concurrencyReductions: $reductions,
             efficiency: {
               attempts: ([ $nodes[].attempts // 0 ] | add // 0),
@@ -1064,7 +1096,7 @@ graph_status_run() {
   # Node definitions with state class.
   printf '%s\n' "$mermaid_definitions"
   # Definitions were captured with the table data above so live status remains
-  # responsive while a run is executing. Keep the legacy construction below
+  # responsive while a run is executing. Keep the alternate construction below
   # as reference for output compatibility without re-reading every ledger file.
   if false; then
   local safe_nid_def escaped_label ntype_def runtime_def

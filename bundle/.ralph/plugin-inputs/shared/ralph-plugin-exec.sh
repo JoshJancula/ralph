@@ -14,12 +14,14 @@ RALPH_EXECUTED=0
 KIND=""
 PLAN_PATH=""
 RUNTIME=""
-AGENT=""
 MODEL=""
+MODEL_SOURCE=""
+NATIVE_SUBAGENTS="inherit"
 PROJECT_ROOT=""
 STATE_ROOT=""
 AGENT_ROOT=""
-NAMESPACE=""
+TASK=""
+INPUT_PLAN=""
 RUN_ID=""
 CONFIRMATION_ID=""
 REQUEST=""
@@ -28,21 +30,22 @@ EXECUTION_CONSENT="not-offered"
 
 usage() {
   cat <<'USAGE'
-Usage: ralph-plugin-exec.sh preview --kind plan|orchestration|graph-run|graph-resume --plan <path> [options]
+Usage: ralph-plugin-exec.sh preview --kind plan|workflow-start|workflow-resume [options]
        ralph-plugin-exec.sh execute --confirmation-id <sha256> --request <text> [options]
 
 preview options:
-  --kind <kind>                 plan, orchestration, graph-run, or graph-resume
-  --plan <path>                 Plan file to invoke
+  --kind <kind>                 plan, workflow-start, or workflow-resume
+  --plan <path>                 Leaf plan (kind=plan) or workflow file (kind=workflow-start)
+  --task <text>                 Optional task for workflow-start
+  --input-plan <path>           Optional supplied leaf plan for workflow-start (--plan on CLI)
   --runtime <name>              Runtime when resolved
-  --agent <name>                Agent when resolved
   --model <name>                Model when resolved
+  --native-subagents <mode>     Native runtime subagents: off or inherit
   --workspace <path>            Project root (alias: --project-root)
   --project-root <path>         Alias for --workspace
   --workspace-root <path>       State root (.ralph-workspace)
   --agent-workspace <path>      Agent workspace root
-  --namespace <ns>              Graph namespace
-  --run <id>                    Graph resume run id
+  --run <id>                    Workflow run id (workflow-resume)
 
 execute options:
   all preview options, plus:
@@ -129,17 +132,13 @@ build_command() {
   COMMAND=""
   cmd_push "$RALPH_COMMAND_NAME"
   case "$KIND" in
-    plan|orchestration)
+    plan)
       cmd_push "run"
       cmd_push "--plan"
       cmd_push_quoted "$PLAN_PATH"
       if [[ -n "$RUNTIME" ]]; then
         cmd_push "--runtime"
         cmd_push_quoted "$RUNTIME"
-      fi
-      if [[ -n "$AGENT" ]]; then
-        cmd_push "--agent"
-        cmd_push_quoted "$AGENT"
       fi
       if [[ -n "$MODEL" ]]; then
         cmd_push "--model"
@@ -152,24 +151,33 @@ build_command() {
       cmd_push "--agent-workspace"
       cmd_push_quoted "$AGENT_ROOT"
       ;;
-    graph-run)
-      cmd_push "graph"
-      cmd_push "run"
+    workflow-start)
+      cmd_push "workflow"
+      cmd_push "start"
+      cmd_push "--file"
       cmd_push_quoted "$PLAN_PATH"
-      if [[ -n "$NAMESPACE" ]]; then
-        cmd_push "--namespace"
-        cmd_push_quoted "$NAMESPACE"
+      if [[ -n "$TASK" ]]; then
+        cmd_push "--task"
+        cmd_push_quoted "$TASK"
+      fi
+      if [[ -n "$INPUT_PLAN" ]]; then
+        cmd_push "--plan"
+        cmd_push_quoted "$INPUT_PLAN"
+      fi
+      if [[ -n "$RUNTIME" ]]; then
+        cmd_push "--runtime"
+        cmd_push_quoted "$RUNTIME"
+      fi
+      if [[ -n "$MODEL" ]]; then
+        cmd_push "--model"
+        cmd_push_quoted "$MODEL"
       fi
       cmd_push "--workspace"
       cmd_push_quoted "$PROJECT_ROOT"
       ;;
-    graph-resume)
-      cmd_push "graph"
+    workflow-resume)
+      cmd_push "workflow"
       cmd_push "resume"
-      cmd_push_quoted "$PLAN_PATH"
-      cmd_push "--namespace"
-      cmd_push_quoted "$NAMESPACE"
-      cmd_push "--run"
       cmd_push_quoted "$RUN_ID"
       cmd_push "--workspace"
       cmd_push_quoted "$PROJECT_ROOT"
@@ -186,8 +194,12 @@ canonical_tuple() {
     "stateRoot=${STATE_ROOT}" \
     "agentRoot=${AGENT_ROOT}" \
     "runtime=${RUNTIME}" \
-    "agent=${AGENT}" \
     "model=${MODEL}" \
+    "modelSource=${MODEL_SOURCE}" \
+    "nativeSubagents=${NATIVE_SUBAGENTS}" \
+    "task=${TASK}" \
+    "inputPlan=${INPUT_PLAN}" \
+    "runId=${RUN_ID}" \
     "command=${COMMAND}"
 }
 
@@ -199,8 +211,12 @@ emit_preview() {
   printf 'stateRoot: %s\n' "$STATE_ROOT"
   printf 'agentRoot: %s\n' "$AGENT_ROOT"
   printf 'runtime: %s\n' "$RUNTIME"
-  printf 'agent: %s\n' "$AGENT"
   printf 'model: %s\n' "$MODEL"
+  printf 'model source: %s\n' "$MODEL_SOURCE"
+  printf 'native subagents: %s\n' "$NATIVE_SUBAGENTS"
+  printf 'task: %s\n' "${TASK:-none}"
+  printf 'inputPlan: %s\n' "${INPUT_PLAN:-none}"
+  printf 'runId: %s\n' "${RUN_ID:-none}"
   printf 'command: %s\n' "$COMMAND"
   printf 'confirmationId: %s\n' "$confirmation_id"
   printf '{'
@@ -211,8 +227,12 @@ emit_preview() {
   printf '"stateRoot":"%s",' "$(json_escape "$STATE_ROOT")"
   printf '"agentRoot":"%s",' "$(json_escape "$AGENT_ROOT")"
   printf '"runtime":"%s",' "$(json_escape "$RUNTIME")"
-  printf '"agent":"%s",' "$(json_escape "$AGENT")"
   printf '"model":"%s",' "$(json_escape "$MODEL")"
+  printf '"modelSource":"%s",' "$(json_escape "$MODEL_SOURCE")"
+  printf '"nativeSubagents":"%s",' "$(json_escape "$NATIVE_SUBAGENTS")"
+  printf '"task":"%s",' "$(json_escape "$TASK")"
+  printf '"inputPlan":"%s",' "$(json_escape "$INPUT_PLAN")"
+  printf '"runId":"%s",' "$(json_escape "$RUN_ID")"
   printf '"command":"%s",' "$(json_escape "$COMMAND")"
   printf '"confirmationId":"%s"' "$(json_escape "$confirmation_id")"
   printf '}\n'
@@ -237,19 +257,32 @@ parse_args() {
         PLAN_PATH=$2
         shift 2
         ;;
+      --task)
+        [[ -n "${2-}" ]] || die "ralph-plugin-exec: --task requires a value"
+        TASK=$2
+        shift 2
+        ;;
+      --input-plan)
+        [[ -n "${2-}" ]] || die "ralph-plugin-exec: --input-plan requires a path"
+        INPUT_PLAN=$2
+        shift 2
+        ;;
       --runtime)
         [[ -n "${2-}" ]] || die "ralph-plugin-exec: --runtime requires a value"
         RUNTIME=$2
         shift 2
         ;;
-      --agent)
-        [[ -n "${2-}" ]] || die "ralph-plugin-exec: --agent requires a value"
-        AGENT=$2
-        shift 2
+      --role|--agent)
+        die "ralph-plugin-exec: --role was removed; Ralph plugins no longer ship roles"
         ;;
       --model)
         [[ -n "${2-}" ]] || die "ralph-plugin-exec: --model requires a value"
         MODEL=$2
+        shift 2
+        ;;
+      --native-subagents)
+        [[ -n "${2-}" ]] || die "ralph-plugin-exec: --native-subagents requires a value"
+        NATIVE_SUBAGENTS=$2
         shift 2
         ;;
       --workspace|--project-root)
@@ -268,9 +301,7 @@ parse_args() {
         shift 2
         ;;
       --namespace)
-        [[ -n "${2-}" ]] || die "ralph-plugin-exec: --namespace requires a value"
-        NAMESPACE=$2
-        shift 2
+        die "ralph-plugin-exec: --namespace was removed; use workflow run ids"
         ;;
       --run)
         [[ -n "${2-}" ]] || die "ralph-plugin-exec: --run requires a value"
@@ -310,16 +341,23 @@ parse_args() {
 
 resolve_tuple() {
   case "$KIND" in
-    plan|orchestration|graph-run|graph-resume) ;;
+    plan|workflow-start|workflow-resume) ;;
     "") die "ralph-plugin-exec: --kind is required" ;;
     *) die "ralph-plugin-exec: unknown kind: $KIND" ;;
   esac
-  [[ -n "$PLAN_PATH" ]] || die "ralph-plugin-exec: --plan is required"
-  [[ -f "$PLAN_PATH" ]] || die "ralph-plugin-exec: plan file not found: $PLAN_PATH"
 
-  if [[ "$KIND" == "graph-resume" ]]; then
-    [[ -n "$NAMESPACE" ]] || die "ralph-plugin-exec: graph-resume requires --namespace"
-    [[ -n "$RUN_ID" ]] || die "ralph-plugin-exec: graph-resume requires --run"
+  case "$KIND" in
+    plan|workflow-start)
+      [[ -n "$PLAN_PATH" ]] || die "ralph-plugin-exec: --plan is required"
+      [[ -f "$PLAN_PATH" ]] || die "ralph-plugin-exec: plan file not found: $PLAN_PATH"
+      ;;
+    workflow-resume)
+      [[ -n "$RUN_ID" ]] || die "ralph-plugin-exec: workflow-resume requires --run"
+      ;;
+  esac
+
+  if [[ -n "$INPUT_PLAN" ]]; then
+    [[ -f "$INPUT_PLAN" ]] || die "ralph-plugin-exec: input plan file not found: $INPUT_PLAN"
   fi
 
   if [[ -z "$PROJECT_ROOT" ]]; then
@@ -332,10 +370,26 @@ resolve_tuple() {
     AGENT_ROOT=$PWD
   fi
 
-  PLAN_PATH=$(absolutize "$PLAN_PATH")
+  if [[ -n "$PLAN_PATH" ]]; then
+    PLAN_PATH=$(absolutize "$PLAN_PATH")
+  fi
+  if [[ -n "$INPUT_PLAN" ]]; then
+    INPUT_PLAN=$(absolutize "$INPUT_PLAN")
+  fi
   PROJECT_ROOT=$(absolutize "$PROJECT_ROOT")
   STATE_ROOT=$(absolutize "$STATE_ROOT")
   AGENT_ROOT=$(absolutize "$AGENT_ROOT")
+
+  case "$NATIVE_SUBAGENTS" in
+    off|inherit) ;;
+    *) die "ralph-plugin-exec: --native-subagents must be off or inherit" ;;
+  esac
+
+  if [[ -n "$MODEL" ]]; then
+    MODEL_SOURCE="explicit override"
+  else
+    MODEL_SOURCE="runtime saved/default"
+  fi
 
   COMMAND=""
   build_command
@@ -498,6 +552,7 @@ case "$op" in
     execute "$@"
     ;;
   *)
-    die "ralph-plugin-exec: unknown operation: $op"
+    usage >&2
+    exit 2
     ;;
 esac

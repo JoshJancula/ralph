@@ -83,6 +83,51 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 | `RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME` | Cap on human-context bytes for fresh invocations when using standard/lean budget (default `2048`). |
 | `RALPH_PLAN_TRANSCRIPT_EVICTION` | `off`, `safe`, or `aggressive`; controls how aggressively Ralph compacts repeated tool-turn history into the runner-owned continuation summary. Defaults to `safe` in `ralph`/`hybrid` and `off` in `no`/`native` unless explicitly set. `safe` keeps transcript pruning on but bounded; `aggressive` may also lower the prompt context budget to `lean`. |
 
+### Named tooling profiles
+
+Pipeline plans (orchestration and graph) and reusable workflows may declare a
+`tooling` block with `defaultProfile` and optional per-stage `overrides`. The
+four profile names are defined in `.ralph/tooling-profiles.json` and resolve to
+env overlays at dispatch. Graph is the preferred future workflow engine for
+staged work; orchestration plans and `orchestrator.sh`
+remain supported and are not deprecated by PLAN15 -- both engines accept the
+same `tooling` authoring block.
+
+| Profile | `RALPH_MODE` | `RALPH_PROXY_SHELL_COMPACT` | `RALPH_COMPACT_GENERIC_FALLBACK` | `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` | `RALPH_NATIVE_RESULT_COMPACT` |
+|---------|--------------|----------------------------|----------------------------------|----------------------------------------|------------------------------|
+| `raw` | `no` | `0` | `0` | (unset) | `0` |
+| `ralph-read-heavy` | `ralph` | `1` | `0` | (unset) | `0` |
+| `ralph-compact` | `ralph` | `1` | `1` | `16384` | `0` |
+| `ralph-aggressive` | `ralph` | `1` | `1` | `4096` | `1` |
+
+Each dispatched stage receives a resolved `toolingProfile`. Dispatch also sets
+process-local identity keys (not capability-gated):
+
+| Variable | Purpose |
+|----------|---------|
+| `RALPH_TOOLING_PROFILE` | The resolved profile name for this stage invocation. |
+| `RALPH_TOOLING_PROFILE_DEGRADED` | Comma-sorted list of profile env keys omitted because the runtime's tooling-profile capability contract does not deliver them. Empty when nothing was dropped. |
+
+A pipeline may declare either run-level `ralphMode` or a `tooling` block, not
+both. Omitting `tooling` preserves prior behavior (no per-stage profile
+overlay). Full operator guidance: [TOOLING.md](TOOLING.md#named-tooling-profiles)
+and [GRAPH.md](GRAPH.md#tooling-profiles).
+
+### Context budget vs tooling profile
+
+`RALPH_PLAN_CONTEXT_BUDGET` (and the orchestration stage field `contextBudget`) and a
+stage's `toolingProfile` are orthogonal controls that act in opposite directions. They do
+not compose into a single setting and neither overrides the other:
+
+| Control | Direction | What it governs |
+|---------|-----------|-----------------|
+| `contextBudget` / `RALPH_PLAN_CONTEXT_BUDGET` (`full`, `standard`, `lean`) | Outbound (Ralph to the model) | How much context Ralph attaches to the prompt it sends for each TODO. |
+| `toolingProfile` (`raw`, `ralph-read-heavy`, `ralph-compact`, `ralph-aggressive`) | Inbound (tools to the model) | How tool output coming back from reads, searches, and shell commands is bounded and compacted. |
+
+Both remain independently settable per stage. Setting a lean context budget does not imply
+a compacting tooling profile, and choosing `raw` tooling does not restore a `full` prompt
+budget. See [TOOLING.md](TOOLING.md#context-budget-vs-tooling-profile).
+
 ## Post-TODO verification
 
 When a TODO is marked complete, Ralph runs a declared verification command after the model invocation (via `run-plan-post-verify.sh`) instead of leaving it to the agent in-context. Verification output is captured and suppressed from the next prompt; byte counts feed `verification_bytes_suppressed` in the plan usage summary. Failing verifications reopen the TODO and inject only a compact summary plus an artifact path.
@@ -156,21 +201,62 @@ These names are normalized from runtime-specific variables by `ralph_run_plan_lo
 
 Replace `<RUNTIME>` with `CURSOR`, `CLAUDE`, `CODEX`, `OPENCODE`, or `ANTIGRAVITY` as appropriate.
 
+## Workflow terminal UI
+
+Public workflow status, watch, and runs share one engine-neutral read model.
+Operator journeys: [WORKFLOWS.md](WORKFLOWS.md#status-watch-and-the-terminal-viewer).
+
+| Variable | Purpose |
+|----------|---------|
+| `NO_COLOR` | When set, strip ANSI from static `status` / `runs` tables (and other Ralph color paths that honor the standard). |
+| `RALPH_WORKFLOW_NO_COLOR` | `1` disables workflow viewer color and forces the plain streaming watch path instead of curses. |
+| `RALPH_NO_COLOR` | Additional Ralph-wide no-color signal honored by workflow static tables. |
+| `CI` | Truthy values force plain streaming watch (no curses / alternate screen). |
+| `TERM=dumb` | Forces plain streaming watch. |
+| `RALPH_GRAPH_PLAIN` | Truthy: force plain streaming watch (compatibility with older plain-output knobs). |
+| `RALPH_GRAPH_NO_TUI` | Truthy: same as plain — skip the interactive viewer. |
+| `RALPH_GRAPH_SCREEN_READER` | Truthy: screen-reader-safe streaming watch (no animation, cursor control, or required color). |
+| `ACCESSIBILITY_SCREEN_READER` | Truthy: same screen-reader path as `RALPH_GRAPH_SCREEN_READER`. |
+| `RALPH_WORKFLOW_FOLLOW_INTERVAL` | Seconds between plain-watch status polls (falls back to `RALPH_GRAPH_FOLLOW_INTERVAL`, default `1`). |
+| `RALPH_WORKFLOW_LOG_TAIL_LINES` | Default tail length for `ralph workflow logs` (default `80`). |
+| `RALPH_WORKFLOW_USAGE_REPORT` | `0` disables the automatic run-scoped workflow usage report printed when lifecycle commands return. Default `1`. Explicit `ralph usage --run <exact-run-id>` remains available. |
+
+Public flags (not env vars): `ralph workflow watch --plain` forces streaming text;
+`ralph workflow runs --tsv` forces the stable TSV schema on a TTY.
+`status --json` and `runs --json` never emit ANSI. Do not use retired engine
+viewer flags or namespace selectors with public `ralph workflow` verbs.
+
 ## Models
 
 Ralph no longer ships bundled default model lists for Claude or Codex. Prebuilt agents may leave `model` empty in `config.json`; resolution then uses saved models or interactive prompts.
+
+### Listing models (all runtimes)
+
+`ralph models list <runtime>` (or `.ralph/models.sh list <runtime>`) is read-only:
+
+| Runtime | List source |
+|---------|-------------|
+| `claude`, `codex` | Ordered entries from the saved-model store (`models.json`) |
+| `cursor` | Native discovery via `cursor-agent --list-models` (or detected `agent`) |
+| `opencode` | Native discovery via `opencode models` |
+| `antigravity` | Native discovery via `agy models` (exact display strings preserved) |
+
+Native list modes never write `models.json`. If the runtime CLI is unavailable, the command surfaces the discovery helper failure rather than falling back to saved models.
 
 ### Saved models (Claude and Codex)
 
 | Item | Purpose |
 |------|---------|
-| `ralph models` / `.ralph/models.sh` | `list`, `add`, and `remove` subcommands for `claude` and `codex` runtimes. |
+| `ralph models` / `.ralph/models.sh` | `list` for all five runtimes; `add` and `remove` only for `claude` and `codex`. |
 | `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json` | Ordered saved-model store (`schema_version`, per-runtime arrays). First entry is the default fallback. |
 | `RALPH_CONFIG_HOME` | Override Ralph config root (defaults to `${XDG_CONFIG_HOME:-$HOME/.config}/ralph`). |
 
 Examples:
 
 ```bash
+ralph models list cursor
+ralph models list opencode
+ralph models list antigravity
 ralph models add claude claude-sonnet-4-6
 ralph models list codex
 bash .ralph/models.sh remove claude claude-sonnet-4-6
@@ -192,28 +278,30 @@ Ralph lists available models via `agy models`, preserves each exact display stri
 
 ### Claude/Codex resolution order
 
-When `run-plan` selects a model for Claude or Codex (highest wins):
+When `run-plan` selects a model for Claude or Codex on a leaf plan (highest wins):
 
-1. `--model <id>` CLI flag
-2. `CLAUDE_PLAN_MODEL` or `CODEX_PLAN_MODEL` (each falls back to `CURSOR_PLAN_MODEL` when unset)
-3. Non-empty agent config `model`
-4. First saved model from `models.json` (`ralph models add`)
-5. Interactive prompt (saved-model menu or manual entry; offers to save new ids)
+1. `--model <id>` CLI flag (or plan-header `model:`)
+2. TODO `model:`
+3. Attended TTY: interactive picker showing the full saved-model catalog (plus custom entry). `models.json` is a catalog to choose from, not an auto-selected default.
+4. Non-interactive / no TTY: first saved model from `models.json` (CI/automation fallback only)
+5. Runtime-native default (omit Ralph `--model`)
 
-Orchestration stage `model` in the pipeline plan overrides agent config for that stage only.
+Profile-derived models and `*_PLAN_MODEL` env vars are not rungs for standard leaf resolution.
+Staged graph/orchestration/workflow runs use: stage or voter `model:` > saved > native
+(always non-interactive at the runner boundary).
 
 ### Antigravity resolution order
 
 When `run-plan` selects a model for Antigravity (highest wins):
 
 1. `--model <id>` CLI flag
-2. `ANTIGRAVITY_PLAN_MODEL` (then `OPENCODE_PLAN_MODEL`, then `CURSOR_PLAN_MODEL` when unset)
-3. Non-empty agent config `model`
-4. Interactive `agy models` menu (TTY only)
+2. TODO `model:`
+3. Attended TTY: interactive `agy models` menu
+4. Runtime-native default (omit Ralph `--model`)
 
 Saved `ralph models` entries do not apply to Antigravity.
 
-**Non-interactive:** Claude/Codex runs fail when none of steps 1-4 resolve a model. Add a saved default with `ralph models add <runtime> <id>`, or pass `--model` / set the runtime env var. Cursor/OpenCode/Antigravity non-interactive runs require `--model`, the runtime env var chain, or a non-empty agent-config model. For Antigravity, the model must be an exact display string from `agy models` so Ralph can pass it to `agy --model "<exact model string from agy models>"` unchanged.
+**Non-interactive:** Claude/Codex runs use the first saved model when CLI/TODO pins are unset; they fail only when nothing resolves and a model is required by the invoke path. Add a saved default with `ralph models add <runtime> <id>`, or pass `--model`. Cursor/OpenCode/Antigravity non-interactive runs require `--model` or an equivalent pin. For Antigravity, the model must be an exact display string from `agy models` so Ralph can pass it to `agy --model "<exact model string from agy models>"` unchanged.
 
 ## Cursor-specific
 
@@ -667,21 +755,25 @@ The workspace knowledge graph is hidden from plan runs unless `RALPH_KNOWLEDGE_F
 
 `knowledge-tool.sh` is not gated by `RALPH_KNOWLEDGE_FEATURE`; operators invoke it directly for init/record/query/status/cleanup/export.
 
-## Killswitch
+## Killswitch / safety
 
-The killswitch blocks dangerous commands, tools, or file paths before they execute. Configuration is loaded from `killswitch.json` (per-workspace, global, or bundle default). Full configuration reference: [SECURITY.md](SECURITY.md#kill-switch).
+The killswitch blocks dangerous commands, tools, or file paths before they execute. Public CLI: `ralph safety status|validate|check|init|edit`. Full configuration reference: [SECURITY.md](SECURITY.md#kill-switch-ralph-safety).
 
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_KILLSWITCH_DISABLED` | Set to `1` to disable the killswitch entirely. |
-| `RALPH_BANNED_TOOLS` | Comma-separated tool names or glob patterns to block (added to config). |
-| `RALPH_BANNED_PATHS` | Comma-separated file path patterns to block (added to config). |
-| `RALPH_BANNED_PATTERNS` | Comma-separated regex patterns for command matching (uses bash ERE, added to config). |
+| `RALPH_KILLSWITCH_OVERRIDE_FILE` | Absolute path to an override config that wins over project/global/bundle when present (session runs may set this to `killswitch-override.json`). |
+| `RALPH_BANNED_TOOLS` | Comma-separated tool names or glob patterns to block (added to config after a successful load). |
+| `RALPH_BANNED_PATHS` | Comma-separated file path patterns to block (added to config after a successful load). |
+| `RALPH_BANNED_PATTERNS` | Comma-separated regex patterns for command matching (uses bash ERE, added to config after a successful load). |
 
-Configuration file search order:
-1. `$WORKSPACE/.ralph-workspace/killswitch.json`
-2. `$RALPH_HOME/killswitch.json`
-3. Bundle default (`bundle/.ralph/killswitch.json`)
+Configuration source precedence (first configured winner; invalid/unreadable configured winner fails closed):
+1. `RALPH_KILLSWITCH_OVERRIDE_FILE` when set and present
+2. `<state-root>/killswitch.json` (default `$WORKSPACE/.ralph-workspace/killswitch.json`)
+3. `$RALPH_HOME/killswitch.json`
+4. Bundle default (`bundle/.ralph/killswitch.json`)
+
+Env ban/allow lists merge only after the winning source validates.
 
 ## Safety and usage prompt
 

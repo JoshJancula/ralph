@@ -1,0 +1,734 @@
+{
+  "width": 120,
+  "height": 40,
+  "plain": [
+    "Ralph fixture-seq-running  bug-fix \u00b7 Sequential",
+    "Task  Fix the timeout",
+    "RUNNING  Elapsed 2m 0s  Updated 1m ago  Stages 1/2",
+    "[\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500] 1/2",
+    "another supervisor owns this run and is still making progress",
+    "Stages",
+    "  succeeded  research",
+    "> running    implement 2/5",
+    "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+    "\u2502 implement  plan-backed  running                                                                                      \u2502",
+    "\u2502 TODO  implement-core                                                                                                 \u2502",
+    "\u2502 TODOs  2/5                                                                                                           \u2502",
+    "\u2502 Plan source  generated from plan-implementation                                                                      \u2502",
+    "\u2502 Attempt  1  Duration  1m 30s                                                                                         \u2502",
+    "\u2502 Artifacts  implementation.md                                                                                         \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-running",
+        "role": "path",
+        "width": 19
+      },
+      {
+        "col": 27,
+        "text": "bug-fix",
+        "role": "heading",
+        "width": 7
+      },
+      {
+        "col": 34,
+        "text": " \u00b7 Sequential",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Fix the timeout                                                                                                   ",
+        "role": "default",
+        "width": 114
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "RUNNING",
+        "role": "accent",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 17,
+        "text": "2m 0s",
+        "role": "default",
+        "width": 5
+      },
+      {
+        "col": 22,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 32,
+        "text": "1m ago",
+        "role": "default",
+        "width": 6
+      },
+      {
+        "col": 38,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 47,
+        "text": "1/2                                                                      ",
+        "role": "default",
+        "width": 73
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+        "role": "success",
+        "width": 21
+      },
+      {
+        "col": 22,
+        "text": "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500] ",
+        "role": "muted",
+        "width": 23
+      },
+      {
+        "col": 45,
+        "text": "1/2",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "another supervisor owns this run and is still making progress",
+        "role": "muted",
+        "width": 61
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Stages",
+        "role": "heading",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 1,
+        "text": " succeeded  ",
+        "role": "success",
+        "width": 12
+      },
+      {
+        "col": 13,
+        "text": "research                                                                                                   ",
+        "role": "default",
+        "width": 107
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> running    implement 2/5                                                                                              ",
+        "role": "focus",
+        "width": 120
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u250c\u2500",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+        "role": "muted",
+        "width": 102
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "implement",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 13,
+        "text": "plan-backed",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 26,
+        "text": "running",
+        "role": "accent",
+        "width": 7
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "TODO  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 8,
+        "text": "implement-core                                                                                                 ",
+        "role": "default",
+        "width": 111
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "TODOs  ",
+        "role": "muted",
+        "width": 7
+      },
+      {
+        "col": 9,
+        "text": "2/5                                                                                                           ",
+        "role": "default",
+        "width": 110
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Plan source  ",
+        "role": "muted",
+        "width": 13
+      },
+      {
+        "col": 15,
+        "text": "generated from plan-implementation                                                                      ",
+        "role": "default",
+        "width": 104
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "1m 30s                                                                                         ",
+        "role": "default",
+        "width": 95
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Artifacts  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "implementation.md",
+        "role": "path",
+        "width": 17
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+        "role": "muted",
+        "width": 120
+      }
+    ]
+  ]
+}

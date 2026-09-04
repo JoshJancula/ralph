@@ -40,7 +40,7 @@ setup() {
   [ "$original_hash" = "$restored_hash" ]
   [ "$original_size" = "$restored_size" ]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "signal cleanup: trap handler registered for INT TERM HUP" {
@@ -83,7 +83,7 @@ setup() {
   [[ "$state_dir1" == *"$plan1_key"* ]]
   [[ "$state_dir2" == *"$plan2_key"* ]]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "failed CLI cleanup: overlays restored after runtime failure" {
@@ -115,7 +115,7 @@ with open('$journal_file') as f:
 assert data['cleanup_status'] == 'cleaned'
 "
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "timeout cleanup: overlays restored on timeout" {
@@ -147,7 +147,7 @@ assert data['cleanup_status'] == 'cleaned'
 assert data['cleanup_time'] is not None
 "
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "stale restore preserves durable Claude hook install" {
@@ -168,7 +168,7 @@ assert data['cleanup_time'] is not None
   run jq -r '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[0].command' "$workspace/.claude/settings.json"
   [ "$output" = ".claude/hooks/native-result-compact.sh" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "stale restore preserves durable Cursor hook install and hook scripts" {
@@ -195,7 +195,7 @@ assert data['cleanup_time'] is not None
   run jq -r '.hooks.postToolUse[] | select(.matcher == "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch") | .command' "$workspace/.cursor/hooks.json"
   [ "$output" = ".cursor/hooks/post-tool-native-result-compact.sh" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "malformed ambient config: invalid JSON rejected" {
@@ -220,44 +220,7 @@ assert data['cleanup_time'] is not None
   
   [ "$status" -ne 0 ] || [[ "$output" == *"json"* ]] || [[ "$output" == *"JSON"* ]]
   
-  rm -rf "$workspace"
-}
-
-@test "overlay collision precedence: agent overrides ambient" {
-  workspace="$(mktemp -d)"
-  
-  # Setup ambient MCP
-  mkdir -p "$workspace/.cursor"
-  cat > "$workspace/.cursor/mcp.json" <<'JSON'
-{
-  "mcpServers": {
-    "collision": {
-      "command": "ambient-cmd",
-      "args": ["ambient"]
-    }
-  }
-}
-JSON
-  
-  MCP_SETUP="$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh"
-  RUNTIME_CONFIG_MCP="$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh"
-  
-  # Test with agent override
-  run env RALPH_MODE=no \
-    bash -c '
-    source "$1"
-    source "$2"
-    export WORKSPACE="$3"
-    export RALPH_PROJECT_ROOT="$3"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'[{"name": "collision", "transport": "stdio", "command": "agent-cmd"}]'"'"'
-    ralph_runtime_config_mcp_resolve cursor "$3" "test-agent" "$3"
-    cat "$RALPH_RUNTIME_MCP_RESOLVE_PATH"
-  ' _ "$MCP_SETUP" "$RUNTIME_CONFIG_MCP" "$workspace"
-  
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"agent-cmd"* ]]
-  
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "overlay collision precedence: ralph protected last" {
@@ -283,7 +246,7 @@ JSON
   
   [ "$status" -eq 0 ]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "temp filename isolation: no secret leakage in temp paths" {
@@ -309,7 +272,7 @@ JSON
   ! grep -q "secret" "$summary_file" || true
   [ -f "$temp_file" ]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "missing variable resolution fails before CLI" {
@@ -345,7 +308,7 @@ JSON
   [ "$status" -ne 0 ]
   [[ "$output" == *"UNSET_VAR_12345"* ]] || [[ "$output" == *"missing"* ]]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "stale journal cleanup: old journals are restored automatically" {
@@ -398,5 +361,5 @@ with open('$journal_file', 'w') as f:
   [ "$status" -eq 0 ]
   grep -q '"original":true' "$target_file"
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

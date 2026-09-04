@@ -32,9 +32,12 @@ def load_json(path: Path) -> dict:
 
 
 def manifest_for(workspace: Path) -> dict:
+    # Runtime-created state is not project output. Other control paths remain
+    # in the before/after manifests so cmd_capture can detect and reject their
+    # mutation. Excluding .ralph here would make its edits invisible before
+    # the controlPaths check below; resolving its symlink would also hide the
+    # project-owned bundle/.ralph source tree.
     entries = scan(workspace, {".ralph-workspace"})
-    # Runtime-created local state is never project output and must not be part
-    # of the optimistic baseline or a publishable changeset.
     entries = [
         entry
         for entry in entries

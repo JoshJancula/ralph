@@ -284,6 +284,27 @@ prepare_fixture() {
   [ "$(cat "$run_dir/base/sentinel")" = "owned" ]
 }
 
+@test "snapshot excludes the control alias but preserves its physical in-tree source" {
+  local tmpd project state run_dir
+  tmpd="$(mktemp -d)"
+  project="$tmpd/project"
+  state="$tmpd/state"
+  run_dir="$state/graph-runs/ns/run"
+  make_non_git_fixture "$project"
+  mkdir -p "$project/bundle/.ralph/bash-lib" "$state"
+  printf 'product source\n' >"$project/bundle/.ralph/bash-lib/example.sh"
+  ln -s bundle/.ralph "$project/.ralph"
+  make_run_file "$run_dir"
+
+  graph_run_base_prepare "$run_dir" \
+    "$(roots_json "$project" "$state" "$project")" '["snapshot"]'
+
+  [ ! -e "$run_dir/base/source/.ralph" ]
+  [ "$(cat "$run_dir/base/source/bundle/.ralph/bash-lib/example.sh")" = "product source" ]
+  jq -e '.entries[] | select(.path == "bundle/.ralph/bash-lib/example.sh")' \
+    "$run_dir/base/manifest.json" >/dev/null
+}
+
 @test "shared mode records no immutable base and never falls back from isolation" {
   local tmpd project state run_dir
   tmpd="$(mktemp -d)"

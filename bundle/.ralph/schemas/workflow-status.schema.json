@@ -1,0 +1,120 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "stages", "diagnosis", "nextAction"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "enum": [1]},
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "workflowId", "mode", "entryKind", "task", "taskProvenance", "sourcePath", "sourceKind", "state", "inputPath", "inputPlan", "createdAt", "updatedAt"],
+      "properties": {
+        "runId": {"type": "string", "minLength": 1},
+        "workflowId": {"type": ["string", "null"]},
+        "mode": {"type": "string", "enum": ["sequential", "dependency"]},
+        "entryKind": {"type": "string", "enum": ["task", "plan"]},
+        "task": {"type": "string", "minLength": 1},
+        "taskProvenance": {"type": "string", "enum": ["explicit", "workflow", "plan-overview", "plan-filename"]},
+        "sourcePath": {"type": "string", "pattern": "^/.+"},
+        "sourceKind": {"type": "string", "enum": ["project", "global", "bundled", "file", "legacy-orchestration"]},
+        "state": {"type": "string", "enum": ["queued", "running", "waiting", "blocked", "stale", "failed", "cancelled", "succeeded"]},
+        "inputPath": {"type": "string", "pattern": "^/.+"},
+        "inputPlan": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "originalPath": {"type": "string", "pattern": "^/.+"},
+            "sourcePath": {"type": "string", "pattern": "^/.+"},
+            "manifestPath": {"type": "string", "pattern": "^/.+"},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "format": {"type": "string", "enum": ["classic", "yaml"]},
+            "totalTodos": {"type": "integer", "minimum": 0},
+            "completedTodos": {"type": "integer", "minimum": 0},
+            "openTodos": {"type": "integer", "minimum": 0}
+          }
+        },
+        "createdAt": {"type": "string", "minLength": 1},
+        "updatedAt": {"type": "string", "minLength": 1}
+      }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "stageKind"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "index": {"type": "integer", "minimum": 0},
+          "state": {"type": "string", "enum": ["queued", "running", "waiting", "blocked", "stale", "failed", "cancelled", "succeeded", "skipped"]},
+          "stageKind": {"type": "string", "enum": ["executable", "plan-backed", "approval", "supervisor"]},
+          "attempt": {"type": "integer", "minimum": 0},
+          "planPath": {"type": ["string", "null"]},
+          "planRunId": {"type": ["string", "null"]},
+          "planSourceKind": {"type": ["string", "null"], "enum": ["generated", "provided", null]},
+          "planSourceStageId": {"type": ["string", "null"]},
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["stageId", "condition"],
+              "properties": {
+                "stageId": {"type": "string", "minLength": 1},
+                "condition": {"type": ["string", "null"]}
+              }
+            }
+          },
+          "originalPlanPath": {"type": ["string", "null"]},
+          "sourcePlanPath": {"type": ["string", "null"]},
+          "controlPlanPath": {"type": ["string", "null"]},
+          "currentTodoId": {"type": ["string", "null"]},
+          "workspaceMode": {"type": ["string", "null"], "enum": ["shared", "snapshot", "worktree", null]},
+          "workspacePath": {"type": ["string", "null"], "pattern": "^/.+"},
+          "workspaceAvailable": {"type": "boolean"},
+          "baseRevision": {"type": ["string", "null"]},
+          "changesetManifest": {"type": ["string", "null"], "pattern": "^/.+"},
+          "changedFiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "wave": {"type": ["integer", "null"], "minimum": 0},
+          "terminalResult": {"type": ["string", "null"]},
+          "reasonCode": {"type": ["string", "null"]},
+          "completedTodos": {"type": "integer", "minimum": 0},
+          "totalTodos": {"type": "integer", "minimum": 0},
+          "artifacts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "blocker": {"type": ["object", "null"], "additionalProperties": true},
+          "approval": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "properties": {
+              "question": {"type": "string"},
+              "changesTarget": {"type": "string"}
+            }
+          },
+          "requestId": {"type": ["string", "null"]},
+          "requestState": {"type": ["string", "null"], "enum": ["outstanding", "answered", "consumed", "cancelled", null]},
+          "requestQuestion": {"type": ["string", "null"]},
+          "evidence": {"type": "array", "items": {"type": ["string", "object"], "additionalProperties": true}},
+          "createdAt": {"type": "string", "minLength": 1},
+          "updatedAt": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reasonCode", "summary", "stageId", "requestKind", "requestId", "evidence", "retryable", "nextAction"],
+      "properties": {
+        "state": {"type": "string", "enum": ["queued", "running", "waiting", "blocked", "stale", "failed", "cancelled", "succeeded"]},
+        "reasonCode": {"type": "string", "enum": ["operator-request", "operator-input", "human-approval", "human-changes-requested", "unmet-dependency", "failed-prerequisite", "missing-artifact", "invalid-artifact", "loop-exhausted", "cycle", "live-owner", "stale-owner", "stage-failed", "cancelled", "none"]},
+        "summary": {"type": "string"},
+        "stageId": {"type": ["string", "null"]},
+        "requestKind": {"type": ["string", "null"], "enum": ["approval", "input", "permission", null]},
+        "requestId": {"type": ["string", "null"]},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "retryable": {"type": "boolean"},
+        "nextAction": {"type": ["object", "null"], "additionalProperties": false, "properties": {"label": {"type": "string", "minLength": 1}, "argv": {"type": "array", "items": {"type": "string"}}}}
+      }
+    },
+    "nextAction": {"type": ["object", "null"], "additionalProperties": false, "properties": {"label": {"type": "string", "minLength": 1}, "argv": {"type": "array", "items": {"type": "string"}}}}
+  }
+}

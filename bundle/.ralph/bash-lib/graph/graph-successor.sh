@@ -300,38 +300,153 @@ graph_successor_gate_fingerprint() {
 # artifacts, changeset evidence, and gates, plus a digest over that object.
 graph_successor_completion_fingerprint() {
   local graph_json="$1" workspace="$2" namespace="$3" run_id="$4" node_id="$5"
-  local state_root definition ancestors_json ancestor_id ancestor_def
-  local input_specs output_specs inputs artifacts changeset gates digest body
+  local state_root run_dir node_file extract ledger
+  local definition ancestors_json inputs artifacts changeset gates digest body
+  local ancestor_id ancestor_def ancestor_digest
+  local spec_path spec_required resolved
+  local ledger_changeset ledger_gate
+  local cs_path cs_file_hash cs_identity cs_scopes
+  local gate_profile gate_profile_json gate_profile_digest gate_outcome gate_hash
 
   [[ -n "$graph_json" && -f "$graph_json" && -n "$workspace" && -n "$namespace" && -n "$run_id" && -n "$node_id" ]] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   state_root="$(graph_state_state_root "$workspace")" || return 1
+  run_dir="$(graph_state_run_dir "$workspace" "$namespace" "$run_id")" || return 1
 
-  definition="$(graph_successor_definition_digest "$graph_json" "$node_id")" || return 1
+  # One jq for every graph-derived input. Each canonical JSON string is
+  # produced with a recursive key sort so it matches `jq -cS` byte for byte,
+  # which the stored digests depend on.
+  extract="$(jq -cS --arg id "$node_id" '
+    def sortkeys: walk(if type == "object" then to_entries | sort_by(.key) | from_entries else . end);
+    def specs($n; $field):
+      [ ($n.stage[$field] // [])[]
+        | if type == "string" then {path: ., required: true}
+          else {path: (.path // ""), required: (.required // true)} end
+        | select(.path != "") ];
+    def inbound($start; $edges; $nodes):
+      {seen: [], frontier: [$start]}
+      | until(
+          .frontier | length == 0;
+          . as $s
+          | $s.frontier as $f
+          | (
+              [ $f[] as $n | $edges[] | select(.to == $n) | .from ]
+              + [ $f[] as $n
+                  | ($nodes[] | select(.id == $n) | .dependsOn // [])[]
+                  | if type == "string" then .
+                    else (.id // .node // empty) end ]
+            ) as $next
+          | (($s.seen + $f) | unique) as $seen2
+          | {seen: $seen2, frontier: ($next | unique | map(select(. != "")) | . - $seen2)}
+        )
+      | .seen;
+    . as $g
+    | ($g.nodes[] | select(.id == $id)) as $n
+    | (inbound($id; ($g.edges // []); ($g.nodes // []))
+        | map(select(. != $id and . != "")) | unique | sort) as $anc
+    | ($n.stage.verificationProfile // "") as $profile
+    | {
+        definitionText: ({id: $n.id, type: ($n.type // "agent"), stage: ($n.stage // {})} | sortkeys | tojson),
+        ancestors: [ $anc[] as $a
+                     | { id: $a,
+                         defText: (($g.nodes[] | select(.id == $a) | {id, type: (.type // "agent"), stage: (.stage // {})})
+                                    | sortkeys | tojson) } ],
+        inputSpecs: (specs($n; "inputArtifacts") | unique_by(.path) | sort_by(.path)),
+        outputSpecs: ((specs($n; "outputArtifacts") + specs($n; "artifacts")) | unique_by(.path) | sort_by(.path)),
+        writeScopes: ($n.stage.writeScopes // []),
+        profile: $profile,
+        profileText: (if $profile == "" then "{}"
+                      else (($g.verificationProfiles // [] | map(select(.name == $profile)) | .[0] // {}) | sortkeys | tojson)
+                      end)
+      }
+  ' "$graph_json" 2>/dev/null)" || return 1
+  [[ -n "$extract" && "$extract" != "null" ]] || return 1
+
+  # One read for every scalar the rest of this function needs.
+  local _scalars _definition_text _profile_text
+  # A non-whitespace delimiter so an empty profile is preserved as an empty
+  # field instead of collapsing into the next one.
+  _scalars="$(jq -r '[.definitionText, .profile, .profileText, (.writeScopes|tojson)] | join("\u001f")' <<<"$extract")" || return 1
+  IFS=$'\x1f' read -r _definition_text gate_profile _profile_text cs_scopes <<<"$_scalars"
+  definition="$(graph_successor_sha256_text "$_definition_text")" || return 1
 
   ancestors_json='[]'
-  while IFS= read -r ancestor_id || [[ -n "$ancestor_id" ]]; do
+  while IFS=$'\t' read -r ancestor_id ancestor_def || [[ -n "$ancestor_id" ]]; do
     [[ -n "$ancestor_id" ]] || continue
-    ancestor_def="$(graph_successor_definition_digest "$graph_json" "$ancestor_id" 2>/dev/null || true)"
-    [[ -n "$ancestor_def" ]] || ancestor_def="missing"
-    ancestors_json="$(jq -c --arg id "$ancestor_id" --arg d "$ancestor_def" \
-      '. + [{id:$id, definition:$d}]' <<<"$ancestors_json")" || return 1
-  done < <(graph_successor_ancestor_ids "$graph_json" "$node_id")
-  ancestors_json="$(jq -cS 'sort_by(.id)' <<<"$ancestors_json")" || return 1
+    if [[ -n "$ancestor_def" && "$ancestor_def" != "null" ]]; then
+      ancestor_digest="$(graph_successor_sha256_text "$ancestor_def")" || return 1
+    else
+      ancestor_digest="missing"
+    fi
+    ancestors_json="${ancestors_json%]}"
+    [[ "$ancestors_json" == "[" ]] || ancestors_json="${ancestors_json},"
+    ancestors_json="${ancestors_json}{\"definition\":\"${ancestor_digest}\",\"id\":\"${ancestor_id}\"}]"
+  done < <(jq -r '.ancestors[] | [.id, .defText] | @tsv' <<<"$extract")
 
-  input_specs="$(graph_successor_declared_artifact_specs "$graph_json" "$node_id" "input")" || input_specs='[]'
-  output_specs="$(graph_successor_declared_artifact_specs "$graph_json" "$node_id" "output")" || output_specs='[]'
-  inputs="$(graph_successor_resolve_artifact_records "$input_specs" "$state_root" "$namespace")" || return 1
-  artifacts="$(graph_successor_resolve_artifact_records "$output_specs" "$state_root" "$namespace")" || return 1
-  changeset="$(graph_successor_changeset_fingerprint "$graph_json" "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
-  gates="$(graph_successor_gate_fingerprint "$graph_json" "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  # Artifact records need a digest per declared path; the paths themselves are
+  # already resolved above, so only the file hashing touches the filesystem.
+  inputs="$(_graph_successor_artifact_records "$extract" inputSpecs "$state_root" "$namespace")" || return 1
+  artifacts="$(_graph_successor_artifact_records "$extract" outputSpecs "$state_root" "$namespace")" || return 1
+
+  # One jq for both node-ledger fields.
+  node_file="$(graph_state_node_file "$workspace" "$namespace" "$run_id" "$node_id" 2>/dev/null || true)"
+  ledger_changeset=""
+  ledger_gate=""
+  if [[ -n "$node_file" && -f "$node_file" ]]; then
+    ledger="$(jq -r '[(.changesetHash // .attempts[-1].changesetHash // ""),
+                     (.gateOutcome // .attempts[-1].gateOutcome // "")] | join("\u001f")' "$node_file" 2>/dev/null || true)"
+    IFS=$'\x1f' read -r ledger_changeset ledger_gate <<<"$ledger"
+  fi
+
+  [[ -n "$cs_scopes" ]] || cs_scopes='[]'
+  cs_path="$(graph_successor_changeset_path "$run_dir" "$node_id" 2>/dev/null || true)"
+  cs_file_hash="missing"
+  cs_identity=""
+  if [[ -n "$cs_path" && -f "$cs_path" ]]; then
+    cs_file_hash="$(graph_successor_sha256_file "$cs_path")"
+    cs_identity="$(jq -r '.contentIdentity // empty' "$cs_path" 2>/dev/null || true)"
+  fi
+  [[ -n "$ledger_changeset" ]] || ledger_changeset="$cs_file_hash"
+  if [[ "$cs_file_hash" == "missing" && "$ledger_changeset" != "missing" && -n "$ledger_changeset" ]]; then
+    cs_file_hash="$ledger_changeset"
+  fi
+
+  gate_profile_json="$_profile_text"
+  if [[ "$gate_profile_json" == "{}" ]]; then
+    gate_profile_digest="none"
+  else
+    gate_profile_digest="$(graph_successor_sha256_text "$gate_profile_json")" || return 1
+  fi
+  gate_outcome="$ledger_gate"
+  [[ -n "$gate_outcome" ]] || gate_outcome="none"
+  gate_hash="$(graph_successor_sha256_file "$(graph_successor_gate_result_path "$state_root" "$namespace" "$node_id")")"
 
   body="$(jq -cnS --arg definition "$definition" --argjson ancestors "$ancestors_json" \
     --argjson inputs "$inputs" --argjson artifacts "$artifacts" \
-    --argjson changeset "$changeset" --argjson gates "$gates" \
-    '{definition:$definition, ancestors:$ancestors, inputs:$inputs, artifacts:$artifacts, changeset:$changeset, gates:$gates}')" || return 1
+    --argjson scopes "$cs_scopes" --arg cshash "$cs_file_hash" --arg csident "$cs_identity" --arg csledger "$ledger_changeset" \
+    --arg profile "$gate_profile" --arg pdigest "$gate_profile_digest" --arg outcome "$gate_outcome" --arg ghash "$gate_hash" \
+    '{definition:$definition, ancestors:$ancestors, inputs:$inputs, artifacts:$artifacts,
+      changeset:{writeScopes:$scopes, sha256:$cshash, contentIdentity:$csident, ledgerHash:$csledger},
+      gates:{profile:$profile, profileDigest:$pdigest, outcome:$outcome, sha256:$ghash}}')" || return 1
   digest="$(graph_successor_sha256_text "$body")" || return 1
   jq -cnS --argjson body "$body" --arg digest "$digest" '$body + {digest:$digest}'
+}
+
+# _graph_successor_artifact_records <extract_json> <specs_field> <state_root> <namespace>
+# Builds the {path, required, sha256} records for one declared-artifact field
+# using the specs already extracted from the frozen graph.
+_graph_successor_artifact_records() {
+  local extract="$1" field="$2" state_root="$3" namespace="$4"
+  local records='[]' path required resolved digest
+  while IFS=$'\t' read -r path required || [[ -n "$path" ]]; do
+    [[ -n "$path" ]] || continue
+    resolved="$(graph_successor_exchange_path "$state_root" "$namespace" "$path")"
+    digest="$(graph_successor_sha256_file "$resolved")"
+    records="${records%]}"
+    [[ "$records" == "[" ]] || records="${records},"
+    records="${records}{\"path\":\"${path}\",\"required\":${required},\"sha256\":\"${digest}\"}]"
+  done < <(jq -r --arg f "$field" '.[$f][] | [.path, (.required|tostring)] | @tsv' <<<"$extract")
+  jq -cS . <<<"$records"
 }
 
 # graph_successor_required_evidence_missing <graph_json> <fingerprint_json> <node_id>
@@ -684,7 +799,7 @@ graph_successor_create() {
   fi
   [[ "$max_parallel" =~ ^[1-9][0-9]*$ ]] || max_parallel=2
 
-  if ! graph_state_init_run_v2 "$workspace" "$namespace" "$new_run_id" "$plan_path" "$new_graph" "$max_parallel"; then
+  if ! graph_state_init_run "$workspace" "$namespace" "$new_run_id" "$plan_path" "$new_graph" "$max_parallel"; then
     echo "Error: failed to initialize successor run $new_run_id" >&2
     return 1
   fi

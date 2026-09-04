@@ -75,13 +75,19 @@ ralph_process_run_init() {
     return 0
   fi
 
+  local owner_start=""
+  owner_start="$(
+    PYTHONPATH="$(dirname "$script")" python3 -c \
+      "from ralph_process_supervisor import pid_identity; print(pid_identity($$))" \
+      2>/dev/null || true
+  )"
   exports="$(python3 "$script" init \
     --state-root "$state_root" \
     --project-root "$project_root" \
     --plan "$plan_path" \
     --kind "$kind" \
     --owner-pid "$$" \
-    --owner-start "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --owner-start "${owner_start}" \
     --max-live "$RALPH_PROCESS_MAX_RUN_LIVE")" || return $?
   eval "$exports"
   RALPH_PROCESS_RUN_DEPTH=0
@@ -133,6 +139,18 @@ ralph_process_check_abort() {
   [[ -n "${RALPH_PROCESS_RUN_DIR:-}" && -f "$abort_file" ]] || return 0
   printf '%s\n' "Error: Ralph process safety limit was exceeded; managed processes were terminated." >&2
   return 78
+}
+
+# Prefer ralph_kill_tree (TERM then KILL) for proven-owned supervisor cancel.
+# Timing stays in ralph-process-teardown.sh; cancel callers must persist cancel
+# intent before invoking this so signal handlers record cancelled.
+ralph_process_term_kill_tree() {
+  local root_pid="${1:-}"
+  if ! declare -F ralph_kill_tree >/dev/null 2>&1; then
+    # shellcheck source=./ralph-process-teardown.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ralph-process-teardown.sh"
+  fi
+  ralph_kill_tree "$root_pid"
 }
 
 # Close a run owned by this shell. Attached stage/nested shells leave the

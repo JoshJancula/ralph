@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-seq-stale",
+  "bug-fix | Sequential",
+  "STALE  Fix the timeout",
+  "0/1 stages  0s",
+  "> stale     implement",
+  "implement  executable  stale",
+  "Next  recover the abandoned run",
+  "Attempt  2  Duration  1m 0s",
+  "",
+  "",
+  "",
+  ""
+]

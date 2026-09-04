@@ -71,7 +71,6 @@ write_valid_fixture() {
     "command": "ralph",
     "pluginApi": 1
   },
-  "agents": ["architect"],
   "workflows": ["ralph-status"],
   "contracts": {
     "antigravity": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",

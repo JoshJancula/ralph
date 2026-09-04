@@ -4,9 +4,8 @@
 # execution: graph is the only thing that distinguishes this from a plain
 # pipeline plan - a graph node is a pipeline stage plus a small number of
 # extra fields (type, dependsOn, voters, policy, ...). Compile this file with
-# `ralph graph compile <this-file>` (or `bash bundle/.ralph/graph-run.sh
-# compile <this-file>`) to lint it and cache a .graph.json beside it without
-# running anything.
+# `bash .ralph/graph-run.sh compile <this-file>` to lint it and cache a
+# .graph.json beside it without running anything.
 #
 # This template shows every graph node shape covered by the GRAPH-MODE plan:
 #   - research         a plain agent node (type defaults to "agent")
@@ -30,40 +29,43 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
+      instructions: Research the task and write findings to the produced artifact.
       produces:
-        - path: "{{ARTIFACT_NS}}/research.md"
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
+          required: true
 
     - id: implement
       runtime: claude
-      agent: implementation
+      instructions: Implement the change end to end and write the handoff artifact.
       dependsOn:
         - research
       requires:
-        - path: "{{ARTIFACT_NS}}/research.md"
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
+          required: true
       produces:
-        - path: "{{ARTIFACT_NS}}/implementation.md"
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
+          required: true
 
     - id: review
       type: consensus
-      runtime: cursor
-      agent: code-review
+      policy: veto
       quorum: 2
       minRuntimes: 3
       voters:
         - id: alpha
           runtime: cursor
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
         - id: beta
           runtime: codex
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
         - id: gamma
           runtime: claude
-          agent: code-review
+          instructions: Review the implementation against the handoff and return a verdict.
       dependsOn:
         - implement
       requires:
-        - path: "{{ARTIFACT_NS}}/implementation.md"
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
+          required: true
 
     - id: decide
       type: join

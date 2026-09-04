@@ -17,9 +17,13 @@ setup() {
   "enabled": true,
   "dry_run": true,
   "banned_tools": [],
-  "toolDenylist": ["Bash", "Shell", "bash", "command_execution"],
-  "deniedArgumentPatterns": [],
+  "tool_denylist": ["Bash", "Shell", "bash", "command_execution"],
+  "allowed_tools": [],
   "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
+  "denied_argument_patterns": [],
   "custom_rules": []
 }
 EOF

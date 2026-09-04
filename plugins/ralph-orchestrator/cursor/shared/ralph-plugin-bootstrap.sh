@@ -8,7 +8,7 @@ set -euo pipefail
 
 EXPECTED_PLUGIN_API=1
 RALPH_COMMAND_NAME="ralph"
-REQUIRED_VERBS=(run create graph agent)
+REQUIRED_VERBS=(run create workflow)
 ENSURE_MODE=0
 INSTALL_COMMAND=""
 INSTALL_DESTINATION=""

@@ -82,7 +82,7 @@ def render_plan(nodes):
     for node in nodes:
         out.append("    - id: %s" % node["id"])
         out.append("      runtime: %s" % node["runtime"])
-        out.append("      agent: implementation")
+        out.append("      role: implementation")
         out.append("      workspaceMode: snapshot")
         if node["dependsOn"]:
             out.append("      dependsOn:")

@@ -662,3 +662,148 @@ EOF
   [ "$(cat "$original")" = '{"original":true}' ]
   overlay_cleanup
 }
+
+# G16: reproduce the repeated OpenCode allow-once request against the shared
+# continuation/overlay adapter. One continuation, one consume, distinct later
+# request, and byte-exact config restoration.
+@test "adapter continuation reproduces repeated OpenCode allow-once with one consume and byte-exact restore" {
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-opencode.sh"
+
+  local ws config original_bytes json consume continuation
+  local caps later defect_status restore_json
+  local fixture
+
+  ws="$(mktemp -d)"
+  export WORKSPACE="$ws"
+  export RALPH_PROJECT_ROOT="$ws"
+  export RALPH_PLAN_WORKSPACE_ROOT="$ws/.ralph-workspace"
+  export RALPH_PLAN_KEY="approval-continuation"
+  export RALPH_GRAPH_NODE_ID="implement-cli-bootstrap"
+  mkdir -p "$ws/.ralph-workspace" "$ws/.opencode"
+  ralph_approval_adapter_overlay_reset
+
+  fixture="$REPO_ROOT/.ralph-workspace/artifacts/graph-mode-recovery/fixtures/repeated-allow-once-request.json"
+  [ -f "$fixture" ]
+  [ "$(jq -r '.category' "$fixture")" = "repeated-allow-once-request" ]
+
+  config="$ws/.ralph-workspace/runtime-config/approval-continuation/opencode-permission-override.json"
+  mkdir -p "$(dirname "$config")"
+  printf '%s' '{"model":"project-model","theme":"keep-me","permission":{"edit":{"secret.ts":"ask"}}}' >"$config"
+  original_bytes="$(cat "$config")"
+
+  caps="$(run_plan_invoke_opencode_graph_approval_capabilities)"
+  [ "$(printf '%s' "$caps" | jq -r '.sameOperationResponse')" = "true" ]
+  [ "$(printf '%s' "$caps" | jq -r '.lifetimes.once')" = "true" ]
+  [ "$(printf '%s' "$caps" | jq -r '.lifetimes.run')" = "true" ]
+  [ "$(printf '%s' "$caps" | jq -r '.lifetimes["always-policy"]')" = "true" ]
+
+  # Attempt 1: allow-once without a live serve session installs a narrow overlay
+  # before retry (the historical gap that caused a second operator prompt).
+  json="$(run_plan_invoke_opencode_graph_approval_apply "$(jq -nc --arg t "$config" '{
+    decision: "allow-once",
+    runtime: "opencode",
+    sessionId: "ses-bootstrap-1",
+    nativeRequestId: "op-implement-cli-bootstrap-1",
+    tool: "bash",
+    action: "execute",
+    resource: "npm test -- focused",
+    effect: "write",
+    target: $t
+  }')")"
+  [ "$(printf '%s' "$json" | jq -r '.decision')" = "allow-once" ]
+  [ "$(printf '%s' "$json" | jq -r '.path')" = "overlay" ]
+  [ "$(printf '%s' "$json" | jq -r '.sameOperationReply')" = "false" ]
+  [ "$(printf '%s' "$json" | jq -r '.continuation')" = "session" ]
+  consume="$(printf '%s' "$json" | jq -r '.consumeRecord')"
+  continuation="$(printf '%s' "$json" | jq -r '.continuationRecord')"
+  [ -n "$consume" ] && [ -f "$consume" ]
+  [ -n "$continuation" ] && [ -f "$continuation" ]
+  [ "$(jq -r '.decision' "$consume")" = "allow-once" ]
+  [ "$(jq -r '.requestId' "$consume")" = "op-implement-cli-bootstrap-1" ]
+  [ "$(jq -r '.path' "$continuation")" = "overlay" ]
+  [ "$(jq -r '.permission.bash["npm test -- focused"]' "$config")" = "allow" ]
+  [ "$(jq -r '.model' "$config")" = "project-model" ]
+  [ "$(jq -r '.theme' "$config")" = "keep-me" ]
+  [ "$(jq -r '.permission.edit["secret.ts"]' "$config")" = "ask" ]
+
+  # Exactly one consume and one continuation for the original request.
+  [ "$(find "$(dirname "$consume")" -type f -name '*.json' | wc -l | tr -d ' ')" = "1" ]
+  [ "$(find "$(dirname "$continuation")" -type f -name '*.json' | wc -l | tr -d ' ')" = "1" ]
+
+  # Immediate recreation of the same normalized tuple is an adapter defect,
+  # not a fresh operator prompt (the repeated-allow-once failure mode).
+  run ralph_approval_adapter_assert_not_recreated "$(jq -nc '{
+    runtime: "opencode",
+    sessionId: "ses-bootstrap-2",
+    nativeRequestId: "op-implement-cli-bootstrap-2",
+    tool: "bash",
+    action: "execute",
+    resource: "npm test -- focused",
+    effect: "write"
+  }')"
+  defect_status="$status"
+  [ "$defect_status" -ne 0 ]
+  [[ "$output" == *"continuation defect"* || "$output" == *"recreated"* ]]
+
+  # Byte-exact restoration of the pre-continuation config.
+  restore_json="$(run_plan_invoke_opencode_graph_approval_restore success)"
+  [ "$(printf '%s' "$restore_json" | jq -r '.restored')" = "true" ]
+  [ "$(cat "$config")" = "$original_bytes" ]
+
+  # After restore, the previously blocked same-tuple request is no longer an
+  # active-continuation defect (operator may decide again on a new cycle).
+  run ralph_approval_adapter_assert_not_recreated "$(jq -nc '{
+    runtime: "opencode",
+    nativeRequestId: "op-implement-cli-bootstrap-2",
+    tool: "bash",
+    action: "execute",
+    resource: "npm test -- focused",
+    effect: "write"
+  }')"
+  [ "$status" -eq 0 ]
+
+  # A distinct later request (different resource) remains a separate cycle.
+  later="$(run_plan_invoke_opencode_graph_approval_apply "$(jq -nc --arg t "$config" '{
+    decision: "allow-once",
+    runtime: "opencode",
+    sessionId: "ses-later",
+    nativeRequestId: "op-implement-cli-bootstrap-later",
+    tool: "read",
+    action: "read",
+    resource: "docs/GRAPH.md",
+    effect: "read",
+    target: $t
+  }')")"
+  [ "$(printf '%s' "$later" | jq -r '.decision')" = "allow-once" ]
+  [ "$(printf '%s' "$later" | jq -r '.consumeRecord')" != "$consume" ]
+  [ -f "$(printf '%s' "$later" | jq -r '.consumeRecord')" ]
+  [ "$(jq -r '.permission.read["docs/GRAPH.md"]' "$config")" = "allow" ]
+  [ "$(find "$(dirname "$consume")" -type f -name '*.json' | wc -l | tr -d ' ')" = "2" ]
+
+  run_plan_invoke_opencode_graph_approval_restore success >/dev/null
+  [ "$(cat "$config")" = "$original_bytes" ]
+
+  ralph_approval_adapter_overlay_reset
+  unset RALPH_GRAPH_NODE_ID
+  rm -rf "$ws"
+}
+
+@test "adapter continuation refuses allow-once when once is explicitly unsupported" {
+  overlay_workspace
+  local caps
+  caps="$(ralph_approval_adapter_capabilities opencode '{"sameOperationResponse":false,"lifetimes":{"once":false,"run":true}}')"
+  run ralph_approval_adapter_can_enforce_once "$caps"
+  [ "$status" -ne 0 ]
+  run ralph_approval_adapter_continue "$(jq -nc '{
+    decision: "allow-once",
+    runtime: "opencode",
+    action: "execute",
+    resource: "npm test",
+    effect: "write",
+    nativeRequestId: "req-refuse-once",
+    sessionId: "ses-refuse"
+  }')" "$caps"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"do not offer"* || "$output" == *"cannot enforce allow-once"* || "$output" == *"unsupported"* ]]
+  overlay_cleanup
+}

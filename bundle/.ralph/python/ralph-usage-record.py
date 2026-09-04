@@ -331,6 +331,44 @@ else:
         }
     )
 
+# Durable TODO continuation / background telemetry. Applied after overlay merge so
+# explicit env wins over empty overlay defaults. Never logs command secrets or
+# unbounded job output — only tier, reason, attempt key, continuity mode, and
+# bounded wait/terminal status.
+_bg_tier = (
+    os.environ.get("RALPH_USAGE_BG_TIER", "").strip()
+    or os.environ.get("RALPH_BG_TIER_SELECTED", "").strip()
+)
+if _bg_tier:
+    record["bg_tier"] = _bg_tier
+_bg_tier_reason = (
+    os.environ.get("RALPH_USAGE_BG_TIER_REASON", "").strip()
+    or os.environ.get("RALPH_BG_TIER_REASON", "").strip()
+)
+if _bg_tier_reason:
+    record["bg_tier_reason"] = _bg_tier_reason
+_continuation_reason = os.environ.get("RALPH_USAGE_CONTINUATION_REASON", "").strip()
+if _continuation_reason:
+    record["continuation_reason"] = _continuation_reason
+_logical_attempt = os.environ.get("RALPH_USAGE_LOGICAL_ATTEMPT", "").strip()
+if _logical_attempt:
+    record["logical_attempt"] = _logical_attempt
+_session_continuity = os.environ.get("RALPH_USAGE_SESSION_CONTINUITY", "").strip()
+if _session_continuity:
+    record["session_continuity"] = _session_continuity
+_degraded_fallback = os.environ.get("RALPH_USAGE_DEGRADED_FALLBACK", "").strip()
+if _degraded_fallback:
+    record["degraded_fallback"] = _degraded_fallback
+_wait_duration = os.environ.get("RALPH_USAGE_WAIT_DURATION_SECONDS", "").strip()
+if _wait_duration:
+    try:
+        record["wait_duration_seconds"] = int(_wait_duration)
+    except ValueError:
+        pass
+_terminal_status = os.environ.get("RALPH_USAGE_TERMINAL_STATUS", "").strip()
+if _terminal_status:
+    record["terminal_status"] = _terminal_status
+
 proxy_bytes = _collect_proxy_read_bytes(plan_key, started_at, ended_at)
 if proxy_bytes is not None:
     record["proxy_read_bytes"] = proxy_bytes

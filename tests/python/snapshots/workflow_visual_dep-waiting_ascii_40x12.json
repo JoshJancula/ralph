@@ -1,0 +1,194 @@
+{
+  "width": 40,
+  "height": 12,
+  "plain": [
+    "Ralph fixture-dep-waves",
+    "feature-delivery | Dependency",
+    "WAITING  Ship the feature with an inten\u2026",
+    "1/4 stages  2m 0s",
+    "> waiting   approve-plan",
+    "approve-plan  approval  waiting",
+    "Next  answer the outstanding request",
+    "Question  Approve the implementation pl\u2026",
+    "Request  outstanding",
+    "Changes target  implement",
+    "Attempt  1  Duration  30s",
+    "Blocker  approval (outstanding)"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-waves",
+        "role": "path",
+        "width": 17
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "feature-delivery | Dependency",
+        "role": "muted",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "WAITING",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Ship the feature with an inten\u2026",
+        "role": "default",
+        "width": 33
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "1/4 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "2m 0s",
+        "role": "muted",
+        "width": 5
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> waiting   approve-plan                ",
+        "role": "focus",
+        "width": 40
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "approve-plan",
+        "role": "heading",
+        "width": 12
+      },
+      {
+        "col": 14,
+        "text": "approval",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 24,
+        "text": "waiting",
+        "role": "warning",
+        "width": 7
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "answer the outstanding request",
+        "role": "command",
+        "width": 30
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Question  ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 10,
+        "text": "Approve the implementation pl\u2026",
+        "role": "default",
+        "width": 30
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Request  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "outstanding",
+        "role": "warning",
+        "width": 11
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Changes target  ",
+        "role": "muted",
+        "width": 16
+      },
+      {
+        "col": 16,
+        "text": "implement",
+        "role": "path",
+        "width": 9
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 22,
+        "text": "30s               ",
+        "role": "default",
+        "width": 18
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Blocker  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "approval (outstanding)",
+        "role": "warning",
+        "width": 22
+      }
+    ]
+  ]
+}

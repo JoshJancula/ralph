@@ -9,15 +9,11 @@ pipeline:
       voters:
         - id: alpha
           runtime: cursor
-          agent: code-review
         - id: beta
           runtime: codex
-          agent: code-review
     - id: adjudicate
       type: join
       runtime: claude
-      agent: adjudicator
-      subagents: on
       dependsOn:
         - review
 todos:

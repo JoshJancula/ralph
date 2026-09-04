@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sourceKind",
+    "originalPath",
+    "copiedPath",
+    "originalSha256",
+    "copiedSha256",
+    "format",
+    "totalTodos",
+    "completedTodos",
+    "openTodos",
+    "task",
+    "taskProvenance",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["provided"]
+    },
+    "originalPath": {
+      "type": "string",
+      "pattern": "^/.+$"
+    },
+    "copiedPath": {
+      "type": "string",
+      "pattern": "^/.+$"
+    },
+    "originalSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "copiedSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["classic", "yaml"]
+    },
+    "totalTodos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "completedTodos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "openTodos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskProvenance": {
+      "type": "string",
+      "enum": ["explicit", "plan-overview", "plan-filename"]
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

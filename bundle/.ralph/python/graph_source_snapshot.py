@@ -29,6 +29,11 @@ DEFAULT_CACHE_NAMES = {
     "node_modules",
 }
 
+# Named control roots at the source root. Snapshot capture excludes them by
+# resolved identity so a symlink or nested state directory cannot leak into
+# the frozen base even when its relative name is not the usual prefix.
+CONTROL_ROOT_NAMES = (".git", ".ralph", ".ralph-workspace")
+
 
 class CaptureError(RuntimeError):
     pass
@@ -42,6 +47,95 @@ def canonical_json(value: object) -> bytes:
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def collect_resolved_roots(
+    source: Path, state_root: Optional[Path]
+) -> List[Path]:
+    """Absolute identities of state and control roots to exclude from capture."""
+    roots: List[Path] = []
+    seen: Set[Path] = set()
+
+    def add(path: Path) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        roots.append(resolved)
+
+    if state_root is not None:
+        add(state_root)
+    for name in CONTROL_ROOT_NAMES:
+        candidate = source / name
+        if candidate.exists() or candidate.is_symlink():
+            add(candidate)
+    return roots
+
+
+def path_resolves_under(
+    path: Path, roots: Sequence[Path], source: Path
+) -> bool:
+    try:
+        resolved = path.resolve()
+        source_resolved = source.resolve()
+    except OSError:
+        return False
+    if resolved == source_resolved:
+        return False
+    # A project may expose its installed Ralph control directory as a symlink
+    # to source that is also legitimately part of the project. Ralph itself
+    # does this: .ralph -> bundle/.ralph. The alias must stay out of the
+    # snapshot, but excluding every path with the same resolved identity also
+    # removes bundle/.ralph and makes isolated nodes unable to edit Ralph.
+    # Preserve the physical in-tree target when reached by its own path; a
+    # differently named symlink to that target is still rejected below.
+    physical_control_targets: Set[Path] = set()
+    for name in CONTROL_ROOT_NAMES:
+        alias = source / name
+        if not alias.is_symlink():
+            continue
+        try:
+            target = alias.resolve()
+            target.relative_to(source_resolved)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        physical_control_targets.add(target)
+
+    try:
+        lexical = Path(os.path.abspath(path))
+    except OSError:
+        lexical = path
+
+    for root in roots:
+        if root == source_resolved:
+            continue
+        if root in physical_control_targets:
+            try:
+                lexical.relative_to(root)
+            except ValueError:
+                pass
+            else:
+                continue
+        # An in-tree name or symlink whose identity is the control/state root
+        # is excluded even when that identity lives outside the source tree.
+        if resolved == root:
+            return True
+        # Nested content is excluded only when the root itself is inside the
+        # tree being scanned. Workspaces stored under an external state root
+        # must not treat every file as state just because they live there.
+        try:
+            root.relative_to(source_resolved)
+        except ValueError:
+            continue
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def read_excludes(
@@ -60,8 +154,11 @@ def read_excludes(
                 )
             excludes.add(pure.as_posix().rstrip("/"))
     if state_root is not None:
+        for name in CONTROL_ROOT_NAMES:
+            if name != ".git":
+                excludes.add(name)
         try:
-            state_relative = state_root.resolve().relative_to(source)
+            state_relative = state_root.resolve().relative_to(source.resolve())
         except ValueError:
             pass
         else:
@@ -70,7 +167,12 @@ def read_excludes(
     return excludes
 
 
-def is_excluded(relative: str, explicit: Set[str], source: Optional[Path] = None) -> bool:
+def is_excluded(
+    relative: str,
+    explicit: Set[str],
+    source: Optional[Path] = None,
+    resolved_roots: Optional[Sequence[Path]] = None,
+) -> bool:
     parts = PurePosixPath(relative).parts
     if ".git" in parts:
         return True
@@ -85,11 +187,19 @@ def is_excluded(relative: str, explicit: Set[str], source: Optional[Path] = None
         candidate = source.joinpath(*parts[: index + 1])
         if candidate.is_dir() and not candidate.is_symlink():
             return True
+    if source is not None and resolved_roots:
+        candidate = source.joinpath(*parts) if parts else source
+        if path_resolves_under(candidate, resolved_roots, source):
+            return True
     return False
 
 
 def validate_symlink(
-    path: Path, relative: str, source: Path, explicit: Set[str]
+    path: Path,
+    relative: str,
+    source: Path,
+    explicit: Set[str],
+    resolved_roots: Optional[Sequence[Path]] = None,
 ) -> None:
     target = os.readlink(path)
     if os.path.isabs(target):
@@ -101,7 +211,7 @@ def validate_symlink(
         raise CaptureError(f"unsafe escaping symlink in source: {relative}")
     if resolved == path or resolved in path.parents:
         raise CaptureError(f"unsafe cyclic symlink in source: {relative}")
-    if is_excluded(target_relative, explicit, source):
+    if is_excluded(target_relative, explicit, source, resolved_roots):
         raise CaptureError(f"symlink targets excluded source content: {relative}")
 
 
@@ -142,8 +252,13 @@ def entry_for(path: Path, relative: str) -> Dict[str, object]:
     raise CaptureError(f"unsupported source file type: {relative}")
 
 
-def scan(source: Path, explicit: Set[str]) -> List[Dict[str, object]]:
+def scan(
+    source: Path,
+    explicit: Set[str],
+    resolved_roots: Optional[Sequence[Path]] = None,
+) -> List[Dict[str, object]]:
     entries: List[Dict[str, object]] = []
+    roots = list(resolved_roots or ())
 
     def visit(directory: Path, prefix: PurePosixPath) -> None:
         try:
@@ -153,11 +268,11 @@ def scan(source: Path, explicit: Set[str]) -> List[Dict[str, object]]:
         for child in children:
             relative_path = prefix / child.name
             relative = relative_path.as_posix()
-            if is_excluded(relative, explicit, source):
+            if is_excluded(relative, explicit, source, roots):
                 continue
             path = Path(child.path)
             if path.is_symlink():
-                validate_symlink(path, relative, source, explicit)
+                validate_symlink(path, relative, source, explicit, roots)
             entry = entry_for(path, relative)
             entries.append(entry)
             if entry["type"] == "directory":
@@ -241,7 +356,8 @@ def capture(args: argparse.Namespace) -> int:
         raise CaptureError("snapshot destination inside source requires a state-root exclusion")
 
     explicit = read_excludes(args.exclude_file, source, state_root)
-    before = scan(source, explicit)
+    resolved_roots = collect_resolved_roots(source, state_root)
+    before = scan(source, explicit, resolved_roots)
     before_identity = identity(before)
     if args.ready_file:
         Path(args.ready_file).write_text("ready\n", encoding="utf-8")
@@ -256,7 +372,7 @@ def capture(args: argparse.Namespace) -> int:
         temporary.rmdir()
         copied = copy_source(source, temporary, before)
         copied_identity = identity(copied)
-        after = scan(source, explicit)
+        after = scan(source, explicit, resolved_roots)
         after_identity = identity(after)
         if not (
             before_identity == copied_identity
@@ -289,6 +405,7 @@ def git_status(args: argparse.Namespace) -> int:
     source = Path(args.source).resolve()
     state_root = Path(args.state_root).resolve() if args.state_root else None
     explicit = read_excludes(args.exclude_file, source, state_root)
+    resolved_roots = collect_resolved_roots(source, state_root)
     raw = Path(args.status_file).read_bytes().split(b"\0")
     records: List[Dict[str, str]] = []
     index = 0
@@ -309,7 +426,7 @@ def git_status(args: argparse.Namespace) -> int:
             original = raw[index].decode("utf-8", "surrogateescape")
             index += 1
         paths = [path] + ([original] if original else [])
-        if all(is_excluded(item, explicit, source) for item in paths):
+        if all(is_excluded(item, explicit, source, resolved_roots) for item in paths):
             continue
         item = {"code": code, "path": path}
         if original:
@@ -331,7 +448,8 @@ def source_identity(args: argparse.Namespace) -> int:
     if not source.is_dir():
         raise CaptureError(f"source root is not a directory: {source}")
     explicit = read_excludes(args.exclude_file, source, state_root)
-    entries = scan(source, explicit)
+    resolved_roots = collect_resolved_roots(source, state_root)
+    entries = scan(source, explicit, resolved_roots)
     payload = {
         "filesystemIdentity": identity(entries),
         "entryCount": len(entries),

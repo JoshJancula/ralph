@@ -10,20 +10,27 @@ RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 #   run_plan_invoke_claude_minimal_mode_validate -- normalize CLAUDE_PLAN_MINIMAL.
 #   run_plan_invoke_claude_minimal_mcp_lockdown_validate -- normalize CLAUDE_PLAN_MINIMAL_DISABLE_MCP.
 #   run_plan_invoke_claude_apply_minimal_flags -- append CLAUDE_PLAN_MINIMAL auth-safe flags.
-#   run_plan_invoke_claude_mcp_config_prepare / run_plan_invoke_claude_mcp_config_cleanup -- ralph-mode ephemeral MCP config.
+#   run_plan_invoke_claude_mcp_config_prepare / run_plan_invoke_claude_mcp_config_cleanup -- ralph-mode ephemeral MCP config containing only the ralph server.
+#   run_plan_invoke_claude_mcp_prepare_ralph_layer -- validate + prepare that ephemeral config for the "layered" (non-strict) MCP lockdown mode.
 #   run_plan_invoke_claude_native_hooks_prepare / run_plan_invoke_claude_native_hooks_cleanup -- dynamic Claude hook settings overlay.
 #   run_plan_invoke_claude_permission_mode_validate -- normalize CLAUDE_PLAN_PERMISSION_MODE.
 #   run_plan_invoke_claude_session_resume_args / run_plan_invoke_claude_session_new_args / run_plan_invoke_claude_bare_resume_args -- build argv fragments.
 #   run_plan_invoke_claude_bare_resume_warn -- stderr warning when bare resume is not allowed.
 #   ralph_run_plan_invoke_claude -- run Claude headless with model, tools, resume; exports log/session paths for demux.
+#   run_plan_invoke_claude_disallowed_tools_supported -- help-only probe for --disallowedTools (nativeSubagents=off).
+#   run_plan_invoke_claude_native_subagents_preflight -- fail closed when off lacks deny-control support.
 #   run_plan_invoke_claude_graph_approval_live_supported -- graph help-only live-channel proof (no model call).
 #   run_plan_invoke_claude_graph_approval_capabilities -- advertise only enforceable Claude lifetimes.
+#   run_plan_invoke_claude_graph_approval_parse_permission -- elevate a fake-adapter event into the G15 contract.
 #   run_plan_invoke_claude_graph_approval_apply / restore -- common resumable overlay fallback.
 #   run_plan_invoke_claude_graph_approval_start_or_fallback -- live path only after nonbillable proof.
 # Env:
 #   CLAUDE_PLAN_BARE (truthy enables --bare; default off — requires ANTHROPIC_API_KEY)
 #   CLAUDE_PLAN_MINIMAL (truthy enables auth-safe minimal flag composition; default on)
-#   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (default on: pass --strict-mcp-config and empty --mcp-config when no effective MCP overlay; off loads native MCP discovery)
+#   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (explicit override for MCP discovery; unset lets the resolved tooling profile decide -- Ralph profile layers a
+#     ralph-only --mcp-config over native discovery, raw stays locked down with --strict-mcp-config and an empty catalog. Explicit 1/true/yes/on always
+#     locks down with an empty catalog even for a Ralph profile. Explicit 0/false/no/off always permits native discovery: Ralph profile still layers its
+#     ralph-only config non-strictly on top, raw leaves native discovery completely alone.)
 #   CLAUDE_PLAN_MINIMAL_TOOLS (csv tool names for --tools in minimal mode; default "Bash,Read,Edit,Write")
 #   CLAUDE_PLAN_PERMISSION_MODE (one of default, acceptEdits, auto, bypassPermissions, dontAsk, plan; default unset)
 
@@ -118,16 +125,38 @@ run_plan_invoke_claude_apply_minimal_flags() {
   local args_name="$1"
   local mcp_config_path="${2:-}"
   local tools="${3:-${CLAUDE_PLAN_MINIMAL_TOOLS:-Bash,Read,Edit,Write}}"
+  # mcp_lockdown_mode (4th arg) controls how MCP discovery is composed:
+  #   lockdown (default) -- --strict-mcp-config plus mcp_config_path, or an
+  #                          empty {"mcpServers":{}} catalog when no path is
+  #                          given. Disables native ambient/CLI MCP discovery.
+  #   layered            -- --mcp-config mcp_config_path with NO
+  #                          --strict-mcp-config, so native discovery still
+  #                          runs and the given config (e.g. the Ralph-only
+  #                          server) is layered on top of it.
+  #   native             -- no MCP flags at all; native discovery is left
+  #                          completely alone.
+  local mcp_lockdown_mode="${4:-lockdown}"
   if [[ "${RALPH_RUN_PLAN_RESET_COMMAND_USED:-0}" != "1" ]]; then
     eval "$args_name+=(--disable-slash-commands)"
   fi
-  if [[ -n "$mcp_config_path" ]]; then
-    eval "$args_name+=(--strict-mcp-config)"
-    eval "$args_name+=(--mcp-config \"$mcp_config_path\")"
-  elif [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-1}" == "1" ]]; then
-    eval "$args_name+=(--strict-mcp-config)"
-    eval "$args_name+=(--mcp-config '{\"mcpServers\":{}}')"
-  fi
+  case "$mcp_lockdown_mode" in
+    layered)
+      if [[ -n "$mcp_config_path" ]]; then
+        eval "$args_name+=(--mcp-config \"$mcp_config_path\")"
+      fi
+      ;;
+    native)
+      ;;
+    *)
+      if [[ -n "$mcp_config_path" ]]; then
+        eval "$args_name+=(--strict-mcp-config)"
+        eval "$args_name+=(--mcp-config \"$mcp_config_path\")"
+      else
+        eval "$args_name+=(--strict-mcp-config)"
+        eval "$args_name+=(--mcp-config '{\"mcpServers\":{}}')"
+      fi
+      ;;
+  esac
   eval "$args_name+=(--setting-sources \"$(run_plan_invoke_claude_setting_sources)\")"
   eval "$args_name+=(--tools \"$tools\")"
 }
@@ -143,13 +172,13 @@ run_plan_invoke_claude_mcp_config_prepare() {
   local config_path="${RALPH_MCP_CONFIG_PATH:-}"
   local owns_config=0
 
-  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
-    CLAUDE_PLAN_MCP_CONFIG_PATH="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
-    CLAUDE_PLAN_MCP_CONFIG_OWNED=0
-    export CLAUDE_PLAN_MCP_CONFIG_PATH CLAUDE_PLAN_MCP_CONFIG_OWNED
-    return 0
-  fi
-
+  # Deliberately does NOT prefer RALPH_RUNTIME_MCP_RESOLVE_PATH (the merged
+  # ambient+agent+ralph catalog rebuilt by ralph_runtime_config_mcp_resolve).
+  # That rebuilt copy loses ambient MCP server state (for example OAuth/session
+  # state) that lives outside the config file. Ralph-profile runs always get an
+  # ephemeral config containing ONLY the ralph server here, so native discovery
+  # (left on by the caller for a Ralph profile) is what surfaces ambient
+  # servers, and this call only ever adds Ralph's own server on top.
   if [[ -z "$config_path" ]]; then
     config_path="$(mktemp "${TMPDIR:-/tmp}/ralph-claude-mcp-XXXXXX")"
     owns_config=1
@@ -169,6 +198,28 @@ run_plan_invoke_claude_mcp_config_prepare() {
   export CLAUDE_PLAN_MCP_CONFIG_PATH CLAUDE_PLAN_MCP_CONFIG_OWNED
   if [[ "$owns_config" == "1" ]]; then
     ralph_mcp_overlay_register_runtime_cleanup run_plan_invoke_claude_mcp_config_cleanup
+  fi
+}
+
+# run_plan_invoke_claude_mcp_prepare_ralph_layer <tools_use>
+# Validates the ralph-profile MCP preconditions (bare mode, allowed tools),
+# then prepares the ralph-only ephemeral MCP config via
+# run_plan_invoke_claude_mcp_config_prepare. On success, CLAUDE_PLAN_MCP_CONFIG_PATH
+# / CLAUDE_PLAN_MCP_CONFIG_OWNED are exported by that call for the caller to read.
+run_plan_invoke_claude_mcp_prepare_ralph_layer() {
+  local tools_use="$1"
+  if [[ "${CLAUDE_PLAN_BARE:-0}" == "1" ]]; then
+    echo "Error: Agent Tool Access (ralph) is incompatible with CLAUDE_PLAN_BARE=1 because ralph mode needs the auth-safe minimal path to inject the MCP config. Re-run with --no-claude-bare (or unset CLAUDE_PLAN_BARE)." >&2
+    return 1
+  fi
+  if [[ -z "$tools_use" ]]; then
+    echo "Error: Agent Tool Access (ralph) requires --allowedTools so the tool surface can match the CLI tool surface. Re-run without CLAUDE_PLAN_NO_ALLOWED_TOOLS=1." >&2
+    run_plan_invoke_claude_native_hooks_cleanup
+    return 1
+  fi
+  if ! run_plan_invoke_claude_mcp_config_prepare; then
+    run_plan_invoke_claude_native_hooks_cleanup
+    return 1
   fi
 }
 
@@ -257,7 +308,7 @@ ralph_run_plan_invoke_claude_completion_tool_names() {
 ralph_run_plan_invoke_claude_delegation_tool_names() {
   [[ "${RALPH_MCP_SCOPE:-operator}" == graph-node ]] || return 0
   local _ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
-  printf '%s' "${_ns}ralph_delegate_start,${_ns}ralph_delegate_status,${_ns}ralph_delegate_wait,${_ns}ralph_delegate_result,${_ns}ralph_delegate_cancel"
+  printf '%s' "${_ns}ralph_delegated_run_start,${_ns}ralph_delegated_run_status,${_ns}ralph_delegated_run_wait,${_ns}ralph_delegated_run_result,${_ns}ralph_delegated_run_cancel"
 }
 
 ralph_run_plan_invoke_claude_allowed_tools_list() {
@@ -357,14 +408,43 @@ run_plan_invoke_claude_permission_mode_validate() {
   esac
 }
 
+# run_plan_invoke_claude_disallowed_tools_supported [cli]
+# Help-only. Never starts a session or sends a prompt. Returns 0 when the
+# installed Claude CLI advertises --disallowedTools (Claude's proven Agent deny).
+run_plan_invoke_claude_disallowed_tools_supported() {
+  local cli_name="${1:-${CLAUDE_PLAN_CLI:-claude}}"
+  local help_text
+
+  if ! command -v "$cli_name" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! help_text="$("$cli_name" --help 2>/dev/null)"; then
+    return 1
+  fi
+  [[ "$help_text" == *"--disallowedTools"* ]]
+}
+
+# run_plan_invoke_claude_native_subagents_preflight [cli]
+# nativeSubagents=off requires the proven --disallowedTools deny control before
+# invocation. inherit preserves ambient behavior and skips this probe.
+run_plan_invoke_claude_native_subagents_preflight() {
+  local cli_name="${1:-${CLAUDE_PLAN_CLI:-claude}}"
+  local mode
+
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  [[ "$mode" == "off" ]] || return 0
+
+  if run_plan_invoke_claude_disallowed_tools_supported "$cli_name"; then
+    return 0
+  fi
+  echo "Error: nativeSubagents=off requires Claude CLI support for --disallowedTools; refusing to invoke (upgrade Claude CLI or use nativeSubagents=inherit)." >&2
+  return 1
+}
+
 ralph_run_plan_invoke_claude() {
   ralph_run_plan_sync_mode_knobs
   ralph_run_plan_subagents_log_contract claude || return 1
   ralph_run_plan_subagents_require_runtime_capability claude || return 1
-  # Fail before model invocation when native subagent mode is active but runtime is unproven.
-  ralph_run_plan_native_subagent_verify_runtime claude || return 1
-  # Inject the native subagent prompt contract into PROMPT_STATIC when mode is read-only.
-  ralph_run_plan_native_subagent_append_contract || return 1
   # Paths and flags the Python demux / tee pipeline expects in the environment.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
 
@@ -383,6 +463,12 @@ ralph_run_plan_invoke_claude() {
     return 1
   fi
 
+  # nativeSubagents=off: verify deny control before building argv / invoking.
+  # inherit: skip; do not alter ambient Agent availability.
+  if ! run_plan_invoke_claude_native_subagents_preflight "$cli"; then
+    return 1
+  fi
+
   local -a args=(-p)
   run_plan_invoke_common_add_model_flag args --model
   if ! run_plan_invoke_common_add_reasoning_effort_flag args claude "$cli"; then
@@ -390,32 +476,33 @@ ralph_run_plan_invoke_claude() {
   fi
   run_plan_invoke_common_add_structured_output_flag args claude "$cli"
 
-  local budget=""
   if [[ -n "${RALPH_CLAUDE_MAX_BUDGET_USD:-}" ]]; then
-    budget="$RALPH_CLAUDE_MAX_BUDGET_USD"
-  elif [[ -n "${RALPH_AGENT_MAX_BUDGET:-}" ]]; then
-    budget="$RALPH_AGENT_MAX_BUDGET"
-  fi
-  if [[ -n "$budget" ]]; then
-    args+=(--max-budget-usd "$budget")
+    args+=(--max-budget-usd "$RALPH_CLAUDE_MAX_BUDGET_USD")
   fi
 
   if ! run_plan_invoke_claude_bare_mode_validate; then return 1; fi
   if ! run_plan_invoke_claude_minimal_mode_validate; then return 1; fi
+
+  # Capture whether the operator explicitly set the MCP lockdown override
+  # BEFORE minimal_mcp_lockdown_validate normalizes/defaults it to "1", so the
+  # profile-driven decision below can tell "operator said so" apart from
+  # "unset, let the profile decide". CLAUDE_PLAN_MINIMAL_DISABLE_MCP is only
+  # ever set here by an explicit env var or the --claude-allow-mcp /
+  # --no-claude-allow-mcp flags (see run-plan-args.sh).
+  local _mcp_lockdown_explicit=0
+  [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP+set}" == "set" ]] && _mcp_lockdown_explicit=1
   if ! run_plan_invoke_claude_minimal_mcp_lockdown_validate; then return 1; fi
 
   run_plan_invoke_claude_native_hooks_prepare
 
-  # Use RALPH_MODE and RALPH_AGENT_TOOL_ACCESS to determine MCP injection behavior
+  # "Ralph profile" below means the Ralph MCP proxy tools are in play for this
+  # invocation: RALPH_MODE=ralph, RALPH_MODE=hybrid, or the legacy
+  # RALPH_AGENT_TOOL_ACCESS=ralph override. Everything else -- including the
+  # tooling-profiles.json "raw" profile, which sets RALPH_MODE=no -- is "raw".
   local _ralph_mode="${RALPH_MODE:-no}"
   local ralph_tools_mode=0
   if [[ "$_ralph_mode" == "ralph" || "$_ralph_mode" == "hybrid" || "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
     ralph_tools_mode=1
-    # Auto-enable MCP when RALPH_MODE is ralph or hybrid
-    if [[ "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-1}" == "1" ]]; then
-      CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
-      export CLAUDE_PLAN_MINIMAL_DISABLE_MCP
-    fi
   fi
 
   local tools_use
@@ -423,53 +510,64 @@ ralph_run_plan_invoke_claude() {
     tools_use=""
   elif [[ "${CLAUDE_PLAN_ALLOWED_TOOLS+set}" == "set" ]]; then
     tools_use="$CLAUDE_PLAN_ALLOWED_TOOLS"
-  elif [[ -n "${CLAUDE_TOOLS_FROM_AGENT:-}" ]]; then
-    tools_use="$CLAUDE_TOOLS_FROM_AGENT"
   else
     tools_use="Bash,Read,Edit,Write"
   fi
 
-  # `Agent` is Claude's native dispatch tool.  Do this only from the resolved
-  # runner contract: inherit deliberately leaves the historical argv untouched.
+  # nativeSubagents=off uses --disallowedTools Agent (proven deny). inherit
+  # leaves argv untouched so ambient Agent availability is preserved.
   local subagents_mode
-  subagents_mode="$(ralph_run_plan_subagents_mode)" || return 1
-  case "$subagents_mode" in
-    on)
-      case ",$tools_use," in
-        *,Agent,*) ;;
-        *) tools_use="${tools_use:+$tools_use,}Agent" ;;
-      esac
-      ;;
-    off)
-      # A deny flag is needed even when an ambient/native agent profile adds
-      # Agent after Ralph selected its normal allowed-tools list.
-      ;;
-  esac
+  subagents_mode="$(ralph_run_plan_native_subagents_mode)" || return 1
 
+  # Decide how MCP discovery is composed for this invocation. This is a
+  # deliberate contract, not a bug fix: Ralph-profile runs never rebuild
+  # ambient MCP servers into a merged, ephemeral --mcp-config (that rebuild
+  # loses ambient state -- e.g. OAuth/session state -- that does not live in
+  # the config file). Precedence, highest first:
+  #   1. Explicit CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1 -- always strict lockdown
+  #      with an empty catalog, even for a Ralph profile.
+  #   2. Explicit CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0 -- always permits native
+  #      discovery. Ralph profile also layers the one-server Ralph config
+  #      non-strictly on top; raw leaves native discovery alone entirely.
+  #   3. Unset -- the resolved profile decides: Ralph profile layers the
+  #      Ralph-only config non-strictly, raw keeps today's strict/empty
+  #      lockdown default.
+  # See run_plan_invoke_claude_apply_minimal_flags for the argv composition
+  # of each mcp_lockdown_mode.
+  local mcp_lockdown_mode="lockdown"
   local mcp_config_path=""
   local mcp_overlay_effective=0
-  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
-    mcp_config_path="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
-    CLAUDE_PLAN_MCP_CONFIG_PATH="$mcp_config_path"
-    CLAUDE_PLAN_MCP_CONFIG_OWNED=0
-    export CLAUDE_PLAN_MCP_CONFIG_PATH CLAUDE_PLAN_MCP_CONFIG_OWNED
-    mcp_overlay_effective=1
+  local mcp_overlay_decision=""
+
+  if [[ "$_mcp_lockdown_explicit" == "1" && "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP}" == "1" ]]; then
+    mcp_overlay_decision="explicit_lockdown"
+  elif [[ "$_mcp_lockdown_explicit" == "1" && "${CLAUDE_PLAN_MINIMAL_DISABLE_MCP}" == "0" ]]; then
+    if [[ "$ralph_tools_mode" == "1" ]]; then
+      if ! run_plan_invoke_claude_mcp_prepare_ralph_layer "$tools_use"; then
+        return 1
+      fi
+      mcp_config_path="$CLAUDE_PLAN_MCP_CONFIG_PATH"
+      mcp_lockdown_mode="layered"
+      mcp_overlay_effective=1
+      mcp_overlay_decision="explicit_permit_ralph_layered"
+    else
+      mcp_lockdown_mode="native"
+      mcp_overlay_decision="explicit_permit_native"
+    fi
   elif [[ "$ralph_tools_mode" == "1" ]]; then
-    if [[ "${CLAUDE_PLAN_BARE:-0}" == "1" ]]; then
-      echo "Error: Agent Tool Access (ralph) is incompatible with CLAUDE_PLAN_BARE=1 because ralph mode needs the auth-safe minimal path to inject the MCP config. Re-run with --no-claude-bare (or unset CLAUDE_PLAN_BARE)." >&2
-      return 1
-    fi
-    if [[ -z "$tools_use" ]]; then
-      echo "Error: Agent Tool Access (ralph) requires --allowedTools so the tool surface can match the CLI tool surface. Re-run without CLAUDE_PLAN_NO_ALLOWED_TOOLS=1." >&2
-      run_plan_invoke_claude_native_hooks_cleanup
-      return 1
-    fi
-    if ! run_plan_invoke_claude_mcp_config_prepare; then
-      run_plan_invoke_claude_native_hooks_cleanup
+    if ! run_plan_invoke_claude_mcp_prepare_ralph_layer "$tools_use"; then
       return 1
     fi
     mcp_config_path="$CLAUDE_PLAN_MCP_CONFIG_PATH"
+    mcp_lockdown_mode="layered"
     mcp_overlay_effective=1
+    mcp_overlay_decision="profile_ralph_layered"
+  else
+    mcp_overlay_decision="profile_raw_lockdown"
+  fi
+
+  if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
+    runtime_overlay_set_mcp_override_decisions "$mcp_overlay_decision"
   fi
   if [[ "$mcp_overlay_effective" == "1" ]]; then
     if declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
@@ -524,7 +622,7 @@ ralph_run_plan_invoke_claude() {
     # removes automatic context sources.
     args+=(--bare)
   elif [[ "${CLAUDE_PLAN_MINIMAL:-1}" == "1" || "$ralph_tools_mode" == "1" ]]; then
-    run_plan_invoke_claude_apply_minimal_flags args "$mcp_config_path" "$tools_use"
+    run_plan_invoke_claude_apply_minimal_flags args "$mcp_config_path" "$tools_use" "$mcp_lockdown_mode"
   fi
 
   if ! run_plan_invoke_claude_permission_mode_validate; then
@@ -554,31 +652,14 @@ ralph_run_plan_invoke_claude() {
     run_plan_invoke_claude_bare_resume_warn
   run_plan_invoke_common_add_cli_resume_flags args --verbose --output-format stream-json
 
-  # Native --agent flag passthrough (adapter-native-md phase):
-  # When RALPH_AGENT_NATIVE_NAME is set and RALPH_AGENT_NATIVE_PASSTHROUGH is on,
-  # add --agent flag and suppress the agent-derived --system-prompt context.
-  # The claude CLI --agent <name> flag:
-  # - Coexists without conflicts alongside --allowedTools, --mcp-config
-  # - Is a session/identity override flag (not a file resolver)
-  # - Does NOT auto-discover local .claude/agents/<name>.md files
-  # - Requires pre-registered agents in Claude app config or fails with unknown-agent
-  local _native_passthrough_idx=-1
-  if [[ -n "${RALPH_AGENT_NATIVE_NAME:-}" ]] && [[ "${RALPH_AGENT_NATIVE_PASSTHROUGH}" != "0" ]]; then
-    args+=("--agent" "$RALPH_AGENT_NATIVE_NAME")
-    _native_passthrough_idx=$((${#args[@]} - 2))
-  fi
-
   # Fresh/checkpoint turns pass stable context via --system-prompt for Anthropic prompt caching.
   # The dynamic user turn (PROMPT) excludes that context (set by run-plan-core.sh).
   # Claude ignores --exclude-dynamic-system-prompt-sections when --system-prompt is supplied,
   # so only pass exclude-dynamic on resume/reset paths where PROMPT_STATIC is empty.
-  # Skip --system-prompt when native passthrough is active (agent context comes from Claude).
-  if [[ $_native_passthrough_idx -lt 0 ]]; then
-    if [[ -n "${PROMPT_STATIC:-}" ]]; then
-      args+=(--system-prompt "$PROMPT_STATIC")
-    elif [[ "${RALPH_CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS:-1}" == "1" ]]; then
-      args+=(--exclude-dynamic-system-prompt-sections)
-    fi
+  if [[ -n "${PROMPT_STATIC:-}" ]]; then
+    args+=(--system-prompt "$PROMPT_STATIC")
+  elif [[ "${RALPH_CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS:-1}" == "1" ]]; then
+    args+=(--exclude-dynamic-system-prompt-sections)
   fi
 
   run_plan_invoke_claude_cli() {
@@ -602,26 +683,6 @@ ralph_run_plan_invoke_claude() {
     export CLAUDE_PLAN_MINIMAL
     run_plan_invoke_claude_apply_minimal_flags args
     echo "Note: claude reported 'Not logged in' with --bare (which skips keychain reads). Retrying once with CLAUDE_PLAN_MINIMAL=1 instead and persisting that for the rest of this process. Set ANTHROPIC_API_KEY (or unset CLAUDE_PLAN_BARE to use the safe default) to silence." >&2
-    rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
-    run_plan_invoke_common_execute \
-      run_plan_invoke_claude_cli \
-      claude \
-      "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse stream-json and update session-id.claude.txt; running without it."
-  fi
-
-  # Native passthrough fallback: if --agent failed due to unknown agent and passthrough was active,
-  # retry with inlined context and suppress --agent flag (mirror --bare login fallback).
-  if [[ $_native_passthrough_idx -ge 0 ]] && [[ -s "$EXIT_CODE_FILE" ]] && [[ "$(cat "$EXIT_CODE_FILE")" != "0" ]] && [[ -s "$OUTPUT_LOG" ]] && [[ "$(cat "$OUTPUT_LOG")" == *"unknown agent"* || "$(cat "$OUTPUT_LOG")" == *"agent not found"* ]]; then
-    # Remove --agent flag and its argument
-    args=("${args[@]:0:_native_passthrough_idx}" "${args[@]:$((_native_passthrough_idx+2))}")
-    # Re-add --system-prompt with inlined context (fallback to PREBUILT_AGENT_CONTEXT if available)
-    if [[ -n "${PREBUILT_AGENT_CONTEXT:-}" ]]; then
-      local _fallback_prompt_static="${PROMPT_STATIC:-}${PREBUILT_AGENT_CONTEXT}"
-      if [[ -n "$_fallback_prompt_static" ]]; then
-        args+=(--system-prompt "$_fallback_prompt_static")
-      fi
-    fi
-    echo "Note: claude reported unknown agent with --agent '$RALPH_AGENT_NATIVE_NAME'. Retrying once without --agent flag and with inlined context. Register the agent in Claude app config or set RALPH_AGENT_NATIVE_PASSTHROUGH=off to use the full inlined mode." >&2
     rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
     run_plan_invoke_common_execute \
       run_plan_invoke_claude_cli \
@@ -717,6 +778,69 @@ run_plan_invoke_claude_graph_approval_capabilities() {
     lifetimes: {once: true, run: true, "always-policy": false}
   }')"
   ralph_approval_adapter_capabilities claude "$proof"
+}
+
+# run_plan_invoke_claude_graph_approval_parse_permission <fake-adapter-event-json>
+# Elevates a Claude fake-adapter permission event into the G15 actionable
+# request contract. Choices/lifetimes come only from Claude capabilities
+# (once+run; never advertise always-policy).
+run_plan_invoke_claude_graph_approval_parse_permission() {
+  local raw="${1:-}"
+  local fields caps
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: Claude graph approval parse requires a permission event" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Claude graph approval parse" >&2
+    return 1
+  fi
+  if ! printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: Claude graph approval parse requires a JSON object" >&2
+    return 1
+  fi
+  _run_plan_invoke_claude_graph_approval_ensure_adapter || return 1
+
+  if printf '%s' "$raw" | jq -e '
+    def lower($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then ($v | ascii_downcase)
+      else "" end;
+    (lower(.tool // .permissionRequest.tool // "")) == "permission"
+    and (lower(.action // .permissionRequest.action // "")) == "permission"
+    and (lower(.effect // .permissionRequest.effect // "")) == "write"
+  ' >/dev/null 2>&1; then
+    ralph_approval_adapter_permission_unknown claude \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  fields="$(printf '%s' "$raw" | jq -ce '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      else "" end;
+    {
+      runtime: "claude",
+      sessionId: str(.sessionId // .sessionID // .session // .permissionRequest.sessionId // ""),
+      nativeRequestId: str(.nativeRequestId // .requestId // .id // .permissionRequest.nativeRequestId // ""),
+      tool: str(.tool // .tool_name // .permissionRequest.tool // ""),
+      action: str(.action // .permissionRequest.action // ""),
+      resource: str(.resource // .command // .path // .permissionRequest.resource // ""),
+      effect: str(.effect // .permissionRequest.effect // ""),
+      reason: str(.reason // .permissionRequest.reason // ""),
+      expiresAt: (.expiresAt // null)
+    }
+  ' 2>/dev/null)" || {
+    ralph_approval_adapter_permission_unknown claude \
+      "Claude permission event is missing actionable identity"
+    return 0
+  }
+
+  caps="$(run_plan_invoke_claude_graph_approval_capabilities "${CLAUDE_PLAN_CLI:-claude}")" || return 1
+  ralph_approval_adapter_build_permission_record "$fields" "$caps"
 }
 
 # run_plan_invoke_claude_graph_approval_fallback [reason]

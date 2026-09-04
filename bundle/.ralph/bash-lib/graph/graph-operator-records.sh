@@ -13,6 +13,13 @@
 # A decision repeats the request identity tuple and stores the choice,
 # exact-or-narrower granted rule, actor source, and decidedAt. Replays of
 # the identical decision are safe; a conflicting decision fails.
+#
+# Shared primitives (create-once write, nonce mint/validate, request-id
+# validation, credential detection, reason bound/redact, path containment via
+# graph_logs_*) are the authoritative implementations. Workflow common action
+# records in bash-lib/workflow/workflow-actions.sh must wrap these rather than
+# copy weaker logic. Graph permission request/decision shapes and paths remain
+# the internal compatibility surface.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "This file is meant to be sourced, not executed." >&2
@@ -157,8 +164,45 @@ graph_operator_nonce_valid() {
   return 0
 }
 
+# graph_operator_text_looks_like_credential <text>
+# Returns 0 when text matches credential-looking assignment or token shapes.
+# Shared by graph reason redaction and workflow action credential rejection.
+graph_operator_text_looks_like_credential() {
+  local text="${1:-}"
+  [[ -n "$text" ]] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$text" | python3 -c '
+import re, sys
+text = sys.stdin.read()
+patterns = (
+    re.compile(
+        r"(?i)(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|"
+        r"bearer|authorization|credential)\s*[=:]\s*\S+"
+    ),
+    re.compile(
+        r"(?i)(?<![A-Za-z0-9_-])(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{8,}|"
+        r"ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})(?![A-Za-z0-9_-])"
+    ),
+)
+sys.exit(0 if any(p.search(text) for p in patterns) else 1)
+'
+    return $?
+  fi
+  if printf '%s' "$text" | grep -Eqi \
+    '(password|passwd|secret|token|api[_-]?key|private[_-]?key|bearer|authorization|credential)[[:space:]]*[=:][[:space:]]*[^[:space:]]+'; then
+    return 0
+  fi
+  if printf '%s' "$text" | grep -Eq \
+    'sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{8,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}'; then
+    return 0
+  fi
+  return 1
+}
+
 # graph_operator_bound_reason <text>
 # Redacts credential-looking text and caps length at GRAPH_OPERATOR_REASON_MAX.
+# Display redaction is defense in depth for graph permission reasons; workflow
+# action question/details/message fields must reject credentials instead.
 graph_operator_bound_reason() {
   local text="${1:-}" max="${GRAPH_OPERATOR_REASON_MAX:-200}" ellipsis="..." keep
   if [[ ! "$max" =~ ^[0-9]+$ ]] || [[ "$max" -lt 1 ]]; then

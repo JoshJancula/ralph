@@ -243,7 +243,7 @@ seed_active_attempt() {
     --arg outcome "$outcome" \
     --arg runtime "$runtime" \
     '{
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: $nodeId,
       status: $status,
       lastAttemptId: (if $lastAttemptId == "" then null else $lastAttemptId end),

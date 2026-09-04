@@ -8,10 +8,8 @@ pipeline:
       type: checkpoint
     - id: independent
       runtime: claude
-      agent: research
     - id: after-gate
       runtime: claude
-      agent: research
       dependsOn:
         - gate
 todos:

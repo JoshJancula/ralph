@@ -33,28 +33,44 @@ WORKFLOWS=(
     grep -q 'Smoke safe workflow' "$file"
     grep -q 'Uninstall repository plugin' "$file"
     grep -q 'RALPH_SMOKE_MOCK' "$file"
+    ! grep -Eq 'ralph-agents|ralph-graph|ralph-orchestrate' "$file"
   done
 }
 
-@test "host smokes use supported native install and discovery surfaces" {
+@test "host smokes use adapter-matching native install and discovery surfaces" {
+  local claude="$WORKFLOW_DIR/ralph-plugin-smoke-claude.yml"
   local codex="$WORKFLOW_DIR/ralph-plugin-smoke-codex.yml"
   local cursor="$WORKFLOW_DIR/ralph-plugin-smoke-cursor.yml"
   local opencode="$WORKFLOW_DIR/ralph-plugin-smoke-opencode.yml"
   local antigravity="$WORKFLOW_DIR/ralph-plugin-smoke-antigravity.yml"
 
+  # Claude adapter argv (exact).
+  grep -q 'claude plugin marketplace add --scope user' "$claude"
+  grep -q 'claude plugin install --scope user ralph-orchestrator@ralph-plugins --yes' "$claude"
+  grep -q 'claude plugin list --json' "$claude"
+  grep -q 'claude plugin uninstall --scope user ralph-orchestrator@ralph-plugins' "$claude"
+  grep -q 'claude plugin marketplace remove --scope user ralph-plugins' "$claude"
+
+  # Codex adapter verb shape; smoke marketplace name is isolated for CI.
   grep -q 'codex plugin marketplace add' "$codex"
-  grep -q 'codex plugin add ralph-orchestrator@ralph-smoke' "$codex"
-  grep -q 'codex plugin remove ralph-orchestrator@ralph-smoke' "$codex"
+  grep -q 'codex plugin add ralph-orchestrator@ralph-smoke --json' "$codex"
+  grep -q 'codex plugin list --json' "$codex"
+  grep -q 'codex plugin remove ralph-orchestrator@ralph-smoke --json' "$codex"
+  grep -q 'codex plugin marketplace remove ralph-smoke --json' "$codex"
   ! grep -Eq 'codex plugin (install|uninstall)' "$codex"
 
+  # Cursor adapter owned-copy path.
   grep -q 'https://cursor.com/install' "$cursor"
   grep -q '\.cursor/plugins/local/ralph-orchestrator' "$cursor"
   ! grep -Eq 'cursor-agent plugin (install|list|uninstall)' "$cursor"
 
+  # OpenCode adapter owned paths (plugins + skills only; no agents/).
   grep -q '\.opencode/plugins/ralph-runtime-hooks.ts' "$opencode"
   grep -q '\.opencode/skills' "$opencode"
+  ! grep -Eq '\.opencode/agents' "$opencode"
   ! grep -Eq 'opencode plugin (install|list|uninstall)' "$opencode"
 
+  # Antigravity adapter argv (exact).
   grep -q 'https://antigravity.google/cli/install.sh' "$antigravity"
   grep -q 'agy.*plugin install' "$antigravity"
   grep -q 'agy plugin list' "$antigravity"
@@ -65,11 +81,18 @@ WORKFLOWS=(
   local workflow file block_dir block script
   for workflow in "${WORKFLOWS[@]}"; do
     file="$WORKFLOW_DIR/$workflow"
-    grep -Eq "mock: .*plugin install" "$file"
-    grep -Eq "mock: .*plugin list" "$file"
+    if [[ "$workflow" == *codex* ]]; then
+      # Codex adapter verbs are marketplace add / plugin add / remove.
+      grep -Eq "mock: .*plugin (marketplace add|add)" "$file"
+      grep -Eq "mock: .*plugin list" "$file"
+      grep -Eq "mock: .*plugin (remove|marketplace remove)" "$file"
+    else
+      grep -Eq "mock: .*plugin install" "$file"
+      grep -Eq "mock: .*plugin list" "$file"
+      grep -Eq "mock: .*plugin uninstall" "$file"
+    fi
     grep -Eq "mock: .*ralph-doctor" "$file"
-    grep -Eq "mock: .*ralph-agents" "$file"
-    grep -Eq "mock: .*plugin uninstall" "$file"
+    grep -Eq "mock: .*ralph-workflow" "$file"
 
     # Extract and execute every Actions `run` block with the host mock branch.
     # This exercises the local path without dispatching an authenticated run.

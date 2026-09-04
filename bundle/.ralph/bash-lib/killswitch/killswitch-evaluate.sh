@@ -11,6 +11,8 @@ KILLSWITCH_DECISION_REASON=""
 KILLSWITCH_DECISION_TOOL=""
 KILLSWITCH_DECISION_ARGUMENTS=""
 KILLSWITCH_DECISION_RESOURCE=""
+KILLSWITCH_MATCHED_RULE=""
+KILLSWITCH_CLASSIFY_ONLY=0
 
 _killswitch_set_decision() {
   KILLSWITCH_DECISION="${1:-allow}"
@@ -85,9 +87,20 @@ PY
 
 # Canonical policy evaluator. Prints allow, deny, or fatal.
 # Never writes a sentinel and never calls killswitch_trigger.
+# Refuses evaluation when config load did not succeed (fail closed).
+# When KILLSWITCH_CLASSIFY_ONLY=1, behavior is identical (evaluate is already
+# side-effect free); the flag documents classify-only callers such as
+# ralph safety check and must never be paired with killswitch_apply_decision.
 killswitch_evaluate() {
   local event_json="${1:-}"
+  KILLSWITCH_MATCHED_RULE=""
   _killswitch_set_decision allow >/dev/null
+
+  if [[ "${_KILLSWITCH_LOAD_OK:-0}" != "1" ]]; then
+    KILLSWITCH_MATCHED_RULE="killswitch config not loaded"
+    _killswitch_set_decision deny config "killswitch config not loaded" "" "" ""
+    return 1
+  fi
 
   if ! killswitch_is_enabled; then
     _killswitch_set_decision allow
@@ -98,6 +111,7 @@ killswitch_evaluate() {
   parsed="$(killswitch_parse_event "$event_json")" || parsed="invalid"
   status_line="$(printf '%s\n' "$parsed" | sed -n '1p')"
   if [[ "$status_line" != "ok" ]]; then
+    KILLSWITCH_MATCHED_RULE="invalid event"
     _killswitch_set_decision deny event "invalid event" "" "" ""
     return 0
   fi
@@ -107,31 +121,69 @@ killswitch_evaluate() {
   arguments="$(printf '%s\n' "$parsed" | sed -n '4p')"
 
   if [[ -n "$tool" ]] && killswitch_tool_is_denied "$tool"; then
+    KILLSWITCH_MATCHED_RULE="tool denylist"
     _killswitch_set_decision fatal tool "tool denylist" "$tool" "$arguments" "$resource"
     return 0
   fi
 
   if [[ -n "$tool" ]] && killswitch_tool_is_banned "$tool"; then
+    KILLSWITCH_MATCHED_RULE="banned tool"
     _killswitch_set_decision fatal tool "banned tool" "$tool" "$arguments" "$resource"
     return 0
   fi
 
   if killswitch_arguments_match_denied_pattern "$tool" "$arguments"; then
+    KILLSWITCH_MATCHED_RULE="denied argument pattern"
     _killswitch_set_decision fatal argument "denied argument pattern" "$tool" "$arguments" "$resource"
     return 0
   fi
 
   if [[ -n "$resource" ]] && killswitch_path_is_banned "$resource"; then
+    KILLSWITCH_MATCHED_RULE="banned path"
     _killswitch_set_decision fatal path "banned path" "$tool" "$arguments" "$resource"
     return 0
   fi
 
   if [[ -n "$arguments" ]] && killswitch_command_matches_rule "$arguments"; then
-    _killswitch_set_decision fatal command "${KILLSWITCH_VIOLATION_RULE:-custom_rule}" "$tool" "$arguments" "$resource"
+    KILLSWITCH_MATCHED_RULE="${KILLSWITCH_VIOLATION_RULE:-custom_rule}"
+    _killswitch_set_decision fatal command "${KILLSWITCH_MATCHED_RULE}" "$tool" "$arguments" "$resource"
     return 0
   fi
 
   _killswitch_set_decision allow "" "" "$tool" "$arguments" "$resource"
+}
+
+# Classify-only: evaluate command text via the production evaluator without
+# applying a decision (no sentinel, no process kill, no shell/runtime exec).
+# Prints allow, deny, or fatal. Sets KILLSWITCH_CLASSIFY_ONLY=1 for the call.
+killswitch_classify_command() {
+  local command_text="${1-}"
+  local event_json
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "killswitch: python3 is required for classify-only evaluation" >&2
+    return 1
+  fi
+
+  # Pass command text only as a Python argv element / JSON string — never to a shell.
+  event_json="$(
+    python3 -c '
+import json, sys
+print(json.dumps({
+    "schemaVersion": 1,
+    "source": "safety-check",
+    "runtime": "ralph",
+    "tool": "",
+    "action": "classify",
+    "effect": "read",
+    "resource": "",
+    "arguments": sys.argv[1],
+}, separators=(",", ":")))
+' "$command_text"
+  )" || return 1
+
+  KILLSWITCH_CLASSIFY_ONLY=1
+  killswitch_evaluate "$event_json"
 }
 
 # Apply a previously computed or freshly evaluated decision. Only fatal calls

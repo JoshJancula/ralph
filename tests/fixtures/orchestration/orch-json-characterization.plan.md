@@ -5,13 +5,11 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: codex
-      agent: code-review
       requires:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true

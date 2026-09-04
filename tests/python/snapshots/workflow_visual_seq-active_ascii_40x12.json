@@ -1,0 +1,181 @@
+{
+  "width": 40,
+  "height": 12,
+  "plain": [
+    "Ralph fixture-seq-running",
+    "bug-fix | Sequential",
+    "RUNNING  Fix the timeout",
+    "1/2 stages  2m 0s",
+    "> running   implement",
+    "implement  plan-backed  running",
+    "TODO  implement-core",
+    "TODOs  2/5",
+    "Plan source  generated from plan-implem\u2026",
+    "Attempt  1  Duration  1m 30s",
+    "Artifacts  implementation.md",
+    ""
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-running",
+        "role": "path",
+        "width": 19
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "bug-fix | Sequential",
+        "role": "muted",
+        "width": 20
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "RUNNING",
+        "role": "accent",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Fix the timeout                ",
+        "role": "default",
+        "width": 33
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "1/2 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "2m 0s",
+        "role": "muted",
+        "width": 5
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> running   implement                   ",
+        "role": "focus",
+        "width": 40
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "implement",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "plan-backed",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 24,
+        "text": "running",
+        "role": "accent",
+        "width": 7
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "TODO  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "implement-core                    ",
+        "role": "default",
+        "width": 34
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "TODOs  ",
+        "role": "muted",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "2/5                              ",
+        "role": "default",
+        "width": 33
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Plan source  ",
+        "role": "muted",
+        "width": 13
+      },
+      {
+        "col": 13,
+        "text": "generated from plan-implem\u2026",
+        "role": "default",
+        "width": 27
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 22,
+        "text": "1m 30s            ",
+        "role": "default",
+        "width": 18
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Artifacts  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "implementation.md",
+        "role": "path",
+        "width": 17
+      }
+    ],
+    []
+  ]
+}

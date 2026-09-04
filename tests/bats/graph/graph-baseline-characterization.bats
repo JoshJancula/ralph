@@ -206,27 +206,30 @@ compile_plan_graph_to() {
   false
 }
 
-@test "GAP2 characterization: subagents field is included in run-plan-routing effective metadata fields" {
-  # The routing metadata carries subagents so the selected runtime invocation
-  # can enforce the native-subagent policy rather than merely reserving a
-  # scheduler slot.
-  # run-plan-routing.sh's ralph_run_plan_routing_effective_metadata_fields
-  # extracts: stage, runtime, agent, model, sessionStrategy, contextBudget,
-  # planFile -- and does NOT extract subagents.  Confirm by inspecting the
-  # function source.
+@test "GAP2 characterization: nativeSubagents field is included in run-plan-routing effective metadata fields" {
+  # The routing metadata carries the resolved nativeSubagents value so the
+  # selected runtime invocation can enforce the native-subagent policy rather
+  # than merely reserving a scheduler slot. The removed `subagents` field must
+  # not reappear alongside it.
   command -v python3 >/dev/null || skip "python3 required"
 
   routing_src="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-routing.sh"
   [ -f "$routing_src" ]
 
-  # The routing function must exist.
   grep -q "ralph_run_plan_routing_effective_metadata_fields" "$routing_src"
 
-  # The function body must include subagents in the fields list.
   fn_body="$(awk '/ralph_run_plan_routing_effective_metadata_fields\(\)/{found=1} found{print} found && /^}$/{exit}' "$routing_src")"
 
-  if ! echo "$fn_body" | grep -q '"subagents"'; then
-    echo "subagents is missing from ralph_run_plan_routing_effective_metadata_fields" >&2
+  if ! echo "$fn_body" | grep -q '"nativeSubagents"'; then
+    echo "nativeSubagents is missing from ralph_run_plan_routing_effective_metadata_fields" >&2
+    false
+  fi
+  if echo "$fn_body" | grep -q '"subagents"'; then
+    echo "removed subagents field reappeared in ralph_run_plan_routing_effective_metadata_fields" >&2
+    false
+  fi
+  if echo "$fn_body" | grep -q '"agent"'; then
+    echo "removed agent field reappeared in ralph_run_plan_routing_effective_metadata_fields" >&2
     false
   fi
 }

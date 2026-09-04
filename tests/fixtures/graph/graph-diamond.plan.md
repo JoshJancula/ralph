@@ -4,12 +4,10 @@ pipeline:
   stages:
     - id: source
       runtime: cursor
-      agent: research
       produces:
         - path: shared/input.md
     - id: left
       runtime: cursor
-      agent: implementation
       dependsOn:
         - source
       requires:
@@ -20,7 +18,6 @@ pipeline:
     # permits the diamond middle nodes to overlap (cross-provider happy path).
     - id: right
       runtime: claude
-      agent: implementation
       dependsOn:
         - source
       requires:
@@ -29,7 +26,6 @@ pipeline:
         - path: shared/right.md
     - id: sink
       runtime: cursor
-      agent: implementation
       dependsOn:
         - left
         - right

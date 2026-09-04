@@ -12,7 +12,7 @@ fi
 
 GRAPH_RECOVERY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! declare -F graph_state_read_node_v2 >/dev/null 2>&1; then
+if ! declare -F graph_state_read_node >/dev/null 2>&1; then
   # shellcheck source=./graph-state.sh
   source "$GRAPH_RECOVERY_SCRIPT_DIR/graph-state.sh"
 fi
@@ -70,7 +70,7 @@ graph_recovery_interrupt_attempt() {
     return 1
   fi
 
-  node_json="$(graph_state_read_node_v2 "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
+  node_json="$(graph_state_read_node "$workspace" "$namespace" "$run_id" "$node_id")" || return 1
   prev_status="$(jq -r '.status // empty' <<<"$node_json" 2>/dev/null)"
   prev_outcome="$(jq -r --arg aid "$attempt_id" '(.attempts // [])[]? | select(.attemptId == $aid) | .outcome // empty' <<<"$node_json" 2>/dev/null)"
 
@@ -97,7 +97,7 @@ graph_recovery_interrupt_attempt() {
   attempt_fields_json="$(jq -cn --arg ts "$timestamp" --arg reason "$reason" \
     '{outcome:"interrupted",finishedAt:$ts} + if $reason == "" then {} else {reason:$reason} end')"
 
-  if ! graph_state_write_node_v2 "$workspace" "$namespace" "$run_id" "$node_id" "interrupted" \
+  if ! graph_state_write_node "$workspace" "$namespace" "$run_id" "$node_id" "interrupted" \
     "$attempt_id" "$attempt_fields_json"; then
     echo "Error: failed to interrupt attempt $attempt_id for node $node_id" >&2
     return 1
@@ -125,6 +125,33 @@ graph_recovery_lock_path() {
     return 1
   fi
   printf '%s/recovery.lock\n' "$run_dir"
+}
+
+# graph_recovery_emit_receipt <workspace> <namespace> <run_id> <interrupted_count> <reset_count>
+#
+# Prints the operator-facing recovery receipt: a bounded mutation summary and
+# the exact resume command. Called only after a successful recovery mutation.
+graph_recovery_emit_receipt() {
+  local workspace="$1" namespace="$2" run_id="$3"
+  local interrupted="${4:-0}" reset="${5:-0}"
+  local run_file plan_path quoted_plan quoted_ns quoted_run
+
+  [[ "$interrupted" =~ ^[0-9]+$ ]] || interrupted=0
+  [[ "$reset" =~ ^[0-9]+$ ]] || reset=0
+
+  run_file="$(graph_state_run_file "$workspace" "$namespace" "$run_id")" || return 1
+  plan_path="$(jq -r '.planPath // empty' "$run_file" 2>/dev/null)" || plan_path=""
+  quoted_ns="$(printf '%q' "$namespace")"
+  quoted_run="$(printf '%q' "$run_id")"
+
+  printf '\nRecovery complete.\n'
+  printf 'Mutation summary: interrupted %s attempt(s), reset %s node(s) to pending.\n' \
+    "$interrupted" "$reset"
+  if [[ -n "$plan_path" ]]; then
+    printf 'Resume with: ralph workflow resume %s\n' "$quoted_run"
+  else
+    printf 'Resume with: ralph workflow resume %s\n' "$quoted_run"
+  fi
 }
 
 # graph_recovery_node_is_reset_eligible <status>
@@ -263,6 +290,9 @@ _graph_recovery_attempt_run_locked() {
     return 1
   fi
 
+  if [[ "${GRAPH_RECOVERY_EMIT_RECEIPT:-1}" != "0" ]]; then
+    graph_recovery_emit_receipt "$workspace" "$namespace" "$run_id" "$interrupted_count" "$reset_count"
+  fi
   return 0
 }
 

@@ -34,7 +34,7 @@ setup() {
         stage: {
           id: "impl",
           runtime: "cursor",
-          agent: "implementation",
+          role: "implementation",
           workspaceMode: "snapshot"
         }
       }
@@ -108,7 +108,7 @@ seed_active_attempt() {
     --arg attemptId "$attempt_id" \
     --arg runtime "$runtime" \
     '{
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: $nodeId,
       status: "awaiting-operator",
       lastAttemptId: $attemptId,

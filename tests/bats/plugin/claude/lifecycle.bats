@@ -5,6 +5,8 @@ source "$BATS_TEST_DIRNAME/../../helper/load-lib.bash"
 PLUGIN_ROOT="$REPO_ROOT/plugins/ralph-orchestrator/claude"
 NATIVE_SETTINGS="$REPO_ROOT/bundle/.claude/settings.json"
 MCP_SERVER="$REPO_ROOT/bundle/.ralph/mcp-server.sh"
+CANONICAL_WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
+OBSOLETE_WORKFLOWS=(ralph-agents ralph-graph ralph-orchestrate)
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -16,7 +18,7 @@ teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
-@test "Claude plugin installs with manifest, agents, skill, workflows, MCP, and marketplace" {
+@test "Claude plugin installs with manifest, skill, workflows, MCP, and marketplace" {
   [ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]
   [ -f "$PLUGIN_ROOT/.claude-plugin/marketplace.json" ]
   [ -f "$PLUGIN_ROOT/hooks/hooks.json" ]
@@ -40,21 +42,23 @@ teardown() {
     .plugins[0].version == "0.1.0-beta.1"
   ' "$PLUGIN_ROOT/.claude-plugin/marketplace.json"
 
-  local id
-  for id in architect code-review implementation qa research security; do
-    [ -f "$PLUGIN_ROOT/agents/$id.md" ]
-    grep -Fq '${CLAUDE_PLUGIN_ROOT}/skills/repo-context/SKILL.md' \
-      "$PLUGIN_ROOT/agents/$id.md"
-  done
+  [ ! -d "$PLUGIN_ROOT/agents" ]
+  [ ! -d "$PLUGIN_ROOT/roles" ]
+  [ -f "$PLUGIN_ROOT/skills/repo-context/SKILL.md" ]
 
   jq -e '.mcpServers.ralph.command == "bash" and (.mcpServers.ralph.args | length) == 1' \
     "$PLUGIN_ROOT/.mcp.json"
-  for workflow in ralph-agents ralph-doctor ralph-graph ralph-orchestrate ralph-plan ralph-run ralph-status; do
+  local workflow
+  for workflow in "${CANONICAL_WORKFLOWS[@]}"; do
     [ -f "$PLUGIN_ROOT/workflows/$workflow.md" ]
     [ -f "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
     if [ "$workflow" != "ralph-run" ]; then
       grep -Fq 'CLAUDE_PLUGIN_ROOT' "$PLUGIN_ROOT/workflows/$workflow.md"
     fi
+  done
+  for workflow in "${OBSOLETE_WORKFLOWS[@]}"; do
+    [ ! -e "$PLUGIN_ROOT/workflows/$workflow.md" ]
+    [ ! -e "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
   done
 }
 

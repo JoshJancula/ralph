@@ -72,8 +72,8 @@ valid_request_json() {
   [[ "$page" == *"allow-always"* ]]
   [[ "$page" == *"deny"* ]]
   [[ "$page" == *"awaiting-operator"* ]]
-  [[ "$page" == *"ralph graph actions respond req-001 --decision allow-once --namespace op-ns --run run-001"* ]]
-  [[ "$page" == *"ralph graph actions respond req-001 --decision deny --namespace op-ns --run run-001"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-001 --decision allow-once"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-001 --decision deny"* ]]
 }
 
 @test "human recovery page redacts credential-looking values and keeps one sentence" {
@@ -134,7 +134,7 @@ valid_request_json() {
   [[ "$page" != *"--attempt-id"* ]]
   [[ "$page" != *"TODO"* ]]
   [[ "$page" == *"requestId: req-omit"* ]]
-  [[ "$page" == *"ralph graph actions respond req-omit --decision allow-once --namespace op-ns --run run-001"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-omit --decision allow-once"* ]]
 }
 
 @test "human recovery page writes a crash-recovery file from a persisted request record" {
@@ -154,7 +154,7 @@ valid_request_json() {
   [[ "$page" == *"action: Bash"* ]]
   [[ "$page" == *"resource: src/app.ts"* ]]
   [[ "$page" == *"effect: write"* ]]
-  [[ "$page" == *"ralph graph actions respond req-001 --decision allow-run --namespace op-ns --run run-001"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-001 --decision allow-run"* ]]
   [[ "$page" != *"orchestrator.sh"* ]]
 }
 
@@ -164,8 +164,8 @@ valid_request_json() {
   run ralph_human_recovery_page "$json"
   [ "$status" -eq 0 ]
   page="$output"
-  [[ "$page" == *"ralph graph actions respond req-001 --decision allow-once --namespace op-ns --run run-001"* ]]
-  [[ "$page" == *"ralph graph actions respond req-001 --decision deny --namespace op-ns --run run-001"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-001 --decision allow-once"* ]]
+  [[ "$page" == *"ralph workflow actions respond run-001 req-001 --decision deny"* ]]
   [[ "$page" != *"--decision auto"* ]]
   [[ "$page" != *"--decision yolo"* ]]
 }

@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-seq-input",
+  "bug-fix | Sequential",
+  "WAITING  Fix the timeout",
+  "0/1 stages  0s",
+  "> waiting   implement",
+  "implement  executable  waiting",
+  "Next  answer the outstanding request",
+  "Attempt  1  Duration  1m 0s",
+  "Blocker  input",
+  "",
+  "",
+  ""
+]

@@ -306,20 +306,40 @@ run_plan_invoke_opencode_native_hooks_cleanup() {
 
 run_plan_invoke_opencode_native_hooks_prepare() {
   local requested="${RALPH_NATIVE_HOOKS:-}"
-  local overlay_mode="${RALPH_OPTIMIZATION_MODE:-}"
+  local tooling_profile="${RALPH_MODE:-}"
   local effective_workspace=""
   local mutation_note="OpenCode plugin loaded from workspace .opencode/plugins/; tool.execute.after output.output mutation is unproven on the headless run path; use MCP compaction (RALPH_PROXY_SHELL_COMPACT=1) for reliable token reduction"
+  local tier_selected="" tier_reason=""
 
   OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE=0
   export OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE
+
+  if declare -F ralph_bg_tier_probe_apply >/dev/null 2>&1 \
+    && [[ -z "${RALPH_BG_TIER_SELECTED:-}" ]]; then
+    ralph_bg_tier_probe_apply "opencode" >/dev/null || true
+  fi
+  tier_selected="${RALPH_BG_TIER_SELECTED:-invocation}"
+  tier_reason="${RALPH_BG_TIER_REASON:-opencode-session-idle-not-a-turn-gate-client-injection-unproven}"
+  export RALPH_BG_TIER_SELECTED="$tier_selected"
+  export RALPH_BG_TIER_REASON="$tier_reason"
+  if declare -F runtime_overlay_set_bg_tier >/dev/null 2>&1; then
+    runtime_overlay_set_bg_tier "$tier_selected"
+  fi
+  if declare -F runtime_overlay_set_bg_tier_reason >/dev/null 2>&1; then
+    runtime_overlay_set_bg_tier_reason "$tier_reason"
+  fi
+  if [[ "$tier_selected" == "invocation" ]] \
+    && declare -F runtime_overlay_add_capability >/dev/null 2>&1; then
+    runtime_overlay_add_capability "opencode-bg-tier-invocation-fallback"
+  fi
 
   _runtime_overlay_opencode_record_tool_access_telemetry
 
   if declare -F runtime_overlay_set_native_hooks_requested >/dev/null 2>&1; then
     runtime_overlay_set_native_hooks_requested "${requested:-unset}"
   fi
-  if [[ -n "$overlay_mode" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
-    runtime_overlay_set_overlay_mode "$overlay_mode"
+  if [[ -n "$tooling_profile" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
+    runtime_overlay_set_overlay_mode "$tooling_profile"
   fi
 
   if ! ralph_native_hooks_want_activation; then

@@ -29,7 +29,7 @@
 #   node-recovered         Interrupted node reset to pending after recovery
 #   node-cancelled         Node cancelled
 #   node-skipped           Node skipped (router/conditional)
-#   operator-request       Permission/checkpoint request created
+#   operator-request       Permission/checkpoint/approval request created
 #   operator-decision      Operator decision recorded
 #   budget-warning         Budget/usage warning (estimated/unavailable)
 #   budget-exhausted       Hard budget limit reached

@@ -373,184 +373,9 @@ EOF
   [ "$output" = "scripted-model" ]
 }
 
-@test "prebuilt_agents_root constructs the runtime agents path" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    RUNTIME=cursor
-    ws="$2"
-    root="$(prebuilt_agents_root "$ws")"
-    printf "%s" "$root"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT"
-
-  [ "$status" -eq 0 ]
-  [ "$output" = "$REPO_ROOT/.cursor/agents" ]
-}
-
-@test "list_prebuilt_agent_ids enumerates agents from the fixture" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    ws="$2"
-    list_prebuilt_agent_ids "$ws"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 0 ]
-  ids=()
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    ids+=("$line")
-  done <<< "$output"
-
-  expected=("architect" "code-review" "implementation" "qa" "research" "security")
-  [ "${#ids[@]}" -eq "${#expected[@]}" ]
-  for idx in "${!expected[@]}"; do
-    [ "${ids[idx]}" = "${expected[idx]}" ]
-  done
-}
-
-@test "validate_prebuilt_agent_config reports missing configs" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    ws="$2"
-    validate_prebuilt_agent_config "$ws" "does-not-exist"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"config not found:"* ]]
-}
-
-@test "prebuilt agent helpers expose model id and context block" {
-  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due agent context formatting variance"
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  local expected_model
-  expected_model="$(jq -r .model "$REPO_ROOT/.cursor/agents/architect/config.json")"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    ws="$2"
-    read_prebuilt_agent_model "$ws" "architect"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-  [ "$status" -eq 0 ]
-  [ "$output" = "$expected_model" ]
-
-  run env RALPH_ARTIFACT_NS=PLAN bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    ws="$2"
-    format_prebuilt_agent_context_block "$ws" "architect"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"**Prebuilt agent profile**"* ]]
-  [[ "$output" == *"- **name:** architect"* ]]
-  [[ "$output" == *"**Skill paths"* ]]
-  [[ "$output" == *"**Declared output artifacts:**"* ]]
-  [[ "$output" == *"**Rules (read and follow; full text inlined below):**"* ]]
-  [[ "$output" == *"repo-context"* ]]
-  [[ "$output" == *"SKILL.md"* ]]
-  [[ "$output" == *".ralph-workspace/artifacts/PLAN/architecture.md"* ]]
-  [[ "$output" == *".ralph-workspace/artifacts/PLAN/research.md"* ]]
-  [[ "$output" == *"**Agent config:**"* ]]
-
-  run env RALPH_ARTIFACT_NS=PLAN RALPH_COMPACT_CONTEXT=1 bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    ws="$2"
-    format_prebuilt_agent_context_block "$ws" "architect"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$REPO_ROOT" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"**Rules (read and follow; paths only):**"* ]]
-  [[ "$output" == *"  - \`.cursor/rules/no-emoji.mdc\`"* ]]
-  [[ "$output" == *"**Skill paths (read these files in the repo as needed):**"* ]]
-  [[ "$output" == *"**Declared output artifacts:**"* ]]
-  [[ "$output" != *"--- Rule file:"* ]]
-}
-
-@test "prompt_select_prebuilt_agent accepts scripted TTY selection" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local runner
-  runner="$(mktemp)"
-
-  cat <<'EOS' > "$runner"
-#!/usr/bin/env bash
-set -euo pipefail
-source "$PREBUILT_FUNCS_FILE"
-AGENTS_ROOT_REL=".cursor/agents"
-AGENT_CONFIG_TOOL="$REPO_ROOT/.ralph/agent-config-tool.sh"
-C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-selected="$(prompt_select_prebuilt_agent "$REPO_ROOT")"
-printf "\n"
-printf "%s\n" "$selected"
-EOS
-  chmod +x "$runner"
-
-  run env PREBUILT_FUNCS_FILE="$RUN_PLAN_PROMPT_FUNCS_FILE" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
-2
-EOF
-
-  [ "$status" -eq 0 ]
-  final_line="$(printf '%s\n' "$output" | awk 'NF { last=$0 } END { printf "%s\n", last }' | tr -d '\r')"
-  rm -f "$runner"
-  [ "$final_line" = "code-review" ]
-}
-
-@test "prompt_agent_source_mode accepts scripted selection" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  local runner
-  runner="$(mktemp)"
-
-  cat <<'EOS' > "$runner"
-#!/usr/bin/env bash
-set -euo pipefail
-source "$PROMPT_FUNCS_FILE"
-list_prebuilt_agent_ids() {
-  printf "%s\n" "architect"
-}
-AGENTS_ROOT_REL=".cursor/agents"
-C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
-NON_INTERACTIVE_FLAG=0
-PREBUILT_AGENT=""
-INTERACTIVE_SELECT_AGENT_FLAG=0
-PLAN_MODEL_CLI=""
-prompt_agent_source_mode "$REPO_ROOT"
-printf "\nflag=%s\n" "$INTERACTIVE_SELECT_AGENT_FLAG"
-EOS
-  chmod +x "$runner"
-
-  run env PROMPT_FUNCS_FILE="$RUN_PLAN_PROMPT_FUNCS_FILE" REPO_ROOT="$REPO_ROOT" ralph-script-pty-bash "$runner" <<'EOF'
-2
-EOF
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"flag=0"* ]]
-  rm -f "$runner"
-}
+# The prebuilt-agent selection helpers these tests covered were removed with
+# the agent-profile surface. Model precedence remains covered by the
+# run-plan model-resolution bats file under tests/bats/run-plan/.
 
 @test "prompt_cleanup_on_exit prompts for yes and no answers via scripted TTY input" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
@@ -603,7 +428,7 @@ EOF
   [ "$(wc -l < "$cleanup_marker")" -eq 1 ]
   [[ "$output" == *"Cleanup command:"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$cleanup_script" "$cleanup_marker" "$cleanup_runner"
 }
 
@@ -664,13 +489,12 @@ EOF
     RALPH_RUN_PLAN_RELATIVE=".ralph/run-plan.sh --runtime cursor"
     PLAN_PATH="plan path.md"
     WORKSPACE="/tmp/workspace dir"
-    PREBUILT_AGENT=""
     source "$1"
     printf "%s" "$(ralph_restart_command_hint)"
   ' _ "$RUN_PLAN_HUMAN_FUNCS_FILE"
 
   [ "$status" -eq 0 ]
-  [ "$output" = ".ralph/run-plan.sh --runtime cursor --non-interactive --plan plan\\ path.md --agent agent --workspace /tmp/workspace\\ dir" ]
+  [ "$output" = ".ralph/run-plan.sh --runtime cursor --non-interactive --plan plan\\ path.md --workspace /tmp/workspace\\ dir" ]
 
   run bash -c '
     set -euo pipefail
@@ -682,150 +506,6 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = ".ralph/orchestrator.sh --orchestration /tmp/restart\\ plan/orch.json" ]
 
-}
-
-@test "prebuilt agent CURSOR_PLAN_MODEL env var overrides agent config model" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  local tmp_dir agents_root cfg_dir
-  tmp_dir="$(mktemp -d)"
-  agents_root="$tmp_dir/.cursor/agents"
-  cfg_dir="$agents_root/test-agent"
-  mkdir -p "$cfg_dir"
-  cat > "$cfg_dir/config.json" <<'CFG'
-{
-  "name": "test-agent",
-  "model": "agent-default-model",
-  "description": "regression test agent",
-  "rules": [],
-  "skills": [],
-  "output_artifacts": [
-    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
-  ]
-}
-CFG
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    RUNTIME=cursor
-    export CURSOR_PLAN_MODEL="env-override-model"
-    unset PLAN_MODEL_CLI
-    ws="$2"
-    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
-    _runtime_env_model=""
-    case "$RUNTIME" in
-      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
-    esac
-    if [[ -n "$_runtime_env_model" ]]; then
-      SELECTED_MODEL="$_runtime_env_model"
-    fi
-    printf "%s" "$SELECTED_MODEL"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 0 ]
-  [ "$output" = "env-override-model" ]
-  rm -rf "$tmp_dir"
-}
-
-@test "prebuilt agent PLAN_MODEL_CLI takes priority over CURSOR_PLAN_MODEL and config" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  local tmp_dir agents_root cfg_dir
-  tmp_dir="$(mktemp -d)"
-  agents_root="$tmp_dir/.cursor/agents"
-  cfg_dir="$agents_root/test-agent"
-  mkdir -p "$cfg_dir"
-  cat > "$cfg_dir/config.json" <<'CFG'
-{
-  "name": "test-agent",
-  "model": "agent-default-model",
-  "description": "regression test agent",
-  "rules": [],
-  "skills": [],
-  "output_artifacts": [
-    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
-  ]
-}
-CFG
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    RUNTIME=cursor
-    export CURSOR_PLAN_MODEL="env-override-model"
-    PLAN_MODEL_CLI="cli-flag-model"
-    ws="$2"
-    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
-    _runtime_env_model=""
-    case "$RUNTIME" in
-      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
-    esac
-    if [[ -n "$_runtime_env_model" ]]; then
-      SELECTED_MODEL="$_runtime_env_model"
-    fi
-    if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
-      SELECTED_MODEL="$PLAN_MODEL_CLI"
-    fi
-    printf "%s" "$SELECTED_MODEL"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 0 ]
-  [ "$output" = "cli-flag-model" ]
-  rm -rf "$tmp_dir"
-}
-
-@test "prebuilt agent falls back to config model when no env or CLI override" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-  [ -n "$RUN_PLAN_PREBUILT_FUNCS_FILE" ] || skip "prebuilt helper unavailable"
-
-  local tmp_dir agents_root cfg_dir
-  tmp_dir="$(mktemp -d)"
-  agents_root="$tmp_dir/.cursor/agents"
-  cfg_dir="$agents_root/test-agent"
-  mkdir -p "$cfg_dir"
-  cat > "$cfg_dir/config.json" <<'CFG'
-{
-  "name": "test-agent",
-  "model": "agent-default-model",
-  "description": "regression test agent",
-  "rules": [],
-  "skills": [],
-  "output_artifacts": [
-    { "path": ".ralph-workspace/artifacts/test/out.md", "required": true }
-  ]
-}
-CFG
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENTS_ROOT_REL=".cursor/agents"
-    AGENT_CONFIG_TOOL="$3"
-    RUNTIME=cursor
-    unset CURSOR_PLAN_MODEL
-    unset PLAN_MODEL_CLI
-    ws="$2"
-    SELECTED_MODEL="$(read_prebuilt_agent_model "$ws" "test-agent")"
-    _runtime_env_model=""
-    case "$RUNTIME" in
-      cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
-    esac
-    if [[ -n "$_runtime_env_model" ]]; then
-      SELECTED_MODEL="$_runtime_env_model"
-    fi
-    printf "%s" "$SELECTED_MODEL"
-  ' _ "$RUN_PLAN_PREBUILT_FUNCS_FILE" "$tmp_dir" "$REPO_ROOT/.ralph/agent-config-tool.sh"
-
-  [ "$status" -eq 0 ]
-  [ "$output" = "agent-default-model" ]
-  rm -rf "$tmp_dir"
 }
 
 @test "CLAUDE_PLAN_MODEL env var overrides config model for claude runtime" {

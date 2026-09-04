@@ -341,7 +341,7 @@ interrupt_teardown_read_pid_file() {
   interrupt_teardown_assert_tree_gone "$runtime_pid" "$child_pid"
   interrupt_teardown_assert_output_stable "$output_log"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -377,7 +377,7 @@ interrupt_teardown_read_pid_file() {
   interrupt_teardown_assert_tree_gone "$runtime_pid" "$child_pid"
   interrupt_teardown_assert_output_stable "$output_log"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -412,7 +412,7 @@ interrupt_teardown_read_pid_file() {
   interrupt_teardown_wait_gone "$child_pid" 5
   interrupt_teardown_assert_output_stable "$output_log"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -449,7 +449,7 @@ interrupt_teardown_read_pid_file() {
   [[ ! -f "$sidecar" ]]
   interrupt_teardown_wait_gone "$sidecar_pid" 5
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -511,7 +511,7 @@ interrupt_teardown_read_pid_file() {
   interrupt_teardown_assert_tree_gone "$runtime_pid" "$child_pid"
   interrupt_teardown_assert_output_stable "$output_log"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -537,7 +537,7 @@ interrupt_teardown_read_pid_file() {
   exit_code="${exit_code:-0}"
   [ "$exit_code" -eq 130 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -563,7 +563,7 @@ interrupt_teardown_read_pid_file() {
   exit_code="${exit_code:-0}"
   [ "$exit_code" -eq 143 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -589,7 +589,7 @@ interrupt_teardown_read_pid_file() {
   exit_code="${exit_code:-0}"
   [ "$exit_code" -eq 129 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 

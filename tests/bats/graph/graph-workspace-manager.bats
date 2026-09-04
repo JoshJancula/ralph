@@ -4,6 +4,7 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-state.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-run-base.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-workspace-manager.sh"
+source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-changeset.sh"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
 
 setup() {
@@ -88,7 +89,6 @@ pipeline:
   stages:
     - id: build
       runtime: cursor
-      agent: implementation
       workspaceMode: snapshot
       setupProfile: dependencies
 todos:
@@ -136,6 +136,139 @@ PLAN
   again="$(graph_workspace_prepare_node "$run_dir" "$graph" left)"
   [ "$again" = "$p1" ]
   [ -f "$again/retry.txt" ]
+}
+
+@test "dirty snapshot lanes share one frozen base, isolate changesets, and cannot discover caller Git" {
+  local tmpd project state agent run_dir graph left right left_pid right_pid
+  local identity_before identity_after status_before status_after refs_before refs_after
+  local left_manifest right_manifest left_paths right_paths project_git discovered
+  tmpd="$(mktemp -d)"
+  project="$tmpd/project"
+  agent="$tmpd/agent"
+  mkdir -p "$project/src" "$agent"
+  write_config "$project"
+  printf 'left base\n' >"$project/src/left.txt"
+  printf 'right base\n' >"$project/src/right.txt"
+  printf 'shared\n' >"$project/src/shared.txt"
+  ln -s shared.txt "$project/src/link.txt"
+  printf 'control\n' >"$project/.ralph/control.txt"
+  printf '.ralph-workspace/\nstate-alias\n' >"$project/.gitignore"
+  git init -q "$project"
+  git -C "$project" add src .ralph .gitignore
+  git -C "$project" -c user.name=Ralph -c user.email=ralph@example.invalid \
+    commit -qm fixture
+  printf 'tracked dirty\n' >"$project/src/left.txt"
+  printf 'untracked dirty\n' >"$project/untracked.txt"
+  state="$project/.ralph-workspace"
+  mkdir -p "$state"
+  ln -s .ralph-workspace "$project/state-alias"
+  printf 'state sentinel\n' >"$state/should-not-freeze.txt"
+  run_dir="$state/graph-runs/ns/run"
+  graph="$tmpd/graph.json"
+  jq -cn \
+    '{schemaVersion:1,ralphVersion:"test",name:"dirty-base",
+      namespace:"dirty-base",maxParallel:2,failurePolicy:"drain",
+      nodes:[
+        {id:"left",type:"agent",dependsOn:[],derivedFrom:"stage",
+         stage:{id:"left",runtime:"cursor",agent:"implementation",
+                workspaceMode:"snapshot",writeScopes:["src/left.txt"]}},
+        {id:"right",type:"agent",dependsOn:[],derivedFrom:"stage",
+         stage:{id:"right",runtime:"cursor",agent:"implementation",
+                workspaceMode:"snapshot",writeScopes:["src/right.txt"]}}
+      ],edges:[]}' >"$graph"
+  mkdir -p "$run_dir"
+  jq -cn '{schemaVersion:1,ralphVersion:"test",runId:"run",status:"running"}' \
+    >"$run_dir/run.json"
+  identity_before="$(python3 "$GRAPH_WORKSPACE_HELPER" identity \
+    --source "$project" --state-root "$state" | jq -c .)"
+  status_before="$(git -C "$project" status --porcelain=v1 --untracked-files=all)"
+  refs_before="$(git -C "$project" show-ref)"
+  project_git="$(git -C "$project" rev-parse --show-toplevel)"
+
+  graph_run_base_prepare "$run_dir" \
+    "$(jq -cn --arg project "$project" --arg state "$state" --arg agent "$agent" \
+      '{projectRoot:$project,stateRoot:$state,agentWorkspace:$agent}')" \
+    '["snapshot"]'
+  graph_workspace_prepare_run "$run_dir" "$graph"
+
+  [ "$(jq -r '.roots.projectRoot' "$run_dir/run.json")" = "$(cd "$project" && pwd -P)" ]
+  [ "$(jq -r '.roots.stateRoot' "$run_dir/run.json")" = "$(cd "$state" && pwd -P)" ]
+  [ "$(jq -r '.roots.agentWorkspace' "$run_dir/run.json")" = "$(cd "$agent" && pwd -P)" ]
+  [ "$(jq -r '.sourceBase.immutable' "$run_dir/run.json")" = "true" ]
+  [ -n "$(jq -r '.sourceBase.filesystemIdentity' "$run_dir/run.json")" ]
+  [ "$(jq -r '.sourceBase.git.clean' "$run_dir/run.json")" = "false" ]
+  [ -f "$run_dir/base/source/src/left.txt" ]
+  [ "$(cat "$run_dir/base/source/src/left.txt")" = "tracked dirty" ]
+  [ "$(cat "$run_dir/base/source/untracked.txt")" = "untracked dirty" ]
+  [ "$(readlink "$run_dir/base/source/src/link.txt")" = "shared.txt" ]
+  [ ! -e "$run_dir/base/source/.git" ]
+  [ ! -e "$run_dir/base/source/.ralph" ]
+  [ ! -e "$run_dir/base/source/.ralph-workspace" ]
+  [ ! -e "$run_dir/base/source/state-alias" ]
+  [ ! -e "$run_dir/base/source/should-not-freeze.txt" ]
+  ! jq -e '.entries[] | select(.path == ".ralph" or (.path | startswith(".ralph/"))
+      or .path == ".ralph-workspace" or (.path | startswith(".ralph-workspace/"))
+      or .path == "state-alias" or .path == "should-not-freeze.txt")' \
+    "$run_dir/base/manifest.json" >/dev/null
+
+  graph_workspace_prepare_node "$run_dir" "$graph" left >"$tmpd/left.path" &
+  left_pid=$!
+  graph_workspace_prepare_node "$run_dir" "$graph" right >"$tmpd/right.path" &
+  right_pid=$!
+  wait "$left_pid"
+  wait "$right_pid"
+  left="$(<"$tmpd/left.path")"
+  right="$(<"$tmpd/right.path")"
+  [ "$left" != "$right" ]
+  [ "$(cat "$left/src/left.txt")" = "tracked dirty" ]
+  [ "$(cat "$right/src/left.txt")" = "tracked dirty" ]
+  [ "$(cat "$left/untracked.txt")" = "$(cat "$right/untracked.txt")" ]
+  [ "$(readlink "$left/src/link.txt")" = "shared.txt" ]
+  [ "$(readlink "$right/src/link.txt")" = "shared.txt" ]
+  [ ! -e "$left/.ralph" ]
+  [ ! -e "$right/.ralph-workspace" ]
+  [ ! -e "$left/state-alias" ]
+  run git -C "$left" rev-parse --show-toplevel
+  [ "$status" -eq 0 ]
+  discovered="$(git -C "$left" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ "$discovered" = "$left" ]
+  [ "$discovered" != "$project_git" ]
+  run git -C "$right" rev-parse --show-toplevel
+  [ "$status" -eq 0 ]
+  discovered="$(git -C "$right" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ "$discovered" = "$right" ]
+  [ "$discovered" != "$project_git" ]
+
+  graph_changeset_capture_baseline "$run_dir" "$graph" left a1 "$left"
+  graph_changeset_capture_baseline "$run_dir" "$graph" right a1 "$right"
+  printf 'left lane\n' >"$left/src/left.txt"
+  printf 'right lane\n' >"$right/src/right.txt"
+  graph_changeset_capture_node "$run_dir" "$graph" left a1 "$left" "$state"
+  graph_changeset_capture_node "$run_dir" "$graph" right a1 "$right" "$state"
+  left_manifest="$(graph_changeset_manifest_path "$run_dir" left)"
+  right_manifest="$(graph_changeset_manifest_path "$run_dir" right)"
+  left_paths="$(jq -r '[.changes[].path] | sort | join(",")' "$left_manifest")"
+  right_paths="$(jq -r '[.changes[].path] | sort | join(",")' "$right_manifest")"
+  [ "$left_paths" = "src/left.txt" ]
+  [ "$right_paths" = "src/right.txt" ]
+  [ "$(jq -r '.changes[0].after.sha256' "$left_manifest")" != \
+    "$(jq -r '.changes[0].after.sha256' "$right_manifest")" ]
+  [ "$(cat "$left/src/right.txt")" = "right base" ]
+  [ "$(cat "$right/src/left.txt")" = "tracked dirty" ]
+
+  identity_after="$(python3 "$GRAPH_WORKSPACE_HELPER" identity \
+    --source "$project" --state-root "$state" | jq -c .)"
+  status_after="$(git -C "$project" status --porcelain=v1 --untracked-files=all)"
+  refs_after="$(git -C "$project" show-ref)"
+  [ "$identity_after" = "$identity_before" ]
+  [ "$(jq -r '.sourceBase.filesystemIdentity' "$run_dir/run.json")" = \
+    "$(printf '%s' "$identity_after" | jq -r '.filesystemIdentity')" ]
+  [ "$status_after" = "$status_before" ]
+  [ "$refs_after" = "$refs_before" ]
+  [ "$(cat "$project/src/left.txt")" = "tracked dirty" ]
+  [ "$(cat "$project/src/right.txt")" = "right base" ]
+  [ "$(cat "$project/untracked.txt")" = "untracked dirty" ]
+  [ "$(readlink "$project/src/link.txt")" = "shared.txt" ]
 }
 
 @test "snapshot workspace survives an interrupted manager phase and cannot change repository refs" {

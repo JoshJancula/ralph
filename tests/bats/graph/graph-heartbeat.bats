@@ -28,27 +28,27 @@ setup() {
   GRAPH_JSON="$TMPD/graph.json"
   compile_graph "$DIAMOND_PLAN" "$WORKSPACE" "$GRAPH_JSON"
   PLAN_FILE="$WORKSPACE/$(basename "$DIAMOND_PLAN")"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2
 }
 
 teardown() {
   rm -rf "$TMPD"
 }
 
-@test "heartbeat owner metadata is initialized by graph_state_init_run_v2" {
+@test "heartbeat owner metadata is initialized by graph_state_init_run" {
   export GRAPH_STATE_SUPERVISOR_PID=12345
   export GRAPH_STATE_OWNER_HOSTNAME="heartbeat-test-host"
   export GRAPH_STATE_OWNER_PROCESS_START_ID="proc-start-abc"
   export GRAPH_STATE_HEARTBEAT_AT="2026-08-12T01:00:00Z"
 
-  run graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2
+  run graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2
   [ "$status" -eq 0 ]
 
   local run_file
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
   [ -f "$run_file" ]
 
-  [ "$(jq -r '.schemaVersion' "$run_file")" = "2" ]
+  [ "$(jq -r '.schemaVersion' "$run_file")" = "3" ]
   [ "$(jq -r '.status' "$run_file")" = "running" ]
   [ "$(jq -r '.supervisorPid' "$run_file")" = "12345" ]
   [ "$(jq -r '.ownerHostname' "$run_file")" = "heartbeat-test-host" ]
@@ -56,28 +56,22 @@ teardown() {
   [ "$(jq -r '.heartbeatAt' "$run_file")" = "2026-08-12T01:00:00Z" ]
 }
 
-@test "heartbeat owner metadata v1 read normalizes missing fields to null without touching disk" {
-  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$GRAPH_JSON" 2 >/dev/null
-
-  local run_file before after normalized
+@test "running graph owner can be rebound from startup process to scheduler" {
+  local run_file
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  [ -f "$run_file" ]
-  [ "$(jq -r '.schemaVersion' "$run_file")" = "1" ]
+  jq '.supervisorPid = 11111 | .ownerProcessStartId = "startup-process"' \
+    "$run_file" >"$run_file.tmp"
+  mv "$run_file.tmp" "$run_file"
 
-  before="$(shasum "$run_file" | awk '{print $1}')"
+  export GRAPH_STATE_OWNER_HOSTNAME="scheduler-host"
+  export GRAPH_STATE_OWNER_PROCESS_START_ID="scheduler-process"
+  export GRAPH_STATE_HEARTBEAT_AT="2026-08-12T01:02:00Z"
+  graph_state_rebind_run_owner "$WORKSPACE" "$NAMESPACE" "$RUN_ID" 22222
 
-  normalized="$(graph_state_read_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  [ -n "$normalized" ]
-
-  after="$(shasum "$run_file" | awk '{print $1}')"
-  [ "$before" = "$after" ]
-
-  [ "$(printf '%s' "$normalized" | jq -r '.schemaVersion')" = "2" ]
-  [ "$(printf '%s' "$normalized" | jq -r '.sourceSchemaVersion')" = "1" ]
-  [ "$(printf '%s' "$normalized" | jq -r '.supervisorPid')" = "null" ]
-  [ "$(printf '%s' "$normalized" | jq -r '.ownerHostname')" = "null" ]
-  [ "$(printf '%s' "$normalized" | jq -r '.ownerProcessStartId')" = "null" ]
-  [ "$(printf '%s' "$normalized" | jq -r '.heartbeatAt')" = "null" ]
+  [ "$(jq -r '.supervisorPid' "$run_file")" = "22222" ]
+  [ "$(jq -r '.ownerHostname' "$run_file")" = "scheduler-host" ]
+  [ "$(jq -r '.ownerProcessStartId' "$run_file")" = "scheduler-process" ]
+  [ "$(jq -r '.heartbeatAt' "$run_file")" = "2026-08-12T01:02:00Z" ]
 }
 
 set_run_json_field() {
@@ -122,7 +116,7 @@ set_run_json_null() {
 @test "heartbeat liveness returns stale for expired heartbeat and pid reuse" {
   local run_file owner_start
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  owner_start="$(graph_heartbeat_process_start_id_of_pid "$$")"
+  owner_start="$(graph_heartbeat_process_start_id_of_pid "$$")" || skip "process start identity is unavailable in this environment"
   set_run_json_field "$run_file" "heartbeatAt" "2026-08-12T00:00:00Z"
   set_run_json_field "$run_file" "supervisorPid" "$$"
   set_run_json_field "$run_file" "ownerProcessStartId" "different-start-id"
@@ -143,12 +137,11 @@ set_run_json_null() {
 }
 
 @test "heartbeat liveness returns unknown when process inspection is unavailable" {
-  local run_file owner_start
+  local run_file
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  owner_start="$(graph_heartbeat_process_start_id_of_pid "$$")"
   set_run_json_field "$run_file" "heartbeatAt" "2026-08-12T00:00:00Z"
   set_run_json_field "$run_file" "supervisorPid" "$$"
-  set_run_json_field "$run_file" "ownerProcessStartId" "$owner_start"
+  set_run_json_field "$run_file" "ownerProcessStartId" "identity-not-needed-when-inspection-is-off"
 
   GRAPH_HEARTBEAT_PROCESS_LOOKUP=off \
     run graph_heartbeat_classify_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" 1 1999999999
@@ -168,22 +161,22 @@ set_run_json_null() {
   [ "$output" = "unknown" ]
 }
 
-@test "heartbeat liveness returns unknown when owner process start id is missing" {
+@test "heartbeat liveness returns stale for a dead owner even when start identity is unavailable" {
   local run_file
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
   set_run_json_field "$run_file" "heartbeatAt" "2026-08-12T00:00:00Z"
-  set_run_json_field "$run_file" "supervisorPid" "$$"
+  set_run_json_field "$run_file" "supervisorPid" "99999"
   set_run_json_null "$run_file" "ownerProcessStartId"
 
   run graph_heartbeat_classify_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" 1 1999999999
   [ "$status" -eq 0 ]
-  [ "$output" = "unknown" ]
+  [ "$output" = "stale" ]
 }
 
 @test "heartbeat liveness returns unknown for expired heartbeat with alive matching owner" {
   local run_file owner_start
   run_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
-  owner_start="$(graph_heartbeat_process_start_id_of_pid "$$")"
+  owner_start="$(graph_heartbeat_process_start_id_of_pid "$$")" || skip "process start identity is unavailable in this environment"
   set_run_json_field "$run_file" "heartbeatAt" "2026-08-12T00:00:00Z"
   set_run_json_field "$run_file" "supervisorPid" "$$"
   set_run_json_field "$run_file" "ownerProcessStartId" "$owner_start"
@@ -238,7 +231,7 @@ set_run_json_null() {
   local node_file before after
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}' >/dev/null
 
   export GRAPH_STATE_HEARTBEAT_AT="2026-01-01T00:00:15Z"
@@ -260,7 +253,7 @@ set_run_json_null() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z"}' >/dev/null
 
   run graph_state_update_attempt_heartbeat "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "$aid" "2026-01-01T00:00:45Z"
@@ -274,7 +267,7 @@ set_run_json_null() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","outcome":"succeeded","exitCode":0,"finishedAt":"2026-01-01T00:01:00Z"}' >/dev/null
 
   export GRAPH_STATE_HEARTBEAT_AT="2026-01-01T00:00:15Z"
@@ -290,9 +283,9 @@ set_run_json_null() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z"}' >/dev/null
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "succeeded" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "succeeded" \
     "$aid" '{"outcome":"succeeded","exitCode":0,"finishedAt":"2026-01-01T00:01:00Z"}' >/dev/null
 
   export GRAPH_STATE_HEARTBEAT_AT="2026-01-01T00:00:15Z"
@@ -308,7 +301,7 @@ set_run_json_null() {
   local node_file
   node_file="$(graph_state_node_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid")"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z"}' >/dev/null
 
   export GRAPH_STATE_HEARTBEAT_AT="2026-01-01T00:00:15Z"
@@ -327,7 +320,7 @@ set_run_json_null() {
 
   graph_schedule_load_index "$GRAPH_JSON"
 
-  graph_state_write_node_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
+  graph_state_write_node "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$nid" "running" \
     "$aid" '{"startedAt":"2026-01-01T00:00:00Z","runtime":"cursor"}' >/dev/null
 
   idx="$(graph_schedule_index_map_get "$nid")"

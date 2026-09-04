@@ -2,7 +2,7 @@
   "author": {
     "name": "Ralph maintainers"
   },
-  "description": "Plan, orchestrate, inspect, and safely run Ralph workflows from Codex.",
+  "description": "Plan, author workflows, inspect runs, and safely execute Ralph from Codex.",
   "interface": {
     "capabilities": [
       "skills"
@@ -11,8 +11,8 @@
     "defaultPrompt": "Use the Ralph skills to choose, preview, and operate the correct Ralph workflow for this repository.",
     "developerName": "Ralph maintainers",
     "displayName": "Ralph Orchestrator",
-    "longDescription": "Native Ralph skills for plan authoring, orchestration, graph setup, status, diagnostics, agent discovery, preview, and operator-confirmed execution.",
-    "shortDescription": "Operate Ralph plans and graphs safely."
+    "longDescription": "Native Ralph skills for plan authoring, Sequential and Dependency workflows, status, diagnostics, preview, and operator-confirmed execution.",
+    "shortDescription": "Operate Ralph plans and workflows safely."
   },
   "name": "ralph-orchestrator",
   "skills": "./skills/",

@@ -2,14 +2,18 @@
 """Graph TUI read model, renderer, log pane, operator actions, and lifecycle.
 
 Loads a point-in-time snapshot of one graph run, then renders a deterministic
-colorless frame. Log pane reads use the same contained ledger-path contract as
-the CLI. Operator decisions bind to `graph-run.sh actions respond` and
-`graph-run.sh recover`; this module never writes ledger JSON itself.
-Key-to-state navigation stays pure. Curses I/O is loaded only for an
-interactive session and is never imported at module load. When curses or a
-suitable TTY is unavailable, the same snapshot renders as concise streaming
-status. Terminal settings are restored on normal exit, exception, SIGINT,
-and SIGTERM.
+frame through the shared semantic canvas. Log pane reads use the same contained
+ledger-path contract as the CLI. Operator decisions bind to `graph-run.sh
+actions respond` and `graph-run.sh recover`; this module never writes ledger
+JSON itself. Key-to-state navigation stays pure. Curses I/O is loaded only for
+an interactive session and is never imported at module load. When a graph run
+belongs to a public workflow registry run, the entrypoint routes to the
+workflow viewer for that exact public run ID. Standalone internal graphs keep
+graph-specific model and action support but share capability probing, theme
+roles, canvas painting, and terminal restoration with the workflow viewer.
+When curses or a suitable TTY is unavailable, the same snapshot renders as
+concise streaming status. Terminal settings are restored on normal exit,
+exception, SIGINT, and SIGTERM.
 """
 
 from __future__ import annotations
@@ -27,9 +31,18 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+try:
+    import ralph_term as _TERM
+except ImportError:
+    _TERM = None  # type: ignore[assignment]
+
+import workflow_canvas as wc
+import workflow_curses as wcurse
+import workflow_viewer as wviewer
+
 
 LOG_STREAMS = ("runner", "agent", "usage")
-HEALTH_STATES = ("healthy", "stale", "unknown")
+HEALTH_STATES = ("healthy", "stale", "unknown", "terminal")
 USAGE_RELIABILITY_AUTHORITATIVE = "authoritative"
 USAGE_RELIABILITY_UNAVAILABLE = "unavailable"
 USAGE_RELIABILITY_MIXED = "mixed"
@@ -46,8 +59,8 @@ DEFAULT_ACTION_DECISION = "allow-once"
 PERSISTENT_DECISIONS = frozenset({"allow-always"})
 CONFIRM_RECOVER = "recover"
 CONFIRM_ALLOW_ALWAYS = "allow-always"
-_REPLACEMENT = "\ufffd"
-_ELLIPSIS = "..."
+_REPLACEMENT = _TERM.Symbols(ascii_only=True).replacement if _TERM is not None else "\ufffd"
+_ELLIPSIS = _TERM.Symbols(ascii_only=True).ellipsis if _TERM is not None else "..."
 _CONTROL_CHARS = dict.fromkeys(range(32))
 _CONTROL_CHARS[ord("\t")] = " "
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -208,6 +221,7 @@ class GraphTuiSnapshot:
     selected_log: GraphTuiLogMetadata
     events: Tuple[Mapping[str, object], ...]
     warnings: Tuple[str, ...]
+    operator_view: Optional[Mapping[str, object]] = None
 
 
 @dataclass(frozen=True)
@@ -317,7 +331,7 @@ def inspect_process(pid: int) -> Tuple[str, Optional[str]]:
 
 
 def unique_attempts(records: Sequence[Mapping[str, object]], node_id: str) -> List[GraphTuiAttempt]:
-    """Collapse v1 running+terminal duplicates to one record per attemptId."""
+    """Collapse running and terminal duplicates to one record per attemptId."""
     merged: Dict[str, Dict[str, object]] = {}
     order: List[str] = []
     for raw in records:
@@ -333,6 +347,175 @@ def unique_attempts(records: Sequence[Mapping[str, object]], node_id: str) -> Li
     return [_attempt_from_record(node_id, attempt_id, merged[attempt_id]) for attempt_id in order]
 
 
+def _bash_lib_dir(graph_run: Optional[str | os.PathLike[str]] = None) -> Path:
+    if graph_run:
+        return Path(graph_run).resolve().parent / "bash-lib"
+    return Path(__file__).resolve().parent.parent / "bash-lib"
+
+
+def fetch_operator_view_json(
+    workspace: Optional[str | os.PathLike[str]],
+    namespace: str,
+    run_id: str,
+    *,
+    graph_run: Optional[str | os.PathLike[str]] = None,
+    now_epoch: Optional[int] = None,
+) -> Optional[Mapping[str, object]]:
+    """Build the operator view through the bash read model. Read-only."""
+    if not workspace or not namespace or not run_id:
+        return None
+    bash_lib = _bash_lib_dir(graph_run)
+    script = "\n".join(
+        [
+            f'source "{bash_lib}/graph/graph-state.sh"',
+            f'source "{bash_lib}/graph/graph-heartbeat.sh"',
+            f'source "{bash_lib}/graph/graph-operator-records.sh"',
+            f'source "{bash_lib}/graph/graph-failure-classify.sh"',
+            f'source "{bash_lib}/graph/graph-preflight.sh"',
+            f'source "{bash_lib}/graph/graph-logs.sh"',
+            f'source "{bash_lib}/graph/graph-operator-view.sh"',
+            'graph_operator_view_build "$1" "$2" "$3"',
+        ]
+    )
+    env = os.environ.copy()
+    if now_epoch is not None:
+        env["GRAPH_OPERATOR_VIEW_NOW_EPOCH"] = str(now_epoch)
+        env["GRAPH_STATUS_NOW_EPOCH"] = str(now_epoch)
+    try:
+        completed = subprocess.run(
+            ["bash", "-c", script, "graph-operator-view", str(workspace), namespace, run_id],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout or "")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != "graph-operator-view/v1":
+        return None
+    return payload
+
+
+def operator_view_node_state(
+    snapshot: GraphTuiSnapshot, node_id: str, *, fallback: str
+) -> str:
+    view = snapshot.operator_view
+    if not isinstance(view, Mapping):
+        return fallback
+    for section in ("attention", "active"):
+        items = view.get(section)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("nodeId") == node_id:
+                state = item.get("state")
+                if isinstance(state, str) and state:
+                    return state
+    return fallback
+
+
+def operator_view_next_action_text(snapshot: GraphTuiSnapshot, node_id: str) -> Optional[str]:
+    view = snapshot.operator_view
+    if not isinstance(view, Mapping):
+        return None
+    for section in ("attention", "active"):
+        items = view.get(section)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping) or item.get("nodeId") != node_id:
+                continue
+            actions = item.get("nextActions")
+            if not isinstance(actions, list) or not actions:
+                return None
+            first = actions[0]
+            if isinstance(first, Mapping):
+                text = first.get("commandText")
+                if isinstance(text, str) and text:
+                    return text
+    actions = view.get("nextActions")
+    if isinstance(actions, list):
+        for item in actions:
+            if isinstance(item, Mapping):
+                text = item.get("commandText")
+                if isinstance(text, str) and text:
+                    return text
+    return None
+
+
+def render_operator_view_text(
+    view: Mapping[str, object],
+    *,
+    width: int = DEFAULT_FRAME_WIDTH,
+) -> str:
+    """Concise colorless operator screen for non-TTY fallback."""
+    run = view.get("run") if isinstance(view.get("run"), Mapping) else {}
+    run_id = str(run.get("runId") or "-")
+    namespace = str(run.get("namespace") or "-")
+    status = str(run.get("status") or "-")
+    owner = str(run.get("ownerHealth") or "-")
+    lines = [f"ralph workflow  run={run_id}  ns={namespace}  status={status}  owner-health={owner}"]
+    idx = 0
+    for section, title in (("attention", "== NEEDS ATTENTION =="), ("active", "== ACTIVE ==")):
+        items = view.get(section)
+        if not isinstance(items, list) or not items:
+            continue
+        lines.append("")
+        lines.append(title)
+        lines.append("")
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            idx += 1
+            node_id = str(item.get("nodeId") or "run")
+            state = str(item.get("state") or "-")
+            cause = str(item.get("cause") or "")
+            progress = str(item.get("lastProgressLine") or "")
+            action = ""
+            actions = item.get("nextActions")
+            if isinstance(actions, list) and actions and isinstance(actions[0], Mapping):
+                action = str(actions[0].get("commandText") or "")
+            headline = f"[{idx}] {node_id}  ({state})"
+            lines.append(clip_text(headline, width))
+            if cause and cause != "null":
+                lines.append(clip_text(f"  cause: {cause}", width))
+            if progress and progress != "null":
+                lines.append(clip_text(f"  progress: {progress}", width))
+            if action:
+                lines.append(clip_text(f"  next: {action}", width))
+            lines.append("")
+    completed = view.get("completed") if isinstance(view.get("completed"), Mapping) else {}
+    pending = view.get("pending") if isinstance(view.get("pending"), Mapping) else {}
+    lines.append("== COMPLETION ==")
+    lines.append(
+        clip_text(
+            f"  succeeded: {completed.get('succeeded', 0)}  "
+            f"failed: {completed.get('failed', 0)}  "
+            f"cancelled: {completed.get('cancelled', 0)}",
+            width,
+        )
+    )
+    lines.append("")
+    lines.append("== PENDING ==")
+    lines.append(
+        clip_text(
+            f"  untouched: {pending.get('count', 0)} pending; use status --details for full node table",
+            width,
+        )
+    )
+    return "\n".join(lines[:STREAMING_FRAME_HEIGHT])
+
+
 def load_snapshot(
     run_dir: str | os.PathLike[str],
     *,
@@ -342,6 +525,8 @@ def load_snapshot(
     now_epoch: Optional[int] = None,
     heartbeat_ttl_seconds: int = DEFAULT_HEARTBEAT_TTL_SECONDS,
     process_lookup: Optional[ProcessLookup] = None,
+    workspace: Optional[str | os.PathLike[str]] = None,
+    graph_run: Optional[str | os.PathLike[str]] = None,
 ) -> GraphTuiSnapshot:
     """Load a side-effect-free snapshot of one graph run directory."""
     root = Path(run_dir)
@@ -358,12 +543,15 @@ def load_snapshot(
 
     nodes = _load_nodes(root, graph_nodes, warnings)
     attempts = tuple(attempt for node in nodes for attempt in node.attempts)
-    health = classify_health(
-        run.raw,
-        now_epoch=now_epoch,
-        ttl_seconds=heartbeat_ttl_seconds,
-        process_lookup=process_lookup,
-    )
+    if run.status in TERMINAL_RUN_STATUSES:
+        health = "terminal"
+    else:
+        health = classify_health(
+            run.raw,
+            now_epoch=now_epoch,
+            ttl_seconds=heartbeat_ttl_seconds,
+            process_lookup=process_lookup,
+        )
     usage_reliability = _aggregate_usage_reliability(attempts)
     pending_actions = tuple(_load_pending_actions(root, warnings))
     events, event_warnings = read_events(root / "events.jsonl")
@@ -375,6 +563,13 @@ def load_snapshot(
         selected_attempt_id=selected_attempt_id,
         selected_stream=selected_stream,
     )
+    operator_view = fetch_operator_view_json(
+        workspace,
+        run.namespace,
+        run.run_id,
+        graph_run=graph_run,
+        now_epoch=now_epoch,
+    )
     return GraphTuiSnapshot(
         run=run,
         nodes=tuple(nodes),
@@ -385,6 +580,7 @@ def load_snapshot(
         selected_log=selected_log,
         events=tuple(events),
         warnings=tuple(warnings),
+        operator_view=operator_view,
     )
 
 
@@ -701,6 +897,8 @@ def read_log_pane(
 
 def clip_text(text: str, width: int, *, pad: bool = False) -> str:
     """Truncate to width without raising. Optional space-padding for frames."""
+    if _TERM is not None:
+        return _TERM.clip_text(text, width, pad=pad, ellipsis=_ELLIPSIS)
     width = _clamp_dim(width, 0)
     cleaned = _sanitize_text(text)
     if width <= 0:
@@ -744,17 +942,94 @@ def render_frame(
     state: Optional[GraphTuiState] = None,
 ) -> str:
     """Render a deterministic colorless frame. No curses and no I/O."""
-    return "\n".join(
-        render_lines(
-            snapshot,
-            width=width,
-            height=height,
-            selected_node_id=selected_node_id,
-            selected_attempt_id=selected_attempt_id,
-            log_pane=log_pane,
-            state=state,
-        )
+    return render_canvas(
+        snapshot,
+        width=width,
+        height=height,
+        selected_node_id=selected_node_id,
+        selected_attempt_id=selected_attempt_id,
+        log_pane=log_pane,
+        state=state,
+    ).render_plain()
+
+
+def _line_role(line: str) -> str:
+    """Map a rendered graph line to a shared semantic style role."""
+    stripped = line.strip()
+    if line.startswith("ralph workflow") or line.startswith("SELECTED") or line.startswith("LOG"):
+        return "heading"
+    if line.startswith(">"):
+        return "focus"
+    if line.startswith("q quit") or set(stripped) == {"-"}:
+        return "muted"
+    if line.startswith("  NODE"):
+        return "heading"
+    lowered = stripped.casefold()
+    if "failed" in lowered or "error" in lowered or "blocked" in lowered:
+        return "failure"
+    if "succeeded" in lowered or "success" in lowered:
+        return "success"
+    if "running" in lowered or "awaiting-operator" in lowered:
+        return "accent"
+    if "pending" in lowered or "cancelled" in lowered or "warning" in lowered:
+        return "warning"
+    return "default"
+
+
+def _write_line_with_roles(canvas: wc.Canvas, y: int, line: str, *, width: int) -> None:
+    """Write one graph line, coloring state tokens with shared semantic roles."""
+    base_role = _line_role(line)
+    if base_role in {"heading", "focus", "muted"} or line.startswith("SELECTED") or line.startswith("LOG"):
+        canvas.write(0, y, line, role=base_role, max_width=width)
+        return
+    col = 0
+    for part in re.split(r"(\s+)", line):
+        if not part:
+            continue
+        role = base_role
+        token = part.casefold().strip(" ,;[]()")
+        if token in {"failed", "error", "blocked"} or re.fullmatch(r"failed=[1-9][0-9]*", token):
+            role = "failure"
+        elif token in {"succeeded", "success"} or re.fullmatch(r"succeeded=[0-9]+", token):
+            role = "success"
+        elif token in {"running", "awaiting-operator"} or re.fullmatch(r"running=[0-9]+", token):
+            role = "accent"
+        elif token in {"pending", "cancelled", "warning"} or re.fullmatch(r"pending=[0-9]+", token):
+            role = "warning"
+        elif part.isspace():
+            role = "default"
+        remaining = max(0, width - col)
+        if remaining <= 0:
+            break
+        col = canvas.write(col, y, part, role=role, max_width=remaining)
+
+
+def render_canvas(
+    snapshot: GraphTuiSnapshot,
+    *,
+    width: int = DEFAULT_FRAME_WIDTH,
+    height: int = DEFAULT_FRAME_HEIGHT,
+    selected_node_id: Optional[str] = None,
+    selected_attempt_id: Optional[str] = None,
+    log_pane: Optional[GraphTuiLogPane] = None,
+    state: Optional[GraphTuiState] = None,
+) -> wc.Canvas:
+    """Render the graph frame onto the shared semantic canvas."""
+    width = _clamp_dim(width, DEFAULT_FRAME_WIDTH)
+    height = _clamp_dim(height, DEFAULT_FRAME_HEIGHT)
+    canvas = wc.Canvas(width, height)
+    lines = render_lines(
+        snapshot,
+        width=width,
+        height=height,
+        selected_node_id=selected_node_id,
+        selected_attempt_id=selected_attempt_id,
+        log_pane=log_pane,
+        state=state,
     )
+    for y, line in enumerate(lines):
+        _write_line_with_roles(canvas, y, line, width=width)
+    return canvas
 
 
 def render_lines(
@@ -821,7 +1096,7 @@ def render_lines(
         lines.append(table_header)
         row_budget = table_budget - 1
         if row_budget > 0:
-            lines.extend(_table_rows(snapshot.nodes, selected, row_budget))
+            lines.extend(_table_rows(snapshot.nodes, selected, row_budget, snapshot))
     if separator_budget:
         lines.append("-" * max(width, 1))
     lines.extend(detail[:detail_budget])
@@ -889,7 +1164,11 @@ def apply_key(state: GraphTuiState, key: object, snapshot: GraphTuiSnapshot) -> 
         return _open_action(state, snapshot)
     elif _is_deny_key(key) and snapshot.pending_actions:
         return _request_submit(_open_action(state, snapshot), snapshot, decision="deny")
-    elif _is_recover_key(key) and snapshot.health == "stale":
+    elif (
+        _is_recover_key(key)
+        and snapshot.run.status == "running"
+        and snapshot.health == "stale"
+    ):
         return replace(state, confirm_kind=CONFIRM_RECOVER, action_pending_submit=False)
     if action == "down":
         return _move_selection(state, snapshot, 1)
@@ -1166,7 +1445,9 @@ def _reconcile_action(state: GraphTuiState, snapshot: GraphTuiSnapshot) -> Graph
     pending = snapshot.pending_actions
     pending_ids = [item.request_id for item in pending]
     confirm_kind = state.confirm_kind
-    if confirm_kind == CONFIRM_RECOVER and snapshot.health != "stale":
+    if confirm_kind == CONFIRM_RECOVER and (
+        snapshot.run.status != "running" or snapshot.health != "stale"
+    ):
         confirm_kind = None
     if confirm_kind == CONFIRM_ALLOW_ALWAYS and state.selected_decision != CONFIRM_ALLOW_ALWAYS:
         confirm_kind = None
@@ -1220,20 +1501,34 @@ def _is_recover_key(key: object) -> bool:
     return _key_letter(key) == "c"
 
 
+def _key_text(key: object) -> Optional[str]:
+    """Normalize printable curses key codes without mistaking special codes for text."""
+    if isinstance(key, str):
+        return key
+    if isinstance(key, int) and 0 <= key <= 255:
+        try:
+            return chr(key)
+        except ValueError:
+            return None
+    return None
+
+
 def _key_letter(key: object) -> Optional[str]:
-    if isinstance(key, str) and len(key) == 1 and key.isalpha():
-        return key.lower()
+    text = _key_text(key)
+    if text is not None and len(text) == 1 and text.isalpha():
+        return text.lower()
     return None
 
 
 def _decision_from_key(key: object) -> Optional[str]:
-    if key in {"1", "o", "O"}:
+    text = _key_text(key)
+    if text in {"1", "o", "O"}:
         return "allow-once"
-    if key in {"2"}:
+    if text in {"2"}:
         return "allow-run"
-    if key in {"3"}:
+    if text in {"3"}:
         return "allow-always"
-    if key in {"4"}:
+    if text in {"4"}:
         return "deny"
     letter = _key_letter(key)
     if letter == "o":
@@ -1416,8 +1711,8 @@ def _nav_action(key: object) -> Optional[str]:
         mapped = _CURSES_KEY_CODES.get(key)
         if mapped:
             return mapped
-        key = str(key)
-    if not isinstance(key, str) or not key:
+    key = _key_text(key)
+    if key is None or not key:
         return None
     action = _NAV_ACTIONS.get(key)
     if action:
@@ -1428,7 +1723,8 @@ def _nav_action(key: object) -> Optional[str]:
 
 
 def _is_filter_char(key: object) -> bool:
-    return isinstance(key, str) and len(key) == 1 and key.isprintable() and key not in {"\n", "\r", "\x1b"}
+    text = _key_text(key)
+    return text is not None and len(text) == 1 and text.isprintable() and text not in {"\n", "\r", "\x1b"}
 
 
 def _apply_filter_key(state: GraphTuiState, key: object, snapshot: GraphTuiSnapshot) -> GraphTuiState:
@@ -1443,7 +1739,7 @@ def _apply_filter_key(state: GraphTuiState, key: object, snapshot: GraphTuiSnaps
     if action == "backspace":
         return _reconcile_selection(replace(state, filter_query=state.filter_query[:-1]), snapshot)
     if _is_filter_char(key):
-        return _reconcile_selection(replace(state, filter_query=state.filter_query + str(key)), snapshot)
+        return _reconcile_selection(replace(state, filter_query=state.filter_query + str(_key_text(key))), snapshot)
     return state
 
 
@@ -1563,7 +1859,7 @@ def _render_log_block(pane: GraphTuiLogPane) -> List[str]:
         flags.append("replaced")
     if pane.reset:
         flags.append("reset")
-    header = f"log stream={pane.stream} path={pane.relative_path or '-'}"
+    header = f"LOG  stream={pane.stream}  path={pane.relative_path or '-'}"
     if flags:
         header = f"{header} {' '.join(flags)}"
     lines = [header]
@@ -1577,7 +1873,10 @@ def _render_log_block(pane: GraphTuiLogPane) -> List[str]:
 def _sanitize_text(text: str) -> str:
     if not text:
         return ""
-    return str(text).replace("\r", " ").replace("\n", " ").translate(_CONTROL_CHARS)
+    cleaned = str(text).replace("\r", " ").replace("\n", " ")
+    if _TERM is not None:
+        return _TERM.sanitize_control(cleaned)
+    return cleaned.translate(_CONTROL_CHARS)
 
 
 def _clamp_dim(value: object, default: int) -> int:
@@ -1621,7 +1920,7 @@ def _resolve_selected_attempt(
 def _render_header(snapshot: GraphTuiSnapshot) -> str:
     run = snapshot.run
     return (
-        f"ralph graph  run={run.run_id}  ns={run.namespace}  "
+        f"ralph workflow  run={run.run_id}  ns={run.namespace}  "
         f"status={run.status}  health={snapshot.health}"
     )
 
@@ -1650,24 +1949,27 @@ def _render_detail(
 ) -> List[str]:
     if node is None:
         return ["node=-  type=-  runtime=-  status=-  attempts=0"]
+    display_state = operator_view_node_state(snapshot, node.node_id, fallback=node.status)
     duration = format_duration(attempt.started_at, attempt.finished_at) if attempt else "-"
     outcome = attempt.outcome if attempt else None
     usage = attempt.usage_reliability if attempt else USAGE_RELIABILITY_UNAVAILABLE
     attempt_id = attempt.attempt_id if attempt else node.last_attempt_id
-    return [
+    next_action = operator_view_next_action_text(snapshot, node.node_id)
+    stream = snapshot.selected_log.stream if snapshot.selected_log.stream in LOG_STREAMS else "runner"
+    lines = [
         (
-            f"node={node.node_id}  type={node.type}  runtime={_dash(node.runtime)}  "
-            f"status={node.status}  attempts={node.attempt_count}"
+            f"SELECTED  node={node.node_id}  runtime={_dash(node.runtime)}  "
+            f"status={display_state}  attempts={node.attempt_count}  mode={_dash(node.workspace_mode)}"
         ),
         (
             f"attempt={_dash(attempt_id)}  outcome={_dash(outcome)}  "
             f"duration={duration}  usage={usage}"
         ),
-        (
-            f"mode={_dash(node.workspace_mode)}  scopes={format_scopes(node.write_scopes)}  "
-            f"log={_log_label(snapshot, node, attempt)}"
-        ),
+        f"LOG  stream={stream}  path={_log_label(snapshot, node, attempt)}",
     ]
+    if next_action:
+        lines.append(f"next: {next_action}")
+    return lines
 
 
 def _render_footer(snapshot: GraphTuiSnapshot, state: Optional[GraphTuiState] = None) -> str:
@@ -1692,7 +1994,7 @@ def _render_pending_block(
         if state is not None and state.last_action_error:
             lines.append(f"error={state.last_action_error}")
         return lines
-    if snapshot.health == "stale":
+    if snapshot.run.status == "running" and snapshot.health == "stale":
         lines.append("c recover  health=stale")
     if not snapshot.pending_actions:
         if state is not None and state.last_action_error:
@@ -1748,6 +2050,7 @@ def _table_rows(
     nodes: Sequence[GraphTuiNode],
     selected: Optional[GraphTuiNode],
     row_budget: int,
+    snapshot: Optional[GraphTuiSnapshot] = None,
 ) -> List[str]:
     if row_budget <= 0 or not nodes:
         return []
@@ -1764,9 +2067,14 @@ def _table_rows(
         marker = ">" if selected_id is not None and node.node_id == selected_id else " "
         last = node.attempts[-1] if node.attempts else None
         duration = format_duration(last.started_at, last.finished_at) if last else "-"
+        display_state = (
+            operator_view_node_state(snapshot, node.node_id, fallback=node.status)
+            if snapshot is not None
+            else node.status
+        )
         rows.append(
             f"{marker} {_cell(node.node_id, 16)} {_cell(node.type, 8)} "
-            f"{_cell(_dash(node.runtime), 9)} {_cell(node.status, 11)} "
+            f"{_cell(_dash(node.runtime), 9)} {_cell(display_state, 11)} "
             f"{_cell(str(node.attempt_count), 8)} {_cell(duration, 8)} "
             f"{_dash(node.workspace_mode)}"
         )
@@ -1922,6 +2230,21 @@ def _graph_node_specs(graph: Optional[Mapping[str, object]]) -> List[Dict[str, o
     return specs
 
 
+def _operator_request_is_actionable(raw: Mapping[str, object]) -> bool:
+    if raw.get("actionable") is False:
+        return False
+    if not raw.get("requestId"):
+        return False
+    if raw.get("classification") == "unknown":
+        return False
+    action = str(raw.get("action") or "")
+    resource = str(raw.get("resource") or "")
+    if action == "permission" and resource == "permission":
+        return False
+    choices = raw.get("choices")
+    return isinstance(choices, list) and len(choices) > 0
+
+
 def _load_pending_actions(run_dir: Path, warnings: List[str]) -> List[GraphTuiPendingAction]:
     req_dir = run_dir / "operator" / "requests"
     dec_dir = run_dir / "operator" / "decisions"
@@ -1941,6 +2264,8 @@ def _load_pending_actions(run_dir: Path, warnings: List[str]) -> List[GraphTuiPe
         raw = _read_json_atomic(path)
         if raw is None:
             warnings.append(f"skipping unreadable operator request: {request_id}")
+            continue
+        if not _operator_request_is_actionable(raw):
             continue
         choices_raw = raw.get("choices")
         choices = (
@@ -2267,31 +2592,39 @@ def probe_tui_capabilities(
 
     Checks are injectable so tests do not need a real TTY. `columns` is
     accepted for callers that already measured the screen; narrow widths
-    stay renderable and do not fail the probe.
+    stay renderable and do not fail the probe. Capability detection shares
+    the workflow viewer's environment and curses checks.
     """
     del columns
     if not python_ok:
         return TuiCapabilities(python_ok=False, reason="python")
     env = dict(os.environ if environ is None else environ)
-    if _env_flag(env, "RALPH_GRAPH_PLAIN") or _env_flag(env, "RALPH_GRAPH_NO_TUI"):
-        return TuiCapabilities(python_ok=True, reason=REASON_PLAIN)
-    if _env_flag(env, "RALPH_GRAPH_SCREEN_READER") or _env_flag(env, "ACCESSIBILITY_SCREEN_READER"):
-        return TuiCapabilities(python_ok=True, reason=REASON_SCREEN_READER)
+    # Preserve graph-specific CI reason; the shared probe folds CI into "plain".
     if _env_flag(env, "CI"):
         return TuiCapabilities(python_ok=True, reason=REASON_CI)
-    term_value = term if term is not None else env.get("TERM", "")
-    if not term_value or term_value == "dumb":
-        return TuiCapabilities(python_ok=True, reason=REASON_TERM)
-    in_tty = sys.stdin.isatty() if stdin_isatty is None else bool(stdin_isatty)
-    out_tty = sys.stdout.isatty() if stdout_isatty is None else bool(stdout_isatty)
-    if not in_tty or not out_tty:
-        return TuiCapabilities(python_ok=True, tty_ok=False, reason=REASON_TTY)
-    importer = curses_importer or _load_curses
-    try:
-        importer()
-    except Exception:
-        return TuiCapabilities(python_ok=True, tty_ok=True, curses_ok=False, reason=REASON_CURSES)
-    return TuiCapabilities(python_ok=True, curses_ok=True, tty_ok=True)
+    shared = wcurse.probe_curses_capabilities(
+        stdin_isatty=stdin_isatty,
+        stdout_isatty=stdout_isatty,
+        term=term,
+        environ=env,
+        curses_importer=curses_importer,
+    )
+    if shared.available:
+        return TuiCapabilities(python_ok=True, curses_ok=True, tty_ok=True)
+    reason_map = {
+        "plain": REASON_PLAIN,
+        "screen-reader": REASON_SCREEN_READER,
+        "term": REASON_TERM,
+        "tty": REASON_TTY,
+        "curses": REASON_CURSES,
+    }
+    reason = reason_map.get(shared.reason or "", shared.reason or REASON_TTY)
+    return TuiCapabilities(
+        python_ok=True,
+        curses_ok=False,
+        tty_ok=reason == REASON_CURSES,
+        reason=reason,
+    )
 
 
 def decide_tui_launch(mode: str, caps: TuiCapabilities) -> TuiLaunchPlan:
@@ -2319,6 +2652,8 @@ def render_streaming_status(
     state: Optional[GraphTuiState] = None,
 ) -> str:
     """Concise colorless status frame used when curses cannot run."""
+    if snapshot.operator_view:
+        return render_operator_view_text(snapshot.operator_view, width=width)
     return render_frame(
         snapshot,
         width=width,
@@ -2327,8 +2662,8 @@ def render_streaming_status(
     )
 
 
-class TerminalRestorer:
-    """Save and restore terminal attributes. Restore is idempotent."""
+class TerminalRestorer(wcurse.TerminalRestorer):
+    """Shared curses lifecycle guard with graph-test compatible bookkeeping."""
 
     def __init__(
         self,
@@ -2339,91 +2674,86 @@ class TerminalRestorer:
         curses_mod: Any = None,
         raise_on_sigint: bool = True,
     ) -> None:
-        self.fd = 0 if fd is None else fd
-        self._termios = termios_mod
-        self._signal = signal_mod
-        self._curses = curses_mod
-        self._raise_on_sigint = raise_on_sigint
-        self._saved: Any = None
-        self._prev_handlers: Dict[int, Any] = {}
-        self._termios_restored = False
-        self._endwin_done = False
-        self._installed = False
+        super().__init__(
+            fd=0 if fd is None else fd,
+            termios_mod=termios_mod,
+            signal_mod=signal_mod,
+            curses_mod=curses_mod,
+            raise_on_sigint=raise_on_sigint,
+        )
         self.restore_count = 0
-
-    def install(self) -> None:
-        if self._installed:
-            return
-        termios_mod = self._termios if self._termios is not None else _load_termios()
-        signal_mod = self._signal if self._signal is not None else _load_signal()
-        self._termios = termios_mod
-        self._signal = signal_mod
-        if termios_mod is not None:
-            try:
-                self._saved = termios_mod.tcgetattr(self.fd)
-            except Exception:
-                self._saved = None
-        self._termios_restored = False
-        self._endwin_done = False
-        if signal_mod is not None:
-            for signum in _lifecycle_signals(signal_mod):
-                try:
-                    self._prev_handlers[signum] = signal_mod.signal(signum, self._handle_signal)
-                except Exception:
-                    continue
-        self._installed = True
 
     def restore(self) -> None:
         self.restore_count += 1
-        if self._curses is not None and not self._endwin_done:
-            self._endwin_done = True
-            try:
-                self._curses.endwin()
-            except Exception:
-                pass
-        if self._termios_restored:
-            return
-        self._termios_restored = True
-        if self._saved is None or self._termios is None:
-            return
-        when = getattr(self._termios, "TCSANOW", 0)
+        # Standalone graph sessions historically call endwin whenever a curses
+        # module is bound, even before begin_screen. Keep that contract while
+        # still using the shared per-resource restoration path.
+        if self._curses is not None and not self._screen_started:
+            self.begin_screen()
+        super().restore()
+
+
+# Shared semantic palette / paint entrypoints used by both viewers.
+init_curses_palette = wcurse.init_palette
+paint_semantic_canvas = wcurse.paint_canvas
+
+
+def resolve_public_workflow_run_id(
+    run_dir: str | os.PathLike[str],
+) -> Optional[str]:
+    """Return the exact public workflow run ID when this graph is registry-backed."""
+    path = Path(run_dir) / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    registry = payload.get("registryRunPath")
+    if not isinstance(registry, str) or not registry:
+        return None
+    registry_path = Path(registry)
+    if not registry_path.is_dir():
+        return None
+    registry_run = registry_path / "run.json"
+    if registry_run.is_file():
         try:
-            self._termios.tcsetattr(self.fd, when, self._saved)
-        except Exception:
-            pass
+            registry_payload = json.loads(registry_run.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            registry_payload = None
+        if isinstance(registry_payload, dict):
+            run_id = registry_payload.get("runId")
+            if isinstance(run_id, str) and run_id and run_id not in {".", ".."} and "/" not in run_id:
+                return run_id
+    run_id = payload.get("runId")
+    if isinstance(run_id, str) and run_id and run_id not in {".", ".."} and "/" not in run_id:
+        return run_id
+    return None
 
-    def close(self) -> None:
-        self.restore()
-        self._uninstall_handlers()
-        self._installed = False
 
-    def __enter__(self) -> "TerminalRestorer":
-        self.install()
-        return self
+def resolve_public_workflow_state_root(
+    run_dir: str | os.PathLike[str],
+) -> Optional[Path]:
+    """Derive the workflow state root from registryRunPath when present."""
+    path = Path(run_dir) / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    registry = payload.get("registryRunPath")
+    if not isinstance(registry, str) or not registry:
+        return None
+    registry_path = Path(registry)
+    if not registry_path.is_dir():
+        return None
+    return registry_path.parent.parent
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _handle_signal(self, signum: int, frame: object) -> None:
-        self.restore()
-        self._uninstall_handlers()
-        signal_mod = self._signal
-        sigint = getattr(signal_mod, "SIGINT", None) if signal_mod is not None else None
-        if self._raise_on_sigint and sigint is not None and signum == sigint:
-            raise KeyboardInterrupt
-        raise SystemExit(_signal_exit_code(signum))
-
-    def _uninstall_handlers(self) -> None:
-        signal_mod = self._signal
-        if signal_mod is None:
-            self._prev_handlers.clear()
-            return
-        for signum, previous in list(self._prev_handlers.items()):
-            try:
-                signal_mod.signal(signum, previous)
-            except Exception:
-                pass
-        self._prev_handlers.clear()
 
 
 def run_tui_session(
@@ -2431,7 +2761,7 @@ def run_tui_session(
     *,
     keys: Optional[Sequence[object]] = None,
     get_key: Optional[Callable[[], object]] = None,
-    painter: Optional[Callable[[str], None]] = None,
+    painter: Optional[Callable[[Any], None]] = None,
     load: Optional[Callable[..., GraphTuiSnapshot]] = None,
     sleep: Callable[[float], None] = lambda _seconds: None,
     refresh_interval: float = DEFAULT_REFRESH_INTERVAL,
@@ -2446,7 +2776,21 @@ def run_tui_session(
     exit_on_terminal: bool = True,
 ) -> TuiSessionResult:
     """Drive one interactive session with injected I/O. No curses import."""
-    loader = load or load_snapshot
+    if load is None:
+        def _default_loader(
+            run_dir_arg: str | os.PathLike[str],
+            **kwargs: object,
+        ) -> GraphTuiSnapshot:
+            return load_snapshot(
+                run_dir_arg,
+                workspace=workspace,
+                graph_run=graph_run,
+                **kwargs,
+            )
+
+        loader: Callable[..., GraphTuiSnapshot] = _default_loader
+    else:
+        loader = load
     key_iter = iter(keys or ())
     frames = 0
     snapshot = loader(
@@ -2467,7 +2811,7 @@ def run_tui_session(
             )
             state = apply_snapshot(replace(state, refresh_requested=False), snapshot)
         pane, state = read_log_pane(Path(run_dir), snapshot, state)
-        frame = render_frame(
+        canvas = render_canvas(
             snapshot,
             width=width,
             height=height,
@@ -2475,7 +2819,7 @@ def run_tui_session(
             log_pane=pane,
         )
         if painter is not None:
-            painter(frame)
+            painter(canvas)
         frames += 1
         if state.quit_requested:
             return TuiSessionResult(
@@ -2524,9 +2868,25 @@ def run_streaming_status(
     exit_on_terminal: bool = True,
     fallback: bool = False,
     reason: Optional[str] = None,
+    workspace: Optional[str | os.PathLike[str]] = None,
+    graph_run: Optional[str | os.PathLike[str]] = None,
 ) -> TuiSessionResult:
     """Print concise status frames until the run is terminal or bounded."""
-    loader = load or load_snapshot
+    if load is None:
+        def _default_loader(
+            run_dir_arg: str | os.PathLike[str],
+            **kwargs: object,
+        ) -> GraphTuiSnapshot:
+            return load_snapshot(
+                run_dir_arg,
+                workspace=workspace,
+                graph_run=graph_run,
+                **kwargs,
+            )
+
+        loader: Callable[..., GraphTuiSnapshot] = _default_loader
+    else:
+        loader = load
     writer = output or (lambda text: print(text, flush=True))
     frames = 0
     while True:
@@ -2569,7 +2929,7 @@ def run_curses_session(
     keys: Optional[Sequence[object]] = None,
     max_frames: Optional[int] = None,
 ) -> TuiSessionResult:
-    """Paint frames through curses.wrapper. Always restores the terminal."""
+    """Paint frames through the shared curses lifecycle and semantic canvas."""
     curses = curses_mod if curses_mod is not None else _load_curses()
     guard = restorer or TerminalRestorer(curses_mod=curses)
     if restorer is None:
@@ -2577,10 +2937,14 @@ def run_curses_session(
     key_iter = iter(keys or ())
 
     def _wrapped(stdscr: Any) -> TuiSessionResult:
+        guard.begin_screen()
+        guard.configure_input(stdscr)
         try:
             stdscr.timeout(max(int(refresh_interval * 1000), 0))
         except Exception:
             pass
+        palette = init_curses_palette(curses)
+        previous_canvas: Optional[wc.Canvas] = None
 
         def get_key() -> object:
             try:
@@ -2591,8 +2955,15 @@ def run_curses_session(
                 except Exception:
                     return -1
 
-        def painter(frame: str) -> None:
-            _paint_curses_frame(stdscr, frame, curses)
+        def painter(canvas: wc.Canvas) -> None:
+            nonlocal previous_canvas
+            previous_canvas = paint_semantic_canvas(
+                stdscr,
+                canvas,
+                curses=curses,
+                palette=palette,
+                previous=previous_canvas,
+            )
 
         return run_tui_session(
             run_dir,
@@ -2608,6 +2979,10 @@ def run_curses_session(
             process_lookup=process_lookup,
             width=_curses_width(stdscr),
             height=_curses_height(stdscr),
+            # A terminal run is exactly when an operator most needs time to
+            # inspect cause, evidence, and next actions. The standalone TUI
+            # remains open until q instead of flashing one final frame.
+            exit_on_terminal=False,
         )
 
     guard.install()
@@ -2615,6 +2990,7 @@ def run_curses_session(
         wrapper = getattr(curses, "wrapper", None)
         if callable(wrapper):
             return wrapper(_wrapped)
+        guard.begin_screen()
         stdscr = curses.initscr()
         try:
             return _wrapped(stdscr)
@@ -2719,6 +3095,27 @@ def main(
     if not parsed.run_dir:
         err_write("Error: graph tui requires --run-dir <path>")
         return 1
+    public_run_id = resolve_public_workflow_run_id(parsed.run_dir)
+    if public_run_id is not None:
+        # Registry-backed graphs use the public workflow viewer contract.
+        force_plain = parsed.mode == MODE_NO_TUI
+        if not force_plain:
+            plan = decide_tui_launch(parsed.mode, caps)
+            force_plain = plan.backend != LAUNCH_CURSES
+            if plan.message:
+                err_write(plan.message)
+        viewer_result = wviewer.run_workflow_viewer(
+            public_run_id,
+            force_plain=force_plain,
+            refresh_interval=parsed.refresh_interval,
+            max_frames=max_frames,
+            max_polls=max_frames,
+            restorer=restorer,
+            curses_mod=curses_mod,
+            output=output,
+            sleep=sleep,
+        )
+        return int(viewer_result.exit_code)
     plan = decide_tui_launch(parsed.mode, caps)
     if plan.message:
         err_write(plan.message)
@@ -2744,6 +3141,8 @@ def main(
         max_frames=max_frames if max_frames is not None else 1,
         fallback=plan.fallback,
         reason=plan.reason,
+        workspace=parsed.workspace,
+        graph_run=parsed.graph_run or default_graph_run(),
     )
     return result.exit_code
 
@@ -2825,7 +3224,80 @@ def _curses_height(stdscr: Any) -> int:
         return DEFAULT_FRAME_HEIGHT
 
 
-def _paint_curses_frame(stdscr: Any, frame: str, curses: Any) -> None:
+def _init_curses_palette(curses: Any) -> Mapping[str, int]:
+    """Best-effort semantic colors for the interactive terminal surface."""
+    palette = {"cyan": 0, "green": 0, "yellow": 0, "red": 0}
+    try:
+        if not bool(curses.has_colors()):
+            return palette
+        curses.start_color()
+        background = getattr(curses, "COLOR_BLACK", 0)
+        try:
+            curses.use_default_colors()
+            background = -1
+        except Exception:
+            pass
+        specs = (
+            ("cyan", 1, getattr(curses, "COLOR_CYAN", 6)),
+            ("green", 2, getattr(curses, "COLOR_GREEN", 2)),
+            ("yellow", 3, getattr(curses, "COLOR_YELLOW", 3)),
+            ("red", 4, getattr(curses, "COLOR_RED", 1)),
+        )
+        for name, pair, foreground in specs:
+            curses.init_pair(pair, foreground, background)
+            palette[name] = int(curses.color_pair(pair))
+    except Exception:
+        return {"cyan": 0, "green": 0, "yellow": 0, "red": 0}
+    return palette
+
+
+def _curses_line_attr(line: str, curses: Any, palette: Mapping[str, int]) -> int:
+    normal = int(getattr(curses, "A_NORMAL", 0))
+    bold = int(getattr(curses, "A_BOLD", 0))
+    dim = int(getattr(curses, "A_DIM", 0))
+    reverse = int(getattr(curses, "A_REVERSE", 0))
+    attr = normal
+    if line.startswith("ralph workflow"):
+        attr |= bold | int(palette.get("cyan", 0))
+    elif line.startswith(">"):
+        attr |= reverse | bold
+    elif line.startswith("SELECTED") or line.startswith("LOG"):
+        attr |= bold | int(palette.get("cyan", 0))
+    elif line.startswith("  NODE") or set(line.strip()) == {"-"}:
+        attr |= bold
+    elif line.startswith("q quit"):
+        attr |= dim
+    return attr
+
+
+def _curses_token_attr(token: str, base: int, curses: Any, palette: Mapping[str, int]) -> int:
+    """Apply state color to the state token instead of washing out a whole row."""
+    lowered = token.casefold().strip(" ,;[]()")
+    bold = int(getattr(curses, "A_BOLD", 0))
+    if lowered in {"failed", "error", "blocked"} or re.fullmatch(r"failed=[1-9][0-9]*", lowered):
+        return base | bold | int(palette.get("red", 0))
+    if lowered in {"succeeded", "success"} or re.fullmatch(r"succeeded=[0-9]+", lowered):
+        return base | int(palette.get("green", 0))
+    if lowered in {"running", "awaiting-operator"} or re.fullmatch(r"running=[0-9]+", lowered):
+        return base | bold | int(palette.get("cyan", 0))
+    if lowered in {"pending", "cancelled", "warning"} or re.fullmatch(r"pending=[0-9]+", lowered):
+        return base | int(palette.get("yellow", 0))
+    return base
+
+
+def _curses_line_spans(line: str, curses: Any, palette: Mapping[str, int]) -> List[Tuple[str, int]]:
+    base = _curses_line_attr(line, curses, palette)
+    if line.startswith("ralph workflow") or line.startswith("SELECTED") or line.startswith("LOG") or line.startswith("q quit"):
+        return [(line, base)]
+    return [(part, _curses_token_attr(part, base, curses, palette)) for part in re.split(r"(\s+)", line) if part]
+
+
+def _paint_curses_frame(
+    stdscr: Any,
+    frame: str,
+    curses: Any,
+    palette: Optional[Mapping[str, int]] = None,
+) -> None:
     try:
         stdscr.erase()
     except Exception:
@@ -2833,13 +3305,25 @@ def _paint_curses_frame(stdscr: Any, frame: str, curses: Any) -> None:
     height = _curses_height(stdscr)
     width = _curses_width(stdscr)
     error_type = getattr(curses, "error", Exception)
+    colors = palette if palette is not None else _init_curses_palette(curses)
     for row, line in enumerate(frame.split("\n")[:height]):
-        try:
-            stdscr.addnstr(row, 0, line, max(width - 1, 0))
-        except error_type:
-            continue
-        except Exception:
-            continue
+        col = 0
+        for text, attr in _curses_line_spans(line, curses, colors):
+            remaining = max(width - 1 - col, 0)
+            if remaining <= 0:
+                break
+            try:
+                stdscr.addnstr(row, col, text, remaining, attr)
+            except TypeError:
+                try:
+                    stdscr.addnstr(row, col, text, remaining)
+                except Exception:
+                    continue
+            except error_type:
+                continue
+            except Exception:
+                continue
+            col += min(len(text), remaining)
     try:
         stdscr.refresh()
     except Exception:

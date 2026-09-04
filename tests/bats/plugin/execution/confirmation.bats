@@ -85,7 +85,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -105,7 +104,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -124,7 +122,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -146,7 +143,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -161,7 +157,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -176,7 +171,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -191,7 +185,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -212,7 +205,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -228,7 +220,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -243,7 +234,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -260,7 +250,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \
@@ -282,7 +271,6 @@ preview_id() {
     --kind plan \
     --plan "$FAKE_PROJECT/plan.md" \
     --runtime cursor \
-    --agent implementation \
     --model "composer-2" \
     --workspace "$FAKE_PROJECT" \
     --workspace-root "$FAKE_STATE" \

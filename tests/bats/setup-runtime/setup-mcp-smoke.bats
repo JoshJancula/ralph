@@ -142,3 +142,66 @@ EOF
   jq -e '.mcpServers.mota.env | has("MOTA_BOT_TOKEN") | not' "$config_path"
   jq -e '.mcpServers.mota.env | has("MOTA_ORG_MCP_KEY") | not' "$config_path"
 }
+
+# Clean MCP fixture: project + runtime with an unrelated native agent present.
+_fixture_mcp_with_native_agent() {
+  local project_dir="$1"
+  local runtime_dir="$2"
+  local marker="${3:-native-agent-marker-do-not-touch}"
+  prepare_project_with_mcp_server "$project_dir"
+  mkdir -p "$runtime_dir/agents/my-native-agent"
+  printf '%s\n' "$marker" >"$runtime_dir/agents/my-native-agent/my-native-agent.md"
+  mkdir -p "$runtime_dir/agents/research"
+  printf 'stale-six\n' >"$runtime_dir/agents/research/research.md"
+}
+
+@test "clean setup mcp continues and preserve unrelated native agent" {
+  command -v jq >/dev/null || skip "jq required"
+  [ -f "$SETUP_MCP_SH" ] || skip "setup-mcp.sh missing"
+
+  local project_dir="$TEST_TEMP_DIR/project"
+  local runtime_dir="$project_dir/.cursor"
+  local marker="native-agent-marker-do-not-touch"
+  _fixture_mcp_with_native_agent "$project_dir" "$runtime_dir" "$marker"
+
+  run bash -c "
+    set -euo pipefail
+    source \"$SETUP_HELPERS_SH\"
+    source \"$SETUP_MCP_SH\"
+    export BUNDLE_ROOT=\"$BUNDLE_ROOT\"
+    setup_mcp_cursor \"$runtime_dir\" \"$project_dir\"
+  "
+  [ "$status" -eq 0 ]
+  jq -e '.mcpServers.ralph.env.RALPH_MODE == "hybrid"' "$runtime_dir/mcp.json"
+  [ -f "$runtime_dir/agents/my-native-agent/my-native-agent.md" ]
+  [[ "$(cat "$runtime_dir/agents/my-native-agent/my-native-agent.md")" == "$marker" ]]
+  [ -f "$runtime_dir/agents/research/research.md" ]
+  [[ "$(cat "$runtime_dir/agents/research/research.md")" == "stale-six" ]]
+  [ ! -d "$runtime_dir/agents/architect" ]
+  [ ! -d "$runtime_dir/agents/qa" ]
+  [ ! -d "$runtime_dir/agents/security" ]
+}
+
+@test "clean setup mcp leaves native agent dirs untouched for claude" {
+  command -v jq >/dev/null || skip "jq required"
+  [ -f "$SETUP_MCP_SH" ] || skip "setup-mcp.sh missing"
+
+  local project_dir="$TEST_TEMP_DIR/project-claude"
+  local runtime_dir="$project_dir/.claude"
+  local marker="claude-mcp-native-agent-keep"
+  _fixture_mcp_with_native_agent "$project_dir" "$runtime_dir" "$marker"
+
+  run bash -c "
+    set -euo pipefail
+    source \"$SETUP_HELPERS_SH\"
+    source \"$SETUP_MCP_SH\"
+    export BUNDLE_ROOT=\"$BUNDLE_ROOT\"
+    setup_mcp_claude \"$runtime_dir\" \"$project_dir\"
+  "
+  [ "$status" -eq 0 ]
+  jq -e '.mcpServers.ralph.env.RALPH_MODE == "hybrid"' "$project_dir/.mcp.json"
+  [ -f "$runtime_dir/agents/my-native-agent/my-native-agent.md" ]
+  [[ "$(cat "$runtime_dir/agents/my-native-agent/my-native-agent.md")" == "$marker" ]]
+  [ ! -e "$runtime_dir/agents.md" ]
+  [ ! -d "$runtime_dir/agents/architect" ]
+}

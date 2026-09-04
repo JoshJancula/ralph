@@ -32,6 +32,13 @@
         "command": ".cursor/hooks/pre-tool-exploration-policy.sh",
         "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
       }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop-continuation.sh",
+        "loop_limit": 5,
+        "timeout": 5400
+      }
     ]
   },
   "version": 1

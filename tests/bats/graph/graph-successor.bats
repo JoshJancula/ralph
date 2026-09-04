@@ -51,7 +51,7 @@ write_base_graph() {
           stage: {
             id: "source",
             runtime: "cursor",
-            agent: "research",
+            instructions: "Research the source input.",
             workspaceMode: "snapshot",
             outputArtifacts: [{path: "shared/input.md", required: true}]
           }
@@ -63,7 +63,7 @@ write_base_graph() {
           stage: {
             id: "left",
             runtime: "cursor",
-            agent: "implementation",
+            instructions: "Implement the left-hand change.",
             workspaceMode: "snapshot",
             writeScopes: ["src/**"],
             inputArtifacts: [{path: "shared/input.md", required: true}],
@@ -77,7 +77,7 @@ write_base_graph() {
           stage: {
             id: "right",
             runtime: "claude",
-            agent: "implementation",
+            instructions: "Implement the right-hand change.",
             workspaceMode: "snapshot",
             inputArtifacts: [{path: "shared/input.md", required: true}],
             outputArtifacts: [{path: "shared/right.md", required: true}]
@@ -110,7 +110,7 @@ write_base_graph() {
 init_predecessor() {
   write_base_graph "$OLD_GRAPH"
   cp "$OLD_GRAPH" "$NEW_GRAPH"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
 }
 
 mark_node() {
@@ -123,7 +123,7 @@ mark_node() {
   fi
   jq -n --arg id "$node_id" --arg aid "$aid" --arg state "$state" --argjson extra "$extra_json" '
     {
-      schemaVersion: 2,
+      schemaVersion: 3,
       nodeId: $id,
       status: $state,
       lastAttemptId: $aid,
@@ -257,13 +257,12 @@ pipeline:
   stages:
     - id: source
       runtime: cursor
-      agent: research
       workspaceMode: snapshot
       produces:
         - path: shared/input.md
     - id: left
       runtime: cursor
-      agent: implementation
+      instructions: Implement the left-hand change.
       workspaceMode: snapshot
       dependsOn:
         - source
@@ -273,7 +272,6 @@ pipeline:
         - path: shared/left.md
     - id: right
       runtime: claude
-      agent: implementation
       workspaceMode: snapshot
       dependsOn:
         - source
@@ -283,7 +281,6 @@ pipeline:
         - path: shared/right.md
     - id: sink
       runtime: cursor
-      agent: implementation
       workspaceMode: snapshot
       dependsOn:
         - left
@@ -322,7 +319,7 @@ init_cli_predecessor() {
   write_cli_plan
   compile_cli_plan "$OLD_GRAPH"
   cp "$OLD_GRAPH" "$NEW_GRAPH"
-  graph_state_init_run_v2 "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
 }
 
 @test "successor evidence reuses unchanged succeeded nodes" {
@@ -637,6 +634,8 @@ init_cli_predecessor() {
   [ "$(printf '%s' "$output" | jq -r '.create')" = "false" ]
   [ "$(printf '%s' "$output" | jq -r '.readOnly')" = "true" ]
   [ "$(printf '%s' "$output" | jq -r '.predecessorRunId')" = "$RUN_ID" ]
+  [[ "$(printf '%s' "$output" | jq -r '.nextCommand')" == *"bash .ralph/graph-run.sh successor"*"--create"* ]]
+  [ "$(printf '%s' "$output" | jq -r '.nextCommandArgv[-1]')" = "--create" ]
   [ "$(node_reuse "$output" source)" = "true" ]
   [ "$(node_reuse "$output" left)" = "true" ]
   [ "$(node_reuse "$output" right)" = "true" ]
@@ -653,7 +652,7 @@ init_cli_predecessor() {
   before="$(predecessor_snapshot)"
   awk '
     /id: left/ { in_left=1 }
-    in_left && /agent: implementation/ { sub(/implementation/, "qa"); in_left=0 }
+    in_left && /instructions: Implement the left-hand change\./ { sub(/left-hand/, "qa"); in_left=0 }
     { print }
   ' "$PLAN_FILE" >"$TMPD/changed.plan.md"
   mv "$TMPD/changed.plan.md" "$PLAN_FILE"
@@ -705,7 +704,7 @@ init_cli_predecessor() {
 @test "successor cli refuses an ambiguous --from selector" {
   init_cli_predecessor
   succeed_all
-  graph_state_init_run_v2 "$WORKSPACE" "other-ns" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
+  graph_state_init_run "$WORKSPACE" "other-ns" "$RUN_ID" "$PLAN_FILE" "$OLD_GRAPH" 2 >/dev/null
   before="$(predecessor_snapshot)"
   run successor_cmd --from "$RUN_ID" --plan "$PLAN_FILE"
   [ "$status" -ne 0 ]

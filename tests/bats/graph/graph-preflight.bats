@@ -55,7 +55,7 @@ write_graph() {
           stage: {
             id: "impl",
             runtime: "claude",
-            agent: "implementation",
+            role: "implementation",
             workspaceMode: "snapshot"
           }
         }
@@ -160,7 +160,6 @@ pipeline:
   stages:
     - id: impl
       runtime: claude
-      agent: implementation
       workspaceMode: snapshot
 todos:
   - id: impl-1
@@ -181,7 +180,6 @@ pipeline:
   stages:
     - id: impl
       runtime: claude
-      agent: implementation
       workspaceMode: shared
       writeScopes:
         - src/**
@@ -231,7 +229,7 @@ EOF
 }
 
 @test "preflight report worktree fails without git or a clean repository" {
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"codex","agent":"implementation","workspaceMode":"worktree","writeScopes":["src/**"],"agentGitAccess":"off"}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"codex","role":"implementation","workspaceMode":"worktree","writeScopes":["src/**"],"agentGitAccess":"off"}}]}'
   export GRAPH_PREFLIGHT_UNAVAILABLE=git
   write_cli_stub "$BIN_DIR/codex" codex ok
   run graph_preflight_report "$GRAPH" "$PROJECT"
@@ -257,14 +255,14 @@ EOF
 
 @test "preflight report shared mutation without acknowledgement fails and with acknowledgement warns" {
   write_cli_stub "$BIN_DIR/claude" claude ok
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"shared","writeScopes":["src/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"shared","writeScopes":["src/**"]}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r '.outcome')" = "fail" ]
   [ "$(finding_status "$output" "workspace-mode:impl")" = "fail" ]
   finding_category_has "$output" workspace-mode fail
 
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"shared","writeScopes":["src/**"],"parallelMutation":"allow","acknowledgeSharedMutationRisk":true}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"shared","writeScopes":["src/**"],"parallelMutation":"allow","acknowledgeSharedMutationRisk":true}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "workspace-mode:impl")" = "warn" ]
@@ -272,7 +270,7 @@ EOF
 }
 
 @test "preflight report write scopes fail when the runtime cannot enforce them" {
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"not-a-runtime","agent":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"not-a-runtime","role":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "write-scopes:impl")" = "fail" ]
@@ -282,13 +280,13 @@ EOF
 
 @test "preflight report write scopes pass for an isolated mutating node and reject control-path globs" {
   write_cli_stub "$BIN_DIR/claude" claude ok
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "write-scopes:impl")" = "pass" ]
   finding_category_has "$output" write-scopes pass
 
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"snapshot","writeScopes":[".ralph/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"snapshot","writeScopes":[".ralph/**"]}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "write-scopes:impl")" = "fail" ]
@@ -310,7 +308,7 @@ EOF
   [ "$(finding_status "$output" "approval:claude")" = "pass" ]
   finding_category_has "$output" approval pass
 
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"unknown-runtime","agent":"implementation","workspaceMode":"snapshot"}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"unknown-runtime","role":"implementation","workspaceMode":"snapshot"}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "approval:unknown-runtime")" = "fail" ]
@@ -336,7 +334,7 @@ EOF
   [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .summary')" == *"authentication is missing"* ]]
 
   write_cli_stub "$BIN_DIR/agy" antigravity empty-models
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","agent":"implementation","workspaceMode":"snapshot","model":"Gemini 3 Pro"}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","role":"implementation","workspaceMode":"snapshot","model":"Gemini 3 Pro"}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
@@ -345,17 +343,110 @@ EOF
 
 @test "preflight report model auth preserves exact Antigravity model strings" {
   write_cli_stub "$BIN_DIR/agy" antigravity ok
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","agent":"implementation","workspaceMode":"snapshot","model":"Gemini 3 Pro"}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","role":"implementation","workspaceMode":"snapshot","model":"Gemini 3 Pro"}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "model-auth:impl")" = "pass" ]
   [ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .evidence')" = "model=Gemini 3 Pro" ]
 
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","agent":"implementation","workspaceMode":"snapshot","model":"gemini-3-pro"}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","role":"implementation","workspaceMode":"snapshot","model":"gemini-3-pro"}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
   [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .repair')" == *"exact display string"* ]]
+}
+
+@test "preflight report model admission runs available unavailable and unlisted-model fixtures for all five runtimes" {
+  # cursor: available model passes, unlisted model fails against the exact --list-models catalog.
+  write_cli_stub "$BIN_DIR/cursor-agent" cursor ok
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"cursor","role":"implementation","workspaceMode":"snapshot","model":"gpt-5"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "pass" ]
+
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"cursor","role":"implementation","workspaceMode":"snapshot","model":"test-model"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
+  [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .summary')" == *"not in the runtime catalog"* ]]
+
+  # opencode: available model passes, unlisted model fails; missing cli is unavailable.
+  # opencode's catalog is id-shaped (no spaces), unlike Antigravity's display strings,
+  # so it needs its own stub rather than write_cli_stub's shared "models" fixture.
+  cat >"$BIN_DIR/opencode" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  --help|help|-h)
+    printf '%s\n' "Usage: opencode" "  --permission-prompt-tool <name>"
+    exit 0
+    ;;
+  models)
+    printf '%s\n' "ollama-cloud/kimi-k2.7-code" "anthropic/claude-opus-4.6"
+    exit 0
+    ;;
+esac
+exit 3
+EOF
+  chmod +x "$BIN_DIR/opencode"
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"opencode","role":"implementation","workspaceMode":"snapshot","model":"anthropic/claude-opus-4.6"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "pass" ]
+
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"opencode","role":"implementation","workspaceMode":"snapshot","model":"unlisted-model"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
+
+  rm -f "$BIN_DIR/opencode"
+  export GRAPH_PREFLIGHT_CLI_OPENCODE="$TMPD/missing-opencode"
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"opencode","role":"implementation","workspaceMode":"snapshot","model":"anthropic/claude-opus-4.6"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
+  [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .summary')" == *"CLI is not available"* ]]
+  unset GRAPH_PREFLIGHT_CLI_OPENCODE
+
+  # codex: no non-billable model catalog exists, so a declared model warns rather than
+  # being fail-closed on a probe Ralph cannot run for free.
+  write_cli_stub "$BIN_DIR/codex" codex ok
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"codex","role":"implementation","workspaceMode":"snapshot","model":"o1"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "warn" ]
+  [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .summary')" == *"cannot be confirmed against a catalog"* ]]
+
+  # antigravity: unavailable when the cli is missing entirely.
+  export GRAPH_PREFLIGHT_CLI_ANTIGRAVITY="$TMPD/missing-agy"
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"antigravity","role":"implementation","workspaceMode":"snapshot","model":"Gemini 3 Pro"}}]}'
+  run graph_preflight_report "$GRAPH" "$PROJECT"
+  [ "$status" -eq 0 ]
+  [ "$(finding_status "$output" "model-auth:impl")" = "fail" ]
+  [[ "$(printf '%s' "$output" | jq -r '.findings[] | select(.id=="model-auth:impl") | .summary')" == *"CLI is not available"* ]]
+}
+
+@test "plan-todo parser accepts antigravity as a graph node runtime alongside the other four" {
+  local plan="$TMPD/antigravity-runtime.plan.md"
+  cat >"$plan" <<'EOF'
+---
+name: antigravity-runtime
+namespace: antigravity-runtime
+execution: graph
+pipeline:
+  stages:
+    - id: impl
+      runtime: antigravity
+      model: "Gemini 3 Pro"
+todos:
+  - id: impl-1
+    stage: impl
+    content: work
+    status: pending
+---
+EOF
+  run bash -c "source '$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh'; plan_pipeline_validate_plan '$plan'"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"invalid runtime"* ]]
 }
 
 @test "preflight report commands fail for a missing or non-allowlisted gate executable" {
@@ -400,7 +491,7 @@ JSON
     {"name":"fast","steps":[{"name":"ok","command":"true"}]}
   ],
   "nodes":[
-    {"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"snapshot"}},
+    {"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"snapshot"}},
     {"id":"g1","type":"gate","dependsOn":["impl"],"derivedFrom":"stage","stage":{"id":"g1","type":"gate","profile":"fast"}}
   ],
   "edges":[{"from":"impl","to":"g1","reasons":["declared"]}]
@@ -428,7 +519,7 @@ JSON
   [ "$(finding_status "$output" "publish:integrate")" = "fail" ]
   finding_category_has "$output" publish fail
 
-  write_graph '{"publishMode":"on-verified","nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"shared"}},{"id":"integrate","type":"integrate","dependsOn":["impl"],"derivedFrom":"stage","stage":{"id":"integrate","type":"integrate","workspaceMode":"shared"}}]}'
+  write_graph '{"publishMode":"on-verified","nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"shared"}},{"id":"integrate","type":"integrate","dependsOn":["impl"],"derivedFrom":"stage","stage":{"id":"integrate","type":"integrate","workspaceMode":"shared"}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(finding_status "$output" "publish:isolation")" = "fail" ]
@@ -437,7 +528,7 @@ JSON
 @test "preflight report is read-only and never starts a model session" {
   local marker="$TMPD/argv" before after ambient
   write_cli_stub "$BIN_DIR/claude" claude ok "$marker"
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
   ambient="$PROJECT/.cursor/mcp.json"
   mkdir -p "$PROJECT/.cursor"
   printf '{}\n' >"$ambient"
@@ -456,13 +547,13 @@ JSON
 
 @test "preflight report overall outcome is fail when any finding fails and warn when only warnings exist" {
   write_cli_stub "$BIN_DIR/claude" claude ok
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","agent":"implementation","workspaceMode":"shared","writeScopes":["src/**"],"parallelMutation":"allow","acknowledgeSharedMutationRisk":true}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"claude","role":"implementation","workspaceMode":"shared","writeScopes":["src/**"],"parallelMutation":"allow","acknowledgeSharedMutationRisk":true}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r '.outcome')" = "warn" ]
   finding_category_has "$output" workspace-mode warn
 
-  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"not-a-runtime","agent":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
+  write_graph '{"nodes":[{"id":"impl","type":"agent","dependsOn":[],"derivedFrom":"stage","stage":{"id":"impl","runtime":"not-a-runtime","role":"implementation","workspaceMode":"snapshot","writeScopes":["src/**"]}}]}'
   run graph_preflight_report "$GRAPH" "$PROJECT"
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r '.outcome')" = "fail" ]
@@ -529,7 +620,7 @@ JSON
   write_plan
   write_dispatch_stub
   export GRAPH_PREFLIGHT_CLI_CLAUDE="$TMPD/missing-claude"
-  run run_cmd "$PLAN"
+  run run_cmd "$PLAN" --yes --no-tui
   [ "$status" -ne 0 ]
   printf '%s\n' "$output" | grep -q 'preflight failed'
   printf '%s\n' "$output" | grep -q 'model-auth'
@@ -547,7 +638,7 @@ JSON
   write_plan_shared_ack
   write_dispatch_stub
   export RALPH_ALLOW_NESTED_RUNS=1
-  run run_cmd "$PLAN"
+  run run_cmd "$PLAN" --yes --no-tui
   [ "$status" -ne 0 ]
   ! printf '%s\n' "$output" | grep -q 'preflight failed'
   [ -d "$PROJECT/.ralph-workspace/graph-runs/preflight-cli" ]

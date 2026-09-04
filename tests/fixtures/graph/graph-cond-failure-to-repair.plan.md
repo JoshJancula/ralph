@@ -4,7 +4,6 @@ pipeline:
   stages:
     - id: implement
       runtime: cursor
-      agent: implementation
       produces:
         - path: shared/output.md
     - id: gate-review
@@ -15,7 +14,6 @@ pipeline:
         - path: shared/output.md
     - id: publish
       runtime: cursor
-      agent: implementation
       dependsOn:
         - id: gate-review
           condition: passed
@@ -23,7 +21,6 @@ pipeline:
         - path: shared/output.md
     - id: repair
       runtime: cursor
-      agent: implementation
       dependsOn:
         - id: gate-review
           condition: changes-required

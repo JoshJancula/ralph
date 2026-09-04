@@ -1,6 +1,38 @@
 {
   "name": "Orch JSON Characterization",
   "namespace": "orch-json-characterization",
+  "stages": [
+    {
+      "id": "research",
+      "runtime": "cursor",
+      "nativeSubagents": "inherit",
+      "outputArtifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+          "required": true
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+          "required": true
+        }
+      ],
+      "plan": "{{WS}}/.ralph-workspace/orchestration-plans/orch-json-characterization/orch-json-characterization-01-research.plan.md"
+    },
+    {
+      "id": "review",
+      "runtime": "codex",
+      "nativeSubagents": "off",
+      "inputArtifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
+          "required": true
+        }
+      ],
+      "plan": ".ralph-workspace/plans/review-stage.plan.md"
+    }
+  ],
   "parallelStages": [
     [
       "research"
@@ -8,37 +40,5 @@
     [
       "review"
     ]
-  ],
-  "stages": [
-    {
-      "agent": "research",
-      "artifacts": [
-        {
-          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-          "required": true
-        }
-      ],
-      "id": "research",
-      "outputArtifacts": [
-        {
-          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-          "required": true
-        }
-      ],
-      "plan": "{{WS}}/.ralph-workspace/orchestration-plans/orch-json-characterization/orch-json-characterization-01-research.plan.md",
-      "runtime": "cursor"
-    },
-    {
-      "agent": "code-review",
-      "id": "review",
-      "inputArtifacts": [
-        {
-          "path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md",
-          "required": true
-        }
-      ],
-      "plan": ".ralph-workspace/plans/review-stage.plan.md",
-      "runtime": "codex"
-    }
   ]
 }
