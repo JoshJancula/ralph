@@ -10,6 +10,7 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
 CLI="$REPO_ROOT/bundle/.ralph/workflow-cli.sh"
 STATE_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-state.sh"
+SEQ_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-engine-sequential.sh"
 STATUS_SCHEMA="$REPO_ROOT/bundle/.ralph/schemas/workflow-status.schema.json"
 ARTIFACT_SCHEMA_PY="$REPO_ROOT/bundle/.ralph/python/artifact_json_schema.py"
 OPVIEW="$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-operator-view.sh"
@@ -40,6 +41,10 @@ teardown_file() {
 setup() {
   unset RALPH_WORKFLOW_STATE_ROOT RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT
   unset WORKFLOW_STATE_FIXED_RUN_ID WORKFLOW_STATE_FIXED_NOW WORKFLOW_STATE_SKIP_FSYNC
+  unset RALPH_SEQ_STAGE_LOG_DIR RALPH_GRAPH_NODE_LOG_DIR RALPH_GRAPH_NODE_LOG_PATH
+  # Isolate from ambient workflow-stage identity when bats runs under a live plan.
+  unset RALPH_WORKFLOW_RUN_ID RALPH_WORKFLOW_STAGE_ID RALPH_WORKFLOW_STAGE_ATTEMPT
+  unset RALPH_WORKFLOW_REGISTRY_RUN RALPH_WORKFLOW_ACTION_NONCE
   export WORKFLOW_STATE_SKIP_FSYNC=1
   # shellcheck source=/dev/null
   source "$STATE_LIB"
@@ -697,6 +702,8 @@ write_dep_stage_logs() {
     }' >"$graph_dir/nodes/${stage_id}.json"
 }
 
+# Fixture-only writer for pure CLI unit paths (follow, combined parsing, etc.).
+# Prefer workflow_seq_prepare_stage_logs for production-path coverage.
 write_seq_stage_logs() {
   local state_root="$1" run_id="$2" stage_id="$3" attempt_n="$4"
   local registry_run="$state_root/workflow-runs/$run_id"
@@ -704,6 +711,22 @@ write_seq_stage_logs() {
   mkdir -p "$log_dir"
   printf 'seq-agent-1\nseq-agent-2\n' >"$log_dir/agent.log"
   printf 'seq-runner-1\n' >"$log_dir/runner.log"
+}
+
+# Thin harness: call the Sequential production prepare/export helpers, then
+# append bytes the way run-plan / orchestrator would under RALPH_GRAPH_NODE_LOG_DIR.
+# Sets PREPARE_SEQ_LOG_DIR in the caller (must not run under command substitution).
+prepare_seq_stage_logs_via_production() {
+  local state_root="$1" run_id="$2" stage_id="$3" attempt_n="$4"
+  local registry_run="$state_root/workflow-runs/$run_id"
+  local log_dir
+  # shellcheck source=/dev/null
+  source "$SEQ_LIB"
+  log_dir="$(workflow_seq_prepare_stage_logs "$registry_run" "$stage_id" "$attempt_n")" || return 1
+  workflow_seq_export_stage_log_dir "$log_dir" || return 1
+  printf 'prod-agent-1\nprod-agent-2\n' >>"$RALPH_GRAPH_NODE_LOG_DIR/agent.log"
+  printf 'prod-runner-1\n' >>"$RALPH_SEQ_STAGE_LOG_DIR/runner.log"
+  PREPARE_SEQ_LOG_DIR="$log_dir"
 }
 
 write_dep_events() {
@@ -889,6 +912,127 @@ write_seq_events() {
   jq '.state = "succeeded"' "$stage_file" >"${stage_file}.tmp" && mv "${stage_file}.tmp" "$stage_file"
   wait_pid_exit "$follow_pid"
   grep -q 'seq-agent-live' "$out"
+}
+
+@test "production prepare_stage_logs writes engine logs readable by select and CLI streams" {
+  local run_id="run-20260826T110000Z-logs-prod"
+  local registry_run log_dir selected
+  seed_sequential_plan_run "$CASE" "$run_id"
+  registry_run="$CASE/workflow-runs/$run_id"
+
+  PREPARE_SEQ_LOG_DIR=""
+  prepare_seq_stage_logs_via_production "$CASE" "$run_id" "implement" 1
+  log_dir="$PREPARE_SEQ_LOG_DIR"
+  [[ "$log_dir" == "$registry_run/engine/logs/stages/implement/attempt-1" ]]
+  [ -f "$log_dir/agent.log" ]
+  [ -f "$log_dir/runner.log" ]
+  [ ! -L "$log_dir" ]
+  [ ! -L "$log_dir/agent.log" ]
+  [ ! -L "$log_dir/runner.log" ]
+  grep -qx 'prod-agent-1' "$log_dir/agent.log"
+  grep -qx 'prod-runner-1' "$log_dir/runner.log"
+  [ "${RALPH_GRAPH_NODE_LOG_DIR:-}" = "$log_dir" ]
+  [ "${RALPH_SEQ_STAGE_LOG_DIR:-}" = "$log_dir" ]
+
+  selected="$(workflow_seq_stage_log_select "$registry_run" "implement" 1 agent)"
+  [ "$selected" = "$log_dir/agent.log" ]
+  selected="$(workflow_seq_stage_log_select "$registry_run" "implement" 1 supervisor)"
+  [ "$selected" = "$log_dir/runner.log" ]
+  selected="$(workflow_seq_stage_log_select "$registry_run" "implement" 1 combined)"
+  [ "$(printf '%s\n' "$selected" | wc -l | tr -d ' ')" -eq 2 ]
+  [[ "$selected" == *"$log_dir/runner.log"* ]]
+  [[ "$selected" == *"$log_dir/agent.log"* ]]
+
+  run --separate-stderr env RALPH_PROJECT_ROOT="$FIX_PROJECT" RALPH_PLAN_WORKSPACE_ROOT="$CASE" \
+    RALPH_HOME="$FIX_ROOT/home" bash "$CLI" logs "$run_id" --stage implement --attempt 1 --stream agent --no-follow
+  [ "$status" -eq 0 ]
+  [ "$output" = $'prod-agent-1\nprod-agent-2' ]
+
+  run --separate-stderr env RALPH_PROJECT_ROOT="$FIX_PROJECT" RALPH_PLAN_WORKSPACE_ROOT="$CASE" \
+    RALPH_HOME="$FIX_ROOT/home" bash "$CLI" logs "$run_id" --stage implement --attempt 1 --stream supervisor --no-follow
+  [ "$status" -eq 0 ]
+  [ "$output" = $'prod-runner-1' ]
+
+  wf_cli logs "$run_id" --stage implement --stream combined --no-follow
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"prod-runner-1"* ]]
+  [[ "$output" == *"prod-agent-1"* ]]
+
+  workflow_seq_clear_stage_log_dir_exports
+  [ -z "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]
+  [ -z "${RALPH_SEQ_STAGE_LOG_DIR:-}" ]
+}
+
+@test "prepare_stage_logs rejects symlink attempt dirs and unsafe stage ids" {
+  local run_id="run-20260826T110000Z-logs-contain"
+  local registry_run engine_dir outside
+  seed_sequential_plan_run "$CASE" "$run_id"
+  registry_run="$CASE/workflow-runs/$run_id"
+  engine_dir="$registry_run/engine"
+  outside="$CASE/outside-logs"
+  mkdir -p "$outside" "$engine_dir/logs/stages"
+  # shellcheck source=/dev/null
+  source "$SEQ_LIB"
+
+  run workflow_seq_prepare_stage_logs "$registry_run" "../escape" 1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a usable path component"* || "$stderr" == *"not a usable path component"* ]]
+  [ ! -e "$engine_dir/logs/stages/../escape" ]
+
+  run workflow_seq_prepare_stage_logs "$registry_run" "foo/bar" 1
+  [ "$status" -ne 0 ]
+
+  ln -s "$outside" "$engine_dir/logs/stages/implement"
+  run workflow_seq_prepare_stage_logs "$registry_run" "implement" 1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"symlink"* || "$stderr" == *"symlink"* ]]
+  [ ! -f "$outside/attempt-1/agent.log" ]
+  [ ! -f "$outside/attempt-1/runner.log" ]
+}
+
+@test "orch soft wrapper surfaces prepare failure warning" {
+  local run_id="run-20260826T110000Z-logs-soft-prepare"
+  local registry_run engine_dir outside stage_json
+  seed_sequential_plan_run "$CASE" "$run_id"
+  registry_run="$CASE/workflow-runs/$run_id"
+  engine_dir="$registry_run/engine"
+  outside="$CASE/outside-logs"
+  stage_json='{"id":"implement","runtime":"cursor"}'
+  mkdir -p "$outside" "$engine_dir/logs/stages/implement"
+  ln -s "$outside" "$engine_dir/logs/stages/implement/attempt-2"
+  # shellcheck source=/dev/null
+  source "$SEQ_LIB"
+
+  run --separate-stderr workflow_seq_orch_journal_before \
+    "$registry_run" implement 0 "$stage_json" 0 ""
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"Warning: sequential stage log prepare failed"* ]]
+  [ -z "${RALPH_SEQ_STAGE_LOG_DIR:-}" ]
+  [ -z "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]
+}
+
+@test "stage_log_select ignores symlink log files under engine" {
+  local run_id="run-20260826T110000Z-logs-symlink-select"
+  local registry_run log_dir outside selected
+  seed_sequential_plan_run "$CASE" "$run_id"
+  registry_run="$CASE/workflow-runs/$run_id"
+  outside="$CASE/outside-agent.log"
+  printf 'secret-outside\n' >"$outside"
+  # shellcheck source=/dev/null
+  source "$SEQ_LIB"
+
+  log_dir="$(workflow_seq_prepare_stage_logs "$registry_run" "implement" 1)"
+  printf 'real-agent\n' >"$log_dir/agent.log"
+  rm -f "$log_dir/agent.log"
+  ln -s "$outside" "$log_dir/agent.log"
+
+  selected="$(workflow_seq_stage_log_select "$registry_run" "implement" 1 agent)"
+  [ -z "$selected" ]
+
+  run --separate-stderr env RALPH_PROJECT_ROOT="$FIX_PROJECT" RALPH_PLAN_WORKSPACE_ROOT="$CASE" \
+    RALPH_HOME="$FIX_ROOT/home" bash "$CLI" logs "$run_id" --stage implement --attempt 1 --stream agent --no-follow
+  [ "$status" -ne 0 ] || [ -z "$output" ]
+  ! printf '%s\n' "$output" | grep -q 'secret-outside'
 }
 
 @test "logs rejects internal namespace selector with no namespace hint" {

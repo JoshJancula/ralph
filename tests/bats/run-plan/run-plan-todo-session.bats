@@ -634,3 +634,131 @@ EOF
   [ "${lines[0]}" = "active" ]
   [ "${lines[1]}" = "sess-reactivate" ]
 }
+
+# --- Permission pause must resume, not restart (regression: PLAN-HOOK-DIET TODO 12) ---
+#
+# The supervisor restores the routing baseline -- clearing RALPH_CURRENT_TODO_*
+# -- before it classifies a permission denial and pauses for the operator. These
+# tests deliberately do NOT keep those variables set, because seeding them by
+# hand is exactly what hid the original defect: the record was persisted with a
+# TODO-less attempt key, never matched on retry, and the TODO restarted fresh in
+# a brand-new session.
+
+todo_session_clear_current_todo_env() {
+  unset RALPH_CURRENT_TODO_LINE RALPH_CURRENT_TODO_ORDINAL \
+    RALPH_CURRENT_TODO_ID RALPH_CURRENT_TODO_HASH
+}
+
+@test "frozen identity keeps the TODO binding across a routing baseline restore" {
+  # shellcheck disable=SC1090
+  source "$HUMAN_CONTINUATION_LIB"
+  todo_session_seed_identity "run-freeze" "hash-freeze" "freeze-todo" "" "opencode"
+  export RALPH_CURRENT_TODO_LINE="12"
+  export RALPH_CURRENT_TODO_ORDINAL="12"
+  ralph_session_todo_create "ses-freeze" "exact" >/dev/null
+
+  ralph_session_todo_identity_freeze
+  # Baseline restore: TODO env gone, RUNTIME back to the run's base runtime.
+  todo_session_clear_current_todo_env
+  export RUNTIME="cursor"
+
+  local record attempt_key
+  record="$(ralph_human_continuation_persist "permission" "allow")"
+  attempt_key="$(jq -r '.attempt_key' <<<"$record")"
+  [[ "$attempt_key" == *"freeze-todo"* ]]
+  [[ "$attempt_key" == *"|12|"* ]]
+  [ "$(jq -r '.identity.todoLine' <<<"$record")" = "12" ]
+  [ "$(jq -r '.identity.runtime' <<<"$record")" = "opencode" ]
+
+  # Next invocation: identity thawed, real TODO env restored by the loop.
+  ralph_session_todo_identity_thaw
+  todo_session_seed_identity "run-freeze" "hash-freeze" "freeze-todo" "" "opencode"
+  export RALPH_CURRENT_TODO_LINE="12"
+  export RALPH_CURRENT_TODO_ORDINAL="12"
+  run ralph_human_continuation_find_pending
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.route' <<<"$output")" = "permission" ]
+}
+
+@test "unfrozen identity after a baseline restore loses the TODO binding" {
+  # Guards the freeze: without it the persisted key is plan-only, which is the
+  # shape seen in the field record that never matched on retry.
+  # shellcheck disable=SC1090
+  source "$HUMAN_CONTINUATION_LIB"
+  todo_session_seed_identity "run-nofreeze" "hash-nofreeze" "nofreeze-todo"
+  export RALPH_CURRENT_TODO_LINE="12"
+  ralph_session_todo_create "ses-nofreeze" "exact" >/dev/null
+  # Retire it so the single-active-manifest fallback cannot rescue the identity.
+  ralph_session_todo_mark_retired "$(ralph_session_todo_manifest_key)" >/dev/null
+  todo_session_clear_current_todo_env
+  rm -f "$RALPH_SESSION_DIR/human-request.json"
+
+  local record
+  record="$(ralph_human_continuation_persist "permission" "allow")"
+  [ "$(jq -r '.identity.todoLine' <<<"$record")" = "null" ]
+}
+
+@test "permission continuation recovers todoLine from a nested todo.line artifact" {
+  # shellcheck disable=SC1090
+  source "$HUMAN_CONTINUATION_LIB"
+  todo_session_seed_identity "run-nested" "hash-nested" "nested-todo"
+  todo_session_clear_current_todo_env
+  export HUMAN_REQUEST_FILE="$RALPH_SESSION_DIR/human-request.json"
+  cat <<'JSON' >"$HUMAN_REQUEST_FILE"
+{
+  "kind": "permission",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "todo": { "line": 12, "text": "narrow the MCP hook scope" }
+}
+JSON
+  local identity
+  identity="$(ralph_human_continuation_resolve_identity)"
+  [ "$(jq -r '.todoLine' <<<"$identity")" = "12" ]
+  unset HUMAN_REQUEST_FILE
+}
+
+@test "todo-continue without a manifest degrades to todo-start instead of failing" {
+  # prepare_invocation is called bare under set -e; returning non-zero here would
+  # abort the whole plan run rather than lose one resume.
+  # shellcheck disable=SC1090
+  source "$HUMAN_CONTINUATION_LIB"
+  todo_session_seed_identity "run-nomanifest" "hash-nomanifest" "nomanifest-todo"
+  export RALPH_CURRENT_TODO_LINE="12"
+  ralph_human_continuation_persist "permission" "allow" >/dev/null
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID \
+    RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  ralph_run_plan_log() { :; }
+
+  run ralph_session_todo_prepare_invocation
+  [ "$status" -eq 0 ]
+
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+  [ "${RALPH_PLAN_CLI_RESUME:-0}" = "0" ]
+}
+
+@test "resumed prompt intro states an approved permission stopped the previous turn" {
+  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh" ] || skip "run-plan-core missing"
+  local helper
+  helper="$(mktemp)"
+  sed -n '/^ralph_run_plan_resume_intro_with_reason()/,/^}/p' \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh" >"$helper"
+  # shellcheck disable=SC1090
+  source "$helper"
+
+  export RALPH_CONTINUATION_ROUTE=permission
+  run ralph_run_plan_resume_intro_with_reason "Continuing the same CLI session (--resume)."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Continuing the same CLI session"* ]]
+  [[ "$output" == *"permission request"* ]]
+  [[ "$output" == *"do not redo work"* ]]
+
+  unset RALPH_CONTINUATION_ROUTE
+  run ralph_run_plan_resume_intro_with_reason "Continuing the same CLI session (--resume)."
+  [ "$status" -eq 0 ]
+  [ "$output" = "Continuing the same CLI session (--resume)." ]
+  rm -f "$helper"
+}

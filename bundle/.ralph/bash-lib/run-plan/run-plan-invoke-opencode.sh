@@ -970,8 +970,38 @@ ralph_run_plan_invoke_opencode() {
     runtime_overlay_set_mcp_effective "false"
   fi
 
+  # Attach the run to a loopback `opencode serve` when the operator can answer
+  # in place, so a permission request suspends one tool call instead of ending
+  # the turn and costing a whole re-invocation.
+  #
+  # Never in graph mode: the scheduler owns its own serve session there, and a
+  # second server would take the run's events away from the one the scheduler
+  # is waiting on.
+  local live_serve_dir="" live_attach_url="" live_watch_pid=""
+  if run_plan_invoke_opencode_serve_graph_enabled; then
+    :
+  elif live_serve_dir="$(run_plan_invoke_opencode_serve_plan_start "$cli" 2>/dev/null)" \
+    && [[ -n "$live_serve_dir" ]] \
+    && live_attach_url="$(run_plan_invoke_opencode_serve_attach_url "$live_serve_dir")"; then
+    if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "OpenCode live approvals active: attached to $live_attach_url (permission requests answered in place)"
+    fi
+    # Belt and braces for an interrupted run: the normal path closes the server
+    # after the invocation, and the group teardown reaps it if the run is
+    # killed, but a runtime cleanup pass must never leave one listening.
+    if declare -F ralph_mcp_overlay_register_runtime_cleanup >/dev/null 2>&1; then
+      ralph_mcp_overlay_register_runtime_cleanup run_plan_invoke_opencode_serve_cleanup
+    fi
+  else
+    live_serve_dir=""
+    live_attach_url=""
+  fi
+
   # `opencode` with no subcommand starts the TUI; headless automation uses `opencode run` (see https://opencode.ai/docs/cli).
   local -a args=(run --agent build)
+  if [[ -n "$live_attach_url" ]]; then
+    args+=(--attach "$live_attach_url")
+  fi
   run_plan_invoke_common_add_model_flag args --model
   run_plan_invoke_common_add_reasoning_effort_flag args opencode "${OPENCODE_PLAN_CLI:-opencode}"
 
@@ -1011,10 +1041,23 @@ ralph_run_plan_invoke_opencode() {
     fi
   }
 
+  if [[ -n "$live_serve_dir" ]]; then
+    run_plan_invoke_opencode_serve_watch_permissions "$live_serve_dir" &
+    live_watch_pid=$!
+  fi
+
   run_plan_invoke_common_execute \
     run_plan_invoke_opencode_cli \
     opencode \
     "Warning: RALPH_PLAN_CLI_RESUME needs python3 to parse JSON and update session-id.opencode.txt; running without it."
+
+  if [[ -n "$live_serve_dir" ]]; then
+    if [[ -n "$live_watch_pid" ]]; then
+      kill "$live_watch_pid" 2>/dev/null || true
+      wait "$live_watch_pid" 2>/dev/null || true
+    fi
+    run_plan_invoke_opencode_serve_close "$live_serve_dir" completion >/dev/null 2>&1 || true
+  fi
 
   if [[ -n "$opencode_config_path" ]]; then
     run_plan_invoke_opencode_config_cleanup
@@ -1041,6 +1084,32 @@ run_plan_invoke_opencode_serve_graph_enabled() {
       ;;
   esac
   [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]
+}
+
+# True when this run can answer a permission request in place, keeping the CLI
+# alive instead of letting it exit and re-running the TODO.
+#
+# `opencode run` exits on a denial, so a plan run's only recovery is to
+# re-invoke -- which costs a turn even when the session resumes. Attaching the
+# run to a local `opencode serve` lets Ralph answer the live request over the
+# server's own protocol, the way an interactive session does.
+#
+# Requires someone who can actually answer: a terminal, or a pre-set decision.
+# Without one there is nobody to prompt, so the run takes the exit-and-resume
+# path instead of blocking forever on a request no one will see.
+run_plan_invoke_opencode_serve_enabled() {
+  if run_plan_invoke_opencode_serve_graph_enabled; then
+    return 0
+  fi
+  case "${RALPH_LIVE_APPROVALS:-auto}" in
+    0|false|no|off)
+      return 1
+      ;;
+  esac
+  if [[ -n "${RALPH_PERMISSION_RESPONSE_DECISION:-}" ]]; then
+    return 0
+  fi
+  [[ -t 0 ]] && [[ -r /dev/tty ]] && [[ -w /dev/tty ]]
 }
 
 _run_plan_invoke_opencode_serve_timeout() {
@@ -1863,8 +1932,8 @@ run_plan_invoke_opencode_serve_capture_from_command() {
     echo "Error: OpenCode serve capture requires a serve command" >&2
     return 1
   fi
-  if ! run_plan_invoke_opencode_serve_graph_enabled; then
-    echo "Error: OpenCode serve approval capture is graph-only" >&2
+  if ! run_plan_invoke_opencode_serve_enabled; then
+    echo "Error: OpenCode serve approval capture needs graph mode or an interactive plan run" >&2
     return 1
   fi
   if ! command -v jq >/dev/null 2>&1; then
@@ -2226,8 +2295,8 @@ run_plan_invoke_opencode_serve_session_start() {
     echo "Error: OpenCode serve session requires a serve command" >&2
     return 1
   fi
-  if ! run_plan_invoke_opencode_serve_graph_enabled; then
-    echo "Error: OpenCode serve approval capture is graph-only" >&2
+  if ! run_plan_invoke_opencode_serve_enabled; then
+    echo "Error: OpenCode serve approval capture needs graph mode or an interactive plan run" >&2
     return 1
   fi
   if ! command -v jq >/dev/null 2>&1; then
@@ -2498,8 +2567,8 @@ run_plan_invoke_opencode_serve_start_or_fallback() {
         ;;
     esac
   done
-  if ! run_plan_invoke_opencode_serve_graph_enabled; then
-    echo "Error: OpenCode serve approval capture is graph-only" >&2
+  if ! run_plan_invoke_opencode_serve_enabled; then
+    echo "Error: OpenCode serve approval capture needs graph mode or an interactive plan run" >&2
     return 1
   fi
   if ! run_plan_invoke_opencode_serve_supported "$cli"; then
@@ -2507,4 +2576,164 @@ run_plan_invoke_opencode_serve_start_or_fallback() {
     return 2
   fi
   run_plan_invoke_opencode_serve_session_start "$cli" "$@"
+}
+
+# --- Live in-band permission approval for plan runs -------------------------
+#
+# `opencode run` exits when a permission is denied, so a plan run's only
+# recovery is to re-invoke the CLI -- a whole turn spent re-reading what the
+# previous turn already knew. Attaching the run to a local `opencode serve`
+# (`opencode run --attach http://127.0.0.1:<port>`) puts the permission request
+# on an event stream Ralph can answer over the server's own reply endpoint, so
+# the agent continues in the same turn the way an interactive session does.
+#
+# These helpers reuse the graph approval transport's primitives -- SSE reader,
+# request capture, decision mapping, reply POST, overlay write -- and add only
+# the plan-run shape: a continuous watcher instead of a single captured request.
+
+_run_plan_invoke_opencode_serve_watch_timeout() {
+  local raw="${RALPH_OPENCODE_SERVE_WATCH_TIMEOUT:-3600}"
+  if [[ "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$raw"
+  else
+    printf '3600'
+  fi
+}
+
+# run_plan_invoke_opencode_serve_plan_start [cli] [serve-args...]
+# Starts a loopback serve for a plan run and prints its session dir. Unlike the
+# graph capture path it does not consume events or wait for a first permission:
+# the run has not started yet, and there may be no permission request at all.
+# Returns 2 when the transport is unavailable, so callers fall back rather than
+# fail the invocation.
+run_plan_invoke_opencode_serve_plan_start() {
+  local cli="${1:-${OPENCODE_PLAN_CLI:-${OPENCODE_CLI:-opencode}}}"
+  shift || true
+  local extra host="127.0.0.1" port pid session_dir timeout
+
+  for extra in "$@"; do
+    case "$extra" in
+      --auto|auto|--dangerously-skip-permissions)
+        echo "Error: OpenCode live approvals reject auto mode" >&2
+        return 1
+        ;;
+    esac
+  done
+  run_plan_invoke_opencode_serve_enabled || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  run_plan_invoke_opencode_serve_supported "$cli" || return 2
+
+  timeout="$(_run_plan_invoke_opencode_serve_timeout)"
+  port="$(_run_plan_invoke_opencode_serve_ephemeral_port)" || return 2
+  session_dir="$(mktemp -d "${TMPDIR:-/tmp}/ralph-opencode-serve-plan.XXXXXX")" || return 2
+  printf '%s\n' "$host" >"$session_dir/host"
+  printf '%s\n' "$port" >"$session_dir/port"
+  printf '%s\n' "starting" >"$session_dir/state"
+
+  "$cli" serve --hostname "$host" --port "$port" "$@" \
+    >"$session_dir/stdout.log" 2>"$session_dir/stderr.log" &
+  pid=$!
+  printf '%s\n' "$pid" >"$session_dir/pid"
+  _run_plan_invoke_opencode_serve_registry_add "$pid"
+  _run_plan_invoke_opencode_serve_session_registry_add "$session_dir"
+
+  if ! _run_plan_invoke_opencode_serve_wait_ready "$host" "$port" "$timeout" "$pid"; then
+    run_plan_invoke_opencode_serve_close "$session_dir" supervisor >/dev/null 2>&1 || true
+    return 2
+  fi
+  printf '%s\n' "listening" >"$session_dir/state"
+  printf '%s\n' "$session_dir"
+}
+
+# run_plan_invoke_opencode_serve_attach_url <session-dir>
+run_plan_invoke_opencode_serve_attach_url() {
+  local session_dir="${1:-}" host port
+  [[ -n "$session_dir" && -d "$session_dir" ]] || return 1
+  host="$(cat "$session_dir/host" 2>/dev/null || true)"
+  port="$(cat "$session_dir/port" 2>/dev/null || true)"
+  [[ -n "$host" && -n "$port" ]] || return 1
+  printf 'http://%s:%s\n' "$host" "$port"
+}
+
+# run_plan_invoke_opencode_live_permission_prompt <captured-request-json>
+# The operator-facing text for one live request. Mirrors the pause prompt's
+# fields so an operator sees the same information either way.
+run_plan_invoke_opencode_live_permission_prompt() {
+  local captured="${1:-}"
+  local permission effect resource prompt
+
+  permission="$(printf '%s' "$captured" | jq -r '.permission // ""')"
+  effect="$(printf '%s' "$captured" | jq -r '.effect // ""')"
+  resource="$(printf '%s' "$captured" | jq -r '.resource // ""')"
+
+  prompt=$'\nPermission request from the running agent (the plan is not paused).\n'
+  prompt+="Runtime: opencode"$'\n'
+  [[ -z "$permission" ]] || prompt+="Classification: ${permission}"$'\n'
+  [[ -z "$effect" ]] || prompt+="Effect: ${effect}"$'\n'
+  [[ -z "$resource" ]] || prompt+="Resource: ${resource}"$'\n'
+  prompt+=$'\nAllow this permission request? [y/N]: '
+  printf '%s' "$prompt"
+}
+
+# run_plan_invoke_opencode_serve_answer_request <session-dir> <captured-json> <index>
+# Asks the operator and replies to one live request. Prints the ralph decision
+# actually sent. Returns 1 when no answer could be obtained, leaving the request
+# unanswered so the runtime's own denial path still applies.
+run_plan_invoke_opencode_serve_answer_request() {
+  local session_dir="${1:-}" captured="${2:-}" index="${3:-1}"
+  local req_dir decision answer
+
+  [[ -n "$session_dir" && -d "$session_dir" ]] || return 1
+  [[ -n "$captured" ]] || return 1
+  # Inherited from run-plan-core in a real run; without it there is no way to
+  # ask, so leave the request to the runtime rather than guessing an answer.
+  declare -F ralph_permission_prompt_operator_decision >/dev/null 2>&1 || return 1
+
+  req_dir="$session_dir/requests/$index"
+  mkdir -p "$req_dir" || return 1
+  cp "$session_dir/host" "$req_dir/host" 2>/dev/null || return 1
+  cp "$session_dir/port" "$req_dir/port" 2>/dev/null || return 1
+  printf '%s\n' "waiting" >"$req_dir/state"
+  printf '%s\n' "$captured" >"$req_dir/request.json"
+
+  answer="$(ralph_permission_prompt_operator_decision \
+    "$(run_plan_invoke_opencode_live_permission_prompt "$captured")")" || return 1
+
+  # allow-once only: a live answer grants this operation, not a standing rule.
+  # Broader lifetimes stay with the operator-facing overlay path.
+  if [[ "$answer" == "allow" ]]; then
+    decision="once"
+  else
+    decision="deny"
+  fi
+  run_plan_invoke_opencode_serve_respond "$req_dir" "$decision" >/dev/null || return 1
+  printf '%s\n' "$decision"
+}
+
+# run_plan_invoke_opencode_serve_watch_permissions <session-dir>
+# Answers permission requests for the life of the attached run. One request at a
+# time, in arrival order; a request nobody answers is left to the runtime.
+run_plan_invoke_opencode_serve_watch_permissions() {
+  local session_dir="${1:-}"
+  local host port line captured index=0 decision
+
+  [[ -n "$session_dir" && -d "$session_dir" ]] || return 1
+  host="$(cat "$session_dir/host" 2>/dev/null || true)"
+  port="$(cat "$session_dir/port" 2>/dev/null || true)"
+  [[ -n "$host" && -n "$port" ]] || return 1
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s' "$line" | jq -e 'type == "object"' >/dev/null 2>&1 || continue
+    run_plan_invoke_opencode_serve_is_permission_event "$line" || continue
+    captured="$(run_plan_invoke_opencode_serve_capture_request "$line" 2>/dev/null)" || continue
+    index=$((index + 1))
+    if decision="$(run_plan_invoke_opencode_serve_answer_request "$session_dir" "$captured" "$index")"; then
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "OpenCode live approval: answered request $index in place (decision=$decision); the agent continues in the same session"
+      fi
+    elif declare -F ralph_run_plan_log >/dev/null 2>&1; then
+      ralph_run_plan_log "WARN: OpenCode live approval could not answer request $index; falling back to the runtime's own denial handling"
+    fi
+  done < <(_run_plan_invoke_opencode_serve_read_sse "$host" "$port" /event "$(_run_plan_invoke_opencode_serve_watch_timeout)")
 }

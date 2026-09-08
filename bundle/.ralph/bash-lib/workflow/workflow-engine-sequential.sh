@@ -365,6 +365,87 @@ workflow_seq_stage_log_select() {
   done < <(workflow_seq_stage_log_rel "$stage_id" "$attempt_n" "$public_stream")
 }
 
+# workflow_seq_stage_attempt_log_dir <registry-run> <stage-id> <attempt-n>
+# Absolute contained directory for a stage attempt's runner/agent logs under
+# engine/logs/stages/<stage>/attempt-<n>/.
+workflow_seq_stage_attempt_log_dir() {
+  local registry_run="$1" stage_id="$2" attempt_n="$3"
+  local engine_dir rel
+  engine_dir="$(workflow_seq_engine_dir "$registry_run")" || return 1
+  if ! [[ "$attempt_n" =~ ^[1-9][0-9]*$|^0$ ]]; then
+    echo "Error: sequential stage log attempt must be a non-negative integer" >&2
+    return 1
+  fi
+  case "$stage_id" in
+    ""|*/*|*\\*|*..*|*$'\n'*|*$'\r'*)
+      echo "Error: sequential stage log stage-id is not a usable path component" >&2
+      return 1
+      ;;
+  esac
+  if ! declare -F ralph_orchestrator_stage_log_rel >/dev/null 2>&1; then
+    # shellcheck source=../orchestrator/orchestrator-logging.sh
+    source "$_WORKFLOW_SEQ_SCRIPT_DIR/../orchestrator/orchestrator-logging.sh"
+  fi
+  rel="$(ralph_orchestrator_stage_log_rel "$stage_id" "$attempt_n" agent)" || return 1
+  printf '%s/%s\n' "$engine_dir" "$(dirname -- "$rel")"
+}
+
+# workflow_seq_prepare_stage_logs <registry-run> <stage-id> <attempt-n>
+# Creates contained regular files for runner.log and agent.log. Prints the
+# absolute attempt log directory. Does not follow symlinks or escape engine/.
+workflow_seq_prepare_stage_logs() {
+  local registry_run="$1" stage_id="$2" attempt_n="$3"
+  local engine_dir log_dir runner agent prefix
+  engine_dir="$(workflow_seq_engine_dir "$registry_run")" || return 1
+  log_dir="$(workflow_seq_stage_attempt_log_dir "$registry_run" "$stage_id" "$attempt_n")" || return 1
+  prefix="$engine_dir/logs/stages/"
+  case "$log_dir" in
+    "$prefix"*) ;;
+    *)
+      echo "Error: sequential stage log dir escapes engine logs/stages: $log_dir" >&2
+      return 1
+      ;;
+  esac
+  if [[ -L "$log_dir" || -L "$(dirname -- "$log_dir")" ]]; then
+    echo "Error: sequential stage log path is a symlink: $log_dir" >&2
+    return 1
+  fi
+  mkdir -p "$log_dir" || return 1
+  runner="$log_dir/runner.log"
+  agent="$log_dir/agent.log"
+  if [[ -L "$runner" || -L "$agent" ]]; then
+    echo "Error: sequential stage log file is a symlink under $log_dir" >&2
+    return 1
+  fi
+  : >>"$runner" || return 1
+  : >>"$agent" || return 1
+  printf '%s\n' "$log_dir"
+}
+
+# workflow_seq_export_stage_log_dir <log-dir>
+# Publish the Sequential attempt log directory so run-plan writes agent.log
+# via RALPH_GRAPH_NODE_LOG_DIR (same contract Dependency uses under
+# logs/nodes/) and orchestrator tees runner output to runner.log.
+workflow_seq_export_stage_log_dir() {
+  local log_dir="${1:-}"
+  [[ -n "$log_dir" && -d "$log_dir" && ! -L "$log_dir" ]] || return 1
+  export RALPH_SEQ_STAGE_LOG_DIR="$log_dir"
+  export RALPH_GRAPH_NODE_LOG_DIR="$log_dir"
+  export RALPH_GRAPH_NODE_LOG_PATH="$log_dir/runner.log"
+  return 0
+}
+
+# workflow_seq_clear_stage_log_dir_exports
+# Drop Sequential-owned log-dir exports after a stage attempt finishes.
+workflow_seq_clear_stage_log_dir_exports() {
+  if [[ -n "${RALPH_SEQ_STAGE_LOG_DIR:-}" ]]; then
+    unset RALPH_SEQ_STAGE_LOG_DIR
+    unset RALPH_GRAPH_NODE_LOG_DIR
+    unset RALPH_GRAPH_NODE_LOG_PATH
+  fi
+  return 0
+}
+
 # workflow_seq_read_event_lines <registry-run>
 workflow_seq_read_event_lines() {
   local registry_run="$1" events_file
@@ -889,6 +970,16 @@ workflow_seq_journal_stage_before() {
   [[ -n "$run_id" ]] && export RALPH_WORKFLOW_RUN_ID="$run_id"
   export RALPH_WORKFLOW_STAGE_ID="$stage_id"
   export RALPH_WORKFLOW_STAGE_ATTEMPT="${stage_id}-${attempt}"
+
+  # Contained public logs: engine/logs/stages/<stage>/attempt-<n>/{runner,agent}.log
+  # Mirror Dependency's RALPH_GRAPH_NODE_LOG_DIR handoff so run-plan writes
+  # agent.log here and orchestrator can tee runner output to runner.log.
+  local log_dir=""
+  if log_dir="$(workflow_seq_prepare_stage_logs "$registry_run" "$stage_id" "$attempt")"; then
+    workflow_seq_export_stage_log_dir "$log_dir" || true
+  else
+    echo "Warning: sequential stage log prepare failed for $stage_id attempt $attempt" >&2
+  fi
   return 0
 }
 
@@ -990,13 +1081,14 @@ workflow_seq_journal_stage_after() {
         --details-json "$(jq -cn --arg id "$stage_id" --arg st "$new_state" '{reason:"stage-finished",stageId:$id,stageState:$st}')" || return 1
       ;;
   esac
+  workflow_seq_clear_stage_log_dir_exports
   return 0
 }
 
 # Soft wrapper used by orchestrator.sh: never changes stage failure semantics.
 # Returns 0 even when journaling fails (logged to stderr); callers ignore status.
 workflow_seq_orch_journal_before() {
-  workflow_seq_journal_stage_before "$@" 2>/dev/null || {
+  workflow_seq_journal_stage_before "$@" || {
     echo "Warning: sequential engine before-stage journal failed (continuing stage)" >&2
     return 0
   }
@@ -1004,8 +1096,9 @@ workflow_seq_orch_journal_before() {
 }
 
 workflow_seq_orch_journal_after() {
-  workflow_seq_journal_stage_after "$@" 2>/dev/null || {
+  workflow_seq_journal_stage_after "$@" || {
     echo "Warning: sequential engine after-stage journal failed (preserving stage result)" >&2
+    workflow_seq_clear_stage_log_dir_exports
     return 0
   }
   return 0
@@ -4409,4 +4502,3 @@ workflow_seq_recover_by_run_id() {
 workflow_seq_cancel_by_run_id() {
   workflow_seq_cancel "$@"
 }
-

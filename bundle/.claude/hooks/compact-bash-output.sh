@@ -12,6 +12,9 @@
 #
 # Gate: RALPH_BASH_COMPACT=1 (default on in native/hybrid when Ralph sets it; RALPH_BASH_COMPACT=0 opts out).
 # Fail-open: never blocks the agent.
+# Killswitch enforcement runs pre-execution in the paired PreToolUse hook
+# (rewrite-bash-command.sh); this PostToolUse hook only compacts output
+# after the command has already run, so it does not evaluate killswitch.
 
 set -uo pipefail
 
@@ -43,6 +46,17 @@ ralph_bash_compact_main() {
   interrupted="$(jq -r '.tool_response.interrupted // false' <<<"$RALPH_BASH_COMPACT_INPUT")"
   is_image="$(jq -r '.tool_response.isImage // false' <<<"$RALPH_BASH_COMPACT_INPUT")"
 
+  # Duration learning inputs (observation only; never gate compaction).
+  local duration_ms="" duration_raw backgrounded="false" fingerprint=""
+  duration_raw="$(jq -r '.duration_ms // empty' <<<"$RALPH_BASH_COMPACT_INPUT")"
+  if [[ "$duration_raw" =~ ^[0-9]+$ ]]; then
+    duration_ms="$duration_raw"
+  fi
+  if jq -e '(.tool_input.run_in_background == true) or ((.tool_response.backgroundTaskId // "") != "")' \
+    <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
+    backgrounded="true"
+  fi
+
   local project_dir compactors_lib
   if ! project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_COMPACT_INPUT)"; then
     ralph_native_hook_debug_log "missing_workspace" "claude:bash_hook" "Bash" "could not resolve project directory"
@@ -55,6 +69,12 @@ ralph_bash_compact_main() {
   fi
   # shellcheck source=/dev/null
   source "$compactors_lib"
+
+  # Pure observation: fingerprint + optional store write. Fail-open; never alters
+  # compaction result, updatedToolOutput, or exit status.
+  fingerprint="$(ralph_native_hook_command_fingerprint "$project_dir" "$command" 2>/dev/null || true)"
+  ralph_native_hook_maybe_record_duration \
+    "$project_dir" "$command" "$fingerprint" "$duration_ms" "$backgrounded" || true
 
   # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
   RALPH_COMPACT_STDOUT="$stdout"
@@ -100,7 +120,9 @@ ralph_bash_compact_main() {
       "$plan_key_fallback" \
       "$plan_key_fallback_reason" \
       "$skip_delivered_bytes" \
-      "$skip_delivered_tokens"
+      "$skip_delivered_tokens" \
+      "$duration_ms" \
+      "$fingerprint"
     ralph_native_hook_fail_open
   fi
 
@@ -144,7 +166,9 @@ ralph_bash_compact_main() {
     "$plan_key_fallback" \
     "$plan_key_fallback_reason" \
     "$delivered_bytes" \
-    "$delivered_tokens"
+    "$delivered_tokens" \
+    "$duration_ms" \
+    "$fingerprint"
 
   ralph_native_hook_emit_claude_post_tool_updated_output \
     "$compact_stdout" \

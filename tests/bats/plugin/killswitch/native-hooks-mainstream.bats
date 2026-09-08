@@ -198,4 +198,11 @@ sentinel_path() {
   [ ! -f "$(sentinel_path)" ]
   jq -e '.permission == "deny"' <<<"$output"
   jq -e '.runtime == "cursor" and .decision == "nudge" and .applied == false' "$RECORD"
+
+  : >"$RECORD"
+  run bash -c "$(hook_env ralph) bash '$CURSOR_NUDGE_HOOK'" <<<"$cursor_nudge"
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+  [ ! -f "$(sentinel_path)" ]
+  ! grep -qi 'deny' "$RECORD"
 }

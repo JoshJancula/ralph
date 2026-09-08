@@ -2,7 +2,7 @@
 
 By default, a plan run uses each assistant's own tools and nothing else. **Ralph mode** is an optional layer on top: it can add Ralph's MCP tools to the run (bounded reads, searches, and shell commands), shrink noisy command output before it reaches the model, and wire in runtime-specific hooks. In `hybrid`, those layers are meant to work together: MCP compaction is authoritative, native adapters are staged where the runtime supports them, and strict-proxy defaults on after preflight. Everything here is opt-in; the default mode is `no`.
 
-This page covers Ralph mode on plan runs (`.ralph/run-plan.sh` / `ralph run-plan`). For wiring the Ralph MCP server into an IDE or other long-lived host, see [MCP.md](MCP.md).
+This page covers Ralph mode on plan runs (`.ralph/run-plan.sh` / `ralph run-plan`). For wiring the Ralph MCP server into an IDE or other long-lived host, see [MCP.md](MCP.md). For the exact per-file inventory of every output-shaping hook (file path, runtime, hook event, tool matcher, controlling env var, and fail-open behavior), see [HOOKS.md](HOOKS.md).
 
 ## The four modes
 

@@ -242,11 +242,57 @@ async function appendTelemetry(options: {
   await Bun.write(logPath, `${JSON.stringify(record)}\n`, { append: true }).catch(() => {});
 }
 
+function commandProfilesScript(libDir: string): string {
+  return `${libDir}/../python/command_profiles.py`;
+}
+
+function stateRootForWorkspace(workspace: string): string {
+  if (process.env.RALPH_PLAN_WORKSPACE_ROOT) {
+    return process.env.RALPH_PLAN_WORKSPACE_ROOT;
+  }
+  return `${workspace}/.ralph-workspace`;
+}
+
+/** OpenCode tool.execute.after has no duration field; pair via callID. */
+async function markInflightStart(
+  libDir: string,
+  workspace: string,
+  command: string,
+  invocationId: string,
+): Promise<void> {
+  if (!libDir || !workspace || !command) return;
+  const script = commandProfilesScript(libDir);
+  const payload = JSON.stringify({
+    state_root: stateRootForWorkspace(workspace),
+    command,
+    invocation_id: invocationId || "",
+  });
+  await runProcess(["python3", script, "mark-start"], { stdin: payload }).catch(() => {});
+}
+
+async function completeInflight(
+  libDir: string,
+  workspace: string,
+  command: string,
+  invocationId: string,
+): Promise<void> {
+  if (!libDir || !workspace) return;
+  const script = commandProfilesScript(libDir);
+  const payload = JSON.stringify({
+    state_root: stateRootForWorkspace(workspace),
+    command: command || "",
+    invocation_id: invocationId || "",
+  });
+  await runProcess(["python3", script, "complete"], { stdin: payload }).catch(() => {});
+}
+
 function nativeResultCompactEnabled(): boolean {
   const nativeResultCompact = process.env.RALPH_NATIVE_RESULT_COMPACT;
   if (nativeResultCompact === "0" || nativeResultCompact === "false") return false;
   if (truthy(nativeResultCompact)) return true;
-  return truthy(process.env.RALPH_BASH_COMPACT) || truthy(process.env.RALPH_PROXY_SHELL_COMPACT);
+  // Shell compaction and exploration-result windowing have different safety
+  // contracts. Do not let an enabled shell path rewrite source-bearing output.
+  return false;
 }
 
 const EXPLORATION_TOOLS = new Set(["read", "grep", "glob", "search", "bash"]);
@@ -347,6 +393,15 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
         throw new Error("Ralph killswitch denied this tool");
       }
       if (input.tool !== "bash") return;
+      const workspace = process.env.WORKSPACE || directory || "";
+      const callId =
+        typeof (input as { callID?: string }).callID === "string"
+          ? (input as { callID?: string }).callID || ""
+          : "";
+      // OpenCode after-hook has no duration field; pair on callID.
+      if (libDir && command) {
+        await markInflightStart(libDir, workspace, command, callId);
+      }
       if (!truthy(process.env.RALPH_BASH_REWRITE)) return;
       if (!libDir) return;
       if (typeof command !== "string" || !command) return;
@@ -359,6 +414,13 @@ export const RalphRuntimeHooks: Plugin = async ({ directory }) => {
 
       if (input.tool === "bash") {
         const command = typeof input.args?.command === "string" ? input.args.command : "";
+        const callId =
+          typeof (input as { callID?: string }).callID === "string"
+            ? (input as { callID?: string }).callID || ""
+            : "";
+        if (libDir) {
+          await completeInflight(libDir, workspace, command, callId);
+        }
         const originalText = typeof output.output === "string" ? output.output : "";
         const originalBytes = byteCount(originalText);
 

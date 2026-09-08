@@ -10,25 +10,29 @@ setup() {
   unset RALPH_BASH_COMPACT RALPH_NATIVE_RESULT_COMPACT RALPH_PROXY_SHELL_COMPACT RALPH_BASH_REWRITE
 }
 
-@test "table: all four modes x all four channels resolve gate and source correctly" {
+@test "table: all four modes x all five channels resolve gate and source correctly" {
   # mode:channel:expectedGate:expectedSource
   local -a table=(
     "no:bash_compact:off:unset_default_off"
     "no:native_result_compact:off:unset_default_off"
     "no:proxy_shell_compact:off:unset_default_off"
     "no:bash_rewrite:off:unset_default_off"
+    "no:auto_background:off:unset_default_off"
     "native:bash_compact:on:mode_default"
     "native:native_result_compact:off:unset_default_off"
     "native:proxy_shell_compact:off:unset_default_off"
     "native:bash_rewrite:off:unset_default_off"
+    "native:auto_background:on:mode_default"
     "ralph:bash_compact:off:unset_default_off"
     "ralph:native_result_compact:off:unset_default_off"
     "ralph:proxy_shell_compact:on:mode_default"
     "ralph:bash_rewrite:off:unset_default_off"
+    "ralph:auto_background:off:unset_default_off"
     "hybrid:bash_compact:on:mode_default"
     "hybrid:native_result_compact:off:unset_default_off"
     "hybrid:proxy_shell_compact:on:mode_default"
     "hybrid:bash_rewrite:off:unset_default_off"
+    "hybrid:auto_background:on:mode_default"
   )
   local row mode channel exp_gate exp_source record
   for row in "${table[@]}"; do
@@ -89,13 +93,13 @@ setup() {
   [ "$output" = "explicit_env" ]
 }
 
-@test "ralph_compaction_gate_provenance_all returns all four channels" {
+@test "ralph_compaction_gate_provenance_all returns all five channels" {
   local records
   records="$(ralph_compaction_gate_provenance_all "hybrid")"
 
-  run jq -e 'length == 4' <<<"$records"
+  run jq -e 'length == 5' <<<"$records"
   [ "$status" -eq 0 ]
-  run jq -e '[.[].channel] | sort == ["bash_compact","bash_rewrite","native_result_compact","proxy_shell_compact"]' <<<"$records"
+  run jq -e '[.[].channel] | sort == ["auto_background","bash_compact","bash_rewrite","native_result_compact","proxy_shell_compact"]' <<<"$records"
   [ "$status" -eq 0 ]
 }
 

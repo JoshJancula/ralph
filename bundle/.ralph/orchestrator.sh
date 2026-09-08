@@ -199,10 +199,12 @@ export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
 # Directory run-plan.sh actually writes its per-plan logs into. Mirrors the
-# RALPH_LOG_DIR selection in run-plan-core.sh: the graph scheduler sets
-# RALPH_GRAPH_NODE_ID so concurrent nodes keep a shared RALPH_ARTIFACT_NS while
-# logging under a per-node subdirectory. Every operator-facing log hint must go
-# through this, or graph-mode failures point at paths that do not exist.
+# RALPH_LOG_DIR selection in run-plan-core.sh: the graph scheduler (and the
+# Sequential engine via workflow_seq_journal_stage_before) set
+# RALPH_GRAPH_NODE_LOG_DIR so concurrent/isolated attempts keep a shared
+# RALPH_ARTIFACT_NS while logging under a per-attempt subdirectory. Every
+# operator-facing log hint must go through this, or failures point at paths
+# that do not exist.
 orch_plan_log_dir() {
   if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
     printf '%s\n' "$RALPH_GRAPH_NODE_LOG_DIR"
@@ -1323,6 +1325,9 @@ orch_stage_execute() {
     fi
   fi
   orch_stage_collect_expected_artifacts "$stage"
+  # Publish this stage's artifact contract as data for the MCP artifact tools,
+  # so instructions never have to restate paths, schemas, or the namespace.
+  orch_stage_write_contract "$WORKSPACE" "$stage" "$stage_id"
 
   if ! orchestrator_validate_stage_agent_plan "$agent" "$plan_rel"; then
     ralph_orchestrator_log "FAIL parse: empty plan for stage JSON: $stage"
@@ -2071,6 +2076,22 @@ orch_stage_run_runner() {
   local _use_tee=0
   local _child_pid=""
   local _exit_status=0
+  # Sequential workflow stages export RALPH_SEQ_STAGE_LOG_DIR (and
+  # RALPH_GRAPH_NODE_LOG_DIR) from workflow_seq_journal_stage_before so
+  # runner output lands in engine/logs/stages/<stage>/attempt-<n>/runner.log.
+  # Dependency/graph single-stage children already redirect the whole process
+  # onto runner.log and do not set RALPH_SEQ_STAGE_LOG_DIR.
+  local _runner_log_file="$LOG_FILE"
+  if [[ -n "${RALPH_SEQ_STAGE_LOG_DIR:-}" \
+    && -d "${RALPH_SEQ_STAGE_LOG_DIR}" \
+    && ! -L "${RALPH_SEQ_STAGE_LOG_DIR}" ]]; then
+    _runner_log_file="${RALPH_SEQ_STAGE_LOG_DIR}/runner.log"
+    if [[ -L "$_runner_log_file" ]]; then
+      _runner_log_file="$LOG_FILE"
+    else
+      : >>"$_runner_log_file" 2>/dev/null || _runner_log_file="$LOG_FILE"
+    fi
+  fi
   if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] \
     && ([[ -t 1 ]] || [[ "${ORCHESTRATOR_PARALLEL_PREFIX_STREAM:-0}" == "1" ]]) \
     && command -v tee >/dev/null 2>&1; then
@@ -2090,7 +2111,7 @@ orch_stage_run_runner() {
         env -u RALPH_AGENT_TOOL_ACCESS -u RALPH_NATIVE_HOOKS \
         "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" 2>&1
       printf '%s' "$?" > "$_runner_exitfile" 2>/dev/null || true
-    } | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$LOG_FILE") &
+    } | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$_runner_log_file") &
     _child_pid=$!
     # The runner PID is written by the first command in the pipeline (the subshell),
     # but we need to write it from within the subshell. Since we don't have direct
@@ -2110,7 +2131,7 @@ orch_stage_run_runner() {
   fi
   ralph_process_scope_exec stage orchestrator \
     env -u RALPH_AGENT_TOOL_ACCESS -u RALPH_NATIVE_HOOKS \
-    "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1 &
+    "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" >>"$_runner_log_file" 2>&1 &
   _child_pid=$!
   orch_record_runner_pid "$_child_pid"
   wait "$_child_pid"

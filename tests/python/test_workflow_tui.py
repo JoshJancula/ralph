@@ -168,19 +168,25 @@ class TestFixedWorkflowStatusFixtures(unittest.TestCase):
             wt.deferred_progress_stage_ids(snapshot),
             frozenset({"implement-r1", "review-r1"}),
         )
+        revealed = wt.revealed_progress_stages(snapshot)
+        self.assertEqual([stage.id for stage in revealed], ["review"])
+        # Deferred queued conditionals must not count as visible queued work.
+        self.assertEqual(sum(stage.state == "queued" for stage in revealed), 0)
         self.assertEqual(
-            [stage.id for stage in wt.revealed_progress_stages(snapshot)],
-            ["review"],
+            sum(stage.state == "queued" for stage in snapshot.stages),
+            2,
         )
 
         branch["state"] = "running"
         branch["attempt"] = 1
         snapshot = wt.parse_status_snapshot(payload)
         self.assertEqual(wt.deferred_progress_stage_ids(snapshot), frozenset())
+        revealed = wt.revealed_progress_stages(snapshot)
         self.assertEqual(
-            [stage.id for stage in wt.revealed_progress_stages(snapshot)],
+            [stage.id for stage in revealed],
             ["review", "implement-r1", "review-r1"],
         )
+        self.assertEqual(sum(stage.state == "queued" for stage in revealed), 1)
 
     def test_stage_order_uses_public_index_and_source_order_as_tiebreaker(self) -> None:
         payload = fixture_payload("sequential-task-running.json")

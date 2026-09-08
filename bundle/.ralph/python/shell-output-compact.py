@@ -55,6 +55,14 @@ FAMILY_MAVEN_BUILD = "maven_build"
 FAMILY_GRADLE_BUILD = "gradle_build"
 FAMILY_GENERIC_LARGE = "generic_large"
 
+# Source-output families: these commands return content the agent asked for
+# (paths, directory entries), not progress noise, so summarizing them destroys
+# the answer and forces a re-run. There is deliberately no environment
+# variable to re-enable compaction of these families; source output is never
+# summarized on the shell path. Operators who want source output windowed
+# already have that control through RALPH_NATIVE_RESULT_COMPACT.
+SOURCE_OUTPUT_FAMILIES = frozenset({FAMILY_FIND, FAMILY_LS, FAMILY_TREE})
+
 _GENERIC_LARGE_MIN_BYTES = 4096
 _GENERIC_LARGE_MIN_LINES = 80
 _GENERIC_LARGE_HEAD_LINES = 30
@@ -252,6 +260,8 @@ def compact_shell_output(
     if family_entry is None and _command_allows_shape_fallback(command):
         family_id = detect_output_shape(combined_original)
         family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
+    if family_id in SOURCE_OUTPUT_FAMILIES:
+        return _not_compacted(command, stdout, stderr, exit_status)
     if family_entry is None:
         generic_result = (
             _generic_size_fallback(command, stdout, stderr, exit_status, combined_original)
@@ -1369,9 +1379,8 @@ def _compact_tsc(
 
     if exit_status != 0 and error_lines:
         parts = [f"tsc errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:20])
-        if len(error_lines) > 20:
-            parts.append(f"... and {len(error_lines) - 20} more error(s)")
+        # Every distinct TS error code and location must survive compaction.
+        parts.extend(error_lines)
         output = "\n".join(parts)
         return output, "", True
 
@@ -1470,9 +1479,9 @@ def _compact_pytest(
         parts = [f"pytest failures (exit {exit_status}) for: {command.strip()}"]
         if passed_count > 0:
             parts.append(f"({passed_count} test(s) passing omitted)")
-        parts.extend(failed_tests[:30])
-        if len(failed_tests) > 30:
-            parts.append(f"... and {len(failed_tests) - 30} more failed test(s)")
+        # Every distinct failed/errored test identifier must survive compaction;
+        # never truncate this list, only the passing-test noise above it.
+        parts.extend(failed_tests)
         output = "\n".join([p for p in parts if p.strip()])
         return output, "", True
 
@@ -1534,6 +1543,7 @@ def _compact_go_test(
     lines = text.splitlines()
 
     test_lines = []
+    failed_test_names = []
     passed_count = 0
     failed_count = 0
 
@@ -1544,11 +1554,17 @@ def _compact_go_test(
         elif line.startswith("FAIL"):
             test_lines.append(line)
             failed_count += 1
+        elif line.strip().startswith("--- FAIL:"):
+            # Individual failing subtest/test identifier, e.g. "--- FAIL: TestFoo (0.00s)".
+            failed_test_names.append(line)
 
-    if exit_status != 0 and (failed_count > 0 or any("FAIL" in l for l in lines)):
+    if exit_status != 0 and (
+        failed_count > 0 or failed_test_names or any("FAIL" in l for l in lines)
+    ):
         parts = [f"go test failures (exit {exit_status}) for: {command.strip()}"]
         if passed_count > 0:
             parts.append(f"({passed_count} test(s) passing omitted)")
+        parts.extend(failed_test_names)
         parts.extend([l for l in test_lines if "FAIL" in l])
         output = "\n".join([p for p in parts if p.strip()])
         return output, "", True
@@ -1706,7 +1722,9 @@ def _compact_cargo_build(
 
     for line in lines:
         lower = line.lower()
-        if re.search(r"(?:error|failed)", lower) and "error:" in line:
+        # rustc emits both "error: <message>" and "error[E0308]: <message>";
+        # both forms, plus the final "aborting due to ..." line, must be kept.
+        if re.search(r"^\s*error(?:\[[a-z0-9]+\])?:", lower) or "aborting due to" in lower:
             error_lines.append(line)
         elif re.search(r"^\s*warning", lower):
             warning_lines.append(line)
@@ -1715,7 +1733,7 @@ def _compact_cargo_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"cargo build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
         if warning_lines:
             parts.append(f"({len(warning_lines)} warning(s) omitted)")
         output = "\n".join(parts)
@@ -1753,7 +1771,9 @@ def _compact_maven_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"maven build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
+        # Preserve the trailing BUILD FAILURE / test-count summary alongside errors.
+        parts.extend(summary_lines)
         output = "\n".join(parts)
         return output, "", True
 
@@ -1789,7 +1809,9 @@ def _compact_gradle_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"gradle build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
+        # Preserve the trailing BUILD FAILED summary alongside the error lines.
+        parts.extend(summary_lines)
         output = "\n".join(parts)
         return output, "", True
 

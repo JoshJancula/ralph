@@ -2439,6 +2439,12 @@ def raw_artifacts(items: list[dict]) -> list[dict]:
         schema = as_text(item.get("schema", ""))
         if schema:
             entry["schema"] = schema
+        # Optional stable handle the agent addresses the artifact by through the
+        # MCP artifact tools. Omitted by default; the stage-contract generator
+        # then derives it from the filename stem.
+        name = as_text(item.get("name", ""))
+        if name:
+            entry["name"] = name
         result.append(entry)
     return result
 
@@ -4242,7 +4248,7 @@ def build_approval_orch_stage(stage: dict) -> dict:
     requires = raw_artifacts(stage.get("requires", []))
     if requires:
         out["inputArtifacts"] = [
-            {key: value for key, value in item.items() if key in {"path", "schema", "required"}}
+            {key: value for key, value in item.items() if key in {"path", "schema", "required", "name"}}
             for item in requires
         ]
     return out
@@ -4347,7 +4353,7 @@ def build_orch_stage(stage: dict, stage_todos: list) -> dict:
     requires = raw_artifacts(stage.get("requires", []))
     if requires:
         out["inputArtifacts"] = [
-            {key: value for key, value in item.items() if key in {"path", "schema", "required"}}
+            {key: value for key, value in item.items() if key in {"path", "schema", "required", "name"}}
             for item in requires
         ]
     loop_back = as_text(stage.get("loopBackTo", ""))

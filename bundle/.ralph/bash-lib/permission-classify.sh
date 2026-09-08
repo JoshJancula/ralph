@@ -575,6 +575,44 @@ meta = {
   printf '%s\n' "$out"
 }
 
+# Ask the operator to allow or deny one permission request on the terminal.
+# Prints "allow" or "deny" on stdout; returns 1 when no answer could be read,
+# which is not the same as a deny and must never be recorded as one.
+#
+# Shared by the pause-and-resume path and the live in-band approval path so
+# both honor RALPH_PERMISSION_RESPONSE_DECISION and read the terminal the same
+# way. The prompt itself goes to /dev/tty, never stdout: stdout belongs to the
+# runtime's output pipeline.
+ralph_permission_prompt_operator_decision() {
+  local prompt_text="${1:-}"
+  local decision="" read_rc=0
+
+  if [[ -n "${RALPH_PERMISSION_RESPONSE_DECISION:-}" ]]; then
+    case "$(printf '%s' "$RALPH_PERMISSION_RESPONSE_DECISION" | tr '[:upper:]' '[:lower:]')" in
+      y|yes|allow) printf 'allow\n' ;;
+      *) printf 'deny\n' ;;
+    esac
+    return 0
+  fi
+
+  { [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; } || return 1
+
+  printf '%s' "$prompt_text" >/dev/tty
+  # The CLI process may have left the terminal in raw or non-blocking mode.
+  # Reset to canonical blocking mode and drain any buffered keystrokes that
+  # accumulated while the agent was running; both calls are no-op on failure.
+  stty sane </dev/tty 2>/dev/null || true
+  while IFS= read -r -t 0 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
+  IFS= read -r decision </dev/tty || read_rc=$?
+  if [[ "$read_rc" -ne 0 ]]; then
+    return 1
+  fi
+  case "$(printf '%s' "$decision" | tr '[:upper:]' '[:lower:]')" in
+    y|yes|allow) printf 'allow\n' ;;
+    *) printf 'deny\n' ;;
+  esac
+}
+
 # Best-effort path pattern for OpenCode permission approval.
 ralph_permission_opencode_external_directory_pattern() {
   local blocked_path="${1:-}"

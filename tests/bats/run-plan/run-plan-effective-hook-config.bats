@@ -125,9 +125,52 @@ setup() {
   [ "$output" = "gate_disabled" ]
 }
 
-@test "resolve_all returns exactly four channel records for a runtime" {
+@test "resolve_all returns exactly five channel records for a runtime" {
   local records
   records="$(ralph_effective_hook_config_resolve_all "claude" "hybrid")"
-  run jq -e 'length == 4' <<<"$records"
+  run jq -e 'length == 5' <<<"$records"
   [ "$status" -eq 0 ]
+  run jq -e '[.[].channel] | sort == ["auto_background","bash_compact","bash_rewrite","native_result_compact","proxy_shell_compact"]' <<<"$records"
+  [ "$status" -eq 0 ]
+}
+
+@test "auto_background: on and effective for claude native and hybrid" {
+  local record mode
+  for mode in native hybrid; do
+    record="$(ralph_effective_hook_config_resolve "auto_background" "claude" "$mode")"
+    run jq -r '.enabled' <<<"$record"
+    [ "$output" = "true" ]
+    run jq -r '.effective' <<<"$record"
+    [ "$output" = "true" ]
+    run jq -r '.requestedSource' <<<"$record"
+    [ "$output" = "mode_default" ]
+    run jq -r '.reason' <<<"$record"
+    [[ "$output" == proven_channel:* ]]
+  done
+}
+
+@test "auto_background: off for mode no and mode ralph" {
+  local record mode
+  for mode in no ralph; do
+    record="$(ralph_effective_hook_config_resolve "auto_background" "claude" "$mode")"
+    run jq -r '.enabled' <<<"$record"
+    [ "$output" = "false" ]
+    run jq -r '.effective' <<<"$record"
+    [ "$output" = "false" ]
+    run jq -r '.reason' <<<"$record"
+    [ "$output" = "gate_disabled" ]
+  done
+}
+
+@test "auto_background: enabled but not effective on unsupported runtimes" {
+  local record runtime
+  for runtime in cursor codex opencode; do
+    record="$(ralph_effective_hook_config_resolve "auto_background" "$runtime" "hybrid")"
+    run jq -r '.enabled' <<<"$record"
+    [ "$output" = "true" ]
+    run jq -r '.effective' <<<"$record"
+    [ "$output" = "false" ]
+    run jq -r '.reason' <<<"$record"
+    [ "$output" = "channel_unsupported_on_runtime" ]
+  done
 }

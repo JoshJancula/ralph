@@ -530,6 +530,143 @@ def verify_stage_artifact_schemas(
             ) from exc
 
 
+def artifact_name_from_path(path: str) -> str:
+    """Derive the agent-facing artifact handle from its path.
+
+    The filename stem, minus a trailing ".schema"-style suffix chain, e.g.
+    ".ralph-workspace/artifacts/ns/trade-intents.json" -> "trade-intents".
+    """
+    base = os.path.basename(path)
+    stem = base.split(".", 1)[0] if "." in base else base
+    return stem
+
+
+def resolve_artifact_abs_path(rel_path: str, *, workspace: str, state_root: str) -> str:
+    """Absolute location of a workspace-relative artifact path.
+
+    Mirrors verify_step_artifacts: paths under .ralph-workspace/ resolve against
+    the plan state root when one is configured, everything else against the
+    workspace. Resolution happens here, once, because the orchestrator and the
+    MCP server disagree about what RALPH_PLAN_WORKSPACE_ROOT means -- the
+    contract carries the answer so neither has to guess.
+    """
+    if os.path.isabs(rel_path):
+        return rel_path
+    if state_root and rel_path.startswith(".ralph-workspace/"):
+        return os.path.join(state_root.rstrip("/"), rel_path[len(".ralph-workspace/"):])
+    return os.path.join(workspace.rstrip("/"), rel_path)
+
+
+def _contract_entry(
+    item: dict[str, Any],
+    *,
+    artifact_ns: str,
+    plan_key: str,
+    stage_id: str,
+    workspace: str = "",
+    state_root: str = "",
+) -> dict[str, Any] | None:
+    raw_path = str(item.get("path", "") or "")
+    if not raw_path:
+        return None
+    expanded = expand_artifact_tokens(
+        raw_path,
+        artifact_ns=artifact_ns,
+        plan_key=plan_key,
+        stage_id=stage_id,
+    )
+    name = str(item.get("name", "") or "") or artifact_name_from_path(expanded)
+    entry: dict[str, Any] = {
+        "name": name,
+        "path": expanded,
+        "required": bool(item.get("required", True)),
+        "format": "json" if expanded.endswith(".json") else "text",
+    }
+    schema = str(item.get("schema", "") or "")
+    if schema:
+        entry["schema"] = schema
+    if workspace:
+        entry["resolvedPath"] = resolve_artifact_abs_path(
+            expanded, workspace=workspace, state_root=state_root
+        )
+    return entry
+
+
+def build_stage_contract(
+    stage: dict[str, Any],
+    *,
+    stage_id: str,
+    artifact_ns: str = "",
+    plan_key: str = "",
+    workspace: str = "",
+    state_root: str = "",
+) -> dict[str, Any]:
+    """Build the agent-facing artifact contract for one stage.
+
+    Paths are emitted already expanded, so no {{TOKEN}} ever reaches an
+    agent-facing surface. Names must be unique within each direction; a
+    collision is a workflow-authoring error and is reported as such, since the
+    agent addresses artifacts by name alone.
+    """
+    plan_key = plan_key or artifact_ns
+
+    def collect(fields: tuple[str, ...], direction: str) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        seen_names: dict[str, str] = {}
+        for field in fields:
+            for item in stage.get(field, []) or []:
+                if not isinstance(item, dict):
+                    continue
+                entry = _contract_entry(
+                    item,
+                    artifact_ns=artifact_ns,
+                    plan_key=plan_key,
+                    stage_id=stage_id,
+                    workspace=workspace,
+                    state_root=state_root,
+                )
+                if entry is None or entry["path"] in seen_paths:
+                    continue
+                prior = seen_names.get(entry["name"])
+                if prior is not None and prior != entry["path"]:
+                    raise ValueError(
+                        f"stage {stage_id} {direction}: duplicate artifact name "
+                        f"{entry['name']!r} for {prior} and {entry['path']}; "
+                        f"add an explicit `name:` to one of them"
+                    )
+                seen_paths.add(entry["path"])
+                seen_names[entry["name"]] = entry["path"]
+                entries.append(entry)
+        return entries
+
+    return {
+        "stageId": stage_id,
+        "artifactNs": artifact_ns,
+        "produces": collect(("artifacts", "outputArtifacts"), "produces"),
+        "requires": collect(("inputArtifacts",), "requires"),
+    }
+
+
+def validate_artifact_text(artifact_text: str, schema_abs: str) -> None:
+    """Validate candidate artifact text against a schema document on disk.
+
+    Raises ValueError with a location-tagged message. Used by the MCP artifact
+    write path to reject bad content *before* it reaches the artifact
+    directory, and by the validate-artifact CLI subcommand.
+    """
+    if not artifact_text.strip():
+        raise ValueError("artifact content is empty")
+    schema_doc = load_schema_document(schema_abs)
+    try:
+        assert_supported_schema(schema_doc, "$")
+        validate_json_text(artifact_text, schema_doc)
+    except SchemaValidationError as exc:
+        raise ValueError(f"location={exc.json_path}: {exc.message}") from exc
+    except UnsupportedSchemaKeywordError as exc:
+        raise ValueError(f"location={exc.schema_path}: {exc}") from exc
+
+
 def _cmd_validate_orch_paths(args: argparse.Namespace) -> int:
     with open(args.orchestration, encoding="utf-8") as handle:
         orchestration = json.load(handle)
@@ -583,6 +720,56 @@ def _cmd_validate_final_output(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_validate_artifact(args: argparse.Namespace) -> int:
+    try:
+        if args.file == "-":
+            artifact_text = sys.stdin.read()
+        else:
+            with open(args.file, encoding="utf-8") as handle:
+                artifact_text = handle.read()
+    except OSError as exc:
+        print(f"cannot read artifact: {exc}", file=sys.stderr)
+        return 1
+    try:
+        validate_artifact_text(artifact_text, args.schema)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_stage_contract(args: argparse.Namespace) -> int:
+    try:
+        stage = json.loads(args.stage_json)
+    except json.JSONDecodeError as exc:
+        print(f"stage JSON is not valid: {exc}", file=sys.stderr)
+        return 1
+    stage_id = args.stage_id or str(stage.get("id", "") or "")
+    plan_key = args.plan_key or args.artifact_ns
+    try:
+        contract = build_stage_contract(
+            stage,
+            stage_id=stage_id,
+            artifact_ns=args.artifact_ns,
+            plan_key=plan_key,
+            workspace=args.workspace,
+            state_root=args.state_root,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    payload = json.dumps(contract, indent=2, sort_keys=False) + "\n"
+    if args.out and args.out != "-":
+        out_dir = os.path.dirname(args.out)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+    else:
+        sys.stdout.write(payload)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ralph artifact JSON schema tools")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -616,6 +803,43 @@ def main(argv: list[str] | None = None) -> int:
     validate_final.add_argument("--text", default="")
     validate_final.add_argument("--artifact", action="append", default=[])
     validate_final.set_defaults(func=_cmd_validate_final_output)
+
+    validate_artifact = subparsers.add_parser(
+        "validate-artifact",
+        help="Validate one JSON artifact (file or stdin) against a schema",
+    )
+    validate_artifact.add_argument("--schema", required=True)
+    validate_artifact.add_argument(
+        "--file",
+        required=True,
+        help='Artifact file path, or "-" to read candidate content from stdin.',
+    )
+    validate_artifact.set_defaults(func=_cmd_validate_artifact)
+
+    stage_contract = subparsers.add_parser(
+        "stage-contract",
+        help="Emit the agent-facing artifact contract for one orchestration stage",
+    )
+    stage_contract.add_argument("--stage-json", required=True)
+    stage_contract.add_argument("--stage-id", default="")
+    stage_contract.add_argument("--artifact-ns", default="")
+    stage_contract.add_argument("--plan-key", default="")
+    stage_contract.add_argument(
+        "--workspace",
+        default="",
+        help="Workspace root; when given, each entry carries a resolvedPath.",
+    )
+    stage_contract.add_argument(
+        "--state-root",
+        default="",
+        help="Absolute path that .ralph-workspace/ resolves to, when not <workspace>/.ralph-workspace.",
+    )
+    stage_contract.add_argument(
+        "--out",
+        default="-",
+        help='Destination file, or "-" for stdout.',
+    )
+    stage_contract.set_defaults(func=_cmd_stage_contract)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -7,6 +7,7 @@ import copy
 import json
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -307,6 +308,48 @@ class FilteringTests(unittest.TestCase):
             ("review", "implement-r1", "review-r1"),
         )
 
+    def test_command_catalog_omits_conditional_routes_until_they_are_entered(
+        self,
+    ) -> None:
+        payload = copy.deepcopy(fixture_payload("sequential-task-running.json"))
+        payload["run"]["mode"] = "dependency"
+        root = payload["stages"][0]
+        root.update(id="review", state="running", dependencies=[])
+        branch = payload["stages"][1]
+        branch.update(
+            id="implement-r1",
+            state="queued",
+            attempt=0,
+            dependencies=[{"stageId": "review", "condition": "changes-required"}],
+        )
+        child = copy.deepcopy(branch)
+        child.update(
+            id="review-r1",
+            index=2,
+            dependencies=[{"stageId": "implement-r1", "condition": None}],
+        )
+        payload["stages"] = [root, branch, child]
+        state = wi.initial_ui_state(
+            wt.view_from_snapshot(wt.parse_status_snapshot(payload))
+        )
+        commands = wi.workflow_command_lines(state)
+        catalog_start = commands.index("# All stage logs and artifacts")
+        catalog = commands[catalog_start:]
+        self.assertIn("# review (running)", catalog)
+        catalog_text = "\n".join(catalog)
+        self.assertNotIn("implement-r1", catalog_text)
+        self.assertNotIn("review-r1", catalog_text)
+
+        branch["state"] = "running"
+        branch["attempt"] = 1
+        state = wi.apply_refresh(state, wt.parse_status_snapshot(payload))
+        commands = wi.workflow_command_lines(state)
+        catalog_start = commands.index("# All stage logs and artifacts")
+        catalog = commands[catalog_start:]
+        self.assertIn("# review (running)", catalog)
+        self.assertIn("# implement-r1 (running)", catalog)
+        self.assertIn("# review-r1 (queued)", catalog)
+
     def test_incremental_filter_narrows_visible_stages(self) -> None:
         state = wi.initial_ui_state(sequential_view())
         editing = wi.apply_keys(state, ["/", "r", "e", "s"])
@@ -585,6 +628,93 @@ class FooterContractTests(unittest.TestCase):
                 before,
                 f"footer advertises {action.key!r} but it produced no state change",
             )
+
+
+class SelectionLogTargetTests(unittest.TestCase):
+    """Selection and stream changes must retarget WorkflowLogState via reconcile.
+
+    Prove that apply_key navigation and stream cycling reset offsets/inode/seen
+    so a prior missing pane cannot keep stale stage/stream identity.
+    """
+
+    def _seeded_implement_state(self) -> wi.WorkflowUiState:
+        state = wi.initial_ui_state(sequential_view())
+        self.assertEqual(state.view.selected_stage_id, "implement")
+        return replace(
+            state,
+            log_state=replace(
+                state.log_state,
+                stage_id="implement",
+                attempt=1,
+                selected_stream="agent",
+                log_offset=99,
+                log_inode=42,
+                log_seen=True,
+            ),
+        )
+
+    def test_up_and_k_retarget_log_state_and_reset_cursor(self) -> None:
+        for key in ("k", "KEY_UP"):
+            with self.subTest(key=key):
+                moved = wi.apply_key(self._seeded_implement_state(), key)
+                self.assertEqual(moved.view.selected_stage_id, "research")
+                self.assertEqual(moved.log_state.stage_id, "research")
+                self.assertEqual(moved.log_state.attempt, 1)
+                self.assertEqual(moved.log_state.log_offset, 0)
+                self.assertIsNone(moved.log_state.log_inode)
+                self.assertFalse(moved.log_state.log_seen)
+                self.assertEqual(moved.log_state.selected_stream, "agent")
+
+    def test_down_and_j_retarget_log_state_and_reset_cursor(self) -> None:
+        state = wi.initial_ui_state(sequential_view())
+        state = wi.apply_key(state, "k")
+        self.assertEqual(state.view.selected_stage_id, "research")
+        state = replace(
+            state,
+            log_state=replace(
+                state.log_state,
+                stage_id="research",
+                attempt=1,
+                log_offset=77,
+                log_inode=11,
+                log_seen=True,
+            ),
+        )
+        for key in ("j", "KEY_DOWN"):
+            with self.subTest(key=key):
+                moved = wi.apply_key(state, key)
+                self.assertEqual(moved.view.selected_stage_id, "implement")
+                self.assertEqual(moved.log_state.stage_id, "implement")
+                self.assertEqual(moved.log_state.log_offset, 0)
+                self.assertIsNone(moved.log_state.log_inode)
+                self.assertFalse(moved.log_state.log_seen)
+
+    def test_stream_cycle_under_log_focus_resets_cursor(self) -> None:
+        state = wi.apply_key(self._seeded_implement_state(), "l")
+        self.assertEqual(state.focus, wi.FOCUS_LOG)
+        self.assertTrue(state.log_state.focused)
+        # Re-seed cursor after focus toggle so the stream cycle is the reset cause.
+        state = replace(
+            state,
+            log_state=replace(
+                state.log_state,
+                log_offset=55,
+                log_inode=9,
+                log_seen=True,
+                selected_stream="agent",
+            ),
+        )
+        cycled = wi.apply_key(state, "s")
+        self.assertEqual(cycled.log_state.selected_stream, "supervisor")
+        self.assertEqual(cycled.log_state.stage_id, "implement")
+        self.assertEqual(cycled.log_state.log_offset, 0)
+        self.assertIsNone(cycled.log_state.log_inode)
+        self.assertFalse(cycled.log_state.log_seen)
+        again = wi.apply_key(cycled, "s")
+        self.assertEqual(again.log_state.selected_stream, "combined")
+        self.assertEqual(again.log_state.log_offset, 0)
+        self.assertIsNone(again.log_state.log_inode)
+        self.assertFalse(again.log_state.log_seen)
 
 
 class DependencyModeTests(unittest.TestCase):

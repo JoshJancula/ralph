@@ -515,17 +515,20 @@ require_python3() {
   [ "$(printf '%s' "$output" | jq -r '.[0].resource')" = "src/lib.ts" ]
 }
 
-@test "opencode approval request does not start serve outside graph mode" {
+@test "opencode approval request does not start serve with no operator and no graph node" {
   require_python3
   local events_file="$TEST_TMPDIR/events.jsonl"
   local launched="$TEST_TMPDIR/fake-launched"
   write_events_file "$events_file" "$(permission_event_json)"
   write_fake_opencode_serve "$events_file" "" "$launched"
   unset RALPH_GRAPH_NODE_ID RALPH_GRAPH_APPROVAL
+  # Plan runs may also use this transport, but only when someone can answer;
+  # bats has no terminal and no pre-set decision, so nothing may start.
+  unset RALPH_PERMISSION_RESPONSE_DECISION
 
   run run_plan_invoke_opencode_serve_capture_from_command "$BIN_DIR/opencode"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"graph-only"* ]]
+  [[ "$output" == *"graph mode or an interactive plan run"* ]]
   [ ! -f "$launched" ]
 }
 

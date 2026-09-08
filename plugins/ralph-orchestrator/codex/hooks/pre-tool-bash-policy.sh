@@ -203,12 +203,17 @@ ralph_codex_pre_tool_main() {
   command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
   [[ -n "$command" ]] || ralph_codex_pre_tool_fail_open
 
-  local workspace plan_key rewritten_command
+  local workspace plan_key rewritten_command invocation_id
   workspace="$(ralph_codex_pre_tool_workspace)" || ralph_codex_pre_tool_fail_open
   ralph_codex_killswitch_from_input "$RALPH_CODEX_PRE_TOOL_INPUT" "$workspace"
   command -v python3 >/dev/null 2>&1 || ralph_codex_pre_tool_fail_open
   [[ -n "$workspace" && -d "$workspace" ]] || ralph_codex_pre_tool_fail_open
   plan_key="$(ralph_codex_pre_tool_plan_key)"
+
+  # Codex PostToolUse does not deliver duration_ms; pair via tool_use_id.
+  # Mark before rewrite so the stored command is the agent's original intent.
+  invocation_id="$(jq -r '.tool_use_id // empty' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
+  ralph_native_hook_mark_inflight "$workspace" "$command" "$invocation_id" || true
 
   rewritten_command=""
 

@@ -132,6 +132,7 @@ Commands:
   setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
   safety       Inspect and validate safety/killswitch config (see: ralph safety --help)
   plugin       Host-install packaged runtime plugins (see: ralph plugin --help)
+  profiles     Inspect and reset learned command-duration profiles (see: ralph profiles --help)
   config       Manage Ralph configuration (see: ralph config --help)
   process      List or stop managed Ralph process runs (see: ralph process --help)
 
@@ -540,6 +541,14 @@ case "$cmd" in
       exit 1
     fi
     exec bash "$safety_cli" "$@"
+    ;;
+  profiles)
+    profiles_cli="$RALPH_HOME/bundle/.ralph/bash-lib/profiles/profiles-cli.sh"
+    if [[ ! -f "$profiles_cli" ]]; then
+      echo "Error: profiles CLI is not installed yet: $profiles_cli" >&2
+      exit 1
+    fi
+    exec bash "$profiles_cli" "$@"
     ;;
   plugin)
     plugin_cli="$RALPH_HOME/bundle/.ralph/bash-lib/plugin/plugin-cli.sh"

@@ -435,7 +435,32 @@ ralph_session_todo_run_id() {
   fi
 }
 
+# Freeze the current TODO identity so it survives a routing baseline restore.
+#
+# ralph_run_plan_routing_restore_baseline clears RALPH_CURRENT_TODO_* and resets
+# RUNTIME to the run's base runtime, but the supervisor still runs permission
+# classification, the operator pause, and continuation persistence after it for
+# the same TODO. Without a freeze those records are written with a TODO-less
+# identity and never match on the retry, which restarts the TODO from scratch.
+# The frozen snapshot is preferred verbatim -- re-deriving would record the base
+# runtime, and ralph_session_todo_read rejects a manifest whose runtime differs.
+ralph_session_todo_identity_freeze() {
+  local identity
+  identity="$(ralph_session_todo_identity_json)" || return 1
+  [[ -n "$identity" ]] || return 1
+  RALPH_TODO_IDENTITY_FROZEN_JSON="$identity"
+  export RALPH_TODO_IDENTITY_FROZEN_JSON
+}
+
+ralph_session_todo_identity_thaw() {
+  unset RALPH_TODO_IDENTITY_FROZEN_JSON
+}
+
 ralph_session_todo_identity_json() {
+  if [[ -n "${RALPH_TODO_IDENTITY_FROZEN_JSON:-}" ]]; then
+    printf '%s\n' "$RALPH_TODO_IDENTITY_FROZEN_JSON"
+    return 0
+  fi
   jq -nc \
     --arg projectRoot "${RALPH_PROJECT_ROOT:-}" \
     --arg stateRoot "${RALPH_PLAN_WORKSPACE_ROOT:-}" \
@@ -1004,6 +1029,7 @@ ralph_session_todo_prepare_invocation() {
   ralph_session_apply_resume_strategy
 
   reason="$(ralph_session_todo_resolve_invocation_reason)"
+  unset RALPH_CONTINUATION_ROUTE 2>/dev/null || true
   if declare -F ralph_human_continuation_try_apply >/dev/null 2>&1 \
     && ralph_human_continuation_try_apply; then
     reason="${RALPH_TODO_INVOCATION_REASON_CONTINUE:-todo-continue}"
@@ -1019,7 +1045,18 @@ ralph_session_todo_prepare_invocation() {
   ralph_session_todo_export_paths
 
   if [[ "$reason" == "$RALPH_TODO_INVOCATION_REASON_CONTINUE" ]]; then
-    record="$(ralph_session_todo_select_manifest)" || return 1
+    # A continuation can outlive its manifest (session capture lost, manifest
+    # retired). Degrade to todo-start instead of failing: the caller invokes
+    # this bare under set -e, so a non-zero return would abort the plan run.
+    if ! record="$(ralph_session_todo_select_manifest)"; then
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "todo session $reason: no manifest for this TODO; falling back to $RALPH_TODO_INVOCATION_REASON_START (no session to resume)"
+      fi
+      RALPH_PLAN_INVOCATION_REASON="$RALPH_TODO_INVOCATION_REASON_START"
+      export RALPH_PLAN_INVOCATION_REASON
+      ralph_session_derive_cli_resume
+      return 0
+    fi
     session_id="$(jq -r '.session_id // empty' <<<"$record")"
     manifest_key="$(jq -r '.manifest_key // empty' <<<"$record")"
     if [[ -n "$session_id" ]]; then

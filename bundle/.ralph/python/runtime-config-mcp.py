@@ -598,6 +598,8 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
             "RALPH_PROXY_SHELL_COMPACT",
             "RALPH_PROXY_SHELL_COMPACT_LOG",
             "RALPH_RESULT_WINDOWING_LOG",
+            "RALPH_STAGE_CONTRACT",
+            "RALPH_STAGE_ID",
         ):
             val = os.environ.get(key, "")
             if val:

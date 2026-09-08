@@ -53,6 +53,32 @@ validate_status_fixture() {
   shopt -u nullglob
 }
 
+@test "operator status refreshes a running plan-backed stage from its contained control plan" {
+  local registry control stages refreshed
+  registry="$BATS_TEST_TMPDIR/registry-run"
+  control="$registry/plans/implement/attempt-1/control.plan.md"
+  mkdir -p "$(dirname "$control")"
+  cat >"$control" <<'EOF'
+---
+todos:
+  - id: first
+    content: first work
+    status: completed
+  - id: second
+    content: second work
+    status: pending
+---
+EOF
+  stages='[{"id":"implement","state":"running","planSourceKind":"generated","controlPlanPath":"'"$control"'","completedTodos":0,"totalTodos":2,"currentTodoId":"first"}]'
+
+  refreshed="$(_workflow_operator_view_refresh_live_plan_progress "$registry" "$stages")"
+  printf '%s' "$refreshed" | jq -e '
+    .[0].completedTodos == 1
+    and .[0].totalTodos == 2
+    and .[0].currentTodoId == "second"
+  ' >/dev/null
+}
+
 @test "Sequential task entry start render shows outcome and watch action" {
   local record
   record="$(jq -cn \

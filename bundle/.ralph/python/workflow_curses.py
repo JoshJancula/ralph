@@ -520,6 +520,43 @@ def _render_dialog_canvas(dialog: object, width: int, height: int, *, ascii_only
     return woa.render_dialog_frame(dialog, width, height, ascii_only=ascii_only)
 
 
+def _log_pane_matches_state(
+    pane: Optional[wlog.WorkflowLogPane],
+    log_state: wlog.WorkflowLogState,
+) -> bool:
+    """True when the session pane still binds the reconciled stage/attempt/stream."""
+
+    if pane is None:
+        return True
+    stream = wlog.normalize_log_stream(log_state.selected_stream)
+    return (
+        pane.stage_id == log_state.stage_id
+        and pane.attempt == log_state.attempt
+        and pane.stream == stream
+    )
+
+
+def _refresh_selected_log_pane(
+    read_logs: Callable[
+        [wt.WorkflowViewModel, wlog.WorkflowLogState, Optional[wlog.WorkflowLogPane]],
+        Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState],
+    ],
+    view: wt.WorkflowViewModel,
+    log_state: wlog.WorkflowLogState,
+    log_pane: Optional[wlog.WorkflowLogPane],
+) -> Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState]:
+    """Re-read the selected stage/stream pane.
+
+    When reconcile changed stage/attempt/stream identity, drop the prior pane
+    so pause cannot reuse previous-stage lines and paint cannot keep a stale
+    missing warning. Pause still reuses the previous pane inside ``read_logs``
+    when identity is unchanged.
+    """
+
+    previous = log_pane if _log_pane_matches_state(log_pane, log_state) else None
+    return read_logs(view, log_state, previous)
+
+
 def run_curses_session(
     run_id: str,
     *,
@@ -591,9 +628,10 @@ def run_curses_session(
                 else:
                     state = replace(state, view=loaded, refresh_requested=False)
                 next_refresh = clock() + refresh_interval
-                if state.log_state.focused or log_pane is None:
-                    log_pane, next_log_state = read_logs(state.view, state.log_state, log_pane)
-                    state = replace(state, log_state=next_log_state)
+                log_pane, next_log_state = _refresh_selected_log_pane(
+                    read_logs, state.view, state.log_state, log_pane
+                )
+                state = replace(state, log_state=next_log_state)
 
             refresh_due = state.refresh_requested or clock() >= next_refresh
             if refresh_due:
@@ -608,9 +646,19 @@ def run_curses_session(
                     else:
                         state = replace(state, view=loaded, refresh_requested=False)
                     next_refresh = clock() + refresh_interval
-                    if state.log_state.focused or log_pane is None:
-                        log_pane, next_log_state = read_logs(state.view, state.log_state, log_pane)
-                        state = replace(state, log_state=next_log_state)
+                    log_pane, next_log_state = _refresh_selected_log_pane(
+                        read_logs, state.view, state.log_state, log_pane
+                    )
+                    state = replace(state, log_state=next_log_state)
+
+            # Selection/stream changes reconcile log_state before the next status
+            # refresh; force-replace a mismatched pane so paint cannot keep the
+            # prior stage's lines or a stale missing warning.
+            if not _log_pane_matches_state(log_pane, state.log_state):
+                log_pane, next_log_state = _refresh_selected_log_pane(
+                    read_logs, state.view, state.log_state, log_pane
+                )
+                state = replace(state, log_state=next_log_state)
 
             canvas = render_canvas(
                 state,

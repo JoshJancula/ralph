@@ -10,6 +10,10 @@ sys.path.insert(0, str(REPO_ROOT / "bundle" / ".ralph" / "python"))
 
 from artifact_json_schema import (  # noqa: E402
     SchemaValidationError,
+    artifact_name_from_path,
+    build_stage_contract,
+    resolve_artifact_abs_path,
+    validate_artifact_text,
     UnsupportedSchemaKeywordError,
     assert_supported_schema,
     expand_artifact_tokens,
@@ -374,6 +378,167 @@ class BundledArtifactSchemaTests(unittest.TestCase):
             with self.subTest(schema=name):
                 self.assertIsInstance(load_schema_document(str(schema_dir / name)), dict)
 
+
+TRADE_INTENT_SCHEMA = {
+    "type": "object",
+    "required": ["generatedAt", "intents"],
+    "additionalProperties": False,
+    "properties": {
+        "generatedAt": {"type": "string", "minLength": 1},
+        "intents": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["symbol", "thesis"],
+                "additionalProperties": False,
+                "properties": {
+                    "symbol": {"type": "string", "minLength": 1},
+                    "thesis": {"type": "string", "minLength": 1},
+                },
+            },
+        },
+    },
+}
+
+
+class ValidateArtifactTextTests(unittest.TestCase):
+    """The pre-write gate behind ralph_write_artifact."""
+
+    def _schema_file(self, tmp: str, schema: dict) -> str:
+        path = os.path.join(tmp, "s.schema.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(schema, handle)
+        return path
+
+    def test_accepts_conforming_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(tmp, TRADE_INTENT_SCHEMA)
+            validate_artifact_text(
+                json.dumps({"generatedAt": "2026-01-01T00:00:00Z",
+                            "intents": [{"symbol": "NVDA", "thesis": "up"}]}),
+                schema,
+            )
+
+    def test_reports_location_of_missing_required_property(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(tmp, TRADE_INTENT_SCHEMA)
+            with self.assertRaises(ValueError) as ctx:
+                validate_artifact_text(
+                    json.dumps({"generatedAt": "x",
+                                "intents": [{"symbol": "NVDA", "thesis": "ok"},
+                                            {"symbol": "AMD"}]}),
+                    schema,
+                )
+            message = str(ctx.exception)
+            self.assertIn("location=$/intents/1", message)
+            self.assertIn("thesis", message)
+
+    def test_rejects_unknown_property(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(tmp, TRADE_INTENT_SCHEMA)
+            with self.assertRaises(ValueError) as ctx:
+                validate_artifact_text(
+                    json.dumps({"generatedAt": "x", "intents": [], "extra": 1}), schema
+                )
+            self.assertIn("location=$/extra", str(ctx.exception))
+
+    def test_rejects_empty_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(tmp, TRADE_INTENT_SCHEMA)
+            with self.assertRaises(ValueError):
+                validate_artifact_text("   ", schema)
+
+    def test_malformed_json_is_a_value_error_not_a_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(tmp, TRADE_INTENT_SCHEMA)
+            with self.assertRaises(ValueError) as ctx:
+                validate_artifact_text('{"generatedAt": ', schema)
+            self.assertIn("not valid JSON", str(ctx.exception))
+
+    def test_unsupported_schema_keyword_surfaces_as_value_error(self) -> None:
+        # assert_supported_schema raises UnsupportedSchemaKeywordError, which is
+        # not a ValueError; the wrapper must convert it rather than let it escape.
+        with tempfile.TemporaryDirectory() as tmp:
+            schema = self._schema_file(
+                tmp, {"$schema": "https://json-schema.org/draft-07/schema#", "type": "object"}
+            )
+            with self.assertRaises(ValueError) as ctx:
+                validate_artifact_text("{}", schema)
+            self.assertIn("$schema", str(ctx.exception))
+
+
+class StageContractTests(unittest.TestCase):
+    """The contract the orchestrator publishes for the artifact MCP tools."""
+
+    def test_derives_name_from_filename_stem(self) -> None:
+        self.assertEqual(artifact_name_from_path("a/b/trade-intents.json"), "trade-intents")
+        self.assertEqual(artifact_name_from_path("a/b/quant-notes.md"), "quant-notes")
+        self.assertEqual(artifact_name_from_path("a/b/notes"), "notes")
+
+    def test_expands_tokens_so_no_placeholder_reaches_the_agent(self) -> None:
+        stage = {
+            "artifacts": [{"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/out.json"}],
+            "inputArtifacts": [{"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/in.md"}],
+        }
+        contract = build_stage_contract(stage, stage_id="analyze", artifact_ns="ns-1")
+        self.assertEqual(contract["artifactNs"], "ns-1")
+        rendered = json.dumps(contract)
+        self.assertNotIn("{{", rendered)
+        self.assertEqual(contract["produces"][0]["name"], "out")
+        self.assertEqual(contract["requires"][0]["name"], "in")
+
+    def test_marks_json_and_text_artifacts(self) -> None:
+        stage = {"artifacts": [{"path": "a/out.json"}, {"path": "a/notes.md"}]}
+        contract = build_stage_contract(stage, stage_id="s")
+        formats = {e["name"]: e["format"] for e in contract["produces"]}
+        self.assertEqual(formats, {"out": "json", "notes": "text"})
+
+    def test_dedupes_artifacts_and_outputArtifacts(self) -> None:
+        entry = {"path": "a/out.json", "required": True}
+        stage = {"artifacts": [entry], "outputArtifacts": [entry]}
+        contract = build_stage_contract(stage, stage_id="s")
+        self.assertEqual(len(contract["produces"]), 1)
+
+    def test_duplicate_names_are_an_authoring_error(self) -> None:
+        stage = {"artifacts": [{"path": "a/notes.md"}, {"path": "b/notes.md"}]}
+        with self.assertRaises(ValueError) as ctx:
+            build_stage_contract(stage, stage_id="s")
+        self.assertIn("duplicate artifact name", str(ctx.exception))
+
+    def test_explicit_name_resolves_a_collision(self) -> None:
+        stage = {"artifacts": [{"path": "a/notes.md", "name": "quant-notes"},
+                               {"path": "b/notes.md"}]}
+        contract = build_stage_contract(stage, stage_id="s")
+        self.assertEqual([e["name"] for e in contract["produces"]], ["quant-notes", "notes"])
+
+    def test_resolved_path_follows_state_root_for_workspace_artifacts(self) -> None:
+        # The orchestrator and the MCP server disagree about what
+        # RALPH_PLAN_WORKSPACE_ROOT means, so the contract resolves paths once.
+        self.assertEqual(
+            resolve_artifact_abs_path(
+                ".ralph-workspace/artifacts/ns/out.json",
+                workspace="/repo",
+                state_root="/state/.ralph-workspace",
+            ),
+            "/state/.ralph-workspace/artifacts/ns/out.json",
+        )
+
+    def test_resolved_path_falls_back_to_workspace(self) -> None:
+        self.assertEqual(
+            resolve_artifact_abs_path("ralph/schemas/x.json", workspace="/repo", state_root=""),
+            "/repo/ralph/schemas/x.json",
+        )
+
+    def test_contract_carries_resolved_path_when_workspace_given(self) -> None:
+        stage = {"artifacts": [{"path": ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/out.json"}]}
+        contract = build_stage_contract(
+            stage, stage_id="s", artifact_ns="ns",
+            workspace="/repo", state_root="/repo/.ralph-workspace",
+        )
+        self.assertEqual(
+            contract["produces"][0]["resolvedPath"],
+            "/repo/.ralph-workspace/artifacts/ns/out.json",
+        )
 
 if __name__ == "__main__":
     unittest.main()

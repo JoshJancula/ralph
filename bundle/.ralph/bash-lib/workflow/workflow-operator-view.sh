@@ -502,6 +502,51 @@ _workflow_operator_print_plan_paths() {
   [[ -n "$control" && "$control" != "null" ]] && workflow_operator_print stdout "Control plan" "$control"
 }
 
+# _workflow_operator_view_refresh_live_plan_progress <registry-run> <stages-json>
+# Re-reads the control plan of every running plan-backed stage so status shows
+# where the plan actually is, not the last figure the engine persisted. A long
+# TODO can run for many minutes between ledger writes, and a stale
+# "0/2, current: first" reads as a stalled stage.
+#
+# Prints the stages array with completedTodos / totalTodos / currentTodoId
+# refreshed. Any stage that is not running, has no readable control plan, or
+# whose plan cannot be parsed is passed through untouched.
+_workflow_operator_view_refresh_live_plan_progress() {
+  local registry_run="${1:-}" stages="${2:-}"
+  local helper count idx stage control state progress refreshed
+
+  [[ -n "$stages" ]] || return 0
+  if ! printf '%s' "$stages" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    printf '%s' "$stages"
+    return 0
+  fi
+  helper="$_WORKFLOW_OPVIEW_PYTHON_DIR/plan-yaml-frontmatter-op.py"
+  if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$helper" ]]; then
+    printf '%s' "$stages"
+    return 0
+  fi
+
+  refreshed="$stages"
+  count="$(printf '%s' "$stages" | jq 'length')"
+  for ((idx = 0; idx < count; idx++)); do
+    stage="$(printf '%s' "$refreshed" | jq -c ".[$idx]")"
+    state="$(printf '%s' "$stage" | jq -r '.state // empty')"
+    [[ "$state" == "running" ]] || continue
+    control="$(printf '%s' "$stage" | jq -r '.controlPlanPath // empty')"
+    [[ -n "$control" && "$control" != "null" ]] || continue
+    # A relative control path is recorded against the run's registry directory.
+    [[ "$control" == /* ]] || control="${registry_run%/}/$control"
+    [[ -r "$control" ]] || continue
+    progress="$(python3 "$helper" "$control" progress 2>/dev/null)" || continue
+    [[ -n "$progress" ]] || continue
+    printf '%s' "$progress" | jq -e 'type == "object"' >/dev/null 2>&1 || continue
+    refreshed="$(printf '%s' "$refreshed" \
+      | jq -c --argjson i "$idx" --argjson p "$progress" '.[$i] += $p')" || return 1
+  done
+
+  printf '%s' "$refreshed"
+}
+
 # _workflow_operator_print_handoff <status-json>
 _workflow_operator_print_handoff() {
   local status="$1" implement review

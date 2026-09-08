@@ -86,7 +86,9 @@ ralph_human_continuation_resolve_identity() {
   fi
   request_file="${HUMAN_REQUEST_FILE:-${RALPH_SESSION_DIR:-}/human-request.json}"
   if [[ -f "$request_file" ]]; then
-    todo_line="$(jq -r '.todo_line // empty' "$request_file" 2>/dev/null || true)"
+    # ralph_write_human_request_artifact nests the TODO as .todo.line; older
+    # records and the operator-response template use a flat .todo_line.
+    todo_line="$(jq -r '(.todo.line // .todo_line) // empty' "$request_file" 2>/dev/null || true)"
     if [[ -n "$todo_line" && "$todo_line" != "0" && "$todo_line" != "null" ]]; then
       identity="$(ralph_session_todo_identity_json 2>/dev/null || true)"
       # Not "${identity:-{}}": bash closes that expansion one brace early, so a
@@ -194,12 +196,19 @@ ralph_human_continuation_mark_consumed() {
 
 # Returns 0 when a pending human-answer continuation was consumed for this TODO.
 ralph_human_continuation_try_apply() {
-  local record request_id
+  local record request_id route
   record="$(ralph_human_continuation_find_pending 2>/dev/null || true)"
   [[ -n "$record" ]] || return 1
   request_id="$(jq -r '.request_id // empty' <<<"$record")"
   [[ -n "$request_id" ]] || return 1
   ralph_human_continuation_mark_consumed "$request_id" || return 1
+  # The prompt builder tells a resumed agent why its previous turn stopped.
+  route="$(jq -r '.route // empty' <<<"$record")"
+  if [[ "$route" == "permission" ]]; then
+    export RALPH_CONTINUATION_ROUTE="permission"
+  else
+    unset RALPH_CONTINUATION_ROUTE 2>/dev/null || true
+  fi
   RALPH_PLAN_INVOCATION_REASON="${RALPH_TODO_INVOCATION_REASON_CONTINUE:-todo-continue}"
   export RALPH_PLAN_INVOCATION_REASON
   export RALPH_USAGE_CONTINUATION_REASON="human-answer"

@@ -28,7 +28,9 @@ LIST_SUITE=0
 # locally when you want the slow and acceptance files too.
 TIER="fast"
 TIER_EXPLICIT=0
+PATH_FILTER=""
 BATS_ARGS=()
+BATS_FLAGS=()
 USER_PATHS=0
 
 has_parallel_runner() {
@@ -130,11 +132,15 @@ Options:
                           acceptance  heavy end-to-end replays
                           all         everything
                         Cannot be combined with explicit test paths.
+  --filter PATTERN      Keep only suite (or explicit) .bats paths matching the
+                        ERE PATTERN (e.g. native-hook or 'a|b'). Applied after
+                        tier/path selection; remaining args still go to bats.
   --list-suite          Print the test file paths for the suite and exit.
   --no-setup-fixtures   Skip scripts/setup-test-fixtures.sh
   -h, --help            Show this help
 
 When no test paths are given, runs all tests/bats/**/*.bats except tests/bats/local/.
+Bats flags such as --count may be passed after run-bats options (or after --).
 EOF
 }
 
@@ -222,11 +228,24 @@ while [[ $# -gt 0 ]]; do
       SETUP_FIXTURES=0
       shift
       ;;
+    --filter)
+      if [[ $# -lt 2 ]]; then
+        echo "run-bats: --filter requires a PATTERN argument" >&2
+        exit 1
+      fi
+      PATH_FILTER="$2"
+      shift 2
+      ;;
     --)
       shift
       BATS_ARGS+=("$@")
       USER_PATHS=1
       break
+      ;;
+    --count | --verbose-run | --print-output-on-failure | --show-output-of-passing-tests | --recursive | --no-tempdir-cleanup | --no-parallelize-across-files | --no-parallelize-within-files)
+      # Common bats flags used in plan verify lines without a leading `--`.
+      BATS_FLAGS+=("$1")
+      shift
       ;;
     -*)
       echo "run-bats: unknown option: $1" >&2
@@ -242,17 +261,32 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$LIST_SUITE" -eq 1 ]]; then
-  if [[ "$USER_PATHS" -eq 1 ]]; then
-    printf '%s\n' "${BATS_ARGS[@]}"
-  else
+  if [[ "$USER_PATHS" -ne 1 ]]; then
     # An over-budget fast tier is refused here too: --list-suite is how CI and
     # tooling ask what fast contains, and answering with a tier that must not
     # run would just move the failure downstream.
     if [[ "$TIER" == "fast" ]]; then
       enforce_fast_budget || exit 1
     fi
-    ralph_bats_tier_files "$REPO_ROOT" "$TIER"
+    BATS_ARGS=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      BATS_ARGS+=("$line")
+    done < <(ralph_bats_tier_files "$REPO_ROOT" "$TIER")
   fi
+  expand_bats_directory_args
+  if [[ -n "$PATH_FILTER" ]]; then
+    path_filter_bounded="(^|/)${PATH_FILTER}(/|\\.bats$)"
+    filtered=()
+    for arg in "${BATS_ARGS[@]}"; do
+      [[ "$arg" == -* ]] && continue
+      if [[ "$arg" =~ $path_filter_bounded ]]; then
+        filtered+=("$arg")
+      fi
+    done
+    BATS_ARGS=("${filtered[@]}")
+  fi
+  printf '%s\n' "${BATS_ARGS[@]}"
   exit 0
 fi
 
@@ -268,7 +302,26 @@ if [[ "$USER_PATHS" -eq 0 ]]; then
 fi
 
 expand_bats_directory_args
-if [[ ${#BATS_ARGS[@]} -eq 0 ]]; then
+if [[ -n "$PATH_FILTER" ]]; then
+  # Bound the ERE so "native-hook" matches .../native-hook/... or
+  # .../native-hook.bats but not .../native-hooks-....
+  path_filter_bounded="(^|/)${PATH_FILTER}(/|\\.bats$)"
+  filtered=()
+  for arg in "${BATS_ARGS[@]}"; do
+    if [[ "$arg" == -* ]]; then
+      filtered+=("$arg")
+      continue
+    fi
+    if [[ "$arg" =~ $path_filter_bounded ]]; then
+      filtered+=("$arg")
+    fi
+  done
+  BATS_ARGS=("${filtered[@]}")
+fi
+if [[ ${#BATS_FLAGS[@]} -gt 0 ]]; then
+  BATS_ARGS+=("${BATS_FLAGS[@]}")
+fi
+if [[ "$(bats_target_file_count "${BATS_ARGS[@]}")" -eq 0 ]]; then
   echo "run-bats: no test files found for the requested paths" >&2
   exit 1
 fi

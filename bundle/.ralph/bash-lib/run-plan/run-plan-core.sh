@@ -522,6 +522,19 @@ ralph_apply_runtime_prompt_guidance() {
   PROMPT+=$'\n\n'"${guidance}"
 }
 
+# Append why a resumed turn was interrupted, when the runner knows.
+# A permission pause exits the CLI mid-task; the resumed session still holds the
+# whole transcript, so say what happened rather than let the agent infer that it
+# failed and start the TODO over.
+ralph_run_plan_resume_intro_with_reason() {
+  local intro="${1:-}"
+  if [[ "${RALPH_CONTINUATION_ROUTE:-}" == "permission" ]]; then
+    printf '%s\n' "${intro} The previous turn stopped on a permission request that the operator has now approved; continue from where it stopped and do not redo work you already completed."
+    return 0
+  fi
+  printf '%s\n' "$intro"
+}
+
 # Agent completion instructions for per-TODO prompts (paragraph style for resume/reset/compact).
 # Optional 4th arg: pass "1" to also request VERIFICATION STATUS / VERIFICATION_RESULT: PASS/FAIL from the agent.
 ralph_run_plan_agent_completion_prompt_block() {
@@ -1975,9 +1988,11 @@ fi
 RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORKSPACE_ROOT}"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 export RALPH_PLAN_WORKSPACE_ROOT
-# Graph scheduler sets RALPH_GRAPH_NODE_LOG_DIR to the contained attempt
-# directory under <run-dir>/logs/nodes/<safe-node-id>/<attempt-id>/. Never
-# create or append to the namespace-only logs/<namespace>/nodes/ tree.
+# Graph scheduler / Sequential workflow engine set RALPH_GRAPH_NODE_LOG_DIR to
+# the contained attempt directory:
+#   Dependency: <run-dir>/logs/nodes/<safe-node-id>/<attempt-id>/
+#   Sequential: <registry-run>/engine/logs/stages/<stage>/attempt-<n>/
+# Never create or append to the namespace-only logs/<namespace>/nodes/ tree.
 if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
   RALPH_LOG_DIR="$RALPH_GRAPH_NODE_LOG_DIR"
 elif [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
@@ -2712,29 +2727,15 @@ ralph_human_input_write_offline_instructions() {
         "$_permission_prompt" "$_permission_decision" >&2
     else
       _permission_prompt+=$'\nAllow this permission request? [y/N]: '
-      printf '%s' "$_permission_prompt" >/dev/tty
-      # The CLI process may have left the terminal in raw or non-blocking mode.
-      # Reset to canonical blocking mode and drain any buffered keystrokes that
-      # accumulated while the agent was running; both calls are no-op on failure.
-      stty sane </dev/tty 2>/dev/null || true
-      while IFS= read -r -t 0 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
       local _permission_read_rc=0
-      IFS= read -r _permission_decision </dev/tty || _permission_read_rc=$?
+      _permission_decision="$(ralph_permission_prompt_operator_decision "$_permission_prompt")" \
+        || _permission_read_rc=$?
       if [[ "$_permission_read_rc" -ne 0 ]]; then
         # EOF or a read error is not an operator answer. Recording it as a deny
         # would both stop the run and misreport who decided.
         ralph_run_plan_log "WARN: permission prompt read failed (rc=$_permission_read_rc); no operator answer captured"
         return 1
       fi
-      _permission_decision="$(printf '%s' "$_permission_decision" | tr '[:upper:]' '[:lower:]')"
-      case "$_permission_decision" in
-        y|yes|allow)
-          _permission_decision="allow"
-          ;;
-        *)
-          _permission_decision="deny"
-          ;;
-      esac
     fi
     if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
       ralph_write_operator_response_template "$_request_file" "$OPERATOR_RESPONSE_FILE"
@@ -4502,6 +4503,11 @@ while true; do
     export RALPH_CURRENT_TODO_ORDINAL
     export RALPH_CURRENT_TODO_ID
     export RALPH_CURRENT_TODO_HASH
+    # Release any identity frozen for the previous invocation's post-processing;
+    # the live RALPH_CURRENT_TODO_* above are authoritative from here.
+    if declare -F ralph_session_todo_identity_thaw >/dev/null 2>&1; then
+      ralph_session_todo_identity_thaw
+    fi
 
     if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
       if ! ralph_run_plan_pipeline_input_artifacts_prepare "$PLAN_PATH" "$todo_target" "$line_num"; then
@@ -4751,6 +4757,7 @@ while true; do
           _resume_intro="Reusing bare CLI resume in reset mode (last-session semantics; isolated CI only)."
         fi
       fi
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
       PROMPT_STATIC=""
       PROMPT="${_reset_prefix}$_resume_intro
 
@@ -4813,6 +4820,7 @@ Cost model: prefer strict \`verify:\` for final proof; use one blocking call for
           _resume_intro="Reusing bare CLI resume in compact mode (last-session semantics; isolated CI only)."
         fi
       fi
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
       PROMPT_STATIC=""
       _compact_label="${_compact_command:-the compact command}"
       PROMPT="${_compact_prefix}$_resume_intro
@@ -4837,6 +4845,7 @@ Cost model: prefer strict \`verify:\` for final proof; use one blocking call for
       else
         _resume_intro="Continuing via bare CLI resume (last-session semantics; isolated CI only)."
       fi
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
       PROMPT_STATIC=""
       PROMPT="$_resume_intro
 
@@ -5262,6 +5271,21 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code elapsed=${_inv_elapsed}s)"
     _inv_effective_runtime="$RUNTIME"
     _inv_effective_model="${SELECTED_MODEL:-}"
+    # Bind the CLI session id to this TODO from the supervisor. The invocation
+    # wrapper does the same on its way out, but the reaper above tears the
+    # wrapper down as soon as EXIT_CODE_FILE appears -- which the wrapper writes
+    # one line before it captures -- so that call is racy and can be lost. This
+    # one runs with the TODO identity and effective RUNTIME still live, and is
+    # idempotent with the wrapper's.
+    if declare -F ralph_session_todo_capture_after_invocation >/dev/null 2>&1; then
+      ralph_session_todo_capture_after_invocation || true
+    fi
+    # Everything below restores the routing baseline, which clears
+    # RALPH_CURRENT_TODO_* -- but permission classification, the operator pause,
+    # and continuation persistence all still belong to this TODO.
+    if declare -F ralph_session_todo_identity_freeze >/dev/null 2>&1; then
+      ralph_session_todo_identity_freeze || true
+    fi
     ralph_run_plan_routing_restore_baseline
     ralph_runtime_overlay_cleanup_if_needed
     GIT_STATUS_AT_END="$(git -C "$WORKSPACE" status --short --untracked-files=all 2>/dev/null || true)"
@@ -6165,6 +6189,9 @@ print('\\x1f'.join(str(d.get(k, 0)) for k in keys))
       rm -f "$PENDING_HUMAN"
       if declare -F ralph_run_plan_revoke_workflow_operator_input_capability >/dev/null 2>&1; then
         ralph_run_plan_revoke_workflow_operator_input_capability
+      fi
+      if declare -F ralph_session_todo_identity_thaw >/dev/null 2>&1; then
+        ralph_session_todo_identity_thaw
       fi
       break
     fi

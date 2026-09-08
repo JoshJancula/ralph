@@ -7,6 +7,7 @@ import json
 import sys
 import threading
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -531,6 +532,301 @@ class SessionTests(unittest.TestCase):
             self.assertTrue(refresh_started.wait(1))
         finally:
             release_refresh.set()
+
+    def test_unfocused_refresh_replaces_missing_pane_and_pause_reuses(self) -> None:
+        """Status refresh re-reads logs while Logs focus is inactive.
+
+        A prior missing/warning pane must be replaced when the reader later
+        returns real lines. While paused, the prior pane is reused without a
+        new content read.
+        """
+
+        curses, termios, signals = FakeCurses(), FakeTermios(), FakeSignal()
+        guard = backend.TerminalRestorer(
+            termios_mod=termios, signal_mod=signals, curses_mod=curses
+        )
+        fixture_path = (
+            REPO_ROOT
+            / "tests"
+            / "bats"
+            / "workflow"
+            / "fixtures"
+            / "status"
+            / "sequential-task-running.json"
+        )
+        snapshot = wt.parse_status_snapshot(json.loads(fixture_path.read_text(encoding="utf-8")))
+
+        def load(run_id: str, previous: wt.WorkflowViewModel | None) -> wt.WorkflowViewModel:
+            del run_id, previous
+            return wt.WorkflowViewModel(snapshot=snapshot, selected_stage_id="implement")
+
+        call_trace: list[dict[str, object]] = []
+        returned_panes: list[wlog.WorkflowLogPane] = []
+        content_reads = 0
+
+        def log_reader(
+            view: wt.WorkflowViewModel,
+            state: wlog.WorkflowLogState,
+            previous: wlog.WorkflowLogPane | None,
+        ) -> tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState]:
+            nonlocal content_reads
+            call_trace.append(
+                {
+                    "focused": state.focused,
+                    "paused": state.paused,
+                    "previous_missing": None if previous is None else previous.missing,
+                    "previous_lines": None if previous is None else previous.lines,
+                }
+            )
+            # Mirror read_log_pane pause reuse: no new content fetch.
+            if state.paused and previous is not None:
+                pane = replace(previous, paused=True, follow=state.follow)
+                returned_panes.append(pane)
+                return pane, state
+
+            content_reads += 1
+            stage = view.selected_stage
+            assert stage is not None
+            stream = wlog.normalize_log_stream(state.selected_stream)
+            if content_reads == 1:
+                pane = wlog.WorkflowLogPane(
+                    stream=stream,
+                    stage_id=stage.id,
+                    attempt=stage.attempt,
+                    relative_paths=(f"logs/stages/{stage.id}/{stage.attempt}/{stream}.log",),
+                    lines=(),
+                    exists=False,
+                    size_bytes=None,
+                    missing=True,
+                    uncontained=False,
+                    symlink=False,
+                    truncated=False,
+                    omitted=False,
+                    replaced=False,
+                    follow=state.follow,
+                    paused=False,
+                    reset=False,
+                    unavailable=False,
+                    offset=0,
+                    inode=None,
+                    error="workflow log not found",
+                )
+            else:
+                pane = wlog.WorkflowLogPane(
+                    stream=stream,
+                    stage_id=stage.id,
+                    attempt=stage.attempt,
+                    relative_paths=(f"logs/stages/{stage.id}/{stage.attempt}/{stream}.log",),
+                    lines=("agent line one", "agent line two"),
+                    exists=True,
+                    size_bytes=28,
+                    missing=False,
+                    uncontained=False,
+                    symlink=False,
+                    truncated=False,
+                    omitted=False,
+                    replaced=False,
+                    follow=state.follow,
+                    paused=False,
+                    reset=False,
+                    unavailable=False,
+                    offset=28,
+                    inode=1,
+                    error=None,
+                )
+            returned_panes.append(pane)
+            return pane, state
+
+        # r: missing pane; r: missing-to-present while unfocused;
+        # l/p/l: pause under log focus then leave focus (paused stays);
+        # r: paused reuse without a new content read; q: quit.
+        result = backend.run_curses_session(
+            "fixture-seq-running",
+            curses_mod=curses,
+            restorer=guard,
+            loader=load,
+            log_reader=log_reader,
+            keys=("r", "r", "l", "p", "l", "r", "q"),
+            max_frames=20,
+            refresh_interval=10,
+            input_timeout_seconds=0.05,
+            now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+            background_refresh=False,
+            clock=lambda: 0.0,
+        )
+        self.assertTrue(result.quit_requested)
+        self.assertGreaterEqual(len(returned_panes), 3)
+        self.assertTrue(all(not entry["focused"] for entry in call_trace[:2]))
+        self.assertTrue(returned_panes[0].missing)
+        self.assertEqual(returned_panes[0].lines, ())
+        self.assertTrue(call_trace[1]["previous_missing"])
+        self.assertFalse(returned_panes[1].missing)
+        self.assertEqual(returned_panes[1].lines, ("agent line one", "agent line two"))
+        paused_calls = [entry for entry in call_trace if entry["paused"]]
+        self.assertTrue(paused_calls)
+        self.assertEqual(paused_calls[-1]["previous_lines"], ("agent line one", "agent line two"))
+        self.assertFalse(paused_calls[-1]["focused"])
+        self.assertEqual(content_reads, 2)
+        self.assertTrue(returned_panes[-1].paused)
+        self.assertEqual(returned_panes[-1].lines, ("agent line one", "agent line two"))
+
+    def test_selection_and_stream_change_retarget_read_logs(self) -> None:
+        """After Up/Down and stream cycle, the next read targets the new identity.
+
+        No live curses tty: FakeCurses + injected keys. A prior missing pane for
+        the old stage must not be passed through as ``previous`` once reconcile
+        changes stage/stream; offsets must arrive reset at the reader.
+        """
+
+        curses, termios, signals = FakeCurses(), FakeTermios(), FakeSignal()
+        guard = backend.TerminalRestorer(
+            termios_mod=termios, signal_mod=signals, curses_mod=curses
+        )
+        fixture_path = (
+            REPO_ROOT
+            / "tests"
+            / "bats"
+            / "workflow"
+            / "fixtures"
+            / "status"
+            / "sequential-task-running.json"
+        )
+        snapshot = wt.parse_status_snapshot(json.loads(fixture_path.read_text(encoding="utf-8")))
+
+        def load(run_id: str, previous: wt.WorkflowViewModel | None) -> wt.WorkflowViewModel:
+            del run_id, previous
+            return wt.WorkflowViewModel(snapshot=snapshot, selected_stage_id="implement")
+
+        call_trace: list[dict[str, object]] = []
+
+        def log_reader(
+            view: wt.WorkflowViewModel,
+            state: wlog.WorkflowLogState,
+            previous: wlog.WorkflowLogPane | None,
+        ) -> tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState]:
+            stage = view.selected_stage
+            assert stage is not None
+            stream = wlog.normalize_log_stream(state.selected_stream)
+            call_trace.append(
+                {
+                    "stage_id": stage.id,
+                    "stream": stream,
+                    "log_stage_id": state.stage_id,
+                    "log_offset": state.log_offset,
+                    "log_inode": state.log_inode,
+                    "log_seen": state.log_seen,
+                    "previous_stage": None if previous is None else previous.stage_id,
+                    "previous_stream": None if previous is None else previous.stream,
+                    "previous_missing": None if previous is None else previous.missing,
+                }
+            )
+            # First read for a stage/stream returns missing so a stale missing
+            # pane is in session state before selection/stream switches.
+            missing = len(call_trace) == 1 or (
+                previous is None and state.log_offset == 0 and not state.log_seen
+            )
+            if missing and len(call_trace) <= 3:
+                pane = wlog.WorkflowLogPane(
+                    stream=stream,
+                    stage_id=stage.id,
+                    attempt=stage.attempt,
+                    relative_paths=(f"logs/stages/{stage.id}/{stage.attempt}/{stream}.log",),
+                    lines=(),
+                    exists=False,
+                    size_bytes=None,
+                    missing=True,
+                    uncontained=False,
+                    symlink=False,
+                    truncated=False,
+                    omitted=False,
+                    replaced=False,
+                    follow=state.follow,
+                    paused=False,
+                    reset=False,
+                    unavailable=False,
+                    offset=0,
+                    inode=None,
+                    error="workflow log not found",
+                )
+                # Simulate a cursor that would go stale if reconcile skipped.
+                next_state = replace(state, log_offset=40, log_inode=7, log_seen=True)
+                return pane, next_state
+            pane = wlog.WorkflowLogPane(
+                stream=stream,
+                stage_id=stage.id,
+                attempt=stage.attempt,
+                relative_paths=(f"logs/stages/{stage.id}/{stage.attempt}/{stream}.log",),
+                lines=(f"{stage.id}:{stream}:line",),
+                exists=True,
+                size_bytes=12,
+                missing=False,
+                uncontained=False,
+                symlink=False,
+                truncated=False,
+                omitted=False,
+                replaced=False,
+                follow=state.follow,
+                paused=False,
+                reset=False,
+                unavailable=False,
+                offset=12,
+                inode=1,
+                error=None,
+            )
+            return pane, replace(state, log_offset=12, log_inode=1, log_seen=True)
+
+        # r: load implement missing pane; KEY_UP: research; j: implement again;
+        # l/s: cycle stream under log focus; q: quit.
+        result = backend.run_curses_session(
+            "fixture-seq-running",
+            curses_mod=curses,
+            restorer=guard,
+            loader=load,
+            log_reader=log_reader,
+            keys=("r", "KEY_UP", "j", "l", "s", "q"),
+            max_frames=30,
+            refresh_interval=10,
+            input_timeout_seconds=0.05,
+            now=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+            background_refresh=False,
+            clock=lambda: 0.0,
+        )
+        self.assertTrue(result.quit_requested)
+        self.assertGreaterEqual(len(call_trace), 4)
+
+        first = call_trace[0]
+        self.assertEqual(first["stage_id"], "implement")
+        self.assertEqual(first["stream"], "agent")
+
+        after_up = next(entry for entry in call_trace if entry["stage_id"] == "research")
+        self.assertEqual(after_up["log_stage_id"], "research")
+        self.assertEqual(after_up["stream"], "agent")
+        self.assertEqual(after_up["log_offset"], 0)
+        self.assertIsNone(after_up["log_inode"])
+        self.assertFalse(after_up["log_seen"])
+        self.assertIsNone(after_up["previous_stage"])
+
+        after_down = [
+            entry
+            for entry in call_trace
+            if entry["stage_id"] == "implement" and entry is not first
+        ]
+        self.assertTrue(after_down)
+        retarget_implement = after_down[0]
+        self.assertEqual(retarget_implement["log_stage_id"], "implement")
+        self.assertEqual(retarget_implement["log_offset"], 0)
+        self.assertIsNone(retarget_implement["log_inode"])
+        self.assertFalse(retarget_implement["log_seen"])
+        self.assertIsNone(retarget_implement["previous_stage"])
+
+        after_stream = next(
+            entry for entry in call_trace if entry["stream"] == "supervisor"
+        )
+        self.assertEqual(after_stream["stage_id"], "implement")
+        self.assertEqual(after_stream["log_offset"], 0)
+        self.assertIsNone(after_stream["log_inode"])
+        self.assertFalse(after_stream["log_seen"])
+        self.assertIsNone(after_stream["previous_stage"])
 
 
 if __name__ == "__main__":

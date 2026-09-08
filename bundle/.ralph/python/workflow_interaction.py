@@ -355,7 +355,12 @@ def workflow_command_lines(state: WorkflowUiState) -> Tuple[str, ...]:
         lines.extend(f"less {shlex.quote(path)}" for path in produced_artifacts(stage))
     lines.append(f"ralph usage --run {run_id}")
     lines.append("# All stage logs and artifacts")
-    for item in state.view.stages:
+    catalog_stages = (
+        wt.revealed_progress_stages(state.view.snapshot)
+        if state.view.snapshot is not None
+        else state.view.stages
+    )
+    for item in catalog_stages:
         item_id = shlex.quote(item.id)
         item_args = f" --stage {item_id}"
         if item.attempt > 0:

@@ -676,7 +676,7 @@ def group_stages_for_list(
     if snapshot.run.mode != "dependency":
         return [(None, stages)]
     if not any(stage.wave is not None for stage in stages):
-        return [(None, wt.topology_ordered_stages(snapshot))]
+        return [(None, stages)]
 
     groups: List[Tuple[Optional[str], Tuple[wt.Stage, ...]]] = []
     current_wave: object = object()
@@ -787,8 +787,8 @@ def _header_lines(
 
     run = view.snapshot.run
     diagnosis = view.snapshot.diagnosis
-    counts = count_stages(view.snapshot.stages)
     progress_stages = wt.revealed_progress_stages(view.snapshot)
+    counts = count_stages(progress_stages)
     outcome_state = effective_outcome_state(run.state, diagnosis.state)
     badge = outcome_badge(outcome_state)
     badge_role = outcome_role(outcome_state, diagnosis.reason_code)

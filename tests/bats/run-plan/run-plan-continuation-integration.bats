@@ -322,6 +322,48 @@ cont_launch_bg() {
   cont_assert_zero_agent_polls
 }
 
+@test "journey: permission pause resumes the exact session after the baseline restore" {
+  # The field failure: the supervisor restores the routing baseline (clearing
+  # RALPH_CURRENT_TODO_*) before it classifies the denial and prompts, so the
+  # continuation was persisted TODO-less, never matched, and the TODO re-ran in
+  # a brand-new session. The freeze is what makes the retry find its session.
+  cont_load_telemetry_helpers
+  local session_id="sess-permission-pause"
+  ralph_session_todo_create "$session_id" "exact" >/dev/null
+
+  ralph_session_todo_identity_freeze
+  local restored_line="$RALPH_CURRENT_TODO_LINE"
+  local restored_ordinal="$RALPH_CURRENT_TODO_ORDINAL"
+  local restored_id="$RALPH_CURRENT_TODO_ID"
+  local restored_hash="$RALPH_CURRENT_TODO_HASH"
+  unset RALPH_CURRENT_TODO_LINE RALPH_CURRENT_TODO_ORDINAL \
+    RALPH_CURRENT_TODO_ID RALPH_CURRENT_TODO_HASH
+
+  local record request_id
+  record="$(ralph_human_continuation_persist "permission" "allow")"
+  [ "$(jq -r '.route,.permission_decision' <<<"$record" | paste -sd, -)" = "permission,allow" ]
+  [ "$(jq -r '.identity.todoId' <<<"$record")" = "$restored_id" ]
+  request_id="$(jq -r '.request_id' <<<"$record")"
+
+  # Next invocation: the loop re-exports the TODO env and thaws.
+  ralph_session_todo_identity_thaw
+  export RALPH_CURRENT_TODO_LINE="$restored_line"
+  export RALPH_CURRENT_TODO_ORDINAL="$restored_ordinal"
+  export RALPH_CURRENT_TODO_ID="$restored_id"
+  export RALPH_CURRENT_TODO_HASH="$restored_hash"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON}" = "todo-continue" ]
+  [ "${RALPH_RUN_PLAN_RESUME_SESSION_ID}" = "$session_id" ]
+  [ "${RALPH_PLAN_CLI_RESUME}" = "1" ]
+  # The resumed prompt says why the previous turn stopped.
+  [ "${RALPH_CONTINUATION_ROUTE:-}" = "permission" ]
+  [ -f "$(ralph_human_continuation_consumed_marker_path "$request_id")" ]
+  cont_assert_zero_agent_polls
+}
+
 @test "journey: next TODO starts fresh after prior TODO completes" {
   local first_session="sess-todo-one" second_session=""
   ralph_session_todo_create "$first_session" "exact" >/dev/null

@@ -358,6 +358,77 @@ class TestElapsedAndLabels(unittest.TestCase):
         self.assertNotIn("implement-r1", rendered[2])
         self.assertNotIn("review-r1", rendered[2])
 
+    def test_header_counts_omit_deferred_queued_conditionals(self) -> None:
+        payload = copy.deepcopy(fixture_payload("sequential-task-running.json"))
+        payload["run"]["mode"] = "dependency"
+        root = payload["stages"][0]
+        root.update(id="review", state="running", attempt=1, dependencies=[])
+        branch = payload["stages"][1]
+        branch.update(
+            id="implement-r1",
+            state="queued",
+            attempt=0,
+            dependencies=[{"stageId": "review", "condition": "changes-required"}],
+        )
+        child = copy.deepcopy(branch)
+        child.update(
+            id="review-r1",
+            index=2,
+            dependencies=[{"stageId": "implement-r1", "condition": None}],
+        )
+        payload["stages"] = [root, branch, child]
+        view = wt.view_from_snapshot(wt.parse_status_snapshot(payload))
+
+        full_counts = wl.count_stages(view.snapshot.stages)
+        self.assertEqual(full_counts.queued, 2)
+        self.assertEqual(full_counts.total, 3)
+
+        revealed = wt.revealed_progress_stages(view.snapshot)
+        revealed_counts = wl.count_stages(revealed)
+        self.assertEqual(revealed_counts.queued, 0)
+        self.assertEqual(revealed_counts.running, 1)
+        self.assertEqual(revealed_counts.total, 1)
+
+        header = [
+            "".join(span.text for span in line)
+            for line in wl._header_lines(
+                view,
+                width=40,
+                tier="compact",
+                now=FIXED_NOW,
+                ascii_only=True,
+            )
+        ]
+        self.assertTrue(
+            any("0/1 stages" in line for line in header),
+            header,
+        )
+        header_text = "\n".join(header)
+        self.assertNotIn("implement-r1", header_text)
+        self.assertNotIn("review-r1", header_text)
+
+        summary = "".join(span.text for span in wl._progress_summary_spans(view))
+        self.assertEqual(summary, "Progress  0 complete · 1 in progress · 0 remaining")
+
+        branch["state"] = "running"
+        branch["attempt"] = 1
+        view = wt.view_from_snapshot(wt.parse_status_snapshot(payload))
+        revealed_counts = wl.count_stages(wt.revealed_progress_stages(view.snapshot))
+        self.assertEqual(revealed_counts.running, 2)
+        self.assertEqual(revealed_counts.queued, 1)
+        self.assertEqual(revealed_counts.total, 3)
+        header = [
+            "".join(span.text for span in line)
+            for line in wl._header_lines(
+                view,
+                width=40,
+                tier="compact",
+                now=FIXED_NOW,
+                ascii_only=True,
+            )
+        ]
+        self.assertTrue(any("0/3 stages" in line for line in header), header)
+
     def test_progress_tree_reveals_only_the_conditional_route_that_is_entered(self) -> None:
         payload = copy.deepcopy(fixture_payload("sequential-task-running.json"))
         payload["run"]["mode"] = "dependency"

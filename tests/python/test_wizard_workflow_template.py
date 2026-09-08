@@ -29,6 +29,7 @@ from ralph_script_loader import load_ralph_script
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RALPH_ROOT = REPO_ROOT / "bundle" / ".ralph"
 EXPECTED_IDS = (
+    "assessment",
     "bug-fix",
     "feature-delivery",
     "human-verified-delivery",
@@ -36,6 +37,8 @@ EXPECTED_IDS = (
     "plan-delivery",
     "refactor",
     "release-gate",
+    "review-jury",
+    "triage",
 )
 
 wft = load_ralph_script("wizard-workflow-template")
@@ -56,7 +59,7 @@ class TestBundledWorkflowsPath(unittest.TestCase):
 
 
 class TestListWorkflows(unittest.TestCase):
-    def test_list_workflows_exact_seven_ids_from_canonical_path(self) -> None:
+    def test_list_workflows_exact_ten_ids_from_canonical_path(self) -> None:
         workflows_dir = wft.bundled_workflows_dir(RALPH_ROOT)
         self.assertTrue(workflows_dir.is_dir(), f"missing canonical dir: {workflows_dir}")
         entries = wft.list_workflows(workflows_dir)
@@ -71,7 +74,7 @@ class TestListWorkflows(unittest.TestCase):
             self.assertEqual(entry["mode"], "dependency")
             self.assertNotIn("engine", entry)
 
-    def test_cmd_list_prints_json_lines_for_exact_seven(self) -> None:
+    def test_cmd_list_prints_json_lines_for_exact_ten(self) -> None:
         workflows_dir = wft.bundled_workflows_dir(RALPH_ROOT)
         buf = io.StringIO()
         with redirect_stdout(buf):
