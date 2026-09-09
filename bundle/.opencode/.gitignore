@@ -1,0 +1,7 @@
+# package.json is the @opencode-ai/plugin pin and must be committed: CI runs
+# `npm install --prefix bundle/.opencode` to materialize the type declaration
+# that the plugin supply-chain check hashes. Ignoring it made that step fail
+# with ENOENT, killing the bats fast and slow tiers before any test ran.
+node_modules
+package-lock.json
+bun.lock
