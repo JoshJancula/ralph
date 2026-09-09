@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Mapping, Optional
 
 from tool_call_classification import ACCOUNTING_KEYS
+from tool_call_target_telemetry import READ_WASTE_DEMUX_KEYS
 from usage_accounting import (
     USAGE_INVOCATION_SCHEMA_VERSION,
     attach_auxiliary_metrics,
@@ -286,6 +287,36 @@ if merge_path.strip():
                     classified = classify_tool_calls(bt)
                     for counter_key in ACCOUNTING_KEYS:
                         record[counter_key] = classified.get(counter_key, 0)
+                # Read-waste telemetry. The demux computes these and they feed the
+                # per-invocation optimization hint, but without persisting them the
+                # numbers vanish with the run and no cross-invocation analysis is
+                # possible. They are runtime-agnostic: any runtime that reports tool
+                # calls produces them. Redundant reads are the expensive kind of
+                # context bloat -- a token entering context is billed once as a cache
+                # write (~1.25x) and again as a cache read (~0.1x) on every later
+                # request in the invocation.
+                # Write-price inputs: the TTL split determines whether a cache
+                # write cost 1.25x (5-minute) or 2x (1-hour) base input price.
+                for ttl_key in (
+                    "cache_creation_5m_input_tokens",
+                    "cache_creation_1h_input_tokens",
+                ):
+                    ttl_value = mu.get(ttl_key)
+                    if ttl_value is not None:
+                        try:
+                            record[ttl_key] = int(ttl_value)
+                        except (TypeError, ValueError):
+                            record[ttl_key] = 0
+                for waste_key in READ_WASTE_DEMUX_KEYS:
+                    waste_value = mu.get(waste_key)
+                    if waste_value is not None:
+                        try:
+                            record[waste_key] = int(waste_value)
+                        except (TypeError, ValueError):
+                            record[waste_key] = 0
+                targets = mu.get("tool_call_targets")
+                if isinstance(targets, list):
+                    record["tool_call_targets"] = targets
                 if runtime == "opencode":
                     overlay_module = _load_overlay_fields_module()
                     if overlay_module is not None and hasattr(

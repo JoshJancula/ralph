@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "category": "missing-root-artifact",
+  "summary": "Three of the six preserved ralph-plugin-beta-graph runs have no events.jsonl, logs/, or operator/ directory at the run root. Only graph.json, observability.jsonl, orchestration-plans/, and run.json exist. There is no per-run supervisor.log or admission.jsonl to reconstruct scheduling decisions for these runs.",
+  "affectedAttempts": [
+    "run-20260811T125349Z-0-17reyS",
+    "run-20260811T133516Z-0-FzRkSY",
+    "run-20260811T135841Z-0-vk9YK7"
+  ],
+  "presentRootFiles": [
+    "graph.json",
+    "observability.jsonl",
+    "orchestration-plans/",
+    "run.json",
+    "workspaces/metadata"
+  ],
+  "missingRootFiles": [
+    "events.jsonl",
+    "logs/",
+    "operator/",
+    "retry-context/"
+  ],
+  "comparisonAttemptsWithRootArtifacts": [
+    "run-20260814T162017Z-0-L23fPN",
+    "run-20260815T021145Z-0-udoZs5"
+  ],
+  "operatorImpact": "An operator opening one of the three affected run directories has no supervisor.log, no events feed, and no operator/requests directory to explain why the run is stuck or what to do next. The run.json schemaVersion for these three is 1; the two later runs are schemaVersion 2 and carry the missing root artifacts, showing the gap was closed only in the newer runtime version, not backfilled onto older runs."
+}

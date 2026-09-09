@@ -22,14 +22,36 @@ ralph_native_hook_ralph_home() {
   return 1
 }
 
+# The bash-lib directory this file was loaded from.
+#
+# A hook shipped inside a Ralph tree already knows where its siblings live: they
+# sit next to the lib that is currently executing. Without this, a checkout or a
+# project-local install with no global ~/.ralph resolves nothing and every hook
+# silently no-ops. This is not the global fallback -- it is the tree the running
+# code came from -- so it applies even under RALPH_DISABLE_GLOBAL_FALLBACK.
+ralph_native_hook_self_bash_lib_dir() {
+  local dir
+  dir="$(dirname "$_NATIVE_HOOK_LIB_DIR")"
+  [[ -d "$dir" ]] || return 1
+  printf '%s\n' "$dir"
+}
+
 # Resolve a file under bash-lib. Prefers project-local .ralph, then $RALPH_HOME/bundle/.ralph.
 # Args: workspace relative_path (e.g. compactors.sh or mcp-proxy/mcp-proxy-policy.sh)
 ralph_native_hook_resolve_bash_lib() {
   local workspace="${1:-}" rel_path="${2:-}"
-  local candidate ralph_home
+  local candidate ralph_home self_dir
 
   if [[ -n "$workspace" ]]; then
     candidate="$workspace/.ralph/bash-lib/$rel_path"
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  if self_dir="$(ralph_native_hook_self_bash_lib_dir 2>/dev/null)"; then
+    candidate="$self_dir/$rel_path"
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return 0
@@ -68,6 +90,11 @@ ralph_native_hook_resolve_bash_lib_dir() {
     fi
   done
 
+  if dir="$(ralph_native_hook_self_bash_lib_dir 2>/dev/null)"; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+
   if [[ "${RALPH_DISABLE_GLOBAL_FALLBACK:-0}" == "1" ]]; then
     return 1
   fi
@@ -85,10 +112,18 @@ ralph_native_hook_resolve_bash_lib_dir() {
 # Resolve a script directly under .ralph (e.g. mcp-server.sh).
 ralph_native_hook_resolve_ralph_script() {
   local workspace="${1:-}" script_name="${2:-}"
-  local candidate ralph_home
+  local candidate ralph_home self_dir
 
   if [[ -n "$workspace" ]]; then
     candidate="$workspace/.ralph/$script_name"
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  if self_dir="$(ralph_native_hook_self_bash_lib_dir 2>/dev/null)"; then
+    candidate="$(dirname "$self_dir")/$script_name"
     if [[ -f "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return 0

@@ -1854,8 +1854,8 @@ ralph_mcp_proxy_read_file_metadata() {
   local resolved="${1:-}"
   local file_size file_mtime
   [[ -f "$resolved" ]] || return 1
-  file_size="$(stat -f '%z' "$resolved" 2>/dev/null || stat -c '%s' "$resolved" 2>/dev/null || true)"
-  file_mtime="$(stat -f '%m' "$resolved" 2>/dev/null || stat -c '%Y' "$resolved" 2>/dev/null || true)"
+  file_size="$(stat -c '%s' "$resolved" 2>/dev/null || stat -f '%z' "$resolved" 2>/dev/null || true)"
+  file_mtime="$(stat -c '%Y' "$resolved" 2>/dev/null || stat -f '%m' "$resolved" 2>/dev/null || true)"
   [[ "$file_size" =~ ^[0-9]+$ && "$file_mtime" =~ ^[0-9]+$ ]] || return 1
   printf '%s|%s' "$file_size" "$file_mtime"
 }

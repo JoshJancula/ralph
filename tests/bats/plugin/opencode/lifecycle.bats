@@ -50,7 +50,16 @@ teardown() {
   ' "$PLUGIN_ROOT/.ralph-plugin-generated.json"
 }
 
+# The pinned host declaration lives in bundle/.opencode/node_modules, which is
+# gitignored and only present after `npm install` in that directory. The hash
+# pin is a supply-chain guard, so it must never be asserted against a missing
+# file -- that tests the checkout, not the pin.
+require_opencode_declaration() {
+  [ -f "$DECLARATION" ] || skip "pinned @opencode-ai/plugin declaration not installed (run npm install in bundle/.opencode)"
+}
+
 @test "OpenCode module matches the pinned declaration and hook contract" {
+  require_opencode_declaration
   local expected_hash
   expected_hash="$(jq -r '.typeDeclarationSha256' "$CONTRACT")"
   [ "$(shasum -a 256 "$DECLARATION" | awk '{print $1}')" = "$expected_hash" ]
@@ -65,6 +74,7 @@ teardown() {
 }
 
 @test "OpenCode renderer blocks an incompatible host declaration" {
+  require_opencode_declaration
   run python3 - "$GENERATOR" <<'PY'
 import importlib.util
 import os

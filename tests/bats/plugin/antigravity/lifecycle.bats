@@ -4,7 +4,10 @@ source "$BATS_TEST_DIRNAME/../../helper/load-lib.bash"
 
 PLUGIN_ROOT="$REPO_ROOT/plugins/ralph-orchestrator/antigravity"
 CONTRACT="$REPO_ROOT/bundle/.ralph/plugin-inputs/contracts/antigravity.json"
-AUDIT="$REPO_ROOT/.ralph-workspace/artifacts/plugin-beta-finish/antigravity-contract.md"
+# The audit doc is a tracked reference, not runtime state: .ralph-workspace
+# is gitignored, so a fixture there exists only on the machine that produced
+# it and never in a fresh clone or CI.
+AUDIT="$REPO_ROOT/docs/audits/antigravity-contract.md"
 CANONICAL_WORKFLOWS=(ralph-doctor ralph-plan ralph-run ralph-status ralph-workflow)
 OBSOLETE_WORKFLOWS=(ralph-agents ralph-graph ralph-orchestrate)
 

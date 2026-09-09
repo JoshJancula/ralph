@@ -61,7 +61,10 @@ todo_session_seed_identity() {
   local manifest_path mode
   manifest_path="$(ralph_session_todo_manifest_path "add-tier2-todo-session-manifest")"
   [ -f "$manifest_path" ]
-  mode="$(stat -f '%OLp' "$manifest_path" 2>/dev/null || stat -c '%a' "$manifest_path")"
+  # GNU coreutils first: BSD `stat -c` fails cleanly with no output, but GNU
+  # `stat -f` prints a filesystem block before failing, and the command
+  # substitution then concatenates that with the fallback's answer.
+  mode="$(stat -c '%a' "$manifest_path" 2>/dev/null || stat -f '%OLp' "$manifest_path")"
   [ "$mode" = "600" ]
 }
 

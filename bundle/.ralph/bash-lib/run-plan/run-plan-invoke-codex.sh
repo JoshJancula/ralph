@@ -1944,7 +1944,21 @@ while true; do
       fi
     fi
   elif ! kill -0 "$pid" 2>/dev/null; then
-    if [[ ! -f "$session_dir/close.flag" ]]; then
+    # The server can exit with lines still buffered in the fifo -- it may write
+    # the approval request and terminate in the same breath. Exiting on the
+    # death signal alone discards those bytes, so a fast server is
+    # indistinguishable from one that never emitted a request. Drain first.
+    while IFS= read -r -t 0.2 line <&4; do
+      handle_line "${line:-}"
+      if [[ -f "$session_dir/raw-request.json" && ! -f "$session_dir/request.ready" ]]; then
+        printf '%s\n' "1" >"$session_dir/request.ready"
+        if [[ "$state" == "starting" ]]; then
+          state="waiting"
+          printf '%s\n' "$state" >"$session_dir/state"
+        fi
+      fi
+    done
+    if [[ ! -f "$session_dir/close.flag" && ! -f "$session_dir/request.ready" ]]; then
       printf '%s\n' "server-exit" >"$session_dir/failed"
     fi
     printf '%s\n' "closed" >"$session_dir/state"

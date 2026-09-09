@@ -463,11 +463,15 @@ graph_state_list_runs() {
   # so the newest is last. Do not rely on GNU find -printf (macOS lacks it).
   local tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/ralph-graph-runs.XXXXXX")" || return 1
-  find "$ns_root" -mindepth 1 -maxdepth 1 -type d -exec stat -f '%m %N' {} \; 2>/dev/null \
+  # GNU first, BSD second. Probing BSD first cannot work here: on Linux
+  # `stat -f` treats the format as a file operand and prints a filesystem block
+  # for the directory instead of failing, so $tmp fills with garbage and an
+  # "is it empty" fallback check never fires -- leaving the list unordered.
+  # macOS `find` has no -printf, so it errors out and falls through cleanly.
+  find "$ns_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | awk '{print $2}' > "$tmp" 2>/dev/null
-  # GNU stat fallback (Linux CI): %Y mtime seconds.
   if [[ ! -s "$tmp" ]]; then
-    find "$ns_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+    find "$ns_root" -mindepth 1 -maxdepth 1 -type d -exec stat -f '%m %N' {} \; 2>/dev/null \
       | sort -n | awk '{print $2}' > "$tmp" 2>/dev/null
   fi
   # Print only the basename of each run directory.

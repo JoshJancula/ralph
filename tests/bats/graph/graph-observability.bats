@@ -9,7 +9,7 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-logs.sh"
 GRAPH_RUN_SH="$REPO_ROOT/bundle/.ralph/graph-run.sh"
 GRAPH_TUI_PY="$REPO_ROOT/bundle/.ralph/python/graph_tui.py"
 PTY_EXEC="$REPO_ROOT/tests/bats/bin/ralph-pty-exec"
-GENERIC_FIXTURE="$REPO_ROOT/.ralph-workspace/artifacts/graph-mode-recovery/fixtures/generic-opencode-request.json"
+GENERIC_FIXTURE="$REPO_ROOT/tests/fixtures/graph-mode-recovery/generic-opencode-request.json"
 
 setup() {
   TMPD="$(mktemp -d)"

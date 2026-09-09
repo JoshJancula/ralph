@@ -376,7 +376,7 @@ require_python3() {
 @test "opencode G15 permission parser preserves actionable identity and rejects generics" {
   local repo_root fixture parsed
   repo_root="$BATS_TEST_DIRNAME/../../.."
-  fixture="$repo_root/.ralph-workspace/artifacts/graph-mode-recovery/fixtures/generic-opencode-request.json"
+  fixture="$repo_root/tests/fixtures/graph-mode-recovery/generic-opencode-request.json"
   [ -f "$fixture" ]
 
   # read

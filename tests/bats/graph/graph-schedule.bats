@@ -166,7 +166,13 @@ EOF
 
   run /bin/bash "$script"
   [ "$status" -eq 0 ]
-  [[ "$output" == bash=3.2* ]]
+  # The point is that the loader works on the oldest bash Ralph supports. Only
+  # macOS ships 3.2 as /bin/bash; on Linux CI it is 5.x, where asserting the
+  # version tests the host rather than the loader. The behavior assertions
+  # below run on whatever /bin/bash is, so the portable path stays covered.
+  if [[ "$(/bin/bash -c 'printf %s "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')" == 3.2 ]]; then
+    [[ "$output" == bash=3.2* ]]
+  fi
   [[ "$output" == *$'\n'count=3$'\n'* ]] || [[ "$output" == *"count=3"* ]]
   [[ "$output" == *"transform_indegree=1"* ]]
   [[ "$output" == *"source_succ=transform"* ]]
@@ -447,7 +453,10 @@ EOF
   run /bin/bash "$harness"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" >"$out32"
-  [[ "$(grep '^bash=' "$out32")" == bash=3.2* ]]
+  # See the loader test above: assert 3.2 only where /bin/bash really is 3.2.
+  if [[ "$(/bin/bash -c 'printf %s "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')" == 3.2 ]]; then
+    [[ "$(grep '^bash=' "$out32")" == bash=3.2* ]]
+  fi
   [[ "$(grep '^fast ' "$out32")" == *"rc=0"* ]]
   [[ "$(grep '^fast ' "$out32")" == *"missing=0"* ]]
   [[ "$(grep '^slow ' "$out32")" == *"rc=0"* ]]

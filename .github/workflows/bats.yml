@@ -45,6 +45,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
       - name: Install GNU parallel and ripgrep
         run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
 
@@ -122,6 +129,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
       - name: Install GNU parallel and ripgrep
         run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
 
@@ -156,6 +170,13 @@ jobs:
         uses: bats-core/bats-action@4.0.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
 
       - name: Install GNU parallel and ripgrep
         run: sudo apt-get update && sudo apt-get install -y parallel ripgrep

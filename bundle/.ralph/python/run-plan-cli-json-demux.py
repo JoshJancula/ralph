@@ -720,20 +720,25 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                 )
         return
     if mode == "claude":
-        # Claude stream-json emits one usage block per assistant turn (each a per-request
-        # delta, under message.usage) plus a final `result` event. Empirically the result
-        # event reports cache_read/cache_creation cumulatively but input_tokens/output_tokens
-        # for the FINAL turn only -- so trusting it undercounts input/output for multi-turn
-        # invocations (e.g. a 166-turn TODO collapsing to input=10 even though tens of
-        # thousands of tokens were written to cache). We therefore SUM the per-turn assistant
-        # usage for all four fields, which is billing-accurate, and fall back to the result
-        # event's usage only when no per-turn usage was observed (e.g. an interrupted stream).
+        # Claude stream-json emits one `assistant` event per CONTENT BLOCK, not per API
+        # request. Every block of one response repeats the same message.id and a COPY of
+        # that request's usage, so summing raw assistant events multiplies each request's
+        # tokens by its block count (measured 2.2x-2.4x on real streams). Usage is therefore
+        # keyed by message.id here and reduced in finalize_usage().
         #
-        # Only the actual terminal result event should be treated as fallback usage. Some
+        # Two further properties of the stream, both verified against live runs:
+        #   - The terminal `result` event's usage is the exact SUM across all requests for
+        #     input/cache_creation/cache_read -- it matches a dedupe-by-message-id sum.
+        #   - Per-event output_tokens is a STALE PARTIAL snapshot taken when the block
+        #     opened (it reads 1-3 even for a long response). Only the result event carries
+        #     real output. Never sum per-event output.
+        # So the result event is primary, with the deduped per-message sum as the fallback
+        # for streams that terminate without one (interrupt, timeout, crash).
+        #
+        # Only the actual terminal result event should be treated as terminal usage. Some
         # Claude event variants can include an unrelated top-level `result` payload on
-        # non-terminal events; treating any event with a `result` key as terminal causes us
-        # to discard valid per-turn assistant usage and leaves only a tiny final-turn usage
-        # snapshot alongside a large cache write count.
+        # non-terminal events; treating any event with a `result` key as terminal discards
+        # valid per-request usage.
         is_result_event = obj.get("type") == "result"
 
         usage = obj.get("usage")
@@ -745,21 +750,39 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
         if not isinstance(usage, dict):
             return
 
+        # Cache writes are priced by TTL: ~1.25x base input for the 5-minute
+        # breakpoint, ~2x for the 1-hour one. Which one the CLI picks is not ours
+        # to choose, so record the split rather than assuming a rate -- measured
+        # runs show Claude Code writing entirely at the 1-hour TTL.
+        cache_creation = usage.get("cache_creation")
+        if not isinstance(cache_creation, dict):
+            cache_creation = {}
+
         tokens = {
             "input_tokens": int(usage.get("input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),
             "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
             "cache_read_input_tokens": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_creation_5m_input_tokens": int(
+                cache_creation.get("ephemeral_5m_input_tokens") or 0
+            ),
+            "cache_creation_1h_input_tokens": int(
+                cache_creation.get("ephemeral_1h_input_tokens") or 0
+            ),
         }
         if is_result_event:
-            # Stash for fallback only; adding it would clobber/double-count the final turn
-            # already captured via the per-turn assistant usage.
             acc["_claude_result_usage"] = tokens
         else:
-            acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
-            acc["_claude_turn_usage_seen"] = True
-            for key, value in tokens.items():
-                acc[key] += value
+            # Key by message.id so repeated content-block events collapse to one request.
+            # Events with no id cannot be attributed, so each gets its own synthetic key --
+            # that degrades to the old per-event behavior rather than dropping the usage.
+            message = obj.get("message")
+            msg_id = message.get("id") if isinstance(message, dict) else None
+            per_message = acc.setdefault("_claude_msg_usage", {})
+            if not msg_id:
+                msg_id = f"_anon_{len(per_message)}"
+            # Later blocks of one message carry a fuller snapshot, so keep the last.
+            per_message[msg_id] = tokens
         return
     # Generic: look for common token field names across runtimes (cursor, etc.)
     for in_key in ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"):
@@ -807,17 +830,49 @@ def compute_cache_read_ratios(acc: Dict[str, Any]) -> Tuple[float, float]:
     return per_turn, per_call
 
 
+_CLAUDE_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    # TTL split of the write bucket; determines the write price (1.25x vs 2x).
+    "cache_creation_5m_input_tokens",
+    "cache_creation_1h_input_tokens",
+)
+
+
+def _finalize_claude_usage(acc: Dict[str, Any]) -> None:
+    """Reduce per-message Claude usage into billing-accurate invocation totals.
+
+    Primary source is the terminal result event (the exact cross-request sum, and the
+    only source of real output_tokens). Fallback is the dedupe-by-message-id sum for
+    streams that never emit one. Per field we take the max of the two: they agree on a
+    healthy stream, and the max keeps whichever source is populated when one is partial
+    (an interrupted stream has no result; a hypothetical CLI that reported only the final
+    turn in `result` would be covered by the deduped sum).
+    """
+    per_message = acc.get("_claude_msg_usage") or {}
+    # Distinct message ids are the real count of API responses; assistant events are not.
+    acc["tool_turns"] = len(per_message)
+
+    deduped = {
+        field: sum(int(u.get(field) or 0) for u in per_message.values())
+        for field in _CLAUDE_USAGE_FIELDS
+    }
+    result_usage = acc.get("_claude_result_usage")
+    if not isinstance(result_usage, dict):
+        result_usage = {}
+
+    for field in _CLAUDE_USAGE_FIELDS:
+        acc[field] = max(deduped[field], int(result_usage.get(field) or 0))
+
+
 def finalize_usage(acc: Dict[str, Any], mode: str) -> None:
     """Apply end-of-stream usage fixups that depend on the full event sequence."""
     if mode == "antigravity":
         acc["usage_unsupported"] = not bool(acc.get("_antigravity_step_usage_seen"))
-    if mode == "claude" and not acc.get("_claude_turn_usage_seen"):
-        # No per-turn assistant usage was observed (e.g. a stream that only produced a
-        # result event); fall back to whatever the result event reported.
-        result_usage = acc.get("_claude_result_usage")
-        if isinstance(result_usage, dict):
-            for key, value in result_usage.items():
-                acc[key] = int(value or 0)
+    if mode == "claude":
+        _finalize_claude_usage(acc)
     if mode == "opencode":
         # If the provider reported cache reads, we keep the measured field
         # and never imply cache savings.
@@ -990,6 +1045,8 @@ def main() -> None:
         "output_tokens": 0,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
+        "cache_creation_5m_input_tokens": 0,
+        "cache_creation_1h_input_tokens": 0,
         "max_turn_total_tokens": 0,
         "tool_turns": 0,
         "tool_calls_total": 0,

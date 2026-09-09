@@ -189,9 +189,22 @@ cleanup_plan_graph_run_is_terminal() {
 # cleanup_plan_file_mtime <path>
 # Prints the mtime of <path> as a Unix epoch integer.
 # Tries macOS BSD stat first, then GNU stat.
+# Epoch mtime, or 0 when it cannot be read.
+#
+# Probe GNU coreutils first. BSD `stat -c` fails cleanly and falls through, but
+# GNU `stat -f` *succeeds* with filesystem info -- a multi-line "File: ..."
+# block -- so the BSD-first order returns prose on Linux. Callers compare the
+# result arithmetically, where `File` is then evaluated as a variable name and
+# aborts the run under `set -u`. Validate the result rather than trusting the
+# exit status alone.
 cleanup_plan_file_mtime() {
-  local path="$1"
-  stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null || echo 0
+  local path="$1" mtime=""
+  mtime="$(stat -c %Y "$path" 2>/dev/null)" || mtime=""
+  if [[ ! "$mtime" =~ ^[0-9]+$ ]]; then
+    mtime="$(stat -f %m "$path" 2>/dev/null)" || mtime=""
+  fi
+  [[ "$mtime" =~ ^[0-9]+$ ]] || mtime=0
+  printf '%s\n' "$mtime"
 }
 
 # cleanup_plan_epoch_days_ago <days>

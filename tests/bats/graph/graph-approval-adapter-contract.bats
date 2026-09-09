@@ -682,7 +682,7 @@ EOF
   mkdir -p "$ws/.ralph-workspace" "$ws/.opencode"
   ralph_approval_adapter_overlay_reset
 
-  fixture="$REPO_ROOT/.ralph-workspace/artifacts/graph-mode-recovery/fixtures/repeated-allow-once-request.json"
+  fixture="$REPO_ROOT/tests/fixtures/graph-mode-recovery/repeated-allow-once-request.json"
   [ -f "$fixture" ]
   [ "$(jq -r '.category' "$fixture")" = "repeated-allow-once-request" ]
 

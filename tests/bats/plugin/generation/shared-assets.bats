@@ -17,7 +17,10 @@ generated_checksum() {
       while IFS= read -r -d '' path; do
         printf '%s ' "$path"
         shasum -a 256 "$path" | awk '{print $1}'
-        stat -f '%Mp%Lp' "$path"
+        # Mode digits, portably: GNU coreutils first, then BSD. Probing BSD
+        # first would emit a filesystem block on Linux before failing, which the
+        # command substitution folds into the checksum input.
+        stat -c '%a' "$path" 2>/dev/null || stat -f '%Mp%Lp' "$path"
       done
   )
 }

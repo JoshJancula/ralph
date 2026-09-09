@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -103,6 +104,10 @@ _TELEMETRY_COUNTERS = (
     "repeated_read_extra_calls",
     "plan_file_read_calls",
 )
+
+# Public alias for consumers that persist these counters out of the demux usage
+# file (ralph-usage-record.py). Kept as one list so producer and reader cannot drift.
+READ_WASTE_DEMUX_KEYS = _TELEMETRY_COUNTERS
 
 
 def init_tool_target_telemetry() -> Dict[str, Any]:
@@ -297,6 +302,133 @@ def is_plan_file_target(target: str) -> bool:
     return bool(suffix) and suffix != "/"
 
 
+# --- Read-only shell file access -------------------------------------------
+#
+# Capable models inspect files with shell commands (cat/sed/grep) rather than
+# read-family tools. Ralph hashes shell commands, so those reads are invisible to
+# the read-waste counters: an invocation that reads one file ten times via `cat`
+# scores identically to one that reads ten different files. Measured opus runs did
+# 100% of their file access this way, making read-waste unmeasurable for them.
+#
+# We therefore extract *paths only*, and only from an allowlist of read-only
+# commands. The full command is never recorded -- the shell entry keeps its hash.
+# Recording a path from `cat X` is equivalent to recording it from `Read(X)`,
+# which the telemetry already does.
+
+# Read-only commands whose non-flag arguments are all file paths.
+_SHELL_READ_PATH_ARGS = frozenset(
+    {"cat", "head", "tail", "nl", "wc", "less", "more", "file", "stat", "md5sum", "shasum"}
+)
+# Read-only commands whose FIRST non-flag argument is a pattern or script, not a path.
+_SHELL_READ_PATTERN_FIRST = frozenset(
+    {"grep", "egrep", "fgrep", "rg", "ag", "ack", "awk", "sed"}
+)
+_SHELL_READ_COMMANDS = _SHELL_READ_PATH_ARGS | _SHELL_READ_PATTERN_FIRST
+
+# Splitting on these keeps each pipeline stage a separate candidate command.
+_SHELL_SEGMENT_RE = re.compile(r"\|\||&&|[|;\n]")
+# A redirect means the segment writes; never treat it as a read.
+_SHELL_WRITE_RE = re.compile(r">>?")
+_SHELL_READ_PATHS_CAP = 16
+# Flags that turn an otherwise read-only command into a writer (sed -i edits in
+# place). A segment carrying one is not a read, even though its args are paths.
+_SHELL_WRITE_FLAGS = {
+    "sed": {"-i", "--in-place"},
+}
+
+
+def _looks_like_path(token: str) -> bool:
+    """Conservative path test: avoids mistaking a grep pattern for a filename."""
+    if not token or token.startswith("-"):
+        return False
+    if any(ch in token for ch in "*?$`\\"):
+        return False
+    if "/" in token:
+        return True
+    # A bare filename needs a plausible extension (foo.py, not "1,20p" or "TODO").
+    base, dot, ext = token.rpartition(".")
+    return bool(base and dot and ext.isalnum() and 1 <= len(ext) <= 5)
+
+
+# `sed -n '120,180p'` / `sed -n 120,180p` -- an explicit line window.
+_SED_RANGE_RE = re.compile(r"^(\d+),(\d+)p$")
+
+
+def _shell_window_suffix(name: str, tokens: List[str]) -> str:
+    """Line-window suffix for a shell read, mirroring _read_window_suffix().
+
+    Read tools distinguish `Read(f, offset=1, limit=50)` from `Read(f, offset=200)`
+    because paging through a large file is not a redundant read. A shell read must
+    be held to the same standard or `sed -n` paging would be miscounted as waste.
+    Commands with no explicit window (cat, grep) read the whole file, so they get
+    no suffix and correctly collide with each other.
+    """
+    if name != "sed":
+        return ""
+    for token in tokens[1:]:
+        match = _SED_RANGE_RE.match(token.strip())
+        if match:
+            return f":offset={match.group(1)}:limit={match.group(2)}"
+    return ""
+
+
+def extract_shell_read_paths(command: str) -> List[str]:
+    """Paths read by an allowlisted read-only shell command, in order.
+
+    Returns [] for anything not provably a read: unknown commands, redirects,
+    unparseable quoting. Silence is the safe answer -- a missed read understates
+    waste, while a false one would invent it.
+    """
+    text = (command or "").strip()
+    if not text:
+        return []
+    found: List[str] = []
+    for segment in _SHELL_SEGMENT_RE.split(text):
+        segment = segment.strip()
+        if not segment or _SHELL_WRITE_RE.search(segment):
+            continue
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        # Skip leading VAR=value assignments and common wrappers.
+        while tokens and ("=" in tokens[0].split("/")[-1][:64] and not tokens[0].startswith("-")
+                          and "/" not in tokens[0].split("=")[0]):
+            tokens = tokens[1:]
+        if not tokens:
+            continue
+        name = os.path.basename(tokens[0])
+        if name not in _SHELL_READ_COMMANDS:
+            continue
+        flags = [t for t in tokens[1:] if t.startswith("-")]
+        write_flags = _SHELL_WRITE_FLAGS.get(name, frozenset())
+        if any(f.split("=")[0] in write_flags for f in flags):
+            continue
+        args = [t for t in tokens[1:] if not t.startswith("-")]
+        if name in _SHELL_READ_PATTERN_FIRST and args:
+            args = args[1:]  # drop the pattern / script
+        suffix = _shell_window_suffix(name, tokens)
+        for arg in args:
+            if _looks_like_path(arg):
+                display = _display_path(arg)
+                if display:
+                    display += suffix
+                    if display not in found:
+                        found.append(display)
+                if len(found) >= _SHELL_READ_PATHS_CAP:
+                    return found
+    return found
+
+
+def _shell_read_extraction_enabled() -> bool:
+    """Opt-out for operators who do not want paths recovered from shell commands."""
+    return os.environ.get("RALPH_SHELL_READ_TARGETS", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
 def record_tool_target(
     acc: Dict[str, Any],
     tool_name: str,
@@ -319,6 +451,35 @@ def record_tool_target(
     targets = acc.setdefault("tool_call_targets", [])
     if isinstance(targets, list) and len(targets) < _TOOL_TARGETS_CAP:
         targets.append({"tool": normalized, "family": family, "target": target})
+
+    # A read-only shell command is a read. Emit one synthetic read entry per path
+    # so re-reads via the shell are counted like re-reads via a read tool. The
+    # shell entry above keeps its hashed target; only paths are added here.
+    if family == "shell" and tool_input is not None and _shell_read_extraction_enabled():
+        command = _first_arg_value(_iter_input_candidates(tool_input), ("command",))
+        for path in extract_shell_read_paths(command or ""):
+            shell_read = _truncate(path)
+            if isinstance(entries, list):
+                entries.append(
+                    {
+                        "tool": normalized,
+                        "family": "read",
+                        "target": shell_read,
+                        "is_read": True,
+                        "read_key": shell_read,
+                        "dedupe_key": (normalized, shell_read),
+                        "via_shell": True,
+                    }
+                )
+            if isinstance(targets, list) and len(targets) < _TOOL_TARGETS_CAP:
+                targets.append(
+                    {
+                        "tool": normalized,
+                        "family": "read",
+                        "target": shell_read,
+                        "via_shell": True,
+                    }
+                )
 
 
 def finalize_tool_target_telemetry(acc: Dict[str, Any]) -> None:

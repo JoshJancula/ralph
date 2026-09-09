@@ -147,13 +147,13 @@ write_dependency_graph_json() {
     namespace: "scale-dep",
     maxParallel: 4,
     tooling: { defaultProfile: null },
-    nodes: [{
+    nodes: ([{
       id: "implement", type: "agent", dependsOn: [],
       derivedFrom: "stage", stage: { id: "implement", runtime: "cursor", toolingProfile: null }
     }] + [range(1; $n) | {
       id: ("batch-" + tostring), type: "agent", dependsOn: [],
       derivedFrom: "stage", stage: { id: ("batch-" + tostring), runtime: "cursor" }
-    }],
+    }]),
     edges: []
   }' >"$path"
 }

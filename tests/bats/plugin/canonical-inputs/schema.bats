@@ -216,7 +216,10 @@ canonical_json_files() {
   )"
   [ "$source_count" -eq 1 ]
 
-  run grep -ERn --fixed-strings "$EXPECTED_VERSION" "$INPUT_ROOT"
+  # -E and --fixed-strings are conflicting matchers: GNU grep rejects the
+  # combination with exit 2, while BSD grep silently honors the last one. The
+  # intent is a literal search, so ask for exactly that.
+  run grep -Rn --fixed-strings "$EXPECTED_VERSION" "$INPUT_ROOT"
   [ "$status" -eq 1 ]
 }
 

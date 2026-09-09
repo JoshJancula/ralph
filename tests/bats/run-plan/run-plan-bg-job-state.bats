@@ -67,7 +67,8 @@ bg_job_advance_to_terminal() {
   local meta mode
   meta="$(ralph_bg_job_meta_path "job-mode")"
   [ -f "$meta" ]
-  mode="$(stat -f '%OLp' "$meta" 2>/dev/null || stat -c '%a' "$meta")"
+  # GNU coreutils first -- see the todo-session manifest mode test.
+  mode="$(stat -c '%a' "$meta" 2>/dev/null || stat -f '%OLp' "$meta")"
   [ "$mode" = "600" ]
 }
 
