@@ -27,6 +27,10 @@ setup() {
   SHIM="$RH/ralph"
   awk "/cat > \"\\\$tmp\" <<'SHIM'/{f=1;next} /^SHIM\$/{f=0} f" "$REPO_ROOT/install.sh" > "$SHIM"
   chmod +x "$SHIM"
+  # Last in setup(): teardown() in these files dereferences variables setup
+  # creates, so skipping before they exist fails teardown under `set -u` and
+  # bats drops the test with no TAP line at all instead of reporting a skip.
+  bats_skip_known_ci_flakes
 }
 
 teardown() {

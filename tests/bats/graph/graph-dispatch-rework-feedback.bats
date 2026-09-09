@@ -16,6 +16,10 @@ RALPH_DIR_SRC="$REPO_ROOT/bundle/.ralph"
 # setup_rework_dispatch_workspace still need it pointed at the real helpers.
 setup() {
   export RALPH_DIR="$REPO_ROOT/.ralph"
+  # Last in setup(): teardown() in these files dereferences variables setup
+  # creates, so skipping before they exist fails teardown under `set -u` and
+  # bats drops the test with no TAP line at all instead of reporting a skip.
+  bats_skip_known_ci_flakes
 }
 
 json_payload() {

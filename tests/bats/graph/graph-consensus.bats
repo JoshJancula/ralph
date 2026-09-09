@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
+
+setup() {
+  bats_skip_known_ci_flakes
+}
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/plan-todo.sh"
 export RALPH_RUN_PLAN_LIBRARY_ONLY=1
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"

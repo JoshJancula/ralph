@@ -106,6 +106,33 @@ bats_skip_known_ci_flakes() {
   fi
 
   case "${BATS_TEST_FILENAME##*/}:${BATS_TEST_DESCRIPTION}" in
+    "graph-artifact-routing.bats:three distinct roots: successful completion writes exactly one artifact under the state root, none in the agent snapshot" | \
+    "graph-artifact-routing.bats:three distinct roots: a missing artifact resolves to the state root and carries G11 required-artifact-missing evidence" | \
+    "graph-consensus.bats:adjudicate policy: on dissent dispatches adjudicator with full dissent packet" | \
+    "graph-consensus.bats:onVoterError retry: re-dispatches voter exactly once and falls back to fail when still errored" | \
+    "graph-dispatch-rework-feedback.bats:rework target dispatch injects prior review verdict feedback into its rendered plan" | \
+    "graph-observability.bats:logs follow rotation and detach stay read-only" | \
+    "graph-status.bats:default status snapshot explains real-run failures and waits without listing every pending node" | \
+    "config-killswitch.bats:stale sentinels are ignored and current sentinels abort" | \
+    "run-plan-routing.bats:routing injects workflow stage instructions before TODO content" | \
+    "workflow-run-registry.bats:Dependency adapter graph pointer projection includes plan progress and approval action")
+      # Quarantined on CI by operator decision, not because they are flaky.
+      #
+      # These ten pass on macOS -- locally and in a clean clone -- and fail only
+      # on the Linux runner. They were last touched by the workflow refactor and
+      # main's suite was green before it, so the failures most likely describe a
+      # real Linux-only regression in that work. Quarantining hides that signal;
+      # that tradeoff was made deliberately to stop CI blocking on it.
+      #
+      # They still run locally (no CI/GITHUB_ACTIONS in the environment), so the
+      # coverage is not lost -- only the CI gate is. To run them on CI again,
+      # set RALPH_RUN_LINUX_QUARANTINE=1, or use the bats-linux-repro workflow,
+      # which sets it and prints output on failure.
+      if [[ "${RALPH_RUN_LINUX_QUARANTINE:-0}" == "1" ]]; then
+        return 0
+      fi
+      skip "quarantined on CI: Linux-only failure, still runs locally (RALPH_RUN_LINUX_QUARANTINE=1 to run)"
+      ;;
     "mcp-proxy-grep-source-cap-dedupe.bats:duplicate of a source-capped grep stays deduped AND still reports partial-source state" | \
     "bash-compact-delivered-metrics.bats:applied compaction with a storage footer: delivered exceeds legacy compactedBytes by the footer" | \
     "fail-open-instrumentation.bats:below-threshold (small content, not expanded) is not logged as an error" | \

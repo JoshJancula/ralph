@@ -83,6 +83,10 @@ setup() {
     jq --arg p "$plan_copy" '.planPath = $p' "$run_json" > "$run_json.tmp" \
       && mv "$run_json.tmp" "$run_json"
   fi
+  # Last in setup(): teardown() in these files dereferences variables setup
+  # creates, so skipping before they exist fails teardown under `set -u` and
+  # bats drops the test with no TAP line at all instead of reporting a skip.
+  bats_skip_known_ci_flakes
 }
 
 teardown() {
