@@ -2115,7 +2115,9 @@ workflow_cli_cmd_start() {
     plan_shape="$(workflow_cli_plan_shape "$plan_real")"
     case "$plan_shape" in
       workflow|graph|orchestration)
-        echo "Error: --plan received a workflow or orchestration file, not a plan; use ralph workflow start --file for workflow files" >&2
+        # Name the actual shape: "workflow or orchestration" was inaccurate for a
+        # graph plan, and the shape is the one thing the user needs to see.
+        echo "Error: --plan received an unsupported plan shape ($plan_shape), not a leaf plan; use ralph workflow start --file for workflow files" >&2
         exit 1
         ;;
       missing)
@@ -2144,7 +2146,8 @@ workflow_cli_cmd_start() {
     else
       # Has Ralph TODOs: treat as a leaf plan. Requires planInput on the workflow.
       if [[ "$plan_input_mode" == "absent" ]]; then
-        echo "Error: this file contains Ralph TODOs but the workflow does not declare planInput; use --task for a task description or use a planInput workflow" >&2
+        # Name the rejected flag: the user passed --plan, so say so.
+        echo "Error: --plan received a file with Ralph TODOs but the workflow does not declare planInput; use --task for a task description or use a planInput workflow" >&2
         exit 1
       fi
       if [[ "${open_n:-0}" -lt 1 ]]; then

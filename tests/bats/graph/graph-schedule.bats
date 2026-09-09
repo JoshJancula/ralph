@@ -449,8 +449,11 @@ EOF
   out32="$tmpd/out-32.txt"
   out_default="$tmpd/out-default.txt"
 
-  # bash 3.2: portable poll path
-  run /bin/bash "$harness"
+  # Portable poll path. Force it explicitly rather than relying on /bin/bash
+  # being ancient: that only holds on macOS. On Linux /bin/bash is 5.x, which
+  # has `wait -n`, so this run silently took the fast path and then failed the
+  # wait_n=no assertion below -- and never exercised the poll path at all.
+  run env GRAPH_REAP_FORCE_POLL=1 /bin/bash "$harness"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" >"$out32"
   # See the loader test above: assert 3.2 only where /bin/bash really is 3.2.

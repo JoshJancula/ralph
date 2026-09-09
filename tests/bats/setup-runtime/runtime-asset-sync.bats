@@ -104,8 +104,14 @@ EOF
       target="$REPO_ROOT/$base/agents/$id"
       [ ! -e "$target" ]
     done
-    # Containing agent directories remain.
-    [ -d "$REPO_ROOT/$base/agents" ]
+    # Containing agent directories remain -- but only where the runtime dir is
+    # present at all. The five repo-root runtime dirs (.cursor .claude .codex
+    # .opencode .agents) are gitignored dev-workflow config, so they exist on a
+    # developer machine and never in a fresh checkout. Asserting on them
+    # unconditionally tests the checkout, not the sync.
+    if [ -d "$REPO_ROOT/$base" ]; then
+      [ -d "$REPO_ROOT/$base/agents" ]
+    fi
   done
 }
 
