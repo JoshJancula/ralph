@@ -73,7 +73,14 @@ jobs:
         # --print-output-on-failure is the whole point: the default TAP output
         # gives a line number but not the actual command output, which is what
         # you need to tell a test bug from a product bug.
+        #
+        # RALPH_RUN_LINUX_QUARANTINE=1 is required: CI sets CI=1, which makes
+        # bats_skip_known_ci_flakes skip the very tests this job exists to
+        # reproduce. Without it every run here is a wall of skips.
+        env:
+          CI: '1'
+          RALPH_RUN_LINUX_QUARANTINE: '1'
         run: |
-          CI=1 bash scripts/run-bats.sh -j "${{ inputs.jobs }}" -- \
+          bash scripts/run-bats.sh -j "${{ inputs.jobs }}" -- \
             --print-output-on-failure \
             ${{ inputs.files }}
