@@ -22,8 +22,16 @@ find_system_bats() {
 args=()
 enable_timing=1
 jobs_requested=0
+jobs_value=""
+expect_jobs_value=0
 saw_parallel_flag=0
 for arg in "$@"; do
+  if [[ "$expect_jobs_value" -eq 1 ]]; then
+    jobs_value="$arg"
+    expect_jobs_value=0
+    args+=("$arg")
+    continue
+  fi
   case "$arg" in
     -T | --timing)
       enable_timing=1
@@ -34,6 +42,12 @@ for arg in "$@"; do
       ;;
     -j | --jobs)
       jobs_requested=1
+      expect_jobs_value=1
+      args+=("$arg")
+      ;;
+    -j=* | --jobs=*)
+      jobs_requested=1
+      jobs_value="${arg#*=}"
       args+=("$arg")
       ;;
     --no-parallelize-within-files | --no-parallelize-across-files)
@@ -55,7 +69,12 @@ done
 # scripts/run-bats.sh has capped this for a while, but bin/bats is the other way
 # in and had no guard, so a direct `bin/bats -j 8 ...` still hit it. Add the same
 # cap here unless the caller has explicitly chosen a parallelization mode.
-if [[ "$jobs_requested" -eq 1 && "$saw_parallel_flag" -eq 0 ]]; then
+# bats rejects --no-parallelize-within-files below --jobs 2, so the cap must not
+# be added for -j 1. That combination is how a caller asks for a fully serial
+# run -- CI's serial recheck step does exactly this -- and adding the flag there
+# turned it into an immediate hard error rather than a serial run.
+if [[ "$jobs_requested" -eq 1 && "$saw_parallel_flag" -eq 0 ]] \
+  && [[ "$jobs_value" =~ ^[0-9]+$ ]] && [[ "$jobs_value" -ge 2 ]]; then
   args+=(--no-parallelize-within-files)
 fi
 
