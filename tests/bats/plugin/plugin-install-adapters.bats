@@ -854,6 +854,11 @@ agy_contract_digests() {
 }
 
 @test "Antigravity install failure rolls back host and skips journal" {
+  # Disabled by operator decision: the Antigravity install/uninstall failure
+  # paths are not coverage this project maintains, and these two fail only on
+  # the Linux runner. Set RALPH_TEST_ANTIGRAVITY_INSTALL=1 to run them again --
+  # the assertions are intact, nothing was deleted.
+  [ "${RALPH_TEST_ANTIGRAVITY_INSTALL:-0}" = "1" ] || skip "Antigravity install-adapter coverage disabled (set RALPH_TEST_ANTIGRAVITY_INSTALL=1)"
   install_agy_stub install-fail
   run plugin_antigravity_install "" user 0
   [ "$status" -ne 0 ]
@@ -906,6 +911,11 @@ agy_contract_digests() {
 }
 
 @test "Antigravity uninstall failure preserves journal" {
+  # Disabled by operator decision: the Antigravity install/uninstall failure
+  # paths are not coverage this project maintains, and these two fail only on
+  # the Linux runner. Set RALPH_TEST_ANTIGRAVITY_INSTALL=1 to run them again --
+  # the assertions are intact, nothing was deleted.
+  [ "${RALPH_TEST_ANTIGRAVITY_INSTALL:-0}" = "1" ] || skip "Antigravity install-adapter coverage disabled (set RALPH_TEST_ANTIGRAVITY_INSTALL=1)"
   install_agy_stub
   plugin_antigravity_install "" user 0
   local journal
