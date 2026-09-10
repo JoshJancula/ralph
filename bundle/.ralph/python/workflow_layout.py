@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from typing import Collection, Iterable, List, Optional, Sequence, Tuple
 
 import workflow_canvas as wc
-import workflow_logs as wlog
 import workflow_tui as wt
 
 
@@ -937,6 +936,7 @@ def _stage_row_spans(entry: StageListEntry, *, width: int, tier: str) -> Tuple[w
 # Lower number = higher priority (kept first when vertical space is scarce).
 DETAIL_PRIORITY = {
     "identity": 0,
+    "live_tail": 1,
     "next": 1,
     "reason": 1,
     "question": 2,
@@ -1061,6 +1061,48 @@ def is_approval_stage(stage: wt.Stage) -> bool:
     return stage.kind == "approval"
 
 
+LIVE_TAIL_HINT = "press l for the exact command"
+
+
+def stage_live_tail_command(
+    view: wt.WorkflowViewModel,
+    stage: Optional[wt.Stage],
+    *,
+    max_width: Optional[int] = None,
+) -> str:
+    """Exact public command that follows the selected stage's log.
+
+    The viewer never reads log content itself: every log fetch cost a blocking
+    public CLI call per selection change, which made arrowing through stages
+    stall. Operators get this copy-paste command instead and tail in their own
+    terminal.
+
+    A truncated command cannot be pasted, so ``max_width`` picks the longest
+    variant that fits by shedding flags that already match the CLI defaults.
+    Returns "" when even the shortest variant would be cut.
+    """
+
+    if view.run is None or stage is None:
+        return ""
+    run_id = shlex.quote(view.run.run_id)
+    stage_id = shlex.quote(stage.id)
+    attempt = f" --attempt {stage.attempt}" if stage.attempt > 0 else ""
+    base = f"ralph workflow logs {run_id} --stage {stage_id}"
+    variants = (
+        f"{base}{attempt} --stream combined --tail 200 --follow",
+        f"{base}{attempt} --stream combined --follow",
+        f"{base}{attempt} --follow",
+        f"{base} --follow",
+    )
+    if max_width is None:
+        return variants[0]
+    budget = max(0, int(max_width))
+    for variant in variants:
+        if wc.display_width(variant) <= budget:
+            return variant
+    return ""
+
+
 def _labeled_spans(label: str, value: str, *, value_role: str = "default") -> Tuple[wc.StyledText, ...]:
     return (
         wc.StyledText(f"{label}  ", "muted"),
@@ -1095,6 +1137,7 @@ def build_stage_detail_lines(
     reveal_paths: bool = False,
     max_lines: Optional[int] = None,
     include_heading: bool = False,
+    available_width: Optional[int] = None,
 ) -> Tuple[DetailLine, ...]:
     """Build priority-ordered detail rows for the selected stage.
 
@@ -1146,6 +1189,22 @@ def build_stage_detail_lines(
         wc.StyledText(stage_inspection_state_label(view, stage), state_role),
     )
     lines.append(DetailLine(key="identity", priority=DETAIL_PRIORITY["identity"], spans=identity))
+
+    # The label eats part of the row, so the command budget is what is left.
+    live_tail = stage_live_tail_command(
+        view,
+        stage,
+        max_width=None if available_width is None else available_width - 11,
+    )
+    lines.append(
+        DetailLine(
+            key="live_tail",
+            priority=DETAIL_PRIORITY["live_tail"],
+            spans=_labeled_spans(
+                "Live tail", live_tail or LIVE_TAIL_HINT, value_role="command"
+            ),
+        )
+    )
 
     if (
         view.diagnosis is not None
@@ -1381,17 +1440,6 @@ def detail_reserve_rows(tier: str, available: int) -> int:
     return min(max(6, available // 3), available)
 
 
-def log_reserve_rows(tier: str, available: int, *, has_log: bool) -> int:
-    """Rows reserved for the persistent wide-mode log pane."""
-
-    if not has_log or tier != "wide":
-        return 0
-    available = max(0, int(available))
-    if available < 4:
-        return 0
-    return min(max(8, available // 3), available)
-
-
 def contains_plan_path_leak(text: str) -> bool:
     """True when an approval (or primary) view exposes plan-file path vocabulary."""
 
@@ -1446,6 +1494,7 @@ def _paint_detail_pane(
             reveal_paths=reveal_paths,
             max_lines=line_budget,
             include_heading=False,
+            available_width=inner.width,
         )
         row = inner.y
         for detail in detail_lines:
@@ -1466,6 +1515,7 @@ def _paint_detail_pane(
         reveal_paths=reveal_paths,
         max_lines=available,
         include_heading=(tier != "compact"),
+        available_width=width,
     )
     for detail in detail_lines:
         if y >= height:
@@ -1473,95 +1523,6 @@ def _paint_detail_pane(
         _write_line(canvas, y, detail.spans, width=width)
         y += 1
     return y
-
-
-def _paint_log_pane(
-    canvas: wc.Canvas,
-    pane: wlog.WorkflowLogPane,
-    *,
-    y: int,
-    width: int,
-    height: int,
-    ascii_only: bool,
-    title: str = "Logs",
-) -> int:
-    """Paint a bounded log pane into ``[y, height)`` and return next y."""
-
-    available = height - y
-    if available <= 0 or width <= 0:
-        return y
-
-    use_box = available >= 4 and width >= 20
-    if use_box:
-        rect = wc.Rect(0, y, width, available)
-        inner = canvas.draw_box(
-            rect,
-            title=title,
-            padding=(0, 1),
-            ascii_only=ascii_only,
-        )
-        lines = wlog.paint_log_lines(pane, max_lines=max(0, inner.height))
-        row = inner.y
-        for line in lines:
-            if row >= inner.bottom:
-                break
-            role = "muted" if row == inner.y else "path"
-            if pane.missing or pane.uncontained or pane.symlink or pane.unavailable:
-                role = "warning" if row > inner.y else "muted"
-            canvas.write_spans(
-                inner.x,
-                row,
-                wc.truncate_spans((wc.StyledText(line, role),), inner.width),
-                max_width=inner.width,
-            )
-            row += 1
-        return y + available
-
-    lines = wlog.paint_log_lines(pane, max_lines=available)
-    for index, line in enumerate(lines):
-        if y >= height:
-            break
-        role = "muted" if index == 0 else "path"
-        _write_line(canvas, y, (wc.StyledText(line, role),), width=width)
-        y += 1
-    return y
-
-
-def render_log_focus_frame(
-    view: wt.WorkflowViewModel,
-    pane: wlog.WorkflowLogPane,
-    width: int,
-    height: int,
-    *,
-    now: Optional[datetime] = None,
-    ascii_only: bool = False,
-) -> wc.Canvas:
-    """Focused log view used by compact/standard tiers."""
-
-    width = max(0, int(width))
-    height = max(0, int(height))
-    canvas = wc.Canvas(width, height)
-    if width == 0 or height == 0:
-        return canvas
-    now = _now_or_default(now)
-    tier = layout_tier(width, height)
-    y = 0
-    for spans in _header_lines(view, width=width, tier=tier, now=now, ascii_only=ascii_only):
-        if y >= height:
-            return canvas
-        _write_line(canvas, y, spans, width=width)
-        y += 1
-    if y < height:
-        _paint_log_pane(
-            canvas,
-            pane,
-            y=y,
-            width=width,
-            height=height,
-            ascii_only=ascii_only,
-            title="Logs (focused)",
-        )
-    return canvas
 
 
 def _filter_status_spans(
@@ -1654,12 +1615,7 @@ def _selected_tree_detail_rows(
     prefix_width = wc.display_width(_tree_prefix(node, True)) + 2
     prefix = " " * prefix_width
     run_id = shlex.quote(view.run.run_id)
-    stage_id = shlex.quote(stage.id)
-    attempt = f" --attempt {stage.attempt}" if stage.attempt > 0 else ""
-    log_command = (
-        f"ralph workflow logs {run_id} --stage {stage_id}{attempt} "
-        "--stream combined --tail 200 --follow"
-    )
+    log_command = stage_live_tail_command(view, stage)
     info: List[str] = []
     dependencies = dependency_summary(stage.dependencies)
     if dependencies:
@@ -1672,8 +1628,8 @@ def _selected_tree_detail_rows(
         wc.StyledText(" · ".join(info) or stage_kind_label(stage.kind), "muted"),
     )
     log_row = (
-        wc.StyledText(prefix + "Logs     ", "accent"),
-        wc.StyledText(log_command, "command"),
+        wc.StyledText(prefix + "Live tail", "accent"),
+        wc.StyledText("  " + log_command, "command"),
     )
     action_row = (
         wc.StyledText(prefix + "Action   ", "accent"),
@@ -1868,8 +1824,6 @@ def render_primary_frame(
     ascii_only: bool = False,
     reveal_paths: bool = False,
     details_view: bool = False,
-    log_pane: Optional[wlog.WorkflowLogPane] = None,
-    log_focused: bool = False,
     visible_stage_ids: Optional[Collection[str]] = None,
     filter_query: str = "",
     filter_editing: bool = False,
@@ -1882,8 +1836,6 @@ def render_primary_frame(
     ``details_view`` / ``reveal_paths`` expand abbreviated path labels to full
     contained paths inside the detail pane only. Compact layouts keep a short
     high-priority detail strip; standard and wide reserve a dedicated pane.
-    Wide mode keeps a persistent log pane when ``log_pane`` is provided.
-    Compact/standard open logs only as a focused view (``log_focused``).
     ``inspection_lines`` reserves a persistent bottom pane for exact public
     inspection commands. In a wide-but-shallow compact terminal, the header
     folds the active-stage details into one line so every inspection row can
@@ -1907,16 +1859,6 @@ def render_primary_frame(
     )
     show_paths = bool(reveal_paths or details_view)
     filtering = bool(filter_editing or filter_query)
-
-    if log_pane is not None and log_focused and tier != "wide":
-        return render_log_focus_frame(
-            view,
-            log_pane,
-            width,
-            height,
-            now=now,
-            ascii_only=ascii_only,
-        )
 
     inspections = tuple(tuple(line) for line in (inspection_lines or ()))
     compact_inspection = bool(inspections and tier == "compact" and not filtering)
@@ -1999,10 +1941,7 @@ def render_primary_frame(
 
     inspection_rows = min(len(inspections), max(0, height - y))
     content_height = height - inspection_rows
-    remaining = content_height - y
-    show_persistent_log = log_pane is not None and tier == "wide"
-    log_rows = log_reserve_rows(tier, remaining, has_log=show_persistent_log)
-    body_height = content_height - log_rows
+    body_height = content_height
     detail_available = max(0, body_height - y)
     reserve = detail_reserve_rows(tier, detail_available)
     # Always leave room for the detail pane when any rows remain after stages.
@@ -2062,16 +2001,6 @@ def render_primary_frame(
             reveal_paths=show_paths,
         )
 
-    if show_persistent_log and log_pane is not None and log_rows > 0:
-        _paint_log_pane(
-            canvas,
-            log_pane,
-            y=body_height,
-            width=width,
-            height=content_height,
-            ascii_only=ascii_only,
-            title="Logs",
-        )
     inspection_y = content_height
     for spans in inspections:
         if inspection_y >= height:
@@ -2112,8 +2041,6 @@ def render_primary_plain(
     trim_trailing: bool = True,
     reveal_paths: bool = False,
     details_view: bool = False,
-    log_pane: Optional[wlog.WorkflowLogPane] = None,
-    log_focused: bool = False,
     visible_stage_ids: Optional[Collection[str]] = None,
     filter_query: str = "",
     filter_editing: bool = False,
@@ -2128,8 +2055,6 @@ def render_primary_plain(
         ascii_only=ascii_only,
         reveal_paths=reveal_paths,
         details_view=details_view,
-        log_pane=log_pane,
-        log_focused=log_focused,
         visible_stage_ids=visible_stage_ids,
         filter_query=filter_query,
         filter_editing=filter_editing,
@@ -2149,8 +2074,6 @@ def render_primary_lines(
     trim_trailing: bool = True,
     reveal_paths: bool = False,
     details_view: bool = False,
-    log_pane: Optional[wlog.WorkflowLogPane] = None,
-    log_focused: bool = False,
     visible_stage_ids: Optional[Collection[str]] = None,
     filter_query: str = "",
     filter_editing: bool = False,
@@ -2165,8 +2088,6 @@ def render_primary_lines(
         ascii_only=ascii_only,
         reveal_paths=reveal_paths,
         details_view=details_view,
-        log_pane=log_pane,
-        log_focused=log_focused,
         visible_stage_ids=visible_stage_ids,
         filter_query=filter_query,
         filter_editing=filter_editing,

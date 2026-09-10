@@ -12,10 +12,10 @@
     "> waiting    implement",
     "+- Selected stage -----------------------------------------------------------------------------------------------------+",
     "| implement  executable  waiting                                                                                       |",
+    "| Live tail  ralph workflow logs fixture-seq-input --stage implement --attempt 1 --stream combined --tail 200 --follow |",
     "| Next  answer the outstanding request                                                                                 |",
     "| Attempt  1  Duration  1m 0s                                                                                          |",
     "| Blocker  input                                                                                                       |",
-    "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
@@ -241,6 +241,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-input --stage implement --attempt 1 --stream combined --tail 200 --follow",
+        "role": "command",
+        "width": 105
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -314,20 +340,6 @@
         "text": "input",
         "role": "warning",
         "width": 5
-      },
-      {
-        "col": 119,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

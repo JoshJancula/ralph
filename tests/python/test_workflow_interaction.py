@@ -7,7 +7,6 @@ import copy
 import json
 import sys
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +15,6 @@ FIXTURE_DIR = REPO_ROOT / "tests" / "bats" / "workflow" / "fixtures" / "status"
 sys.path.insert(0, str(PYTHON_DIR))
 
 import workflow_interaction as wi  # noqa: E402
-import workflow_logs as wlog  # noqa: E402
 import workflow_tui as wt  # noqa: E402
 
 
@@ -134,7 +132,7 @@ class BindingTableTests(unittest.TestCase):
             ("page-down clamps at the last stage", "KEY_NPAGE", lambda s: s.view.selected_stage_id, "implement"),
             ("page-up clamps at the first stage", "KEY_PPAGE", lambda s: s.view.selected_stage_id, "research"),
             ("d toggles the details view", "d", lambda s: s.details_view, True),
-            ("l opens the log focus", "l", lambda s: s.focus, wi.FOCUS_LOG),
+            ("l opens the live-tail command links", "l", lambda s: s.focus, wi.FOCUS_COMMANDS),
             ("c opens exact command help", "c", lambda s: s.focus, wi.FOCUS_COMMANDS),
             ("? opens the help overlay", "?", lambda s: s.focus, wi.FOCUS_HELP),
             ("r requests a refresh", "r", lambda s: s.refresh_requested, True),
@@ -163,32 +161,17 @@ class BindingTableTests(unittest.TestCase):
         result = wi.apply_key(base, "z")
         self.assertEqual(result, base)
 
-    def test_log_focus_bindings(self) -> None:
-        opened = wi.apply_key(self._state(), "l")
-        self.assertTrue(opened.log_state.focused)
-        cases = [
-            ("s cycles the log stream", "s", lambda s: s.log_state.selected_stream, "supervisor"),
-            ("f toggles follow on", "f", lambda s: s.log_state.follow, True),
-            ("p toggles pause on", "p", lambda s: s.log_state.paused, True),
-            ("escape returns to the stage list", "\x1b", lambda s: s.focus, wi.FOCUS_STAGES),
-            ("l closes the focused log view", "l", lambda s: s.focus, wi.FOCUS_STAGES),
-        ]
-        for description, key, extract, expected in cases:
-            with self.subTest(description):
-                result = wi.apply_key(opened, key)
-                self.assertEqual(extract(result), expected)
-
     def test_details_toggle_requires_a_selected_stage(self) -> None:
         view = wt.WorkflowViewModel(snapshot=None, selected_stage_id=None)
         state = wi.initial_ui_state(view)
         result = wi.apply_key(state, "d")
         self.assertFalse(result.details_view)
 
-    def test_log_toggle_requires_a_selected_stage(self) -> None:
+    def test_log_toggle_without_a_selected_stage_still_lists_commands(self) -> None:
         view = wt.WorkflowViewModel(snapshot=None, selected_stage_id=None)
         state = wi.initial_ui_state(view)
         result = wi.apply_key(state, "l")
-        self.assertEqual(result.focus, wi.FOCUS_STAGES)
+        self.assertEqual(result.focus, wi.FOCUS_COMMANDS)
 
 
 class FocusTransferTests(unittest.TestCase):
@@ -247,14 +230,6 @@ class FocusTransferTests(unittest.TestCase):
         opened = wi.apply_key(state, "?")
         closed = wi.apply_key(opened, "?")
         self.assertEqual(closed.focus, wi.FOCUS_STAGES)
-
-    def test_help_restores_the_prior_focus_from_log(self) -> None:
-        state = wi.initial_ui_state(sequential_view())
-        in_log = wi.apply_key(state, "l")
-        opened = wi.apply_key(in_log, "?")
-        self.assertEqual(opened.focus, wi.FOCUS_HELP)
-        closed = wi.apply_key(opened, "\x1b")
-        self.assertEqual(closed.focus, wi.FOCUS_LOG)
 
     def test_help_ignores_navigation_and_reopens_on_toggle(self) -> None:
         state = wi.apply_key(wi.initial_ui_state(sequential_view()), "?")
@@ -449,7 +424,7 @@ class RefreshReconciliationTests(unittest.TestCase):
         self.assertEqual(state.view.selected_stage_id, "verify")
         self.assertFalse(state.selection_touched)
 
-    def test_opening_details_or_logs_does_not_disable_auto_follow(self) -> None:
+    def test_opening_details_or_links_does_not_disable_auto_follow(self) -> None:
         initial_payload = copy.deepcopy(fixture_payload("sequential-task-running.json"))
         state = wi.initial_ui_state(
             wt.view_from_snapshot(wt.parse_status_snapshot(initial_payload))
@@ -468,7 +443,6 @@ class RefreshReconciliationTests(unittest.TestCase):
         advanced_payload["diagnosis"]["stageId"] = "verify"
         state = wi.apply_refresh(state, wt.parse_status_snapshot(advanced_payload))
         self.assertEqual(state.view.selected_stage_id, "verify")
-        self.assertEqual(state.log_state.stage_id, "verify")
 
     def test_refresh_reclamps_selection_when_filtered_out(self) -> None:
         state = wi.initial_ui_state(sequential_view())
@@ -483,17 +457,6 @@ class RefreshReconciliationTests(unittest.TestCase):
         # "qa-check" no longer matches "res"; selection clears.
         self.assertEqual(wi.visible_stage_ids(refreshed), ())
         self.assertIsNone(refreshed.view.selected_stage_id)
-
-    def test_refresh_reconciles_the_log_pane_target(self) -> None:
-        state = wi.initial_ui_state(sequential_view())
-        self.assertEqual(state.log_state.stage_id, "implement")
-
-        payload = copy.deepcopy(fixture_payload("sequential-task-running.json"))
-        payload["stages"][1]["attempt"] = 3
-        refreshed_snapshot = wt.parse_status_snapshot(payload)
-        refreshed = wi.apply_refresh(state, refreshed_snapshot)
-        self.assertEqual(refreshed.log_state.attempt, 3)
-        self.assertEqual(refreshed.log_state.log_offset, 0)
 
     def test_apply_error_preserves_the_last_good_snapshot(self) -> None:
         state = wi.initial_ui_state(sequential_view())
@@ -530,7 +493,7 @@ class FooterContractTests(unittest.TestCase):
     def _keys(self, state: wi.WorkflowUiState) -> set:
         return {action.key for action in wi.contextual_footer(state)}
 
-    def test_stage_focus_footer_omits_log_only_bindings(self) -> None:
+    def test_stage_focus_footer_omits_retired_log_stream_bindings(self) -> None:
         state = wi.initial_ui_state(sequential_view())
         keys = self._keys(state)
         self.assertNotIn("s", keys)
@@ -545,10 +508,10 @@ class FooterContractTests(unittest.TestCase):
         )
         self.assertEqual(quit_action.label, "close viewer")
 
-    def test_log_focus_footer_omits_stage_only_bindings(self) -> None:
+    def test_links_overlay_footer_omits_stage_only_bindings(self) -> None:
         state = wi.apply_key(wi.initial_ui_state(sequential_view()), "l")
         keys = self._keys(state)
-        for hidden in ("/", "d", "up/down j/k", "PgUp/PgDn", "Home/End"):
+        for hidden in ("/", "d", "up/down j/k", "a"):
             self.assertNotIn(hidden, keys)
 
     def test_footer_hides_details_and_logs_without_a_selected_stage(self) -> None:
@@ -592,9 +555,6 @@ class FooterContractTests(unittest.TestCase):
             "a",
             "l",
             "c",
-            "s",
-            "f",
-            "p",
             "r",
             "?",
             "q",
@@ -628,93 +588,6 @@ class FooterContractTests(unittest.TestCase):
                 before,
                 f"footer advertises {action.key!r} but it produced no state change",
             )
-
-
-class SelectionLogTargetTests(unittest.TestCase):
-    """Selection and stream changes must retarget WorkflowLogState via reconcile.
-
-    Prove that apply_key navigation and stream cycling reset offsets/inode/seen
-    so a prior missing pane cannot keep stale stage/stream identity.
-    """
-
-    def _seeded_implement_state(self) -> wi.WorkflowUiState:
-        state = wi.initial_ui_state(sequential_view())
-        self.assertEqual(state.view.selected_stage_id, "implement")
-        return replace(
-            state,
-            log_state=replace(
-                state.log_state,
-                stage_id="implement",
-                attempt=1,
-                selected_stream="agent",
-                log_offset=99,
-                log_inode=42,
-                log_seen=True,
-            ),
-        )
-
-    def test_up_and_k_retarget_log_state_and_reset_cursor(self) -> None:
-        for key in ("k", "KEY_UP"):
-            with self.subTest(key=key):
-                moved = wi.apply_key(self._seeded_implement_state(), key)
-                self.assertEqual(moved.view.selected_stage_id, "research")
-                self.assertEqual(moved.log_state.stage_id, "research")
-                self.assertEqual(moved.log_state.attempt, 1)
-                self.assertEqual(moved.log_state.log_offset, 0)
-                self.assertIsNone(moved.log_state.log_inode)
-                self.assertFalse(moved.log_state.log_seen)
-                self.assertEqual(moved.log_state.selected_stream, "agent")
-
-    def test_down_and_j_retarget_log_state_and_reset_cursor(self) -> None:
-        state = wi.initial_ui_state(sequential_view())
-        state = wi.apply_key(state, "k")
-        self.assertEqual(state.view.selected_stage_id, "research")
-        state = replace(
-            state,
-            log_state=replace(
-                state.log_state,
-                stage_id="research",
-                attempt=1,
-                log_offset=77,
-                log_inode=11,
-                log_seen=True,
-            ),
-        )
-        for key in ("j", "KEY_DOWN"):
-            with self.subTest(key=key):
-                moved = wi.apply_key(state, key)
-                self.assertEqual(moved.view.selected_stage_id, "implement")
-                self.assertEqual(moved.log_state.stage_id, "implement")
-                self.assertEqual(moved.log_state.log_offset, 0)
-                self.assertIsNone(moved.log_state.log_inode)
-                self.assertFalse(moved.log_state.log_seen)
-
-    def test_stream_cycle_under_log_focus_resets_cursor(self) -> None:
-        state = wi.apply_key(self._seeded_implement_state(), "l")
-        self.assertEqual(state.focus, wi.FOCUS_LOG)
-        self.assertTrue(state.log_state.focused)
-        # Re-seed cursor after focus toggle so the stream cycle is the reset cause.
-        state = replace(
-            state,
-            log_state=replace(
-                state.log_state,
-                log_offset=55,
-                log_inode=9,
-                log_seen=True,
-                selected_stream="agent",
-            ),
-        )
-        cycled = wi.apply_key(state, "s")
-        self.assertEqual(cycled.log_state.selected_stream, "supervisor")
-        self.assertEqual(cycled.log_state.stage_id, "implement")
-        self.assertEqual(cycled.log_state.log_offset, 0)
-        self.assertIsNone(cycled.log_state.log_inode)
-        self.assertFalse(cycled.log_state.log_seen)
-        again = wi.apply_key(cycled, "s")
-        self.assertEqual(again.log_state.selected_stream, "combined")
-        self.assertEqual(again.log_state.log_offset, 0)
-        self.assertIsNone(again.log_state.log_inode)
-        self.assertFalse(again.log_state.log_seen)
 
 
 class DependencyModeTests(unittest.TestCase):

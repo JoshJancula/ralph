@@ -11,9 +11,9 @@
     "> stale      implement",
     "+- Selected stage -------------------------------------------------------------+",
     "| implement  executable  stale                                                 |",
+    "| Live tail  ralph workflow logs fixture-seq-stale --stage implement --follow  |",
     "| Next  recover the abandoned run                                              |",
     "| Attempt  2  Duration  1m 0s                                                  |",
-    "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
@@ -211,6 +211,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-stale --stage implement --follow",
+        "role": "command",
+        "width": 64
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -258,20 +284,6 @@
         "text": "1m 0s                                                  ",
         "role": "default",
         "width": 55
-      },
-      {
-        "col": 79,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 79,

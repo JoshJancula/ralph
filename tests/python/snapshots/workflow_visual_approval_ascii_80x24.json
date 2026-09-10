@@ -11,6 +11,7 @@
     "> waiting    \u2500\u2500 approve-plan",
     "+- Selected stage -------------------------------------------------------------+",
     "| approve-plan  approval  waiting                                              |",
+    "| Live tail  press l for the exact command                                     |",
     "| Next  answer the outstanding request                                         |",
     "| Question  Approve the implementation plan?                                   |",
     "| Request  outstanding                                                         |",
@@ -18,7 +19,6 @@
     "| Attempt  1  Duration  1m 0s                                                  |",
     "| Blocker  approval (outstanding)                                              |",
     "| Evidence  1                                                                  |",
-    "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
@@ -194,6 +194,32 @@
         "text": "waiting",
         "role": "warning",
         "width": 7
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
       },
       {
         "col": 79,
@@ -388,20 +414,6 @@
         "text": "1                                                                  ",
         "role": "default",
         "width": 67
-      },
-      {
-        "col": 79,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 79,

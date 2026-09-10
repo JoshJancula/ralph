@@ -23,7 +23,6 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 import workflow_canvas as wc
 import workflow_interaction as wi
 import workflow_layout as wl
-import workflow_logs as wlog
 import workflow_tui as wt
 
 
@@ -361,7 +360,6 @@ def render_canvas(
     *,
     width: int,
     height: int,
-    log_pane: Optional[wlog.WorkflowLogPane] = None,
     now: Optional[datetime] = None,
     ascii_only: bool = False,
     dialog: Optional[object] = None,
@@ -374,7 +372,7 @@ def render_canvas(
     if dialog is not None:
         canvas = _render_dialog_canvas(dialog, max(0, int(width)), body_height, ascii_only=ascii_only)
     elif state.focus == wi.FOCUS_COMMANDS:
-        all_commands = wi.workflow_command_lines(state)
+        all_commands = wi.wrapped_command_lines(state)
         visible_commands = wi.visible_command_lines(state)
         start = min(state.command_offset, max(0, len(all_commands) - 1)) + 1
         end = min(len(all_commands), start + len(visible_commands) - 1)
@@ -392,7 +390,6 @@ def render_canvas(
             if (
                 state.filter_editing
                 or state.focus != wi.FOCUS_STAGES
-                or state.log_state.focused
                 or (
                     state.details_view
                     and wl.layout_tier(max(0, int(width)), frame_height) == "compact"
@@ -409,8 +406,6 @@ def render_canvas(
             now=now,
             ascii_only=ascii_only,
             details_view=state.details_view,
-            log_pane=log_pane,
-            log_focused=state.log_state.focused,
             visible_stage_ids=visible,
             filter_query=state.filter_query,
             filter_editing=state.filter_editing,
@@ -507,7 +502,7 @@ def _primary_inspection_lines(
                 "focus",
             ),
             wc.StyledText("  Up/Down or j/k selects a different stage  ", "muted"),
-            wc.StyledText("d details  l logs  c all stage links", "command"),
+            wc.StyledText("d details  l live tail  c all stage links", "command"),
         )
     return (inspect_row,)
 
@@ -520,55 +515,12 @@ def _render_dialog_canvas(dialog: object, width: int, height: int, *, ascii_only
     return woa.render_dialog_frame(dialog, width, height, ascii_only=ascii_only)
 
 
-def _log_pane_matches_state(
-    pane: Optional[wlog.WorkflowLogPane],
-    log_state: wlog.WorkflowLogState,
-) -> bool:
-    """True when the session pane still binds the reconciled stage/attempt/stream."""
-
-    if pane is None:
-        return True
-    stream = wlog.normalize_log_stream(log_state.selected_stream)
-    return (
-        pane.stage_id == log_state.stage_id
-        and pane.attempt == log_state.attempt
-        and pane.stream == stream
-    )
-
-
-def _refresh_selected_log_pane(
-    read_logs: Callable[
-        [wt.WorkflowViewModel, wlog.WorkflowLogState, Optional[wlog.WorkflowLogPane]],
-        Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState],
-    ],
-    view: wt.WorkflowViewModel,
-    log_state: wlog.WorkflowLogState,
-    log_pane: Optional[wlog.WorkflowLogPane],
-) -> Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState]:
-    """Re-read the selected stage/stream pane.
-
-    When reconcile changed stage/attempt/stream identity, drop the prior pane
-    so pause cannot reuse previous-stage lines and paint cannot keep a stale
-    missing warning. Pause still reuses the previous pane inside ``read_logs``
-    when identity is unchanged.
-    """
-
-    previous = log_pane if _log_pane_matches_state(log_pane, log_state) else None
-    return read_logs(view, log_state, previous)
-
-
 def run_curses_session(
     run_id: str,
     *,
     curses_mod: Any = None,
     restorer: Optional[TerminalRestorer] = None,
     loader: Optional[Callable[[str, Optional[wt.WorkflowViewModel]], wt.WorkflowViewModel]] = None,
-    log_reader: Optional[
-        Callable[
-            [wt.WorkflowViewModel, wlog.WorkflowLogState, Optional[wlog.WorkflowLogPane]],
-            Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState],
-        ]
-    ] = None,
     command: Sequence[str] = ("ralph",),
     refresh_interval: float = DEFAULT_REFRESH_INTERVAL,
     input_timeout_seconds: float = DEFAULT_INPUT_TIMEOUT_SECONDS,
@@ -591,13 +543,11 @@ def run_curses_session(
     )
     if background_refresh is None:
         background_refresh = loader is None
-    read_logs = log_reader or _default_log_reader(command)
     key_iter = iter(keys or ())
     refresh_interval = max(0.05, float(refresh_interval))
     input_timeout_ms = max(1, int(max(0.01, float(input_timeout_seconds)) * 1000))
     frames = 0
     previous_canvas: Optional[wc.Canvas] = None
-    log_pane: Optional[wlog.WorkflowLogPane] = None
     # Operator-action modal state. Loaded lazily: the actions list costs a
     # public CLI call, so it is only fetched when the operator opens a dialog.
     dialog: Optional[object] = None
@@ -628,10 +578,6 @@ def run_curses_session(
                 else:
                     state = replace(state, view=loaded, refresh_requested=False)
                 next_refresh = clock() + refresh_interval
-                log_pane, next_log_state = _refresh_selected_log_pane(
-                    read_logs, state.view, state.log_state, log_pane
-                )
-                state = replace(state, log_state=next_log_state)
 
             refresh_due = state.refresh_requested or clock() >= next_refresh
             if refresh_due:
@@ -646,25 +592,11 @@ def run_curses_session(
                     else:
                         state = replace(state, view=loaded, refresh_requested=False)
                     next_refresh = clock() + refresh_interval
-                    log_pane, next_log_state = _refresh_selected_log_pane(
-                        read_logs, state.view, state.log_state, log_pane
-                    )
-                    state = replace(state, log_state=next_log_state)
-
-            # Selection/stream changes reconcile log_state before the next status
-            # refresh; force-replace a mismatched pane so paint cannot keep the
-            # prior stage's lines or a stale missing warning.
-            if not _log_pane_matches_state(log_pane, state.log_state):
-                log_pane, next_log_state = _refresh_selected_log_pane(
-                    read_logs, state.view, state.log_state, log_pane
-                )
-                state = replace(state, log_state=next_log_state)
 
             canvas = render_canvas(
                 state,
                 width=state.width,
                 height=state.height,
-                log_pane=log_pane,
                 now=now(),
                 dialog=dialog,
             )
@@ -723,7 +655,7 @@ def _is_open_dialog_key(key: object) -> bool:
 def _dialog_target(state: wi.WorkflowUiState) -> Optional[str]:
     """Request id the selected stage is waiting on, if any."""
 
-    if state.focus == wi.FOCUS_LOG or state.filter_editing:
+    if state.focus != wi.FOCUS_STAGES or state.filter_editing:
         return None
     return _operator_actions_module().outstanding_request_id(state.view)
 
@@ -774,22 +706,6 @@ def _handle_dialog_key(
         return submitted, actions, state
     # Success: close and pull a fresh snapshot so the stage's new state shows.
     return None, None, replace(state, refresh_requested=True)
-
-
-def _default_log_reader(
-    command: Sequence[str],
-) -> Callable[
-    [wt.WorkflowViewModel, wlog.WorkflowLogState, Optional[wlog.WorkflowLogPane]],
-    Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState],
-]:
-    def read(
-        view: wt.WorkflowViewModel,
-        state: wlog.WorkflowLogState,
-        previous: Optional[wlog.WorkflowLogPane],
-    ) -> Tuple[wlog.WorkflowLogPane, wlog.WorkflowLogState]:
-        return wlog.read_log_pane(view, state, previous_pane=previous, command=command)
-
-    return read
 
 
 def _load_view(

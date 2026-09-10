@@ -11,9 +11,9 @@
     "> succeeded  \u2500\u2500 integrate",
     "+- Selected stage -------------------------------------------------------------+",
     "| integrate  supervisor  succeeded                                             |",
+    "| Live tail  press l for the exact command                                     |",
     "| Attempt  1  Duration  1m 0s                                                  |",
     "| Artifacts  integration.json                                                  |",
-    "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
     "|                                                                              |",
@@ -223,6 +223,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Attempt  ",
         "role": "muted",
         "width": 9
@@ -270,20 +296,6 @@
         "text": "integration.json",
         "role": "path",
         "width": 16
-      },
-      {
-        "col": 79,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 79,

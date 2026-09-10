@@ -11,9 +11,9 @@
     "> stale      implement",
     "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
     "\u2502 implement  executable  stale                                                                                         \u2502",
+    "\u2502 Live tail  ralph workflow logs fixture-seq-stale --stage implement --attempt 2 --stream combined --tail 200 --follow \u2502",
     "\u2502 Next  recover the abandoned run                                                                                      \u2502",
     "\u2502 Attempt  2  Duration  1m 0s                                                                                          \u2502",
-    "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
@@ -227,6 +227,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-stale --stage implement --attempt 2 --stream combined --tail 200 --follow",
+        "role": "command",
+        "width": 105
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -274,20 +300,6 @@
         "text": "1m 0s                                                                                          ",
         "role": "default",
         "width": 95
-      },
-      {
-        "col": 119,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

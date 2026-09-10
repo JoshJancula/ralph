@@ -5,9 +5,9 @@
   "0/1 stages  0s",
   "> stale     implement",
   "implement  executable  stale",
+  "Live tail  press l for the exact command",
   "Next  recover the abandoned run",
   "Attempt  2  Duration  1m 0s",
-  "",
   "",
   "",
   ""

@@ -8,8 +8,8 @@
     "0/1 stages  1m 0s",
     "> failed    implement",
     "implement  executable  failed",
+    "Live tail  press l for the exact command",
     "Attempt  1  Duration  1m 0s",
-    "",
     "",
     "",
     "",
@@ -97,6 +97,20 @@
     [
       {
         "col": 0,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
         "text": "Attempt  ",
         "role": "muted",
         "width": 9
@@ -120,7 +134,6 @@
         "width": 18
       }
     ],
-    [],
     [],
     [],
     [],

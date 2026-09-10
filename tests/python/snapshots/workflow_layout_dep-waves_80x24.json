@@ -14,13 +14,13 @@
   "  blocked    integrate",
   "+- Selected stage -------------------------------------------------------------+",
   "| approve-plan  approval  waiting                                              |",
+  "| Live tail  press l for the exact command                                     |",
   "| Next  answer the outstanding request                                         |",
   "| Question  Approve the implementation plan?                                   |",
   "| Request  outstanding                                                         |",
   "| Changes target  implement                                                    |",
   "| Attempt  1  Duration  30s                                                    |",
   "| Blocker  approval (outstanding)                                              |",
-  "|                                                                              |",
   "|                                                                              |",
   "+------------------------------------------------------------------------------+"
 ]

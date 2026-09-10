@@ -8,12 +8,12 @@
     "1/2 stages  2m 0s",
     "> running   implement",
     "implement  plan-backed  running",
+    "Live tail  press l for the exact command",
     "TODO  implement-core",
     "TODOs  2/5",
     "Plan source  generated from plan-implem\u2026",
     "Attempt  1  Duration  1m 30s",
-    "Artifacts  implementation.md",
-    ""
+    "Artifacts  implementation.md"
   ],
   "spans": [
     [
@@ -97,6 +97,20 @@
     [
       {
         "col": 0,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
         "text": "TODO  ",
         "role": "muted",
         "width": 6
@@ -175,7 +189,6 @@
         "role": "path",
         "width": 17
       }
-    ],
-    []
+    ]
   ]
 }

@@ -5,10 +5,10 @@
   "0/1 stages  0s",
   "> waiting   implement",
   "implement  executable  waiting",
+  "Live tail  press l for the exact command",
   "Next  answer the outstanding request",
   "Attempt  1  Duration  1m 0s",
   "Blocker  input",
-  "",
   "",
   ""
 ]

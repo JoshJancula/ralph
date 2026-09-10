@@ -12,6 +12,7 @@
     "> running    implement 2/5",
     "+- Selected stage -----------------------------------------------------------------------------------------------------+",
     "| implement  plan-backed  running                                                                                      |",
+    "| Live tail  ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow          |",
     "| TODO  implement-core                                                                                                 |",
     "| TODOs  2/5                                                                                                           |",
     "| Plan source  generated from plan-implementation                                                                      |",
@@ -25,12 +26,11 @@
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
-    "+----------------------------------------------------------------------------------------------------------------------+",
-    "+- Logs ---------------------------------------------------------------------------------------------------------------+",
-    "| LOG  stream=agent  stage=implement  attempt=1  path=logs/stages/implement/1/agent.log  follow=on                     |",
-    "| 12:00:01 model loaded                                                                                                |",
-    "| 12:00:02 implementing semantic canvas                                                                                |",
-    "| 12:00:03 waiting for verification                                                                                    |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
+    "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
@@ -41,7 +41,7 @@
     "Agent logs  runtime output only; follows  ralph workflow logs fixture-seq-running --stage implement --attempt 1 --strea\u2026",
     "Requests  approval, input, and permission  ralph workflow actions list fixture-seq-running",
     "Artifacts  files produced by every stage  ralph workflow status fixture-seq-running --json | jq -r '.stages[] | .artifa\u2026",
-    "up/down j/k select  PgUp/PgDn page  Home/End first/last  / filter  d details  l logs  c commands  r refresh  ? help  q \u2026"
+    "up/down j/k select  PgUp/PgDn page  Home/End first/last  / filter  d details  l live tail  c commands  r refresh  ? hel\u2026"
   ],
   "spans": [
     [
@@ -236,6 +236,32 @@
         "text": "running",
         "role": "accent",
         "width": 7
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 96
       },
       {
         "col": 119,
@@ -501,43 +527,9 @@
     [
       {
         "col": 0,
-        "text": "+----------------------------------------------------------------------------------------------------------------------+",
-        "role": "muted",
-        "width": 120
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "+-",
-        "role": "muted",
-        "width": 2
-      },
-      {
-        "col": 2,
-        "text": " Logs ",
-        "role": "heading",
-        "width": 6
-      },
-      {
-        "col": 8,
-        "text": "---------------------------------------------------------------------------------------------------------------+",
-        "role": "muted",
-        "width": 112
-      }
-    ],
-    [
-      {
-        "col": 0,
         "text": "|",
         "role": "muted",
         "width": 1
-      },
-      {
-        "col": 2,
-        "text": "LOG  stream=agent  stage=implement  attempt=1  path=logs/stages/implement/1/agent.log  follow=on",
-        "role": "muted",
-        "width": 96
       },
       {
         "col": 119,
@@ -554,10 +546,18 @@
         "width": 1
       },
       {
-        "col": 2,
-        "text": "12:00:01 model loaded",
-        "role": "path",
-        "width": 21
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
       },
       {
         "col": 119,
@@ -574,12 +574,6 @@
         "width": 1
       },
       {
-        "col": 2,
-        "text": "12:00:02 implementing semantic canvas",
-        "role": "path",
-        "width": 37
-      },
-      {
         "col": 119,
         "text": "|",
         "role": "muted",
@@ -592,12 +586,6 @@
         "text": "|",
         "role": "muted",
         "width": 1
-      },
-      {
-        "col": 2,
-        "text": "12:00:03 waiting for verification",
-        "role": "path",
-        "width": 33
       },
       {
         "col": 119,
@@ -779,7 +767,7 @@
     [
       {
         "col": 0,
-        "text": "up/down j/k select  PgUp/PgDn page  Home/End first/last  / filter  d details  l logs  c commands  r refresh  ? help  q \u2026",
+        "text": "up/down j/k select  PgUp/PgDn page  Home/End first/last  / filter  d details  l live tail  c commands  r refresh  ? hel\u2026",
         "role": "muted",
         "width": 120
       }

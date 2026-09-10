@@ -548,15 +548,17 @@ focus; the common set:
 | Home/End (or g/G) | First / last stage |
 | `/` | Incremental stage filter (Enter apply, Esc cancel) |
 | `d` | Toggle selected-stage detail |
-| `l` | Open selected stage logs |
-| `c` | Expand copyable status commands plus log and artifact commands for every stage |
-| `s` | Cycle log stream (`agent` / `supervisor` / `combined`) |
-| `f` | Toggle log follow |
-| `p` | Pause / resume log |
+| `l` or `c` | Expand copyable status commands plus live-tail and artifact commands for every stage |
 | `r` | Refresh now |
 | `?` | Toggle help |
 | `q` | Detach (workflow keeps running) |
 | Ctrl-C | Detach |
+
+The viewer never streams log content itself. Reading a stage's log cost a
+blocking public CLI call on every selection change, which made arrowing
+between stages stall. The selected-stage detail carries the exact
+`ralph workflow logs ... --follow` command instead, and `l` expands the full
+copyable set, so you tail in a second terminal at full speed.
 
 Viewer-driven operator actions (approval/input decisions, resume, reset,
 recover) call the public `ralph workflow actions`, `resume`, `reset`, `recover`,
@@ -570,7 +572,7 @@ files itself. You can always run the same CLI verbs outside the viewer.
 |------|--------------|-------|
 | Compact | 40x12 | Selected-stage-centered progress tree, inline log/artifact/action command, and contextual keys |
 | Standard | 80x24 | Expanded dependency tree and selected detail, including every dependency and stage it unlocks |
-| Wide | 120x40 | Adds a persistent log pane |
+| Wide | 120x40 | Adds more tree nodes and detail rows |
 
 The progress tree places stages in prerequisite-first order and marks them
 `complete`, `in progress`, `next`, `pending`, `conditional`, or `not needed`.

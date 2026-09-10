@@ -12,12 +12,12 @@
     "> running    implement 2/5",
     "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
     "\u2502 implement  plan-backed  running                                                                                      \u2502",
+    "\u2502 Live tail  ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow          \u2502",
     "\u2502 TODO  implement-core                                                                                                 \u2502",
     "\u2502 TODOs  2/5                                                                                                           \u2502",
     "\u2502 Plan source  generated from plan-implementation                                                                      \u2502",
     "\u2502 Attempt  1  Duration  1m 30s                                                                                         \u2502",
     "\u2502 Artifacts  implementation.md                                                                                         \u2502",
-    "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
@@ -253,6 +253,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 96
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "TODO  ",
         "role": "muted",
         "width": 6
@@ -378,20 +404,6 @@
         "text": "implementation.md",
         "role": "path",
         "width": 17
-      },
-      {
-        "col": 119,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

@@ -2,12 +2,16 @@
 """Pure keyboard-interaction state machine for the workflow terminal UI.
 
 This module owns stage selection/navigation, incremental stage filtering,
-log stream/follow/pause controls, the details toggle, the contextual ``?``
-help overlay, refresh reconciliation, and ``q``/Ctrl-C detach for
+the details toggle, the stage-links overlay, the contextual ``?`` help
+overlay, refresh reconciliation, and ``q``/Ctrl-C detach for
 ``ralph workflow watch``. It is deliberately backend-neutral: it never
 imports ``curses`` and never reaches into a Sequential or Dependency engine
-tree. It only depends on the public read model (``workflow_tui``) and the
-public log-pane state (``workflow_logs``).
+tree. It only depends on the public read model (``workflow_tui``).
+
+The viewer never streams log content itself. Log output is reached through
+the exact ``ralph workflow logs ... --follow`` commands this module builds,
+so stage navigation stays instant instead of blocking on a CLI call per
+selection change.
 
 All public functions are pure: given the same inputs they return the same
 output and never mutate their arguments. The curses backend (a later TODO)
@@ -21,12 +25,10 @@ import shlex
 from dataclasses import dataclass, replace
 from typing import Optional, Sequence, Tuple
 
-import workflow_logs as wlog
 import workflow_tui as wt
 
 
 FOCUS_STAGES = "stages"
-FOCUS_LOG = "log"
 FOCUS_HELP = "help"
 FOCUS_COMMANDS = "commands"
 
@@ -78,14 +80,8 @@ _KEY_ACTIONS = {
     "D": "details-toggle",
     "r": "refresh",
     "R": "refresh",
-    "l": "log-toggle",
-    "L": "log-toggle",
-    "s": "stream-next",
-    "S": "stream-next",
-    "f": "follow-toggle",
-    "F": "follow-toggle",
-    "p": "pause-toggle",
-    "P": "pause-toggle",
+    "l": "commands-toggle",
+    "L": "commands-toggle",
     "q": "quit",
     "Q": "quit",
     "\x1b": "escape",
@@ -106,7 +102,6 @@ _KEY_ACTIONS = {
 }
 
 _NAV_ACTIONS = frozenset({"down", "up", "page-down", "page-up", "home", "end"})
-_LOG_ONLY_ACTIONS = frozenset({"stream-next", "follow-toggle", "pause-toggle"})
 
 
 @dataclass(frozen=True)
@@ -119,7 +114,6 @@ class WorkflowUiState:
     """
 
     view: wt.WorkflowViewModel
-    log_state: wlog.WorkflowLogState
     focus: str = FOCUS_STAGES
     previous_focus: str = FOCUS_STAGES
     filter_query: str = ""
@@ -147,17 +141,14 @@ class FooterAction:
 def initial_ui_state(
     view: wt.WorkflowViewModel,
     *,
-    log_state: Optional[wlog.WorkflowLogState] = None,
     width: int = 80,
     height: int = 24,
     page_size: int = DEFAULT_PAGE_SIZE,
 ) -> WorkflowUiState:
     """Build the starting interaction state for a freshly loaded view."""
 
-    resolved_log_state = log_state if log_state is not None else wlog.initial_log_state(view)
     return WorkflowUiState(
         view=view,
-        log_state=resolved_log_state,
         width=max(0, int(width)),
         height=max(0, int(height)),
         page_size=max(1, int(page_size)),
@@ -191,8 +182,7 @@ def _with_selection(state: WorkflowUiState, stage_id: Optional[str]) -> Workflow
     if state.view.selected_stage_id == stage_id:
         return state
     next_view = replace(state.view, selected_stage_id=stage_id)
-    next_log_state = wlog.reconcile_log_state(next_view, state.log_state)
-    return replace(state, view=next_view, log_state=next_log_state)
+    return replace(state, view=next_view)
 
 
 def _reconcile_filtered_selection(state: WorkflowUiState) -> WorkflowUiState:
@@ -262,6 +252,8 @@ def _is_filter_char(key: object) -> bool:
 
 
 def has_log_target(state: WorkflowUiState) -> bool:
+    """True when a stage is selected, so its live-tail commands are offerable."""
+
     return state.view.selected_stage is not None
 
 
@@ -384,14 +376,59 @@ def workflow_command_lines(state: WorkflowUiState) -> Tuple[str, ...]:
     return tuple(lines)
 
 
+COMMAND_WRAP_INDENT = "    "
+
+
 def command_page_size(state: WorkflowUiState) -> int:
     """Rows available inside the command modal after borders and footer."""
 
     return max(1, state.height - 3)
 
 
+def command_wrap_width(state: WorkflowUiState) -> int:
+    """Usable text width inside the command modal (two borders, two paddings)."""
+
+    return max(20, state.width - 4)
+
+
+def _wrap_command(line: str, width: int) -> Tuple[str, ...]:
+    """Fold one command onto ``width`` at argument boundaries.
+
+    Commands in this overlay exist to be copied, so they are wrapped rather
+    than truncated. A word longer than the width is emitted whole and allowed
+    to clip rather than being silently cut mid-token.
+    """
+
+    if len(line) <= width:
+        return (line,)
+    rows: list = []
+    current = ""
+    indent = ""
+    for word in line.split(" "):
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= width or not current:
+            current = candidate
+            continue
+        rows.append(current)
+        indent = COMMAND_WRAP_INDENT
+        current = f"{indent}{word}"
+    if current:
+        rows.append(current)
+    return tuple(rows)
+
+
+def wrapped_command_lines(state: WorkflowUiState) -> Tuple[str, ...]:
+    """Command catalog folded to the modal width. Paging counts these rows."""
+
+    width = command_wrap_width(state)
+    rows: list = []
+    for line in workflow_command_lines(state):
+        rows.extend(_wrap_command(line, width))
+    return tuple(rows)
+
+
 def visible_command_lines(state: WorkflowUiState) -> Tuple[str, ...]:
-    lines = workflow_command_lines(state)
+    lines = wrapped_command_lines(state)
     page_size = command_page_size(state)
     max_offset = max(0, len(lines) - page_size)
     offset = min(max(0, state.command_offset), max_offset)
@@ -399,7 +436,7 @@ def visible_command_lines(state: WorkflowUiState) -> Tuple[str, ...]:
 
 
 def _scroll_commands(state: WorkflowUiState, delta: int) -> WorkflowUiState:
-    lines = workflow_command_lines(state)
+    lines = wrapped_command_lines(state)
     max_offset = max(0, len(lines) - command_page_size(state))
     return replace(state, command_offset=min(max(state.command_offset + delta, 0), max_offset))
 
@@ -425,25 +462,9 @@ def _apply_commands_focus_key(state: WorkflowUiState, key: object) -> WorkflowUi
     if action == "end":
         return replace(
             state,
-            command_offset=max(0, len(workflow_command_lines(state)) - command_page_size(state)),
+            command_offset=max(0, len(wrapped_command_lines(state)) - command_page_size(state)),
         )
     return state
-
-
-def _apply_log_focus_key(state: WorkflowUiState, action: Optional[str]) -> WorkflowUiState:
-    if action == "escape" or action == "log-toggle":
-        return replace(
-            state,
-            focus=FOCUS_STAGES,
-            log_state=wlog.toggle_log_focus(state.log_state) if state.log_state.focused else state.log_state,
-        )
-    if action == "stream-next":
-        return replace(state, log_state=wlog.set_log_stream(state.log_state, wlog.cycle_log_stream(state.log_state.selected_stream)))
-    if action == "follow-toggle":
-        return replace(state, log_state=wlog.toggle_follow(state.log_state))
-    if action == "pause-toggle":
-        return replace(state, log_state=wlog.toggle_pause(state.log_state))
-    return None
 
 
 def _apply_stages_focus_key(state: WorkflowUiState, action: Optional[str]) -> WorkflowUiState:
@@ -470,14 +491,6 @@ def _apply_stages_focus_key(state: WorkflowUiState, action: Optional[str]) -> Wo
         if state.view.selected_stage is None:
             return state
         return replace(state, details_view=not state.details_view)
-    if action == "log-toggle":
-        if not has_log_target(state):
-            return state
-        return replace(
-            state,
-            focus=FOCUS_LOG,
-            log_state=wlog.toggle_log_focus(state.log_state) if not state.log_state.focused else state.log_state,
-        )
     if action == "escape":
         if state.filter_query:
             return _reconcile_filtered_selection(replace(state, filter_query=""))
@@ -523,12 +536,6 @@ def apply_key(state: WorkflowUiState, key: object) -> WorkflowUiState:
             command_offset=0,
         )
 
-    if state.focus == FOCUS_LOG:
-        handled = _apply_log_focus_key(state, action)
-        if handled is not None:
-            return handled
-        return state
-
     handled = _apply_stages_focus_key(state, action)
     if handled is not None:
         return handled
@@ -551,7 +558,7 @@ def apply_resize(state: WorkflowUiState, width: int, height: int) -> WorkflowUiS
 def apply_refresh(state: WorkflowUiState, snapshot: wt.WorkflowSnapshot) -> WorkflowUiState:
     """Reconcile a freshly loaded snapshot into the interaction state.
 
-    Preserves the filter query, focus, details toggle, and log controls.
+    Preserves the filter query, focus, and details toggle.
     Selection is reconciled by ``workflow_tui`` first, then re-clamped into
     the active filter so an incremental filter never shows a selection that
     the filter would exclude.
@@ -570,11 +577,9 @@ def apply_refresh(state: WorkflowUiState, snapshot: wt.WorkflowSnapshot) -> Work
         if preserve_manual_selection
         else wt.view_from_snapshot(snapshot)
     )
-    next_log_state = wlog.reconcile_log_state(next_view, state.log_state)
     refreshed = replace(
         state,
         view=next_view,
-        log_state=next_log_state,
         selection_touched=preserve_manual_selection,
         refresh_requested=False,
     )
@@ -585,18 +590,6 @@ def apply_error(state: WorkflowUiState, error: wt.UiError) -> WorkflowUiState:
     """Surface a failed refresh without discarding the last good snapshot/state."""
 
     return replace(state, view=replace(state.view, error=error), refresh_requested=False)
-
-
-def _log_binding_labels(state: WorkflowUiState) -> Tuple[FooterAction, ...]:
-    stream_label = f"stream ({state.log_state.selected_stream})"
-    follow_label = "follow off" if state.log_state.follow else "follow on"
-    pause_label = "resume" if state.log_state.paused else "pause"
-    return (
-        FooterAction("Esc", "back"),
-        FooterAction("s", stream_label),
-        FooterAction("f", follow_label),
-        FooterAction("p", pause_label),
-    )
 
 
 def contextual_footer(state: WorkflowUiState) -> Tuple[FooterAction, ...]:
@@ -627,13 +620,6 @@ def contextual_footer(state: WorkflowUiState) -> Tuple[FooterAction, ...]:
         )
 
     actions: list = []
-    if state.focus == FOCUS_LOG:
-        actions.extend(_log_binding_labels(state))
-        actions.append(FooterAction("r", "refresh"))
-        actions.append(FooterAction("?", "help"))
-        actions.append(FooterAction("q", "detach"))
-        return tuple(actions)
-
     # FOCUS_STAGES
     visible = visible_stage_ids(state)
     if len(visible) > 1:
@@ -648,7 +634,7 @@ def contextual_footer(state: WorkflowUiState) -> Tuple[FooterAction, ...]:
     if selected_stage_has_request(state):
         actions.append(FooterAction("a", "respond"))
     if has_log_target(state):
-        actions.append(FooterAction("l", "logs"))
+        actions.append(FooterAction("l", "live tail"))
     actions.append(FooterAction("c", "commands"))
     actions.append(FooterAction("r", "refresh"))
     actions.append(FooterAction("?", "help"))
@@ -668,14 +654,11 @@ def full_help_footer(state: WorkflowUiState) -> Tuple[FooterAction, ...]:
         FooterAction("PgUp/PgDn", "page selection"),
         FooterAction("Home/End", "first/last stage"),
         FooterAction("/", "start incremental stage filter"),
-        FooterAction("Esc", "clear filter / close log / close help"),
+        FooterAction("Esc", "clear filter / close overlay"),
         FooterAction("d", "toggle stage detail/reveal"),
         FooterAction("a", "respond to the selected stage's approval or input request"),
-        FooterAction("l", "open selected stage log"),
-        FooterAction("c", "show every stage's log and artifact commands"),
-        FooterAction("s", "cycle log stream (agent/supervisor/combined)"),
-        FooterAction("f", "toggle log follow"),
-        FooterAction("p", "pause/resume log"),
+        FooterAction("l", "show live tail and artifact commands"),
+        FooterAction("c", "show live tail and artifact commands"),
         FooterAction("r", "refresh now"),
         FooterAction("?", "toggle this help"),
         FooterAction(

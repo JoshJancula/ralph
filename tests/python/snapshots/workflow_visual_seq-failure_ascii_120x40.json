@@ -12,8 +12,8 @@
     "> failed     implement",
     "+- Selected stage -----------------------------------------------------------------------------------------------------+",
     "| implement  executable  failed                                                                                        |",
+    "| Live tail  ralph workflow logs fixture-seq-failed --stage implement --attempt 1 --stream combined --follow           |",
     "| Attempt  1  Duration  1m 0s                                                                                          |",
-    "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
@@ -241,6 +241,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-failed --stage implement --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 95
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Attempt  ",
         "role": "muted",
         "width": 9
@@ -262,20 +288,6 @@
         "text": "1m 0s                                                                                          ",
         "role": "default",
         "width": 95
-      },
-      {
-        "col": 119,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

@@ -8,10 +8,10 @@
     "0/1 stages  0s",
     "> waiting   implement",
     "implement  executable  waiting",
+    "Live tail  press l for the exact command",
     "Next  answer the outstanding request",
     "Attempt  1  Duration  1m 0s",
     "Blocker  input",
-    "",
     "",
     ""
   ],
@@ -97,6 +97,20 @@
     [
       {
         "col": 0,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -148,7 +162,6 @@
         "width": 5
       }
     ],
-    [],
     [],
     []
   ]

@@ -18,13 +18,13 @@
     "  blocked    integrate",
     "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
     "\u2502 approve-plan  approval  waiting                                                                                      \u2502",
+    "\u2502 Live tail  ralph workflow logs fixture-dep-waves --stage approve-plan --attempt 1 --stream combined --follow         \u2502",
     "\u2502 Next  answer the outstanding request                                                                                 \u2502",
     "\u2502 Question  Approve the implementation plan?                                                                           \u2502",
     "\u2502 Request  outstanding                                                                                                 \u2502",
     "\u2502 Changes target  implement                                                                                            \u2502",
     "\u2502 Attempt  1  Duration  30s                                                                                            \u2502",
     "\u2502 Blocker  approval (outstanding)                                                                                      \u2502",
-    "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
     "\u2502                                                                                                                      \u2502",
@@ -343,6 +343,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-dep-waves --stage approve-plan --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 97
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -494,20 +520,6 @@
         "text": "approval (outstanding)",
         "role": "warning",
         "width": 22
-      },
-      {
-        "col": 119,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

@@ -12,12 +12,12 @@
     "> running    implement 2/5",
     "+- Selected stage -----------------------------------------------------------------------------------------------------+",
     "| implement  plan-backed  running                                                                                      |",
+    "| Live tail  ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow          |",
     "| TODO  implement-core                                                                                                 |",
     "| TODOs  2/5                                                                                                           |",
     "| Plan source  generated from plan-implementation                                                                      |",
     "| Attempt  1  Duration  1m 30s                                                                                         |",
     "| Artifacts  implementation.md                                                                                         |",
-    "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
@@ -253,6 +253,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 96
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "TODO  ",
         "role": "muted",
         "width": 6
@@ -378,20 +404,6 @@
         "text": "implementation.md",
         "role": "path",
         "width": 17
-      },
-      {
-        "col": 119,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,

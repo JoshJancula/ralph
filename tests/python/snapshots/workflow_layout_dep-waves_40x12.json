@@ -5,10 +5,10 @@
   "1/4 stages  2m 0s",
   "> waiting   approve-plan",
   "approve-plan  approval  waiting",
+  "Live tail  press l for the exact command",
   "Next  answer the outstanding request",
   "Question  Approve the implementation pl\u2026",
   "Request  outstanding",
   "Changes target  implement",
-  "Attempt  1  Duration  30s",
-  "Blocker  approval (outstanding)"
+  "Attempt  1  Duration  30s"
 ]

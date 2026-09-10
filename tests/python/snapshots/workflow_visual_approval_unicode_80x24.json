@@ -11,6 +11,7 @@
     "> waiting    \u2500\u2500 approve-plan",
     "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
     "\u2502 approve-plan  approval  waiting                                              \u2502",
+    "\u2502 Live tail  press l for the exact command                                     \u2502",
     "\u2502 Next  answer the outstanding request                                         \u2502",
     "\u2502 Question  Approve the implementation plan?                                   \u2502",
     "\u2502 Request  outstanding                                                         \u2502",
@@ -18,7 +19,6 @@
     "\u2502 Attempt  1  Duration  1m 0s                                                  \u2502",
     "\u2502 Blocker  approval (outstanding)                                              \u2502",
     "\u2502 Evidence  1                                                                  \u2502",
-    "\u2502                                                                              \u2502",
     "\u2502                                                                              \u2502",
     "\u2502                                                                              \u2502",
     "\u2502                                                                              \u2502",
@@ -194,6 +194,32 @@
         "text": "waiting",
         "role": "warning",
         "width": 7
+      },
+      {
+        "col": 79,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
       },
       {
         "col": 79,
@@ -388,20 +414,6 @@
         "text": "1                                                                  ",
         "role": "default",
         "width": 67
-      },
-      {
-        "col": 79,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "\u2502",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 79,

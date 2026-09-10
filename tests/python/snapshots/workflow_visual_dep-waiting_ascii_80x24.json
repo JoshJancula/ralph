@@ -17,13 +17,13 @@
     "  blocked    integrate",
     "+- Selected stage -------------------------------------------------------------+",
     "| approve-plan  approval  waiting                                              |",
+    "| Live tail  press l for the exact command                                     |",
     "| Next  answer the outstanding request                                         |",
     "| Question  Approve the implementation plan?                                   |",
     "| Request  outstanding                                                         |",
     "| Changes target  implement                                                    |",
     "| Attempt  1  Duration  30s                                                    |",
     "| Blocker  approval (outstanding)                                              |",
-    "|                                                                              |",
     "|                                                                              |",
     "+------------------------------------------------------------------------------+"
   ],
@@ -295,6 +295,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -446,20 +472,6 @@
         "text": "approval (outstanding)",
         "role": "warning",
         "width": 22
-      },
-      {
-        "col": 79,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 79,

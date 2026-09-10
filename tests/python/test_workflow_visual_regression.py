@@ -3,7 +3,7 @@
 
 Snapshots capture plain text plus semantic cell/role spans -- never terminal
 escape bytes. The matrix covers responsive sizes, Sequential and Dependency
-modes, outcome states, filter/help/dialog/log interaction frames, and
+modes, outcome states, filter/help/dialog/links interaction frames, and
 ASCII/unicode variants. Invariants assert contrast-independent labels, no
 clipped required actions, no internal namespace leakage, deterministic frames,
 and stable selection markers.
@@ -30,7 +30,6 @@ import workflow_canvas as wc  # noqa: E402
 import workflow_curses as wcurse  # noqa: E402
 import workflow_interaction as wi  # noqa: E402
 import workflow_layout as wl  # noqa: E402
-import workflow_logs as wlog  # noqa: E402
 import workflow_operator_actions as woa  # noqa: E402
 import workflow_tui as wt  # noqa: E402
 
@@ -164,36 +163,6 @@ def stale_view() -> wt.WorkflowViewModel:
     return wt.view_from_snapshot(wt.parse_status_snapshot(payload))
 
 
-def sample_log_pane(*, focused: bool = False) -> wlog.WorkflowLogPane:
-    del focused
-    return wlog.WorkflowLogPane(
-        stream="agent",
-        stage_id="implement",
-        attempt=1,
-        relative_paths=("logs/stages/implement/1/agent.log",),
-        lines=(
-            "12:00:01 model loaded",
-            "12:00:02 implementing semantic canvas",
-            "12:00:03 waiting for verification",
-        ),
-        exists=True,
-        size_bytes=120,
-        missing=False,
-        uncontained=False,
-        symlink=False,
-        truncated=False,
-        omitted=False,
-        replaced=False,
-        follow=True,
-        paused=False,
-        reset=False,
-        unavailable=False,
-        offset=120,
-        inode=1,
-        error=None,
-    )
-
-
 def approval_dialog() -> woa.WorkflowDialog:
     snapshot = view_from_fixture("dependency-approval-wait.json").snapshot
     assert snapshot is not None
@@ -257,14 +226,12 @@ def render_ui(
     height: int,
     *,
     ascii_only: bool,
-    log_pane: Optional[wlog.WorkflowLogPane] = None,
     dialog: Optional[woa.WorkflowDialog] = None,
 ) -> wc.Canvas:
     return wcurse.render_canvas(
         state,
         width=width,
         height=height,
-        log_pane=log_pane,
         now=FIXED_NOW,
         ascii_only=ascii_only,
         dialog=dialog,
@@ -295,7 +262,7 @@ class VisualRegressionMatrixTests(unittest.TestCase):
                         self.assertEqual((canvas.width, canvas.height), (width, height))
                         assert_snapshot_matches(self, case, canvas, variant=variant)
 
-    def test_filter_help_dialog_log_interaction_snapshots(self) -> None:
+    def test_filter_help_dialog_links_interaction_snapshots(self) -> None:
         width, height = STANDARD
         view = view_from_fixture("sequential-task-running.json")
         base = wi.initial_ui_state(view, width=width, height=height)
@@ -312,16 +279,15 @@ class VisualRegressionMatrixTests(unittest.TestCase):
         dialog_canvas = render_ui(base, width, height, ascii_only=True, dialog=dialog)
         assert_snapshot_matches(self, "dialog", dialog_canvas, variant="ascii")
 
-        log_state = wi.apply_key(base, "l")
-        pane = sample_log_pane()
-        log_canvas = render_ui(log_state, width, height, ascii_only=True, log_pane=pane)
-        assert_snapshot_matches(self, "log", log_canvas, variant="ascii")
+        # l offers the live-tail commands; the viewer never streams log content.
+        links_state = wi.apply_key(base, "l")
+        links_canvas = render_ui(links_state, width, height, ascii_only=True)
+        assert_snapshot_matches(self, "links", links_canvas, variant="ascii")
 
-        # Wide persistent log pane (no focus takeover).
         wide_w, wide_h = wl.WIDE_SIZE
         wide_state = wi.apply_resize(base, wide_w, wide_h)
-        wide_log = render_ui(wide_state, wide_w, wide_h, ascii_only=True, log_pane=pane)
-        assert_snapshot_matches(self, "log-wide", wide_log, variant="ascii")
+        wide_canvas = render_ui(wide_state, wide_w, wide_h, ascii_only=True)
+        assert_snapshot_matches(self, "links-wide", wide_canvas, variant="ascii")
 
         # No-color / accessibility: unicode borders still carry explicit state words.
         nocolor = render_ui(filtering, width, height, ascii_only=False)
@@ -531,7 +497,7 @@ class SnapshotStabilityAndSensitivityTests(unittest.TestCase):
                 ("filtering", render_ui(wi.apply_keys(state, ["/", "r", "e", "s"]), 80, 24, ascii_only=True)),
                 ("help", render_ui(wi.apply_key(state, "?"), 80, 24, ascii_only=True)),
                 ("dialog", render_ui(state, 80, 24, ascii_only=True, dialog=approval_dialog())),
-                ("log", render_ui(wi.apply_key(state, "l"), 80, 24, ascii_only=True, log_pane=sample_log_pane())),
+                ("links", render_ui(wi.apply_key(state, "l"), 80, 24, ascii_only=True)),
             ):
                 captured[name] = capture_canvas(canvas)
         return captured
@@ -555,12 +521,11 @@ def _write_snapshots() -> None:
         "filtering": render_ui(wi.apply_keys(base, ["/", "r", "e", "s"]), width, height, ascii_only=True),
         "help": render_ui(wi.apply_key(base, "?"), width, height, ascii_only=True),
         "dialog": render_ui(base, width, height, ascii_only=True, dialog=approval_dialog()),
-        "log": render_ui(wi.apply_key(base, "l"), width, height, ascii_only=True, log_pane=sample_log_pane()),
-        "log-wide": render_ui(
+        "links": render_ui(wi.apply_key(base, "l"), width, height, ascii_only=True),
+        "links-wide": render_ui(
             wi.apply_resize(base, *wl.WIDE_SIZE),
             *wl.WIDE_SIZE,
             ascii_only=True,
-            log_pane=sample_log_pane(),
         ),
     }
     for case, canvas in interaction_cases.items():

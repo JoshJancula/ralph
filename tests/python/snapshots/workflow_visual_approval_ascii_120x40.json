@@ -12,6 +12,7 @@
     "> waiting    \u2500\u2500 approve-plan",
     "+- Selected stage -----------------------------------------------------------------------------------------------------+",
     "| approve-plan  approval  waiting                                                                                      |",
+    "| Live tail  ralph workflow logs fixture-dep-approval --stage approve-plan --attempt 1 --stream combined --follow      |",
     "| Next  answer the outstanding request                                                                                 |",
     "| Question  Approve the implementation plan?                                                                           |",
     "| Request  outstanding                                                                                                 |",
@@ -19,7 +20,6 @@
     "| Attempt  1  Duration  1m 0s                                                                                          |",
     "| Blocker  approval (outstanding)                                                                                      |",
     "| Evidence  1                                                                                                          |",
-    "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
     "|                                                                                                                      |",
@@ -241,6 +241,32 @@
       },
       {
         "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-dep-approval --stage approve-plan --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 100
+      },
+      {
+        "col": 119,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
         "text": "Next  ",
         "role": "muted",
         "width": 6
@@ -418,20 +444,6 @@
         "text": "1                                                                                                          ",
         "role": "default",
         "width": 107
-      },
-      {
-        "col": 119,
-        "text": "|",
-        "role": "muted",
-        "width": 1
-      }
-    ],
-    [
-      {
-        "col": 0,
-        "text": "|",
-        "role": "muted",
-        "width": 1
       },
       {
         "col": 119,
