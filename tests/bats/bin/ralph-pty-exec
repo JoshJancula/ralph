@@ -1,8 +1,67 @@
 #!/usr/bin/env python3
-"""Run a command with stdin and stdout on a real PTY (portable; GNU script is inconsistent)."""
+"""Run a command on a bounded PTY with real stdin EOF propagation."""
 import os
 import pty
+import select
+import signal
 import sys
+import time
+
+
+DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    while data:
+        written = os.write(fd, data)
+        data = data[written:]
+
+
+def _exit_code(status: int) -> int:
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return 1
+
+
+def _terminate_child(pid: int) -> None:
+    for sig, grace in ((signal.SIGTERM, 1.0), (signal.SIGKILL, 0.0)):
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            return
+        except OSError:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            try:
+                waited, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if waited == pid:
+                return
+            time.sleep(0.02)
+        if sig == signal.SIGKILL:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+            return
+
+
+def _timeout_seconds() -> float:
+    raw = os.environ.get("RALPH_PTY_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError("RALPH_PTY_TIMEOUT_SECONDS must be a positive number") from exc
+    if value <= 0:
+        raise ValueError("RALPH_PTY_TIMEOUT_SECONDS must be a positive number")
+    return value
 
 def main() -> None:
     if len(sys.argv) < 2:
@@ -10,15 +69,82 @@ def main() -> None:
         sys.exit(2)
     cmd = sys.argv[1:]
     try:
-        status = pty.spawn(cmd)
+        timeout = _timeout_seconds()
+        pid, master_fd = pty.fork()
     except OSError as exc:
         print(exc, file=sys.stderr)
         sys.exit(127)
-    if os.WIFEXITED(status):
-        sys.exit(os.WEXITSTATUS(status))
-    if os.WIFSIGNALED(status):
-        sys.exit(128 + os.WTERMSIG(status))
-    sys.exit(1)
+    except ValueError as exc:
+        print(f"ralph-pty-exec: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    if pid == 0:
+        try:
+            os.execvp(cmd[0], cmd)
+        except OSError as exc:
+            print(exc, file=sys.stderr)
+            os._exit(127)
+
+    stdin_fd = sys.stdin.fileno()
+    stdout_fd = sys.stdout.fileno()
+    stdin_open = True
+    master_open = True
+    deadline = time.monotonic() + timeout
+
+    try:
+        while True:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            if waited == pid:
+                if master_open:
+                    try:
+                        while True:
+                            data = os.read(master_fd, 4096)
+                            if not data:
+                                break
+                            _write_all(stdout_fd, data)
+                    except OSError:
+                        pass
+                sys.exit(_exit_code(status))
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_child(pid)
+                print(
+                    f"ralph-pty-exec: timed out after {timeout:g}s: {' '.join(cmd)}",
+                    file=sys.stderr,
+                )
+                sys.exit(124)
+
+            readers = [master_fd] if master_open else []
+            if stdin_open:
+                readers.append(stdin_fd)
+            ready, _, _ = select.select(readers, [], [], min(0.1, remaining))
+
+            if stdin_open and stdin_fd in ready:
+                data = os.read(stdin_fd, 4096)
+                if data:
+                    _write_all(master_fd, data)
+                else:
+                    # A PTY is not automatically closed when the helper's stdin
+                    # reaches EOF. Send terminal EOT once so a canonical `read`
+                    # observes EOF, then stop polling the closed source.
+                    _write_all(master_fd, b"\x04")
+                    stdin_open = False
+
+            if master_open and master_fd in ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    data = b""
+                if data:
+                    _write_all(stdout_fd, data)
+                else:
+                    master_open = False
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

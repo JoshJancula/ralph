@@ -16,6 +16,16 @@ Ralph distinguishes three roots (see also [AGENTS.md](../AGENTS.md#three-root-mo
 
 `RALPH_MCP_WORKSPACE` is the project root passed to the MCP server. Plan-run injection also forwards `RALPH_PROJECT_ROOT`, `RALPH_AGENT_WORKSPACE`, and `RALPH_PLAN_WORKSPACE_ROOT` when set. Standalone servers that set only `RALPH_MCP_WORKSPACE` keep backward-compatible behavior.
 
+### Graph admission budgets
+
+| Variable | Purpose |
+|----------|---------|
+| `RALPH_GRAPH_MAX_PARALLEL` | Run-wide concurrent graph invocation cap. Defaults to the compiled graph's `maxParallel` (default `2`). Broker children consume their own slot. |
+| `RALPH_GRAPH_MAX_PARALLEL_PER_RUNTIME` | Requested same-runtime cap (default `1`). It exceeds one only for adapters whose capability matrix proves invocation-local configuration; unsafe and unknown adapters remain capped at one. |
+| `RALPH_GRAPH_MAX_PARALLEL_TOKEN_STREAMS` | Concurrent model token-stream cap. Defaults to the effective run-wide cap. A native-subagent parent reserves itself plus its declared child concurrency; a broker child consumes one. |
+
+Admission decisions are written as JSONL under `.ralph-workspace/logs/<namespace>/graph-admission-<run-id>.jsonl`. Snapshot or worktree isolation does not change adapter safety because runtime configuration is discovered from the project root.
+
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_PLAN_RUNTIME` | Default CLI runtime when `--runtime` is omitted (`cursor`, `claude`, `codex`, `opencode`, `antigravity`). |
@@ -72,6 +82,51 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 | `RALPH_PLAN_CONTEXT_BUDGET` | `full`, `standard`, or `lean`; controls how much context is attached to prompts (default `standard`). Invalid values fall back to `standard`. |
 | `RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME` | Cap on human-context bytes for fresh invocations when using standard/lean budget (default `2048`). |
 | `RALPH_PLAN_TRANSCRIPT_EVICTION` | `off`, `safe`, or `aggressive`; controls how aggressively Ralph compacts repeated tool-turn history into the runner-owned continuation summary. Defaults to `safe` in `ralph`/`hybrid` and `off` in `no`/`native` unless explicitly set. `safe` keeps transcript pruning on but bounded; `aggressive` may also lower the prompt context budget to `lean`. |
+
+### Named tooling profiles
+
+Pipeline plans (orchestration and graph) and reusable workflows may declare a
+`tooling` block with `defaultProfile` and optional per-stage `overrides`. The
+four profile names are defined in `.ralph/tooling-profiles.json` and resolve to
+env overlays at dispatch. Graph is the preferred future workflow engine for
+staged work; orchestration plans and `orchestrator.sh`
+remain supported and are not deprecated by PLAN15 -- both engines accept the
+same `tooling` authoring block.
+
+| Profile | `RALPH_MODE` | `RALPH_PROXY_SHELL_COMPACT` | `RALPH_COMPACT_GENERIC_FALLBACK` | `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` | `RALPH_NATIVE_RESULT_COMPACT` |
+|---------|--------------|----------------------------|----------------------------------|----------------------------------------|------------------------------|
+| `raw` | `no` | `0` | `0` | (unset) | `0` |
+| `ralph-read-heavy` | `ralph` | `1` | `0` | (unset) | `0` |
+| `ralph-compact` | `ralph` | `1` | `1` | `16384` | `0` |
+| `ralph-aggressive` | `ralph` | `1` | `1` | `4096` | `1` |
+
+Each dispatched stage receives a resolved `toolingProfile`. Dispatch also sets
+process-local identity keys (not capability-gated):
+
+| Variable | Purpose |
+|----------|---------|
+| `RALPH_TOOLING_PROFILE` | The resolved profile name for this stage invocation. |
+| `RALPH_TOOLING_PROFILE_DEGRADED` | Comma-sorted list of profile env keys omitted because the runtime's tooling-profile capability contract does not deliver them. Empty when nothing was dropped. |
+
+A pipeline may declare either run-level `ralphMode` or a `tooling` block, not
+both. Omitting `tooling` preserves prior behavior (no per-stage profile
+overlay). Full operator guidance: [TOOLING.md](TOOLING.md#named-tooling-profiles)
+and [GRAPH.md](GRAPH.md#tooling-profiles).
+
+### Context budget vs tooling profile
+
+`RALPH_PLAN_CONTEXT_BUDGET` (and the orchestration stage field `contextBudget`) and a
+stage's `toolingProfile` are orthogonal controls that act in opposite directions. They do
+not compose into a single setting and neither overrides the other:
+
+| Control | Direction | What it governs |
+|---------|-----------|-----------------|
+| `contextBudget` / `RALPH_PLAN_CONTEXT_BUDGET` (`full`, `standard`, `lean`) | Outbound (Ralph to the model) | How much context Ralph attaches to the prompt it sends for each TODO. |
+| `toolingProfile` (`raw`, `ralph-read-heavy`, `ralph-compact`, `ralph-aggressive`) | Inbound (tools to the model) | How tool output coming back from reads, searches, and shell commands is bounded and compacted. |
+
+Both remain independently settable per stage. Setting a lean context budget does not imply
+a compacting tooling profile, and choosing `raw` tooling does not restore a `full` prompt
+budget. See [TOOLING.md](TOOLING.md#context-budget-vs-tooling-profile).
 
 ## Post-TODO verification
 
@@ -146,21 +201,62 @@ These names are normalized from runtime-specific variables by `ralph_run_plan_lo
 
 Replace `<RUNTIME>` with `CURSOR`, `CLAUDE`, `CODEX`, `OPENCODE`, or `ANTIGRAVITY` as appropriate.
 
+## Workflow terminal UI
+
+Public workflow status, watch, and runs share one engine-neutral read model.
+Operator journeys: [WORKFLOWS.md](WORKFLOWS.md#status-watch-and-the-terminal-viewer).
+
+| Variable | Purpose |
+|----------|---------|
+| `NO_COLOR` | When set, strip ANSI from static `status` / `runs` tables (and other Ralph color paths that honor the standard). |
+| `RALPH_WORKFLOW_NO_COLOR` | `1` disables workflow viewer color and forces the plain streaming watch path instead of curses. |
+| `RALPH_NO_COLOR` | Additional Ralph-wide no-color signal honored by workflow static tables. |
+| `CI` | Truthy values force plain streaming watch (no curses / alternate screen). |
+| `TERM=dumb` | Forces plain streaming watch. |
+| `RALPH_GRAPH_PLAIN` | Truthy: force plain streaming watch (compatibility with older plain-output knobs). |
+| `RALPH_GRAPH_NO_TUI` | Truthy: same as plain — skip the interactive viewer. |
+| `RALPH_GRAPH_SCREEN_READER` | Truthy: screen-reader-safe streaming watch (no animation, cursor control, or required color). |
+| `ACCESSIBILITY_SCREEN_READER` | Truthy: same screen-reader path as `RALPH_GRAPH_SCREEN_READER`. |
+| `RALPH_WORKFLOW_FOLLOW_INTERVAL` | Seconds between plain-watch status polls (falls back to `RALPH_GRAPH_FOLLOW_INTERVAL`, default `1`). |
+| `RALPH_WORKFLOW_LOG_TAIL_LINES` | Default tail length for `ralph workflow logs` (default `80`). |
+| `RALPH_WORKFLOW_USAGE_REPORT` | `0` disables the automatic run-scoped workflow usage report printed when lifecycle commands return. Default `1`. Explicit `ralph usage --run <exact-run-id>` remains available. |
+
+Public flags (not env vars): `ralph workflow watch --plain` forces streaming text;
+`ralph workflow runs --tsv` forces the stable TSV schema on a TTY.
+`status --json` and `runs --json` never emit ANSI. Do not use retired engine
+viewer flags or namespace selectors with public `ralph workflow` verbs.
+
 ## Models
 
 Ralph no longer ships bundled default model lists for Claude or Codex. Prebuilt agents may leave `model` empty in `config.json`; resolution then uses saved models or interactive prompts.
+
+### Listing models (all runtimes)
+
+`ralph models list <runtime>` (or `.ralph/models.sh list <runtime>`) is read-only:
+
+| Runtime | List source |
+|---------|-------------|
+| `claude`, `codex` | Ordered entries from the saved-model store (`models.json`) |
+| `cursor` | Native discovery via `cursor-agent --list-models` (or detected `agent`) |
+| `opencode` | Native discovery via `opencode models` |
+| `antigravity` | Native discovery via `agy models` (exact display strings preserved) |
+
+Native list modes never write `models.json`. If the runtime CLI is unavailable, the command surfaces the discovery helper failure rather than falling back to saved models.
 
 ### Saved models (Claude and Codex)
 
 | Item | Purpose |
 |------|---------|
-| `ralph models` / `.ralph/models.sh` | `list`, `add`, and `remove` subcommands for `claude` and `codex` runtimes. |
+| `ralph models` / `.ralph/models.sh` | `list` for all five runtimes; `add` and `remove` only for `claude` and `codex`. |
 | `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json` | Ordered saved-model store (`schema_version`, per-runtime arrays). First entry is the default fallback. |
 | `RALPH_CONFIG_HOME` | Override Ralph config root (defaults to `${XDG_CONFIG_HOME:-$HOME/.config}/ralph`). |
 
 Examples:
 
 ```bash
+ralph models list cursor
+ralph models list opencode
+ralph models list antigravity
 ralph models add claude claude-sonnet-4-6
 ralph models list codex
 bash .ralph/models.sh remove claude claude-sonnet-4-6
@@ -182,28 +278,30 @@ Ralph lists available models via `agy models`, preserves each exact display stri
 
 ### Claude/Codex resolution order
 
-When `run-plan` selects a model for Claude or Codex (highest wins):
+When `run-plan` selects a model for Claude or Codex on a leaf plan (highest wins):
 
-1. `--model <id>` CLI flag
-2. `CLAUDE_PLAN_MODEL` or `CODEX_PLAN_MODEL` (each falls back to `CURSOR_PLAN_MODEL` when unset)
-3. Non-empty agent config `model`
-4. First saved model from `models.json` (`ralph models add`)
-5. Interactive prompt (saved-model menu or manual entry; offers to save new ids)
+1. `--model <id>` CLI flag (or plan-header `model:`)
+2. TODO `model:`
+3. Attended TTY: interactive picker showing the full saved-model catalog (plus custom entry). `models.json` is a catalog to choose from, not an auto-selected default.
+4. Non-interactive / no TTY: first saved model from `models.json` (CI/automation fallback only)
+5. Runtime-native default (omit Ralph `--model`)
 
-Orchestration stage `model` in the pipeline plan overrides agent config for that stage only.
+Profile-derived models and `*_PLAN_MODEL` env vars are not rungs for standard leaf resolution.
+Staged graph/orchestration/workflow runs use: stage or voter `model:` > saved > native
+(always non-interactive at the runner boundary).
 
 ### Antigravity resolution order
 
 When `run-plan` selects a model for Antigravity (highest wins):
 
 1. `--model <id>` CLI flag
-2. `ANTIGRAVITY_PLAN_MODEL` (then `OPENCODE_PLAN_MODEL`, then `CURSOR_PLAN_MODEL` when unset)
-3. Non-empty agent config `model`
-4. Interactive `agy models` menu (TTY only)
+2. TODO `model:`
+3. Attended TTY: interactive `agy models` menu
+4. Runtime-native default (omit Ralph `--model`)
 
 Saved `ralph models` entries do not apply to Antigravity.
 
-**Non-interactive:** Claude/Codex runs fail when none of steps 1-4 resolve a model. Add a saved default with `ralph models add <runtime> <id>`, or pass `--model` / set the runtime env var. Cursor/OpenCode/Antigravity non-interactive runs require `--model`, the runtime env var chain, or a non-empty agent-config model. For Antigravity, the model must be an exact display string from `agy models` so Ralph can pass it to `agy --model "<exact model string from agy models>"` unchanged.
+**Non-interactive:** Claude/Codex runs use the first saved model when CLI/TODO pins are unset; they fail only when nothing resolves and a model is required by the invoke path. Add a saved default with `ralph models add <runtime> <id>`, or pass `--model`. Cursor/OpenCode/Antigravity non-interactive runs require `--model` or an equivalent pin. For Antigravity, the model must be an exact display string from `agy models` so Ralph can pass it to `agy --model "<exact model string from agy models>"` unchanged.
 
 ## Cursor-specific
 
@@ -419,7 +517,7 @@ Ralph implements shell-output compaction once in shared libraries, then exposes 
 | **True post-tool mutation (native)** | Claude only | `PostToolUse:Bash` hook [`bundle/.claude/hooks/compact-bash-output.sh`](../bundle/.claude/hooks/compact-bash-output.sh) returns `hookSpecificOutput.updatedToolOutput` (proven on 2.1.162); full originals stored in `.ralph-workspace/tool-results/<plan-key>/`; fails open. | `RALPH_MODE=native` or `hybrid` (auto `RALPH_BASH_COMPACT=1` when unset); explicit `RALPH_BASH_COMPACT=0` opts out; non-zero exits do not trigger output replacement |
 | **Pre-tool wrapper (native)** | Cursor, Codex | Shell `preToolUse` input rewrite to invoke `native-shell-wrapper` (proven Cursor 2026.06.03-0bbb28e; Codex 0.136.0 via T5). Wrapper captures, compacts, stores originals in `.ralph-workspace/tool-results/<plan-key>/`. Fails open; falls back to raw command or simple rewrite when wrapper unavailable. Hybrid enables this layer alongside MCP compaction, but the stored original remains shared with the proxy path. | `RALPH_NATIVE_SHELL_WRAPPER=1` (default on when native adapters (via `--ralph-mode native` or `hybrid`) and not explicitly disabled); `RALPH_BASH_REWRITE=1` for fallback simple rewrite |
 | **MCP hook supplement (Cursor)** | Cursor | Ralph MCP `postToolUse` output compaction via `updated_mcp_tool_output` (proven on tested build) for Ralph MCP tool results when `RALPH_PROXY_SHELL_COMPACT=1` (or `RALPH_CURSOR_MCP_HOOK_COMPACT=1`). Shell native `postToolUse` output replacement is not proven, so `hybrid` still treats the proxy path as authoritative. | `RALPH_MODE=hybrid` or `ralph` with `RALPH_PROXY_SHELL_COMPACT=1` |
-| **MCP fallback (recommended)** | OpenCode | Plugin staging and code verified (T6/T7), but headless hook invocation and output mutation unproven (OpenCode 1.14.35). In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; MCP-proxy native-result compaction (`result_windowing`) is authoritative unless revalidation records `headless_mutation_reaches_model: yes`. | `--ralph-mode hybrid` or `ralph` with `RALPH_PROXY_SHELL_COMPACT=1` and `RALPH_NATIVE_RESULT_COMPACT=1` |
+| **MCP fallback (recommended)** | OpenCode | Plugin staging and code verified (T6/T7), but headless hook invocation and output mutation unproven (OpenCode 1.14.35). In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; proxy-shell compaction is authoritative for noisy command output. | `--ralph-mode hybrid` or `ralph` with `RALPH_PROXY_SHELL_COMPACT=1` |
 
 **Command rewriting** (Phase 5) is documented separately in [Shell command rewrite runtime matrix](#shell-command-rewrite-runtime-matrix-phase-5-outcome) below. Universal rewrite runs through `ralph_proxy_shell`; Claude ships native `PreToolUse:Bash` adapter; Cursor and Codex use wrapper invocation when applicable.
 
@@ -454,7 +552,7 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 | **Claude** (2.1.162) | PROVEN (optional, `RALPH_BASH_REWRITE=1`) | PROVEN (`PostToolUse:Bash`, `RALPH_BASH_COMPACT=1`) | True post-tool mutation | Strongest native path; full originals stored `.ralph-workspace/tool-results/` |
 | **Cursor** (2026.06.03-0bbb28e) | PROVEN wrapper + fallback rewrite (`RALPH_NATIVE_SHELL_WRAPPER=1`) | NOT PROVEN for Shell `postToolUse` | Wrapper-based pre-tool rewrite | Also: Ralph MCP `postToolUse` proven for Ralph proxy tools only |
 | **Codex** (0.136.0) | PROVEN wrapper + fallback rewrite (`RALPH_NATIVE_SHELL_WRAPPER=1`) | UNPROVEN (lifecycle present, real smoke pending) | Wrapper-based pre-tool rewrite | PostToolUse lifecycle fires but agent-visible mutation not proven |
-| **OpenCode** (1.14.35) | UNPROVEN headless invocation | UNPROVEN headless invocation | MCP-proxy native-result compaction (default) | Plugin code implements both hooks; staging proven; headless firing unproven. `hybrid` keeps native and Ralph tools; see [TOOLING.md#opencode-hybrid-contract](TOOLING.md#opencode-hybrid-contract) |
+| **OpenCode** (1.14.35) | UNPROVEN headless invocation | UNPROVEN headless invocation | MCP-proxy shell compaction for noisy command output | Plugin code implements both hooks; staging proven; headless firing unproven. `hybrid` keeps native and Ralph tools; see [TOOLING.md#opencode-hybrid-contract](TOOLING.md#opencode-hybrid-contract) |
 
 ### Proxy shell output compaction (`RALPH_PROXY_SHELL_COMPACT`)
 
@@ -474,7 +572,8 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RALPH_NATIVE_RESULT_COMPACT` | off in `no`/`ralph`; auto `1` in `native`/`hybrid` when unset | When `1`, `true`, `yes`, or `on`, compact native exploration tool output (`read`, `grep`, `glob`, `bash`, and compatible aliases) through the shared `native-result-compact` path. Output is windowed into the same stored-result envelope used by MCP proxy tools; full originals live under `.ralph-workspace/tool-results/<plan-key>/` and agents page with `ralph_proxy_result_*`. Savings are recorded as `result_windowing` telemetry. Ralph sets `RALPH_NATIVE_RESULT_COMPACT=1` in `native` and `hybrid` modes unless you already exported the variable; opt out with `RALPH_NATIVE_RESULT_COMPACT=0`. On OpenCode, this is the authoritative compaction path unless revalidation records `headless_mutation_reaches_model: yes` (see [TOOLING.md#opencode-hybrid-contract](TOOLING.md#opencode-hybrid-contract)). |
+| `RALPH_NATIVE_RESULT_COMPACT` | off unless explicitly set to `1` | Legacy opt-in for windowing native exploration output (`read`, `grep`, `glob`, `search`, and compatible aliases) into stored-result envelopes. `native` and `hybrid` never enable it automatically, and shell compaction does not activate it. Default exploration results remain directly visible; set `0` to force it off. |
+| `RALPH_MCP_EXPLORATION_RESULT_COMPACT` | `0` | Legacy opt-in for stored-result envelopes on Ralph proxy exploration tools. By default, proxy read, grep, glob, search, and repomap results return their direct requested window; set to `1` only for compatibility with clients that require `resultId` retrieval. |
 
 ### Runtime-native bash output compaction (`RALPH_BASH_COMPACT`)
 
@@ -553,11 +652,12 @@ Optimization-event counts (`optimization_events_total`, per-path event counts) d
 
 **Dominance warning.** When a single event or a single source tool accounts for more than `DOMINANCE_THRESHOLD_SHARE` (50%) of a report's total net saved bytes, the report emits a `dominance_warning` (surfaced tool, share, net saved bytes, measurement quality) and the rendered markdown shows a caution callout. This exists so a report does not present an average or aggregate saving that is actually driven by one outlier event as if it were representative.
 
-### Generic compaction fallback (`RALPH_COMPACT_GENERIC_THRESHOLD_BYTES`)
+### Generic compaction fallback (`RALPH_COMPACT_GENERIC_FALLBACK`)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` | `8192` | Byte threshold for the `generic_large` size-triggered fallback in [`shell-output-compact.py`](../bundle/.ralph/python/shell-output-compact.py). When no command family or output-shape rule matches, combined stdout/stderr above this size is compacted to head + tail plus error/failure lines extracted from the elided middle (progress walls, compiler warnings, test floods, stack traces). Output at or below the threshold passes through unchanged. Non-integer or negative values fall back to `8192`. Applies to MCP proxy shell compaction and native adapter compactors that call the shared library. |
+| `RALPH_COMPACT_GENERIC_FALLBACK` | `0` | Set to `1` to compact unknown large shell output with the generic `generic_large` fallback. It is disabled by default because unknown output can be source data. |
+| `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` | `8192` | Byte threshold used only when `RALPH_COMPACT_GENERIC_FALLBACK=1`. Non-integer or negative values fall back to `8192`. |
 
 ### Wrapper-based native shell compaction (`RALPH_NATIVE_SHELL_WRAPPER`)
 
@@ -574,9 +674,9 @@ Optimization-event counts (`optimization_events_total`, per-path event counts) d
 
 <a id="opencode-native-hook-status"></a>
 
-**OpenCode hybrid contract (documented local plugin path; native adapters unproven headless):** Verified on OpenCode **1.14.35** (2026-06-04): Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` to workspace `.opencode/plugins/` (documented auto-discovery path proven via T6). Plugin code implements `tool.execute.before` and `tool.execute.after` (T7 verified). In `--ralph-mode hybrid`, native OpenCode tools (`read`, `grep`, `glob`, `bash`) and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Native exploration output is compacted/windowed through Ralph's shared `native-result-compact` path with `result_windowing` telemetry.
+**OpenCode hybrid contract (documented local plugin path; native adapters unproven headless):** Verified on OpenCode **1.14.35** (2026-06-04): Ralph stages `bundle/.opencode/plugins/ralph-runtime-hooks.ts` to workspace `.opencode/plugins/` (documented auto-discovery path proven via T6). Plugin code implements `tool.execute.before` and `tool.execute.after` (T7 verified). In `--ralph-mode hybrid`, native OpenCode tools (`read`, `grep`, `glob`, `bash`) and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Native exploration output stays visible by default; its legacy windowing path is explicit opt-in only.
 
-**Authoritative compaction:** **MCP-proxy compaction** (`RALPH_NATIVE_RESULT_COMPACT=1`, `RALPH_PROXY_SHELL_COMPACT=1`, `native-result-compact-cli.sh`) is authoritative by default. Ralph checks `.ralph-workspace/artifacts/PLAN13/opencode-hook-revalidation.md` when present; only when that artifact records `headless_mutation_reaches_model: yes` does the **plugin-hook mutation** path become authoritative instead. Without that verdict, headless `opencode run` hook invocation and agent-visible output mutation remain unproven; overlay records `native_hooks_configured=true`, `native_hooks_effective=false`, `native_hooks_reason=plugin_injected_unproven_headless`, `fallback_path_active=true`, and `native_shell_compaction_authoritative=mcp_proxy_compaction`.
+**Authoritative compaction:** MCP proxy shell compaction (`RALPH_PROXY_SHELL_COMPACT=1`) is authoritative for noisy OpenCode shell output. Native exploration compaction remains opt-in; headless `opencode run` hook invocation and agent-visible output mutation remain unproven, so overlays record `native_hooks_effective=false` until revalidation proves them.
 
 **Cache-read reporting:** Provider cache-read token fields are model/provider dependent and are telemetry only (optimization hints, not the primary context-control mechanism). See [TOOLING.md#opencode-hybrid-contract](TOOLING.md#opencode-hybrid-contract) and `bundle/.opencode/plugins/SPIKE-output-mutation.md`.
 
@@ -655,21 +755,25 @@ The workspace knowledge graph is hidden from plan runs unless `RALPH_KNOWLEDGE_F
 
 `knowledge-tool.sh` is not gated by `RALPH_KNOWLEDGE_FEATURE`; operators invoke it directly for init/record/query/status/cleanup/export.
 
-## Killswitch
+## Killswitch / safety
 
-The killswitch blocks dangerous commands, tools, or file paths before they execute. Configuration is loaded from `killswitch.json` (per-workspace, global, or bundle default). Full configuration reference: [SECURITY.md](SECURITY.md#kill-switch).
+The killswitch blocks dangerous commands, tools, or file paths before they execute. Public CLI: `ralph safety status|validate|check|init|edit`. Full configuration reference: [SECURITY.md](SECURITY.md#kill-switch-ralph-safety).
 
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_KILLSWITCH_DISABLED` | Set to `1` to disable the killswitch entirely. |
-| `RALPH_BANNED_TOOLS` | Comma-separated tool names or glob patterns to block (added to config). |
-| `RALPH_BANNED_PATHS` | Comma-separated file path patterns to block (added to config). |
-| `RALPH_BANNED_PATTERNS` | Comma-separated regex patterns for command matching (uses bash ERE, added to config). |
+| `RALPH_KILLSWITCH_OVERRIDE_FILE` | Absolute path to an override config that wins over project/global/bundle when present (session runs may set this to `killswitch-override.json`). |
+| `RALPH_BANNED_TOOLS` | Comma-separated tool names or glob patterns to block (added to config after a successful load). |
+| `RALPH_BANNED_PATHS` | Comma-separated file path patterns to block (added to config after a successful load). |
+| `RALPH_BANNED_PATTERNS` | Comma-separated regex patterns for command matching (uses bash ERE, added to config after a successful load). |
 
-Configuration file search order:
-1. `$WORKSPACE/.ralph-workspace/killswitch.json`
-2. `$RALPH_HOME/killswitch.json`
-3. Bundle default (`bundle/.ralph/killswitch.json`)
+Configuration source precedence (first configured winner; invalid/unreadable configured winner fails closed):
+1. `RALPH_KILLSWITCH_OVERRIDE_FILE` when set and present
+2. `<state-root>/killswitch.json` (default `$WORKSPACE/.ralph-workspace/killswitch.json`)
+3. `$RALPH_HOME/killswitch.json`
+4. Bundle default (`bundle/.ralph/killswitch.json`)
+
+Env ban/allow lists merge only after the winning source validates.
 
 ## Safety and usage prompt
 

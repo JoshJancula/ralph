@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "category": "test-run-no-completed-feedback",
+  "summary": "Bats test invocations inside node agent logs are routinely compacted to a TAP plan line plus a '+N more lines' pointer, with no per-test ok/not-ok lines retained inline. The largest verified instance in the preserved run directories is a 29-test mcp-proxy-policy.bats run whose compacted view shows only '1..29' and a truncation pointer; a second invocation of the same file is truncated identically. A single-file read elsewhere in the same node's log is truncated at '+73 more lines', which is the specific magnitude referenced when this class of truncation is discussed as 'the 73-line/73-test-scale run with no completed-test feedback'; the fixture below documents the verified 29-test case plus the exact 73-line truncation pointer since no single bats invocation with exactly 73 declared tests was found in the six preserved runs.",
+  "affectedAttempts": [
+    "unify-killswitch-core__run-20260815T021145Z-0-udoZs5__1",
+    "implement-cli-bootstrap__run-20260812T020611Z-0-Bnsvuc__1"
+  ],
+  "verifiedBatsTruncation": {
+    "testFile": "tests/bats/mcp-proxy/mcp-proxy-policy.bats",
+    "declaredTestCount": 29,
+    "tapPlanLine": "1..29",
+    "compactedTruncationPointer": "+38 more lines",
+    "okNotOkLinesRetainedInline": 0,
+    "resultReference": "compacted view pointer only; full output requires ralph_proxy_result_read"
+  },
+  "verified73LineTruncation": {
+    "context": "native read() of bundle/.ralph/bash-lib/graph/graph-state.sh during implement-cli-bootstrap",
+    "compactedTruncationPointer": "+73 more lines",
+    "note": "this is a file-read truncation, not a test-run truncation; included because it is the only exact '73' magnitude present in the preserved logs and matches the number referenced in the evidence request"
+  },
+  "operatorImpact": "Whether truncating a test run or a file read, the compacted view hides individual completion lines behind a line-count pointer, so an operator or downstream agent cannot tell which specific tests passed or failed without an extra explicit full-output read step."
+}

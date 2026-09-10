@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Shared shell command registry: safety gates, predicates, rule ids, and rewrites."""
+"""Shared shell command registry: safety gates, predicates, rule ids, and rewrites.
+
+SHELL_COMMAND_RULES holds two kinds of rules. Match-only rules (the
+majority) exist solely to classify a command into a family for the
+compaction layer; they never alter the command text. Rewrite rules
+(carrying a non-None `rewrite=` callable) alter the command text before it
+runs. Exactly two rewrite rules exist, and both only fire when the user
+passed no conflicting flags of their own: `pytest` becomes
+`pytest -q --tb=line`, and `tsc` becomes `tsc --pretty false`. The whole
+rewrite path is gated behind RALPH_BASH_REWRITE (bundle/.claude/hooks/
+rewrite-bash-command.sh and its per-runtime equivalents), which is unset by
+default, so no rewriting happens unless it is explicitly enabled.
+tests/python/test_shell_command_registry.py asserts this rewrite-rule set
+stays at exactly two rules, so adding or removing one must also update this
+docstring and the table in docs/HOOKS.md.
+"""
 
 from __future__ import annotations
 
@@ -73,8 +88,6 @@ _RESERVED_FIRST = frozenset({
     "while",
 })
 
-_GIT_STATUS_FLAG_RE = re.compile(r"^--(?:porcelain|short|branch|untracked-files)")
-_GIT_STATUS_SHORT_FLAG = frozenset({"-s", "-b", "-u", "--short", "--branch", "--porcelain"})
 _PYTEST_QUIET_FLAG = frozenset({"-q", "--quiet"})
 _PYTEST_TB_PREFIX = "--tb="
 _GIT_GLOBAL_OPTION_WITH_VALUE = frozenset({"-C", "-c", "--git-dir", "--work-tree"})
@@ -466,23 +479,6 @@ def _match_gh_pr_list(_cmd: str, tokens: list[str]) -> bool:
     )
 
 
-def _rewrite_git_status(_cmd: str, tokens: list[str], rewrite_prefix: list[str]) -> str | None:
-    if not _match_git_status(_cmd, tokens):
-        return None
-    rest = tokens[2:]
-    for arg in rest:
-        if arg in _GIT_STATUS_SHORT_FLAG:
-            return None
-        if _GIT_STATUS_FLAG_RE.match(arg):
-            return None
-        if arg.startswith("-"):
-            return None
-    return _apply_rewrite_prefix(
-        rewrite_prefix,
-        _join_command("git status --porcelain=v2 --branch", rest),
-    )
-
-
 def _rewrite_pytest(_cmd: str, tokens: list[str], rewrite_prefix: list[str]) -> str | None:
     if not _match_pytest(_cmd, tokens):
         return None
@@ -533,7 +529,12 @@ def _rule(
 
 
 SHELL_COMMAND_RULES: tuple[ShellCommandRule, ...] = (
-    _rule(RULE_GIT_STATUS, FAMILY_GIT_STATUS, _match_git_status, rewrite=_rewrite_git_status, phase="phase2"),
+    # git_status is match-only: the compactor still trims noisy output, but the
+    # command itself is never rewritten. Rewriting `git status` to
+    # `--porcelain=v2 --branch` changes the output form the agent explicitly
+    # requested, which is a different and less defensible trade than dropping
+    # progress noise from output the agent did not ask to reshape.
+    _rule(RULE_GIT_STATUS, FAMILY_GIT_STATUS, _match_git_status, phase="phase2"),
     _rule(FAMILY_GIT_DIFF, FAMILY_GIT_DIFF, _match_git_diff, phase="phase2"),
     _rule(FAMILY_GIT_SHOW, FAMILY_GIT_SHOW, _match_git_show, phase="phase2"),
     _rule(FAMILY_GIT_LOG, FAMILY_GIT_LOG, _match_git_log, phase="phase2"),

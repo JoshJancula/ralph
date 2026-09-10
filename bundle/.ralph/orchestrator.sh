@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Canonical Ralph orchestrator (repo root: .ralph/orchestrator.sh). Dispatches each JSON
-# stage to `.ralph/run-plan.sh` with per-stage `--runtime`, `--plan` (from the stage), and `--agent`.
+# stage to `.ralph/run-plan.sh` with per-stage `--runtime`, `--plan` (from the stage), and
+# optional `--role`.
 # Master orchestrator: read a JSON orchestration plan, run each step in order via Ralph
 # (unified run-plan; `--plan` is always passed). Stops on first failure
 # and writes actionable logs under .ralph-workspace/logs/orchestrator-*.log.
@@ -13,12 +14,12 @@
 #     "stages": [
 #       {
 #         "id": "stage-id",
-#         "agent": "agent-name",
+#         "role": "research",
 #         "runtime": "cursor", "claude", "codex", "opencode", or "antigravity" (optional, default: cursor),
 #         "plan": "path/to/stage-plan.md",
 #         "mcpProxyPolicy": "readonly" (optional; forwarded to RALPH_MCP_PROXY_POLICY for that stage),
 #         "sessionStrategy": "fresh" | "resume" | "reset" (optional; preferred),
-#         "sessionResume": true or false (optional legacy fallback; mapped to session strategy resume/fresh),
+#         "sessionResume": true or false (optional shorthand mapped to session strategy resume/fresh),
 #         "inputArtifacts": ["path/to/{{ARTIFACT_NS}}/input.md"],
 #         "outputArtifacts": [
 #           "path/to/{{ARTIFACT_NS}}/output.md"
@@ -33,7 +34,7 @@
 #     ]
 #   }
 #
-# Each stage's plan file lists the TODO(s) that agent should complete.
+# Each stage's plan file lists the TODO(s) that stage should complete.
 # After each stage, required artifacts are verified (exist, non-empty).
 #
 # Usage:
@@ -68,6 +69,8 @@ RALPH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(pwd)"
 WORKSPACE_ROOT_OVERRIDE=""
 ORCH_FILE=""
+# shellcheck source=bash-lib/help-render.sh
+source "$RALPH_DIR/bash-lib/help-render.sh"
 
 # Single-stage mode: execute exactly one stage and emit a StageOutcomeReport.
 # When SINGLE_STAGE_MODE=1 the orchestrator routes into the per-stage function,
@@ -82,11 +85,10 @@ SINGLE_STAGE_STARTED_AT=""
 SINGLE_STAGE_REPORT_WRITTEN=0
 
 usage() {
-  echo "Usage: $0 --orchestration <orchestration_plan.orch.json> [workspace_dir]" >&2
-  echo "   or: $0 <orchestration_plan.orch.json> [workspace_dir]" >&2
-  echo "Optional: append --workspace-root <path> to set a custom .ralph-workspace location" >&2
-  echo "Single stage: --single-stage <stageId> --run-id <runId> --attempt-id <attemptId>" >&2
-  echo "              executes exactly one stage and writes a StageOutcomeReport." >&2
+  ralph_help_title "Usage: orchestrator.sh --orchestration <plan> [options]" >&2
+  ralph_help_section 'Options' >&2
+  ralph_help_command '--workspace-root <path>' 'Set a custom .ralph-workspace location.' >&2
+  ralph_help_command '--single-stage <stage> --run-id <id> --attempt-id <id>' 'Execute exactly one stage and write its StageOutcomeReport.' >&2
   exit 1
 }
 
@@ -118,6 +120,10 @@ while [[ $# -gt 0 ]]; do
       SINGLE_STAGE_ATTEMPT_ID="$2"
       shift 2
       ;;
+  --model|--model=*)
+    echo "Error: orchestration does not accept --model; configure models per stage or voter." >&2
+    exit 1
+    ;;
     -h|--help)
     echo "Usage: $0 --orchestration <orchestration_plan.orch.json> [workspace_dir]"
     echo "   or: $0 <orchestration_plan.orch.json> [workspace_dir]"
@@ -168,7 +174,12 @@ if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
 fi
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 RALPH_ACTIVE_DIR="$RALPH_DIR"
-if [[ -f "$WORKSPACE/.ralph/run-plan.sh" && -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
+if [[ -n "${RALPH_GRAPH_TOOLING_ROOT:-}" ]]; then
+  RALPH_ACTIVE_DIR="$(cd "$RALPH_GRAPH_TOOLING_ROOT" 2>/dev/null && pwd -P)" || {
+    echo "Orchestrator error: invalid frozen graph tooling root." >&2
+    exit 1
+  }
+elif [[ -f "$WORKSPACE/.ralph/run-plan.sh" && -f "$WORKSPACE/.ralph/ralph-env-safety.sh" ]]; then
   RALPH_ACTIVE_DIR="$WORKSPACE/.ralph"
 fi
 if [[ ! -f "$RALPH_ACTIVE_DIR/ralph-env-safety.sh" ]]; then
@@ -187,25 +198,35 @@ export RALPH_PLAN_WORKSPACE_ROOT="$DEFAULT_ORCH_WORKSPACE_ROOT"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs"
 mkdir -p "$RALPH_LOG_DIR"
+# Directory run-plan.sh actually writes its per-plan logs into. Mirrors the
+# RALPH_LOG_DIR selection in run-plan-core.sh: the graph scheduler (and the
+# Sequential engine via workflow_seq_journal_stage_before) set
+# RALPH_GRAPH_NODE_LOG_DIR so concurrent/isolated attempts keep a shared
+# RALPH_ARTIFACT_NS while logging under a per-attempt subdirectory. Every
+# operator-facing log hint must go through this, or failures point at paths
+# that do not exist.
+orch_plan_log_dir() {
+  if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+    printf '%s\n' "$RALPH_GRAPH_NODE_LOG_DIR"
+  elif [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+    printf '%s\n' "$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS"
+  else
+    printf '%s\n' "$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS"
+  fi
+}
+
 ORCH_BASENAME="$(basename "$ORCH_FILE" | sed 's/\.[^.]*$//')"
 ORCH_BASENAME="${ORCH_BASENAME//[^A-Za-z0-9_.-]/_}"
 LOG_FILE="$RALPH_LOG_DIR/orchestrator-${ORCH_BASENAME}.log"
 # Ensure the log path exists before the first append (some environments rely on the file for smoke checks).
 touch "$LOG_FILE"
 RALPH_RUN_PLAN="$RALPH_ACTIVE_DIR/run-plan.sh"
-# Populated per stage from JSON (and sometimes merged from agent config); cleared each iteration.
+# Populated per stage from stage JSON only (artifacts / outputArtifacts); cleared each iteration.
 EXPECTED_ARTIFACT_PATHS=()
 
 ralph_orchestrator_timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 
-# Used by merge_required_artifacts_from_agent when a stage omits explicit artifacts.
-if [[ -f "$RALPH_ACTIVE_DIR/agent-config-tool.sh" ]]; then
-  AGENT_CONFIG_TOOL_SH="$RALPH_ACTIVE_DIR/agent-config-tool.sh"
-else
-  AGENT_CONFIG_TOOL_SH=""
-fi
-
-# expand_artifact_tokens, merge_required_artifacts_from_agent, orchestrator_validate_runtime, etc.
+# expand_artifact_tokens, orchestrator_validate_runtime, orch_stage_collect_expected_artifacts, etc.
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/runtime-resolve.sh"
 # shellcheck source=/dev/null
@@ -219,12 +240,22 @@ if ! declare -F expand_artifact_tokens >/dev/null 2>&1; then
 fi
 # shellcheck source=bash-lib/orchestrator/orchestrator-lib.sh
 source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-lib.sh"
+# shellcheck source=bash-lib/orchestrator/orchestrator-verify.sh
+source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-verify.sh"
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/ralph-format-elapsed.sh"
 # shellcheck source=bash-lib/orchestrator/orchestrator-handoffs.sh
 source "$RALPH_ACTIVE_DIR/bash-lib/orchestrator/orchestrator-handoffs.sh"
 # shellcheck source=/dev/null
 source "$RALPH_ACTIVE_DIR/bash-lib/review-status.sh"
+# shellcheck source=bash-lib/atomic-json.sh
+source "$RALPH_ACTIVE_DIR/bash-lib/atomic-json.sh"
+# G10/G11: pure failure-envelope normalizer for the single-stage
+# StageOutcomeReport writer below.
+if [[ -f "$RALPH_ACTIVE_DIR/bash-lib/graph/graph-failure-classify.sh" ]]; then
+  # shellcheck source=bash-lib/graph/graph-failure-classify.sh
+  source "$RALPH_ACTIVE_DIR/bash-lib/graph/graph-failure-classify.sh"
+fi
 if [[ -f "$RALPH_ACTIVE_DIR/bash-lib/rubric-grader.sh" ]]; then
   # shellcheck source=/dev/null
   source "$RALPH_ACTIVE_DIR/bash-lib/rubric-grader.sh"
@@ -301,6 +332,19 @@ orch_interrupt_teardown() {
 
   ralph_orchestrator_log "orchestrator received signal ${signal}; tearing down tracked processes"
 
+  # Persist cancellation intent before TERM reaches owned children. SIGINT is
+  # checkpointed only after teardown so the last run-plan atomic plan update
+  # has settled.
+  if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+    orch_workflow_seq_ensure_lib || true
+    if declare -F workflow_seq_engine_active >/dev/null 2>&1 &&
+      workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" 2>/dev/null; then
+      if [[ "$signal" == "TERM" || "$signal" == "HUP" ]]; then
+        workflow_seq_operator_cancel "$RALPH_WORKFLOW_REGISTRY_RUN" || true
+      fi
+    fi
+  fi
+
   # Registry-backed sessions are authoritative. This includes runtime CLIs
   # that called setsid beneath a stage and therefore escaped its pipeline PGID.
   ralph_process_stop_active "orchestrator-signal-${signal}" || true
@@ -313,6 +357,13 @@ orch_interrupt_teardown() {
 
   # Stop every active parallel-wave stage wrapper and reap it.
   orch_reap_parallel_pids
+
+  if [[ "$signal" == "INT" && -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+    if declare -F workflow_seq_engine_active >/dev/null 2>&1 &&
+      workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" 2>/dev/null; then
+      workflow_seq_operator_interrupt_checkpoint "$RALPH_WORKFLOW_REGISTRY_RUN" || true
+    fi
+  fi
 
   # Signal-appropriate exit code: INT=130, TERM=143, HUP=129.
   local exit_code
@@ -355,39 +406,58 @@ orch_single_stage_report_path() {
 
 # Best-effort durable flush of a single file. Prefers a real per-file fsync via
 # python3; falls back to sync(1) when present. Never fails the caller.
+# Thin wrapper around the shared ralph_fsync_path from atomic-json.sh; kept
+# for any in-tree callers that still reference the orch_ name.
 orch_fsync_path() {
-  local target="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$target" <<'PY' 2>/dev/null || true
-import os, sys
-p = sys.argv[1]
-try:
-    fd = os.open(p, os.O_RDONLY)
-except OSError:
-    sys.exit(0)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
-  elif command -v sync >/dev/null 2>&1; then
-    sync 2>/dev/null || true
-  fi
+  ralph_fsync_path "$1"
 }
 
+# orch_single_stage_write_report <outcome> <exit_code> <reason> [evidence-json]
+#
+# G10: writes the current schema. Identity and timing fields remain stable;
+# a non-success outcome additionally gets
+# an optional `failure` object built by the pure G10/G11 normalizer in
+# graph-failure-classify.sh (graph_failure_classify_v2). [evidence-json] is
+# an optional compact JSON object a caller may supply with richer G11
+# evidence (timeoutMarker, cancelMarker, nativePermission, offendingPaths,
+# missingArtifacts, ...); it is merged over the exitCode/reason this
+# function always has, so a caller with no extra evidence still gets a
+# best-effort classification instead of an invented one. A success outcome
+# never gets a `failure` object.
 orch_single_stage_write_report() {
-  local outcome="$1" exit_code="$2" reason="${3:-}"
+  local outcome="$1" exit_code="$2" reason="${3:-}" evidence_extra="${4:-}"
   [[ "${SINGLE_STAGE_MODE:-0}" == "1" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 1
   [[ "$exit_code" =~ ^-?[0-9]+$ ]] || exit_code=1
-  local report_path report_dir tmp_file finished_at
+  local report_path report_dir finished_at
   report_path="$(orch_single_stage_report_path)" || return 1
   report_dir="$(dirname "$report_path")"
   mkdir -p "$report_dir" 2>/dev/null || return 1
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  tmp_file="$(mktemp "$report_dir/.stage-outcome-XXXXXX" 2>/dev/null)" || return 1
-  if ! jq -n \
-    --argjson schemaVersion 1 \
+
+  local failure_json="null"
+  if [[ "$outcome" != "success" ]] && declare -F graph_failure_classify_v2 >/dev/null 2>&1; then
+    local base_evidence merged_evidence
+    base_evidence="$(jq -nc --argjson exitCode "$exit_code" --arg reason "$reason" \
+      '{exitCode: $exitCode} + (if $reason == "" then {} else {reason: $reason, summary: $reason} end)' 2>/dev/null)"
+    if [[ -n "$base_evidence" ]]; then
+      if [[ -n "$evidence_extra" ]] && printf '%s' "$evidence_extra" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        merged_evidence="$(jq -nc --argjson base "$base_evidence" --argjson extra "$evidence_extra" '$base * $extra' 2>/dev/null)"
+      else
+        merged_evidence="$base_evidence"
+      fi
+      if [[ -n "$merged_evidence" ]]; then
+        failure_json="$(graph_failure_classify_v2 "$merged_evidence" 2>/dev/null)" || failure_json=""
+        [[ -n "$failure_json" ]] || failure_json="null"
+      fi
+    fi
+  fi
+
+  if ! ralph_atomic_write_json "$report_path" \
+    '{schemaVersion: $schemaVersion, runId: $runId, stageId: $stageId, attemptId: $attemptId, outcome: $outcome, exitCode: $exitCode, startedAt: $startedAt, finishedAt: $finishedAt}
+       + (if $reason == "" then {} else {reason: $reason} end)
+       + (if $failure == null then {} else {failure: $failure} end)' \
+    --argjson schemaVersion 2 \
     --arg runId "$SINGLE_STAGE_RUN_ID" \
     --arg stageId "$SINGLE_STAGE_ID" \
     --arg attemptId "$SINGLE_STAGE_ATTEMPT_ID" \
@@ -396,34 +466,29 @@ orch_single_stage_write_report() {
     --arg startedAt "${SINGLE_STAGE_STARTED_AT:-$finished_at}" \
     --arg finishedAt "$finished_at" \
     --arg reason "$reason" \
-    '{schemaVersion: $schemaVersion, runId: $runId, stageId: $stageId, attemptId: $attemptId, outcome: $outcome, exitCode: $exitCode, startedAt: $startedAt, finishedAt: $finishedAt}
-       + (if $reason == "" then {} else {reason: $reason} end)' \
-    > "$tmp_file" 2>/dev/null; then
-    rm -f "$tmp_file" 2>/dev/null || true
+    --argjson failure "$failure_json"; then
     return 1
   fi
-  orch_fsync_path "$tmp_file"
-  if ! mv -f "$tmp_file" "$report_path" 2>/dev/null; then
-    rm -f "$tmp_file" 2>/dev/null || true
-    return 1
-  fi
-  orch_fsync_path "$report_dir"
   SINGLE_STAGE_REPORT_WRITTEN=1
   return 0
 }
 
 # EXIT trap for single-stage mode: if the stage terminated before a report was
 # written (runner failure, artifact failure, or a signal), emit a failed or
-# cancelled report using the process exit code, without masking it.
+# cancelled report using the process exit code, without masking it. A
+# received signal is passed through as a G11 tier-1 cancellation marker so
+# the failure envelope carries that evidence instead of only generic text.
 orch_exit_trap() {
   local ec=$?
   if [[ "${SINGLE_STAGE_MODE:-0}" == "1" && "${SINGLE_STAGE_REPORT_WRITTEN:-0}" != "1" ]]; then
-    local outcome="failed" reason="stage terminated before completion"
+    local outcome="failed" reason="stage terminated before completion" evidence=""
     if [[ -n "${ORCH_INTERRUPT_SIGNAL:-}" ]]; then
       outcome="cancelled"
       reason="received signal ${ORCH_INTERRUPT_SIGNAL}"
+      evidence="$(jq -nc --arg owner "orchestrator" --arg signal "$ORCH_INTERRUPT_SIGNAL" \
+        '{cancelMarker: {owner: $owner, signal: $signal}}' 2>/dev/null)"
     fi
-    orch_single_stage_write_report "$outcome" "$ec" "$reason" || true
+    orch_single_stage_write_report "$outcome" "$ec" "$reason" "$evidence" || true
   fi
   ralph_process_run_close "orchestrator-exit" || true
   return "$ec"
@@ -431,28 +496,88 @@ orch_exit_trap() {
 
 trap 'orch_exit_trap' EXIT
 
-# Inlined here (not only bash-lib/orchestrator-verify.sh) so this script stays self-contained for operators.
+# Override the bash-lib remediation copy so operators see the live CLI path.
 artifact_remediation_text() {
   echo "  Remediation:"
   echo "    1. Open the step plan and ensure the agent finished every TODO (agent should write declared outputs)."
   echo "    2. Create or fill the missing path under the repo root (see .ralph-workspace/artifacts/ for handoff files)."
-  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage"
-  echo "       or adjust output_artifacts in the agent config."
+  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage."
   echo "    4. Re-run from repo root: $0 --orchestration \"$ORCH_FILE\" \"$WORKSPACE\""
 }
+
+# G12: the one resolved-path function. A required-artifact path declared on
+# a stage always resolves the same way for every consumer -- artifact
+# verification (verify_step_artifacts below), the StageOutcomeReport
+# missingArtifacts evidence, and the agent-facing prompt block
+# (ralph_artifact_namespace_prompt_block in run-plan-artifacts.sh, fed via
+# RALPH_REQUIRED_ARTIFACT_PATHS_JSON) all call this instead of re-deriving
+# the answer independently:
+#   - an already-absolute path passes through unchanged;
+#   - a `.ralph-workspace/artifacts/...` path resolves under
+#     RALPH_ARTIFACT_ROOT (<state-root>/artifacts/<namespace>) when that is
+#     set -- the supervisor's own artifact directory, never the isolated
+#     agent workspace's own throwaway `.ralph-workspace`;
+#   - any other `.ralph-workspace/...` path resolves under
+#     RALPH_PLAN_WORKSPACE_ROOT (the state root);
+#   - anything else resolves relative to $WORKSPACE (the agent workspace),
+#     matching source-edit paths declared without the artifacts prefix.
+orch_resolve_artifact_path() {
+  local raw="${1:-}"
+  if [[ "$raw" == /* ]]; then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+  if [[ "$raw" == .ralph-workspace/artifacts/* && -n "${RALPH_ARTIFACT_ROOT:-}" ]]; then
+    local ns_prefix=".ralph-workspace/artifacts/${RALPH_ARTIFACT_NS:-}/"
+    if [[ -n "${RALPH_ARTIFACT_NS:-}" && "$raw" == "$ns_prefix"* ]]; then
+      printf '%s/%s\n' "${RALPH_ARTIFACT_ROOT%/}" "${raw#"$ns_prefix"}"
+    else
+      printf '%s/%s\n' "${RALPH_ARTIFACT_ROOT%/}" "${raw#.ralph-workspace/artifacts/}"
+    fi
+    return 0
+  fi
+  if [[ "$raw" == .ralph-workspace/* && -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    printf '%s/%s\n' "${RALPH_PLAN_WORKSPACE_ROOT%/}" "${raw#.ralph-workspace/}"
+    return 0
+  fi
+  printf '%s/%s\n' "$WORKSPACE" "$raw"
+}
+
+# G12: absolute, resolved required-artifact paths for the current stage, as
+# a compact JSON array. Empty when there are no expected artifacts. Used to
+# populate RALPH_REQUIRED_ARTIFACT_PATHS_JSON so the agent prompt names the
+# exact supervisor-owned destinations instead of leaving the agent to guess
+# a path relative to its own isolated workspace.
+orch_required_artifact_paths_json() {
+  local ap abs
+  local -a resolved=()
+  for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
+    abs="$(orch_resolve_artifact_path "$ap")"
+    resolved+=("$abs")
+  done
+  if ((${#resolved[@]} == 0)); then
+    printf '[]\n'
+    return 0
+  fi
+  printf '%s\n' "${resolved[@]}" | jq -R . | jq -sc .
+}
+
+# Populated by verify_step_artifacts on failure: the resolved absolute
+# paths of every missing or empty required artifact, so the caller can pass
+# them as G11 tier-4 evidence to orch_single_stage_write_report instead of
+# falling through to a generic exit-trap classification.
+ORCH_MISSING_ARTIFACT_PATHS=()
 
 # After each successful delegated run: each expected artifact must exist and be non-empty.
 verify_step_artifacts() {
   local step_n="$1"
   local ap abs
+  ORCH_MISSING_ARTIFACT_PATHS=()
   if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
-    if [[ "$ap" == /* ]]; then
-      abs="$ap"
-    else
-      abs="$WORKSPACE/$ap"
-    fi
+    abs="$(orch_resolve_artifact_path "$ap")"
     if [[ ! -f "$abs" ]]; then
+      ORCH_MISSING_ARTIFACT_PATHS+=("$abs")
       ralph_orchestrator_log "FAIL step $step_n artifact check: missing file: $ap (resolved: $abs)"
       {
         echo ""
@@ -469,9 +594,10 @@ verify_step_artifacts() {
       echo "  Resolved path: $abs" >&2
       artifact_remediation_text >&2
       echo "  Log: $LOG_FILE" >&2
-      return 1
+      continue
     fi
     if [[ ! -s "$abs" ]]; then
+      ORCH_MISSING_ARTIFACT_PATHS+=("$abs")
       ralph_orchestrator_log "FAIL step $step_n artifact check: empty file: $ap (resolved: $abs)"
       {
         echo ""
@@ -488,11 +614,11 @@ verify_step_artifacts() {
       echo "  Resolved path: $abs" >&2
       artifact_remediation_text >&2
       echo "  Log: $LOG_FILE" >&2
-      return 1
+      continue
     fi
     done
   fi
-  return 0
+  ((${#ORCH_MISSING_ARTIFACT_PATHS[@]} == 0))
 }
 
 # Extract status from code-review artifact (for loop control)
@@ -524,7 +650,7 @@ check_loop_condition() {
     fi
   fi
 
-  # Check review status (schema-aware; falls back to legacy markdown when no schema).
+  # Check review status (schema-aware; falls back to markdown when no schema is declared).
   local status="$(ralph_extract_review_status_with_schema "$review_file" "$evaluator_schema_abs" 2>/dev/null)" || status="unknown"
   local max_iter="$(echo "$stage_json" | jq -r '.loopControl.maxIterations // 3' 2>/dev/null)" || max_iter=3
   local on_exhausted="$(echo "$stage_json" | jq -r '.loopControl.onExhausted // empty' 2>/dev/null)" || on_exhausted=""
@@ -604,29 +730,36 @@ orch_stage_normalize_id() {
   printf '%s\n' "$stage_id"
 }
 
-orch_stage_collect_expected_artifacts() {
+# Extract optional stage instructions for the run-plan prompt bridge. Returns
+# empty when absent. Always safe to assign into RALPH_WORKFLOW_STAGE_INSTRUCTIONS
+# (empty clears ambient leakage for stages without instructions).
+orch_stage_instructions_from_json() {
   local stage_json="$1"
-  local agent="$2"
-  local runtime="$3"
-  local stage_has_artifacts=0
-  local artifacts_array artifact_path
+  local instructions=""
+  instructions="$(echo "$stage_json" | jq -r '.instructions // empty' 2>/dev/null)" || instructions=""
+  printf '%s' "$instructions"
+}
 
-  EXPECTED_ARTIFACT_PATHS=()
-  artifacts_array="$(echo "$stage_json" | jq '.artifacts // []' 2>/dev/null)" || artifacts_array="[]"
-  while IFS= read -r artifact_path; do
-    [[ -z "$artifact_path" ]] && continue
-    artifact_paths_append_unique "$artifact_path"
-    stage_has_artifacts=1
-  done < <(echo "$artifacts_array" | jq -r '.[] | select(.required == true) | .path' 2>/dev/null)
-  while IFS= read -r artifact_path; do
-    [[ -z "$artifact_path" ]] && continue
-    artifact_paths_append_unique "$artifact_path"
-    stage_has_artifacts=1
-  done < <(echo "$stage_json" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
-
-  if [[ "$agent_source" == "prebuilt" && "$stage_has_artifacts" -eq 0 ]]; then
-    merge_required_artifacts_from_agent "$agent" "$runtime"
+# Reject removed agent / agentSource keys. Role ids are obsolete; callers may
+# still receive an empty role string when absent. Prints the role id (may be
+# empty) on success; exits 1 with replacement guidance on removed syntax.
+orch_stage_role_from_json() {
+  local stage_json="$1"
+  if echo "$stage_json" | jq -e 'has("agent")' >/dev/null 2>&1; then
+    echo "Error: stage agent was removed. Use inline workflow instructions (instructions: text)." >&2
+    return 1
   fi
+  if echo "$stage_json" | jq -e 'has("agentSource")' >/dev/null 2>&1; then
+    echo "Error: stage agentSource was removed. Use inline workflow instructions (instructions: text)." >&2
+    return 1
+  fi
+  local role=""
+  role="$(echo "$stage_json" | jq -r '.role // ""' 2>/dev/null)" || role=""
+  if [[ -n "$role" && ! "$role" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "Error: stage role must be a non-empty id matching ^[a-z0-9]+(-[a-z0-9]+)*$ (got '$role')" >&2
+    return 1
+  fi
+  printf '%s\n' "$role"
 }
 
 orch_stage_capture_usage() {
@@ -658,13 +791,411 @@ _STAGE_USAGE_EOF
   fi
 }
 
+# Soft-load Sequential engine journal helpers (RALPH_ACTIVE_DIR, then RALPH_DIR).
+orch_workflow_seq_ensure_lib() {
+  local lib=""
+  if declare -F workflow_seq_orch_journal_before >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -f "${RALPH_ACTIVE_DIR:-}/bash-lib/workflow/workflow-engine-sequential.sh" ]]; then
+    lib="${RALPH_ACTIVE_DIR}/bash-lib/workflow/workflow-engine-sequential.sh"
+  elif [[ -f "${RALPH_DIR:-}/bash-lib/workflow/workflow-engine-sequential.sh" ]]; then
+    lib="${RALPH_DIR}/bash-lib/workflow/workflow-engine-sequential.sh"
+  else
+    return 1
+  fi
+  # shellcheck source=bash-lib/workflow/workflow-engine-sequential.sh
+  source "$lib"
+}
+
+# Journal stage start when Sequential engine/run.json is active. Never fails the stage.
+orch_workflow_seq_journal_before() {
+  local stage_id="${1:-}" stage_index="${2:-0}" stage_json="${3:-}" stage_iter="${4:-0}"
+  local wave=""
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]] || return 0
+  orch_workflow_seq_ensure_lib || return 0
+  if ! declare -F workflow_seq_engine_active >/dev/null 2>&1; then
+    return 0
+  fi
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 0
+  if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+    wave="$(jq -r --arg id "$stage_id" '
+      (.parallelStages // []) as $waves
+      | if ($waves | length) == 0 then ""
+        else
+          (reduce range(0; $waves | length) as $i
+            ({found:""};
+              if .found != "" then .
+              else
+                (($waves[$i] | if type == "string" then split(",") else . end)
+                  | map(gsub("^\\s+|\\s+$";""))
+                  | index($id)) as $pos
+                | if $pos != null then .found = ($i | tostring) else . end
+              end)
+            | .found)
+        end
+    ' "$ORCH_FILE" 2>/dev/null)" || wave=""
+  fi
+  workflow_seq_orch_journal_before \
+    "$RALPH_WORKFLOW_REGISTRY_RUN" \
+    "$stage_id" \
+    "$stage_index" \
+    "$stage_json" \
+    "$stage_iter" \
+    "$wave" || true
+}
+
+# Journal stage finish. Preserves caller exit semantics (soft journal failure).
+orch_workflow_seq_journal_after() {
+  local stage_id="${1:-}" exit_code="${2:-1}" stage_json="${3:-}"
+  local artifacts_json="[]"
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]] || return 0
+  orch_workflow_seq_ensure_lib || return 0
+  if ! declare -F workflow_seq_engine_active >/dev/null 2>&1; then
+    return 0
+  fi
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 0
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
+    artifacts_json="$(printf '%s\n' "${EXPECTED_ARTIFACT_PATHS[@]}" | jq -R . | jq -cs .)"
+  fi
+  workflow_seq_orch_journal_after \
+    "$RALPH_WORKFLOW_REGISTRY_RUN" \
+    "$stage_id" \
+    "$exit_code" \
+    "$stage_json" \
+    "$artifacts_json" || true
+}
+
+# True when Sequential engine says this stage already succeeded (resume skip).
+orch_workflow_seq_should_skip_succeeded() {
+  local stage_id="${1:-}"
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "$stage_id" ]] || return 1
+  orch_workflow_seq_ensure_lib || return 1
+  declare -F workflow_seq_stage_should_skip >/dev/null 2>&1 || return 1
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 1
+  workflow_seq_stage_should_skip "$RALPH_WORKFLOW_REGISTRY_RUN" "$stage_id"
+}
+
+# Prefer durable control plan path from the Sequential engine ledger when set.
+orch_workflow_seq_resolve_plan_override() {
+  local stage_id="${1:-}" control=""
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "$stage_id" ]] || return 0
+  orch_workflow_seq_ensure_lib || return 0
+  declare -F workflow_seq_resolve_control_plan >/dev/null 2>&1 || return 0
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 0
+  control="$(workflow_seq_resolve_control_plan "$RALPH_WORKFLOW_REGISTRY_RUN" "$stage_id" 2>/dev/null)" || control=""
+  if [[ -n "$control" && -f "$control" ]]; then
+    printf '%s\n' "$control"
+  fi
+  return 0
+}
+
+# Before a Sequential planFrom stage runs: resolve planner evidence, create or
+# reuse the control copy, project orch plan + fresh sessionStrategy, and
+# persist progress fields. Prints the control plan path on stdout. Fails closed
+# (non-zero) when evidence is missing/invalid so the stage never reaches a
+# runtime. No-op (empty stdout, exit 0) when the stage is not planFrom or the
+# Sequential engine is inactive.
+orch_workflow_seq_prepare_planfrom() {
+  local stage_id="${1:-}" stage_json="${2:-}"
+  local plan_from="" binding control force_args=()
+
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "$stage_id" ]] || return 0
+  plan_from="$(printf '%s' "$stage_json" | jq -r '.planFrom // empty' 2>/dev/null)" || plan_from=""
+  [[ -n "$plan_from" ]] || return 0
+
+  orch_workflow_seq_ensure_lib || {
+    echo "Error: Sequential planFrom requires workflow-engine-sequential.sh" >&2
+    return 1
+  }
+  declare -F workflow_seq_bind_planfrom_control >/dev/null 2>&1 || {
+    echo "Error: workflow_seq_bind_planfrom_control unavailable" >&2
+    return 1
+  }
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || {
+    echo "Error: Sequential planFrom requires an active sequential engine ledger" >&2
+    return 1
+  }
+  [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]] || {
+    echo "Error: Sequential planFrom requires ORCH_FILE for control projection" >&2
+    return 1
+  }
+
+  # Consumer-only reset: RALPH_WORKFLOW_SEQ_PLANFROM_FORCE_FRESH=1 creates a
+  # fresh control copy from the same verified planner source.
+  if [[ "${RALPH_WORKFLOW_SEQ_PLANFROM_FORCE_FRESH:-0}" == "1" ]]; then
+    force_args=(--force-fresh)
+  fi
+
+  binding="$(
+    workflow_seq_bind_planfrom_control \
+      --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN" \
+      --orch-path "$ORCH_FILE" \
+      --stage-id "$stage_id" \
+      "${force_args[@]}"
+  )" || {
+    ralph_orchestrator_log "FAIL planFrom bind: missing/invalid generated plan for $stage_id (planner=$plan_from)"
+    echo -e "${C_R}${C_BOLD}planFrom blocked before runtime: invalid or missing planner plan for '${stage_id}'${C_RST}" >&2
+    return 1
+  }
+  control="$(printf '%s' "$binding" | jq -r '.controlPlanPath // empty')"
+  [[ -n "$control" && -f "$control" ]] || {
+    echo "Error: planFrom bind did not produce a control plan for $stage_id" >&2
+    return 1
+  }
+  printf '%s\n' "$control"
+  return 0
+}
+
+# Sequential provided plan (planInput): bind/validate common input + control
+# copy for the designated stage only, before any runtime invocation.
+# No-op when the stage is not the planInput consumer. Missing/corrupt input
+# fails closed. Consumer-only reset: RALPH_WORKFLOW_SEQ_PROVIDED_FORCE_FRESH=1.
+orch_workflow_seq_prepare_provided() {
+  local stage_id="${1:-}" stage_json="${2:-}"
+  local binding control force_args=()
+
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "$stage_id" ]] || return 0
+
+  orch_workflow_seq_ensure_lib || {
+    # Soft-load failure: only hard-fail when this stage is clearly the consumer.
+    if [[ -n "${RALPH_WORKFLOW_PLAN_INPUT_STAGE:-}" && \
+          "${RALPH_WORKFLOW_PLAN_INPUT_STAGE}" == "$stage_id" ]]; then
+      echo "Error: Sequential provided plan requires workflow-engine-sequential.sh" >&2
+      return 1
+    fi
+    return 0
+  }
+  declare -F workflow_seq_stage_is_provided_consumer >/dev/null 2>&1 || return 0
+  declare -F workflow_seq_bind_provided_plan_control >/dev/null 2>&1 || {
+    if workflow_seq_stage_is_provided_consumer "$RALPH_WORKFLOW_REGISTRY_RUN" "$stage_id"; then
+      echo "Error: workflow_seq_bind_provided_plan_control unavailable" >&2
+      return 1
+    fi
+    return 0
+  }
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 0
+  workflow_seq_stage_is_provided_consumer "$RALPH_WORKFLOW_REGISTRY_RUN" "$stage_id" || return 0
+
+  # planFrom takes precedence (task-entry generated path); provided bind is
+  # only for the designated planInput consumer without planFrom.
+  if printf '%s' "$stage_json" | jq -e '(.planFrom // "") != ""' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]] || {
+    echo "Error: Sequential provided plan requires ORCH_FILE for control projection" >&2
+    return 1
+  }
+
+  if [[ "${RALPH_WORKFLOW_SEQ_PROVIDED_FORCE_FRESH:-0}" == "1" ]]; then
+    force_args=(--force-fresh)
+  fi
+
+  binding="$(
+    workflow_seq_bind_provided_plan_control \
+      --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN" \
+      --orch-path "$ORCH_FILE" \
+      --stage-id "$stage_id" \
+      "${force_args[@]}"
+  )" || {
+    ralph_orchestrator_log "FAIL provided-plan bind: missing/invalid input for $stage_id"
+    echo -e "${C_R}${C_BOLD}provided plan blocked before runtime: missing or invalid input for '${stage_id}'${C_RST}" >&2
+    return 1
+  }
+  control="$(printf '%s' "$binding" | jq -r '.controlPlanPath // empty')"
+  [[ -n "$control" && -f "$control" ]] || {
+    echo "Error: provided-plan bind did not produce a control plan for $stage_id" >&2
+    return 1
+  }
+  printf '%s\n' "$control"
+  return 0
+}
+
+# Before dispatching a stage, recheck required artifacts of every succeeded
+# lower-index prerequisite recorded in the Sequential engine ledger.
+orch_workflow_seq_recheck_prereq_artifacts() {
+  local stage_id="${1:-}" id
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "$stage_id" ]] || return 0
+  orch_workflow_seq_ensure_lib || return 0
+  declare -F workflow_seq_list_stage_ids >/dev/null 2>&1 || return 0
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 0
+  while IFS= read -r id || [[ -n "$id" ]]; do
+    [[ -z "$id" || "$id" == "$stage_id" ]] && continue
+    if workflow_seq_stage_should_skip "$RALPH_WORKFLOW_REGISTRY_RUN" "$id" 2>/dev/null; then
+      if ! workflow_seq_recheck_stage_artifacts \
+          --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN" \
+          --stage-id "$id" \
+          --workspace "${WORKSPACE:-$PWD}"; then
+        ralph_orchestrator_log "FAIL artifact recheck: prerequisite stage $id failed for $stage_id"
+        echo -e "${C_R}${C_BOLD}Artifact recheck failed for succeeded prerequisite '${id}'${C_RST}" >&2
+        return 1
+      fi
+    fi
+  done < <(workflow_seq_list_stage_ids "$RALPH_WORKFLOW_REGISTRY_RUN")
+  return 0
+}
+
+# True when Sequential workflow engine owns this run and sourceKind is not the
+# explicitly internal classic-orchestration path (legacy humanAck retained there).
+orch_workflow_seq_uses_common_actions() {
+  local kind=""
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]] || return 1
+  orch_workflow_seq_ensure_lib || return 1
+  declare -F workflow_seq_engine_active >/dev/null 2>&1 || return 1
+  workflow_seq_engine_active "$RALPH_WORKFLOW_REGISTRY_RUN" || return 1
+  if declare -F workflow_seq_is_legacy_orchestration_input >/dev/null 2>&1; then
+    workflow_seq_is_legacy_orchestration_input "$RALPH_WORKFLOW_REGISTRY_RUN" && return 1
+  else
+    kind="$(jq -r '.sourceKind // empty' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)" || kind=""
+    [[ "$kind" == "legacy-orchestration" ]] && return 1
+  fi
+  return 0
+}
+
+# Public Sequential approval: durable common action request, exit 3, no agent.
+# Returns 0 after parking (caller must exit 3). Returns 1 on activation failure.
+orch_workflow_seq_handle_approval_stage() {
+  local stage_id="${1:-}" stage_json="${2:-}" stage_index="${3:-0}" stage_iter="${4:-0}"
+  local step_n="${5:-0}"
+  local run_id attempt_id namespace activation wave orch_json=""
+  local workspace="${WORKSPACE:-$PWD}"
+
+  [[ -n "$stage_id" && -n "$stage_json" ]] || return 1
+  orch_workflow_seq_ensure_lib || {
+    echo "Error: Sequential approval requires workflow-engine-sequential.sh" >&2
+    return 1
+  }
+  declare -F workflow_seq_approval_activate >/dev/null 2>&1 || {
+    echo "Error: workflow_seq_approval_activate unavailable" >&2
+    return 1
+  }
+  orch_workflow_seq_uses_common_actions || {
+    echo "Error: type:approval requires an active Sequential workflow run (not legacy-orchestration)" >&2
+    return 1
+  }
+
+  run_id="${RALPH_WORKFLOW_RUN_ID:-$(jq -r '.runId // empty' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)}"
+  [[ -n "$run_id" ]] || {
+    echo "Error: Sequential approval missing run id" >&2
+    return 1
+  }
+  namespace="$(jq -r '.namespace // .name // "workflow"' "${ORCH_FILE:-/dev/null}" 2>/dev/null)" || namespace="workflow"
+  [[ -n "$namespace" && "$namespace" != "null" ]] || namespace="workflow"
+  attempt_id="${RALPH_WORKFLOW_STAGE_ATTEMPT:-${stage_id}-${stage_iter:-1}}"
+  if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+    orch_json="$ORCH_FILE"
+  fi
+  wave=""
+  if [[ -n "$orch_json" ]]; then
+    wave="$(jq -r --arg id "$stage_id" '
+      (.parallelStages // []) as $waves
+      | if ($waves | length) == 0 then ""
+        else
+          (reduce range(0; $waves | length) as $i
+            ({found:""};
+              if .found != "" then .
+              else
+                (($waves[$i] | if type == "string" then split(",") else . end)
+                  | map(gsub("^\\s+|\\s+$";""))
+                  | index($id)) as $pos
+                | if $pos != null then .found = ($i | tostring) else . end
+              end)
+            | .found)
+        end
+    ' "$orch_json" 2>/dev/null)" || wave=""
+  fi
+
+  orch_workflow_seq_journal_before "$stage_id" "$stage_index" "$stage_json" "$stage_iter"
+
+  local activate_args=(
+    --workspace "$workspace"
+    --namespace "$namespace"
+    --run-id "$run_id"
+    --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN"
+    --stage-id "$stage_id"
+    --attempt-id "$attempt_id"
+  )
+  if [[ -n "$orch_json" ]]; then
+    activate_args+=(--orch-json "$orch_json")
+  else
+    activate_args+=(--stage-json "$stage_json")
+  fi
+  if [[ -n "$wave" && "$wave" != "null" ]]; then
+    activate_args+=(--wave "$wave")
+  fi
+
+  if ! activation="$(workflow_seq_approval_activate "${activate_args[@]}")"; then
+    ralph_orchestrator_log "FAIL step $step_n: Sequential approval activate failed for $stage_id"
+    orch_workflow_seq_journal_after "$stage_id" 1 "$stage_json"
+    return 1
+  fi
+
+  ralph_orchestrator_log "step $step_n: Sequential approval waiting (exit 3; no runtime) request=$(printf '%s' "$activation" | jq -r '.requestId')"
+  echo "" >&2
+  local opview_lib="" approval_q approval_ct request_id status_json wf_id task_text entry_kind task_prov
+  request_id="$(printf '%s' "$activation" | jq -r '.requestId // empty')"
+  approval_q="$(echo "$stage_json" | jq -r '.question // empty' 2>/dev/null)"
+  approval_ct="$(echo "$stage_json" | jq -r '.changesTarget // empty' 2>/dev/null)"
+  if [[ -f "${RALPH_ACTIVE_DIR:-}/bash-lib/workflow/workflow-operator-view.sh" ]]; then
+    opview_lib="${RALPH_ACTIVE_DIR}/bash-lib/workflow/workflow-operator-view.sh"
+  elif [[ -f "${RALPH_DIR:-}/bash-lib/workflow/workflow-operator-view.sh" ]]; then
+    opview_lib="${RALPH_DIR}/bash-lib/workflow/workflow-operator-view.sh"
+  fi
+  if [[ -n "$opview_lib" ]]; then
+    # shellcheck source=bash-lib/workflow/workflow-operator-view.sh
+    source "$opview_lib"
+    wf_id="$(jq -r '.workflowId // "-"' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)"
+    task_text="$(jq -r '.task // ""' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)"
+    entry_kind="$(jq -r '.entryKind // "task"' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)"
+    task_prov="$(jq -r '.taskProvenance // "explicit"' "$RALPH_WORKFLOW_REGISTRY_RUN/run.json" 2>/dev/null)"
+    status_json="$(jq -cn \
+      --arg runId "$run_id" \
+      --arg wf "$wf_id" \
+      --arg task "$task_text" \
+      --arg entry "$entry_kind" \
+      --arg prov "$task_prov" \
+      --arg stageId "$stage_id" \
+      --arg requestId "$request_id" \
+      --arg question "$approval_q" \
+      --arg changesTarget "$approval_ct" \
+      '{
+        schemaVersion: 1,
+        run: {runId:$runId, workflowId:$wf, mode:"sequential", entryKind:$entry, task:$task, taskProvenance:$prov},
+        stages: [{
+          id: $stageId, state: "waiting", stageKind: "approval",
+          approval: {question: $question, changesTarget: $changesTarget},
+          requestId: $requestId, requestState: "outstanding", evidence: []
+        }],
+        diagnosis: {
+          state: "waiting", reasonCode: "human-approval",
+          summary: "the run is waiting for the operator to decide an approval gate",
+          stageId: $stageId, requestKind: "approval", requestId: $requestId,
+          retryable: false, evidence: []
+        },
+        nextAction: {label: "answer the outstanding request", argv: ["ralph","workflow","actions","list",$runId]}
+      }')"
+    workflow_operator_render_status "$status_json" stderr
+  else
+    echo -e "${C_Y}${C_BOLD}Human approval required (Sequential workflow)${C_RST}" >&2
+    echo "  Stage: $stage_id" >&2
+    echo "  Request: $request_id" >&2
+    echo "  Decide with: ralph workflow actions list $run_id" >&2
+    echo "  Then: ralph workflow resume $run_id" >&2
+  fi
+  echo "  Log: $LOG_FILE" >&2
+  # Activate already parked waiting+blocker; journal_after exit 3 keeps blocker.
+  orch_workflow_seq_journal_after "$stage_id" 3 "$stage_json"
+  return 0
+}
+
 orch_stage_execute() {
   local step_n="$1"
   local stage="$2"
   local plan_abs="$3"
   local plan_rel="$4"
   local runtime="$5"
-  local agent="$6"
+  local role="$6"
   local agent_source="$7"
   local stage_model="$8"
   local agent_source_raw="$9"
@@ -674,9 +1205,104 @@ orch_stage_execute() {
   local stage_usage_file="${13:-}"
   local stage_index="${14:-0}"
   local stage_context_budget=""
+  local stage_native_subagents=""
   local stage_mcp_proxy_policy=""
   local stage_mcp_proxy_policy_type=""
+  local _seq_plan_override=""
+  # Role is instruction-only; required outputs come exclusively from the stage.
+  local agent="$role"
+
+  # Sequential resume: never rerun a stage the engine already marked succeeded.
+  if [[ -n "$stage_id" ]] && orch_workflow_seq_should_skip_succeeded "$stage_id"; then
+    ralph_orchestrator_log "step $step_n skipped: sequential engine stage already succeeded ($stage_id)"
+    echo -e "${C_DIM}Step ${step_n} skipped (already succeeded): ${stage_id}${C_RST}" >&2
+    printf -v "$step_status_var" '%s' 0
+    return 0
+  fi
+
+  # Public Sequential approval: common actions, exit 3, never invoke an agent.
+  local _seq_stage_type=""
+  _seq_stage_type="$(echo "$stage" | jq -r '.type // empty' 2>/dev/null)" || _seq_stage_type=""
+  if [[ "$_seq_stage_type" == "approval" ]]; then
+    if orch_workflow_seq_handle_approval_stage "$stage_id" "$stage" "$stage_index" "$stage_iter" "$step_n"; then
+      printf -v "$step_status_var" '%s' 3
+      exit 3
+    fi
+    printf -v "$step_status_var" '%s' 1
+    return 1
+  fi
+
+  # Before downstream dispatch, recheck required artifacts of succeeded prerequisites.
+  if [[ -n "$stage_id" ]] && ! orch_workflow_seq_recheck_prereq_artifacts "$stage_id"; then
+    printf -v "$step_status_var" '%s' 1
+    return 1
+  fi
+
+  # Sequential planFrom: bind/verify control copy before any runtime invocation.
+  # Missing/invalid planner evidence fails closed here.
+  local _seq_planfrom_control=""
+  if [[ -n "$stage_id" ]]; then
+    if ! _seq_planfrom_control="$(orch_workflow_seq_prepare_planfrom "$stage_id" "$stage")"; then
+      printf -v "$step_status_var" '%s' 1
+      return 1
+    fi
+    if [[ -n "$_seq_planfrom_control" ]]; then
+      plan_abs="$_seq_planfrom_control"
+      plan_rel="$_seq_planfrom_control"
+      # Re-read projected stage (plan + sessionStrategy fresh) after orch mutation.
+      if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+        stage="$(jq -c --arg id "$stage_id" '.stages[] | select(.id == $id)' "$ORCH_FILE" 2>/dev/null)" || true
+      fi
+      ralph_orchestrator_log "step $step_n sequential planFrom control: $plan_abs"
+    fi
+  fi
+
+  # Sequential provided plan (planInput): bind only the designated stage to the
+  # common input manifest. Missing/corrupt input fails before runtime.
+  local _seq_provided_control=""
+  if [[ -n "$stage_id" && -z "${_seq_planfrom_control:-}" ]]; then
+    if ! _seq_provided_control="$(orch_workflow_seq_prepare_provided "$stage_id" "$stage")"; then
+      printf -v "$step_status_var" '%s' 1
+      return 1
+    fi
+    if [[ -n "$_seq_provided_control" ]]; then
+      plan_abs="$_seq_provided_control"
+      plan_rel="$_seq_provided_control"
+      if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+        stage="$(jq -c --arg id "$stage_id" '.stages[] | select(.id == $id)' "$ORCH_FILE" 2>/dev/null)" || true
+      fi
+      ralph_orchestrator_log "step $step_n sequential provided-plan control: $plan_abs"
+    fi
+  fi
+
+  # Resume continues the same mutable control plan when the engine recorded one.
+  _seq_plan_override="$(orch_workflow_seq_resolve_plan_override "$stage_id" 2>/dev/null || true)"
+  if [[ -n "$_seq_plan_override" ]]; then
+    plan_abs="$_seq_plan_override"
+    plan_rel="$_seq_plan_override"
+    ralph_orchestrator_log "step $step_n using sequential control plan: $plan_abs"
+  fi
+
   stage_context_budget="$(echo "$stage" | jq -r '.contextBudget // ""' 2>/dev/null)" || stage_context_budget=""
+  # Graph/orchestration agent stages default to off, but only on a runtime with
+  # a proven deny boundary. Choosing off for a runtime that cannot enforce it
+  # would refuse to invoke a stage whose author never asked for off; an
+  # explicitly authored off on such a runtime still fails at preflight.
+  local _ns_default="off"
+  if declare -F graph_runtime_native_subagents_off_supported >/dev/null 2>&1; then
+    graph_runtime_native_subagents_off_supported "$runtime" || _ns_default="inherit"
+  else
+    case "$runtime" in claude|codex) _ns_default="off" ;; *) _ns_default="inherit" ;; esac
+  fi
+  stage_native_subagents="$(echo "$stage" | jq -r --arg d "$_ns_default" '.nativeSubagents // $d' 2>/dev/null)" || stage_native_subagents="$_ns_default"
+  case "$stage_native_subagents" in
+    inherit|off) ;;
+    *)
+      ralph_orchestrator_log "FAIL step $step_n: nativeSubagents must be inherit or off (got $stage_native_subagents)"
+      printf -v "$step_status_var" '%s' 1
+      return 1
+      ;;
+  esac
   local plan_abs_file="$plan_abs"
   local step_status=0
   local runner="$RALPH_RUN_PLAN"
@@ -690,11 +1316,22 @@ orch_stage_execute() {
 
   export STAGE_ITERATION="$stage_iter"
   export RALPH_STAGE_ID="$stage_id"
-  orch_stage_collect_expected_artifacts "$stage" "$agent" "$runtime"
+  # Workflow-owned ordinary stages also publish common stage identity for
+  # attempt-bound OPERATOR_INPUT capability / request acceptance.
+  if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+    export RALPH_WORKFLOW_STAGE_ID="$stage_id"
+    if [[ -z "${RALPH_WORKFLOW_STAGE_ATTEMPT:-}" ]]; then
+      export RALPH_WORKFLOW_STAGE_ATTEMPT="${stage_id}-${stage_iter:-1}"
+    fi
+  fi
+  orch_stage_collect_expected_artifacts "$stage"
+  # Publish this stage's artifact contract as data for the MCP artifact tools,
+  # so instructions never have to restate paths, schemas, or the namespace.
+  orch_stage_write_contract "$WORKSPACE" "$stage" "$stage_id"
 
   if ! orchestrator_validate_stage_agent_plan "$agent" "$plan_rel"; then
-    ralph_orchestrator_log "FAIL parse: empty agent or plan for stage JSON: $stage"
-    echo -e "${C_R}Empty agent or plan path.${C_RST} Log: $LOG_FILE" >&2
+    ralph_orchestrator_log "FAIL parse: empty plan for stage JSON: $stage"
+    echo -e "${C_R}Empty plan path.${C_RST} Log: $LOG_FILE" >&2
     printf -v "$step_status_var" '%s' 1
     return 1
   fi
@@ -834,11 +1471,11 @@ orch_stage_execute() {
     if ((${#_session_strategy_cli[@]} > 0)); then
       _dry_sr=" ${_session_strategy_cli[*]}"
     fi
-    _dry_model_label="${stage_model:-agent-config default}"
-    if [[ "$agent_source" == "prebuilt" ]]; then
-      echo "DRY RUN step $step_n: $runner_label --workspace <path> --agent $agent --plan $plan_rel${_dry_sr}"
+    _dry_model_label="${stage_model:-saved or runtime-native default}"
+    if [[ -n "$role" ]]; then
+      echo "DRY RUN step $step_n: $runner_label --workspace <path> --role $role --plan $plan_rel${_dry_sr}"
     else
-      echo "DRY RUN step $step_n: $runner_label --workspace <path> --plan $plan_rel${_dry_sr} (custom agent: $agent)"
+      echo "DRY RUN step $step_n: $runner_label --workspace <path> --plan $plan_rel${_dry_sr}"
     fi
     echo "  model: ${_dry_model_label}"
     if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
@@ -873,16 +1510,16 @@ orch_stage_execute() {
     return 0
   fi
 
-  _step_model_label="${stage_model:-agent-config default}"
+  _step_model_label="${stage_model:-saved or runtime-native default}"
   echo -e "${C_DIM}────────────────────────────────────────────────────────────${C_RST}"
-  echo -e "${C_B}Step ${step_n}${C_RST} ${C_G}$runtime${C_RST} agent=${C_BOLD}$agent${C_RST} source=${C_BOLD}$agent_source${C_RST} model=${C_DIM}${_step_model_label}${C_RST} plan=$plan_rel"
+  echo -e "${C_B}Step ${step_n}${C_RST} ${C_G}$runtime${C_RST} role=${C_BOLD}${role:-none}${C_RST} model=${C_DIM}${_step_model_label}${C_RST} plan=$plan_rel"
   _plan_tag_stream="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//')"
   _plan_tag_stream="${_plan_tag_stream//[^A-Za-z0-9_.-]/_}"
-  _runner_stream_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${_plan_tag_stream}-output.log"
+  _runner_stream_log="$(orch_plan_log_dir)/plan-runner-${_plan_tag_stream}-output.log"
   echo "" >&2
   echo -e "${C_DIM}Invoking:${C_RST} $runner_label" >&2
-  if [[ "$agent_source" == "prebuilt" ]]; then
-    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --workspace <path> --plan <plan> --agent $agent" >&2
+  if [[ -n "$role" ]]; then
+    echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --workspace <path> --plan <plan> --role $role" >&2
   else
     echo -e "${C_DIM}  command:${C_RST} bash $runner --non-interactive --runtime $runtime --workspace <path> --plan <plan>" >&2
   fi
@@ -898,11 +1535,31 @@ orch_stage_execute() {
   fi
 
   set +e
+  # Graph scheduler injects RALPH_PLAN_KEY=<planKey>-<nodeId> plus
+  # RALPH_GRAPH_NODE_ID for session/log isolation while keeping a shared
+  # RALPH_ARTIFACT_NS. Preserve those when present; otherwise derive the plan
+  # key from the stage plan basename as before.
+  _runner_plan_key="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_PLAN_KEY:-}" ]]; then
+    _runner_plan_key="$RALPH_PLAN_KEY"
+  fi
   _runner_env=(
     RALPH_ARTIFACT_NS="$RALPH_ARTIFACT_NS"
-    RALPH_PLAN_KEY="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//;s/[^A-Za-z0-9_.-]/_/g')"
+    RALPH_PLAN_KEY="$_runner_plan_key"
     RALPH_ORCH_FILE="$RALPH_ORCH_FILE"
   )
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+    _runner_env+=(RALPH_GRAPH_NODE_ID="$RALPH_GRAPH_NODE_ID")
+  fi
+  # G12: declared artifact tokens expand before the prompt is built. When
+  # this stage declares required outputs, tell the agent the exact, already
+  # -resolved absolute destinations (via the shared orch_resolve_artifact_path)
+  # so it never guesses a path relative to its own isolated workspace.
+  # ralph_artifact_namespace_prompt_block (run-plan-artifacts.sh) renders
+  # this list and names them supervisor outputs, not source edits.
+  if ((${#EXPECTED_ARTIFACT_PATHS[@]} > 0)); then
+    _runner_env+=(RALPH_REQUIRED_ARTIFACT_PATHS_JSON="$(orch_required_artifact_paths_json)")
+  fi
   if [[ -n "${CODEX_PLAN_SANDBOX:-}" ]]; then
     _runner_env+=(CODEX_PLAN_SANDBOX="$CODEX_PLAN_SANDBOX")
   fi
@@ -944,19 +1601,9 @@ orch_stage_execute() {
     printf -v "$step_status_var" '%s' 1
     return 1
   fi
-  if [[ -n "$stage_model" ]]; then
-    if [[ "$runtime" == "cursor" ]]; then
-      _runner_env+=(CURSOR_PLAN_MODEL="$stage_model")
-    elif [[ "$runtime" == "codex" ]]; then
-      _runner_env+=(CODEX_PLAN_MODEL="$stage_model")
-    elif [[ "$runtime" == "opencode" ]]; then
-      _runner_env+=(OPENCODE_PLAN_MODEL="$stage_model")
-    elif [[ "$runtime" == "antigravity" ]]; then
-      _runner_env+=(ANTIGRAVITY_PLAN_MODEL="$stage_model")
-    else
-      _runner_env+=(CLAUDE_PLAN_MODEL="$stage_model")
-    fi
-  fi
+  # Staged model precedence: stage/voter model: > saved > native. Never pass
+  # profile models or global *_PLAN_MODEL env as a resolution rung.
+  _runner_env+=(RALPH_MODEL_SCOPE=staged PLAN_STAGE_MODEL="$stage_model")
   local stage_reasoning_effort=""
   stage_reasoning_effort="$(echo "$stage" | jq -r '.reasoning_effort // ""' 2>/dev/null)" || stage_reasoning_effort=""
   if [[ -n "$stage_reasoning_effort" ]]; then
@@ -983,6 +1630,19 @@ orch_stage_execute() {
   if [[ -n "$stage_context_budget" ]]; then
     _runner_env+=(RALPH_PLAN_CONTEXT_BUDGET="$stage_context_budget")
   fi
+  _runner_env+=(RALPH_PLAN_NATIVE_SUBAGENTS="$stage_native_subagents")
+  # Always set (possibly empty) so ambient RALPH_WORKFLOW_STAGE_INSTRUCTIONS
+  # from a prior stage cannot leak into a stage without instructions.
+  # Plan-file planner stages append the fixed prompt contract (ungated for
+  # workflow semantics; helper also covers sourced tests without a registry run).
+  local stage_instructions=""
+  if declare -F orch_planner_stage_instructions_with_prompt >/dev/null 2>&1 \
+    && echo "$stage" | jq -e '(.planner.outputMode // "") == "plan-file"' >/dev/null 2>&1; then
+    stage_instructions="$(orch_planner_stage_instructions_with_prompt "$stage" "${ORCH_FILE:-}")"
+  else
+    stage_instructions="$(orch_stage_instructions_from_json "$stage")"
+  fi
+  _runner_env+=(RALPH_WORKFLOW_STAGE_INSTRUCTIONS="$stage_instructions")
   if [[ "$_stage_grader" == "true" ]]; then
     _runner_env+=(RALPH_GRADER_STAGE=1 RALPH_RUBRIC_PATH="$_stage_rubric")
   else
@@ -1003,47 +1663,135 @@ orch_stage_execute() {
   else
     _runner_env+=(RALPH_PLANNER_STAGE=0)
   fi
+  # Workflow registry identity for ungated plan-file publication (engines set these).
+  if [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_REGISTRY_RUN="$RALPH_WORKFLOW_REGISTRY_RUN")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_RUN_ID:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_RUN_ID="$RALPH_WORKFLOW_RUN_ID")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_STAGE_ID:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_STAGE_ID="$RALPH_WORKFLOW_STAGE_ID")
+  elif [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -n "${stage_id:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_STAGE_ID="$stage_id")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_STAGE_ATTEMPT:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_STAGE_ATTEMPT="$RALPH_WORKFLOW_STAGE_ATTEMPT")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_ACTION_CAPABILITY:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_ACTION_CAPABILITY="$RALPH_WORKFLOW_ACTION_CAPABILITY")
+  fi
+  # Nonce stays in env for request CLI only; never log it from orchestrator.
+  if [[ -n "${RALPH_WORKFLOW_ACTION_NONCE:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_ACTION_NONCE="$RALPH_WORKFLOW_ACTION_NONCE")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_TASK:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_TASK="$RALPH_WORKFLOW_TASK")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_FALLBACK_RUNTIME:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_FALLBACK_RUNTIME="$RALPH_WORKFLOW_FALLBACK_RUNTIME")
+  fi
+  if [[ -n "${RALPH_WORKFLOW_FALLBACK_MODEL:-}" ]]; then
+    _runner_env+=(RALPH_WORKFLOW_FALLBACK_MODEL="$RALPH_WORKFLOW_FALLBACK_MODEL")
+  fi
   if declare -F orch_resolve_final_output_schema >/dev/null 2>&1; then
     _final_output_schema="$(orch_resolve_final_output_schema "$stage")"
     if [[ -n "$_final_output_schema" ]]; then
       _runner_env+=(RALPH_STRUCTURED_OUTPUT_SCHEMA="$_final_output_schema")
     fi
   fi
+  if [[ -n "${ORCH_RALPH_MODE:-}" ]]; then
+    _runner_env+=(RALPH_MODE="$ORCH_RALPH_MODE")
+  fi
+  local _stage_tooling_profile=""
+  _stage_tooling_profile="$(echo "$stage" | jq -r '.toolingProfile // empty' 2>/dev/null)" || _stage_tooling_profile=""
+  if [[ -n "$_stage_tooling_profile" ]]; then
+    if ! declare -F ralph_tooling_profile_env >/dev/null 2>&1; then
+      local _tooling_profile_lib=""
+      _tooling_profile_lib="$RALPH_DIR/bash-lib/tooling-profile.sh"
+      if [[ ! -f "$_tooling_profile_lib" && -f "$RALPH_ACTIVE_DIR/bash-lib/tooling-profile.sh" ]]; then
+        _tooling_profile_lib="$RALPH_ACTIVE_DIR/bash-lib/tooling-profile.sh"
+      fi
+      if [[ ! -f "$_tooling_profile_lib" ]]; then
+        ralph_orchestrator_log "FAIL step $step_n: tooling profile helper missing"
+        echo -e "${C_R}${C_BOLD}Step $step_n failed (tooling profile helper missing)${C_RST}" >&2
+        echo "  Expected tooling-profile.sh under Ralph bash-lib." >&2
+        echo "  Log: $LOG_FILE" >&2
+        printf -v "$step_status_var" '%s' 1
+        set -e
+        return 1
+      fi
+      # shellcheck source=bash-lib/tooling-profile.sh
+      source "$_tooling_profile_lib"
+    fi
+    local _profile_line _profile_lines=""
+    if ! _profile_lines="$(ralph_tooling_profile_env "$_stage_tooling_profile" "$runtime")"; then
+      ralph_orchestrator_log "FAIL step $step_n: invalid toolingProfile '$_stage_tooling_profile'"
+      echo -e "${C_R}${C_BOLD}Step $step_n failed (invalid toolingProfile)${C_RST}" >&2
+      echo "  toolingProfile '$_stage_tooling_profile' is not a declared profile name." >&2
+      echo "  Log: $LOG_FILE" >&2
+      printf -v "$step_status_var" '%s' 1
+      set -e
+      return 1
+    fi
+    while IFS= read -r _profile_line || [[ -n "$_profile_line" ]]; do
+      [[ -n "$_profile_line" ]] || continue
+      _runner_env+=("$_profile_line")
+    done <<< "$_profile_lines"
+  fi
   _runner_args=(--non-interactive --runtime "$runtime" --workspace "$WORKSPACE" --plan "$plan_abs_file")
   if [[ -n "${WORKSPACE_ROOT_OVERRIDE:-}" ]]; then
     _runner_args+=(--workspace-root "$WORKSPACE_ROOT_OVERRIDE")
   fi
+  # Graph nodes have an explicit, isolated agent workspace.  run-plan's
+  # ordinary default is its process cwd, which is the scheduler's workspace
+  # here, so pass the root explicitly rather than losing the node boundary.
+  # Keep non-graph orchestration byte-compatible.
+  if [[ -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_AGENT_WORKSPACE:-}" ]]; then
+    _runner_args+=(--agent-workspace "$RALPH_AGENT_WORKSPACE")
+  fi
   if ((${#_session_strategy_cli[@]} > 0)); then
     _runner_args+=("${_session_strategy_cli[@]}")
   fi
-  if [[ "$agent_source" == "prebuilt" ]]; then
-    _runner_args+=(--agent "$agent")
-  elif [[ -z "$stage_model" ]]; then
-    ralph_orchestrator_log "FAIL step $step_n: custom agent '$agent' requires stage model"
-    echo -e "${C_R}${C_BOLD}Step $step_n failed (missing model for custom agent)${C_RST}" >&2
-    echo "  Add \"model\" to this stage in $ORCH_FILE or choose a prebuilt agent." >&2
-    echo "  Log: $LOG_FILE" >&2
-    printf -v "$step_status_var" '%s' 1
-    set -e
-    return 1
+  if [[ -n "$role" ]]; then
+    _runner_args+=(--role "$role")
   fi
+  # Sequential workflow engine: journal immediately before the existing runner
+  # invocation so dry-run / early validation paths are unchanged.
+  orch_workflow_seq_journal_before "$stage_id" "$stage_index" "$stage" "$stage_iter"
   orch_stage_run_runner "$runner" "${_runner_env[@]}"
   rc=$?
   set -e
+  # Persist planFrom / provided-plan control-copy progress after every runner
+  # transition without mutating the immutable source plan/manifest.
+  orch_workflow_seq_ensure_lib || true
+  if declare -F workflow_seq_refresh_plan_progress_after_runner >/dev/null 2>&1; then
+    workflow_seq_refresh_plan_progress_after_runner "${plan_abs_file:-}" || true
+  fi
+  if declare -F workflow_dep_refresh_plan_progress_after_runner >/dev/null 2>&1; then
+    workflow_dep_refresh_plan_progress_after_runner "${plan_abs_file:-}" || true
+  elif [[ -f "${RALPH_ACTIVE_DIR:-}/bash-lib/workflow/workflow-engine-dependency.sh" ]]; then
+    # shellcheck source=bash-lib/workflow/workflow-engine-dependency.sh
+    source "${RALPH_ACTIVE_DIR}/bash-lib/workflow/workflow-engine-dependency.sh"
+    if declare -F workflow_dep_refresh_plan_progress_after_runner >/dev/null 2>&1; then
+      workflow_dep_refresh_plan_progress_after_runner "${plan_abs_file:-}" || true
+    fi
+  fi
   echo -e "${C_DIM}--- end step $step_n runner output (exit $rc) ---${C_RST}" >&2
   echo "" >&2
   if [[ $rc -ne 0 ]]; then
+    orch_workflow_seq_journal_after "$stage_id" "$rc" "$stage"
     plan_tag="$(basename "$plan_abs_file" | sed 's/\.[^.]*$//')"
     plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
-    hint_log="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}.log"
-    hint_out="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log"
-    ralph_orchestrator_log "FAIL step $step_n exit=$rc agent=$agent plan=$plan_abs_file"
+    hint_log="$(orch_plan_log_dir)/plan-runner-${plan_tag}.log"
+    hint_out="$(orch_plan_log_dir)/plan-runner-${plan_tag}-output.log"
+    ralph_orchestrator_log "FAIL step $step_n exit=$rc role=${role:-none} plan=$plan_abs_file"
     {
       echo ""
       echo "======== orchestrator failure ========"
       echo "Step:        $step_n"
       echo "Runtime:     $runtime"
-      echo "Agent:       $agent"
+      echo "Role:        ${role:-none}"
       echo "Plan file:   $plan_abs_file"
       echo "Exit code:   $rc"
       echo "Runner:      $runner"
@@ -1063,6 +1811,18 @@ orch_stage_execute() {
     echo "  Plan: $plan_abs_file" >&2
     echo "  See: $LOG_FILE" >&2
     echo "  Ralph logs: $hint_log / $hint_out" >&2
+    # In graph mode the run-plan log is the authoritative agent stream. If a
+    # supervisor-owned postcondition rejected an otherwise clean model exit,
+    # carry that precise error into the StageOutcomeReport instead of letting
+    # the EXIT trap flatten it to "stage terminated before completion".
+    if [[ "${SINGLE_STAGE_MODE:-0}" == "1" && "${SINGLE_STAGE_REPORT_WRITTEN:-0}" != "1" \
+      && -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" && -f "$RALPH_GRAPH_NODE_LOG_DIR/agent.log" ]]; then
+      _orch_failure_reason="$(sed -n '/ERROR:/p' "$RALPH_GRAPH_NODE_LOG_DIR/agent.log" 2>/dev/null | tail -n 1)"
+      _orch_failure_reason="$(printf '%s' "$_orch_failure_reason" | sed -E 's/^\[[^]]+\][[:space:]]*//')"
+      if [[ -n "$_orch_failure_reason" ]]; then
+        orch_single_stage_write_report "failed" "$rc" "$_orch_failure_reason" || true
+      fi
+    fi
     printf -v "$step_status_var" '%s' "$rc"
     exit "$rc"
   fi
@@ -1071,6 +1831,16 @@ orch_stage_execute() {
     if ! verify_step_artifacts "$step_n"; then
       ralph_orchestrator_log "FAIL step $step_n: artifact verification failed (see log for remediation)"
       printf -v "$step_status_var" '%s' 1
+      # G10/G11 tier 4: write the report with the resolved missing-artifact
+      # evidence directly, rather than letting the EXIT trap fall back to a
+      # generic "stage terminated before completion" reason with no
+      # missingArtifacts. Marks SINGLE_STAGE_REPORT_WRITTEN so the trap
+      # never overwrites this evidence-carrying report.
+      if [[ "${SINGLE_STAGE_MODE:-0}" == "1" && ${#ORCH_MISSING_ARTIFACT_PATHS[@]} -gt 0 ]]; then
+        local _missing_evidence
+        _missing_evidence="$(printf '%s\n' "${ORCH_MISSING_ARTIFACT_PATHS[@]}" | jq -R . | jq -sc '{missingArtifacts: .}' 2>/dev/null)"
+        orch_single_stage_write_report "failed" 1 "required artifact missing or empty" "${_missing_evidence:-}" || true
+      fi
       exit 1
     fi
     ralph_orchestrator_log "step $step_n artifact verification OK (${#EXPECTED_ARTIFACT_PATHS[@]} file(s))"
@@ -1136,11 +1906,27 @@ orch_stage_execute() {
     fi
   fi
 
+  # Workflow plan-file publication runs even in single-stage mode: the stage
+  # must not be marked succeeded until the run-scoped plan+manifest exist.
+  # Legacy dynamic-stage enqueue / generated writer remain multi-stage only
+  # (orch_planner_apply_output no-ops legacy when SINGLE_STAGE_MODE=1).
+  if ! orch_planner_apply_output "$stage" "$stage_id" "$step_n" "$step_status_var"; then
+    if [[ "${ORCH_PLANNER_FAIL_REASON:-}" == "invalid-artifact" ]]; then
+      ralph_orchestrator_log "step $step_n planner reasonCode=invalid-artifact"
+    fi
+    return 1
+  fi
+
   # Single-stage mode executes exactly one stage: no humanAck waiting, router
-  # target application, planner advancement, or loopControl. The orchestration
-  # transition/retry decision is made downstream from the StageOutcomeReport.
+  # target application, or loopControl. The orchestration transition/retry
+  # decision is made downstream from the StageOutcomeReport.
   if [[ "${SINGLE_STAGE_MODE:-0}" != "1" ]]; then
-  human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""
+  # Workflow Sequential runs use durable common approval/input actions. Retain
+  # env-gated humanAck/touch-file only for classic/legacy-orchestration inputs.
+  human_ack_rel=""
+  if ! orch_workflow_seq_uses_common_actions; then
+    human_ack_rel="$(echo "$stage" | jq -r '.humanAck.path // empty' 2>/dev/null)" || human_ack_rel=""
+  fi
   if [[ -n "$human_ack_rel" && "${ORCHESTRATOR_HUMAN_ACK:-0}" == "1" ]]; then
     human_ack_rel="$(expand_artifact_tokens "$human_ack_rel")"
     if [[ "$human_ack_rel" == /* ]]; then
@@ -1182,10 +1968,6 @@ orch_stage_execute() {
     return 0
   fi
 
-  if ! orch_planner_apply_output "$stage" "$stage_id" "$step_n" "$step_status_var"; then
-    return 1
-  fi
-
   loop_decision="proceed"
   if [[ "$agent" == "code-review" ]] || echo "$stage" | jq -e '.loopControl' >/dev/null 2>&1; then
     loop_artifact="${EXPECTED_ARTIFACT_PATHS[0]-}"
@@ -1222,13 +2004,70 @@ orch_stage_execute() {
   fi
   fi
 
-  # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see run-plan-core.sh).
-  _stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-usage-summary.json"
+  # run-plan writes plan-usage-summary.json under logs/<RALPH_ARTIFACT_NS>/ (see
+  # run-plan-core.sh), or logs/<RALPH_ARTIFACT_NS>/nodes/<nodeId>/ when the graph
+  # scheduler set RALPH_GRAPH_NODE_ID for per-node log isolation.
+  _stage_usage_file="$(orch_plan_log_dir)/plan-usage-summary.json"
   orch_stage_capture_usage "$step_n" "$agent" "$runtime" "$_stage_usage_file" "$stage_usage_file"
   ralph_orchestrator_log "step $step_n OK"
   echo -e "${C_G}Step $step_n completed.${C_RST}"
   printf -v "$step_status_var" '%s' 0
+  # Sequential engine after-journal: preserve exit 0; soft-fails never reopen the stage.
+  orch_workflow_seq_journal_after "$stage_id" 0 "$stage"
   return 0
+}
+
+# Resolve the run-wide Ralph tooling mode from the orchestration file.
+#
+# Tool exposure is a property of the whole run: every stage of one run brokers
+# tools the same way. It is declared once, either as ralphMode in the
+# orchestration file (which a graph plan's pipeline.ralphMode is projected
+# into) or as RALPH_MODE in the environment.
+#
+# Declaring both is a conflict rather than a precedence puzzle. Silently
+# letting one win means the mode that actually took effect can only be
+# discovered by reading a log, so disagreeing values are refused outright.
+# Identical values are fine -- that is not a conflict, just a redundant
+# statement of the same intent.
+#
+# Absent both, nothing is exported and the inherited environment stands, so
+# Ralph mode stays opt-in exactly as before.
+orch_resolve_ralph_mode() {
+  ORCH_RALPH_MODE=""
+  local declared="" env_mode="${RALPH_MODE:-}"
+
+  if [[ -n "${ORCH_FILE:-}" && -f "${ORCH_FILE:-}" ]]; then
+    declared="$(jq -r '.ralphMode // empty' "$ORCH_FILE" 2>/dev/null || echo "")"
+  fi
+
+  if [[ -n "$declared" ]]; then
+    case "$declared" in
+      no | native | ralph | hybrid) ;;
+      *)
+        echo -e "${C_R}${C_BOLD}Orchestrator config error: invalid ralphMode${C_RST}" >&2
+        echo "  ralphMode is \"$declared\" in $ORCH_FILE" >&2
+        echo "  Expected one of: no, native, ralph, hybrid" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  if [[ -n "$declared" && -n "$env_mode" && "$declared" != "$env_mode" ]]; then
+    echo -e "${C_R}${C_BOLD}Orchestrator config error: conflicting Ralph mode${C_RST}" >&2
+    echo "  ralphMode is \"$declared\" in $ORCH_FILE" >&2
+    echo "  RALPH_MODE is \"$env_mode\" in the environment" >&2
+    echo "  These apply to the same run and must agree. Remove one, or set them to the same value." >&2
+    exit 1
+  fi
+
+  if [[ -n "$declared" ]]; then
+    ORCH_RALPH_MODE="$declared"
+    export RALPH_MODE="$declared"
+    ralph_orchestrator_log "ralph mode: $declared (declared in $ORCH_FILE)"
+  elif [[ -n "$env_mode" ]]; then
+    ORCH_RALPH_MODE="$env_mode"
+    ralph_orchestrator_log "ralph mode: $env_mode (from environment)"
+  fi
 }
 
 orch_stage_run_runner() {
@@ -1237,6 +2076,22 @@ orch_stage_run_runner() {
   local _use_tee=0
   local _child_pid=""
   local _exit_status=0
+  # Sequential workflow stages export RALPH_SEQ_STAGE_LOG_DIR (and
+  # RALPH_GRAPH_NODE_LOG_DIR) from workflow_seq_journal_stage_before so
+  # runner output lands in engine/logs/stages/<stage>/attempt-<n>/runner.log.
+  # Dependency/graph single-stage children already redirect the whole process
+  # onto runner.log and do not set RALPH_SEQ_STAGE_LOG_DIR.
+  local _runner_log_file="$LOG_FILE"
+  if [[ -n "${RALPH_SEQ_STAGE_LOG_DIR:-}" \
+    && -d "${RALPH_SEQ_STAGE_LOG_DIR}" \
+    && ! -L "${RALPH_SEQ_STAGE_LOG_DIR}" ]]; then
+    _runner_log_file="${RALPH_SEQ_STAGE_LOG_DIR}/runner.log"
+    if [[ -L "$_runner_log_file" ]]; then
+      _runner_log_file="$LOG_FILE"
+    else
+      : >>"$_runner_log_file" 2>/dev/null || _runner_log_file="$LOG_FILE"
+    fi
+  fi
   if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]] \
     && ([[ -t 1 ]] || [[ "${ORCHESTRATOR_PARALLEL_PREFIX_STREAM:-0}" == "1" ]]) \
     && command -v tee >/dev/null 2>&1; then
@@ -1253,9 +2108,10 @@ orch_stage_run_runner() {
     _runner_exitfile="$(mktemp)" || _runner_exitfile="/dev/null"
     {
       ralph_process_scope_exec stage orchestrator \
-        env "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" 2>&1
+        env -u RALPH_AGENT_TOOL_ACCESS -u RALPH_NATIVE_HOOKS \
+        "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" 2>&1
       printf '%s' "$?" > "$_runner_exitfile" 2>/dev/null || true
-    } | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$LOG_FILE") &
+    } | tee >(LC_ALL=C sed -E $'s/\x1b\\[[0-9;]*m//g' >> "$_runner_log_file") &
     _child_pid=$!
     # The runner PID is written by the first command in the pipeline (the subshell),
     # but we need to write it from within the subshell. Since we don't have direct
@@ -1274,7 +2130,8 @@ orch_stage_run_runner() {
     return "$_exit_status"
   fi
   ralph_process_scope_exec stage orchestrator \
-    env "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" >>"$LOG_FILE" 2>&1 &
+    env -u RALPH_AGENT_TOOL_ACCESS -u RALPH_NATIVE_HOOKS \
+    "$@" RALPH_PROCESS_ALLOW_CHILD=1 bash "$runner" "${_runner_args[@]}" >>"$_runner_log_file" 2>&1 &
   _child_pid=$!
   orch_record_runner_pid "$_child_pid"
   wait "$_child_pid"
@@ -1376,7 +2233,7 @@ PYRENDER
 
 # A structured orchestration plan (.plan.md with a pipeline block) is normalized into the
 # .orch.json shape this orchestrator already runs: inline stages become standalone stage
-# plan files, planFile stages are used as-is. Legacy .orch.json inputs skip this entirely.
+# plan files, planFile stages are used as-is. Direct .orch.json inputs skip this entirely.
 if [[ "$ORCH_FILE" != *.json ]]; then
   if ! command -v python3 >/dev/null 2>&1; then
     ralph_orchestrator_log "FAIL: python3 required for structured orchestration plan $ORCH_FILE"
@@ -1428,7 +2285,7 @@ if [[ "$ORCH_FILE" != *.json ]]; then
   fi
 fi
 
-# Legacy .orch.json is parsed directly; structured plans were normalized to one above.
+# Direct .orch.json input is parsed as supplied; structured plans were normalized above.
 if [[ "$ORCH_FILE" == *.json ]]; then
   # Parse JSON orchestration file with jq
   if ! command -v jq >/dev/null 2>&1; then
@@ -1461,6 +2318,17 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     echo "  Log: $LOG_FILE" >&2
     exit 1
   fi
+
+  if jq -e 'has("ralphMode") and ([.stages[]? | select(has("toolingProfile"))] | length > 0)' "$ORCH_FILE" >/dev/null 2>&1; then
+    ralph_orchestrator_log "FAIL parse: ralphMode and stage toolingProfile cannot coexist in $ORCH_FILE"
+    echo -e "${C_R}${C_BOLD}Orchestrator config error: conflicting tooling declarations${C_RST}" >&2
+    echo "  ralphMode and stage toolingProfile apply to the same run and cannot coexist." >&2
+    echo "  Remove ralphMode or declare tooling via stage toolingProfile, not both." >&2
+    echo "  Log: $LOG_FILE" >&2
+    exit 1
+  fi
+
+  orch_resolve_ralph_mode
 
   # Drives {{ARTIFACT_NS}} in paths and per-plan log dirs unless overridden in the environment.
   json_ns="$(jq -r '.namespace // empty' "$ORCH_FILE" 2>/dev/null || echo "")"
@@ -1509,11 +2377,17 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       orch_single_stage_write_report "failed" 1 "invalid runtime: $runtime_raw" || true
       exit 1
     fi
-    agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
-    agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+    if ! role="$(orch_stage_role_from_json "$stage")"; then
+      ralph_orchestrator_log "FAIL single-stage: invalid stage role/agent fields"
+      orch_single_stage_write_report "failed" 1 "invalid stage role/agent fields" || true
+      exit 1
+    fi
     stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
-    agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
-    [[ -z "$agent_source" ]] && agent_source="prebuilt"
+    agent_source=""
+    agent_source_raw=""
+    if [[ -n "$role" ]]; then
+      agent_source="prebuilt"
+    fi
     plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
     step_index=$((step_index + 1))
     plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
@@ -1521,8 +2395,12 @@ if [[ "$ORCH_FILE" == *.json ]]; then
     # orch_stage_execute exits directly on runner/artifact failure; the EXIT trap
     # then records the failed/cancelled report with the real exit code. Non-zero
     # returns (validation without exit) are handled explicitly here.
-    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$ss_idx"; then
-      orch_single_stage_write_report "failed" "${step_rc:-1}" "stage execution failed" || true
+    if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "" "$ss_idx"; then
+      ss_fail_detail="stage execution failed"
+      if [[ -n "${ORCH_PLANNER_FAIL_DETAIL:-}" ]]; then
+        ss_fail_detail="${ORCH_PLANNER_FAIL_REASON:-stage execution failed}: ${ORCH_PLANNER_FAIL_DETAIL}"
+      fi
+      orch_single_stage_write_report "failed" "${step_rc:-1}" "$ss_fail_detail" || true
       exit "${step_rc:-1}"
     fi
     if [[ "${step_rc:-0}" -gt 0 ]]; then
@@ -1576,17 +2454,22 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           echo -e "${C_R}Invalid RUNTIME '${runtime_raw}'. Use cursor, claude, codex, opencode, or antigravity.${C_RST}" >&2
           exit 1
         fi
-        agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
-        agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+        if ! role="$(orch_stage_role_from_json "$stage")"; then
+          ralph_orchestrator_log "FAIL parallel wave $((wave_idx + 1)): invalid stage role/agent fields"
+          exit 1
+        fi
         stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
-        agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
-        [[ -z "$agent_source" ]] && agent_source="prebuilt"
+        agent_source=""
+        agent_source_raw=""
+        if [[ -n "$role" ]]; then
+          agent_source="prebuilt"
+        fi
         plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
         step_index=$((step_index + 1))
         plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
         plan_tag="$(basename "$plan_abs" | sed 's/\.[^.]*$//')"
         plan_tag="${plan_tag//[^A-Za-z0-9_.-]/_}"
-        wave_output_logs+=("$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/plan-runner-${plan_tag}-output.log")
+        wave_output_logs+=("$(orch_plan_log_dir)/plan-runner-${plan_tag}-output.log")
         stage_usage_file="$RALPH_LOG_DIR/$RALPH_ARTIFACT_NS/parallel-wave-${wave_idx}-stage-${stage_id}.usage.json"
         mkdir -p "$(dirname "$stage_usage_file")"
         if [[ "${ORCHESTRATOR_DRY_RUN:-0}" == "1" ]]; then
@@ -1594,10 +2477,10 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           mkdir -p "$(dirname "$stage_file")"
           if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
             (
-              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
             ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
           else
-            ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx" ) &
+            ( orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx" ) &
           fi
           wave_pid=$!
           orch_register_parallel_pid "$wave_pid"
@@ -1608,12 +2491,12 @@ if [[ "$ORCH_FILE" == *.json ]]; then
           mkdir -p "$(dirname "$stage_file")"
           if [[ "${ORCHESTRATOR_RUNNER_TO_CONSOLE:-1}" != "0" ]]; then
             (
-              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              ORCHESTRATOR_PARALLEL_PREFIX_STREAM=1 orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
               echo "$?" > "$stage_file"
             ) 2>&1 | orch_parallel_stage_prefix_stream "$stage_id" "$(orch_parallel_stage_tag_color "$wave_stage_position")" &
           else
             (
-              orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
+              orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" status_tmp "$stage_usage_file" "$back_idx"
               echo "$?" > "$stage_file"
             ) &
           fi
@@ -1686,9 +2569,9 @@ if [[ "$ORCH_FILE" == *.json ]]; then
       stage_id="$(orch_stage_normalize_id "$stage_id")"
       if [[ -n "$stage_id" ]] && orch_router_skip_map_has "$stage_id" >/dev/null 2>&1; then
         step_index=$((step_index + 1))
-        agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null || echo "")"
+        role="$(echo "$stage" | jq -r '.role // ""' 2>/dev/null || echo "")"
         runtime="$(echo "$stage" | jq -r '.runtime // "cursor"' 2>/dev/null || echo "cursor")"
-        orch_router_record_skipped_stage "$step_index" "$stage_id" "$agent" "$runtime"
+        orch_router_record_skipped_stage "$step_index" "$stage_id" "$role" "$runtime"
         echo -e "${C_DIM}Step ${step_index} skipped by router: ${stage_id}${C_RST}"
         idx=$((idx + 1))
         continue
@@ -1705,15 +2588,20 @@ if [[ "$ORCH_FILE" == *.json ]]; then
         echo "  Log: $LOG_FILE" >&2
         exit 1
       fi
-      agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
-      agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+      if ! role="$(orch_stage_role_from_json "$stage")"; then
+        ralph_orchestrator_log "FAIL parse: invalid stage role/agent fields"
+        exit 1
+      fi
       stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
-      agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
-      [[ -z "$agent_source" ]] && agent_source="prebuilt"
+      agent_source=""
+      agent_source_raw=""
+      if [[ -n "$role" ]]; then
+        agent_source="prebuilt"
+      fi
       plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
       step_index=$((step_index + 1))
       plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
-      if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
+      if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
         exit 1
       fi
       if [[ "${step_rc:-0}" -gt 0 ]]; then
@@ -1738,15 +2626,20 @@ if [[ "$ORCH_FILE" == *.json ]]; then
             ralph_orchestrator_log "FAIL parse: invalid RUNTIME '$runtime_raw' in generated planner stage"
             exit 1
           fi
-          agent="$(echo "$stage" | jq -r '.agent // ""' 2>/dev/null)" || agent=""
-          agent_source_raw="$(echo "$stage" | jq -r '.agentSource // ""' 2>/dev/null)" || agent_source_raw=""
+          if ! role="$(orch_stage_role_from_json "$stage")"; then
+            ralph_orchestrator_log "FAIL parse: invalid stage role/agent fields in generated planner stage"
+            exit 1
+          fi
           stage_model="$(echo "$stage" | jq -r '.model // ""' 2>/dev/null)" || stage_model=""
-          agent_source="$(printf '%s' "${agent_source_raw:-prebuilt}" | tr '[:upper:]' '[:lower:]')"
-          [[ -z "$agent_source" ]] && agent_source="prebuilt"
+          agent_source=""
+          agent_source_raw=""
+          if [[ -n "$role" ]]; then
+            agent_source="prebuilt"
+          fi
           plan_rel="$(echo "$stage" | jq -r '.plan // ""' 2>/dev/null)" || plan_rel=""
           step_index=$((step_index + 1))
           plan_abs="$(orchestrator_stage_plan_abs "$plan_rel" "$WORKSPACE")"
-          if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$agent" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
+          if ! orch_stage_execute "$step_index" "$stage" "$plan_abs" "$plan_rel" "$runtime" "$role" "$agent_source" "$stage_model" "$agent_source_raw" "$stage_id" "$stage_iter" step_rc "$idx"; then
             exit 1
           fi
           if [[ "${step_rc:-0}" -gt 0 ]]; then

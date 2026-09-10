@@ -52,7 +52,7 @@ class TestCreatePlanFormat(unittest.TestCase):
     content = plan_file.read_text(encoding="utf-8")
     self.assertTrue(content.startswith("---\n"))
     self.assertIn("todos:", content)
-    self.assertIn("execution: standard", content)
+    self.assertIn("mode: standard", content)
 
   def test_legacy_format_aliases_still_work(self) -> None:
     aliases = ("standard", "structured", "pipeline", "cursor")

@@ -35,7 +35,7 @@ ralph_hook_channel_capability() {
   case "$runtime" in
     claude)
       case "$channel" in
-        bash_compact | native_result_compact | proxy_shell_compact) printf 'proven\n' ;;
+        bash_compact | native_result_compact | proxy_shell_compact | auto_background) printf 'proven\n' ;;
         bash_rewrite) printf 'unsupported\n' ;;
         *) printf 'unknown\n' ;;
       esac
@@ -44,6 +44,7 @@ ralph_hook_channel_capability() {
       case "$channel" in
         bash_compact | native_result_compact) printf 'measured_only\n' ;;
         proxy_shell_compact | bash_rewrite) printf 'proven\n' ;;
+        auto_background) printf 'unsupported\n' ;;
         *) printf 'unknown\n' ;;
       esac
       ;;
@@ -51,14 +52,14 @@ ralph_hook_channel_capability() {
       case "$channel" in
         bash_compact | native_result_compact) printf 'measured_only\n' ;;
         proxy_shell_compact) printf 'proven\n' ;;
-        bash_rewrite) printf 'unsupported\n' ;;
+        bash_rewrite | auto_background) printf 'unsupported\n' ;;
         *) printf 'unknown\n' ;;
       esac
       ;;
     opencode)
       case "$channel" in
         proxy_shell_compact) printf 'proven\n' ;;
-        bash_compact | native_result_compact | bash_rewrite) printf 'unsupported\n' ;;
+        bash_compact | native_result_compact | bash_rewrite | auto_background) printf 'unsupported\n' ;;
         *) printf 'unknown\n' ;;
       esac
       ;;
@@ -84,22 +85,6 @@ ralph_effective_hook_config_resolve() {
   if [[ "$requested_gate" == "on" ]]; then
     enabled="true"
     enabled_reason="$requested_source"
-  elif [[ "$channel" == "native_result_compact" ]]; then
-    # Coupled legacy fallback: native_result_compact also activates when
-    # either legacy Bash or proxy-shell compaction is on, even if its own
-    # gate is off/unset (mirrors ralph_native_hook_result_compact_enabled).
-    local bash_prov proxy_prov bash_gate proxy_gate
-    bash_prov="$(ralph_compaction_gate_provenance "bash_compact" "$mode" "$mode_source")"
-    proxy_prov="$(ralph_compaction_gate_provenance "proxy_shell_compact" "$mode" "$mode_source")"
-    bash_gate="$(jq -r '.gate' <<<"$bash_prov")"
-    proxy_gate="$(jq -r '.gate' <<<"$proxy_prov")"
-    if [[ "$bash_gate" == "on" ]]; then
-      enabled="true"
-      enabled_reason="coupled_bash_compact"
-    elif [[ "$proxy_gate" == "on" ]]; then
-      enabled="true"
-      enabled_reason="coupled_proxy_shell_compact"
-    fi
   fi
 
   local capability
@@ -149,12 +134,12 @@ ralph_effective_hook_config_resolve() {
     }'
 }
 
-# Convenience: all four channels for one runtime/mode as a JSON array.
+# Convenience: all channels for one runtime/mode as a JSON array.
 ralph_effective_hook_config_resolve_all() {
   local runtime="${1:-}" mode="${2:-${RALPH_MODE:-no}}" mode_source="${3:-explicit}"
   local channel
   local -a records=()
-  for channel in bash_compact native_result_compact proxy_shell_compact bash_rewrite; do
+  for channel in bash_compact native_result_compact proxy_shell_compact bash_rewrite auto_background; do
     records+=("$(ralph_effective_hook_config_resolve "$channel" "$runtime" "$mode" "$mode_source")")
   done
   printf '%s\n' "${records[@]}" | jq -sc .

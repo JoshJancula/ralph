@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PostToolUse adapter: compact Read/Grep/Glob via shared Ralph envelope/store path.
-# Gate: RALPH_NATIVE_RESULT_COMPACT=0 opts out; otherwise follows native-result
-# compaction defaults. Fail-open: never blocks the agent.
+# Gate: RALPH_NATIVE_RESULT_COMPACT=1 explicitly opts in. Fail-open: never
+# blocks the agent.
 
 set -uo pipefail
 

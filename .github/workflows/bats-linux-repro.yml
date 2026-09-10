@@ -1,0 +1,86 @@
+name: Bats Linux repro
+
+# Manual-only. Runs a chosen set of bats files on the same runner image the
+# real suite uses, so a Linux-only failure can be reproduced in minutes instead
+# of pushing and waiting out the 150-minute slow tier.
+#
+# It never triggers on push or pull_request, so it adds no cost to normal CI.
+#
+# Why this exists: several failures are invisible on macOS by construction --
+# /bin/bash is 3.2 there and 5.x here (so `wait -n` exists), and the repo-root
+# .cursor/.claude/.codex/.opencode/.agents dirs are gitignored, so they are
+# present on a developer machine and absent in any checkout.
+
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Space-separated bats paths (default: the known Linux-only failures)'
+        required: false
+        default: >-
+          tests/bats/graph/graph-artifact-routing.bats
+          tests/bats/graph/graph-consensus.bats
+          tests/bats/graph/graph-dispatch-rework-feedback.bats
+          tests/bats/graph/graph-observability.bats
+          tests/bats/graph/graph-status.bats
+          tests/bats/config-killswitch.bats
+          tests/bats/run-plan/run-plan-routing.bats
+          tests/bats/workflow/workflow-run-registry.bats
+      jobs:
+        description: 'bats -j parallelism (1 isolates load-related flake)'
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: Reproduce on ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
+
+      - name: Set up Bats
+        uses: bats-core/bats-action@4.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the pinned OpenCode plugin declaration
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
+      - name: Install GNU parallel and ripgrep
+        run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
+
+      - name: Generate test fixtures for .ralph-workspace/
+        run: bash scripts/setup-test-fixtures.sh
+
+      - name: Report the environment differences that hide these failures
+        # Printed before the run so a diff against a local run is one glance.
+        run: |
+          echo "/bin/bash: $(/bin/bash -c 'echo $BASH_VERSION')"
+          echo "bash on PATH: $(bash -c 'echo $BASH_VERSION')"
+          for d in .cursor .claude .codex .opencode .agents; do
+            printf '%-12s %s\n' "$d" "$([ -d "$d" ] && echo present || echo ABSENT)"
+          done
+
+      - name: Run the selected bats files
+        # --print-output-on-failure is the whole point: the default TAP output
+        # gives a line number but not the actual command output, which is what
+        # you need to tell a test bug from a product bug.
+        #
+        # RALPH_RUN_LINUX_QUARANTINE=1 is required: CI sets CI=1, which makes
+        # bats_skip_known_ci_flakes skip the very tests this job exists to
+        # reproduce. Without it every run here is a wall of skips.
+        env:
+          CI: '1'
+          RALPH_RUN_LINUX_QUARANTINE: '1'
+        run: |
+          bash scripts/run-bats.sh -j "${{ inputs.jobs }}" -- \
+            --print-output-on-failure \
+            ${{ inputs.files }}

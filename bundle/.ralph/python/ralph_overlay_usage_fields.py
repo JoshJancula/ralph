@@ -67,6 +67,8 @@ OVERLAY_USAGE_DEFAULTS: dict[str, Any] = {
     "mcp_effective": False,
     "runtime_overlay_mode": "",
     "runtime_overlay_warnings": [],
+    "bg_tier": "",
+    "bg_tier_reason": "",
     "byte_savings_by_path": {},
     "byte_savings_by_channel": {},
     "native_optimization_proven_channels": [],
@@ -739,6 +741,9 @@ def fields_from_summary(summary: Any) -> dict[str, Any]:
         warnings = summary.get("warnings")
     out["runtime_overlay_warnings"] = coerce_warnings(warnings)
 
+    out["bg_tier"] = str(summary.get("bg_tier") or "")
+    out["bg_tier_reason"] = str(summary.get("bg_tier_reason") or "")
+
     byte_savings = summary.get("byte_savings_by_path")
     if isinstance(byte_savings, dict):
         out["byte_savings_by_path"] = byte_savings
@@ -791,6 +796,8 @@ RUNTIME_OVERLAY_SCALAR_FIELDS = (
     "cache_key_injected",
     "cache_key_injected_provider_id",
     "overlay_mode",
+    "bg_tier",
+    "bg_tier_reason",
 )
 
 RUNTIME_OVERLAY_NUMERIC_FIELDS = (

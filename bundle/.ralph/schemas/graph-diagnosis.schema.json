@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "gateNodeId",
+    "gateOutcome",
+    "findings",
+    "laneAssignments",
+    "ambiguous",
+    "unassigned"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "kind": { "type": "string", "enum": ["graph-diagnosis"] },
+    "gateNodeId": { "type": "string" },
+    "gateOutcome": { "type": "string", "enum": ["passed", "changes-required", "error", ""] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "failureSummary", "files", "changesets", "confidence", "owner", "ownerReason"],
+        "properties": {
+          "command": { "type": "string" },
+          "failureSummary": { "type": "string", "maxLength": 500 },
+          "files": { "type": "array", "items": { "type": "string" } },
+          "changesets": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "owner": { "type": ["string", "null"] },
+          "ownerReason": {
+            "type": "string",
+            "enum": ["deterministic-path-match", "ambiguous", "no-owner", "router-agent", "infrastructure-error"]
+          },
+          "candidateLanes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "laneAssignments": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "integer" } }
+    },
+    "ambiguous": { "type": "array", "items": { "type": "integer" } },
+    "unassigned": { "type": "array", "items": { "type": "integer" } }
+  }
+}

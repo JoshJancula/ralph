@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "exclude": [
+    "tests/bats/graph/graph-shard-runner.bats"
+  ],
+  "shards": [
+    {
+      "name": "core",
+      "description": "compile, state, events, scheduler, failure classification",
+      "files": [
+        "tests/bats/graph/graph-compile.bats",
+        "tests/bats/graph/graph-state.bats",
+        "tests/bats/graph/graph-events.bats",
+        "tests/bats/graph/graph-schedule.bats",
+        "tests/bats/graph/graph-failure-classify.bats",
+        "tests/bats/graph/graph-heartbeat.bats",
+        "tests/bats/graph/graph-resume.bats",
+        "tests/bats/graph/graph-checkpoint.bats",
+        "tests/bats/graph/graph-edges.bats",
+        "tests/bats/graph/graph-router.bats",
+        "tests/bats/graph/graph-conditional-edges.bats",
+        "tests/bats/graph/graph-consensus.bats",
+        "tests/bats/graph/graph-repair-epochs.bats",
+        "tests/bats/graph/graph-feedback-routing.bats",
+        "tests/bats/graph/graph-no-recursion.bats",
+        "tests/bats/graph/graph-stage-outcome.bats",
+        "tests/bats/graph/graph-corrective-outcomes.bats",
+        "tests/bats/graph/graph-resilience.bats",
+        "tests/bats/graph/graph-composite-success.bats",
+        "tests/bats/graph/graph-efficiency.bats",
+        "tests/bats/graph/graph-delegated-run.bats",
+        "tests/bats/graph/graph-delegated-run-mcp.bats",
+        "tests/bats/graph/graph-delegated-run-runner.bats",
+        "tests/bats/graph/graph-delegated-run-recovery.bats",
+        "tests/bats/graph/graph-native-subagent.bats",
+        "tests/bats/graph/graph-gate.bats",
+        "tests/bats/graph/graph-baseline-characterization.bats",
+        "tests/bats/graph/graph-authoring-roundtrip.bats",
+        "tests/bats/graph/graph-schema-valid-fixtures.bats",
+        "tests/bats/graph/graph-agent-review-outcome.bats",
+        "tests/bats/graph/graph-dispatch-rework-feedback.bats"
+      ]
+    },
+    {
+      "name": "operator",
+      "description": "status, actions, logs, attach, TUI, recovery",
+      "files": [
+        "tests/bats/graph/graph-status.bats",
+        "tests/bats/graph/graph-actions-cli.bats",
+        "tests/bats/graph/graph-logs-cli.bats",
+        "tests/bats/graph/graph-observability.bats",
+        "tests/bats/graph/graph-recovery.bats",
+        "tests/bats/graph/graph-human-recovery.bats",
+        "tests/bats/graph/graph-operator-schedule.bats",
+        "tests/bats/graph/graph-operator-records.bats",
+        "tests/bats/graph/graph-wizard.bats",
+        "tests/bats/graph/graph-wizard-receipt.bats",
+        "tests/bats/graph/graph-cli-help.bats",
+        "tests/bats/graph/graph-render.bats",
+        "tests/bats/graph/graph-preflight.bats",
+        "tests/bats/graph/graph-preflight-preview.bats",
+        "tests/bats/graph/graph-confirmation.bats",
+        "tests/bats/graph/graph-successor.bats"
+      ]
+    },
+    {
+      "name": "runtime-approval",
+      "description": "adapter and approval continuation tests",
+      "files": [
+        "tests/bats/graph/graph-approval-adapter-contract.bats",
+        "tests/bats/graph/graph-approval-claude-cursor.bats",
+        "tests/bats/graph/graph-approval-antigravity.bats",
+        "tests/bats/graph/graph-approval-codex.bats",
+        "tests/bats/graph/graph-approval-opencode.bats",
+        "tests/bats/graph/graph-approval-policy.bats",
+        "tests/bats/graph/graph-tooling-profile.bats",
+        "tests/bats/graph/graph-runtime-tooling-profile-capabilities.bats"
+      ]
+    },
+    {
+      "name": "isolation",
+      "description": "roots, workspaces, changesets, integration, publication",
+      "files": [
+        "tests/bats/graph/graph-run-base.bats",
+        "tests/bats/graph/graph-workspace-manager.bats",
+        "tests/bats/graph/graph-changeset.bats",
+        "tests/bats/graph/graph-integration.bats",
+        "tests/bats/graph/graph-publish.bats",
+        "tests/bats/graph/graph-artifact-routing.bats",
+        "tests/bats/graph/graph-dispatch-tooling-profile.bats",
+        "tests/bats/graph/graph-retention.bats",
+        "tests/bats/graph/graph-runtime-capabilities.bats",
+        "tests/bats/graph/graph-run-logs.bats"
+      ]
+    },
+    {
+      "name": "acceptance",
+      "description": "vertical journeys and canaries",
+      "files": [
+        "tests/bats/graph/graph-vertical-slice.bats",
+        "tests/bats/graph/graph-production-fixtures.bats",
+        "tests/bats/graph/accept-fanout-jury.bats"
+      ]
+    }
+  ]
+}

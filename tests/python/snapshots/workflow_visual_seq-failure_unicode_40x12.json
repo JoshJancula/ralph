@@ -1,0 +1,142 @@
+{
+  "width": 40,
+  "height": 12,
+  "plain": [
+    "Ralph fixture-seq-failed",
+    "bug-fix \u00b7 Sequential",
+    "FAILED  Fix the timeout",
+    "0/1 stages  1m 0s",
+    "> failed    implement",
+    "implement  executable  failed",
+    "Live tail  press l for the exact command",
+    "Attempt  1  Duration  1m 0s",
+    "",
+    "",
+    "",
+    ""
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-failed",
+        "role": "path",
+        "width": 18
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "bug-fix \u00b7 Sequential",
+        "role": "muted",
+        "width": 20
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "FAILED",
+        "role": "failure",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "  Fix the timeout                 ",
+        "role": "default",
+        "width": 34
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "0/1 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "1m 0s",
+        "role": "muted",
+        "width": 5
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> failed    implement                   ",
+        "role": "focus",
+        "width": 40
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "implement",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "executable",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 23,
+        "text": "failed",
+        "role": "failure",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 22,
+        "text": "1m 0s             ",
+        "role": "default",
+        "width": 18
+      }
+    ],
+    [],
+    [],
+    [],
+    []
+  ]
+}

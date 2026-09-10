@@ -9,6 +9,8 @@ Usage: usage-report.sh [OPTIONS]
 
 Options:
   --workspace <path>                   Workspace root (default: the current directory; use --full to search $HOME).
+  --state-root <path>                  Ralph state root when it is not <workspace>/.ralph-workspace.
+  --run <exact-workflow-run-id>        Report only one workflow run, including every stage attempt.
   --logs-dir <path>                    Directory containing usage logs (may be specified multiple times).
                                         Default: <workspace>/.ralph-workspace/logs when the current
                                         directory is or directly contains a .ralph-workspace;
@@ -20,6 +22,8 @@ EOU
 }
 
 workspace=""
+state_root=""
+run_id=""
 logs_dirs=()
 seen_logs_dirs=$'\n'
 format="text"
@@ -73,6 +77,22 @@ while [[ $# -gt 0 ]]; do
       workspace="$2"
       shift 2
       ;;
+    --state-root)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --state-root requires a path." >&2
+        exit 1
+      fi
+      state_root="$2"
+      shift 2
+      ;;
+    --run)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --run requires an exact workflow run id." >&2
+        exit 1
+      fi
+      run_id="$2"
+      shift 2
+      ;;
     --logs-dir)
       if [[ -z "${2:-}" ]]; then
         echo "Error: --logs-dir requires a directory path." >&2
@@ -117,6 +137,73 @@ if [[ -z "$workspace" ]]; then
 fi
 
 workspace="$(cd "$workspace" && pwd)"
+
+if [[ -n "$run_id" ]]; then
+  if [[ "$run_id" == "latest" || "$run_id" == *"/"* || ! "$run_id" =~ ^run-[A-Za-z0-9._-]+$ ]]; then
+    echo "Error: --run requires an exact workflow run id, not latest or a path." >&2
+    exit 1
+  fi
+  if [[ ${#logs_dirs[@]} -gt 0 || "$full" -eq 1 ]]; then
+    echo "Error: --run cannot be combined with --logs-dir or --full." >&2
+    exit 1
+  fi
+  if [[ -z "$state_root" ]]; then
+    if [[ "$(basename "$workspace")" == ".ralph-workspace" ]]; then
+      state_root="$workspace"
+    else
+      state_root="$workspace/.ralph-workspace"
+    fi
+  fi
+  [[ -d "$state_root" ]] || {
+    echo "Error: Ralph state root not found: $state_root" >&2
+    exit 1
+  }
+  state_root="$(cd "$state_root" && pwd)"
+  run_file="$state_root/workflow-runs/$run_id/run.json"
+  if [[ ! -f "$run_file" || -L "$run_file" ]]; then
+    echo "Error: workflow run not found: $run_id" >&2
+    exit 1
+  fi
+  command -v jq >/dev/null 2>&1 || {
+    echo "Error: jq not found on PATH" >&2
+    exit 1
+  }
+  run_mode="$(jq -r '.mode // empty' "$run_file")"
+  case "$run_mode" in
+    dependency)
+      engine_state="$(jq -r '.engine.statePath // empty' "$run_file")"
+      [[ -n "$engine_state" && -d "$engine_state/logs" ]] || {
+        echo "Error: no usage logs recorded yet for workflow run $run_id" >&2
+        exit 1
+      }
+      engine_state="$(cd "$engine_state" && pwd)"
+      case "$engine_state" in
+        "$state_root"/graph-runs/*/"$run_id") ;;
+        *)
+          echo "Error: workflow run has an invalid Dependency usage path" >&2
+          exit 1
+          ;;
+      esac
+      add_logs_dir "$engine_state/logs"
+      ;;
+    sequential)
+      artifact_ns="$(jq -r '.artifactNamespace // empty' "$run_file")"
+      [[ -n "$artifact_ns" && "$artifact_ns" != *"/"* && "$artifact_ns" != "." && "$artifact_ns" != ".." ]] || {
+        echo "Error: workflow run has no valid usage namespace: $run_id" >&2
+        exit 1
+      }
+      add_logs_dir "$state_root/logs/$artifact_ns"
+      ;;
+    *)
+      echo "Error: workflow run has unsupported mode: ${run_mode:-<empty>}" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ${#logs_dirs[@]} -eq 0 ]]; then
+    echo "Error: no usage logs recorded yet for workflow run $run_id" >&2
+    exit 1
+  fi
+fi
 
 _registry_py="$SCRIPT_DIR/python/workspace-registry.py"
 

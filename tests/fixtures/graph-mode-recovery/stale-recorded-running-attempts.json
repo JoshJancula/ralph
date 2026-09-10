@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "category": "stale-recorded-running-attempts",
+  "summary": "Three of the six preserved runs still have run.json status='running' as of this evidence pass, even though their node files show a mix of failed/running/pending states and the runs started five days before this evidence pass. No process is alive to advance or close them, and no supervisor.log or events.jsonl exists to show the run ever stopped being scheduled.",
+  "affectedAttempts": [
+    "run-20260811T125349Z-0-17reyS",
+    "run-20260811T133516Z-0-FzRkSY",
+    "run-20260811T135841Z-0-vk9YK7"
+  ],
+  "rootStatusByRun": {
+    "run-20260811T125349Z-0-17reyS": "running",
+    "run-20260811T133516Z-0-FzRkSY": "running",
+    "run-20260811T135841Z-0-vk9YK7": "running",
+    "run-20260812T020611Z-0-Bnsvuc": "failed",
+    "run-20260814T162017Z-0-L23fPN": "failed",
+    "run-20260815T021145Z-0-udoZs5": "failed"
+  },
+  "nodeStatusSample_run-20260811T125349Z-0-17reyS": {
+    "start": "succeeded",
+    "define-canonical-plugin-inputs": "failed",
+    "implement-cli-bootstrap": "failed",
+    "implement-safe-legacy-removal": "running",
+    "unify-killswitch-core": "running",
+    "remainder-of-22-nodes": "pending"
+  },
+  "operatorImpact": "Any status listing that trusts run.json without cross-checking node files or process liveness would report three runs as still in progress days after they were abandoned mid-flight, with two of their four active nodes permanently stuck at 'running' and no path to reconcile or close them."
+}

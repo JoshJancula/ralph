@@ -24,6 +24,11 @@ install_colors_init
 #   install_ops_config_root, install_ops_state_root, install_ops_global_runtime_root -- global install paths.
 #   install_ops_emit_copy, install_ops_add_optional_copy, install_ops_build_copy_plan -- plan assembly.
 #   install_ops_execute_plan, install_ops_copy_tree -- run the file copy plan.
+#   install_ops_discover_bundled_workflow_files, install_ops_sync_bundled_workflows,
+#   install_ops_remove_legacy_workflow_templates -- installer-owned bundled workflows (never user dirs).
+#   install_ops_discover_plugin_package_runtimes, install_ops_sync_plugin_packages --
+#     copy generated packages to $RALPH_HOME/plugins/ralph-orchestrator/<runtime>/ (never host-install).
+#   install_ops_remove_stale_ralph_agent_profiles -- upgrade cleanup of six-ID Ralph agent outputs.
 #   install_ops_collect_remove_file_paths, install_ops_build_remove_prune_roots, install_ops_execute_remove,
 #   install_ops_resolve_vendor_rel, install_ops_auto_remove_vendor_after_install, install_ops_remove_vendor -- uninstall / vendor.
 
@@ -210,6 +215,349 @@ install_ops_verify_bundle() {
   fi
 }
 
+# Canonical bundled-workflow directory under the package bundle (installer-owned).
+# Not project state-root workflows and not $RALPH_HOME/workflows/ (user data).
+install_ops_bundled_workflows_src_dir() {
+  printf '%s/.ralph/workflows\n' "${1:-$BUNDLE}"
+}
+
+install_ops_legacy_workflow_templates_subdir() {
+  printf 'workflow-templates\n'
+}
+
+# Installed shared .ralph root: local TARGET/.ralph or global TARGET/bundle/.ralph.
+install_ops_installed_ralph_root() {
+  local target_root="${1:-$TARGET}"
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    printf '%s/bundle/.ralph\n' "$target_root"
+  else
+    printf '%s/.ralph\n' "$target_root"
+  fi
+}
+
+install_ops_should_sync_bundled_workflows() {
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  [[ "${INSTALL_SHARED:-0}" -eq 1 ]]
+}
+
+# Workflow id contract: ^[a-z0-9]+(-[a-z0-9]+)*$
+install_ops_workflow_id_valid() {
+  local id="${1:-}"
+  [[ -n "$id" && "$id" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
+}
+
+# Cheap install-time validation: *.workflow.md, valid id basename, kind: workflow in frontmatter.
+install_ops_workflow_file_is_validated() {
+  local path="${1:-}"
+  local base id
+  [[ -f "$path" ]] || return 1
+  base="$(basename -- "$path")"
+  [[ "$base" == *.workflow.md ]] || return 1
+  id="${base%.workflow.md}"
+  install_ops_workflow_id_valid "$id" || return 1
+  awk '
+    BEGIN { in_fm = 0; found = 0 }
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---" { exit !found }
+    in_fm && /^kind:[[:space:]]*workflow[[:space:]]*$/ { found = 1; exit 0 }
+    END { exit !found }
+  ' "$path"
+}
+
+# Print absolute paths of validated *.workflow.md under the canonical bundled path.
+# Discovery is directory-driven (no hard-coded workflow id list).
+install_ops_discover_bundled_workflow_files() {
+  local src_dir
+  src_dir="$(install_ops_bundled_workflows_src_dir "${1:-$BUNDLE}")"
+  local f
+  [[ -d "$src_dir" ]] || return 0
+  while IFS= read -r -d '' f; do
+    if install_ops_workflow_file_is_validated "$f"; then
+      printf '%s\n' "$f"
+    fi
+  done < <(find "$src_dir" -maxdepth 1 -type f -name '*.workflow.md' -print0 2>/dev/null | sort -z)
+}
+
+# Force-install the shared workflow instruction fragments referenced by bundled
+# workflows as {{INCLUDE:<name>}}. Without these the bundled workflows cannot be
+# instantiated at all, so this ships with them rather than as an optional extra.
+install_ops_sync_bundled_workflow_fragments() {
+  local src_dir dest_dir src dest base
+  src_dir="$(install_ops_bundled_workflows_src_dir "$BUNDLE")/_fragments"
+  dest_dir="$(install_ops_installed_ralph_root)/workflows/_fragments"
+
+  [[ -d "$src_dir" ]] || return 0
+
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    while IFS= read -r -d '' src; do
+      base="$(basename -- "$src")"
+      install_log_dry "[dry-run]" "cp $src $dest_dir/$base"
+    done < <(find "$src_dir" -maxdepth 1 -type f -name '*.md' -print0 2>/dev/null | sort -z)
+    return 0
+  fi
+
+  mkdir -p "$dest_dir"
+  while IFS= read -r -d '' src; do
+    base="$(basename -- "$src")"
+    dest="$dest_dir/$base"
+    cp "$src" "$dest"
+    install_log_ok "Installed workflow fragment" "$dest"
+  done < <(find "$src_dir" -maxdepth 1 -type f -name '*.md' -print0 2>/dev/null | sort -z)
+}
+
+# Force-install every discovered validated bundled workflow into the installer-owned dest.
+# Always overwrites installer-owned copies so upgrades stay byte-exact with the package.
+# Never writes project state-root or $RALPH_HOME/workflows/ user files.
+install_ops_sync_bundled_workflows() {
+  local src_dir dest_dir src dest base
+  install_ops_should_sync_bundled_workflows || return 0
+
+  src_dir="$(install_ops_bundled_workflows_src_dir "$BUNDLE")"
+  dest_dir="$(install_ops_installed_ralph_root)/workflows"
+
+  if [[ ! -d "$src_dir" ]]; then
+    return 0
+  fi
+
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    while IFS= read -r src; do
+      [[ -z "$src" ]] && continue
+      base="$(basename -- "$src")"
+      install_log_dry "[dry-run]" "cp $src $dest_dir/$base"
+    done < <(install_ops_discover_bundled_workflow_files "$BUNDLE")
+    install_ops_sync_bundled_workflow_fragments
+    return 0
+  fi
+
+  mkdir -p "$dest_dir"
+  while IFS= read -r src; do
+    [[ -z "$src" ]] && continue
+    base="$(basename -- "$src")"
+    dest="$dest_dir/$base"
+    cp "$src" "$dest"
+    install_log_ok "Installed bundled workflow" "$dest"
+  done < <(install_ops_discover_bundled_workflow_files "$BUNDLE")
+
+  install_ops_sync_bundled_workflow_fragments
+}
+
+# Remove legacy installer-owned workflow-templates under the shared .ralph root only.
+# Never touches state-root workflows or $RALPH_HOME/workflows/ user data.
+install_ops_remove_legacy_workflow_templates() {
+  local ralph_root legacy_dir user_global state_workflows
+  install_ops_should_sync_bundled_workflows || return 0
+
+  ralph_root="$(install_ops_installed_ralph_root)"
+  legacy_dir="$ralph_root/$(install_ops_legacy_workflow_templates_subdir)"
+  user_global="${RALPH_HOME:-$HOME/.ralph}/workflows"
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    state_workflows="$(install_ops_state_root)/workflows"
+  else
+    state_workflows="${TARGET:-.}/.ralph-workspace/workflows"
+  fi
+
+  # Hard refuse: never operate on user workflow directories.
+  if [[ "$legacy_dir" == "$user_global" || "$legacy_dir" == "$state_workflows" ]]; then
+    install_log_err "Refusing to migrate user workflow directory:" "$legacy_dir"
+    return 1
+  fi
+  case "$legacy_dir" in
+    "$user_global"/*|"$state_workflows"/*)
+      install_log_err "Refusing to migrate path under user workflows:" "$legacy_dir"
+      return 1
+      ;;
+  esac
+
+  [[ -e "$legacy_dir" ]] || return 0
+
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    install_log_dry "[dry-run]" "rm -rf $legacy_dir"
+    return 0
+  fi
+
+  rm -rf "$legacy_dir"
+  install_log_ok "Removed legacy workflow-templates" "$legacy_dir"
+}
+
+# Supported host runtimes for generated plugin packages (directory names under plugins/ralph-orchestrator/).
+install_ops_plugin_package_runtimes() {
+  printf '%s\n' claude codex cursor opencode antigravity
+}
+
+# Repo (or install source) root that contains plugins/ralph-orchestrator/.
+install_ops_plugin_packages_source_root() {
+  local root="${RALPH_INSTALL_SOURCE_ROOT:-${RALPH_INSTALL_SCRIPT_DIR:-}}"
+  if [[ -z "$root" && -n "${BUNDLE:-}" ]]; then
+    root="$(cd "$(dirname -- "$BUNDLE")" && pwd)"
+  fi
+  printf '%s\n' "$root"
+}
+
+# Installer-owned packaged plugin root under $RALPH_HOME (never host registrations).
+install_ops_plugin_packages_dest_root() {
+  printf '%s/plugins/ralph-orchestrator\n' "${RALPH_HOME:-$HOME/.ralph}"
+}
+
+# User-owned host-install journals (never written or removed by the Ralph installer).
+install_ops_plugin_install_journals_root() {
+  printf '%s/plugin-installs\n' "${RALPH_HOME:-$HOME/.ralph}"
+}
+
+install_ops_should_sync_plugin_packages() {
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  [[ "${INSTALL_SHARED:-0}" -eq 1 ]]
+}
+
+# Validate .ralph-plugin-generated.json version/source metadata before packaging.
+# Requires schemaVersion (int >= 1), non-empty pluginVersion, non-empty sourceDescriptor.
+# When plugins/ralph-orchestrator/VERSION exists, pluginVersion must match its trimmed contents.
+install_ops_plugin_package_metadata_valid() {
+  local pkg="${1:-}"
+  local meta version_file expected
+  [[ -n "$pkg" && -d "$pkg" ]] || return 1
+  meta="$pkg/.ralph-plugin-generated.json"
+  [[ -f "$meta" ]] || return 1
+
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 - "$meta" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except (OSError, json.JSONDecodeError):
+    sys.exit(1)
+
+schema = data.get("schemaVersion")
+version = data.get("pluginVersion")
+source = data.get("sourceDescriptor")
+ok = (
+    isinstance(schema, int)
+    and schema >= 1
+    and isinstance(version, str)
+    and bool(version.strip())
+    and isinstance(source, str)
+    and bool(source.strip())
+)
+sys.exit(0 if ok else 1)
+PY
+    then
+      return 1
+    fi
+  else
+    grep -q '"schemaVersion"' "$meta" || return 1
+    grep -q '"pluginVersion"' "$meta" || return 1
+    grep -q '"sourceDescriptor"' "$meta" || return 1
+  fi
+
+  version_file="$(install_ops_plugin_packages_source_root)/plugins/ralph-orchestrator/VERSION"
+  if [[ -f "$version_file" ]]; then
+    expected="$(tr -d '[:space:]' <"$version_file")"
+    [[ -n "$expected" ]] || return 1
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "$meta" "$expected" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+sys.exit(0 if str(data.get("pluginVersion", "")).strip() == sys.argv[2] else 1)
+PY
+    else
+      grep -q "\"pluginVersion\": \"$expected\"" "$meta" || grep -q "\"pluginVersion\":\"$expected\"" "$meta"
+    fi
+  fi
+}
+
+# Print runtime ids whose package dirs validate for install packaging.
+install_ops_discover_plugin_package_runtimes() {
+  local src_root src_base runtime src
+  src_root="$(install_ops_plugin_packages_source_root)"
+  [[ -n "$src_root" ]] || return 0
+  src_base="$src_root/plugins/ralph-orchestrator"
+  [[ -d "$src_base" ]] || return 0
+  while IFS= read -r runtime; do
+    [[ -z "$runtime" ]] && continue
+    src="$src_base/$runtime"
+    [[ -d "$src" ]] || continue
+    if install_ops_plugin_package_metadata_valid "$src"; then
+      printf '%s\n' "$runtime"
+    else
+      install_log_err "Invalid plugin package metadata (refusing to copy):" "$src"
+      return 1
+    fi
+  done < <(install_ops_plugin_package_runtimes)
+}
+
+# Copy/update generated packages to $RALPH_HOME/plugins/ralph-orchestrator/<runtime>/.
+# Never invokes host CLIs or writes plugin-install journals.
+install_ops_sync_plugin_packages() {
+  local src_root src_base dest_root journals runtime src dest version_src version_dest
+  local -a runtimes=()
+  install_ops_should_sync_plugin_packages || return 0
+
+  src_root="$(install_ops_plugin_packages_source_root)"
+  [[ -n "$src_root" ]] || return 0
+  src_base="$src_root/plugins/ralph-orchestrator"
+  [[ -d "$src_base" ]] || return 0
+
+  dest_root="$(install_ops_plugin_packages_dest_root)"
+  journals="$(install_ops_plugin_install_journals_root)"
+  # Hard refuse: never treat journals as a package destination.
+  if [[ "$dest_root" == "$journals" || "$dest_root"/ == "$journals"/* ]]; then
+    install_log_err "Refusing plugin package destination under journals:" "$dest_root"
+    return 1
+  fi
+
+  while IFS= read -r runtime; do
+    [[ -z "$runtime" ]] && continue
+    src="$src_base/$runtime"
+    [[ -d "$src" ]] || continue
+    if ! install_ops_plugin_package_metadata_valid "$src"; then
+      install_log_err "Invalid plugin package metadata (refusing to copy):" "$src"
+      return 1
+    fi
+    runtimes+=("$runtime")
+  done < <(install_ops_plugin_package_runtimes)
+
+  [[ "${#runtimes[@]}" -gt 0 ]] || return 0
+
+  version_src="$src_base/VERSION"
+  version_dest="$dest_root/VERSION"
+
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    if [[ -f "$version_src" ]]; then
+      install_log_dry "[dry-run]" "cp $version_src $version_dest"
+    fi
+    for runtime in "${runtimes[@]}"; do
+      src="$src_base/$runtime"
+      dest="$dest_root/$runtime"
+      install_log_dry "[dry-run]" "rsync -a --delete $src/ $dest/"
+    done
+    return 0
+  fi
+
+  mkdir -p "$dest_root"
+  if [[ -f "$version_src" ]]; then
+    cp "$version_src" "$version_dest"
+    install_log_ok "Installed plugin package VERSION" "$version_dest"
+  fi
+
+  for runtime in "${runtimes[@]}"; do
+    src="$src_base/$runtime"
+    dest="$dest_root/$runtime"
+    mkdir -p "$dest"
+    rsync -a --delete "$src/" "$dest/"
+    install_log_ok "Installed plugin package" "$dest"
+  done
+}
+
 # Detects an existing Ralph install at TARGET and resolves how to proceed.
 # Sets OVERWRITE_EXISTING=1 when the user (or a flag) opts to replace it.
 # Honors --yes (overwrite, no prompt) and --silent (keep existing, skip conflicts).
@@ -312,17 +660,15 @@ install_ops_add_global_runtime_copy() {
   dest="$(install_ops_global_runtime_root "$runtime")"
   [[ -d "$src_root" ]] || return 0
   if [[ "${FORCE_GLOBAL_RUNTIME:-0}" -eq 1 || ! -d "$dest" ]]; then
-    # Copy agents/rules/skills (and runtime-specific dirs like hooks/plugins),
-    # but exclude the ralph/ subtree (scripts now live under .ralph/)
-    for subdir in agents rules skills hooks plugins; do
+    # Copy rules/skills and runtime-specific dirs (hooks/plugins). Do not copy
+    # native agent trees or Antigravity agents.md -- Ralph ships instruction
+    # roles under the shared .ralph/roles/ path instead.
+    for subdir in rules skills hooks plugins; do
       local src="$src_root/$subdir"
       if [[ -d "$src" ]]; then
         install_ops_emit_copy "$src" "$dest/$subdir" "global-$runtime-$subdir"
       fi
     done
-    if [[ "$runtime" == "antigravity" ]]; then
-      install_ops_add_optional_file_copy "$src_root/agents.md" "$dest/agents.md" "global-$runtime-agents-md"
-    fi
   fi
 }
 
@@ -350,35 +696,29 @@ install_ops_build_copy_plan() {
   if [[ "$INSTALL_CURSOR" -eq 1 ]]; then
     install_ops_add_optional_copy "$BUNDLE/.cursor/rules" "$TARGET/.cursor/rules" "cursor-rules"
     install_ops_add_optional_copy "$BUNDLE/.cursor/skills" "$TARGET/.cursor/skills" "cursor-skills"
-    install_ops_add_optional_copy "$BUNDLE/.cursor/agents" "$TARGET/.cursor/agents" "cursor-agents"
   fi
 
   if [[ "$INSTALL_CODEX" -eq 1 ]]; then
     install_ops_add_optional_copy "$BUNDLE/.codex/rules" "$TARGET/.codex/rules" "codex-rules"
     install_ops_add_optional_copy "$BUNDLE/.codex/skills" "$TARGET/.codex/skills" "codex-skills"
-    install_ops_add_optional_copy "$BUNDLE/.codex/agents" "$TARGET/.codex/agents" "codex-agents"
     install_ops_add_optional_copy "$BUNDLE/.codex/hooks" "$TARGET/.codex/hooks" "codex-hooks"
   fi
 
   if [[ "$INSTALL_CLAUDE" -eq 1 ]]; then
     install_ops_add_optional_copy "$BUNDLE/.claude/rules" "$TARGET/.claude/rules" "claude-rules"
     install_ops_add_optional_copy "$BUNDLE/.claude/skills" "$TARGET/.claude/skills" "claude-skills"
-    install_ops_add_optional_copy "$BUNDLE/.claude/agents" "$TARGET/.claude/agents" "claude-agents"
     install_ops_add_optional_copy "$BUNDLE/.claude/hooks" "$TARGET/.claude/hooks" "claude-hooks"
   fi
 
   if [[ "$INSTALL_OPENCODE" -eq 1 ]]; then
     install_ops_add_optional_copy "$BUNDLE/.opencode/rules" "$TARGET/.opencode/rules" "opencode-rules"
     install_ops_add_optional_copy "$BUNDLE/.opencode/skills" "$TARGET/.opencode/skills" "opencode-skills"
-    install_ops_add_optional_copy "$BUNDLE/.opencode/agents" "$TARGET/.opencode/agents" "opencode-agents"
     install_ops_add_optional_copy "$BUNDLE/.opencode/plugins" "$TARGET/.opencode/plugins" "opencode-plugins"
   fi
 
   if [[ "$INSTALL_ANTIGRAVITY" -eq 1 ]]; then
-    install_ops_add_optional_file_copy "$BUNDLE/.agents/agents.md" "$TARGET/.agents/agents.md" "antigravity-agents-md"
     install_ops_add_optional_copy "$BUNDLE/.agents/rules" "$TARGET/.agents/rules" "antigravity-rules"
     install_ops_add_optional_copy "$BUNDLE/.agents/skills" "$TARGET/.agents/skills" "antigravity-skills"
-    install_ops_add_optional_copy "$BUNDLE/.agents/agents" "$TARGET/.agents/agents" "antigravity-agents"
     install_ops_add_optional_copy "$BUNDLE/.agents/hooks" "$TARGET/.agents/hooks" "antigravity-hooks"
   fi
 
@@ -586,12 +926,23 @@ install_ops_copy_tree() {
 # Lists destination directory roots where empty dirs are pruned after file removal (one path per line).
 # Caller sets BUNDLE, TARGET, stack flags, and (for docs/dashboard manifest) RALPH_INSTALL_SOURCE_ROOT / RALPH_INSTALL_SCRIPT_DIR.
 install_ops_build_remove_prune_roots() {
-  local src dest label
+  local src dest label ralph_root legacy_dir
   while IFS='|' read -r src dest label; do
     [[ -z "$src" ]] && continue
     [[ -d "$src" ]] || continue
     printf '%s\n' "$dest"
   done < <(install_ops_build_copy_plan) | sort -u
+
+  if install_ops_should_sync_bundled_workflows; then
+    ralph_root="$(install_ops_installed_ralph_root)"
+    legacy_dir="$ralph_root/$(install_ops_legacy_workflow_templates_subdir)"
+    printf '%s\n' "$legacy_dir"
+    printf '%s\n' "$ralph_root/workflows"
+  fi
+
+  if install_ops_should_sync_plugin_packages; then
+    printf '%s\n' "$(install_ops_plugin_packages_dest_root)"
+  fi
 
   if [[ "$INSTALL_SHARED" -eq 0 ]] && install_ops_should_install_dashboard; then
     printf '%s\n' "$TARGET/.ralph/ralph-dashboard"
@@ -600,8 +951,12 @@ install_ops_build_remove_prune_roots() {
 
 # Prints one absolute file path per line: only paths that exist in this package's bundle (and dashboard tree).
 # Does not delete sibling files the user added under the same directories.
+# Never emits project state-root or $RALPH_HOME/workflows/ user workflow paths.
+# Never emits $RALPH_HOME/plugin-installs/ journals or host plugin registrations.
 install_ops_collect_remove_file_paths() {
-  local src dest label file relpath dash_src
+  local src dest label file relpath dash_src ralph_root legacy_dir user_global
+  local plugin_src_root plugin_src_base plugin_dest_root plugin_journals runtime plugin_src plugin_dest
+  user_global="${RALPH_HOME:-$HOME/.ralph}/workflows"
   while IFS='|' read -r src dest label; do
     [[ -z "$src" ]] && continue
     [[ -d "$src" ]] || continue
@@ -610,6 +965,45 @@ install_ops_collect_remove_file_paths() {
       printf '%s/%s\n' "$dest" "$relpath"
     done < <(find "$src" -type f -print0 2>/dev/null)
   done < <(install_ops_build_copy_plan)
+
+  # Legacy installer-owned workflow-templates under the shared .ralph root only.
+  if install_ops_should_sync_bundled_workflows; then
+    ralph_root="$(install_ops_installed_ralph_root)"
+    legacy_dir="$ralph_root/$(install_ops_legacy_workflow_templates_subdir)"
+    if [[ -d "$legacy_dir" && "$legacy_dir" != "$user_global" ]]; then
+      while IFS= read -r -d '' file; do
+        printf '%s\n' "$file"
+      done < <(find "$legacy_dir" -type f -print0 2>/dev/null)
+    fi
+  fi
+
+  # Packaged plugin assets under $RALPH_HOME/plugins/ralph-orchestrator/ only.
+  if install_ops_should_sync_plugin_packages; then
+    plugin_src_root="$(install_ops_plugin_packages_source_root)"
+    plugin_src_base="${plugin_src_root%/}/plugins/ralph-orchestrator"
+    plugin_dest_root="$(install_ops_plugin_packages_dest_root)"
+    plugin_journals="$(install_ops_plugin_install_journals_root)"
+    if [[ -d "$plugin_src_base" && "$plugin_dest_root" != "$plugin_journals" ]]; then
+      if [[ -f "$plugin_src_base/VERSION" && -f "$plugin_dest_root/VERSION" ]]; then
+        printf '%s\n' "$plugin_dest_root/VERSION"
+      fi
+      while IFS= read -r runtime; do
+        [[ -z "$runtime" ]] && continue
+        plugin_src="$plugin_src_base/$runtime"
+        plugin_dest="$plugin_dest_root/$runtime"
+        [[ -d "$plugin_src" && -d "$plugin_dest" ]] || continue
+        case "$plugin_dest" in
+          "$plugin_journals"|"$plugin_journals"/*)
+            continue
+            ;;
+        esac
+        while IFS= read -r -d '' file; do
+          relpath="${file#"$plugin_src"/}"
+          printf '%s/%s\n' "$plugin_dest" "$relpath"
+        done < <(find "$plugin_src" -type f -print0 2>/dev/null)
+      done < <(install_ops_plugin_package_runtimes)
+    fi
+  fi
 
   dash_src=""
   if [[ -n "${RALPH_INSTALL_SCRIPT_DIR:-}" ]]; then
@@ -864,7 +1258,7 @@ install_ops_detect_stale_runtime_ralph_dirs() {
     local ralph_dir="$target_root/.$runtime/ralph"
     if [[ -d "$ralph_dir" ]]; then
       # Verify this is actually a stale Ralph scripts directory (contains .sh files)
-      # and not user data (agents/, rules/, skills/ are preserved)
+      # and not user data (native agents/, rules/, skills/ are preserved)
       if find "$ralph_dir" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | grep -q .; then
         printf '%s\n' "$ralph_dir"
         found_any=1
@@ -873,6 +1267,137 @@ install_ops_detect_stale_runtime_ralph_dirs() {
   done
 
   return $((found_any == 0))
+}
+
+# Fixed Ralph portable profile IDs retired in favor of .ralph/roles/.
+install_ops_ralph_six_profile_ids() {
+  printf '%s\n' architect code-review implementation qa research security
+}
+
+install_ops_is_ralph_six_profile_id() {
+  local candidate="$1"
+  local id
+  while IFS= read -r id; do
+    [[ "$candidate" == "$id" ]] && return 0
+  done < <(install_ops_ralph_six_profile_ids)
+  return 1
+}
+
+# True when a file was generated by scripts/sync-runtime-assets.sh (md/toml marker or config.json _generated).
+install_ops_is_ralph_generated_agent_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  grep -q 'GENERATED from .* by scripts/sync-runtime-assets.sh' "$file"
+}
+
+# True when a six-ID agent directory contains at least one Ralph-generated file.
+install_ops_is_recognized_ralph_six_profile_dir() {
+  local dir="$1"
+  local file
+  [[ -d "$dir" ]] || return 1
+  install_ops_is_ralph_six_profile_id "$(basename "$dir")" || return 1
+  while IFS= read -r -d '' file; do
+    if install_ops_is_ralph_generated_agent_file "$file"; then
+      return 0
+    fi
+  done < <(find "$dir" -type f -print0 2>/dev/null)
+  return 1
+}
+
+install_ops_runtime_agents_root() {
+  local runtime="$1"
+  local target_root="${2:-$TARGET}"
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    printf '%s/agents\n' "$(install_ops_global_runtime_root "$runtime")"
+  else
+    printf '%s/%s/agents\n' "$target_root" "$(ralph_runtime_config_dirname "$runtime")"
+  fi
+}
+
+install_ops_runtime_agents_md_path() {
+  local runtime="$1"
+  local target_root="${2:-$TARGET}"
+  if [[ "$runtime" != "antigravity" ]]; then
+    return 1
+  fi
+  if [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]]; then
+    printf '%s/agents.md\n' "$(install_ops_global_runtime_root "$runtime")"
+  else
+    printf '%s/%s/agents.md\n' "$target_root" "$(ralph_runtime_config_dirname "$runtime")"
+  fi
+}
+
+# Strip ## @<six-id> sections from a Ralph-generated Antigravity registry.
+# Preserves non-six sections and unrelated native content. Deletes the file when
+# no ## @ sections remain after stripping and the file still carries the GENERATED marker.
+install_ops_strip_ralph_six_sections_from_agents_md() {
+  local agents_md="$1"
+  local tmp
+  [[ -f "$agents_md" ]] || return 0
+  install_ops_is_ralph_generated_agent_file "$agents_md" || return 0
+
+  tmp="${agents_md}.ralph-upgrade.tmp.$$"
+  awk '
+    BEGIN { skip = 0 }
+    /^## @/ {
+      id = substr($0, 5)
+      if (id == "architect" || id == "code-review" || id == "implementation" ||
+          id == "qa" || id == "research" || id == "security") {
+        skip = 1
+        next
+      }
+      skip = 0
+    }
+    skip { next }
+    { print }
+  ' "$agents_md" >"$tmp"
+
+  if ! grep -q '^## @' "$tmp" 2>/dev/null; then
+    rm -f "$agents_md" "$tmp"
+    install_log_ok "Removed retired Ralph Antigravity registry" "$agents_md"
+    return 0
+  fi
+
+  mv "$tmp" "$agents_md"
+  install_log_ok "Stripped retired Ralph profiles from Antigravity registry" "$agents_md"
+}
+
+# On upgrade/install: remove only recognized six-ID Ralph agent outputs. Never
+# wipe unrelated native agent directories or unmarked custom files.
+install_ops_remove_stale_ralph_agent_profiles() {
+  local target_root="${1:-$TARGET}"
+  local runtime agents_root agents_md id dir
+  local -a runtimes=()
+
+  [[ "${DRY_RUN:-0}" -eq 1 ]] && return 0
+
+  [[ "${INSTALL_CURSOR:-0}" -eq 1 ]] && runtimes+=("cursor")
+  [[ "${INSTALL_CLAUDE:-0}" -eq 1 ]] && runtimes+=("claude")
+  [[ "${INSTALL_CODEX:-0}" -eq 1 ]] && runtimes+=("codex")
+  [[ "${INSTALL_OPENCODE:-0}" -eq 1 ]] && runtimes+=("opencode")
+  [[ "${INSTALL_ANTIGRAVITY:-0}" -eq 1 ]] && runtimes+=("antigravity")
+
+  # Shared-only upgrades still clean leftover six-ID outputs under common runtimes.
+  if [[ "${#runtimes[@]}" -eq 0 && "${INSTALL_SHARED:-0}" -eq 1 ]]; then
+    runtimes=(cursor claude codex opencode antigravity)
+  fi
+
+  for runtime in "${runtimes[@]}"; do
+    agents_root="$(install_ops_runtime_agents_root "$runtime" "$target_root")"
+    if [[ -d "$agents_root" ]]; then
+      while IFS= read -r id; do
+        dir="$agents_root/$id"
+        if install_ops_is_recognized_ralph_six_profile_dir "$dir"; then
+          rm -rf "$dir"
+          install_log_ok "Removed retired Ralph agent profile" "$dir"
+        fi
+      done < <(install_ops_ralph_six_profile_ids)
+    fi
+
+    if agents_md="$(install_ops_runtime_agents_md_path "$runtime" "$target_root" 2>/dev/null)"; then
+      install_ops_strip_ralph_six_sections_from_agents_md "$agents_md"
+    fi
+  done
 }
 
 # Prints a notice about stale runtime ralph directories and how to remove them.
@@ -896,7 +1421,7 @@ install_ops_stale_runtime_ralph_notice() {
     printf '  %b%s%b\n' "${C_Y}" "$dir" "${C_RST}"
   done
   printf '%b\n' "${C_DIM}These directories are no longer updated by the installer.${C_RST}"
-  printf '%b\n' "${C_DIM}To remove them (your agents/rules/skills under .<runtime>/ are safe):${C_RST}"
+  printf '%b\n' "${C_DIM}To remove them (native agents/rules/skills under .<runtime>/ are safe):${C_RST}"
   for dir in "${stale_dirs[@]}"; do
     printf '  rm -rf %q\n' "$dir"
   done

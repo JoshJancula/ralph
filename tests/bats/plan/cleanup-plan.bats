@@ -36,7 +36,7 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
   run cleanup_plan_workspace_root "/tmp/script" "$workspace"
   [ "$status" -eq 0 ]
   [ "$output" = "$workspace" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "workspace helper falls back to script parent" {
@@ -139,5 +139,5 @@ source "$RALPH_LIB_ROOT/cleanup-plan.sh"
   [[ "$output" == *"Usage: $cleanup_script"* ]]
   [[ "$output" == *"<artifact-namespace>"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

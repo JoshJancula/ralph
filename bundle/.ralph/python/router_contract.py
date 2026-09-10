@@ -55,6 +55,27 @@ def load_decision(artifact_path: str, schema_path: str | None = None) -> dict[st
     return json.loads(raw)
 
 
+def _has_path(edges: list[dict[str, Any]], from_id: str, to_id: str) -> bool:
+    """Return True if there is a directed path from from_id to to_id in the edge set."""
+    adjacency: dict[str, list[str]] = {}
+    for edge in edges:
+        src = str(edge.get("from") or "")
+        dst = str(edge.get("to") or "")
+        if src:
+            adjacency.setdefault(src, []).append(dst)
+    queue = [from_id]
+    seen: set[str] = {from_id}
+    while queue:
+        cur = queue.pop(0)
+        for nxt in adjacency.get(cur, []):
+            if nxt == to_id:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+    return False
+
+
 def _stage_ids(orchestration: dict[str, Any]) -> list[str]:
     return [str(stage.get("id") or "") for stage in orchestration.get("stages") or []]
 
@@ -86,7 +107,15 @@ def _router_config(stage: dict[str, Any]) -> dict[str, Any] | None:
     return router
 
 
-def validate_router_config(stage: dict[str, Any], stage_id: str, stage_index: int, all_ids: list[str]) -> None:
+def validate_router_config(
+    stage: dict[str, Any],
+    stage_id: str,
+    stage_index: int,
+    all_ids: list[str],
+    *,
+    mode: str = "sequential",
+    graph_edges: list[dict[str, Any]] | None = None,
+) -> None:
     router = _router_config(stage)
     if router is None:
         return
@@ -124,14 +153,28 @@ def validate_router_config(stage: dict[str, Any], stage_id: str, stage_index: in
     for target in allowed:
         if target not in all_ids:
             raise RouterContractError(f"{prefix}: unknown stage target {target!r}")
-        target_index = all_ids.index(target)
-        if target_index <= stage_index:
-            raise RouterContractError(
-                f"{prefix}: target {target!r} must be a later declared stage (backward routing forbidden)"
-            )
+        if mode == "graph":
+            # In graph mode the DAG compiler already enforces acyclicity; do a
+            # cycle check using the supplied edge set when available, and skip
+            # the sequential forward-cursor index check entirely.
+            if graph_edges is not None and _has_path(graph_edges, target, stage_id):
+                raise RouterContractError(
+                    f"{prefix}: target {target!r} would create a cycle in the graph"
+                )
+        else:
+            target_index = all_ids.index(target)
+            if target_index <= stage_index:
+                raise RouterContractError(
+                    f"{prefix}: target {target!r} must be a later declared stage (backward routing forbidden)"
+                )
 
 
-def validate_orchestration(orchestration: dict[str, Any]) -> None:
+def validate_orchestration(
+    orchestration: dict[str, Any],
+    *,
+    mode: str = "sequential",
+    graph_edges: list[dict[str, Any]] | None = None,
+) -> None:
     stages = orchestration.get("stages") or []
     if not isinstance(stages, list):
         raise RouterContractError("stages must be an array")
@@ -143,7 +186,12 @@ def validate_orchestration(orchestration: dict[str, Any]) -> None:
         if not isinstance(stage, dict):
             continue
         stage_id = str(stage.get("id") or "")
-        validate_router_config(stage, stage_id, index, all_ids)
+        validate_router_config(stage, stage_id, index, all_ids, mode=mode, graph_edges=graph_edges)
+
+        if mode == "graph":
+            # In graph mode targets are DAG nodes, not wave positions; the
+            # parallel-wave-middle restriction does not apply.
+            continue
 
         router = _router_config(stage)
         if router is None:
@@ -164,6 +212,7 @@ def resolve_runtime_target(
     stage_index: int,
     all_ids: list[str],
     waves: list[list[str]],
+    mode: str = "sequential",
 ) -> tuple[str, str]:
     """Return (resolved_target, resolution_kind) where kind is stage|terminal|default."""
     raw_target = str(decision.get("target") or "").strip()
@@ -191,15 +240,16 @@ def resolve_runtime_target(
     if raw_target not in all_ids:
         return invalid(f"router target {raw_target!r} is not a declared stage id")
 
-    target_index = all_ids.index(raw_target)
-    if target_index <= stage_index:
-        return invalid(f"router target {raw_target!r} would route backward")
+    if mode != "graph":
+        target_index = all_ids.index(raw_target)
+        if target_index <= stage_index:
+            return invalid(f"router target {raw_target!r} would route backward")
 
-    wave = _wave_for_stage(raw_target, waves)
-    if wave and wave[0] != raw_target:
-        return invalid(
-            f"router target {raw_target!r} would route into the middle of parallel wave {wave!r}"
-        )
+        wave = _wave_for_stage(raw_target, waves)
+        if wave and wave[0] != raw_target:
+            return invalid(
+                f"router target {raw_target!r} would route into the middle of parallel wave {wave!r}"
+            )
 
     return raw_target, "stage"
 
@@ -240,6 +290,17 @@ def main(argv: list[str] | None = None) -> int:
 
     validate_orch = sub.add_parser("validate-orchestration", help="Validate router reachability")
     validate_orch.add_argument("--orchestration", required=True)
+    validate_orch.add_argument(
+        "--mode",
+        default="sequential",
+        choices=["sequential", "graph"],
+        help="Execution mode; graph relaxes backward-routing and wave-middle restrictions",
+    )
+    validate_orch.add_argument(
+        "--graph-edges-json",
+        default="[]",
+        help="JSON array of {from,to} edge objects for cycle detection in graph mode",
+    )
 
     parse_cmd = sub.add_parser("parse-decision", help="Parse and validate a router artifact")
     parse_cmd.add_argument("--artifact", required=True)
@@ -251,6 +312,12 @@ def main(argv: list[str] | None = None) -> int:
     resolve_cmd.add_argument("--stage-index", type=int, required=True)
     resolve_cmd.add_argument("--stage-ids-json", required=True)
     resolve_cmd.add_argument("--parallel-waves-json", default="[]")
+    resolve_cmd.add_argument(
+        "--mode",
+        default="sequential",
+        choices=["sequential", "graph"],
+        help="Execution mode; graph skips backward-routing and wave-middle checks",
+    )
     resolve_cmd.add_argument("--schema", default="")
 
     prompt_cmd = sub.add_parser("prompt-block", help="Render router prompt instructions")
@@ -261,7 +328,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "validate-orchestration":
-            validate_orchestration(_load_json(args.orchestration))
+            graph_edges = json.loads(args.graph_edges_json)
+            validate_orchestration(
+                _load_json(args.orchestration),
+                mode=args.mode,
+                graph_edges=graph_edges if graph_edges else None,
+            )
             return 0
 
         if args.command == "parse-decision":
@@ -282,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
                 stage_index=args.stage_index,
                 all_ids=all_ids,
                 waves=waves,
+                mode=args.mode,
             )
             print(json.dumps({"target": target, "kind": kind}, sort_keys=True))
             return 0

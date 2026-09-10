@@ -33,8 +33,12 @@ RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE=""
 RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED=""
 RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID=""
 RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
+RUNTIME_OVERLAY_SUMMARY_BG_TIER=""
+RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON=""
 RUNTIME_OVERLAY_GENERATED_FILES=()
 RUNTIME_OVERLAY_MUTATED_FILES=()
+RUNTIME_OVERLAY_MUTATED_BACKUPS=()
+RUNTIME_OVERLAY_MUTATED_EXISTED=()
 RUNTIME_OVERLAY_WARNINGS=()
 RUNTIME_OVERLAY_CAPABILITIES=()
 RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
@@ -108,9 +112,13 @@ _runtime_overlay_state_root() {
   if [[ -z "$plan_key" ]]; then
     runtime_overlay_die "Runtime overlay requires RALPH_PLAN_KEY to establish state."
   fi
-  local project_root
-  project_root="$(_runtime_overlay_project_root)"
-  printf '%s/.ralph-workspace/runtime-config/%s' "$project_root" "$plan_key"
+  local state_root
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="$(_runtime_overlay_workspace_root)"
+  else
+    state_root="$(_runtime_overlay_project_root)/.ralph-workspace"
+  fi
+  printf '%s/runtime-config/%s' "$state_root" "$plan_key"
 }
 
 _runtime_overlay_abs_path() {
@@ -126,8 +134,28 @@ PY
 
 _runtime_overlay_require_workspace_bound() {
   local target="$1"
-  local workspace_root="$(_runtime_overlay_project_root)"
-  if ! python3 - "$workspace_root" "$target" <<'PY'
+  local workspace_root
+  workspace_root="$(_runtime_overlay_mutation_root_for_target "$target" 2>/dev/null || true)"
+  if [[ -z "$workspace_root" ]]; then
+    runtime_overlay_die "Overlay mutation rejected: $target is outside the project and agent workspaces."
+  fi
+}
+
+# Runtime-native config normally belongs to the project root, while a graph
+# snapshot may also need a temporary runtime plugin/package overlay inside the
+# isolated agent workspace. Resolve the narrowest authorized root for a target
+# without treating the state root as mutable project space.
+_runtime_overlay_mutation_root_for_target() {
+  local target="$1"
+  local project_root agent_root candidate
+  project_root="$(_runtime_overlay_project_root)"
+  agent_root="${RALPH_AGENT_WORKSPACE:-}"
+  for candidate in "$project_root" "$agent_root"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -d "$candidate" ]]; then
+      candidate="$(cd "$candidate" && pwd)"
+    fi
+    if python3 - "$candidate" "$target" <<'PY'
 import os, sys
 workspace = os.path.abspath(sys.argv[1])
 target = os.path.abspath(sys.argv[2])
@@ -137,9 +165,12 @@ common = os.path.commonpath([workspace, target])
 if common != workspace and target != workspace:
     sys.exit(2)
 PY
-  then
-    runtime_overlay_die "Overlay mutation rejected: $target is outside $workspace_root."
-  fi
+    then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 _runtime_overlay_journal_path() {
@@ -566,14 +597,19 @@ runtime_overlay_init_state() {
   RUNTIME_OVERLAY_SUMMARY_MCP_FAILURE_REASON=""
   RUNTIME_OVERLAY_SUMMARY_PROXY_SHELL_COMPACT_EFFECTIVE=""
   RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE=""
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER=""
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON=""
   RUNTIME_OVERLAY_GENERATED_FILES=()
   RUNTIME_OVERLAY_MUTATED_FILES=()
+  RUNTIME_OVERLAY_MUTATED_BACKUPS=()
+  RUNTIME_OVERLAY_MUTATED_EXISTED=()
   RUNTIME_OVERLAY_WARNINGS=()
   RUNTIME_OVERLAY_CAPABILITIES=()
   RUNTIME_OVERLAY_NATIVE_OPTIMIZATION_PROVEN_CHANNELS=()
   RUNTIME_OVERLAY_FALLBACK_CHANNELS_ACTIVE=()
   RUNTIME_OVERLAY_EXTERNAL_TEMP_FILES=()
   RUNTIME_OVERLAY_CLEANUP_CMDS=()
+  RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED=0
   if [[ -n "${RALPH_AGENT_TOOL_ACCESS:-}" ]]; then
     RUNTIME_OVERLAY_SUMMARY_TOOL_ACCESS_MODE="$RALPH_AGENT_TOOL_ACCESS"
   fi
@@ -768,6 +804,16 @@ runtime_overlay_set_overlay_mode() {
   runtime_overlay_log_decision "overlay_mode" "$1"
 }
 
+runtime_overlay_set_bg_tier() {
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER="$1"
+  runtime_overlay_log_decision "bg_tier" "$1"
+}
+
+runtime_overlay_set_bg_tier_reason() {
+  RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON="$1"
+  runtime_overlay_log_decision "bg_tier_reason" "$1"
+}
+
 runtime_overlay_add_capability() {
   local cap="$1"
   RUNTIME_OVERLAY_CAPABILITIES+=("$cap")
@@ -795,6 +841,114 @@ runtime_overlay_run_cleanup() {
       runtime_overlay_add_warning "Cleanup command failed: $cleanup_cmd"
     fi
   done
+  # Always restore journaled native originals after registered cleanup cmds.
+  # Signal paths clear the EXIT trap before exit, so EXIT-chained MCP/hooks
+  # cleanups may not run; this keeps byte-exact restoration on success,
+  # failure, timeout, and signal. Callers that intentionally keep a durable
+  # install must runtime_overlay_forget_recorded_file first.
+  if declare -F runtime_overlay_restore_recorded_files >/dev/null 2>&1; then
+    runtime_overlay_restore_recorded_files || true
+  fi
+}
+
+# runtime_overlay_forget_recorded_file <abs-or-rel-path>
+# Drop a path from the in-process mutated-file restore list (e.g. durable hook
+# installs that must survive cleanup). Idempotent; missing entries are a no-op.
+runtime_overlay_forget_recorded_file() {
+  local target="${1:-}"
+  local abs idx
+  local kept_files=() kept_backups=() kept_existed=()
+  if [[ -z "$target" ]]; then
+    return 0
+  fi
+  abs="$(_runtime_overlay_abs_path "$target")"
+  if [[ ${#RUNTIME_OVERLAY_MUTATED_FILES[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for ((idx=0; idx<${#RUNTIME_OVERLAY_MUTATED_FILES[@]}; idx++)); do
+    if [[ "${RUNTIME_OVERLAY_MUTATED_FILES[idx]}" == "$abs" ]]; then
+      continue
+    fi
+    kept_files+=("${RUNTIME_OVERLAY_MUTATED_FILES[idx]}")
+    kept_backups+=("${RUNTIME_OVERLAY_MUTATED_BACKUPS[idx]:-}")
+    kept_existed+=("${RUNTIME_OVERLAY_MUTATED_EXISTED[idx]:-0}")
+  done
+  RUNTIME_OVERLAY_MUTATED_FILES=("${kept_files[@]+"${kept_files[@]}"}")
+  RUNTIME_OVERLAY_MUTATED_BACKUPS=("${kept_backups[@]+"${kept_backups[@]}"}")
+  RUNTIME_OVERLAY_MUTATED_EXISTED=("${kept_existed[@]+"${kept_existed[@]}"}")
+}
+
+# runtime_overlay_restore_file <target> <backup> <existed>
+# Restore one journaled original. Empty/missing backup plus existed=0 removes a
+# file created by the overlay. Safe to repeat.
+runtime_overlay_restore_file() {
+  local target="$1"
+  local backup="$2"
+  local existed="${3:-0}"
+  if [[ -z "$target" ]]; then
+    return 0
+  fi
+  if [[ "$existed" == "1" && -n "$backup" && -f "$backup" ]]; then
+    mkdir -p "$(dirname "$target")"
+    cp "$backup" "$target" || return 1
+    return 0
+  fi
+  rm -f "$target"
+  return 0
+}
+
+# runtime_overlay_restore_recorded_files
+# Restore every original captured by runtime_overlay_record_original_file in
+# this process. Does not delete generated files. Idempotent.
+runtime_overlay_restore_recorded_files() {
+  local idx abs backup existed
+  if [[ ${#RUNTIME_OVERLAY_MUTATED_FILES[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for ((idx=${#RUNTIME_OVERLAY_MUTATED_FILES[@]}-1; idx>=0; idx--)); do
+    abs="${RUNTIME_OVERLAY_MUTATED_FILES[idx]}"
+    backup="${RUNTIME_OVERLAY_MUTATED_BACKUPS[idx]:-}"
+    existed="${RUNTIME_OVERLAY_MUTATED_EXISTED[idx]:-0}"
+    if ! runtime_overlay_restore_file "$abs" "$backup" "$existed"; then
+      runtime_overlay_add_warning "Failed to restore overlay original: $abs"
+    fi
+  done
+}
+
+# runtime_overlay_restore_on_signal [INT|TERM|HUP]
+# Restore recorded originals, then re-raise so callers still see the signal.
+runtime_overlay_restore_on_signal() {
+  local sig="${1:-TERM}"
+  runtime_overlay_restore_recorded_files || true
+  if declare -F runtime_overlay_journal_mark_cleaned >/dev/null 2>&1; then
+    runtime_overlay_journal_mark_cleaned || true
+  fi
+  trap - INT TERM HUP
+  kill -s "$sig" "$$" 2>/dev/null || exit 143
+}
+
+# runtime_overlay_install_restore_traps
+# Chain INT/TERM/HUP so originals are restored on signal. Idempotent.
+runtime_overlay_install_restore_traps() {
+  local sig existing
+  if [[ "${RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED:-0}" == "1" ]]; then
+    return 0
+  fi
+  RUNTIME_OVERLAY_RESTORE_TRAPS_INSTALLED=1
+  for sig in INT TERM HUP; do
+    existing="$(trap -p "$sig" 2>/dev/null || true)"
+    if [[ -n "$existing" && "$existing" != "trap -- '' $sig" && "$existing" != "trap -- \"\" $sig" ]]; then
+      existing="${existing#trap -- \'}"
+      existing="${existing#trap -- \"}"
+      existing="${existing%\' $sig}"
+      existing="${existing%\" $sig}"
+      # shellcheck disable=SC2064
+      trap "runtime_overlay_restore_on_signal $sig; $existing" "$sig"
+    else
+      # shellcheck disable=SC2064
+      trap "runtime_overlay_restore_on_signal $sig" "$sig"
+    fi
+  done
 }
 
 runtime_overlay_record_generated_file() {
@@ -819,30 +973,41 @@ runtime_overlay_record_original_file() {
   fi
   local abs
   abs="$(_runtime_overlay_abs_path "$target")"
-  _runtime_overlay_require_workspace_bound "$abs"
+  local mutation_root
+  mutation_root="$(_runtime_overlay_mutation_root_for_target "$abs" 2>/dev/null || true)"
+  if [[ -z "$mutation_root" ]]; then
+    runtime_overlay_die "Overlay mutation rejected: $abs is outside the project and agent workspaces."
+  fi
   RUNTIME_OVERLAY_MUTATED_FILES+=("$abs")
   local rel
-  rel="$(python3 - "$(_runtime_overlay_project_root)" "$abs" <<'PY'
+  rel="$(python3 - "$mutation_root" "$abs" <<'PY'
 import os, sys
 workspace = os.path.abspath(sys.argv[1])
 target = os.path.abspath(sys.argv[2])
 print(os.path.relpath(target, workspace))
 PY
 )"
-  local backup="$RUNTIME_OVERLAY_ORIGINALS_DIR/$rel"
-  mkdir -p "$(dirname "$backup")"
-  runtime_overlay_journal_add_mutated_file "$abs" "$backup"
+  if [[ "$mutation_root" != "$(_runtime_overlay_project_root)" ]]; then
+    rel="agent-workspace/$rel"
+  fi
+  local recorded_backup="$RUNTIME_OVERLAY_ORIGINALS_DIR/$rel"
+  mkdir -p "$(dirname "$recorded_backup")"
+  runtime_overlay_journal_add_mutated_file "$abs" "$recorded_backup"
+  local existed=0
   if [[ -f "$abs" ]]; then
-    cp "$abs" "$backup"
+    existed=1
+    cp "$abs" "$recorded_backup"
   else
     if [[ "$skip_missing_warning" != "1" ]]; then
       runtime_overlay_add_warning "Original file missing when recording: $abs"
     fi
-    printf '' > "$backup"
+    printf '' > "$recorded_backup"
   fi
+  RUNTIME_OVERLAY_MUTATED_BACKUPS+=("$recorded_backup")
+  RUNTIME_OVERLAY_MUTATED_EXISTED+=("$existed")
   runtime_overlay_log_decision "mutated_file" "$abs"
   if [[ -n "$backup_var" ]]; then
-    printf -v "$backup_var" '%s' "$backup"
+    printf -v "$backup_var" '%s' "$recorded_backup"
   fi
 }
 
@@ -894,6 +1059,8 @@ runtime_overlay_write_summary() {
   export RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_VALUE="${RALPH_OPENCODE_CACHE_KEY_INJECTED:-${RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED:-}}"
   export RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID_VALUE="${RALPH_OPENCODE_CACHE_KEY_PROVIDER_ID:-${RUNTIME_OVERLAY_SUMMARY_CACHE_KEY_INJECTED_PROVIDER_ID:-}}"
   export RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE="${RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE:-}"
+  export RUNTIME_OVERLAY_SUMMARY_BG_TIER_VALUE="${RUNTIME_OVERLAY_SUMMARY_BG_TIER:-}"
+  export RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON_VALUE="${RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON:-}"
   export RUNTIME_OVERLAY_ARRAY_GENERATED_FILES="$(printf '%s\n' "${RUNTIME_OVERLAY_GENERATED_FILES[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_MUTATED_FILES="$(printf '%s\n' "${RUNTIME_OVERLAY_MUTATED_FILES[@]-}")"
   export RUNTIME_OVERLAY_ARRAY_WARNINGS="$(printf '%s\n' "${RUNTIME_OVERLAY_WARNINGS[@]-}")"

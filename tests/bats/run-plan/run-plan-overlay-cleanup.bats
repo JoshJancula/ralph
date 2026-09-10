@@ -62,7 +62,7 @@ EOF
     CODEX_PLAN_NO_COLOR=1 \
 	    RALPH_WORKSPACES_FILE="$registry_file" \
 	    RALPH_RUNTIME_OVERLAY_TEST_CLEANUP_MARKER="$marker" \
-	    bash "$RUN_PLAN_SH" --runtime cursor --plan "$plan_file" --workspace "$workspace" --workspace-root "$state_root" --agent research --non-interactive
+	    bash "$RUN_PLAN_SH" --runtime cursor --plan "$plan_file" --workspace "$workspace" --workspace-root "$state_root" --model stub-model --non-interactive
 
   if [[ "$expect_status" == "zero" ]]; then
     if [[ "$status" -ne 0 ]]; then
@@ -82,7 +82,7 @@ EOF
     printf 'cleanup marker missing: %s\n%s\n' "$marker" "$output" >&3
   fi
   [ -f "$marker" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runtime overlay cleanup runs after successful runtime" {
@@ -157,7 +157,7 @@ PY
     RALPH_PLAN_WORKSPACE_ROOT="$state_root" \
     CURSOR_PLAN_NO_COLOR=1 \
     RALPH_WORKSPACES_FILE="$registry_file" \
-    bash "$RUN_PLAN_SH" --runtime cursor --plan "$plan_file" --workspace "$workspace" --workspace-root "$state_root" --agent research --non-interactive
+    bash "$RUN_PLAN_SH" --runtime cursor --plan "$plan_file" --workspace "$workspace" --workspace-root "$state_root" --model stub-model --non-interactive
 
   [ "$status" -eq 0 ]
   [ "$(cat "$cursor_target")" = '{"original":true}' ]
@@ -168,5 +168,5 @@ assert data["cleanup_status"] == "recovered_after_interruption"
 assert data["recovered_after_interruption"] is True
 PY
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

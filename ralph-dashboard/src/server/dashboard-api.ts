@@ -177,6 +177,8 @@ interface UsageSummaryRecord {
   stage_id?: string;
   model?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
   started_at?: string;
   ended_at?: string;
   elapsed_seconds?: number;
@@ -252,6 +254,8 @@ export type ToolCallClassificationMetrics = Record<ToolCallAccountingKey, number
 
 interface ModelBreakdownItem {
   runtime: string;
+  role?: string;
+  modelSource?: string;
   model: string;
   invocations: number;
   elapsed_seconds: number;
@@ -339,6 +343,8 @@ interface MetricsSummaryItem {
   stage_id?: string;
   model?: string;
   runtime?: string;
+  role?: string;
+  modelSource?: string;
   started_at?: string;
   ended_at?: string;
   elapsed_seconds: number;
@@ -943,6 +949,8 @@ function getBreakdownEntries(record: UsageSummaryRecord): ModelBreakdownItem[] {
   return [
     {
       runtime: record.runtime || '',
+      role: record.role || undefined,
+      modelSource: record.modelSource || undefined,
       model: record.model || '',
       invocations: toInt(record.invocations ?? record.steps ?? 1),
       elapsed_seconds: toNumber(record.elapsed_seconds),
@@ -2730,6 +2738,8 @@ function normalizeModelBreakdownRow(item: Record<string, unknown>): ModelBreakdo
   const canonical = canonicalUsageFromRecord(item);
   const row: ModelBreakdownItem = {
     runtime: String(item['runtime'] ?? ''),
+    role: typeof item['role'] === 'string' ? item['role'] : undefined,
+    modelSource: typeof item['modelSource'] === 'string' ? item['modelSource'] : undefined,
     model: String(item['model'] ?? ''),
     invocations: toNumber(item['invocations']),
     elapsed_seconds: toNumber(item['elapsed_seconds']),
@@ -2901,6 +2911,8 @@ function normalizeSummaryRecord(
     stage_id: record.stage_id || undefined,
     model: record.model || undefined,
     runtime: record.runtime || undefined,
+    role: record.role || undefined,
+    modelSource: record.modelSource || undefined,
     started_at: record.started_at || undefined,
     ended_at: record.ended_at || undefined,
     elapsed_seconds: toNumber(record.elapsed_seconds),
@@ -2952,6 +2964,8 @@ async function applyModelBreakdownFallback(
       string,
       {
         runtime: string;
+        role?: string;
+        modelSource?: string;
         model: string;
         invocations: number;
         elapsed_seconds: number;
@@ -2981,10 +2995,14 @@ async function applyModelBreakdownFallback(
       accumulateOverlayFromRecord(planOverlayAcc, item);
       accumulateToolCallsFromRecord(planToolCallAcc, item);
       const runtime = String(item['runtime'] ?? '');
+      const role = typeof item['role'] === 'string' ? item['role'] : undefined;
+      const modelSource = typeof item['modelSource'] === 'string' ? item['modelSource'] : undefined;
       const model = String(item['model'] ?? '');
-      const key = `${runtime}\u0000${model}`;
+      const key = `${runtime}\u0000${role ?? ''}\u0000${modelSource ?? ''}\u0000${model}`;
       const bucket = grouped.get(key) ?? {
         runtime,
+        role,
+        modelSource,
         model,
         invocations: 0,
         elapsed_seconds: 0,
@@ -3041,6 +3059,8 @@ async function applyModelBreakdownFallback(
         });
         const row: ModelBreakdownItem = {
           runtime: bucket.runtime,
+          role: bucket.role,
+          modelSource: bucket.modelSource,
           model: bucket.model,
           invocations: bucket.invocations,
           elapsed_seconds: bucket.elapsed_seconds,
@@ -4026,6 +4046,504 @@ export async function handleWorkspacesRequest(_req: Request, res: Response): Pro
   res.json(body);
 }
 
+export interface GraphRunSummary {
+  namespace: string;
+  runId: string;
+  isLatest: boolean;
+  status: string;
+  startedAt: string | null;
+  nodeCount: number;
+}
+
+export interface DelegatedRunRecord {
+  delegatedRunId: string;
+  runtime: string;
+  role?: string;
+  workspaceMode: string;
+  status: string;
+  verification?: string;
+  usage: Record<string, number>;
+}
+
+/** @deprecated Components will migrate to DelegatedRunRecord in the UI TODO. */
+export interface BrokeredChildState {
+  delegationId: string;
+  runtime?: string;
+  status: string;
+  task?: string;
+  resultArtifact?: string;
+  usage?: Record<string, number>;
+}
+
+export interface NativeSubagentEvent {
+  event: string;
+  timestamp?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface GraphUsageSummary {
+  parent: Record<string, number>;
+  delegatedRuns: Record<string, number>;
+  total: Record<string, number>;
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
+  brokeredChildren?: Record<string, number>;
+}
+
+export interface GraphNodeAttempt {
+  attemptId: string;
+  outcome: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  runtime?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
+  reason?: string;
+  /** V2 observability metadata recorded by the scheduler for this attempt. */
+  workspaceMode?: string;
+  workspacePath?: string;
+  writeScopes?: string[];
+  frozenBase?: string;
+  changesetBaseline?: string;
+  changesetHash?: string;
+  conflictArtifact?: string;
+  crossRuntimeMode?: string;
+  integrationInputs?: string[];
+  integrationResultIdentity?: string;
+  gateOutcome?: string;
+  gateResultPath?: string;
+  publishReadiness?: Record<string, unknown>;
+  changesetManifest?: string;
+  usageSnapshot?: Record<string, unknown>;
+  admissionSummary?: Record<string, unknown>;
+  repairEpoch?: string;
+}
+
+export interface GraphNodeState {
+  nodeId: string;
+  status: string;
+  attempts: GraphNodeAttempt[];
+  lastAttemptId?: string;
+  runtime?: string;
+  role?: string;
+  modelSource?: string;
+  nativeSubagents?: string;
+  /** @deprecated Components will migrate to nativeSubagents in the UI TODO. */
+  nativeSubagentMode?: string;
+  /** V2 observability metadata merged from the latest attempt. */
+  workspaceMode?: string;
+  workspacePath?: string;
+  writeScopes?: string[];
+  frozenBase?: string;
+  changesetBaseline?: string;
+  changesetHash?: string;
+  conflictArtifact?: string;
+  crossRuntimeMode?: string;
+  integrationInputs?: string[];
+  integrationResultIdentity?: string;
+  gateOutcome?: string;
+  gateResultPath?: string;
+  publishReadiness?: Record<string, unknown>;
+  changesetManifest?: string;
+  usageSnapshot?: Record<string, unknown>;
+  admissionSummary?: Record<string, unknown>;
+  repairEpoch?: string;
+  delegatedRuns?: DelegatedRunRecord[];
+  /** @deprecated Components will migrate to delegatedRuns in the UI TODO. */
+  brokeredChildren?: BrokeredChildState[];
+  nativeSubagentEvents?: NativeSubagentEvent[];
+}
+
+export interface GraphRunDetail {
+  namespace: string;
+  runId: string;
+  run: Record<string, unknown>;
+  nodes: GraphNodeState[];
+  graph: Record<string, unknown>;
+  usage?: GraphUsageSummary;
+  concurrencyReductions?: string[];
+}
+
+function safeReadJson(filePath: string): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function safeReadJsonValue(filePath: string): unknown {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function numericUsage(value: unknown): Record<string, number> {
+  if (!isJsonRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(([, candidate]) => typeof candidate === 'number' && Number.isFinite(candidate)),
+  ) as Record<string, number>;
+}
+
+/**
+ * Parse one v2 delegated-run ledger record into the dashboard data contract.
+ * Old node-local records deliberately fail closed: the dashboard never
+ * translates delegationId/task/resultArtifact into the new shape.
+ */
+export function parseDelegatedRunRecord(
+  request: Record<string, unknown>,
+  status: Record<string, unknown>,
+): DelegatedRunRecord | null {
+  const delegatedRunId = request['delegatedRunId'];
+  const runtime = request['runtime'];
+  if (
+    request['schemaVersion'] !== 2
+    || status['schemaVersion'] !== 2
+    || Object.prototype.hasOwnProperty.call(request, 'delegationId')
+    || typeof delegatedRunId !== 'string'
+    || typeof runtime !== 'string'
+    || status['delegatedRunId'] !== delegatedRunId
+  ) {
+    return null;
+  }
+
+  const role = typeof request['role'] === 'string' ? request['role'] : undefined;
+  const workspaceMode =
+    (typeof status['workspaceMode'] === 'string' && status['workspaceMode'])
+    || (typeof request['workspaceMode'] === 'string' && request['workspaceMode'])
+    || 'snapshot';
+  const verification =
+    typeof status['verification'] === 'string'
+      ? status['verification']
+      : typeof status['verificationOutcome'] === 'string'
+        ? status['verificationOutcome']
+        : undefined;
+
+  return {
+    delegatedRunId,
+    runtime,
+    ...(role ? { role } : {}),
+    workspaceMode,
+    status: typeof status['status'] === 'string' ? status['status'] : 'unknown',
+    ...(verification ? { verification } : {}),
+    usage: numericUsage(status['usage']),
+  };
+}
+
+function normalizeGraphNodeAttempt(value: unknown): GraphNodeAttempt | null {
+  if (!isJsonRecord(value) || typeof value['attemptId'] !== 'string' || typeof value['outcome'] !== 'string') {
+    return null;
+  }
+  const attempt: GraphNodeAttempt = {
+    attemptId: value['attemptId'],
+    outcome: value['outcome'],
+  };
+  for (const key of [
+    'runtime', 'role', 'modelSource', 'nativeSubagents', 'reason', 'startedAt', 'finishedAt',
+    'workspaceMode', 'workspacePath', 'frozenBase', 'changesetBaseline', 'changesetHash',
+    'conflictArtifact', 'crossRuntimeMode', 'integrationResultIdentity', 'gateOutcome',
+    'gateResultPath', 'changesetManifest', 'repairEpoch',
+  ] as const) {
+    if (typeof value[key] === 'string') {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  if (typeof value['exitCode'] === 'number') attempt.exitCode = value['exitCode'];
+  for (const key of ['writeScopes', 'integrationInputs'] as const) {
+    if (Array.isArray(value[key]) && value[key].every((item) => typeof item === 'string')) {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  for (const key of ['publishReadiness', 'usageSnapshot', 'admissionSummary'] as const) {
+    if (isJsonRecord(value[key])) {
+      (attempt as unknown as Record<string, unknown>)[key] = value[key];
+    }
+  }
+  return attempt;
+}
+
+function addUsage(total: Record<string, number>, value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  for (const [key, candidate] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      total[key] = (total[key] ?? 0) + candidate;
+    }
+  }
+}
+
+function readJsonLines(filePath: string): Array<Record<string, unknown>> {
+  try {
+    return readFileSync(filePath, 'utf8').split('\n').flatMap((line) => {
+      try {
+        const value = JSON.parse(line) as unknown;
+        return value && typeof value === 'object' && !Array.isArray(value)
+          ? [value as Record<string, unknown>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+function concurrencyReduction(event: Record<string, unknown>): string | null {
+  if (event['event'] !== 'admission') return null;
+  if (event['workKind'] === 'broker-child' && event['decision'] === 'denied') return 'broker capacity';
+  if (event['nativeSubagents'] === 'inherit') return 'native subagent reservation';
+  if (event['sameRuntimeParallelSafe'] === false) return 'runtime overlays';
+  const reason = typeof event['reason'] === 'string' ? event['reason'] : '';
+  return /verification|resource/i.test(reason) ? 'verification resource class' : null;
+}
+
+function resolveGraphRunsRoot(workspaceRootQuery: string): string {
+  const { workspaceRoot } = findDashboardRoots();
+  const effective = workspaceRootQuery ? resolve(workspaceRootQuery) : workspaceRoot;
+  return join(effective, 'graph-runs');
+}
+
+export async function handleGraphRunsRequest(req: Request, res: Response): Promise<void> {
+  const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
+  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
+
+  if (!existsSync(graphRunsDir)) {
+    res.json({ runs: [] });
+    return;
+  }
+
+  const runs: GraphRunSummary[] = [];
+
+  try {
+    const nsEntries: Dirent[] = await fs.readdir(graphRunsDir, { withFileTypes: true });
+    for (const nsEnt of nsEntries) {
+      if (!nsEnt.isDirectory()) {
+        continue;
+      }
+      const namespace = nsEnt.name;
+      const nsDir = join(graphRunsDir, namespace);
+
+      let latestRunId: string | null = null;
+      const latestLink = join(nsDir, 'latest');
+      if (existsSync(latestLink)) {
+        try {
+          latestRunId = basename(realpathSync(latestLink));
+        } catch {
+          // symlink may be dangling
+        }
+      }
+
+      const runEntries: Dirent[] = await fs.readdir(nsDir, { withFileTypes: true });
+      for (const runEnt of runEntries) {
+        if (runEnt.name === 'latest') {
+          continue;
+        }
+        if (!runEnt.isDirectory()) {
+          continue;
+        }
+        const runId = runEnt.name;
+        const runJson = safeReadJson(join(nsDir, runId, 'run.json'));
+
+        let nodeCount = 0;
+        const nodesDir = join(nsDir, runId, 'nodes');
+        if (existsSync(nodesDir)) {
+          try {
+            const nodeFiles = await fs.readdir(nodesDir);
+            nodeCount = nodeFiles.filter((f) => f.endsWith('.json')).length;
+          } catch {
+            // ignore
+          }
+        }
+
+        runs.push({
+          namespace,
+          runId,
+          isLatest: runId === latestRunId,
+          status: typeof runJson['status'] === 'string' ? runJson['status'] : 'unknown',
+          startedAt: typeof runJson['startedAt'] === 'string' ? runJson['startedAt'] : null,
+          nodeCount,
+        });
+      }
+    }
+  } catch {
+    res.status(500).json({ error: 'Failed to read graph-runs directory' });
+    return;
+  }
+
+  runs.sort((a, b) => {
+    if (a.isLatest !== b.isLatest) {
+      return a.isLatest ? -1 : 1;
+    }
+    if (a.startedAt && b.startedAt) {
+      return b.startedAt.localeCompare(a.startedAt);
+    }
+    return 0;
+  });
+
+  res.json({ runs });
+}
+
+export async function handleGraphRunDetailRequest(req: Request, res: Response): Promise<void> {
+  const namespace = String(req.params['namespace'] ?? '').trim();
+  const runId = String(req.params['runId'] ?? '').trim();
+
+  if (!namespace || !runId || /[^A-Za-z0-9._-]/.test(namespace) || /[^A-Za-z0-9._-]/.test(runId)) {
+    res.status(400).json({ error: 'Invalid namespace or runId' });
+    return;
+  }
+
+  const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
+  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
+  const runDir = join(graphRunsDir, namespace, runId);
+
+  if (!existsSync(runDir)) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  const runJson = safeReadJson(join(runDir, 'run.json'));
+  const graphJson = safeReadJson(join(runDir, 'graph.json'));
+  const observabilityEvents = readJsonLines(join(runDir, 'observability.jsonl'));
+  const parentUsage: Record<string, number> = {};
+  const delegatedRunsUsage: Record<string, number> = {};
+
+  const nodeStates: GraphNodeState[] = [];
+  const nodesDir = join(runDir, 'nodes');
+  const V2_NODE_FIELDS = [
+    'workspaceMode',
+    'workspacePath',
+    'writeScopes',
+    'frozenBase',
+    'changesetBaseline',
+    'changesetHash',
+    'conflictArtifact',
+    'nativeSubagents',
+    'crossRuntimeMode',
+    'integrationInputs',
+    'integrationResultIdentity',
+    'gateOutcome',
+    'gateResultPath',
+    'publishReadiness',
+    'changesetManifest',
+    'usageSnapshot',
+    'admissionSummary',
+    'repairEpoch',
+  ] as const;
+
+  const delegatedRunsByNode = new Map<string, DelegatedRunRecord[]>();
+  const delegatedRunParents = new Map<string, string>();
+  const queueValue = safeReadJsonValue(join(runDir, 'delegation-queue.json'));
+  if (Array.isArray(queueValue)) {
+    for (const entry of queueValue) {
+      if (!isJsonRecord(entry)) continue;
+      const delegatedRunId = entry['delegatedRunId'];
+      const parentNodeId = entry['parentNodeId'];
+      if (typeof delegatedRunId === 'string' && typeof parentNodeId === 'string') {
+        delegatedRunParents.set(delegatedRunId, parentNodeId);
+      }
+    }
+  }
+
+  const delegatedRunsDir = join(graphRunsDir, '..', 'delegated-runs');
+  if (existsSync(delegatedRunsDir)) {
+    try {
+      const delegatedEntries = await fs.readdir(delegatedRunsDir, { withFileTypes: true });
+      for (const delegatedEntry of delegatedEntries) {
+        if (!delegatedEntry.isDirectory()) continue;
+        const delegatedRunDir = join(delegatedRunsDir, delegatedEntry.name);
+        const record = parseDelegatedRunRecord(
+          safeReadJson(join(delegatedRunDir, 'request.json')),
+          safeReadJson(join(delegatedRunDir, 'status.json')),
+        );
+        if (!record) continue;
+        const parentNodeId = delegatedRunParents.get(record.delegatedRunId);
+        if (!parentNodeId) continue;
+        const records = delegatedRunsByNode.get(parentNodeId) ?? [];
+        records.push(record);
+        delegatedRunsByNode.set(parentNodeId, records);
+        addUsage(delegatedRunsUsage, record.usage);
+      }
+    } catch {
+      // Delegated-run observability is best-effort; malformed entries are ignored.
+    }
+  }
+
+  if (existsSync(nodesDir)) {
+    try {
+      const nodeFiles = await fs.readdir(nodesDir);
+      for (const file of nodeFiles.sort()) {
+        if (!file.endsWith('.json')) {
+          continue;
+        }
+        const raw = safeReadJson(join(nodesDir, file));
+        const attempts = Array.isArray(raw['attempts'])
+          ? raw['attempts']
+            .map(normalizeGraphNodeAttempt)
+            .filter((attempt): attempt is GraphNodeAttempt => attempt !== null)
+          : [];
+        const latestAttempt = attempts[attempts.length - 1] ?? {};
+        const state: GraphNodeState = {
+          nodeId: typeof raw['nodeId'] === 'string' ? raw['nodeId'] : file.replace(/\.json$/, ''),
+          status: typeof raw['status'] === 'string' ? raw['status'] : 'pending',
+          attempts,
+          lastAttemptId: typeof raw['lastAttemptId'] === 'string' ? raw['lastAttemptId'] : undefined,
+        };
+        // Surface v2 observability metadata from the node entry and from the
+        // latest attempt, with the node entry taking precedence.
+        for (const key of ['runtime', 'role', 'modelSource', 'nativeSubagents'] as const) {
+          const value = raw[key] ?? latestAttempt[key];
+          if (typeof value === 'string') {
+            (state as unknown as Record<string, unknown>)[key] = value;
+          }
+        }
+        // A node summary is cumulative across its local Ralph loop; count only
+        // the latest snapshot, never every retry snapshot.
+        addUsage(parentUsage, latestAttempt.usageSnapshot);
+        for (const key of V2_NODE_FIELDS) {
+          const value = raw[key] ?? latestAttempt[key as keyof GraphNodeAttempt];
+          if (value !== undefined && value !== null) {
+            (state as unknown as Record<string, unknown>)[key] = value as unknown;
+          }
+        }
+        nodeStates.push(state);
+      }
+    } catch {
+      // ignore; return empty nodes
+    }
+  }
+
+  for (const state of nodeStates) {
+    const delegatedRuns = delegatedRunsByNode.get(state.nodeId);
+    if (delegatedRuns && delegatedRuns.length > 0) {
+      state.delegatedRuns = delegatedRuns.sort((a, b) =>
+        a.delegatedRunId.localeCompare(b.delegatedRunId),
+      );
+    }
+  }
+
+  const totalUsage: Record<string, number> = { ...parentUsage };
+  addUsage(totalUsage, delegatedRunsUsage);
+  const concurrencyReductions = [...new Set(observabilityEvents
+    .map(concurrencyReduction)
+    .filter((value): value is string => value !== null))];
+  res.json({
+    namespace, runId, run: runJson, nodes: nodeStates, graph: graphJson,
+    usage: { parent: parentUsage, delegatedRuns: delegatedRunsUsage, total: totalUsage },
+    concurrencyReductions,
+  });
+}
+
 export function registerDashboardApi(app: Express): void {
   app.get('/api/workspace', (_req: Request, res: Response) => {
     const root = findWorkspaceProjectRoot();
@@ -4053,4 +4571,6 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/benchmarks', handleSavingsRequest);
   app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);
   app.get('/api/workspaces', handleWorkspacesRequest);
+  app.get('/api/graph-runs', handleGraphRunsRequest);
+  app.get('/api/graph-runs/:namespace/:runId', handleGraphRunDetailRequest);
 }

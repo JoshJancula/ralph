@@ -5,6 +5,12 @@ if [[ -n "${RALPH_MCP_PROXY_POLICY_LOADED:-}" ]]; then
 fi
 RALPH_MCP_PROXY_POLICY_LOADED=1
 
+_MCP_PROXY_POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_KILLSWITCH_CORE_PATH="${_KILLSWITCH_CORE_PATH:-$_MCP_PROXY_POLICY_DIR/../killswitch/killswitch-core.sh}"
+if [[ -f "$_KILLSWITCH_CORE_PATH" ]]; then
+  source "$_KILLSWITCH_CORE_PATH" || true
+fi
+
 RALPH_MCP_POLICY_VIOLATION_EXIT_CODE=${RALPH_MCP_POLICY_VIOLATION_EXIT_CODE:-64}
 
 ralph_mcp_policy_canonicalize_path() {
@@ -34,14 +40,18 @@ PY
 }
 
 ralph_mcp_policy_plan_key_safe() {
-  local plan_key="${1:-}"
-  local sanitized
-  sanitized="${plan_key//[^a-zA-Z0-9._-]/_}"
-  sanitized="${sanitized//../_}"
-  if [[ -z "$sanitized" ]]; then
-    sanitized="unknown"
+  if declare -F killswitch_plan_key_safe >/dev/null 2>&1; then
+    killswitch_plan_key_safe "$@"
+  else
+    local plan_key="${1:-}"
+    local sanitized
+    sanitized="${plan_key//[^a-zA-Z0-9._-]/_}"
+    sanitized="${sanitized//../_}"
+    if [[ -z "$sanitized" ]]; then
+      sanitized="unknown"
+    fi
+    printf '%s\n' "$sanitized"
   fi
-  printf '%s\n' "$sanitized"
 }
 
 ralph_mcp_policy_security_dir() {
@@ -58,14 +68,23 @@ ralph_mcp_policy_security_dir() {
 
 ralph_mcp_policy_sentinel_path() {
   local plan_key="${1:-${RALPH_PLAN_KEY:-}}"
-  plan_key="${plan_key:-unknown}"
-  local sanitized
-  sanitized="$(ralph_mcp_policy_plan_key_safe "$plan_key")"
+
+  local sentinel_path
+  if declare -F killswitch_sentinel_path >/dev/null 2>&1; then
+    sentinel_path="$(killswitch_sentinel_path "$plan_key")" || return 1
+  else
+    plan_key="${plan_key:-unknown}"
+    local sanitized
+    sanitized="$(ralph_mcp_policy_plan_key_safe "$plan_key")"
+    local dir
+    dir="$(ralph_mcp_policy_security_dir)" || return 1
+    sentinel_path="$dir/kill-switch.$sanitized.json"
+  fi
+
   local dir
   dir="$(ralph_mcp_policy_security_dir)" || return 1
-  local candidate="$dir/kill-switch.$sanitized.json"
   local canonical
-  canonical="$(ralph_mcp_policy_canonicalize_path "$candidate")" || return 1
+  canonical="$(ralph_mcp_policy_canonicalize_path "$sentinel_path")" || return 1
   case "$canonical" in
     "$dir"|"${dir}"/*)
       printf '%s\n' "$canonical"
@@ -79,87 +98,125 @@ ralph_mcp_policy_sentinel_path() {
 }
 
 ralph_mcp_policy_argument_summary() {
-  local args="${1:-}"
-  local summary
-  summary="$(printf '%s' "$args" | tr '\n' ' ' | tr -s ' ' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | cut -c1-160)"
-  if [[ -z "$summary" ]]; then
-    summary="(redacted)"
+  if declare -F killswitch_argument_summary >/dev/null 2>&1; then
+    killswitch_argument_summary "$@"
+  else
+    local args="${1:-}"
+    local summary
+    summary="$(printf '%s' "$args" | tr '\n' ' ' | tr -s ' ' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | cut -c1-160)"
+    if [[ -z "$summary" ]]; then
+      summary="(redacted)"
+    fi
+    printf '%s\n' "$summary"
   fi
-  printf '%s\n' "$summary"
 }
 
 ralph_mcp_policy_argument_hash() {
-  local args="${1:-}"
-  if [[ -z "$args" ]]; then
+  if declare -F killswitch_argument_hash >/dev/null 2>&1; then
+    killswitch_argument_hash "$@"
+  else
+    local args="${1:-}"
+    if [[ -z "$args" ]]; then
+      printf ''
+      return 0
+    fi
+    if command -v python3 &>/dev/null; then
+      python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$args"
+      return 0
+    fi
+    if command -v python &>/dev/null; then
+      python -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$args"
+      return 0
+    fi
+    if command -v sha256sum &>/dev/null; then
+      printf '%s' "$args" | sha256sum | awk '{print $1}'
+      return 0
+    fi
+    if command -v shasum &>/dev/null; then
+      printf '%s' "$args" | shasum -a 256 | awk '{print $1}'
+      return 0
+    fi
+    if command -v openssl &>/dev/null; then
+      printf '%s' "$args" | openssl dgst -sha256 | awk '{print $NF}'
+      return 0
+    fi
     printf ''
-    return 0
   fi
-  if command -v python3 &>/dev/null; then
-    python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$args"
-    return 0
-  fi
-  if command -v python &>/dev/null; then
-    python -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$args"
-    return 0
-  fi
-  if command -v sha256sum &>/dev/null; then
-    printf '%s' "$args" | sha256sum | awk '{print $1}'
-    return 0
-  fi
-  if command -v shasum &>/dev/null; then
-    printf '%s' "$args" | shasum -a 256 | awk '{print $1}'
-    return 0
-  fi
-  if command -v openssl &>/dev/null; then
-    printf '%s' "$args" | openssl dgst -sha256 | awk '{print $NF}'
-    return 0
-  fi
-  printf ''
 }
 
+# Compatibility wrapper. Sentinel bytes are owned by killswitch_write_sentinel.
 ralph_mcp_policy_write_kill_switch_sentinel() {
   local tool="${1:-unknown}"
   local category="${2:-policy}"
   local reason="${3:-violation}"
   local arguments="${4:-}"
-  local plan_key="${RALPH_PLAN_KEY:-unknown}"
-  local sentinel_path
-  sentinel_path="$(ralph_mcp_policy_sentinel_path "$plan_key")" || return 1
-  local timestamp
-  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  local project_root="${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}"
-  local agent_workspace="${RALPH_AGENT_WORKSPACE:-${project_root}}"
-  local plan_workspace_root="${RALPH_PLAN_WORKSPACE_ROOT:-${project_root}/.ralph-workspace}"
-  local summary
-  local hash
-  summary="$(ralph_mcp_policy_argument_summary "$arguments")"
-  hash="$(ralph_mcp_policy_argument_hash "$arguments")"
-  jq -n \
-    --arg timestamp "$timestamp" \
-    --arg project_root "$project_root" \
-    --arg agent_workspace "$agent_workspace" \
-    --arg plan_workspace_root "$plan_workspace_root" \
-    --arg plan_key "$plan_key" \
+  if declare -F killswitch_write_sentinel >/dev/null 2>&1; then
+    killswitch_write_sentinel "$tool" "$category" "$reason" "$arguments" || return 1
+  else
+    return 1
+  fi
+}
+
+# Normalize an MCP tool call to the P10 killswitch event object. Does not evaluate.
+ralph_mcp_policy_event_json() {
+  local tool="${1:-}"
+  local resource="${2:-}"
+  local arguments="${3:-}"
+  local action="${4:-execute}"
+  local effect="${5:-}"
+  local runtime="${RALPH_MCP_PROXY_RUNTIME:-${RALPH_RUNTIME:-unknown}}"
+  local bounded
+  bounded="$(ralph_mcp_policy_argument_summary "$arguments")"
+
+  if [[ -z "$resource" && -n "$arguments" ]] && command -v jq >/dev/null 2>&1; then
+    if jq -e 'type == "object"' >/dev/null 2>&1 <<< "$arguments"; then
+      resource="$(jq -r '.path // .file // .resource // empty' <<< "$arguments" 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ -z "$effect" ]]; then
+    case "$tool" in
+      ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_search|ralph_proxy_repomap|ralph_proxy_result_*|ralph_plan_status)
+        effect="read"
+        ;;
+      ralph_proxy_shell*|ralph_write*|ralph_run_plan)
+        effect="write"
+        ;;
+      *)
+        effect="execute"
+        ;;
+    esac
+  fi
+
+  jq -nc \
+    --argjson schemaVersion 1 \
+    --arg source "mcp" \
+    --arg runtime "$runtime" \
     --arg tool "$tool" \
-    --arg category "$category" \
-    --arg reason "$reason" \
-    --arg summary "$summary" \
-    --arg hash "$hash" \
+    --arg action "$action" \
+    --arg effect "$effect" \
+    --arg resource "${resource:-}" \
+    --arg arguments "$bounded" \
     '{
-      timestamp: $timestamp,
-      project_root: $project_root,
-      agent_workspace: $agent_workspace,
-      plan_workspace_root: $plan_workspace_root,
-      workspace: $project_root,
-      plan_key: $plan_key,
+      schemaVersion: $schemaVersion,
+      source: $source,
+      runtime: $runtime,
       tool: $tool,
-      category: $category,
-      reason: $reason,
-      arguments: {
-        summary: $summary,
-        hash: $hash
-      }
-    }' > "$sentinel_path"
+      action: $action,
+      effect: $effect,
+      resource: $resource,
+      arguments: $arguments
+    }'
+}
+
+# Call the canonical evaluator and print its decision unchanged (allow|deny|fatal).
+ralph_mcp_policy_evaluate() {
+  local event_json="${1:-}"
+  if declare -F killswitch_evaluate >/dev/null 2>&1; then
+    killswitch_evaluate "$event_json"
+    return 0
+  fi
+  printf 'allow\n'
 }
 
 ralph_mcp_policy_violation_fatal() {
@@ -167,7 +224,27 @@ ralph_mcp_policy_violation_fatal() {
   local category="${2:-policy}"
   local reason="${3:-violation}"
   local arguments="${4:-}"
-  ralph_mcp_policy_write_kill_switch_sentinel "$tool" "$category" "$reason" "$arguments"
+  local event_json=""
+
+  if declare -F killswitch_evaluate >/dev/null 2>&1; then
+    event_json="$(ralph_mcp_policy_event_json "$tool" "" "$arguments")" || event_json=""
+    if [[ -n "$event_json" ]]; then
+      killswitch_evaluate "$event_json" >/dev/null
+    fi
+    if [[ "${KILLSWITCH_DECISION:-allow}" != "fatal" ]]; then
+      KILLSWITCH_DECISION="fatal"
+      KILLSWITCH_DECISION_CATEGORY="$category"
+      KILLSWITCH_DECISION_REASON="$reason"
+      KILLSWITCH_DECISION_TOOL="$tool"
+      KILLSWITCH_DECISION_ARGUMENTS="$arguments"
+    fi
+    if declare -F killswitch_apply_decision >/dev/null 2>&1; then
+      killswitch_apply_decision fatal
+    fi
+  elif declare -F killswitch_trigger >/dev/null 2>&1; then
+    killswitch_trigger "$tool" "$category" "$reason" "$arguments"
+  fi
+
   return "$RALPH_MCP_POLICY_VIOLATION_EXIT_CODE"
 }
 
@@ -491,12 +568,25 @@ ralph_mcp_proxy_load_policy() {
   RALPH_MCP_PROXY_POLICY_TOOL_ALLOWLIST_JSON="$(
     jq -c '(.toolAllowlist // .tools.allowlist // .tools.allow // []) | if type == "array" then . else [] end' <<< "$selected_json"
   )"
-  RALPH_MCP_PROXY_POLICY_TOOL_DENYLIST_JSON="$(
-    jq -c '(.toolDenylist // .tools.denylist // .tools.deny // []) | if type == "array" then . else [] end' <<< "$selected_json"
-  )"
-  RALPH_MCP_PROXY_POLICY_DENIED_ARGUMENT_PATTERNS_JSON="$(
-    jq -c '(.deniedArgumentPatterns // .arguments.denyPatterns // []) | if type == "array" then . else [] end' <<< "$selected_json"
-  )"
+  local _policy_tool_denylist_temp
+  _policy_tool_denylist_temp="$(jq -c '(.toolDenylist // .tools.denylist // .tools.deny // []) | if type == "array" then . else [] end' <<< "$selected_json")"
+  local _killswitch_tool_denylist_temp="${RALPH_KILLSWITCH_DENIED_TOOL_DENYLIST_JSON:-[]}"
+  if [[ "$_killswitch_tool_denylist_temp" != "[]" ]]; then
+    RALPH_MCP_PROXY_POLICY_TOOL_DENYLIST_JSON="$(jq -s 'add | unique' <<< "[$_policy_tool_denylist_temp,$_killswitch_tool_denylist_temp]" 2>/dev/null || printf '%s' "$_policy_tool_denylist_temp")"
+  else
+    RALPH_MCP_PROXY_POLICY_TOOL_DENYLIST_JSON="$_policy_tool_denylist_temp"
+  fi
+  local _policy_denied_patterns_temp
+  _policy_denied_patterns_temp="$(jq -c '(.deniedArgumentPatterns // .arguments.denyPatterns // []) | if type == "array" then . else [] end' <<< "$selected_json")"
+  local _killswitch_denied_patterns_temp="${RALPH_KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON:-[]}"
+  if [[ "$_killswitch_denied_patterns_temp" != "[]" ]]; then
+    RALPH_MCP_PROXY_POLICY_DENIED_ARGUMENT_PATTERNS_JSON="$(jq -s 'add' <<< "[$_policy_denied_patterns_temp,$_killswitch_denied_patterns_temp]" 2>/dev/null || printf '%s' "$_policy_denied_patterns_temp")"
+  else
+    RALPH_MCP_PROXY_POLICY_DENIED_ARGUMENT_PATTERNS_JSON="$_policy_denied_patterns_temp"
+  fi
+  # Publish the union at load time so the canonical evaluator owns matching.
+  export RALPH_KILLSWITCH_DENIED_TOOL_DENYLIST_JSON="${RALPH_MCP_PROXY_POLICY_TOOL_DENYLIST_JSON:-[]}"
+  export RALPH_KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON="${RALPH_MCP_PROXY_POLICY_DENIED_ARGUMENT_PATTERNS_JSON:-[]}"
   RALPH_MCP_PROXY_POLICY_RESULT_BYTE_CAP="$(
     jq -r '(
       .resultByteCap //
@@ -642,13 +732,20 @@ ralph_mcp_proxy_load_policy() {
 ralph_mcp_proxy_tool_allowed() {
   local tool_name="${1:-}"
   local allowlist_json="${RALPH_MCP_PROXY_POLICY_TOOL_ALLOWLIST_JSON:-[]}"
-  local denylist_json="${RALPH_MCP_PROXY_POLICY_TOOL_DENYLIST_JSON:-[]}"
+  local event_json decision
   if [[ -z "$tool_name" ]]; then
     return 1
   fi
-  if jq -e --arg name "$tool_name" '. | index($name) != null' <<< "$denylist_json" >/dev/null 2>&1; then
-    return 1
+  event_json="$(ralph_mcp_policy_event_json "$tool_name" "" "")" || event_json=""
+  if [[ -n "$event_json" ]]; then
+    decision="$(ralph_mcp_policy_evaluate "$event_json")"
+    case "$decision" in
+      deny|fatal)
+        return 1
+        ;;
+    esac
   fi
+
   if declare -F ralph_mcp_proxy_is_result_tool >/dev/null 2>&1; then
     if ralph_mcp_proxy_is_result_tool "$tool_name"; then
       return 0
@@ -665,6 +762,26 @@ ralph_mcp_proxy_tool_allowed() {
     return $?
   fi
   return 0
+}
+
+# Adapter: argument denials are decided by the canonical evaluator.
+ralph_mcp_proxy_arguments_denied() {
+  local tool_name="${1:-}"
+  local arguments="${2:-}"
+  local event_json decision
+
+  if [[ -z "$arguments" ]]; then
+    return 1
+  fi
+
+  event_json="$(ralph_mcp_policy_event_json "$tool_name" "" "$arguments")" || return 1
+  decision="$(ralph_mcp_policy_evaluate "$event_json")"
+  case "$decision" in
+    deny|fatal)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 # Grep source-cap absolute ceilings (PLAN15). These are never exceeded
@@ -737,7 +854,10 @@ ralph_mcp_proxy_grep_source_cap_policy_json() {
 
 ralph_mcp_proxy_result_byte_cap_for_tool() {
   local tool_name="${1:-}"
-  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON:-{}}"
+  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON:-}"
+  # Not ":-{}": bash closes that expansion one brace early, so a configured
+  # cap map arrives with a stray trailing "}" and every lookup silently misses.
+  [[ -n "$tool_caps_json" ]] || tool_caps_json='{}'
   local tool_cap global_cap hook_cap
 
   hook_cap="${RALPH_HOOK_RESULT_BYTE_CAP:-}"
@@ -763,7 +883,9 @@ ralph_mcp_proxy_result_byte_cap_for_tool() {
 
 ralph_mcp_proxy_result_token_cap_for_tool() {
   local tool_name="${1:-}"
-  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_TOKEN_CAPS_JSON:-{}}"
+  local tool_caps_json="${RALPH_MCP_PROXY_POLICY_TOOL_RESULT_TOKEN_CAPS_JSON:-}"
+  # Not ":-{}": see the byte-cap lookup above.
+  [[ -n "$tool_caps_json" ]] || tool_caps_json='{}'
   local tool_cap global_cap hook_cap
 
   hook_cap="${RALPH_HOOK_RESULT_TOKEN_CAP:-}"

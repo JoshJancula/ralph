@@ -1,0 +1,488 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "+- Stage links 1-21/25 --------------------------------------------------------+",
+    "| ralph workflow logs fixture-seq-running --stage implement --attempt 1        |",
+    "|     --stream combined --tail 200 --follow                                    |",
+    "| ralph workflow logs fixture-seq-running --stage implement --attempt 1        |",
+    "|     --stream agent --tail 200 --follow                                       |",
+    "| ralph workflow logs fixture-seq-running --stage implement --attempt 1        |",
+    "|     --stream supervisor --tail 200 --no-follow                               |",
+    "| ralph workflow status fixture-seq-running                                    |",
+    "| ralph workflow status fixture-seq-running --json | jq '.stages[] |           |",
+    "|     select(.id==\"implement\")'                                                |",
+    "| ralph workflow actions list fixture-seq-running                              |",
+    "| ralph workflow status fixture-seq-running --json | jq -r '.stages[] |        |",
+    "|     .artifacts[]?'                                                           |",
+    "| ralph workflow watch fixture-seq-running                                     |",
+    "| ralph workflow handoff fixture-seq-running                                   |",
+    "| less /fixtures/implementation.md                                             |",
+    "| ralph usage --run fixture-seq-running                                        |",
+    "| # All stage logs and artifacts                                               |",
+    "| # research (succeeded)                                                       |",
+    "| ralph workflow logs fixture-seq-running --stage research --attempt 1         |",
+    "|     --stream combined --tail 200 --follow                                    |",
+    "| less /fixtures/research.md                                                   |",
+    "+------------------------------------------------------------------------------+",
+    "j/k scroll  PgUp/PgDn page  Home/End first/last  Esc/c close  q detach"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Stage links 1-21/25 ",
+        "role": "heading",
+        "width": 21
+      },
+      {
+        "col": 23,
+        "text": "--------------------------------------------------------+",
+        "role": "muted",
+        "width": 57
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1",
+        "role": "command",
+        "width": 69
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    --stream combined --tail 200 --follow",
+        "role": "command",
+        "width": 41
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1",
+        "role": "command",
+        "width": 69
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    --stream agent --tail 200 --follow",
+        "role": "command",
+        "width": 38
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow logs fixture-seq-running --stage implement --attempt 1",
+        "role": "command",
+        "width": 69
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    --stream supervisor --tail 200 --no-follow",
+        "role": "command",
+        "width": 46
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow status fixture-seq-running",
+        "role": "command",
+        "width": 41
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow status fixture-seq-running --json | jq '.stages[] |",
+        "role": "command",
+        "width": 66
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    select(.id==\"implement\")'",
+        "role": "command",
+        "width": 29
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow actions list fixture-seq-running",
+        "role": "command",
+        "width": 47
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow status fixture-seq-running --json | jq -r '.stages[] |",
+        "role": "command",
+        "width": 69
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    .artifacts[]?'",
+        "role": "command",
+        "width": 18
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow watch fixture-seq-running",
+        "role": "command",
+        "width": 40
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow handoff fixture-seq-running",
+        "role": "command",
+        "width": 42
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "less /fixtures/implementation.md",
+        "role": "command",
+        "width": 32
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph usage --run fixture-seq-running",
+        "role": "command",
+        "width": 37
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "# All stage logs and artifacts",
+        "role": "command",
+        "width": 30
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "# research (succeeded)",
+        "role": "command",
+        "width": 22
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "ralph workflow logs fixture-seq-running --stage research --attempt 1",
+        "role": "command",
+        "width": 68
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "    --stream combined --tail 200 --follow",
+        "role": "command",
+        "width": 41
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "less /fixtures/research.md",
+        "role": "command",
+        "width": 26
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "j/k scroll  PgUp/PgDn page  Home/End first/last  Esc/c close  q detach          ",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}

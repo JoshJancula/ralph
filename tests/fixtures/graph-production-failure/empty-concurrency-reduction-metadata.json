@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "case": "empty-concurrency-reduction-metadata",
+  "description": "Concurrency-reduction metadata is present but empty for a node that had nothing to reduce; status rendering must treat empty as success, not abort.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-eeee0005",
+    "nodeId": "node-fixture-concurrency",
+    "concurrencyReductions": {}
+  }
+}

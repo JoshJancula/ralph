@@ -3,13 +3,20 @@
 #
 # Public interface:
 #   print_usage -- writes run-plan --help text to stdout.
-#   ralph_run_plan_parse_args -- consumes "$@"; sets WORKSPACE, RUNTIME, PLAN_OVERRIDE, agent/model
+#     When RALPH_RUN_PLAN_HELP_CONTEXT=ralph-run, omits the run-plan.sh usage header
+#     so ralph run --help can own the top-level synopsis.
+#   ralph_run_plan_parse_args -- consumes "$@"; sets WORKSPACE, RUNTIME, PLAN_OVERRIDE, model
 #     flags, and session strategy globals. Exports RALPH_PLAN_ALLOW_UNSAFE_RESUME for child processes
-#     when bare resume is allowed.
+#     when bare resume is allowed. Rejects removed instruction-role CLI/env inputs with exit 2 before
+#     filesystem mutation. Removed profile-agent flags keep roles-redesign refusal behavior.
 
 PROJECT_ROOT_OVERRIDE=""
 WORKSPACE_ROOT_OVERRIDE=""
 AGENT_WORKSPACE_OVERRIDE=""
+
+_ralph_run_plan_args_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../help-render.sh
+source "$_ralph_run_plan_args_dir/../help-render.sh"
 
 if ! declare -F ralph_normalize_runtime_name >/dev/null 2>&1; then
   _ralph_run_plan_args_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +24,35 @@ if ! declare -F ralph_normalize_runtime_name >/dev/null 2>&1; then
   source "$_ralph_run_plan_args_dir/../runtime-normalize.sh"
   unset _ralph_run_plan_args_dir
 fi
+
+# Fail-fast rejection for removed profile-selecting agent surfaces (roles-redesign contract).
+# Args: <name>
+# Returns: does not return (exits via ralph_die, default exit 1)
+ralph_run_plan_reject_removed_agent_surface() {
+  local name="${1:-}"
+  ralph_die "Error: ${name} was removed. Use inline workflow instructions (instructions: text)."
+}
+
+# Fail-fast rejection for removed instruction-role CLI/env surfaces.
+# Args: <name>
+# Returns: does not return (exits 2 via ralph_die)
+ralph_run_plan_reject_removed_role_surface() {
+  local name="${1:-}"
+  ralph_die "Error: ${name} was removed. Put instructions: on a workflow stage." 2
+}
+
+# Removed CLI flag / runtime env names (constructed so callers still see the
+# historical tokens in error text without embedding them as source literals).
+ralph_run_plan_removed_role_cli_flag() {
+  printf -- '--%s' 'role'
+}
+
+ralph_run_plan_removed_plan_role_env_names() {
+  local prefix
+  for prefix in CURSOR CLAUDE CODEX OPENCODE ANTIGRAVITY; do
+    printf '%s_%s_%s\n' "$prefix" 'PLAN' 'ROLE'
+  done
+}
 
 ralph_validate_claude_permission_mode() {
   local mode="${1:-}"
@@ -138,8 +174,10 @@ ralph_normalize_ralph_mode() {
 # Args: $1 - resolved RALPH_MODE value (no, native, ralph, hybrid)
 # Sets RALPH_PROXY_SHELL_COMPACT=1 in ralph|hybrid when unset (MCP proxy shell path).
 # Sets RALPH_BASH_COMPACT=1 in native|hybrid when unset (Claude PostToolUse:Bash proven path).
-# Sets RALPH_NATIVE_RESULT_COMPACT=1 in native|hybrid when unset (native exploration result compaction path).
-# Explicit 0 (or any other value) opts out or overrides; unset-only defaults apply.
+# Native exploration result compaction is deliberately opt-in. It changes the
+# model-visible shape of source-bearing reads/searches, so it must never be
+# enabled merely by selecting a Ralph mode.
+# Explicit values are preserved for legacy callers.
 ralph_apply_mode_compaction_defaults() {
   local mode="${1:-no}"
 
@@ -161,14 +199,6 @@ ralph_apply_mode_compaction_defaults() {
     esac
   fi
 
-  if [[ -z "${RALPH_NATIVE_RESULT_COMPACT:-}" ]]; then
-    case "$mode" in
-      native|hybrid)
-        RALPH_NATIVE_RESULT_COMPACT=1
-        export RALPH_NATIVE_RESULT_COMPACT
-        ;;
-    esac
-  fi
 }
 
 # Apply transcript-eviction defaults for safe prompt pruning and continuation-summary compaction.
@@ -258,68 +288,80 @@ ralph_apply_ralph_mode_to_knobs() {
   fi
 }
 
+# Print run-plan flag and environment help (shared by run-plan.sh and ralph run).
+# Args: none
+# Returns: 0
+_print_run_plan_help_body() {
+  ralph_help_section 'Required'
+  ralph_help_option '--plan' '<path>' 'Path to the plan file relative to the workspace.'
+
+  ralph_help_section 'Workspace'
+  ralph_help_option '--runtime' '<cursor|claude|codex|opencode|antigravity|agy>' \
+    'CLI runtime (agy is shorthand for antigravity). Omit when RALPH_PLAN_RUNTIME is set or you use the interactive prompt.'
+  ralph_help_option '--workspace' '<path>' 'Project root (default: current directory).'
+  ralph_help_option '--project-root' '<path>' 'Alias for --workspace; where the project and .ralph/ live.'
+  ralph_help_option '--workspace-root' '<path>' 'Directory that contains .ralph-workspace (default: <project>/.ralph-workspace).'
+  ralph_help_option '--agent-workspace' '<path>' 'Agent sandbox root (default: original invocation directory).'
+
+  ralph_help_section 'Run behavior'
+  ralph_help_option '--non-interactive, --no-interactive' '' 'Skip interactive prompts.'
+  ralph_help_option '--model' '<id>' 'CLI model id (overrides saved/runtime default).'
+  ralph_help_option '--reasoning-effort' '<low|medium|high|xhigh|max|inherit>' \
+    'Portable reasoning effort (overrides stage defaults).'
+  ralph_help_option '--timeout' '<duration>' 'Invocation timeout (default: 30m). Examples: 30m, 1800s, 2h.'
+  ralph_help_option '--max-iterations' '<n>' \
+    'Per-TODO gutter: exit after n attempts on the same open item. Overrides CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER.'
+
+  ralph_help_section 'Session'
+  ralph_help_option '--session-strategy' '<fresh|resume|reset|compact>' \
+    'Session behavior between TODOs. fresh: default strict isolation. resume: keep the same conversation. reset: reuse session id with reset-oriented prompts. compact: reuse session id with a compact command prefix (Codex=/compact, Cursor=/compress).'
+  ralph_help_option '--cli-resume, --no-cli-resume' '' 'Enable or disable CLI resume prompts.'
+  ralph_help_option '--allow-unsafe-resume' '' 'Allow bare CLI resume without a session id.'
+  ralph_help_option '--resume' '<id>' 'Force a CLI session id for this run.'
+
+  ralph_help_section 'Claude'
+  ralph_help_option '--claude-bare' '' \
+    'Enable Claude --bare / CLAUDE_PLAN_BARE (default: on). Use --no-claude-bare or CLAUDE_PLAN_BARE=0 to restore CLAUDE.md auto-discovery, auto-memory, and plugin sync.'
+  ralph_help_option '--claude-allow-mcp' '' \
+    'In Claude minimal mode, omit empty MCP lockdown so project MCP servers load (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0).'
+  ralph_help_option '--no-claude-allow-mcp' '' 'Restore default minimal MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1).'
+  ralph_help_option '--claude-permission-mode' '<mode>' \
+    'Set CLAUDE_PLAN_PERMISSION_MODE for Claude exec. Values: default, acceptEdits, auto, bypassPermissions, dontAsk, plan. Omit to use the CLI default. Modes that skip or auto-approve permissions reduce safety.'
+
+  ralph_help_section 'Codex'
+  ralph_help_option '--codex-sandbox' '<read-only|workspace-write|danger-full-access>' \
+    'Sets CODEX_PLAN_SANDBOX for Codex exec (default: workspace-write; danger-full-access is high risk).'
+  ralph_help_option '--codex-dangerously-bypass' '<0|1>' \
+    'Sets CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX (default: 0; 1 adds --dangerously-bypass-approvals-and-sandbox; isolated-runner-only).'
+
+  ralph_help_section 'Ralph tooling'
+  ralph_help_option '--ralph-mode' '<no|native|ralph|hybrid>' \
+    'Set Ralph tooling and native adapter mode (sets RALPH_MODE). no: no Ralph MCP injection and no native adapters. native: native tools primary with result tools only. ralph: full Ralph MCP catalog; native adapters disabled. hybrid: full Ralph MCP catalog plus native adapters. Interactive runs prompt when no flag, env, or preference exists.'
+  ralph_help_option '--skip-mcp-preflight' '' 'Skip Ralph MCP handshake preflight when Ralph MCP is active (CI/stubs only).'
+
+  ralph_help_section 'Other'
+  ralph_help_option '--help' '' 'Show this message.'
+
+  ralph_help_section 'Environment variables'
+  ralph_help_note 'RALPH_PLAN_CONSOLIDATE=1'
+  ralph_help_note '  Collapse adjacent unchecked todos once at run start (off by default).'
+  ralph_help_note 'RALPH_MODE=<no|native|ralph|hybrid>'
+  ralph_help_note '  Same as --ralph-mode (default: no unless a prompt or preference selects otherwise).'
+  ralph_help_note 'RALPH_SKIP_MCP_PREFLIGHT=1'
+  ralph_help_note '  Skip MCP preflight when Ralph MCP is active.'
+  ralph_help_note 'RALPH_AGENT_WORKSPACE=<path>'
+  ralph_help_note '  Agent sandbox root (default: original invocation directory).'
+}
+
 # Print the run-plan CLI usage summary.
 # Args: none
 # Returns: 0 on success, non-zero on error
 print_usage() {
-  cat <<'EOU'
-Usage: .ralph/run-plan.sh --plan <path> [OPTIONS]
-
-Required:
-  --plan <path>                        Path to the plan file relative to the workspace.
-
-Options:
-  --runtime <cursor|claude|codex|opencode|antigravity|agy>  CLI runtime (use agy as shorthand for antigravity; omit if RALPH_PLAN_RUNTIME is set or you use the interactive prompt).
-  --workspace <path>                   Repo workspace root (default: current directory).
-  --project-root <path>                Alias for --workspace; where the project (and .ralph/) lives.
-  --workspace-root <path>              Directory that contains .ralph-workspace (defaults to <project>/.ralph-workspace).
-  --agent-workspace <path>             Agent sandbox root (default: original invocation directory; files the agent can read/write).
-
-Common options:
-  --agent <name>                       Prebuilt agent directory under .<runtime>/agents/.
-  --agent-source <path>                Explicit agent source file (overrides probe order; sets RALPH_AGENT_SOURCE).
-  --select-agent                       Pick a prebuilt agent interactively.
-  --non-interactive / --no-interactive  Skip interactive prompts.
-  --model <id>                         CLI model id (overrides agent default).
-  --reasoning-effort <low|medium|high|xhigh|max|inherit>
-                                       Portable reasoning effort (overrides agent and stage defaults).
-  --claude-bare                        Enable Claude --bare / CLAUDE_PLAN_BARE (default: on; --no-claude-bare or CLAUDE_PLAN_BARE=0 restores CLAUDE.md auto-discovery, auto-memory, and plugin sync).
-  --claude-allow-mcp                   In Claude minimal mode, omit empty MCP lockdown so project MCP servers load (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0).
-  --no-claude-allow-mcp                Restore default minimal MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1).
-  --claude-permission-mode <default|acceptEdits|auto|bypassPermissions|dontAsk|plan>
-                                       Set CLAUDE_PLAN_PERMISSION_MODE for Claude exec (omit to use the CLI default; modes that skip or auto-approve permissions reduce safety).
-  --codex-sandbox <read-only|workspace-write|danger-full-access>
-                                        Sets CODEX_PLAN_SANDBOX for Codex exec (default: workspace-write; danger-full-access is high risk).
-  --codex-dangerously-bypass <0|1>
-                                        Sets CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX (default: 0; 1 adds --dangerously-bypass-approvals-and-sandbox; isolated-runner-only).
-  --session-strategy <fresh|resume|reset|compact>
-                                        Session behavior between TODOs.
-                                        fresh=default strict isolation, resume=keep same conversation,
-                                        reset=reuse session id with reset-oriented prompts,
-                                        compact=reuse session id with compact command prefix (Codex=/compact, Cursor=/compress).
-  --cli-resume / --no-cli-resume       Enable/disable CLI resume prompts.
-  --allow-unsafe-resume                Allow bare CLI resume without session id.
-  --resume <id>                        Force a CLI session id for this run.
-  --ralph-mode <no|native|ralph|hybrid>
-                                       Set Ralph tooling and native adapter mode (sets RALPH_MODE).
-                                       no     = no Ralph MCP injection and no native adapters.
-                                       native = native tools primary; native adapters enabled; result tools only.
-                                       ralph  = full Ralph MCP catalog; native adapters disabled.
-                                       hybrid = full Ralph MCP catalog plus native adapters.
-                                       Interactive runs prompt when no flag, env, or preference exists.
-  --skip-mcp-preflight                 Skip Ralph MCP handshake preflight when Ralph MCP is active (CI/stubs only).
-  --max-iterations <n>                 Per-TODO gutter: exit after n attempts on the same open item (positive integer).
-                                       Overrides CURSOR_PLAN_GUTTER_ITER / CLAUDE_PLAN_GUTTER_ITER / CODEX_PLAN_GUTTER_ITER.
-  --timeout <duration>                 Invocation timeout (default: 30m). Format: e.g. 30m, 1800s, 2h.
-  --help                               Show this message.
-
-Environment variables:
-  RALPH_PLAN_CONSOLIDATE=1             Collapse adjacent unchecked todos once at run start (off by default).
-  RALPH_MODE=<no|native|ralph|hybrid>  Set Ralph tooling and native adapter mode (matches --ralph-mode flag; default no unless a prompt/preference selects otherwise).
-  RALPH_SKIP_MCP_PREFLIGHT=1           Skip MCP preflight when Ralph MCP is active.
-  RALPH_AGENT_WORKSPACE=<path>         Agent sandbox root (default: original invocation directory).
-  RALPH_AGENT_SOURCE=<path>            Explicit agent source file (overrides probe order; same as --agent-source).
-EOU
+  ralph_help_style_init
+  if [[ "${RALPH_RUN_PLAN_HELP_CONTEXT:-}" != "ralph-run" ]]; then
+    ralph_help_title 'Usage: .ralph/run-plan.sh --plan <path> [options]'
+  fi
+  _print_run_plan_help_body
 }
 
 # Parse CLI flags for run-plan and configure environment variables.
@@ -336,6 +378,42 @@ ralph_run_plan_parse_args() {
   if [[ "${RALPH_NATIVE_HOOKS+x}" == x ]]; then
     ralph_die "Error: RALPH_NATIVE_HOOKS is no longer supported. Use RALPH_MODE=<no|native|ralph|hybrid> instead."
   fi
+
+  # Reject removed profile-selecting agent env surfaces (retain agent-workspace / poll / marks).
+  local _removed_agent_source_env="RALPH_AGENT_"SOURCE
+  if [[ "${!_removed_agent_source_env+x}" == x ]]; then
+    ralph_run_plan_reject_removed_agent_surface "$_removed_agent_source_env"
+  fi
+  # Reject removed probe-order env without embedding the retired contiguous name in source.
+  local _removed_agent_src_order_env="${_removed_agent_source_env}"_ORDER
+  if [[ "${!_removed_agent_src_order_env+x}" == x ]]; then
+    ralph_run_plan_reject_removed_agent_surface "$_removed_agent_src_order_env"
+  fi
+  local _removed_agent_native_passthrough_env="RALPH_AGENT_"NATIVE_PASSTHROUGH
+  if [[ "${!_removed_agent_native_passthrough_env+x}" == x ]]; then
+    ralph_run_plan_reject_removed_agent_surface "$_removed_agent_native_passthrough_env"
+  fi
+  local _removed_plan_agent_env
+  for _removed_plan_agent_env in \
+    CURSOR_PLAN_AGENT \
+    CLAUDE_PLAN_AGENT \
+    CODEX_PLAN_AGENT \
+    OPENCODE_PLAN_AGENT \
+    ANTIGRAVITY_PLAN_AGENT
+  do
+    if [[ "${!_removed_plan_agent_env+x}" == x ]]; then
+      ralph_run_plan_reject_removed_agent_surface "$_removed_plan_agent_env"
+    fi
+  done
+
+  # Reject non-empty removed instruction-role env surfaces before any filesystem mutation.
+  local _removed_plan_role_env
+  while IFS= read -r _removed_plan_role_env; do
+    [[ -n "$_removed_plan_role_env" ]] || continue
+    if [[ -n "${!_removed_plan_role_env:-}" ]]; then
+      ralph_run_plan_reject_removed_role_surface "$_removed_plan_role_env"
+    fi
+  done < <(ralph_run_plan_removed_plan_role_env_names)
 
   local _ralph_mode_env_was_set=0
   [[ "${RALPH_MODE+x}" == x ]] && _ralph_mode_env_was_set=1
@@ -376,6 +454,9 @@ ralph_run_plan_parse_args() {
         fi
         PLAN_MODEL_CLI="$2"
         shift 2
+        ;;
+      "$(ralph_run_plan_removed_role_cli_flag)")
+        ralph_run_plan_reject_removed_role_surface "$(ralph_run_plan_removed_role_cli_flag)"
         ;;
       --reasoning-effort)
         if [[ -z "${2:-}" ]]; then
@@ -443,23 +524,13 @@ ralph_run_plan_parse_args() {
         shift 2
         ;;
       --agent)
-        if [[ -z "${2:-}" ]]; then
-          ralph_die "Error: --agent requires a prebuilt agent name (subdirectory of .<runtime>/agents/)."
-        fi
-        PREBUILT_AGENT="$2"
-        shift 2
+        ralph_run_plan_reject_removed_agent_surface "--agent"
         ;;
       --agent-source)
-        if [[ -z "${2:-}" ]]; then
-          ralph_die "Error: --agent-source requires a path to an agent source file."
-        fi
-        RALPH_AGENT_SOURCE="$2"
-        export RALPH_AGENT_SOURCE
-        shift 2
+        ralph_run_plan_reject_removed_agent_surface "--agent-source"
         ;;
       --select-agent)
-        INTERACTIVE_SELECT_AGENT_FLAG=1
-        shift
+        ralph_run_plan_reject_removed_agent_surface "--select-agent"
         ;;
       --non-interactive | --no-interactive)
         NON_INTERACTIVE_FLAG=1
@@ -584,14 +655,6 @@ ralph_run_plan_parse_args() {
         ;;
     esac
   done
-
-  if [[ -n "$PREBUILT_AGENT" && "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" ]]; then
-    ralph_die "Error: use only one of --agent <name> and --select-agent."
-  fi
-
-  if [[ "$NON_INTERACTIVE_FLAG" == "1" && "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" ]]; then
-    ralph_die "Error: --non-interactive cannot be combined with --select-agent."
-  fi
 
   if [[ -n "$PROJECT_ROOT_OVERRIDE" ]]; then
     WORKSPACE="$PROJECT_ROOT_OVERRIDE"

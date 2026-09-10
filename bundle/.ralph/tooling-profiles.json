@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "raw": {
+      "description": "Ralph MCP off and proxy-shell/native-result compaction disabled: RALPH_MODE=no leaves native hooks off and Ralph MCP unused, so shell output flows through unmodified. Source-listing commands such as find, ls, and tree are never compacted on the shell path, and with RALPH_NATIVE_RESULT_COMPACT=0 native read/grep/glob results are also left untouched.",
+      "env": {
+        "RALPH_MODE": "no",
+        "RALPH_PROXY_SHELL_COMPACT": "0",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "0",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-read-heavy": {
+      "description": "Ralph MCP active with proxy-shell compaction on for known-noise command families only. Source-listing commands (find, ls, tree) are never compacted on the shell path, even in this profile. The generic fallback stays off so unknown large output is left untouched, and RALPH_NATIVE_RESULT_COMPACT=0 keeps native read/grep/glob results unwindowed.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "0",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-compact": {
+      "description": "Ralph MCP active with proxy-shell compaction on and the generic fallback enabled at a 16384-byte threshold, so unknown large shell output beyond that size is also compacted. Source-listing commands (find, ls, tree) are never compacted on the shell path. RALPH_NATIVE_RESULT_COMPACT=0 keeps native read/grep/glob results unwindowed; the only source-output dial is RALPH_NATIVE_RESULT_COMPACT, and it is off here.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "1",
+        "RALPH_COMPACT_GENERIC_THRESHOLD_BYTES": "16384",
+        "RALPH_NATIVE_RESULT_COMPACT": "0"
+      }
+    },
+    "ralph-aggressive": {
+      "description": "Ralph MCP active with proxy-shell compaction on and the generic fallback lowered to a 4096-byte threshold for maximum unknown-output trimming. RALPH_NATIVE_RESULT_COMPACT=1 windows native read/grep/glob results. Despite the aggressive setting, source-listing commands (find, ls, tree) are never compacted on the shell path; source output is never summarized on the shell path.",
+      "env": {
+        "RALPH_MODE": "ralph",
+        "RALPH_PROXY_SHELL_COMPACT": "1",
+        "RALPH_COMPACT_GENERIC_FALLBACK": "1",
+        "RALPH_COMPACT_GENERIC_THRESHOLD_BYTES": "4096",
+        "RALPH_NATIVE_RESULT_COMPACT": "1"
+      }
+    }
+  }
+}

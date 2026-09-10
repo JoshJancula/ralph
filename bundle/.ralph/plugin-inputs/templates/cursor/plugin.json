@@ -1,0 +1,17 @@
+{
+  "name": "{{PLUGIN_ID}}",
+  "displayName": "Ralph Orchestrator",
+  "version": "{{PLUGIN_VERSION}}",
+  "description": "Plan, author workflows, inspect runs, and safely execute Ralph from Cursor.",
+  "author": {
+    "name": "Ralph maintainers"
+  },
+  "license": "MIT",
+  "keywords": [
+    "ralph",
+    "planning",
+    "workflow",
+    "sequential",
+    "dependency"
+  ]
+}

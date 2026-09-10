@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "description": "G18 machine-readable graph authoring contract for the wizard and plan parser validation glue.",
+  "defaults": {
+    "workspaceMode": "snapshot",
+    "edgeDerivation": "both",
+    "failurePolicy": "drain",
+    "maxParallel": 3,
+    "strictEdges": false,
+    "publishMode": "manual",
+    "sessionStrategy": "fresh",
+    "contextBudget": "standard",
+    "consensusPolicy": "veto",
+    "joinPolicy": "veto",
+    "routerOnInvalid": "fail",
+    "toolingProfile": "ralph-compact"
+  },
+  "pipelineFields": {
+    "maxParallel": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "help": "How many graph nodes may run at the same time. Lower this when shared mutation or provider rate limits are a concern."
+    },
+    "edgeDerivation": {
+      "enum": ["declared", "artifacts", "both"],
+      "default": "both",
+      "help": "How edges are derived: dependsOn only (declared), producer/consumer artifacts only (artifacts), or both merged (both)."
+    },
+    "failurePolicy": {
+      "enum": ["drain", "cancel"],
+      "default": "drain",
+      "help": "When a node fails: drain lets in-flight siblings finish; cancel stops scheduling new work immediately."
+    },
+    "strictEdges": {
+      "type": "boolean",
+      "default": false,
+      "help": "When true, more than one node with zero inbound edges becomes a compile error instead of a warning."
+    },
+    "publishMode": {
+      "enum": [
+        "manual",
+        "on-verified"
+      ],
+      "default": "manual",
+      "help": "Manual records publish-ready evidence without changing the caller; on-verified publishes only after every isolation and verification guard succeeds."
+    },
+    "tooling": {
+      "type": "object",
+      "help": "Plan-wide tooling policy: defaultProfile names the tooling profile every node uses, and overrides maps a node id to a different profile. Profile names come from tooling-profiles.json."
+    },
+    "maxReworkIterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "help": "Plan-wide default for a review stage's maxIterations when it declares loopBackTo without its own bound. Graph mode enforces a hard ceiling of 5 regardless of source."
+    }
+  },
+  "choiceHelp": {
+    "policy": {
+      "veto": "Any single reject fails the node. Strictest; good for safety reviews.",
+      "unanimous": "Every voter must approve. Fails if even one voter is missing a verdict.",
+      "quorum": "Passes once N voters approve, so one dissent or one dead voter does not block.",
+      "adjudicate": "Ties and splits are handed to a deciding voter instead of failing."
+    },
+    "workspaceMode": {
+      "snapshot": "Edits a frozen copy of the tree. Safe default for parallel work.",
+      "worktree": "Edits inside a Git worktree. Use when the node needs real Git history.",
+      "shared": "Edits your live files directly. Fast, but parallel nodes can clobber each other."
+    },
+    "edgeDerivation": {
+      "declared": "Order comes only from dependsOn that you write by hand.",
+      "artifacts": "Order is inferred only from which node produces what another requires.",
+      "both": "Merge of the two. Recommended unless you want full manual control."
+    },
+    "failurePolicy": {
+      "drain": "Let already-running nodes finish, then stop. Keeps partial work.",
+      "cancel": "Stop scheduling immediately. Fastest way to abort a bad run."
+    },
+    "sessionStrategy": {
+      "fresh": "New CLI session per node. Strongest isolation, highest token cost.",
+      "resume": "Continue the previous session and its context.",
+      "reset": "Reuse the session id but clear the conversation.",
+      "compact": "Reuse the session id and compact the history first."
+    },
+    "contextBudget": {
+      "full": "Send the most context. Use for wide refactors that need the whole picture.",
+      "standard": "Balanced default.",
+      "lean": "Trim aggressively. Use for narrow, well-scoped nodes."
+    },
+    "onInvalid": {
+      "fail": "Stop the run when the router names no valid target. Safest.",
+      "default": "Fall back to defaultTarget and keep going."
+    }
+  },
+  "operatorTopics": {
+    "nodeTypes": {
+      "help": "A Dependency workflow is a set of nodes plus the edges between them. Every node has a type that decides what it does when its turn comes. Pick agent for work, gate for objective checks, consensus for multi-model judgement, approval for explicit human approve/request-changes/cancel on a resettable upstream stage, checkpoint for file acknowledgement on one branch, router for branching, integrate to merge isolated edits, and join to tally verdicts other nodes wrote."
+    },
+    "rework": {
+      "help": "Bounded rework sends a review stage back to a planFrom consumer. Each repair round receives a fresh control copy of the immutable generated plan source. Static planFile stages and approval nodes cannot be rework targets."
+    },
+    "planFile": {
+      "help": "For Dependency workflows, ordinary agent nodes choose one work source: bounded inline action, existing static plan file, or generated Ralph plan (planner/planFrom). Static planFile rework is rejected; only planFrom consumers may be rework targets, and each repair round gets a fresh control copy."
+    },
+    "voters": {
+      "help": "Each voter is one independent reviewer of the same input. Two or more on distinct runtimes is the point of the node: same-runtime voters tend to agree with each other and hide the disagreement you are paying for."
+    },
+    "verificationProfile": {
+      "help": "A named set of shell steps this gate runs. The wizard scaffolds the profile with a placeholder step; edit the generated pipeline.verificationProfiles block to put your real commands in."
+    },
+    "routerTargets": {
+      "help": "Allowed targets are the branches this router may pick. The default target is used when the router output is missing or names something not in the list, and only if onInvalid is set to default."
+    },
+    "maxParallel": {
+      "help": "Cap on nodes running at once. Raise it for throughput on independent work; lower it when nodes share files or you are hitting provider rate limits."
+    },
+    "dependsOn": {
+      "help": "DependsOn lists upstream node ids that must finish before this node starts. Use it when execution order matters even without artifact wiring."
+    },
+    "artifacts": {
+      "help": "Requires lists inputs this node must read; produces lists outputs later nodes may consume. Artifact edges can add scheduling order on top of dependsOn."
+    },
+    "workspace": {
+      "help": "Workspace mode controls where files are edited. Snapshot copies a frozen base into an isolated workspace (safe default). Worktree uses a Git worktree boundary. Shared edits the live tree and needs explicit risk acknowledgement."
+    },
+    "writeScopes": {
+      "help": "Write scopes are project-relative globs this node may change. They prevent accidental edits outside the declared lane and drive scope-mismatch repair guidance when a model touches an unlisted path."
+    },
+    "retry": {
+      "help": "Graph resume retries failed retryable nodes against the same workspace identity while retry budget remains. Gate flakyRerunPolicy controls bounded step reruns inside a gate profile."
+    },
+    "permission": {
+      "help": "Permission prompts appear only for proved native permission events with actionable identity. Exit codes alone never create a permission request; use the printed allow-once or allow-always continuation instead of editing the ledger."
+    },
+    "tooling": {
+      "help": "A tooling profile decides how much tool output each node's agent sees. One default applies to every node; override it per node only when a node genuinely needs different tooling. Decline this step to leave tooling unset and inherit the runtime default."
+    }
+  },
+  "nodeTypes": {
+    "agent": {
+      "label": "agent",
+      "summary": "Does the actual work: runs a runtime agent or a nested plan file.",
+      "whenToUse": "Use for any node that should write code, docs, or analysis. Most graphs are mostly agent nodes; reach for another type only when you need branching, voting, human sign-off, or a check that must not involve a model.",
+      "example": "implement: runtime claude, writeScopes src/api/**, produces api-handoff.md",
+      "wizardOrder": 1,
+      "fields": {
+        "runtime": {"required": true, "help": "Which CLI runtime executes this node."},
+        "role": {"required": false, "help": "Optional instruction-only SDLC role; the runtime supplies the actual agent."},
+        "model": {"required": false, "help": "Optional stage model override; otherwise use the runtime saved/default model."},
+        "nativeSubagents": {"enum": ["off", "inherit"], "default": "off", "help": "Whether the selected runtime may use its native subagents; this is separate from the SDLC role."},
+        "planFile": {"required": false, "help": "Nested plan executed by the orchestrator instead of inline todos."},
+        "dependsOn": {"required": false, "help": "Upstream nodes that must complete first."},
+        "requires": {"required": false, "help": "Artifact paths this node must read before running."},
+        "produces": {"required": false, "help": "Artifact paths this node must write before finishing."},
+        "workspaceMode": {"enum": ["snapshot", "worktree", "shared"], "default": "snapshot", "help": "Isolation mode for file edits."},
+        "writeScopes": {"required": false, "help": "Writable path globs when using snapshot or worktree isolation."},
+        "sessionStrategy": {"enum": ["fresh", "resume", "reset", "compact"], "default": "fresh"},
+        "contextBudget": {"enum": ["full", "standard", "lean"], "default": "standard"}
+      },
+      "todo": {
+        "content": "Complete the work for this agent node and honor declared artifacts and write scopes.",
+        "verification": "Confirm required outputs exist and any edits stay inside declared write scopes."
+      }
+    },
+    "consensus": {
+      "label": "consensus",
+      "summary": "Asks several models the same question and combines their verdicts.",
+      "whenToUse": "Use when one model's judgement is not trustworthy enough on its own, typically for review or acceptance of risky work. Put the voters on distinct runtimes so a single provider's blind spot cannot pass the check alone. This one node covers both the fan-out and the verdict combination.",
+      "example": "review: policy veto, voters on claude + codex + cursor",
+      "wizardOrder": 2,
+      "fields": {
+        "policy": {"enum": ["veto", "unanimous", "quorum", "adjudicate"], "default": "veto"},
+        "quorum": {"required": false, "help": "Required when policy is quorum."},
+        "dependsOn": {"required": false},
+        "voters": {"required": true, "help": "At least two voters on distinct runtimes are recommended."}
+      },
+      "todo": {
+        "content": "Review the upstream result and record a verdict for the configured policy.",
+        "verification": "Confirm a verdict artifact exists for this voter."
+      }
+    },
+    "checkpoint": {
+      "label": "checkpoint",
+      "summary": "Pauses this branch until a human acknowledges it.",
+      "whenToUse": "Use before anything you want to eyeball first, such as a migration or a publish. Only the branch behind it waits; unrelated branches keep running, so a checkpoint is cheaper than stopping the whole graph. For reusable Sequential and Dependency workflows that need approve/request-changes/cancel with a resettable upstream stage, prefer type: approval instead.",
+      "example": "confirm-migration: dependsOn write-migration",
+      "wizardOrder": 3,
+      "fields": {
+        "dependsOn": {"required": false}
+      },
+      "todo": {
+        "content": "Wait for a human to acknowledge this checkpoint before closing out.",
+        "verification": "Confirm the acknowledgement artifact exists."
+      }
+    },
+    "approval": {
+      "label": "approval",
+      "summary": "Pauses the workflow until a human approves, requests changes, or cancels.",
+      "whenToUse": "Use in Sequential or Dependency workflows when an operator must review durable evidence and either approve, request changes against a resettable upstream executable or planner stage, or cancel. Do not use runtime, model, plan, workspace, or Git fields on this node.",
+      "example": "approve-plan: question Approve this plan?, changesTarget plan-implementation, dependsOn plan-implementation",
+      "wizardOrder": 3.5,
+      "fields": {
+        "question": {"required": true, "help": "Non-empty question shown to the operator."},
+        "changesTarget": {"required": true, "help": "One upstream executable or planner ancestor whose reset closure reaches this approval."},
+        "dependsOn": {"required": true, "help": "Upstream stages that must succeed before the approval activates."},
+        "requires": {"required": true, "help": "Required artifacts and evidence the operator reviews."}
+      },
+      "todo": {
+        "content": "Pause for human approval of the declared evidence; do not invoke an agent.",
+        "verification": "Confirm an approval decision was recorded and the gate advanced or reset guidance was printed."
+      }
+    },
+    "join": {
+      "label": "join",
+      "summary": "Applies a consensus policy to verdicts that upstream nodes already wrote.",
+      "whenToUse": "Use when the voters are separate nodes you configured yourself and you only need the tally. If you want the wizard to create the voters for you, use consensus instead; a join on top of a consensus node is redundant.",
+      "example": "verdict: policy quorum 2, dependsOn review-a, review-b, review-c",
+      "wizardOrder": 4,
+      "fields": {
+        "policy": {"enum": ["veto", "unanimous", "quorum", "adjudicate"], "default": "veto"},
+        "quorum": {"required": false},
+        "dependsOn": {"required": false}
+      },
+      "todo": {
+        "content": "Apply the configured policy to the upstream verdicts.",
+        "verification": "Confirm a consensus-result artifact was written under the consensus directory."
+      }
+    },
+    "gate": {
+      "label": "gate",
+      "summary": "Runs your shell commands (tests, lint, build) with no model involved.",
+      "whenToUse": "Use for objective pass/fail checks. A gate is cheaper and far more reliable than asking an agent whether the tests passed, so prefer it whenever the answer is a command's exit code.",
+      "example": "ci: profile unit-tests running npm test and npm run lint",
+      "wizardOrder": 5,
+      "fields": {
+        "dependsOn": {"required": false},
+        "requires": {"required": false, "help": "Artifacts that must exist before the gate runs."},
+        "profile": {"required": false, "help": "Named verification profile declared under pipeline.verificationProfiles."}
+      },
+      "todo": {
+        "content": "Run the declared verification profile for this gate.",
+        "verification": "Confirm the gate outcome records passed or changes-required."
+      }
+    },
+    "integrate": {
+      "label": "integrate",
+      "summary": "Merges the file changes made by isolated upstream nodes back together.",
+      "whenToUse": "Required whenever two or more parallel nodes edited files in snapshot or worktree isolation and you want their work combined. Without an integrate node those edits stay in their own workspaces and never reach the caller.",
+      "example": "merge: dependsOn lane-a, lane-b, lane-c",
+      "wizardOrder": 6,
+      "fields": {
+        "dependsOn": {"required": true},
+        "workspaceMode": {"enum": ["snapshot", "worktree"], "default": "snapshot", "help": "Integrate nodes require snapshot or worktree; shared is rejected at compile time."}
+      },
+      "todo": {
+        "content": "Merge upstream isolated changesets in declared dependency order.",
+        "verification": "Confirm integration produced a changeset manifest without conflicts."
+      }
+    },
+    "router": {
+      "label": "router",
+      "summary": "Picks exactly one downstream branch to run and skips the others.",
+      "whenToUse": "Use for conditional work, such as sending a change down a hotfix path or a full-review path. A router chooses one target only; when every branch should run, leave them as plain parallel nodes instead.",
+      "example": "triage: allowedTargets hotfix, full-review; defaultTarget full-review",
+      "wizardOrder": 7,
+      "fields": {
+        "dependsOn": {"required": false},
+        "router": {
+          "required": true,
+          "properties": {
+            "allowedTargets": {"required": true, "help": "Downstream node ids this router may select."},
+            "defaultTarget": {"required": true, "help": "Fallback target when output is missing or invalid (if onInvalid is default)."},
+            "terminalOutcomes": {"required": false, "help": "Named outcomes that end routing without selecting a branch."},
+            "onInvalid": {"enum": ["fail", "default"], "default": "fail"}
+          }
+        }
+      },
+      "todo": {
+        "content": "Choose the next branch target from the allowed router targets.",
+        "verification": "Confirm a router-decision artifact names one allowed target."
+      }
+    }
+  }
+}

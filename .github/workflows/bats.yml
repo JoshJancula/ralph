@@ -7,14 +7,32 @@ on:
   pull_request:
     branches:
       - '*'
+  schedule:
+    # Nightly, so the acceptance tier still runs regularly without charging
+    # every pull request for it.
+    - cron: '23 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Superseded runs waste the most expensive resource here. A new push to a PR
+# cancels the in-flight run for that ref instead of letting a multi-job suite
+# burn to completion against a commit nobody will merge. main is never
+# cancelled, so pushes to it always produce a complete result.
+concurrency:
+  group: bats-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
-  bats:
-    name: Run Bats harness
+  bats-fast:
+    name: Bats fast tier
     runs-on: ubuntu-24.04
+    # The fast tier is 210 of 271 files and about 13% of measured suite cost.
+    # It should land in well under 25 minutes; if it does not, something
+    # regressed or hung and the job should die rather than bill for the
+    # 360-minute default.
+    timeout-minutes: 25
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -27,14 +45,21 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
       - name: Install GNU parallel and ripgrep
         run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
 
       - name: Generate test fixtures for .ralph-workspace/
         run: bash scripts/setup-test-fixtures.sh
 
-      - name: Run Bats suite
-        run: CI=1 bash scripts/run-bats.sh -j 4
+      - name: Run Bats fast tier
+        run: CI=1 bash scripts/run-bats.sh --tier fast -j 4
 
       - name: Recheck resource-sensitive Bats tests serially
         # These tests fork many short-lived jq/flock/awk/mktemp subprocesses per
@@ -73,9 +98,116 @@ jobs:
           echo "serial recheck failed after ${attempts} attempts" >&2
           exit 1
 
+  bats-slow:
+    name: Bats slow tier
+    runs-on: ubuntu-24.04
+    # 53 files carrying most of the remaining suite cost -- graph scheduler
+    # runs and run-plan end-to-end paths. Each boots the real
+    # orchestrator/run-plan stack per node, so these are fork-bound rather than
+    # CPU-bound: the suite uses only ~36% of available cores regardless of -j.
+    #
+    # -j was briefly dropped to 2 on the theory that a high load average meant
+    # contention was costing throughput. Measurement says otherwise: -j 4
+    # reached ~475 tests in 27 minutes, -j 2 reached ~489 in 42 minutes
+    # (roughly 17.6 vs 11.6 tests/min). The high load average is a symptom of
+    # deep process trees, not a throughput ceiling. Staying at 4.
+    #
+    # Measured: 93m09s locally at -j 4 for 1049 tests. The earlier 90-minute
+    # cap was an estimate and would have killed a legitimate run. 150 leaves
+    # headroom for a slower 4-core runner while still bounding a hang well
+    # below the 360-minute default.
+    timeout-minutes: 150
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
+
+      - name: Set up Bats
+        uses: bats-core/bats-action@4.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
+      - name: Install GNU parallel and ripgrep
+        run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
+
+      - name: Generate test fixtures for .ralph-workspace/
+        run: bash scripts/setup-test-fixtures.sh
+
+      - name: Run Bats slow tier
+        run: CI=1 bash scripts/run-bats.sh --tier slow -j 4
+
+  bats-acceptance:
+    name: Bats acceptance tier
+    runs-on: ubuntu-24.04
+    # Seven files, 38 tests: heavy end-to-end replays that are real coverage but
+    # do not belong on the critical path of every pull request. Runs on main,
+    # nightly, and on demand.
+    #
+    # Measured at 13m35s locally (-j 2, 38 tests, green). The 45-minute cap is
+    # roughly 3x that, to absorb a slower 4-core runner while still killing a
+    # genuine hang long before the 360-minute default would. -j 2 is simply the
+    # setting this was measured at; it has not been compared against -j 4 here,
+    # and on the slow tier a higher -j measured faster.
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
+
+      - name: Set up Bats
+        uses: bats-core/bats-action@4.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the pinned OpenCode plugin declaration
+        # The plugin generator refuses to render the OpenCode adapter without
+        # the pinned @opencode-ai/plugin type declaration -- that pin is the
+        # supply-chain check. It lives in gitignored node_modules, so CI has to
+        # install it or the check silently degrades into a skip.
+        run: npm install --prefix bundle/.opencode --no-audit --no-fund
+
+      - name: Install GNU parallel and ripgrep
+        run: sudo apt-get update && sudo apt-get install -y parallel ripgrep
+
+      - name: Generate test fixtures for .ralph-workspace/
+        run: bash scripts/setup-test-fixtures.sh
+
+      - name: Run Bats acceptance tier
+        run: CI=1 bash scripts/run-bats.sh --tier acceptance -j 2
+
+  graph-shard-manifest:
+    name: Graph shard manifest
+    runs-on: ubuntu-24.04
+    # Cheap guard: fails if any tests/bats/graph file is in no shard and not
+    # excluded, which is how four files (including the tooling-profile tests)
+    # went unrun. Listing files does not execute any test.
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Link shared Ralph scripts from bundle
+        run: ln -sfn bundle/.ralph .ralph
+
+      - name: Verify every graph test file is assigned to a shard
+        run: bash scripts/run-graph-bats.sh --list-files >/dev/null
+
   python:
     name: Python unit tests (quarantined)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -120,6 +252,10 @@ jobs:
   process-lifecycle:
     name: Process lifecycle (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Signal/teardown tests spawn supervised children; a missed reap is exactly
+    # the failure mode that would otherwise hang the runner. macOS minutes bill
+    # at 10x, so an uncapped hang here is the most expensive one in the repo.
+    timeout-minutes: 20
     # The process-supervisor suite is portable and remains blocking on both OSes.
     # The orchestration fixture below depends on process-group/session behavior
     # that is stable on Linux but does not start reliably on macOS runners.

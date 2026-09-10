@@ -11,9 +11,17 @@ if [[ -r "$_select_model_common" ]]; then
   source "$_select_model_common"
 fi
 
-_CLAUDE_DEFAULT_MODELS=("sonnet" "opus" "haiku")
+# _CLAUDE_DEFAULT_MODELS is defined by select-model-common.sh (sourced above);
+# this fallback only covers the case where the common lib was unreadable.
+# Catalog must stay exactly: haiku, sonnet, opus, fable (selected value unchanged).
+if [[ -z "${_CLAUDE_DEFAULT_MODELS+x}" ]]; then
+  _CLAUDE_DEFAULT_MODELS=("haiku" "sonnet" "opus" "fable")
+fi
+export _CLAUDE_DEFAULT_MODELS
 
 _claude_select_model_interactive() {
+  # Passes the Claude alias catalog so saved IDs merge with missing aliases.
+  # Defaults-only preselect index 2 => sonnet. Saved-present preselect stays 1.
   _select_model_saved_runtime_interactive \
     "claude" \
     "--- Claude (.claude/agents) ---" \
@@ -22,7 +30,7 @@ _claude_select_model_interactive() {
     "${C_Y:-}${C_BOLD:-}Enter custom model id${C_RST:-}: " \
     "Enter custom model id" \
     "_CLAUDE_DEFAULT_MODELS" \
-    1
+    2
 }
 
 select_model_claude() {

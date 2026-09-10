@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "runtime": "codex",
+  "outputDirectory": "plugins/ralph-orchestrator/codex",
+  "contract": null,
+  "capabilities": {
+    "nativeAgents": false,
+    "nativeHooks": true,
+    "mcp": true,
+    "rules": false,
+    "skills": true,
+    "workflows": true
+  },
+  "copies": [
+    {
+      "source": "bundle/.codex/skills/repo-context/SKILL.md",
+      "destination": "skills/repo-context/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.codex/hooks.json",
+      "destination": "hooks.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.codex/hooks/pre-tool-bash-policy.sh",
+      "destination": "hooks/pre-tool-bash-policy.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.codex/hooks/post-tool-bash-mutation-probe.sh",
+      "destination": "hooks/post-tool-bash-mutation-probe.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.codex/hooks/post-tool-bash-telemetry.sh",
+      "destination": "hooks/post-tool-bash-telemetry.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.codex/hooks/post-tool-native-result-compact.sh",
+      "destination": "hooks/post-tool-native-result-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.codex/mcp.example.toml",
+      "destination": "mcp.example.toml",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
+      "destination": "shared/ralph-plugin-bootstrap.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-exec.sh",
+      "destination": "shared/ralph-plugin-exec.sh",
+      "mode": "0755"
+    }
+  ],
+  "templates": [
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/codex/marketplace.json",
+      "destination": ".agents/plugins/marketplace.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/codex/plugin.json",
+      "destination": ".codex-plugin/plugin.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/codex/host-manifest.json",
+      "destination": "host-manifest.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "skills/ralph-doctor/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "skills/ralph-plan/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "skills/ralph-run/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "skills/ralph-status/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "skills/ralph-workflow/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "workflows/ralph-doctor.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "workflows/ralph-plan.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "workflows/ralph-run.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "workflows/ralph-status.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "workflows/ralph-workflow.md",
+      "mode": "0644"
+    }
+  ]
+}

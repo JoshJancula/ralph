@@ -28,18 +28,8 @@ ralph_cursor_exploration_truthy() {
 ralph_cursor_exploration_nudge_active() {
   case "${RALPH_NATIVE_EXPLORATION_NUDGE:-}" in
     1 | true | yes | on) return 0 ;;
-    0 | false | no | off) return 1 ;;
+    *) return 1 ;;
   esac
-  case "${RALPH_MODE:-}" in
-    hybrid | native) return 1 ;;
-    ralph) return 0 ;;
-  esac
-  if [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
-    case "${RALPH_NATIVE_HOOKS:-}" in
-      off | 0 | false | no) return 0 ;;
-    esac
-  fi
-  return 1
 }
 
 ralph_cursor_exploration_workspace() {
@@ -96,6 +86,16 @@ ralph_cursor_exploration_emit_deny() {
   local workspace plan_key
   workspace="$(ralph_cursor_exploration_workspace)" || ralph_cursor_exploration_fail_open
   plan_key="$(ralph_native_hook_plan_key cursor-exploration)"
+  if [[ -n "${RALPH_KILLSWITCH_HOOK_RECORD:-}" ]] && command -v jq >/dev/null 2>&1; then
+    jq -nc \
+      --arg runtime "cursor" \
+      --arg tool "$tool_name" \
+      --arg decision "nudge" \
+      --argjson applied false \
+      --arg source "native-hook" \
+      '{runtime:$runtime,tool:$tool,decision:$decision,applied:$applied,source:$source}' \
+      >>"$RALPH_KILLSWITCH_HOOK_RECORD" 2>/dev/null || true
+  fi
   ralph_native_hook_append_nudge_log \
     "$workspace" \
     "$plan_key" \

@@ -169,9 +169,12 @@ teardown_runtime_invoke_test() {
   teardown_runtime_invoke_test
 }
 
-@test "codex launcher records live CLI PID, preserves exit status, and keeps workspace cwd" {
-  local record pid_marker
+@test "codex launcher records live CLI PID, preserves exit status, and uses agent workspace cwd" {
+  local record pid_marker agent_ws
   setup_runtime_invoke_test "$CODEX_LIB"
+  agent_ws="$WORKSPACE/nested-agent"
+  mkdir -p "$agent_ws"
+  export RALPH_AGENT_WORKSPACE="$agent_ws"
   record="$TEST_TMPDIR/codex.args"
   pid_marker="$TEST_TMPDIR/codex.pid-marker"
   run_plan_invoke_test_write_live_pid_codex_stub "$record" "$pid_marker" 23
@@ -186,7 +189,7 @@ teardown_runtime_invoke_test() {
   [ "$(cat "$pid_marker")" = "live_pid_ok" ]
   [[ "$(cat "$record")" == *"exec"* ]]
   [[ "$(cat "$record")" == *"codex-runtime-prompt"* ]]
-  [[ "$(cat "$record")" == *"cwd=$WORKSPACE"* ]]
+  [[ "$(cat "$record")" == *"cwd=$agent_ws"* ]]
 
   teardown_runtime_invoke_test
 }

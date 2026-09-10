@@ -74,19 +74,21 @@
 #     ralph models list|add|remove <claude|codex> [model-id]
 #     bash .ralph/models.sh list|add|remove <claude|codex> [model-id]
 #   Store: ${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json
-#   The first saved model per runtime is the default fallback. Override the config root with RALPH_CONFIG_HOME.
+#   Attended leaf runs show every saved model and ask you to pick one.
+#   The first saved model is only a non-interactive / no-TTY fallback.
+#   Override the config root with RALPH_CONFIG_HOME.
 #
-#   Claude/Codex resolution order (highest wins):
-#     1. --model <id> CLI flag
-#     2. CLAUDE_PLAN_MODEL or CODEX_PLAN_MODEL (each falls back to CURSOR_PLAN_MODEL when unset)
-#     3. Non-empty agent config `model` (.claude/agents/<id>/config.json etc.)
-#     4. First saved model from models.json (see `ralph models add`)
-#     5. Interactive prompt (saved-model menu or manual entry; offers to save new ids)
-#   Orchestration stage `model` in .orch.json overrides agent config for that stage only.
+#   Claude/Codex leaf resolution order (highest wins):
+#     1. --model <id> CLI flag (or plan-header model:)
+#     2. TODO model:
+#     3. Attended TTY: interactive picker (full saved-model catalog + custom entry)
+#     4. Non-interactive / no TTY: first saved model from models.json
+#     5. Runtime-native default (omit Ralph --model)
+#   Staged graph/orchestration: stage/voter model: > saved > native (runner is non-interactive).
 #
-#   Non-interactive Claude/Codex runs fail when none of steps 1-4 resolve a model. Add a saved default:
-#     ralph models add claude <id>   (or `ralph models add codex <id>`)
-#   Non-interactive Cursor/OpenCode still require --agent, --model, or CURSOR_PLAN_MODEL (unchanged).
+#   Non-interactive Claude/Codex runs use the first saved model when CLI/TODO pins are unset.
+#   Add a saved default: ralph models add claude <id>   (or `ralph models add codex <id>`)
+#   Non-interactive Cursor/OpenCode still require --model or CURSOR_PLAN_MODEL (unchanged).
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
@@ -153,6 +155,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-hooks-config-snapshot.sh"
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-session.sh"
 # shellcheck source=bash-lib/runtime-overlay/runtime-overlay.sh
 source "$SCRIPT_DIR/bash-lib/runtime-overlay/runtime-overlay.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-bg-tier-probe.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-bg-tier-probe.sh"
 # shellcheck source=bash-lib/runtime-config/runtime-config-mcp.sh
 source "$SCRIPT_DIR/bash-lib/runtime-config/runtime-config-mcp.sh"
 # shellcheck source=bash-lib/ralph-named-shell.sh

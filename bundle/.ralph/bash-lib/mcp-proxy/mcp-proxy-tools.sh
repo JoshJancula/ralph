@@ -21,6 +21,10 @@ fi
 RALPH_MCP_PROXY_TOOLS_LOADED=1
 
 _MCP_PROXY_TOOLS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_wait >/dev/null 2>&1; then
+  # shellcheck source=../ralph-wait.sh
+  source "$_MCP_PROXY_TOOLS_LIB_DIR/../ralph-wait.sh"
+fi
 if [[ -z "${RALPH_COMPACTORS_LOADED:-}" ]]; then
   # Pin while BASH_SOURCE still resolves; subprocess callers may lose it at call time.
   export RALPH_COMPACTORS_LIB_DIR="${RALPH_COMPACTORS_LIB_DIR:-$_MCP_PROXY_TOOLS_LIB_DIR/..}"
@@ -1527,6 +1531,36 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   local original_tokens="" returned_tokens="" token_args=()
   local inline_candidate_bytes inline_candidate_tokens=""
 
+  # Exploration tools return the exact window they gathered. Their callers can
+  # request a narrower path, offset, limit, or query; replacing complete results
+  # with a stored-result envelope hides the source the agent explicitly asked
+  # to inspect. A source-capped search is different: the incompleteness marker
+  # and narrowing guidance in its envelope are correctness data, so it must not
+  # take this direct-result fast path.
+  case "$tool_name" in
+    ralph_proxy_shell|ralph_proxy_result_reduce)
+      ;;
+    *)
+      case "${RALPH_MCP_EXPLORATION_RESULT_COMPACT:-0}" in
+        1|true|yes|on)
+          # Compatibility escape hatch for callers that explicitly need the
+          # former stored-envelope behavior.
+          ;;
+        *)
+          if [[ "$source_capped_flag" != "1" ]] \
+            && ! { [[ -n "$extra_envelope_json" ]] \
+              && jq -e '.sourceCapped == true' <<<"$extra_envelope_json" >/dev/null 2>&1; }; then
+            RALPH_MCP_PROXY_LAST_RESULT_ID=""
+            RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=0
+            export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
+            ralph_mcp_proxy_tool_success_json "$preview_text"
+            return 0
+          fi
+          ;;
+      esac
+      ;;
+  esac
+
   original_bytes=${#storage_text}
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "$tool_name")"
   token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$tool_name")"
@@ -1721,10 +1755,15 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
     elif [[ "$tool_name" == "ralph_proxy_glob" ]]; then
       next_actions_json="$(ralph_mcp_proxy_result_envelope_glob_next_actions_json "$result_id" "$grep_pattern" "$read_window")"
     elif [[ "$tool_name" == "ralph_proxy_result_reduce" ]]; then
-      local reduce_source_id reduce_reducer reduce_expression
-      reduce_source_id="$(jq -r '.sourceResultId // empty' <<< "${metadata_json:-{}}")"
-      reduce_reducer="$(jq -r '.reducer // empty' <<< "${metadata_json:-{}}")"
-      reduce_expression="$(jq -r '.expression // empty' <<< "${metadata_json:-{}}")"
+      local reduce_source_id reduce_reducer reduce_expression reduce_meta
+      # Not "${metadata_json:-{}}": bash closes that expansion one brace early,
+      # so populated metadata arrives with a stray trailing "}" and every field
+      # below silently reads empty.
+      reduce_meta="${metadata_json:-}"
+      [[ -n "$reduce_meta" ]] || reduce_meta='{}'
+      reduce_source_id="$(jq -r '.sourceResultId // empty' <<< "$reduce_meta")"
+      reduce_reducer="$(jq -r '.reducer // empty' <<< "$reduce_meta")"
+      reduce_expression="$(jq -r '.expression // empty' <<< "$reduce_meta")"
       next_actions_json="$(ralph_mcp_proxy_result_envelope_reduce_next_actions_json "$reduce_source_id" "$result_id" "$read_window" "$reduce_reducer" "$reduce_expression")"
     else
       next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
@@ -1815,8 +1854,8 @@ ralph_mcp_proxy_read_file_metadata() {
   local resolved="${1:-}"
   local file_size file_mtime
   [[ -f "$resolved" ]] || return 1
-  file_size="$(stat -f '%z' "$resolved" 2>/dev/null || stat -c '%s' "$resolved" 2>/dev/null || true)"
-  file_mtime="$(stat -f '%m' "$resolved" 2>/dev/null || stat -c '%Y' "$resolved" 2>/dev/null || true)"
+  file_size="$(stat -c '%s' "$resolved" 2>/dev/null || stat -f '%z' "$resolved" 2>/dev/null || true)"
+  file_mtime="$(stat -c '%Y' "$resolved" 2>/dev/null || stat -f '%m' "$resolved" 2>/dev/null || true)"
   [[ "$file_size" =~ ^[0-9]+$ && "$file_mtime" =~ ^[0-9]+$ ]] || return 1
   printf '%s|%s' "$file_size" "$file_mtime"
 }
@@ -4189,8 +4228,11 @@ ralph_mcp_proxy_owned_tool_result_summary() {
   entry_json="$(ralph_mcp_proxy_result_tool_index_entry_json "$workspace" "$plan_key" "$result_id")"
   bytes="$(wc -c <"$result_path" | tr -d ' ')"
   line_count="$(ralph_mcp_proxy_result_tool_line_count "$result_path")"
-  tool_name="$(jq -r '.tool // empty' <<< "${entry_json:-{}}")"
-  stored_at="$(jq -r '.storedAt // empty' <<< "${entry_json:-{}}")"
+  # Not "${entry_json:-{}}": bash closes that expansion one brace early, so a
+  # real index entry arrives with a stray trailing "}" and jq rejects it.
+  [[ -n "$entry_json" ]] || entry_json='{}'
+  tool_name="$(jq -r '.tool // empty' <<< "$entry_json")"
+  stored_at="$(jq -r '.storedAt // empty' <<< "$entry_json")"
   if [[ -z "$tool_name" || "$tool_name" == "null" ]]; then
     tool_name=""
   fi
@@ -4198,7 +4240,7 @@ ralph_mcp_proxy_owned_tool_result_summary() {
     stored_at=""
   fi
   local entry_metadata file_metadata metadata_json
-  entry_metadata="$(jq -r '.metadata // empty' <<< "${entry_json:-{}}")"
+  entry_metadata="$(jq -r '.metadata // empty' <<< "$entry_json")"
   if [[ "$entry_metadata" == "null" ]]; then
     entry_metadata=""
   fi
@@ -4544,27 +4586,21 @@ ralph_mcp_proxy_shell_command_state_update() {
   jq -c "$jq_filter" <<<"$state_json" | ralph_mcp_proxy_shell_command_state_write "$file"
 }
 
+# Terminate a managed proxy shell job.
+#
+# This MUST delegate to ralph_native_shell_terminate_spawned_job rather than
+# issuing its own `kill -TERM -$pgid`. That function carries the self-pgid
+# guard: it re-reads the job's LIVE process group and refuses to group-kill a
+# group that is our own. A recorded pgid can collapse onto the launcher's group
+# (a lost setsid race, a `ps -o pgid=` that came back empty and fell back to
+# pgid=pid, or a recycled pid), and this function runs inside the MCP server --
+# so an unguarded group kill terminates the server itself, the stdio transport
+# dies, and the client drops every ralph tool for the rest of the session.
+# A duplicated, unguarded copy of this kill caused exactly that outage; keep one
+# guarded implementation.
 ralph_mcp_proxy_shell_job_kill_managed() {
   local pid="${1:-}" pgid="${2:-}" isolated="${3:-false}"
-  local escalated=0
-  if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
-    if [[ "$pgid" =~ ^[0-9]+$ ]]; then
-      kill -TERM -"$pgid" 2>/dev/null || true
-      local waited=0
-      while (( waited < 10 )) && kill -0 -"$pgid" 2>/dev/null; do
-        sleep 0.1
-        ((waited++)) || true
-      done
-      if kill -0 -"$pgid" 2>/dev/null; then
-        escalated=1
-        kill -KILL -"$pgid" 2>/dev/null || true
-      fi
-    fi
-  elif [[ "$pid" =~ ^[0-9]+$ ]]; then
-    ralph_kill_tree "$pid"
-    escalated=1
-  fi
-  printf '%s\n' "$escalated"
+  ralph_native_shell_terminate_spawned_job "$pid" "$pgid" "$isolated" 1
 }
 
 ralph_mcp_proxy_shell_job_finish() {
@@ -4878,7 +4914,7 @@ ralph_mcp_proxy_owned_tool_shell_wait() {
     if (( now >= deadline )); then
       break
     fi
-    sleep 1
+    ralph_wait 1
     response_json="$(ralph_mcp_proxy_shell_status_response_json "$job_dir" "$args_json")"
     status="$(jq -r '.status // "unknown"' <<< "$response_json")"
     if [[ "$status" != "running" ]]; then

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "case": "attempt-running-then-terminal-transition",
+  "description": "One attemptId is represented by a running transition followed by a terminal transition; storage must collapse these into a single attempt record, not two.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-cccc0003",
+    "nodeId": "node-fixture-transition",
+    "attemptId": "node-fixture-transition__run-fixture-cccc0003__1",
+    "events": [
+      {
+        "event": "node-spawn",
+        "status": "running",
+        "attemptId": "node-fixture-transition__run-fixture-cccc0003__1"
+      },
+      {
+        "event": "node-succeeded",
+        "status": "succeeded",
+        "attemptId": "node-fixture-transition__run-fixture-cccc0003__1"
+      }
+    ]
+  }
+}

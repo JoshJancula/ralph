@@ -30,11 +30,42 @@ teardown() {
   [ "$(cat "$stdin_capture")" = "claude-smoke-prompt" ]
 }
 
+@test "claude subagents contract preserves inherit and controls Agent argv" {
+  local inherit_record on_record off_record
+  inherit_record="$TEST_TMPDIR/inherit.args"
+  on_record="$TEST_TMPDIR/on.args"
+  off_record="$TEST_TMPDIR/off.args"
+  export PROMPT="subagents-contract"
+  export RALPH_MODE=native
+
+  run_plan_invoke_test_write_claude_stub "$inherit_record"
+  export RALPH_PLAN_SUBAGENTS=inherit
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  ! grep -Fxq -- "--disallowedTools" "$inherit_record"
+  ! grep -Fxq -- "Agent" "$inherit_record"
+
+  # nativeSubagents=on was removed; the contract is inherit|off and `on` must
+  # be refused rather than silently widening the allowed-tools list.
+  run_plan_invoke_test_write_claude_stub "$on_record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_claude
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents=on was removed"* ]]
+
+  run_plan_invoke_test_write_claude_stub "$off_record"
+  export CLAUDE_PLAN_ALLOWED_TOOLS="Bash,Read,Agent"
+  export RALPH_PLAN_SUBAGENTS=off
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--disallowedTools" "$off_record"
+  grep -Fxq -- "Agent" "$off_record"
+}
+
 @test "claude invoke helper does not impose a default budget cap" {
   local record="$TEST_TMPDIR/claude-no-budget.args"
   run_plan_invoke_test_write_stub "claude" "$record"
 
-  export PREBUILT_AGENT=implementation
   export PROMPT="large implementation"
   export RALPH_MODE=native
 
@@ -57,16 +88,25 @@ teardown() {
   grep -Fxq -- "12.50" "$record"
 }
 
-@test "claude invoke helper honors an explicit agent budget cap" {
-  local record="$TEST_TMPDIR/claude-agent-budget.args"
+@test "claude invoke ignores profile-derived budget and native --agent passthrough" {
+  local record="$TEST_TMPDIR/claude-no-profile-agent.args"
   run_plan_invoke_test_write_stub "claude" "$record"
 
   export RALPH_AGENT_MAX_BUDGET=7.25
-  export PROMPT="agent-budgeted implementation"
+  export CLAUDE_TOOLS_FROM_AGENT="Bash,Read,Agent"
+  export RALPH_AGENT_NATIVE_NAME="test-agent"
+  export RALPH_AGENT_NATIVE_PASSTHROUGH=1
+  export PROMPT_STATIC="stable-preamble"
+  export PROMPT="primary-default-turn"
   export RALPH_MODE=native
 
   run ralph_run_plan_invoke_claude
   [ "$status" -eq 0 ]
-  grep -Fxq -- "--max-budget-usd" "$record"
-  grep -Fxq -- "7.25" "$record"
+  ! grep -Fxq -- "--max-budget-usd" "$record"
+  ! grep -Fxq -- "7.25" "$record"
+  ! grep -Fxq -- "--agent" "$record"
+  ! grep -Fxq -- "test-agent" "$record"
+  grep -Fxq -- "--system-prompt" "$record"
+  grep -Fxq -- "stable-preamble" "$record"
+  grep -Fxq -- "Bash,Read,Edit,Write" "$record"
 }

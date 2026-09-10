@@ -1,0 +1,43 @@
+{
+  "_inlineTodos": [
+    {
+      "content": "review the input",
+      "id": "review-1",
+      "status": "pending",
+      "verification": ""
+    }
+  ],
+  "dependsOn": [
+    "source"
+  ],
+  "id": "review:alpha",
+  "inputArtifacts": [
+    {
+      "path": "shared/input.md",
+      "required": true
+    }
+  ],
+  "minRuntimes": 2,
+  "quorum": 2,
+  "role": "code-review",
+  "runtime": "cursor",
+  "sessionStrategy": "fresh",
+  "nativeSubagents": "off",
+  "type": "consensus",
+  "voters": [
+    {
+      "id": "alpha",
+      "role": "code-review",
+      "runtime": "cursor"
+    },
+    {
+      "id": "beta",
+      "runtime": "codex"
+    },
+    {
+      "id": "gamma",
+      "role": "security",
+      "runtime": "claude"
+    }
+  ]
+}

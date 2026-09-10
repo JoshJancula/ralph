@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-seq-stale","workflowId":"bug-fix","mode":"sequential","entryKind":"task","task":"Fix the timeout","taskProvenance":"explicit","sourcePath":"/fixtures/bug-fix.workflow.md","sourceKind":"project","state":"stale","inputPath":"/fixtures/input.orch.json","inputPlan":null,"createdAt":"2026-08-27T05:00:00Z","updatedAt":"2026-08-27T05:01:00Z"},
+  "stages": [],
+  "diagnosis": {"state":"stale","reasonCode":"stale-owner","summary":"the owning supervisor is gone and the run can be recovered","stageId":null,"requestKind":null,"requestId":null,"evidence":["last heartbeat 2026-08-27T05:00:00Z"],"retryable":true,"nextAction":{"label":"recover the abandoned run","argv":["ralph","workflow","recover","fixture-seq-stale"]}},
+  "nextAction": {"label":"recover the abandoned run","argv":["ralph","workflow","recover","fixture-seq-stale"]}
+}

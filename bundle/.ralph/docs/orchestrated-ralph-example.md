@@ -1,7 +1,7 @@
 <!--- Example documenting orchestrated pipeline flow -->
 # Orchestrated Ralph walkthrough
 
-This guide demonstrates building a multi-stage pipeline using `ralph create orc`.
+This guide demonstrates building a multi-stage pipeline using `ralph create workflow --mode sequential`.
 
 ## 1. Stage plans
 
@@ -24,7 +24,7 @@ This guide demonstrates building a multi-stage pipeline using `ralph create orc`
 
 ## 2. Pipeline plan spec
 
-Use `ralph create orc` to scaffold the pipeline plan, or write one directly using the structure below:
+Use `ralph create workflow --mode sequential` to scaffold the pipeline plan, or write one directly using the structure below:
 
 ```json
 {
@@ -106,10 +106,10 @@ Set `runtime` per stage to decide if Cursor/Claude/Codex/OpenCode/Antigravity ru
 
 ## 3. Scaffold the pipeline
 
-Before you run the orchestrator, let `.ralph/orchestration-wizard.sh` walk you through the tedious parts. The wizard asks for a pipeline name, namespace, stage runtimes, and agent IDs, then copies `.ralph/plan-templates/classic.plan.template.md` into `.ralph-workspace/orchestration-plans/<namespace>/<namespace>-NN-<stage>.plan.md`, creates the artifact directory under `.ralph-workspace/artifacts/<namespace>/`, and writes a starter orchestration spec that matches your selections. Answer the prompts, replace the placeholder TODOs with the tasks you need, and verify each plan mentions the files to touch, validation commands, and artifact handoffs so the orchestrator can validate output.
+Before you run the orchestrator, let `ralph create workflow --mode sequential` walk you through the tedious parts. The wizard asks for a pipeline name, namespace, stage runtimes, and agent IDs, then copies `.ralph/plan-templates/classic.plan.template.md` into `.ralph-workspace/orchestration-plans/<namespace>/<namespace>-NN-<stage>.plan.md`, creates the artifact directory under `.ralph-workspace/artifacts/<namespace>/`, and writes a starter orchestration spec that matches your selections. Answer the prompts, replace the placeholder TODOs with the tasks you need, and verify each plan mentions the files to touch, validation commands, and artifact handoffs so the orchestrator can validate output.
 
 ```bash
-.ralph/orchestration-wizard.sh
+ralph create workflow --mode sequential
 ```
 
 Typical wizard flow:
@@ -117,7 +117,7 @@ Typical wizard flow:
 1. Start the wizard from repo root:
 
    ```bash
-   .ralph/orchestration-wizard.sh
+   ralph create workflow --mode sequential
    ```
 
 2. Enter a pipeline name and namespace (for example `notifications`), then pick runtimes and agents for each stage. The wizard writes:

@@ -3,6 +3,75 @@
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
 RUN_PLAN_SH="$REPO_ROOT/bundle/.ralph/run-plan.sh"
+BG_STATE_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-job-state.sh"
+PLAN_TODO_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+
+runner_mark_plan_key() {
+  local plan_file="$1"
+  # shellcheck disable=SC1090
+  source "$PLAN_TODO_LIB"
+  plan_log_basename "$plan_file"
+}
+
+runner_mark_output_log_for_plan() {
+  local workspace="$1"
+  local plan_file="$2"
+  local plan_key
+  plan_key="$(runner_mark_plan_key "$plan_file")"
+  printf '%s/.ralph-workspace/logs/%s/plan-runner-%s.log\n' "$workspace" "$plan_key" "$plan_key"
+}
+
+runner_mark_seed_bg_job() {
+  local session_home="$1"
+  local plan_file="$2"
+  local todo_body="$3"
+  local line_num="$4"
+  local job_id="$5"
+  local terminal_mode="${6:-running}"
+  local identity_run_id="${7:-run-runner-mark}"
+  local identity_todo_hash="${8:-}"
+
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local plan_key todo_hash
+  # shellcheck disable=SC1090
+  source "$PLAN_TODO_LIB"
+  plan_key="$(plan_log_basename "$plan_file")"
+  todo_hash="$(plan_todo_hash "$todo_body")"
+  if [[ -n "$identity_todo_hash" ]]; then
+    todo_hash="$identity_todo_hash"
+  fi
+
+  export RALPH_SESSION_DIR="$session_home/$plan_key"
+  export RALPH_PROJECT_ROOT="$(dirname "$plan_file")"
+  export RALPH_PLAN_WORKSPACE_ROOT="$RALPH_PROJECT_ROOT/.ralph-workspace"
+  export RALPH_AGENT_WORKSPACE="$RALPH_PROJECT_ROOT"
+  export RALPH_PLAN_KEY="$plan_key"
+  export RUNTIME="cursor"
+  export RALPH_PROCESS_RUN_ID="$identity_run_id"
+  export RALPH_CURRENT_TODO_LINE="$line_num"
+  export RALPH_CURRENT_TODO_ORDINAL="1"
+  export RALPH_CURRENT_TODO_ID=""
+  export RALPH_CURRENT_TODO_HASH="$todo_hash"
+  export RALPH_BG_MAX_PER_TODO=8
+  mkdir -p "$RALPH_SESSION_DIR"
+  # shellcheck disable=SC1090
+  source "$BG_STATE_LIB"
+
+  ralph_bg_job_create "$job_id" "sleep 999" "runner-mark-test" 3600 2 "$$" >/dev/null
+  ralph_bg_job_mark_launched "$job_id" 4242 "setsid" "true" >/dev/null
+  ralph_bg_job_mark_running "$job_id" >/dev/null
+  case "$terminal_mode" in
+    running) ;;
+    consumed)
+      ralph_bg_job_mark_terminal "$job_id" "passed" >/dev/null
+      ralph_bg_job_consume "$job_id" >/dev/null
+      ;;
+    *)
+      ralph_bg_job_mark_terminal "$job_id" "$terminal_mode" >/dev/null
+      ;;
+  esac
+}
 
 setup_stub_run_plan_support() {
   local workspace="$1"
@@ -751,4 +820,168 @@ EOF
   ! grep -Fq "VERIFICATION_RESULT" "$cursor_record"
 
   rm -rf "$workspace"
+}
+
+@test "runner refuses completion while outstanding background job is running" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home todo_body log_file
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  todo_body="wait for outstanding job before completion"
+  cat <<EOF > "$plan_file"
+# Outstanding job completion gate
+- [ ] ${todo_body}
+EOF
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-job-state.sh"
+ralph_bg_job_create "job-outstanding-running" "sleep 999" "runner-mark-test" 3600 2 \$\$ >/dev/null
+ralph_bg_job_mark_launched "job-outstanding-running" 4242 "setsid" "true" >/dev/null
+ralph_bg_job_mark_running "job-outstanding-running" >/dev/null
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_BG_JOBS=1 CURSOR_PLAN_MAX_ITER=1
+
+  grep -Fq -- "- [ ] ${todo_body}" "$plan_file"
+  ! grep -Fq -- "- [x] ${todo_body}" "$plan_file"
+  log_file="$(runner_mark_output_log_for_plan "$workspace" "$plan_file")"
+  [ -f "$log_file" ]
+  grep -Fq "background job blocks completion: job_id=job-outstanding-running state=running" "$log_file"
+
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "runner refuses completion while terminal background job is unconsumed" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home todo_body log_file
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  todo_body="wait for terminal job consumption before completion"
+  cat <<EOF > "$plan_file"
+# Terminal job completion gate
+- [ ] ${todo_body}
+EOF
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-job-state.sh"
+ralph_bg_job_create "job-terminal-unconsumed" "sleep 999" "runner-mark-test" 3600 2 \$\$ >/dev/null
+ralph_bg_job_mark_launched "job-terminal-unconsumed" 4242 "setsid" "true" >/dev/null
+ralph_bg_job_mark_running "job-terminal-unconsumed" >/dev/null
+ralph_bg_job_mark_terminal "job-terminal-unconsumed" "passed" >/dev/null
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_BG_JOBS=1 CURSOR_PLAN_MAX_ITER=1
+
+  grep -Fq -- "- [ ] ${todo_body}" "$plan_file"
+  ! grep -Fq -- "- [x] ${todo_body}" "$plan_file"
+  log_file="$(runner_mark_output_log_for_plan "$workspace" "$plan_file")"
+  [ -f "$log_file" ]
+  grep -Fq "background job blocks completion: job_id=job-terminal-unconsumed state=terminal" "$log_file"
+
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "runner completes TODO when stale foreign background job record exists" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home todo_body line_num
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  todo_body="ignore stale foreign background job on completion"
+  line_num="2"
+  cat <<EOF > "$plan_file"
+# Stale foreign job completion gate
+- [ ] ${todo_body}
+EOF
+
+  runner_mark_seed_bg_job "$session_home" "$plan_file" "$todo_body" "$line_num" \
+    "job-stale-foreign" "running" "run-foreign" "hash-stale-not-current"
+
+  cat <<'EOF' > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_BG_JOBS=1 CURSOR_PLAN_MAX_ITER=1
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] ${todo_body}" "$plan_file"
+
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "runner completes TODO when background job record is already consumed" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home todo_body log_file
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  todo_body="allow completion after consumed background job"
+  cat <<EOF > "$plan_file"
+# Consumed job completion gate
+- [ ] ${todo_body}
+EOF
+
+  cat <<EOF > "$bin_dir/cursor-agent"
+#!/usr/bin/env bash
+set -euo pipefail
+source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-job-state.sh"
+ralph_bg_job_create "job-already-consumed" "sleep 999" "runner-mark-test" 3600 2 \$\$ >/dev/null
+ralph_bg_job_mark_launched "job-already-consumed" 4242 "setsid" "true" >/dev/null
+ralph_bg_job_mark_running "job-already-consumed" >/dev/null
+ralph_bg_job_mark_terminal "job-already-consumed" "passed" >/dev/null
+ralph_bg_job_consume "job-already-consumed" >/dev/null
+printf '%s\n' "TODO_COMPLETION: COMPLETE"
+printf '%s\n' "TODO_VERIFICATION: SKIPPED"
+exit 0
+EOF
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_BG_JOBS=1 CURSOR_PLAN_MAX_ITER=1
+
+  [ "$status" -eq 0 ]
+  grep -Fq -- "- [x] ${todo_body}" "$plan_file"
+
+  ralph_test_rm_workspace "$workspace"
 }

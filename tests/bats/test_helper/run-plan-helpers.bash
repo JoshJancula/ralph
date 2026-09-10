@@ -82,7 +82,8 @@ setup() {
   append_function_block "$run_plan_core_lib" '^ralph_restart_command_hint()' '^}$' "$RUN_PLAN_HUMAN_ACTION_FUNCS_FILE"
 
   RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE="$(mktemp)"
-  write_source_bundle "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$run_plan_runtime_lib"
+  write_source_bundle "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$run_plan_runtime_lib" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
   append_function_block "$run_plan_core_lib" '^ralph_operator_has_real_answer()' '^}$' "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   append_function_block "$run_plan_core_lib" '^ralph_try_consume_human_response()' '^}$' "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   append_function_block "$run_plan_core_lib" '^ralph_operator_response_file_owned_by_current_user()' '^}$' "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"

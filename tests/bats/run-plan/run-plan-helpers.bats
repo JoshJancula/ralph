@@ -36,7 +36,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [ "$output" = "cursor|$plan|$workspace" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects missing plan" {
@@ -64,7 +64,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--plan <path> is required."* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args exports RALPH_AGENT_WORKSPACE distinct from WORKSPACE" {
@@ -104,7 +104,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"OK:"* ]]
   [[ "$output" == *"RALPH_AGENT_WORKSPACE="* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts custom --agent-workspace" {
@@ -175,7 +175,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [ "$output" = "7" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects invalid --max-iterations" {
@@ -204,7 +204,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--max-iterations must be a positive integer."* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --codex-sandbox and exports it" {
@@ -234,7 +234,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CODEX_PLAN_SANDBOX="danger-full-access"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --claude-bare and exports it" {
@@ -264,7 +264,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_BARE="1"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --no-claude-bare and exports CLAUDE_PLAN_BARE=0" {
@@ -294,7 +294,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_BARE="0"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --claude-minimal and exports CLAUDE_PLAN_MINIMAL=1" {
@@ -324,7 +324,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL="1"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --no-claude-minimal and exports CLAUDE_PLAN_MINIMAL=0" {
@@ -354,7 +354,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL="0"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --claude-allow-mcp and exports CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0" {
@@ -384,7 +384,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP="0"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --no-claude-allow-mcp and exports CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1" {
@@ -414,7 +414,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_MINIMAL_DISABLE_MCP="1"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects invalid CLAUDE_PLAN_MINIMAL value" {
@@ -445,7 +445,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--claude-minimal / CLAUDE_PLAN_MINIMAL must be one of 1, true, yes, on, 0, false, no, or off."* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects invalid CLAUDE_PLAN_MINIMAL_DISABLE_MCP value" {
@@ -476,7 +476,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"CLAUDE_PLAN_MINIMAL_DISABLE_MCP / --claude-allow-mcp must be one of"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --claude-permission-mode and exports it" {
@@ -506,7 +506,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'declare -x CLAUDE_PLAN_PERMISSION_MODE="bypassPermissions"'* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects invalid --claude-permission-mode" {
@@ -535,7 +535,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--claude-permission-mode / CLAUDE_PLAN_PERMISSION_MODE must be one of default, acceptEdits, auto, bypassPermissions, dontAsk, or plan."* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args leaves RALPH_MODE unset without flag or env" {
@@ -566,7 +566,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 0 ]
   [ "$output" = "unset" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects removed --tool-access flag" {
@@ -595,7 +595,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--tool-access is removed"* ]] && [[ "$output" == *"--ralph-mode"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects repeated --tool-access flags" {
@@ -624,7 +624,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--tool-access is removed"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects removed RALPH_AGENT_TOOL_ACCESS env var" {
@@ -654,7 +654,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"RALPH_AGENT_TOOL_ACCESS is no longer supported"* ]] && [[ "$output" == *"RALPH_MODE"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects removed --mcp-proxy-policy flags" {
@@ -688,7 +688,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   [ "$status" -eq 1 ]
   [[ "$output" == *"--mcp-proxy is no longer supported"* ]]
   [[ "$output" == *"--ralph-mode"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects invalid --codex-sandbox" {
@@ -717,7 +717,7 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--codex-sandbox / CODEX_PLAN_SANDBOX must be one of read-only, workspace-write, or danger-full-access."* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_shared_ralph_dir_complete succeeds when layout is present" {
@@ -764,56 +764,8 @@ ERROR_HANDLING_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
   rm -rf "$shared"
 }
 
-@test "list_prebuilt_agent_ids calls the agent-config-tool" {
-  [ -f "$RUN_PLAN_AGENT_FILE" ] || skip "run-plan agent helper missing"
-
-  local workspace stub
-  workspace="$(mktemp -d)"
-  stub="$(mktemp)"
-  cat <<'SCRIPT' >"$stub"
-#!/usr/bin/env bash
-if [[ "$1" == "list" ]]; then
-  printf 'alpha-agent\nbeta-agent\n'
-  exit 0
-fi
-exit 1
-SCRIPT
-  chmod +x "$stub"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENT_CONFIG_TOOL="$2"
-    AGENTS_ROOT_REL="$3"
-    WORKSPACE="$4"
-    list_prebuilt_agent_ids "$WORKSPACE"
-  ' _ "$RUN_PLAN_AGENT_FILE" "$stub" "agents" "$workspace"
-
-  [ "$status" -eq 0 ]
-  [ "$output" = $'alpha-agent\nbeta-agent' ]
-  rm -rf "$workspace"
-  rm -f "$stub"
-}
-
-@test "list_prebuilt_agent_ids errors when the agent-config-tool is missing" {
-  [ -f "$RUN_PLAN_AGENT_FILE" ] || skip "run-plan agent helper missing"
-
-  local workspace
-  workspace="$(mktemp -d)"
-
-  run bash -c '
-    set -euo pipefail
-    source "$1"
-    AGENT_CONFIG_TOOL="/tmp/missing-agent-config-tool"
-    AGENTS_ROOT_REL="agents"
-    WORKSPACE="$2"
-    list_prebuilt_agent_ids "$WORKSPACE"
-  ' _ "$RUN_PLAN_AGENT_FILE" "$workspace"
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"shared agent tool missing"* ]]
-  rm -rf "$workspace"
-}
+# The prebuilt-agent listing helpers were removed with the agent-profile
+# surface; role listing is covered by tests/bats/role-cli.bats.
 
 @test "ralph_session_init establishes a session directory" {
   [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
@@ -849,7 +801,7 @@ SCRIPT
   session_dir="${output%%|*}"
   [ -d "$session_dir" ]
   [[ "$output" == *"/session-id.cursor.txt" ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_session_init scopes session ids by runtime" {
@@ -885,7 +837,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [ "$output" = "$session_home/test-session/session-id.opencode.txt" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_session_init ignores legacy shared session ids" {
@@ -925,7 +877,7 @@ SCRIPT
   legacy_file="$workspace/.ralph-workspace/sessions/test-session/session-id.txt"
   [ -f "$legacy_file" ]
   [ ! -s "$session_home/test-session/session-id.opencode.txt" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_session_apply_resume_strategy uses bare resume when allowed without a stored id" {
@@ -1036,7 +988,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [ "$output" = "30m" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args accepts --timeout with valid duration 1800s" {
@@ -1066,7 +1018,7 @@ SCRIPT
 
   [ "$status" -eq 0 ]
   [ "$output" = "1800s" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects --timeout with missing value" {
@@ -1095,7 +1047,7 @@ SCRIPT
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--timeout requires a duration string"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects --timeout with invalid format (non-numeric)" {
@@ -1124,7 +1076,7 @@ SCRIPT
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--timeout must be a positive integer with a unit"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects --timeout with invalid format (zero duration)" {
@@ -1153,7 +1105,7 @@ SCRIPT
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--timeout duration must be positive"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "ralph_run_plan_parse_args rejects --timeout with unsupported unit" {
@@ -1182,5 +1134,5 @@ SCRIPT
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"--timeout must be a positive integer with a unit"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

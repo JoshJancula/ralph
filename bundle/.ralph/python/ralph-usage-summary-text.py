@@ -130,6 +130,58 @@ def fmt_tokens(value: Any) -> str:
         return fmt_value(value)
 
 
+# Cache pricing, as multiples of the model's base input-token price.
+# Reads are cheap; writes are priced by the TTL of the breakpoint they land on.
+CACHE_READ_PRICE = 0.10
+CACHE_WRITE_5M_PRICE = 1.25
+CACHE_WRITE_1H_PRICE = 2.00
+
+
+def cache_write_price(tokens_5m: int, tokens_1h: int, total: int) -> float:
+    """Blended write price for a measured 5m/1h TTL mix.
+
+    Falls back to the 1-hour rate when the split is unreported: measured Claude
+    Code runs write entirely at the 1-hour TTL, so assuming the cheaper 5-minute
+    rate would understate cost on exactly the runtime this reports on most.
+    """
+    split_total = max(0, tokens_5m) + max(0, tokens_1h)
+    if split_total <= 0:
+        return CACHE_WRITE_1H_PRICE
+    return (
+        max(0, tokens_5m) * CACHE_WRITE_5M_PRICE
+        + max(0, tokens_1h) * CACHE_WRITE_1H_PRICE
+    ) / split_total
+
+
+def cache_write_cost_share(
+    cache_read: Any, cache_create: Any, tokens_5m: Any = 0, tokens_1h: Any = 0
+) -> int:
+    """Percent of cached-token spend attributable to the cache-write premium.
+
+    Token counts alone misrepresent cost: writes are a small fraction of cached
+    volume but a large fraction of the bill. A high share means writes were not
+    amortized -- the invocation paid the write premium on context it then barely
+    re-read. Break-even is ~2 reads per write at the 5-minute TTL and ~3 at the
+    1-hour TTL.
+    """
+    write_tokens = max(0, as_int(cache_create))
+    price = cache_write_price(as_int(tokens_5m), as_int(tokens_1h), write_tokens)
+    read_cost = max(0, as_int(cache_read)) * CACHE_READ_PRICE
+    write_cost = write_tokens * price
+    total = read_cost + write_cost
+    return round(100 * write_cost / total) if total > 0 else 0
+
+
+def color_write_cost_token(share: int) -> str:
+    """Render a write_cost=<pct>% token; high shares are the expensive case."""
+    text = f"write_cost={share}%"
+    if share >= 60:
+        return c("red", text)
+    if share >= 40:
+        return c("yellow", text)
+    return c("green", text)
+
+
 def color_cache_hit_token(ratio: Any) -> str:
     """Render a cache_hit_ratio=<value> token, colored by ratio but keeping the raw value."""
     text = f"cache_hit_ratio={fmt_value(ratio)}"
@@ -612,10 +664,20 @@ def summarize_plan(summary: Dict[str, Any], invocations: Sequence[Dict[str, Any]
         f"cache_read={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'cache_read_input_tokens', invocations, totals['cache_read_input_tokens']))}"
     )
     cache_hit_ratio = summary_value(summary, 'cache_hit_ratio', invocations, 0)
+    write_share = cache_write_cost_share(
+        summary_value(summary, 'cache_read_input_tokens', invocations, totals['cache_read_input_tokens']),
+        summary_value(summary, 'cache_creation_input_tokens', invocations, totals['cache_creation_input_tokens']),
+        sum(as_int(r.get('cache_creation_5m_input_tokens')) for r in invocations),
+        sum(as_int(r.get('cache_creation_1h_input_tokens')) for r in invocations),
+    )
     emit(
         f"  max_turn={'n/a' if plan_unsupported else fmt_tokens(summary_value(summary, 'max_turn_total_tokens', invocations, totals['max_turn_total_tokens']))} "
         f"tool_calls={fmt_tokens(summary_value(summary, 'tool_calls_total', invocations, totals['tool_calls_total']))} "
-        + ("n/a" if plan_unsupported else color_cache_hit_token(cache_hit_ratio))
+        + (
+            "n/a"
+            if plan_unsupported
+            else f"{color_cache_hit_token(cache_hit_ratio)} {color_write_cost_token(write_share)}"
+        )
     )
     per_turn = summary_value(summary, "cache_read_per_tool_turn", invocations, None)
     per_call = summary_value(summary, "cache_read_per_tool_call", invocations, None)

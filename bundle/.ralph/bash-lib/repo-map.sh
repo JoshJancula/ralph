@@ -125,7 +125,7 @@ ralph_repo_map_write_manifest() {
     [[ -n "$relpath" ]] || continue
     abs_path="$search_root_abs/$relpath"
     [[ -f "$abs_path" ]] || continue
-    mtime="$(stat -f '%m' "$abs_path" 2>/dev/null || stat -c '%Y' "$abs_path" 2>/dev/null || printf '0')"
+    mtime="$(stat -c '%Y' "$abs_path" 2>/dev/null || stat -f '%m' "$abs_path" 2>/dev/null || printf '0')"
     printf '%s\t%s\n' "$relpath" "$mtime"
   done <"$files_list" | sort >"$manifest_file"
 }
@@ -142,7 +142,7 @@ ralph_repo_map_manifest_is_stale() {
     [[ -n "$relpath" ]] || continue
     abs_path="$search_root_abs/$relpath"
     [[ -f "$abs_path" ]] || return 0
-    current_mtime="$(stat -f '%m' "$abs_path" 2>/dev/null || stat -c '%Y' "$abs_path" 2>/dev/null || printf '0')"
+    current_mtime="$(stat -c '%Y' "$abs_path" 2>/dev/null || stat -f '%m' "$abs_path" 2>/dev/null || printf '0')"
     stored_mtime="$(awk -F '\t' -v path="$relpath" '$1 == path { print $2; found=1; exit } END { if (!found) print "" }' "$manifest_file")"
     if [[ -z "$stored_mtime" || "$stored_mtime" != "$current_mtime" ]]; then
       return 0

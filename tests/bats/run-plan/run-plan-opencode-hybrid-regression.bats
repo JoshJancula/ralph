@@ -77,10 +77,14 @@ PY
 
   record="$TEST_TMPDIR/opencode.args"
   config_capture="$TEST_TMPDIR/opencode.config.json"
+  ambient_config="$WORKSPACE/opencode.json"
+  printf '%s\n' '{"theme":"keep-byte-exact"}' >"$ambient_config"
+  ambient_before="$(shasum -a 256 "$ambient_config" | awk '{print $1}')"
   cat <<EOF >"$BIN_DIR/opencode"
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >>"$record"
 if [[ -n "\${OPENCODE_CONFIG:-}" && -f "\$OPENCODE_CONFIG" ]]; then
+  printf 'OPENCODE_CONFIG_PATH:%s\n' "\$OPENCODE_CONFIG" >>"$record"
   cp "\$OPENCODE_CONFIG" "$config_capture"
 fi
 exit 0
@@ -93,6 +97,10 @@ EOF
 
   [ -s "$config_capture" ]
   jq -e '.mcp.ralph.enabled == true' "$config_capture" >/dev/null
+  config_path="$(awk -F: '/^OPENCODE_CONFIG_PATH:/{print $2; exit}' "$record")"
+  [ -n "$config_path" ]
+  [ ! -f "$config_path" ]
+  [ "$(shasum -a 256 "$ambient_config" | awk '{print $1}')" = "$ambient_before" ]
 
   local denied=0
   for tool in read grep glob bash; do

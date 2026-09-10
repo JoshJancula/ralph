@@ -53,9 +53,18 @@ class EvaluatorContractLoadTests(unittest.TestCase):
             with self.assertRaises(ec.EvaluatorContractError):
                 ec.load_contract(path)
 
-    def test_missing_feedback_key_fails(self):
+    def test_approved_without_feedback_key_passes(self):
+        # feedback became optional when findings[] was introduced; an approval
+        # carrying neither is the normal clean-review shape.
         with tempfile.TemporaryDirectory() as tmp:
-            path = _write(tmp, "bad.json", '{"status":"approved"}')
+            path = _write(tmp, "ok.json", '{"status":"approved"}')
+            contract = ec.load_contract(path)
+            self.assertEqual(contract["status"], "approved")
+            self.assertEqual(contract["findings"], [])
+
+    def test_changes_required_without_feedback_or_findings_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "bad.json", '{"status":"changes-required"}')
             with self.assertRaises(ec.EvaluatorContractError):
                 ec.load_contract(path)
 

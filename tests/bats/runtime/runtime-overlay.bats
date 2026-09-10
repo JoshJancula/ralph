@@ -12,7 +12,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runtime overlay records generated and mutated files plus summary metadata" {
@@ -73,6 +73,23 @@ PY
   '
   [ "$status" -ne 0 ]
   [[ "$output" == *"outside"* ]]
+}
+
+@test "runtime overlay journals files in an external agent workspace" {
+  agent_workspace="$(mktemp -d)"
+  export RALPH_AGENT_WORKSPACE="$agent_workspace"
+  source "$RUNTIME_OVERLAY_LIB"
+  runtime_overlay_init_state "$RUNTIME" "$RALPH_PLAN_KEY"
+
+  mkdir -p "$agent_workspace/.opencode"
+  original="$agent_workspace/.opencode/package.json"
+  printf '%s' '{"original":true}' > "$original"
+  runtime_overlay_record_original_file "$original"
+
+  backup="$workspace/.ralph-workspace/runtime-config/$RALPH_PLAN_KEY/originals/agent-workspace/.opencode/package.json"
+  [ -f "$backup" ]
+  [ "$(cat "$backup")" = '{"original":true}' ]
+  rm -rf "$agent_workspace"
 }
 
 @test "runtime overlay stale restore replays journaled files" {

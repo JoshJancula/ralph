@@ -23,6 +23,7 @@ setup() {
 
   unset SELECTED_MODEL ANTIGRAVITY_PLAN_CLI ANTIGRAVITY_CLI
   unset RALPH_PLAN_ALLOW_UNSAFE_RESUME RALPH_RUN_PLAN_RESUME_BARE
+  unset RALPH_PLAN_SUBAGENTS
   unset RALPH_PLAN_CLI_RESUME RALPH_RUN_PLAN_RESUME_SESSION_ID
   unset RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESET_COMMAND_USED
   unset RALPH_MODE RALPH_PLAN_PRETTY RALPH_PLAN_NO_COLOR NO_COLOR
@@ -52,6 +53,16 @@ EOF
   [ -s "$record" ]
   grep -Fxq -- "--print" "$record"
   grep -Fxq -- "antigravity-test-prompt" "$record"
+}
+
+@test "antigravity refuses non-inherit subagents before native argv" {
+  local record="$TEST_TMPDIR/agy-subagents.args"
+  write_agy_stub "$record"
+  export RALPH_PLAN_SUBAGENTS=on
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents=on was removed"* ]]
+  [ ! -e "$record" ]
 }
 
 @test "antigravity invoke helper requests live stream-json output" {
@@ -108,6 +119,50 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fxq -- "--print-timeout" "$record"
   grep -Fxq -- "1800s" "$record"
+}
+
+@test "antigravity invoke ignores portable-profile model context config" {
+  local record="$TEST_TMPDIR/agy-no-profile.args"
+  write_agy_stub "$record"
+
+  # Legacy portable-profile fields must not become Antigravity argv/config.
+  # Model comes only from SELECTED_MODEL (prior TODOs); unset => native default.
+  export PREBUILT_AGENT=implementation
+  export PREBUILT_AGENT_CONTEXT=$'## profile context\nmust-not-appear-in-argv'
+  export RALPH_AGENT_MAX_BUDGET=7.25
+  export RALPH_AGENT_NATIVE_NAME=implementation
+  export RALPH_AGENT_NATIVE_PASSTHROUGH=1
+  export PROMPT="antigravity-primary-default-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+
+  ! grep -Fxq -- "--agent" "$record"
+  ! grep -Fxq -- "--model" "$record"
+  ! grep -Fxq -- "--max-budget-usd" "$record"
+  ! grep -Fxq -- "implementation" "$record"
+  ! grep -Fq -- "must-not-appear-in-argv" "$record"
+  grep -Fxq -- "--print" "$record"
+  grep -Fxq -- "antigravity-primary-default-turn" "$record"
+}
+
+@test "antigravity invoke honors SELECTED_MODEL without profile reads" {
+  local record="$TEST_TMPDIR/agy-selected-model.args"
+  write_agy_stub "$record"
+
+  export PREBUILT_AGENT=implementation
+  export SELECTED_MODEL="Claude Sonnet 4.6 (thinking)"
+  export PROMPT="antigravity-model-turn"
+  export RALPH_MODE=native
+
+  run ralph_run_plan_invoke_antigravity
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--model" "$record"
+  grep -Fxq -- "Claude Sonnet 4.6 (thinking)" "$record"
+  ! grep -Fxq -- "--agent" "$record"
+  ! grep -Fxq -- "implementation" "$record"
 }
 
 @test "antigravity invoke helper passes exact model string unchanged" {

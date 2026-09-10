@@ -1,0 +1,86 @@
+name: Ralph plugin authenticated smoke (OpenCode)
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/opencode
+      RALPH_SMOKE_PROJECT: ${{ runner.temp }}/ralph-opencode-project
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require authenticated smoke secret
+        run: |
+          set -euo pipefail
+          test -n "$OPENAI_API_KEY"
+          echo "::add-mask::$OPENAI_API_KEY"
+
+      - name: Install OpenCode and repository plugin
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: local plugin install for opencode'
+            exit 0
+          fi
+          # Matches OpenCode adapter owned paths: .opencode/{plugins,skills} only.
+          npm install --global opencode-ai
+          mkdir -p "$RALPH_SMOKE_PROJECT/.opencode/plugins" \
+            "$RALPH_SMOKE_PROJECT/.opencode/skills"
+          cp "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR/plugins/ralph-runtime-hooks.ts" \
+            "$RALPH_SMOKE_PROJECT/.opencode/plugins/ralph-runtime-hooks.ts"
+          cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR/skills/." \
+            "$RALPH_SMOKE_PROJECT/.opencode/skills/"
+
+      - name: Smoke discovery
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: local plugin list for opencode'
+          else
+            cd "$RALPH_SMOKE_PROJECT"
+            opencode run 'List the installed Ralph skills by name; do not modify files.'
+          fi
+
+      - name: Smoke read-only doctor
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-doctor'
+          else
+            cd "$RALPH_SMOKE_PROJECT"
+            opencode run 'Run the installed ralph-doctor workflow only; do not modify files.'
+          fi
+
+      - name: Smoke safe workflow
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-workflow'
+          else
+            cd "$RALPH_SMOKE_PROJECT"
+            opencode run 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
+          fi
+
+      - name: Uninstall repository plugin
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: local plugin uninstall for opencode'
+          else
+            mv "$RALPH_SMOKE_PROJECT/.opencode" "$RUNNER_TEMP/ralph-opencode.uninstalled"
+            test ! -e "$RALPH_SMOKE_PROJECT/.opencode"
+          fi

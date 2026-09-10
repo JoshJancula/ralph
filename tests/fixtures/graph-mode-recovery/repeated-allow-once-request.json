@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "category": "repeated-allow-once-request",
+  "summary": "In run-20260815T021145Z-0-udoZs5, the operator granted allow-once for implement-cli-bootstrap attempt 1 (op-implement-cli-bootstrap-1), which was consumed to start attempt 2, but attempt 2 immediately generated a second, unrelated fresh operator-permission request (op-implement-cli-bootstrap-2) with the same generic reason, requiring the operator to grant allow-once again for the same node in the same run.",
+  "affectedAttempts": [
+    "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__1",
+    "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__2"
+  ],
+  "requestSequence": [
+    {
+      "requestId": "op-implement-cli-bootstrap-1",
+      "attemptId": "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__1",
+      "createdAt": "2026-08-15T02:15:11Z",
+      "decision": "allow-once",
+      "decidedAt": "2026-08-15T02:18:03Z",
+      "consumedAt": "2026-08-15T02:19:17Z",
+      "nextAttemptNumber": 2
+    },
+    {
+      "requestId": "op-implement-cli-bootstrap-2",
+      "attemptId": "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__2",
+      "createdAt": "2026-08-15T02:44:23Z",
+      "decision": "not recorded in preserved run directory"
+    }
+  ],
+  "sourceFiles": [
+    "operator/requests/op-implement-cli-bootstrap-1.json",
+    "operator/decisions/op-implement-cli-bootstrap-1.json",
+    "operator/continuations/op-implement-cli-bootstrap-1.json",
+    "operator/consumed/op-implement-cli-bootstrap-1.json",
+    "operator/requests/op-implement-cli-bootstrap-2.json",
+    "retry-context/implement-cli-bootstrap.json"
+  ],
+  "operatorImpact": "allow-run and allow-always exist as choices precisely to avoid re-prompting for the same node, but the retry after an allow-once continuation still lands back on operator-permission with a fresh request id and no memory of the prior grant, so the operator answers what looks like the same question twice for one node in roughly 26 minutes."
+}

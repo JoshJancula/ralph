@@ -5,7 +5,6 @@
 #   add_allowlist_root, build_allowlist -- RALPH_MCP_ALLOWLIST parsing.
 #   workspace_allowed -- true when a path stays under allowed roots.
 #   resolve_workspace -- workspace root for a request.
-#   generate_agent_catalog_markdown -- markdown listing of agents for a resource.
 #   resolve_plan_path, resolve_orchestration_path -- validate and absolutize plan/orch paths.
 
 # Normalize a candidate path into a canonical absolute path.
@@ -122,74 +121,6 @@ resolve_workspace() {
     return 4
   fi
   printf '%s\n' "$canonical"
-}
-
-readonly RALPH_MCP_AGENT_CATALOG_RESOURCE_URI="resource://ralph/agents"
-
-generate_agent_catalog_markdown() {
-  local workspace="${WORKSPACE_ROOT:-}"
-  local runtimes=("cursor" "claude" "codex" "opencode" "antigravity")
-  local catalog="# Ralph agent catalog"
-  catalog+="\n\n"
-  if [[ -n "$workspace" ]]; then
-    catalog+="Workspace root: \`$workspace\`"
-  else
-    catalog+="Workspace root: (unknown)"
-  fi
-  catalog+="\n"
-
-  local has_any_agent=0
-  for runtime in "${runtimes[@]}"; do
-    local runtime_dir="$workspace/.${runtime}/agents"
-    if [[ ! -d "$runtime_dir" ]]; then
-      continue
-    fi
-    # MCP server must stay explicitly scoped to the workspace tier and never silently
-    # fall back to global runtime tiers (~/.claude/, ~/.cursor/, etc). This ensures
-    # that agent availability is transparent and deterministic: if an agent is not
-    # present in the workspace, the MCP server will not serve it, even if a global
-    # fallback would make it available. This prevents subtle differences in tool
-    # behavior between local and global install contexts.
-    local section=""
-    local agent_dir
-    for agent_dir in "$runtime_dir"/*; do
-      [[ -d "$agent_dir" ]] || continue
-      local agent_id
-      agent_id="$(basename "$agent_dir")"
-      local config_path="$agent_dir/config.json"
-      [[ -f "$config_path" ]] || continue
-      local name
-      name="$(jq -r '.name // ""' "$config_path")"
-      local model
-      model="$(jq -r '.model // ""' "$config_path")"
-      local description
-      description="$(jq -r '.description // ""' "$config_path")"
-      [[ -z "$name" ]] && name="$agent_id"
-      local relative_config=".${runtime}/agents/${agent_id}/config.json"
-
-      section+="- **$name** (\`$relative_config\`)\n"
-      if [[ -n "$model" ]]; then
-        section+="  - model: \`$model\`\n"
-      fi
-      if [[ -n "$description" ]]; then
-        section+="  - $description\n"
-      fi
-      section+="\n"
-    done
-    if [[ -z "$section" ]]; then
-      continue
-    fi
-    local runtime_label="$(tr '[:lower:]' '[:upper:]' <<<"${runtime:0:1}")${runtime:1}"
-    catalog+="\n## ${runtime_label} agents\n\n"
-    catalog+="$section"
-    has_any_agent=1
-  done
-
-  if [[ "$has_any_agent" -eq 0 ]]; then
-    catalog+="\n*No agent configurations were found.*\n"
-  fi
-
-  printf '%s\n' "$catalog"
 }
 
 # Resolve a plan path inside the workspace while respecting allowlist rules.

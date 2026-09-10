@@ -43,8 +43,8 @@ ralph_native_hook_result_compact_enabled() {
     0 | false | no | off) return 1 ;;
     1 | true | yes | on) return 0 ;;
   esac
-  ralph_native_hook_result_compact_truthy "${RALPH_BASH_COMPACT:-}" && return 0
-  ralph_native_hook_result_compact_truthy "${RALPH_PROXY_SHELL_COMPACT:-}" && return 0
+  # Shell compaction and exploration-result windowing have different safety
+  # contracts. Do not let an enabled shell path rewrite source-bearing output.
   return 1
 }
 
@@ -67,6 +67,11 @@ ralph_native_hook_result_compact_configure_caps() {
   export RALPH_MCP_PROXY_POLICY_TOOL_RESULT_BYTE_CAPS_JSON='{}'
   export RALPH_MCP_PROXY_POLICY_TOOL_RESULT_TOKEN_CAPS_JSON='{}'
   export RALPH_MCP_PROXY_RESULT_ENVELOPE_MODE=1
+  # Native post-tool compaction deliberately opts into stored exploration
+  # envelopes. The MCP proxy's interactive read/search surface defaults to
+  # preserving exact windows, but native hooks need the envelope so the full
+  # result remains retrievable after the runtime carrier is compacted.
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
 }
 
 ralph_native_hook_result_compact_load_libs() {

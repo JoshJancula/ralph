@@ -1,0 +1,470 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "Ralph fixture-seq-running  bug-fix | Sequential",
+    "Task  Fix the timeout",
+    "RUNNING  Elapsed 2m 0s  Updated 1m ago  Stages 1/2",
+    "[#####################---------------------] 1/2",
+    "another supervisor owns this run and is still making progress",
+    "Filter: res_  (1 match)",
+    "Stages",
+    "> succeeded  research",
+    "+- Selected stage -------------------------------------------------------------+",
+    "| research  executable  succeeded                                              |",
+    "| Live tail  ralph workflow logs fixture-seq-running --stage research --follow |",
+    "| Attempt  1  Duration  30s                                                    |",
+    "| Artifacts  research.md                                                       |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "+------------------------------------------------------------------------------+",
+    "Filter: res_  type filter  Enter apply  Esc cancel  Backspace delete"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-running",
+        "role": "path",
+        "width": 19
+      },
+      {
+        "col": 27,
+        "text": "bug-fix",
+        "role": "heading",
+        "width": 7
+      },
+      {
+        "col": 34,
+        "text": " | Sequential",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Fix the timeout                                                           ",
+        "role": "default",
+        "width": 74
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "RUNNING",
+        "role": "accent",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 17,
+        "text": "2m 0s",
+        "role": "default",
+        "width": 5
+      },
+      {
+        "col": 22,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 32,
+        "text": "1m ago",
+        "role": "default",
+        "width": 6
+      },
+      {
+        "col": 38,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 47,
+        "text": "1/2                              ",
+        "role": "default",
+        "width": 33
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "#####################",
+        "role": "success",
+        "width": 21
+      },
+      {
+        "col": 22,
+        "text": "---------------------] ",
+        "role": "muted",
+        "width": 23
+      },
+      {
+        "col": 45,
+        "text": "1/2",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "another supervisor owns this run and is still making progress",
+        "role": "muted",
+        "width": 61
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Filter: ",
+        "role": "warning",
+        "width": 8
+      },
+      {
+        "col": 8,
+        "text": "res_",
+        "role": "accent",
+        "width": 4
+      },
+      {
+        "col": 12,
+        "text": "  (1 match)",
+        "role": "muted",
+        "width": 11
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Stages",
+        "role": "heading",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> succeeded  research                                                           ",
+        "role": "focus",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-------------------------------------------------------------+",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "research",
+        "role": "heading",
+        "width": 8
+      },
+      {
+        "col": 12,
+        "text": "executable",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 24,
+        "text": "succeeded",
+        "role": "success",
+        "width": 9
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-running --stage research --follow",
+        "role": "command",
+        "width": 65
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "30s                                                    ",
+        "role": "default",
+        "width": 55
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Artifacts  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "research.md",
+        "role": "path",
+        "width": 11
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Filter: res_  type filter  Enter apply  Esc cancel  Backspace delete            ",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}
