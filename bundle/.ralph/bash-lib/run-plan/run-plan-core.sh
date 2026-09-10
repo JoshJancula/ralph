@@ -2756,6 +2756,32 @@ ralph_human_input_write_offline_instructions() {
     return 1
   fi
 
+  if [[ "$_request_kind" != "permission" ]] \
+    && { [[ -n "${RALPH_GUIDANCE_RESPONSE_ANSWER:-}" ]] || [[ "$_permission_tty_ok" == "1" ]]; } \
+    && [[ -f "$PENDING_HUMAN" ]] && [[ -s "$PENDING_HUMAN" ]] \
+    && declare -F ralph_guidance_prompt_operator_answer >/dev/null 2>&1; then
+    local _guidance_question _guidance_prompt _guidance_answer _guidance_read_rc=0
+    _guidance_question="$(<"$PENDING_HUMAN")"
+    _guidance_prompt=$'\nGuidance requested -- the plan is paused waiting for your answer.\n\n'
+    _guidance_prompt+="${_guidance_question}"$'\n\n'
+    _guidance_prompt+=$'Type your answer and press Enter (leave blank to fall back to editing operator-response.txt): '
+    _guidance_answer="$(ralph_guidance_prompt_operator_answer "$_guidance_prompt")" || _guidance_read_rc=$?
+    if [[ "$_guidance_read_rc" -eq 0 ]] && [[ -n "$_guidance_answer" ]]; then
+      if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
+        ralph_write_operator_response_template "$_request_file" "$OPERATOR_RESPONSE_FILE"
+      fi
+      jq -n \
+        --arg answer "$_guidance_answer" \
+        '{placeholder: false, kind: "guidance", decision: "answer", runtime: "", classification: "", blocked_command_or_tool: "", blocked_path: "", blocked_tool: "", reason: "terminal bridge response", answer: $answer}' \
+        >"$OPERATOR_RESPONSE_FILE"
+      if ralph_try_consume_human_response; then
+        return 0
+      fi
+      return 1
+    fi
+    ralph_run_plan_log "WARN: guidance prompt read failed or was left blank (rc=$_guidance_read_rc); falling back to file-based instructions"
+  fi
+
   if [[ "$_request_kind" != "permission" ]] && declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
     ralph_write_human_request_artifact \
       "$RALPH_SESSION_DIR" \

@@ -602,7 +602,13 @@ ralph_permission_prompt_operator_decision() {
   # Reset to canonical blocking mode and drain any buffered keystrokes that
   # accumulated while the agent was running; both calls are no-op on failure.
   stty sane </dev/tty 2>/dev/null || true
-  while IFS= read -r -t 0 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
+  # A literal `-t 0` here is a trap on bash 4.2+: per the manual, timeout 0
+  # only *polls* whether input is available and does not consume it, so if
+  # any byte is already buffered this becomes an infinite loop instead of a
+  # drain (reproduced with GNU bash 5.3 under a real pty). A small positive
+  # timeout actually reads and discards each buffered line, then exits once
+  # nothing more arrives within the window.
+  while IFS= read -r -t 0.05 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
   IFS= read -r decision </dev/tty || read_rc=$?
   if [[ "$read_rc" -ne 0 ]]; then
     return 1
@@ -611,6 +617,44 @@ ralph_permission_prompt_operator_decision() {
     y|yes|allow) printf 'allow\n' ;;
     *) printf 'deny\n' ;;
   esac
+}
+
+# Ask the operator to type a free-text answer to a guidance question on the
+# terminal. Prints the answer on stdout; returns 1 when no answer could be
+# read (no tty, EOF, or the operator left it blank), which must never be
+# recorded as an empty answer.
+#
+# Mirrors ralph_permission_prompt_operator_decision above: honors a
+# pre-approved answer via RALPH_GUIDANCE_RESPONSE_ANSWER, otherwise reads the
+# terminal directly so the operator never has to leave the session to edit
+# operator-response.txt by hand. The prompt itself goes to /dev/tty, never
+# stdout: stdout belongs to the runtime's output pipeline.
+ralph_guidance_prompt_operator_answer() {
+  local prompt_text="${1:-}"
+  local answer="" read_rc=0
+
+  if [[ -n "${RALPH_GUIDANCE_RESPONSE_ANSWER:-}" ]]; then
+    printf '%s\n' "$RALPH_GUIDANCE_RESPONSE_ANSWER"
+    return 0
+  fi
+
+  { [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; } || return 1
+
+  printf '%s' "$prompt_text" >/dev/tty
+  stty sane </dev/tty 2>/dev/null || true
+  # A literal `-t 0` here is a trap on bash 4.2+: per the manual, timeout 0
+  # only *polls* whether input is available and does not consume it, so if
+  # any byte is already buffered this becomes an infinite loop instead of a
+  # drain (reproduced with GNU bash 5.3 under a real pty). A small positive
+  # timeout actually reads and discards each buffered line, then exits once
+  # nothing more arrives within the window.
+  while IFS= read -r -t 0.05 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
+  IFS= read -r answer </dev/tty || read_rc=$?
+  if [[ "$read_rc" -ne 0 ]]; then
+    return 1
+  fi
+  [[ -n "$answer" ]] || return 1
+  printf '%s\n' "$answer"
 }
 
 # Best-effort path pattern for OpenCode permission approval.

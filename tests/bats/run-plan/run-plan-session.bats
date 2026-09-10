@@ -713,6 +713,97 @@ EOF
   rm -rf "$tmp_dir"
 }
 
+@test "ralph_human_input_write_offline_instructions answers a guidance pause from the terminal bridge" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local helper tmp_dir human_input pending operator_response human_action
+  local plan_file log_file output_log session_dir human_request
+
+  helper="$(mktemp)"
+  local run_plan_core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  cat <<'EOF' > "$helper"
+C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_RST="" C_DIM=""
+log(){ :; }
+ralph_run_plan_log(){ log "$@"; }
+ralph_restart_command_hint(){ printf "%s" "restart hint"; }
+ralph_write_human_action_file(){ :; }
+ralph_write_operator_response_template() {
+  cat >"$2" <<'TEMPLATE_EOF'
+{
+  "placeholder": true,
+  "kind": "guidance",
+  "decision": "answer",
+  "runtime": "",
+  "classification": "",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "",
+  "answer": ""
+}
+TEMPLATE_EOF
+}
+ralph_path_to_file_uri() {
+  printf 'file://%s' "$1"
+}
+ralph_try_consume_human_response() {
+  RALPH_TEST_CONSUME_CALLED=1
+  return 0
+}
+EOF
+  sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$helper"
+
+  tmp_dir="$(mktemp -d)"
+  human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
+  pending="$tmp_dir/pending-human.txt"
+  operator_response="$tmp_dir/operator-response.txt"
+  human_action="$tmp_dir/HUMAN-ACTION.md"
+  plan_file="$tmp_dir/PLAN.md"
+  log_file="$tmp_dir/log.txt"
+  output_log="$tmp_dir/output.log"
+  session_dir="$tmp_dir/session"
+  mkdir -p "$session_dir"
+  human_request="$session_dir/human-request.json"
+  printf 'plan instructions\n' >"$plan_file"
+  printf 'agent question\n' >"$pending"
+
+  # RALPH_GUIDANCE_RESPONSE_ANSWER is the same style of pre-approval hook
+  # RALPH_PERMISSION_RESPONSE_DECISION provides for permission pauses: it lets
+  # this be exercised deterministically without a live pty, and lets an
+  # operator (or a script) answer a guidance pause without a real terminal.
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    export SCRIPT_DIR="'"$REPO_ROOT"'/bundle/.ralph"
+    HUMAN_INPUT_MD="$2"
+    PENDING_HUMAN="$3"
+    OPERATOR_RESPONSE_FILE="$4"
+    HUMAN_ACTION_FILE="$5"
+    HUMAN_REQUEST_FILE="$6"
+    RALPH_SESSION_DIR="$7"
+    PLAN_PATH="$8"
+    LOG_FILE="$9"
+    OUTPUT_LOG="${10}"
+    HUMAN_PROMPT_NO_OPEN_FLAG=1
+    RALPH_GUIDANCE_RESPONSE_ANSWER="the operator types this answer"
+    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
+    ralph_run_plan_log(){ log "$@"; }
+    ralph_human_input_write_offline_instructions
+    printf "CONSUMED=%s\n" "${RALPH_TEST_CONSUME_CALLED:-0}"
+  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$human_request" "$session_dir" "$plan_file" "$log_file" "$output_log"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CONSUMED=1"* ]]
+  jq -e '.placeholder == false and .kind == "guidance" and .answer == "the operator types this answer"' "$operator_response"
+  [ ! -f "$human_input" ]
+
+  rm -f "$helper"
+  rm -rf "$tmp_dir"
+}
+
 @test "ralph_human_input_write_offline_instructions forwards permission pauses to human ack bridge" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
