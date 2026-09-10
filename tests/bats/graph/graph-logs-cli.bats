@@ -452,7 +452,13 @@ attach_cmd() {
   write_running_attempt impl impl-1
   local out="$TMPD/default-follow.out" log_file="$RUN_DIR/logs/nodes/impl/impl-1/agent.log"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" logs --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --stream agent --workspace "$WORKSPACE" >"$out" 2>/dev/null &
   FOLLOW_PID=$!
@@ -485,7 +491,13 @@ attach_cmd() {
   local out="$TMPD/follow.out" err="$TMPD/follow.err"
   local log_file="$RUN_DIR/logs/nodes/impl/impl-1/agent.log"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" logs --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --stream agent --follow --workspace "$WORKSPACE" >"$out" 2>"$err" &
   FOLLOW_PID=$!
@@ -507,7 +519,13 @@ attach_cmd() {
   local log_file="$RUN_DIR/logs/nodes/impl/impl-1/agent.log"
   printf 'keep-me\nrotate-src\n' >"$log_file"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" logs --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --stream agent --follow --workspace "$WORKSPACE" >"$out" 2>"$err" &
   FOLLOW_PID=$!
@@ -597,7 +615,13 @@ attach_cmd() {
   local events="$RUN_DIR/events.jsonl"
   printf '%s\n' '{"schemaVersion":1,"sequence":1,"event":"run-started","runId":"run-001"}' >"$events"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" attach --namespace "$NAMESPACE" --run "$RUN_ID" \
     --workspace "$WORKSPACE" >"$out" 2>"$err" &
   FOLLOW_PID=$!

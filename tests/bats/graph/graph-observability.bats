@@ -240,7 +240,13 @@ wait_pid_exit() {
   before_node="$(cat "$node_file")"
   before_run="$(cat "$run_file")"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" logs --namespace "$NAMESPACE" --run "$RUN_ID" --node impl \
     --stream agent --follow --workspace "$WORKSPACE" >"$out" 2>"$err" &
   FOLLOW_PID=$!
@@ -257,7 +263,10 @@ wait_pid_exit() {
   FOLLOW_PID=""
   [ "$(cat "$node_file")" = "$before_node" ]
   [ "$(cat "$run_file")" = "$before_run" ]
-  printf '%s\n' "$(cat "$err")" | grep -q '# graph logs  node=impl'
+  # grep the file directly: `printf "$(cat f)" | grep -q` dies with SIGPIPE
+  # (status 141) once the file exceeds the pipe buffer, because grep -q exits on
+  # the first match and pipefail then reports the dead printf, not the match.
+  grep -q '# graph logs  node=impl' "$err"
 }
 
 @test "attach follow detach and terminal restore stay read-only" {
@@ -270,7 +279,13 @@ wait_pid_exit() {
   before_run="$(cat "$run_file")"
   printf '%s\n' '{"schemaVersion":1,"sequence":1,"event":"run-started","runId":"run-obs-001"}' >"$events"
   export RALPH_GRAPH_FOLLOW_INTERVAL=0.05
-  export RALPH_GRAPH_FOLLOW_MAX_POLLS=80
+  # 80 is a runaway guard, not an assertion, and it is a POLL COUNT while the
+  # test's progress is wall-clock bound: the follower keeps polling while the
+  # test does its writes, so a slower or loaded runner burns the budget before
+  # the last write lands. That is how the rotation test timed out on CI while
+  # passing locally. Poll-count behaviour itself is asserted by the dedicated
+  # "follow sleeps between polls" test, which keeps its own small budget.
+  export RALPH_GRAPH_FOLLOW_MAX_POLLS=600
   bash "$GRAPH_RUN_SH" attach --namespace "$NAMESPACE" --run "$RUN_ID" \
     --workspace "$WORKSPACE" >"$out" 2>"$err" &
   FOLLOW_PID=$!
@@ -282,7 +297,9 @@ wait_pid_exit() {
   FOLLOW_PID=""
   [ "$(cat "$node_file")" = "$before_node" ]
   [ "$(cat "$run_file")" = "$before_run" ]
-  printf '%s\n' "$(cat "$out")" | grep -q '# graph status'
+  # See above: grep the file directly rather than piping cat's output into a
+  # grep -q that exits early.
+  grep -q '# graph status' "$out"
 }
 
 @test "tui keys and non-tty fallback use the operator read model" {
