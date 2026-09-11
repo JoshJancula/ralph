@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # shellcheck shell=bash
 # Coverage for stable/volatile prompt ordering in run-plan-core.sh:
-#   - Claude keeps the stable block separate (passed via --system-prompt).
+#   - Claude keeps the stable block separate (passed via --append-system-prompt).
 #   - Every non-Claude runtime places the byte-identical stable block first.
 
 setup() {

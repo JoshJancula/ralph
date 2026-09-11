@@ -28,10 +28,10 @@ RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 #   CLAUDE_PLAN_BARE (truthy enables --bare; default off — requires ANTHROPIC_API_KEY)
 #   CLAUDE_PLAN_MINIMAL (truthy enables auth-safe minimal flag composition; default on)
 #   CLAUDE_PLAN_MINIMAL_DISABLE_MCP (explicit override for MCP discovery; unset lets the resolved tooling profile decide -- Ralph profile layers a
-#     ralph-only --mcp-config over native discovery, raw stays locked down with --strict-mcp-config and an empty catalog. Explicit 1/true/yes/on always
+#     ralph-only --mcp-config over native discovery, raw preserves native discovery. Explicit 1/true/yes/on always
 #     locks down with an empty catalog even for a Ralph profile. Explicit 0/false/no/off always permits native discovery: Ralph profile still layers its
 #     ralph-only config non-strictly on top, raw leaves native discovery completely alone.)
-#   CLAUDE_PLAN_MINIMAL_TOOLS (csv tool names for --tools in minimal mode; default "Bash,Read,Edit,Write")
+#   CLAUDE_PLAN_MINIMAL_TOOLS (explicit --tools override; unset preserves all native built-in tools)
 #   CLAUDE_PLAN_PERMISSION_MODE (one of default, acceptEdits, auto, bypassPermissions, dontAsk, plan; default unset)
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
@@ -98,7 +98,7 @@ run_plan_invoke_claude_minimal_mode_validate() {
 }
 
 run_plan_invoke_claude_minimal_mcp_lockdown_validate() {
-  local lock="${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-1}"
+  local lock="${CLAUDE_PLAN_MINIMAL_DISABLE_MCP:-0}"
   case "$lock" in
     1|true|yes|on)
       CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
@@ -124,21 +124,20 @@ run_plan_invoke_claude_setting_sources() {
 run_plan_invoke_claude_apply_minimal_flags() {
   local args_name="$1"
   local mcp_config_path="${2:-}"
-  local tools="${3:-${CLAUDE_PLAN_MINIMAL_TOOLS:-Bash,Read,Edit,Write}}"
+  # --allowedTools grants permission; --tools removes capabilities. Never
+  # derive the available tool catalog from a permission allowlist: doing so
+  # hides Skill, Grep, Glob, and operator-enabled native tools.
   # mcp_lockdown_mode (4th arg) controls how MCP discovery is composed:
-  #   lockdown (default) -- --strict-mcp-config plus mcp_config_path, or an
+  #   lockdown           -- --strict-mcp-config plus mcp_config_path, or an
   #                          empty {"mcpServers":{}} catalog when no path is
   #                          given. Disables native ambient/CLI MCP discovery.
   #   layered            -- --mcp-config mcp_config_path with NO
   #                          --strict-mcp-config, so native discovery still
   #                          runs and the given config (e.g. the Ralph-only
   #                          server) is layered on top of it.
-  #   native             -- no MCP flags at all; native discovery is left
+  #   native (default)   -- no MCP flags at all; native discovery is left
   #                          completely alone.
-  local mcp_lockdown_mode="${4:-lockdown}"
-  if [[ "${RALPH_RUN_PLAN_RESET_COMMAND_USED:-0}" != "1" ]]; then
-    eval "$args_name+=(--disable-slash-commands)"
-  fi
+  local mcp_lockdown_mode="${4:-native}"
   case "$mcp_lockdown_mode" in
     layered)
       if [[ -n "$mcp_config_path" ]]; then
@@ -158,7 +157,9 @@ run_plan_invoke_claude_apply_minimal_flags() {
       ;;
   esac
   eval "$args_name+=(--setting-sources \"$(run_plan_invoke_claude_setting_sources)\")"
-  eval "$args_name+=(--tools \"$tools\")"
+  if [[ "${CLAUDE_PLAN_MINIMAL_TOOLS+set}" == "set" ]]; then
+    eval "$args_name+=(--tools \"\$CLAUDE_PLAN_MINIMAL_TOOLS\")"
+  fi
 }
 
 run_plan_invoke_claude_mcp_config_cleanup() {
@@ -484,7 +485,7 @@ ralph_run_plan_invoke_claude() {
   if ! run_plan_invoke_claude_minimal_mode_validate; then return 1; fi
 
   # Capture whether the operator explicitly set the MCP lockdown override
-  # BEFORE minimal_mcp_lockdown_validate normalizes/defaults it to "1", so the
+  # BEFORE minimal_mcp_lockdown_validate normalizes/defaults it to "0", so the
   # profile-driven decision below can tell "operator said so" apart from
   # "unset, let the profile decide". CLAUDE_PLAN_MINIMAL_DISABLE_MCP is only
   # ever set here by an explicit env var or the --claude-allow-mcp /
@@ -529,9 +530,8 @@ ralph_run_plan_invoke_claude() {
   #   2. Explicit CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0 -- always permits native
   #      discovery. Ralph profile also layers the one-server Ralph config
   #      non-strictly on top; raw leaves native discovery alone entirely.
-  #   3. Unset -- the resolved profile decides: Ralph profile layers the
-  #      Ralph-only config non-strictly, raw keeps today's strict/empty
-  #      lockdown default.
+  #   3. Unset -- Ralph profiles layer the Ralph-only config non-strictly;
+  #      raw preserves native discovery without adding MCP flags.
   # See run_plan_invoke_claude_apply_minimal_flags for the argv composition
   # of each mcp_lockdown_mode.
   local mcp_lockdown_mode="lockdown"
@@ -563,7 +563,8 @@ ralph_run_plan_invoke_claude() {
     mcp_overlay_effective=1
     mcp_overlay_decision="profile_ralph_layered"
   else
-    mcp_overlay_decision="profile_raw_lockdown"
+    mcp_lockdown_mode="native"
+    mcp_overlay_decision="profile_raw_native"
   fi
 
   if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
@@ -640,8 +641,20 @@ ralph_run_plan_invoke_claude() {
   if [[ -n "$tools_use" ]]; then
     args+=(--allowedTools "$tools_use")
   fi
+  local -a denied_tools=()
   if [[ "$subagents_mode" == "off" ]]; then
-    args+=(--disallowedTools Agent)
+    denied_tools+=(Agent)
+  fi
+  # Enforce the explicit proxy policy with a deny control now that native
+  # tools are no longer narrowed to the permission allowlist.
+  if [[ "${strip_native_bash_tools:-0}" == "1" ]]; then
+    denied_tools+=(Bash)
+  fi
+  if [[ "${strip_native_read_tools:-0}" == "1" ]]; then
+    denied_tools+=(Read Grep Glob)
+  fi
+  if [[ ${#denied_tools[@]} -gt 0 ]]; then
+    args+=(--disallowedTools "${denied_tools[@]}")
   fi
 
   run_plan_invoke_common_add_resume_args \
@@ -652,20 +665,37 @@ ralph_run_plan_invoke_claude() {
     run_plan_invoke_claude_bare_resume_warn
   run_plan_invoke_common_add_cli_resume_flags args --verbose --output-format stream-json
 
-  # Fresh/checkpoint turns pass stable context via --system-prompt for Anthropic prompt caching.
-  # The dynamic user turn (PROMPT) excludes that context (set by run-plan-core.sh).
-  # Claude ignores --exclude-dynamic-system-prompt-sections when --system-prompt is supplied,
-  # so only pass exclude-dynamic on resume/reset paths where PROMPT_STATIC is empty.
+  # Layer Ralph's stable instructions over Claude's native system prompt,
+  # preserving its skill discovery guidance and operator context.
   if [[ -n "${PROMPT_STATIC:-}" ]]; then
-    args+=(--system-prompt "$PROMPT_STATIC")
+    args+=(--append-system-prompt "$PROMPT_STATIC")
   elif [[ "${RALPH_CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS:-1}" == "1" ]]; then
     args+=(--exclude-dynamic-system-prompt-sections)
+  fi
+
+  # Native discovery starts at the agent cwd. Additional directories load
+  # project skills/commands; the env switch also loads CLAUDE.md and rules.
+  # Do not point discovery at the state root or change the agent's cwd.
+  local project_root="${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}"
+  local agent_root="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
+  if [[ -n "$project_root" && -d "$project_root" && -d "$agent_root" ]] &&
+      [[ "$(cd "$project_root" && pwd -P)" != "$(cd "$agent_root" && pwd -P)" ]]; then
+    args+=(--add-dir "$(cd "$project_root" && pwd -P)")
+    case "$(cd "$agent_root" && pwd -P)/" in
+      "$(cd "$project_root" && pwd -P)/"*) ;;
+      *)
+        if [[ -f "$project_root/.claude/settings.json" || -f "$project_root/.claude/settings.local.json" || -f "$project_root/.mcp.json" ]]; then
+          printf 'Warning: Claude --add-dir exposes project rules and skills, but does not load settings or MCP configuration from %s. Use --agent-workspace %s when that project configuration is required.\n' "$project_root" "$project_root" >&2
+        fi
+        ;;
+    esac
   fi
 
   run_plan_invoke_claude_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
     printf '%s' "$PROMPT" | (
       cd "$agent_ws" || exit 1
+      export CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD="${CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD:-1}"
       run_plan_invoke_common_launch_cli claude "$cli" "${args[@]}"
     )
   }
@@ -681,7 +711,7 @@ ralph_run_plan_invoke_claude() {
     export CLAUDE_PLAN_BARE
     CLAUDE_PLAN_MINIMAL=1
     export CLAUDE_PLAN_MINIMAL
-    run_plan_invoke_claude_apply_minimal_flags args
+    run_plan_invoke_claude_apply_minimal_flags args "$mcp_config_path" "$tools_use" "$mcp_lockdown_mode"
     echo "Note: claude reported 'Not logged in' with --bare (which skips keychain reads). Retrying once with CLAUDE_PLAN_MINIMAL=1 instead and persisting that for the rest of this process. Set ANTHROPIC_API_KEY (or unset CLAUDE_PLAN_BARE to use the safe default) to silence." >&2
     rm -f "${RALPH_PLAN_INVOCATION_CLI_PID_FILE:-}" 2>/dev/null || true
     run_plan_invoke_common_execute \

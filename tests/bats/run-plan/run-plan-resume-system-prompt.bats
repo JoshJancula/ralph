@@ -44,7 +44,8 @@ teardown() {
   run ralph_run_plan_invoke_claude
   [ "$status" -eq 0 ]
 
-  grep -Fxq -- "--system-prompt" "$record"
+  [ "$(grep -Fxc -- '--append-system-prompt' "$record")" -eq 2 ]
+  ! grep -Fxq -- "--system-prompt" "$record"
   ! grep -Fxq -- "--exclude-dynamic-system-prompt-sections" "$record"
   [ "$PROMPT_STATIC" = "$first_prompt" ]
   [ "$second_fingerprint" = "$first_fingerprint" ]

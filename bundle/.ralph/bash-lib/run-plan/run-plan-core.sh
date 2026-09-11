@@ -784,7 +784,7 @@ ralph_run_plan_rebuild_prompt_static() {
 
 # Apply common prompt assembly at the shared boundary.
 # Sets PROMPT / PROMPT_STATIC so delivered order is preamble, contracts, task
-# for every runtime (Claude keeps the stable prefix in --system-prompt).
+# for every runtime (Claude keeps the stable prefix in --append-system-prompt).
 # Operates on the global PROMPT (task body already built by the caller).
 ralph_run_plan_apply_ordered_prompt_assembly() {
   local runtime="${1:-}"
@@ -4972,7 +4972,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
 
     # Preamble (mode/runtime guidance) is applied above in ordered assembly.
 
-    # Export PROMPT_STATIC: Claude invoke passes it via --system-prompt; other runtimes already
+    # Export PROMPT_STATIC: Claude invoke passes it via --append-system-prompt; other runtimes already
     # received the fully ordered prompt (no fake cache-control markers).
     export PROMPT_STATIC
     ralph_run_plan_continuation_summary_refresh_metrics

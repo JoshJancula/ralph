@@ -103,6 +103,22 @@ overlay_stop_hook_advance_terminal_job() {
   [ "${lines[2]}" = "user" ]
 }
 
+@test "claude merge preserves operator Stop and context hooks with background jobs disabled" {
+  source "$CLAUDE_OVERLAY"
+  local settings="$workspace/.claude/settings.json"
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"operator-stop"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"operator-context"}]}]},"enabledPlugins":{"operator@local":true},"permissions":{"deny":["Read(./private)"]}}' >"$settings"
+  local before
+  before="$(cat "$settings")"
+  export RALPH_BG_JOBS=0 RALPH_NATIVE_HOOKS=on
+  run_plan_invoke_claude_native_hooks_prepare
+  jq -e '.hooks.Stop[0].hooks[0].command == "operator-stop" and
+    .hooks.SessionStart[0].hooks[0].command == "operator-context" and
+    .enabledPlugins["operator@local"] == true and
+    .permissions.deny == ["Read(./private)"]' "$settings"
+  run_plan_invoke_claude_native_hooks_cleanup
+  [ "$(cat "$settings")" = "$before" ]
+}
+
 @test "claude merge omits Stop hook when RALPH_BG_JOBS is disabled" {
   source "$CLAUDE_OVERLAY"
   export RALPH_BG_JOBS=0

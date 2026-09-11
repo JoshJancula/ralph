@@ -188,9 +188,6 @@ for event, groups in template_hooks.items():
                 continue
             existing["hooks"].append(merged_entry)
 
-if not include_stop:
-    hooks.pop("Stop", None)
-
 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
 with open(target, "w") as fh:
     json.dump(data, fh, indent=2)

@@ -106,16 +106,12 @@ EOF
 
   run_plan_invoke_claude_apply_minimal_flags args
 
-  [ "${args[4]}" = "--setting-sources" ]
-  [ "${args[5]}" = "user,project,local" ]
+  [ "${args[0]}" = "--setting-sources" ]
+  [ "${args[1]}" = "user,project,local" ]
 }
 
-@test "claude no mode keeps strict empty lockdown even with ambient MCP present" {
-  # Contract change: raw (RALPH_MODE=no, no explicit CLAUDE_PLAN_MINIMAL_DISABLE_MCP
-  # override) always locks down with an empty catalog. It no longer reuses the
-  # merged catalog that ralph_runtime_config_mcp_resolve may have built (that
-  # rebuilt catalog is now reserved for the Ralph profile's ambient-preserving
-  # native-discovery path; raw never consumes it).
+@test "claude no mode preserves native discovery with ambient MCP present" {
+  # Leave native ambient configuration and its authentication state with Claude.
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-no-ambient.args"
@@ -142,10 +138,10 @@ EOF
   [ "$status" -eq 0 ]
   local captured
   captured="$(cat "$record")"
-  [[ "$captured" == *"--strict-mcp-config"* ]]
-  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
   [[ "$captured" == *"user,project,local"* ]]
-  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+  [[ "$captured" != *'{"mcpServers":{}}'* ]]
   ! grep -q '"ambient"' "$record"
   ! grep -q 'ambient-cmd' "$record"
 }
@@ -268,7 +264,7 @@ EOF
   [ "$(jq -r '.mcpServers | keys[0]' "$mcp_out")" = "ralph" ]
 }
 
-@test "claude raw profile unset override locks down with an empty catalog" {
+@test "claude raw profile unset override preserves native MCP discovery" {
   local record="$TEST_TMPDIR/claude-raw-unset.args"
   local stdin_cap="$TEST_TMPDIR/claude-raw-unset.stdin"
   write_claude_stub "$record" "$stdin_cap"
@@ -281,8 +277,8 @@ EOF
 
   local captured
   captured="$(cat "$record")"
-  [[ "$captured" == *"--strict-mcp-config"* ]]
-  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
 }
 
 @test "claude ralph profile explicit lockdown override forces strict empty catalog" {
@@ -564,7 +560,7 @@ EOF
 
     grep -q -- "--cache-control" "$6"
     grep -q -- "--max-output-tokens" "$6"
-    grep -q -- "--system-prompt" "$6"
+    grep -q -- "--append-system-prompt" "$6"
     grep -q "STABLE-PREFIX for warm" "$6"
 
     python3 - <<PY

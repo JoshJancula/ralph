@@ -83,7 +83,7 @@ adds only its protected server; native ambient MCP remains runtime-owned.
 
 | Runtime | Mechanism | Notes |
 |---------|-----------|-------|
-| Claude | Temp config containing only the `ralph` server via `--mcp-config <temp>`, without `--strict-mcp-config`, so native MCP discovery stays on and ambient servers are never rebuilt into the temp file | Incompatible with `CLAUDE_PLAN_BARE=1`. Once the MCP preflight passes, Ralph strips native `Bash` so commands go through `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps native Bash). Native `Read`/`Edit`/`Write` stay available. Outside a Ralph mode, Claude minimal mode may lock down with `--strict-mcp-config` and an empty catalog (`CLAUDE_PLAN_MINIMAL_DISABLE_MCP`; see ENVIRONMENT.md). |
+| Claude | Temp config containing only the `ralph` server via `--mcp-config <temp>`, without `--strict-mcp-config`, so native MCP discovery stays on and ambient servers are never rebuilt into the temp file | Incompatible with `CLAUDE_PLAN_BARE=1`. In strict proxy mode, a successful preflight enables `--disallowedTools Bash` so commands use `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps Bash). Other native tools, including `Skill`, remain available. MCP lockdown requires explicit `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1`; raw/native profiles preserve native MCP discovery by default. |
 | Cursor | Merges only `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. |
 | Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true`, and the configured tools approval mode. Native tools and native MCP remain alongside Ralph tools. |
 | OpenCode | Temp config via `OPENCODE_CONFIG` merging only Ralph's server with native config | JSONC comments survive. In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Strict proxy enforcement is unsupported unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` enables a post-run audit. See [OpenCode hybrid contract](#opencode-hybrid-contract). |
@@ -107,6 +107,41 @@ Ralph never inlines removed `role:` / profile-agent metadata, runtime rules,
 skills, MCP definitions, or artifact contracts as a substitute identity.
 Native runtime configuration supplies those native capabilities; Ralph supplies
 declared stage/TODO contracts and any stage `instructions:` text.
+
+### Claude operator context
+
+Ralph layers stable instructions with `--append-system-prompt`. It keeps native
+`user,project,local` setting sources, skill discovery, slash commands, and the
+built-in tool catalog. `--allowedTools` supplies permission grants, not a tool
+catalog. Ralph hook overlays preserve operator hooks, including `SessionStart`
+and `Stop`, and restore modified settings byte-for-byte after invocation.
+
+Personal `~/.claude/` configuration (or the operator's `CLAUDE_CONFIG_DIR`) stays
+native. When the project and agent workspace differ, Ralph passes the project
+root as `--add-dir` and defaults `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`
+in the child. This exposes project skills, commands, memory files, and rules
+without changing the agent's working directory. The state root is not a context
+discovery root.
+
+Claude still controls discovery and permission semantics. Additional directories
+do not load every configuration source: for example, their `.claude/settings.json`,
+`.claude/settings.local.json`, and `.mcp.json` are not automatically loaded as
+settings/MCP sources. Ralph warns when a separate workspace would miss existing
+project configuration. Use the project as the agent workspace when those project
+sources are required. Imports outside the agent directory require Claude's
+native approval. Ralph does not forge trust records, override managed policy,
+or force invocation of skills marked `disable-model-invocation: true`.
+Explicit bare mode, MCP lockdown, tool restrictions, and native operator deny
+rules remain intentional opt-outs. See Claude's [CLI reference](https://code.claude.com/docs/en/cli-reference),
+[memory discovery](https://code.claude.com/docs/en/memory), and
+[skill discovery](https://code.claude.com/docs/en/skills).
+
+Regression coverage checks launch arguments across every tooling mode and
+continuation, hook preservation during invocation, and restoration afterwards.
+The optional `tests/acceptance/accept-claude-native-context.py` also runs the
+installed Claude CLI against a local fake API to assert that native personal
+and project rules reach the request and both skills actually load. It makes no
+paid model requests; see [acceptance instructions](../tests/acceptance/README.md).
 
 ## Native subagents
 

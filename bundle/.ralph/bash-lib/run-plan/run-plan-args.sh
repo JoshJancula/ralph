@@ -321,10 +321,10 @@ _print_run_plan_help_body() {
 
   ralph_help_section 'Claude'
   ralph_help_option '--claude-bare' '' \
-    'Enable Claude --bare / CLAUDE_PLAN_BARE (default: on). Use --no-claude-bare or CLAUDE_PLAN_BARE=0 to restore CLAUDE.md auto-discovery, auto-memory, and plugin sync.'
+    'Opt into Claude --bare / CLAUDE_PLAN_BARE (default: off). Disables native context discovery, hooks, memory, and plugin sync.'
   ralph_help_option '--claude-allow-mcp' '' \
     'In Claude minimal mode, omit empty MCP lockdown so project MCP servers load (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0).'
-  ralph_help_option '--no-claude-allow-mcp' '' 'Restore default minimal MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1).'
+  ralph_help_option '--no-claude-allow-mcp' '' 'Opt into MCP lockdown (sets CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1); native MCP discovery is enabled by default.'
   ralph_help_option '--claude-permission-mode' '<mode>' \
     'Set CLAUDE_PLAN_PERMISSION_MODE for Claude exec. Values: default, acceptEdits, auto, bypassPermissions, dontAsk, plan. Omit to use the CLI default. Modes that skip or auto-approve permissions reduce safety.'
 
