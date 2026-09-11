@@ -234,6 +234,16 @@ _stable_prefix_fp = os.environ.get("RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT", "")
 if _stable_prefix_fp:
     record["stable_prefix_fingerprint"] = _stable_prefix_fp
 
+requests_without_tool_use = 0
+if merge_path.strip():
+    try:
+        with open(merge_path.strip(), "r", encoding="utf-8") as mfh:
+            demux_usage = json.load(mfh)
+        requests_without_tool_use = int(demux_usage.get("requests_without_tool_use") or 0)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        requests_without_tool_use = 0
+record["requests_without_tool_use"] = max(0, requests_without_tool_use)
+
 _resolved_effort = os.environ.get("RALPH_PLAN_REASONING_EFFORT_RESOLVED", "").strip()
 if _resolved_effort:
     record["reasoning_effort_resolved"] = _resolved_effort

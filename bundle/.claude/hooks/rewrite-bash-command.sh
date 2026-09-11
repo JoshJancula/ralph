@@ -87,16 +87,27 @@ ralph_claude_killswitch_event_json() {
 ralph_claude_killswitch_from_input() {
   local input_json="${1:-}"
   local workspace="${2:-}"
-  local tool command event_json core
+  local tool="${3:-}"
+  local command="${4:-}"
+  local event_json core
 
   ralph_claude_killswitch_mode_off && {
-    ralph_claude_killswitch_record "$(jq -r '.tool_name // ""' <<<"$input_json")" "skip" false
+    ralph_claude_killswitch_record "${tool:-}" "skip" false
     return 0
   }
 
-  tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
-  command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  if [[ -z "$tool" || -z "$command" ]]; then
+    tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
+    command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  fi
   [[ -n "$workspace" && -n "$tool" ]] || return 0
+
+  # (b) Skip killswitch evaluation when no operator config exists and the
+  # stock bundle rules clearly do not match (or no bundle config at all).
+  if ! ralph_native_hook_killswitch_needs_full_evaluate "$workspace" "$command"; then
+    ralph_claude_killswitch_record "$tool" "skip" false
+    return 0
+  fi
 
   core="$(ralph_native_hook_resolve_bash_lib "$workspace" "killswitch/killswitch-core.sh" 2>/dev/null || true)"
   [[ -n "$core" && -f "$core" ]] || return 0
@@ -136,8 +147,11 @@ ralph_bash_rewrite_main() {
   RALPH_BASH_REWRITE_INPUT="$(cat)" || ralph_native_hook_fail_open
 
   local event tool_name command
-  event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_BASH_REWRITE_INPUT")"
-  tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_BASH_REWRITE_INPUT")"
+  eval "$(jq -r '
+    "event=\(.hook_event_name // "" | @sh)\n" +
+    "tool_name=\(.tool_name // "" | @sh)\n" +
+    "command=\(.tool_input.command // "" | @sh)"
+  ' <<<"$RALPH_BASH_REWRITE_INPUT")" || ralph_native_hook_fail_open
   if [[ "$event" != "PreToolUse" || "$tool_name" != "Bash" ]]; then
     ralph_claude_killswitch_record "$tool_name" "nudge" false
     ralph_native_hook_fail_open
@@ -145,25 +159,31 @@ ralph_bash_rewrite_main() {
 
   local project_dir
   project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_REWRITE_INPUT)" || true
-  ralph_claude_killswitch_from_input "$RALPH_BASH_REWRITE_INPUT" "${WORKSPACE:-$project_dir}"
-
-  if ! command -v python3 >/dev/null 2>&1; then
-    ralph_native_hook_fail_open
-  fi
-
-  command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_BASH_REWRITE_INPUT")"
+  ralph_claude_killswitch_from_input "$RALPH_BASH_REWRITE_INPUT" "${WORKSPACE:-$project_dir}" "$tool_name" "$command"
   [[ -n "$command" ]] || ralph_native_hook_fail_open
+  [[ -n "$project_dir" ]] || project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_REWRITE_INPUT)" || ralph_native_hook_fail_open
 
-  project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_REWRITE_INPUT)" || ralph_native_hook_fail_open
-
-  local rewrite_enabled=false auto_bg_effective=false
+  local rewrite_enabled=false auto_bg_effective=false profiles_ready=false
   if ralph_native_hook_truthy "${RALPH_BASH_REWRITE:-}"; then
     rewrite_enabled=true
   fi
-  if ralph_bash_auto_background_effective "$project_dir"; then
+  # (a) Skip rewrite/registry python3 when rewrite is off AND no promoted
+  # (long_running) commands exist on disk yet.
+  if ralph_native_hook_command_profiles_registry_ready "$project_dir"; then
+    profiles_ready=true
+  fi
+  if [[ "$rewrite_enabled" != "true" && "$profiles_ready" != "true" ]]; then
+    ralph_native_hook_fail_open
+  fi
+  if [[ "$profiles_ready" == "true" ]] && ralph_bash_auto_background_effective "$project_dir"; then
     auto_bg_effective=true
   fi
   if [[ "$rewrite_enabled" != "true" && "$auto_bg_effective" != "true" ]]; then
+    ralph_native_hook_fail_open
+  fi
+
+  # python3 is only required when we still have rewrite or auto-bg work.
+  if ! command -v python3 >/dev/null 2>&1; then
     ralph_native_hook_fail_open
   fi
 

@@ -66,7 +66,7 @@ There are no `ralph_proxy_edit` or `ralph_proxy_write` tools; agents keep using 
 
 MCP hosts namespace these names, so Claude and Codex advertise them as `mcp__ralph__ralph_proxy_read` and so on. Script against the names the runtime exposes.
 
-In `ralph` and `hybrid` modes, the prompt also tells agents to prefer the proxy tools for exploration, to use the result tools whenever a response is truncated or contains a `resultId` (preview-first, then `view=compacted`, then `view=raw` only when needed), and to keep native edit/write tools for file changes. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path.
+In `ralph` and `hybrid` modes, the prompt steers agents to native `Read`/`Grep`/`Glob` for exploration, `ralph_proxy_shell` for shell (where compaction helps), and the result tools whenever a response is truncated or contains a `resultId` (preview-first, then `view=compacted`, then `view=raw` only when needed). Proxy read/grep/glob remain available for read-only plan roots and batched multi-file reads; native edit/write tools stay the modification path. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path.
 
 ## How injection works per runtime
 
@@ -146,11 +146,11 @@ Single commands are classified into families; compound pipelines are not compact
 | Group | Commands |
 |-------|----------|
 | Git | `git status`, `git diff` |
-| Search and listing | `grep`/`rg`, `find`, `ls`, `tree` |
+| Search and listing | `grep`/`rg` |
 | Tests and builds | `bats`, `npm test`, `vitest`, `pytest`, `cargo test`, `go test`, `tsc`, `eslint` |
 | Operations | `docker ps`, `docker logs`, `kubectl`, `gh pr view`, `gh pr list` |
 
-Each family keeps what matters (failed test names, error lines, file paths, counts) and drops the noise. Source-bearing output such as `git diff`, `git show`, and `grep`/`rg` passes through unchanged. Unknown commands also pass through raw unless `RALPH_COMPACT_GENERIC_FALLBACK=1` explicitly enables the generic head-plus-tail-plus-errors fallback.
+Each family keeps what matters (failed test names, error lines, file paths, counts) and drops the noise. Source-bearing families — `git diff`, `git show`, `git log`, `grep`/`rg`, `find`, `ls`, and `tree` — are never compacted on any shell path, including the generic and failure fallbacks. Unknown commands also pass through raw unless `RALPH_COMPACT_GENERIC_FALLBACK=1` explicitly enables the generic head-plus-tail-plus-errors fallback; that fallback still refuses the source-bearing denylist. The pre-tool wrapper rewrites only `tsc` and `pytest`.
 
 Beyond the built-in Python compactors, simple pattern-based rules can be added as JSON ("DSL rules") via `RALPH_COMPACTOR_DSL_RULES_PATH`; the built-ins live in `bundle/.ralph/bash-lib/compactor-dsl-builtin-rules.json`. Both kinds go through the same safety gate.
 
@@ -186,7 +186,8 @@ Native adapter compaction stores originals in the same place as MCP compaction, 
 Instead of setting `RALPH_MODE` and compaction knobs by hand on every stage,
 orchestration and graph plans can declare a plan-wide `tooling` block. The
 four named profiles live in `.ralph/tooling-profiles.json` (single source of
-truth for names and env overlays):
+truth for names and env overlays). Profiles control compaction channels only;
+they do not steer agents toward or away from native Read/Grep/Glob exploration.
 
 ```yaml
 pipeline:
@@ -453,6 +454,7 @@ The most useful fields, written at cleanup and copied into usage records:
 | `native_optimization_proven_channels` | Channels Ralph proved active for this runtime |
 | `fallback_channels_active` | Channels that fell back to MCP when native hooks were unproven |
 | `runtimes_present`, `runtime_overlays` | Present on aggregate `summary.json` when multiple runtimes contributed |
+| `requests_without_tool_use` | Per-invocation v2 count of assistant requests that contained no tool use; compare with `tool_turns` for the text-only request share |
 | `mutated_files`, `generated_files`, `warnings`, `capabilities` | Audit trail |
 
 Per-runtime files under `summaries/<runtime>.json` carry the same channel fields for that runtime only. See [Optimization channel attribution](#optimization-channel-attribution) for channel id meanings.
@@ -517,6 +519,8 @@ Proxy path policy distinguishes the **project root** (`--workspace`; where `.ral
 ## Telemetry
 
 Compaction and hook activity land in `.ralph-workspace/logs/<plan-key>/discover-report.json` (per-event savings, families, skip reasons) and in the per-run `summary.json` (or `summaries/<runtime>.json`) and `invocation-usage.json`. All local files, nothing uploaded.
+
+When `RALPH_PLAN_VERBOSE` is truthy, the raw merged CLI stream before demux is also retained at `.ralph-workspace/logs/<plan-key>/raw/<iteration>-<runtime>.jsonl` (newest five per plan). Use these files to reconstruct request counts after the fact.
 
 When reading the numbers, keep three layers apart:
 
@@ -586,7 +590,7 @@ Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval 
 
 **Cursor: "existing Cursor MCP config is invalid JSON".** Fix `<workspace>/.cursor/mcp.json` by hand and re-run; Ralph never modifies an invalid config.
 
-**Ralph mode is on but logs show only native Read calls.** Proxy tools only save tokens when agents call them. Plan logs include a per-invocation `Ralph mode breakdown: proxy=... native_read=...`. To enforce proxy usage, see strict proxy mode above.
+**Ralph mode is on but logs show only native Read calls.** That is expected for exploration: native Read/Grep/Glob are the primary path; proxy shell is where compaction helps. Plan logs include a per-invocation `Ralph mode breakdown: proxy=... native_read=...`. Strict proxy still governs whether native shell/search fallback is allowed.
 
 **Stale files under `.ralph-workspace/runtime-config/`.** See [Overlay state and cleanup](#overlay-state-and-cleanup).
 

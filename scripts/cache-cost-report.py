@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 from typing import Any, Mapping, Sequence
 
@@ -98,7 +99,7 @@ def report(records: Sequence[Mapping[str, Any]]) -> int:
         print("no matching invocations")
         return 1
 
-    hdr = f"{'#':<3}{'reqs':>6}{'ctx/req':>10}{'write':>10}{'read':>12}{'wr_beq':>11}{'rd_beq':>11}{'wr%':>6}{'redund':>8}"
+    hdr = f"{'#':<3}{'reqs':>6}{'ctx/req':>10}{'text-only':>12}{'write':>10}{'read':>12}{'wr_beq':>11}{'rd_beq':>11}{'wr%':>6}{'redund':>8}{'prefix tokens (first request)':>30}"
     print(hdr)
     print("-" * len(hdr))
 
@@ -110,6 +111,7 @@ def report(records: Sequence[Mapping[str, Any]]) -> int:
             r.get("cache_read_input_tokens")
         )
         reqs = as_int(r.get("tool_turns"))
+        text_only = as_int(r.get("requests_without_tool_use"))
         wc, rc = wr * write_price(r), rd * CACHE_READ_PRICE
         tw, tr = tw + wc, tr + rc
         share, reason = redundant_read_share(r)
@@ -123,10 +125,21 @@ def report(records: Sequence[Mapping[str, Any]]) -> int:
         else:
             measured.append((share, wc, rc, reqs))
             share_txt = f"{100 * share:.0f}%"
-        ctx = f"{rd // reqs:,}" if reqs else "-"
+        # Codex request telemetry is unavailable when neither token_count nor
+        # its item fallback produced a request. Avoid presenting a bogus zero-
+        # divided value as a measured context size.
+        if reqs:
+            ctx = f"{rd // reqs:,}"
+        elif r.get("runtime") == "codex":
+            ctx = "n/a"
+        else:
+            ctx = "-"
         pct = 100 * wc / (wc + rc) if (wc + rc) > 0 else 0
+        text_only_txt = f"{text_only}/{reqs} ({100 * text_only / reqs:.0f}%)" if reqs else "n/a"
+        prefix = r.get("first_request_input_tokens")
+        prefix_txt = f"{as_int(prefix):,}" if prefix is not None else "n/a"
         print(
-            f"{i:<3}{reqs:>6}{ctx:>10}{wr:>10,}{rd:>12,}{wc:>11,.0f}{rc:>11,.0f}{pct:>5.0f}%{share_txt:>8}"
+            f"{i:<3}{reqs:>6}{ctx:>10}{text_only_txt:>12}{wr:>10,}{rd:>12,}{wc:>11,.0f}{rc:>11,.0f}{pct:>5.0f}%{share_txt:>8}{prefix_txt:>30}"
         )
 
     total = tw + tr
@@ -155,6 +168,29 @@ def report(records: Sequence[Mapping[str, Any]]) -> int:
             f"\n{reasons[UNMEASURED_NO_READS]} of {total_records} invocations made no "
             "file-access tool calls at all."
         )
+    print("\ntop tools by result bytes")
+    result_bytes: dict[str, int] = {}
+    for record in records:
+        by_tool = record.get("tool_result_bytes_by_tool")
+        if isinstance(by_tool, Mapping):
+            for tool, size in by_tool.items():
+                result_bytes[str(tool)] = result_bytes.get(str(tool), 0) + as_int(size)
+    for tool, size in sorted(result_bytes.items(), key=lambda pair: (-pair[1], pair[0]))[:5]:
+        print(f"{tool}: {size:,} bytes")
+
+    prefixes = [
+        as_int(record.get("first_request_input_tokens"))
+        for record in records
+        if record.get("first_request_input_tokens") is not None
+    ]
+    if prefixes:
+        median = statistics.median(prefixes)
+        median_txt = f"{median:,.0f}" if float(median).is_integer() else f"{median:,.1f}"
+        print(
+            "\nprefix tokens (first request) min/median/max per plan: "
+            f"{min(prefixes):,} / {median_txt} / {max(prefixes):,}"
+        )
+
     if not measured:
         print("\nno invocation has a measurable redundant-read share.")
         return 0

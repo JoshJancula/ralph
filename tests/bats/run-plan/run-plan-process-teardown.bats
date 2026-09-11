@@ -204,7 +204,6 @@ EOF
     export RUNTIME=claude
     export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
     export PROMPT_STATIC="warm-teardown-prefix"
-    export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT=teardown-fp
 
     ralph_claude_speculative_cache_warm_maybe_start 7
     pid="$(ralph_claude_speculative_cache_warm_read_pid)"

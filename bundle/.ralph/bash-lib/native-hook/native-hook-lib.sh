@@ -429,6 +429,105 @@ ralph_native_hook_state_root() {
   return 1
 }
 
+# True when an operator-supplied killswitch.json exists (override >
+# project state-root > $RALPH_HOME). Bundle default is excluded: native
+# PreToolUse hooks use ralph_native_hook_killswitch_bundle_quick_allow for
+# the stock bundle rules instead of paying killswitch-core on every call.
+ralph_native_hook_killswitch_config_exists() {
+  local workspace="${1:-}"
+  local override_cfg ws_root ws_cfg global_cfg
+
+  override_cfg="${RALPH_KILLSWITCH_OVERRIDE_FILE:-}"
+  if [[ -n "$override_cfg" && -e "$override_cfg" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    ws_root="${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  elif [[ -n "$workspace" ]]; then
+    ws_root="${workspace%/}/.ralph-workspace"
+  elif [[ -n "${WORKSPACE:-}" ]]; then
+    ws_root="${WORKSPACE%/}/.ralph-workspace"
+  else
+    ws_root=""
+  fi
+  if [[ -n "$ws_root" ]]; then
+    ws_cfg="${ws_root}/killswitch.json"
+    if [[ -e "$ws_cfg" ]]; then
+      return 0
+    fi
+  fi
+
+  if [[ -n "${RALPH_HOME:-}" ]]; then
+    global_cfg="${RALPH_HOME}/killswitch.json"
+    if [[ -e "$global_cfg" ]]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# True when the Ralph bundle ships a killswitch.json (install default).
+ralph_native_hook_killswitch_bundle_present() {
+  local workspace="${1:-}"
+  local lib_dir
+
+  # Prefer the already-sourced native-hook lib dir (no resolve/cd on hot path).
+  if [[ -n "${_NATIVE_HOOK_LIB_DIR:-}" && -e "${_NATIVE_HOOK_LIB_DIR}/../killswitch.json" ]]; then
+    return 0
+  fi
+
+  lib_dir="$(ralph_native_hook_resolve_bash_lib_dir "$workspace" 2>/dev/null || true)"
+  [[ -n "$lib_dir" && -e "${lib_dir}/../killswitch.json" ]]
+}
+
+# Cheap allow-check mirroring stock bundle custom_rules (no_sudo, no_rm_rf_root,
+# no_force_push). Returns 0 when the command is clearly allowed; 1 when it may
+# match and the caller should run full killswitch_evaluate.
+ralph_native_hook_killswitch_bundle_quick_allow() {
+  local command="${1-}"
+  if [[ "$command" =~ ^sudo[[:space:]] ]]; then
+    return 1
+  fi
+  case "$command" in
+    *"rm -rf /"*|*"git push --force"*) return 1 ;;
+  esac
+  return 0
+}
+
+# True when command-profiles has at least one promoted (long_running) entry.
+# A non-empty profiles.json of observations alone is not enough: auto-background
+# only injects for long_running fingerprints, so skip python3 until one exists.
+ralph_native_hook_command_profiles_registry_ready() {
+  local workspace="${1:-}"
+  local state_root profiles
+  state_root="$(ralph_native_hook_state_root "$workspace" 2>/dev/null || true)"
+  [[ -n "$state_root" ]] || return 1
+  profiles="${state_root}/command-profiles/profiles.json"
+  [[ -f "$profiles" && -s "$profiles" ]] || return 1
+  # Cheap scan: avoid python3/jq on the PreToolUse hot path.
+  grep -Eq '"long_running"[[:space:]]*:[[:space:]]*true' "$profiles"
+}
+
+# Decide whether a PreToolUse hook should source killswitch-core for this call.
+# Returns 0 when full evaluation is required; 1 when the hook may skip.
+# Args: workspace command
+ralph_native_hook_killswitch_needs_full_evaluate() {
+  local workspace="${1:-}" command="${2-}"
+
+  if ralph_native_hook_killswitch_config_exists "$workspace"; then
+    return 0
+  fi
+  if ralph_native_hook_killswitch_bundle_present "$workspace"; then
+    if ralph_native_hook_killswitch_bundle_quick_allow "$command"; then
+      return 1
+    fi
+    return 0
+  fi
+  return 1
+}
+
 # Compute a command fingerprint via command-fingerprint.sh. Prints digest or empty.
 # Fail-open: never non-zero for missing python/libs.
 ralph_native_hook_command_fingerprint() {

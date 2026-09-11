@@ -22,6 +22,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# Pytest invoked from the repository root does not add this directory to
+# sys.path; keep the focused test runnable with the TODO's exact command.
+sys.path.insert(0, str(Path(__file__).parent))
+
 from ralph_script_loader import load_ralph_script
 
 DEMUX = load_ralph_script("run-plan-cli-json-demux")
@@ -31,6 +35,18 @@ FIXTURE = (
     / "fixtures"
     / "run-plan-cli-json-demux"
     / "claude-multiblock-usage.jsonl"
+)
+TEXT_ONLY_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "run-plan-cli-json-demux"
+    / "claude-text-only-usage.jsonl"
+)
+TOOL_RESULT_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "run-plan-cli-json-demux"
+    / "claude-tool-result-bytes.jsonl"
 )
 
 # Ground truth: the captured session's terminal result event.
@@ -75,6 +91,10 @@ class ClaudeUsageDedupeTest(unittest.TestCase):
         for field, expected in EXPECTED.items():
             self.assertEqual(usage[field], expected, f"{field} mismatch")
 
+    def test_records_first_request_prefix_tokens(self) -> None:
+        usage = _run_demux(self.lines)
+        self.assertEqual(usage["first_request_input_tokens"], 19948)
+
     def test_repeated_content_blocks_are_not_double_counted(self) -> None:
         usage = _run_demux(self.lines)
         self.assertNotEqual(usage["cache_read_input_tokens"], BUGGY_CACHE_READ)
@@ -109,6 +129,16 @@ class ClaudeUsageDedupeTest(unittest.TestCase):
         # output_tokens is unrecoverable without the result event; it must at least
         # not be inflated by counting the same block snapshots repeatedly.
         self.assertLess(usage["output_tokens"], EXPECTED["output_tokens"])
+
+    def test_counts_deduped_text_only_requests(self) -> None:
+        usage = _run_demux(TEXT_ONLY_FIXTURE.read_text().splitlines())
+        self.assertEqual(usage["tool_turns"], 4)
+        self.assertEqual(usage["requests_without_tool_use"], 2)
+
+    def test_counts_tool_result_bytes_by_tool(self) -> None:
+        usage = _run_demux(TOOL_RESULT_FIXTURE.read_text().splitlines())
+        self.assertEqual(usage["tool_result_bytes_by_tool"], {"Read": 14, "Bash": 4})
+        self.assertEqual(usage["tool_result_bytes_total"], 18)
 
 
 if __name__ == "__main__":

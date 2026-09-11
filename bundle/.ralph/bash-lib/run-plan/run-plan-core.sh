@@ -271,51 +271,43 @@ ralph_mode_prompt_guidance_ralph_catalog() {
   case "$runtime" in
     claude)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Claude exposes Ralph tools with MCP-qualified names; use these as your primary path for read/search/shell and stored-result retrieval:
-- `mcp__ralph__ralph_proxy_read`
-- `mcp__ralph__ralph_proxy_grep`
-- `mcp__ralph__ralph_proxy_glob`
-- `mcp__ralph__ralph_proxy_shell`
-- `mcp__ralph__ralph_proxy_batch` for multiple independent read/search/glob/result operations in one MCP call
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `mcp__ralph__ralph_proxy_shell` (native `Bash` is unavailable in ralph mode; in hybrid it is discouraged for noisy output).
+- Use `mcp__ralph__ralph_proxy_result_*` to page stored shell output.
+- `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `mcp__ralph__ralph_proxy_batch`.
 - The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `mcp__ralph__ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-Native `Bash` is unavailable in ralph mode: run every command through `mcp__ralph__ralph_proxy_shell`, and never ask the operator to enable native `Bash` access.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "mcp__ralph__ralph_proxy_result_read" \
         "mcp__ralph__ralph_proxy_result_search" \
         "mcp__ralph__ralph_proxy_result_summary"
       cat <<'EOF'
-Native `Read`, `Edit`, and `Write` remain available for modifying files. Claude Code requires a native `Read` of a file before you can `Edit` or `Write` it, and a `ralph_proxy_read` does NOT satisfy that requirement: when you intend to change an existing file (for example marking a TODO checkbox), `Read` it natively first, then `Edit`/`Write` it. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifying files. Claude Code requires a native `Read` of a file before you can `Edit` or `Write` it. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     cursor)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Cursor registers Ralph tools as `ralph_proxy_*` (or `mcp__ralph__ralph_proxy_*` when only MCP-qualified names appear). Use Ralph tooling as your primary path for read/search/shell and stored-result retrieval:
-
-- `ralph_proxy_read` for file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` for code search
-- `ralph_proxy_glob` for finding paths by pattern
-- `ralph_proxy_shell` for exploratory, verification, and log-heavy shell commands (git status, tests, builds, directory listings)
+Ralph tooling is preflight-checked before this invocation. Cursor registers Ralph tools as `ralph_proxy_*` (or `mcp__ralph__ralph_proxy_*` when only MCP-qualified names appear). Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native `Shell` is discouraged for noisy output in ralph/hybrid.
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
 - The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "ralph_proxy_result_read" \
         "ralph_proxy_result_search" \
         "ralph_proxy_result_summary"
       cat <<'EOF'
-Native `Read`, `Edit`, and `Write` remain available for modifying files. Use native `Read` only immediately before `Edit` or `Write` on a file that will be modified; use Ralph tooling for all exploration and verification. When you intend to change a file, read it before editing, then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifying files. When you intend to change a file, read it before editing, then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     opencode)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Use Ralph tooling as your primary path for read/search/shell and stored-result retrieval:
-- `ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default); prefer this for exploratory commands, test verification, builds, and log inspection
-
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native shell is discouraged for noisy output in ralph/hybrid.
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "ralph_proxy_result_read" \
@@ -323,7 +315,7 @@ EOF
         "ralph_proxy_result_summary"
       cat <<'EOF'
 If a referenced file lives outside the workspace and OpenCode denies the read as `external_directory`, continue with local workspace files or write `pending-human.txt` instead of retrying the same denied path.
-Native `Read`, `Edit`, and `Write` remain available for modifications. Use native `Read` only immediately before `Edit` or `Write` on a file that will be modified; use Ralph tooling for exploration first. When you intend to change a file, read it before editing and then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifications. When you intend to change a file, read it before editing and then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     codex)
@@ -331,23 +323,11 @@ EOF
       ;;
     *)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. The host may expose Ralph tools with direct names (`ralph_proxy_*`) or MCP-qualified names (`mcp__ralph__ralph_proxy_*`); use whichever is available as your primary path for read/search/shell and stored-result retrieval:
-
-Direct names (if available):
-- `ralph_proxy_read`
-- `ralph_proxy_grep`
-- `ralph_proxy_glob`
-- `ralph_proxy_shell`
-- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-MCP-qualified names (standard on most hosts):
-- `mcp__ralph__ralph_proxy_read`
-- `mcp__ralph__ralph_proxy_grep`
-- `mcp__ralph__ralph_proxy_glob`
-- `mcp__ralph__ralph_proxy_shell`
-- The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `mcp__ralph__ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-Native `Bash` is unavailable in ralph mode: run commands through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only namespaced tools exist), and never ask the operator to enable native `Bash` access.
+Ralph tooling is preflight-checked before this invocation. The host may expose Ralph tools with direct names (`ralph_proxy_*`) or MCP-qualified names (`mcp__ralph__ralph_proxy_*`); use whichever names the host registers. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only namespaced tools exist); native `Bash` is unavailable in ralph mode and discouraged for noisy output in hybrid.
+- Use `ralph_proxy_result_*` (or `mcp__ralph__ralph_proxy_result_*`) to page stored shell output.
+- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch` / `mcp__ralph__ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel` or `mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` (or the MCP-qualified wait tool) and pass `waitSeconds` near its 600 cap (default is only 60); status tools are an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol
       cat <<'EOF'
@@ -363,39 +343,16 @@ ralph_mode_prompt_guidance_ralph_catalog_codex() {
   if [[ "${RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY:-0}" == "1" ]] || [[ "${RALPH_STRICT_PROXY:-0}" == "1" ]]; then
     strict=1
   fi
+  cat <<'EOF'
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` (including `read_file` where the host exposes that name) are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` (native `command_execution` is discouraged for noisy output in ralph/hybrid).
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
+EOF
   if [[ "$mode" == "hybrid" ]]; then
     cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Prefer Ralph tooling when it is healthy for read/search/shell and stored-result retrieval. Native adapters are available as fallback when MCP or proxy paths are slow, failing, or unsuitable; use them freely when they are the better fit.
-
-Ralph tooling available in this runtime:
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` / `mcp__ralph__ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` / `mcp__ralph__ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default; prefer this for exploratory commands like git status, tests, builds, and log inspection)
-
-Prefer Ralph tooling first:
-- Use `ralph_proxy_read` for large file reads instead of native `command_execution` running `cat` or similar
-- Use `ralph_proxy_grep` for code search instead of native `command_execution` running grep/rg
-- Use `ralph_proxy_glob` for finding paths instead of native `command_execution` running find
-- Use `ralph_proxy_shell` for exploratory commands, test runs, build verification, and log inspection; Ralph compacts large outputs automatically
-
-Use native adapters only when Ralph tooling is insufficient or when the runtime requires a native edit flow. Do not treat native read/search/shell tools as an equal-weight alternative to Ralph tooling.
-EOF
-  else
-    cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Ralph tooling is your primary path for read/search/shell and stored-result retrieval:
-
-Ralph tooling available in this runtime:
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` / `mcp__ralph__ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` / `mcp__ralph__ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default; prefer this for exploratory commands like git status, tests, builds, and log inspection)
-
-Use Ralph tooling for exploration and verification:
-- Use `ralph_proxy_read` for large file reads instead of native `command_execution` running `cat` or similar
-- Use `ralph_proxy_grep` for code search instead of native `command_execution` running grep/rg
-- Use `ralph_proxy_glob` for finding paths instead of native `command_execution` running find
-- Use `ralph_proxy_shell` for exploratory commands, test runs, build verification, and log inspection; Ralph compacts large outputs automatically
+When Ralph tooling is slow, failing, or unsuitable for a given call, use native adapters freely, including native edit flows and other runtime-specific needs.
 EOF
   fi
   ralph_mode_prompt_guidance_stored_result_protocol \
@@ -404,7 +361,7 @@ EOF
     "ralph_proxy_result_summary"
   if [[ "$strict" == "1" ]]; then
     cat <<'EOF'
-Strict proxy is active: do not fall back to native read/search/shell when Ralph tooling is required. If the first Ralph tooling call fails, stop and write one structured request to `pending-human.txt` rather than probing with native adapters.
+Strict proxy is active: do not fall back to native shell when Ralph shell tooling is required. If the first Ralph shell call fails, stop and write one structured request to `pending-human.txt` rather than probing with native `command_execution`. Native Read/Grep/Glob remain the primary exploration path.
 EOF
   fi
   cat <<'EOF'
@@ -446,7 +403,7 @@ ralph_mode_prompt_guidance_hybrid() {
       ralph_mode_prompt_guidance_ralph_catalog "$runtime"
       cat <<'EOF'
 
-Native adapters are available as fallback when Ralph tooling is slow, failing, or unsuitable. Prefer Ralph tooling when it is healthy for read/search/shell and stored-result retrieval; use native runtime tools freely when the MCP or proxy path is the better fit, including native edit flows and other runtime-specific needs.
+When Ralph tooling is slow, failing, or unsuitable for a given call, use native runtime tools freely, including native edit flows and other runtime-specific needs.
 EOF
       ;;
   esac
@@ -806,6 +763,25 @@ ralph_run_plan_assemble_prompt_static() {
   ralph_run_plan_assemble_prompt_ordered "" "$ns_block" ""
 }
 
+# Rebuild the stable prefix for resumed turns. Keep this in sync with the
+# fresh-turn assembly below: runtime/mode guidance and the namespace contract
+# are stable, while TODO and continuation details belong in PROMPT.
+ralph_run_plan_rebuild_prompt_static() {
+  local ns_block preamble mode_guidance
+  ns_block="$(ralph_run_plan_namespace_prompt_block)"
+  preamble="$(ralph_runtime_prompt_guidance "$RUNTIME")"
+  mode_guidance=""
+  if [[ "${RALPH_MODE:-no}" != "no" ]]; then
+    mode_guidance="$(ralph_mode_prompt_guidance "$RUNTIME" "${RALPH_MODE:-no}")"
+  fi
+  if [[ -n "$preamble" && -n "$mode_guidance" ]]; then
+    preamble="${preamble}"$'\n\n'"${mode_guidance}"
+  elif [[ -n "$mode_guidance" ]]; then
+    preamble="$mode_guidance"
+  fi
+  ralph_run_plan_assemble_prompt_ordered "$preamble" "$ns_block" ""
+}
+
 # Apply common prompt assembly at the shared boundary.
 # Sets PROMPT / PROMPT_STATIC so delivered order is preamble, contracts, task
 # for every runtime (Claude keeps the stable prefix in --system-prompt).
@@ -822,49 +798,6 @@ ralph_run_plan_apply_ordered_prompt_assembly() {
   else
     # Non-Claude CLIs get one fully ordered prompt; do not use stable-last merge.
     PROMPT="$(ralph_run_plan_assemble_prompt_ordered "$preamble" "$contracts" "$task")"
-  fi
-}
-
-# Rollout gate for stable-prefix-first prompt ordering across non-Claude runtimes.
-# Ralph/hybrid mode enables it unless RALPH_PROMPT_STABLE_PREFIX=0.
-# Native/no mode leaves it disabled unless RALPH_PROMPT_STABLE_PREFIX=1.
-# Invalid values fail early (return 2). When disabled, OpenCode keeps its existing
-# stable-first ordering and Cursor/Codex/Antigravity keep stable-last ordering.
-ralph_run_plan_stable_prefix_enabled() {
-  local gate="${RALPH_PROMPT_STABLE_PREFIX:-}"
-  if [[ -n "$gate" ]]; then
-    case "$gate" in
-      0) return 1 ;;
-      1) return 0 ;;
-      *)
-        if declare -F ralph_run_plan_log >/dev/null 2>&1; then
-          ralph_run_plan_log "RALPH_PROMPT_STABLE_PREFIX: invalid value '$gate' (use 0 or 1)"
-        fi
-        echo "RALPH_PROMPT_STABLE_PREFIX: invalid value '$gate' (use 0 or 1)" >&2
-        return 2
-        ;;
-    esac
-  fi
-  case "${RALPH_MODE:-no}" in
-    ralph|hybrid) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# Merge the stable block (PROMPT_STATIC) and the volatile block (PROMPT) for a runtime.
-# Operates on the global PROMPT/PROMPT_STATIC variables.
-#   - claude: never merged here (stable goes to --system-prompt in the invoker).
-#   - non-claude with stable-prefix enabled, or OpenCode always: stable block first.
-#   - other non-claude with stable-prefix disabled: stable-last ordering.
-ralph_run_plan_merge_prompt() {
-  local runtime="${1:-}"
-  [[ -z "${PROMPT_STATIC:-}" ]] && return 0
-  [[ "$runtime" == "claude" ]] && return 0
-
-  if [[ "$runtime" == "opencode" ]] || ralph_run_plan_stable_prefix_enabled; then
-    PROMPT="${PROMPT_STATIC}"$'\n\n'"${PROMPT}"
-  else
-    PROMPT+=$'\n'"$PROMPT_STATIC"
   fi
 }
 
@@ -1643,6 +1576,14 @@ ralph_apply_previous_efficiency_hint_to_prompt() {
 }
 
 if [[ "${RALPH_RUN_PLAN_LIBRARY_ONLY:-0}" == "1" ]]; then
+  return 0
+fi
+
+# Bare `source run-plan-core.sh` (guidance dumps, ad-hoc function checks) does not
+# load the run-plan.sh prelude where prompt_select_runtime lives. Stop after
+# defining helpers instead of falling into the interactive runtime picker and
+# exiting the caller's shell via `|| exit 1`.
+if ! declare -F prompt_select_runtime >/dev/null 2>&1; then
   return 0
 fi
 
@@ -4113,7 +4054,7 @@ _ralph_append_invocation_usage_history() {
       _extra_fields+=",\"completion_override_used\":false"
     fi
   fi
-  _extra_fields+=",\"prompt_bytes\":${_prompt_bytes},\"todo_bytes\":${_todo_bytes},\"todo_continuation_lines\":${_todo_continuation_lines},\"direct_verification\":$([[ "$_direct_verification" == "1" ]] && printf true || printf false),\"tool_turns\":${_tool_turns}"
+  _extra_fields+=",\"prompt_bytes\":${_prompt_bytes},\"todo_bytes\":${_todo_bytes},\"todo_continuation_lines\":${_todo_continuation_lines},\"direct_verification\":$([[ "$_direct_verification" == "1" ]] && printf true || printf false),\"tool_turns\":${_tool_turns},\"requests_without_tool_use\":0"
   _extra_fields+=",\"ralph_proxy_calls\":0,\"other_mcp_calls\":0,\"native_read_like_calls\":0,\"native_write_like_calls\":0,\"native_file_read_calls\":0,\"native_read_compatibility_calls\":0,\"native_search_calls\":0,\"native_shell_calls\":0,\"ralph_mcp_calls\":0,\"runtime_hook_rewrite_calls\":0,\"runtime_hook_compaction_calls\":0,\"unknown_tool_calls\":0"
   _extra_fields+=",\"native_hooks_effective\":false,\"native_hook_events\":0,\"hook_compactions\":0,\"hook_rewrites\":0,\"hook_original_bytes\":0,\"hook_compacted_bytes\":0,\"mcp_effective\":false,\"runtime_overlay_mode\":\"\",\"runtime_overlay_warnings\":[]"
   if [[ -n "$_split_parent_id" ]]; then
@@ -4784,7 +4725,7 @@ while true; do
         fi
       fi
       _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
-      PROMPT_STATIC=""
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       PROMPT="${_reset_prefix}$_resume_intro
 
 **TODO (line $line_num):** $todo_prompt_body
@@ -4847,7 +4788,7 @@ Cost model: prefer strict \`verify:\` for final proof; use one blocking call for
         fi
       fi
       _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
-      PROMPT_STATIC=""
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       _compact_label="${_compact_command:-the compact command}"
       PROMPT="${_compact_prefix}$_resume_intro
 
@@ -4872,7 +4813,7 @@ Cost model: prefer strict \`verify:\` for final proof; use one blocking call for
         _resume_intro="Continuing via bare CLI resume (last-session semantics; isolated CI only)."
       fi
       _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
-      PROMPT_STATIC=""
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       PROMPT="$_resume_intro
 
 **TODO (line $line_num):** $todo_prompt_body
@@ -5034,12 +4975,6 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     # Export PROMPT_STATIC: Claude invoke passes it via --system-prompt; other runtimes already
     # received the fully ordered prompt (no fake cache-control markers).
     export PROMPT_STATIC
-    # Stable-prefix telemetry: fingerprint + byte count, never the prompt contents. Exported so
-    # invocation usage capture can record them alongside per-invocation usage.
-    RALPH_PROMPT_STABLE_PREFIX_BYTES="${#PROMPT_STATIC}"
-    RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT="$(ralph_run_plan_stable_prefix_fingerprint "$PROMPT_STATIC")"
-    export RALPH_PROMPT_STABLE_PREFIX_BYTES RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT
-    ralph_run_plan_log "stable prefix: bytes=${RALPH_PROMPT_STABLE_PREFIX_BYTES} fingerprint=${RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT:-none}"
     ralph_run_plan_continuation_summary_refresh_metrics
     ralph_run_plan_log "continuation summary: bytes=${RALPH_CONTINUATION_SUMMARY_BYTES:-0} entries=${RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT:-0} truncations=${RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT:-0}"
     # Prompt size measurement and warning.

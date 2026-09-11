@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -39,6 +40,9 @@ from shell_command_registry import (
     FAMILY_TREE,
     FAMILY_TSC,
     FAMILY_VITEST,
+    _basename,
+    _join_line_continuations,
+    _normalize_tokens,
     classify_registry_family,
     classifier_for_family,
     should_bail,
@@ -56,12 +60,22 @@ FAMILY_GRADLE_BUILD = "gradle_build"
 FAMILY_GENERIC_LARGE = "generic_large"
 
 # Source-output families: these commands return content the agent asked for
-# (paths, directory entries), not progress noise, so summarizing them destroys
-# the answer and forces a re-run. There is deliberately no environment
+# (paths, matches, diffs, logs), not progress noise, so summarizing them
+# destroys the answer and forces a re-run. There is deliberately no environment
 # variable to re-enable compaction of these families; source output is never
 # summarized on the shell path. Operators who want source output windowed
 # already have that control through RALPH_NATIVE_RESULT_COMPACT.
-SOURCE_OUTPUT_FAMILIES = frozenset({FAMILY_FIND, FAMILY_LS, FAMILY_TREE})
+SOURCE_OUTPUT_FAMILIES = frozenset(
+    {
+        FAMILY_FIND,
+        FAMILY_LS,
+        FAMILY_TREE,
+        FAMILY_GREP,
+        FAMILY_GIT_DIFF,
+        FAMILY_GIT_SHOW,
+        FAMILY_GIT_LOG,
+    }
+)
 
 _GENERIC_LARGE_MIN_BYTES = 4096
 _GENERIC_LARGE_MIN_LINES = 80
@@ -73,6 +87,40 @@ _GENERIC_LARGE_TAIL_LINES = 5
 _GENERIC_FALLBACK_DEFAULT_THRESHOLD_BYTES = 8192
 _GENERIC_FALLBACK_MAX_ERROR_LINES = 40
 _GENERIC_FALLBACK_ERROR_RE = re.compile(r"error|fail|fatal|exception|not ok", re.IGNORECASE)
+
+# Commands whose stdout is the answer (file contents, matches, diffs). Generic
+# size truncation must not rewrite them even when no family rule matched.
+_GENERIC_FALLBACK_SOURCE_BINARIES = frozenset(
+    {
+        "cat",
+        "sed",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "bat",
+        "jq",
+        "awk",
+        "cut",
+        "diff",
+        "grep",
+        "rg",
+        "ag",
+        "find",
+        "ls",
+        "tree",
+        # Non-zero exit is a normal boolean answer, not a failure signal.
+        "test",
+        "[",
+    }
+)
+_GENERIC_FALLBACK_SOURCE_GIT_SUBCOMMANDS = frozenset({"diff", "show", "log"})
+_GENERIC_FALLBACK_PREFIX_WRAPPERS = frozenset({"sudo", "time", "nice"})
+_CD_AND_PREFIX_RE = re.compile(
+    r"^\s*cd\s+(?:[^\s;&|]+|\"[^\"]*\"|'[^']*')\s*&&\s*",
+    re.IGNORECASE,
+)
+_PIPELINE_SPLIT_RE = re.compile(r"(?<!\|)\|(?!\|)")
 
 # Failure-aware compaction for non-zero exits (RALPH_COMPACT_FAILURE; default on).
 FAMILY_FAILURE_AWARE = "failure_aware"
@@ -261,7 +309,16 @@ def compact_shell_output(
         family_id = detect_output_shape(combined_original)
         family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
     if family_id in SOURCE_OUTPUT_FAMILIES:
-        return _not_compacted(command, stdout, stderr, exit_status)
+        return CompactResult(
+            stdout=stdout,
+            stderr=stderr,
+            compacted=False,
+            stdout_compacted=False,
+            stderr_compacted=False,
+            family=family_id,
+            status="not compacted",
+            exit_status=exit_status,
+        )
     if family_entry is None:
         generic_result = (
             _generic_size_fallback(command, stdout, stderr, exit_status, combined_original)
@@ -418,16 +475,95 @@ def _command_allows_shape_fallback(command: str) -> bool:
     return not cmd
 
 
+def _strip_leading_cd_and_chains(command: str) -> str:
+    """Drop leading `cd <dir> &&` prefixes so the real command is visible."""
+    current = command
+    while True:
+        match = _CD_AND_PREFIX_RE.match(current)
+        if match is None:
+            return current
+        current = current[match.end() :]
+
+
+def _pipeline_stages(command: str) -> list[str]:
+    """Split on bare `|` only; leave `||` intact for bail handling."""
+    return [part.strip() for part in _PIPELINE_SPLIT_RE.split(command) if part.strip()]
+
+
+def _parse_stage_tokens(stage: str) -> list[str] | None:
+    """Argv-split one pipeline stage via the registry tokenizer helpers."""
+    text = (stage or "").strip()
+    if not text:
+        return None
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    tokens, _rewrite_prefix = _normalize_tokens(tokens)
+    while tokens and _basename(tokens[0]) in _GENERIC_FALLBACK_PREFIX_WRAPPERS:
+        tokens = tokens[1:]
+        if not tokens:
+            return None
+        tokens, _rewrite_prefix = _normalize_tokens(tokens)
+    return tokens or None
+
+
+def _tokens_are_source_output_command(tokens: list[str]) -> bool:
+    base = _basename(tokens[0])
+    if base in _GENERIC_FALLBACK_SOURCE_BINARIES:
+        return True
+    if (
+        base == "git"
+        and len(tokens) >= 2
+        and tokens[1] in _GENERIC_FALLBACK_SOURCE_GIT_SUBCOMMANDS
+    ):
+        return True
+    return False
+
+
+def _source_output_denies_generic_fallback(command: str) -> bool:
+    """True when first word or last pipeline stage is a source-output command."""
+    stages = _pipeline_stages(command)
+    if not stages:
+        return False
+    first_tokens = _parse_stage_tokens(stages[0])
+    if first_tokens and _tokens_are_source_output_command(first_tokens):
+        return True
+    last_tokens = _parse_stage_tokens(stages[-1])
+    if last_tokens and _tokens_are_source_output_command(last_tokens):
+        return True
+    return False
+
+
+def _is_pure_pipeline(command: str) -> bool:
+    """True when the only compound operator is `|` (not `||`, `&&`, `;`, ...)."""
+    if _PIPELINE_SPLIT_RE.search(command) is None:
+        return False
+    without_pipes = _PIPELINE_SPLIT_RE.sub(" ", command)
+    return not should_bail(without_pipes)
+
+
 def _command_allows_generic_shape_fallback(command: str) -> bool:
-    """The safe generic_large/numbered_dump shape fallback (size- and
-    repetition-based truncation, no semantic family claim) applies whenever
-    the command doesn't explicitly bail, regardless of whether the command
-    itself was classified.
+    """Whether the safe generic_large size fallback may run for this command.
+
+    Empty/unknown provenance stays eligible. Source-output commands (cat, sed,
+    grep, git diff/show/log, ...) are denied even when no family matched, so
+    the agent's answer is not head/tail truncated. Pure pipelines of unknown
+    commands remain eligible; other bail forms (&&, $(), background) stay out.
     """
     cmd = (command or "").strip()
     if not cmd:
         return True
-    return not should_bail(cmd)
+    inspected = _strip_leading_cd_and_chains(_join_line_continuations(cmd)).strip()
+    if not inspected:
+        return True
+    if _source_output_denies_generic_fallback(inspected):
+        return False
+    if _is_pure_pipeline(inspected):
+        return True
+    return not should_bail(inspected)
 
 
 def _detect_shape_git_diff(text: str) -> bool:
@@ -654,6 +790,9 @@ def _generic_size_fallback(
     if original_bytes <= _generic_fallback_threshold_bytes():
         return _not_compacted(command, stdout, stderr, exit_status)
 
+    if not _command_allows_generic_shape_fallback(command):
+        return _not_compacted(command, stdout, stderr, exit_status)
+
     body = _format_generic_large_output(command, combined_original, exit_status)
     if body is None:
         return _not_compacted(command, stdout, stderr, exit_status)
@@ -768,6 +907,22 @@ def _format_failure_aware_output(
     return "\n".join(body_lines)
 
 
+def _command_denies_failure_aware_fallback(command: str) -> bool:
+    """True when non-zero exit is a normal answer (grep/diff/test/D2 source).
+
+    Reuses the generic-fallback source denylist so failure-aware compaction
+    does not rewrite grep/rg no-match, diff differences, test/[ false, or
+    other source-output commands.
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        return False
+    inspected = _strip_leading_cd_and_chains(_join_line_continuations(cmd)).strip()
+    if not inspected:
+        return False
+    return _source_output_denies_generic_fallback(inspected)
+
+
 def _failure_aware_fallback(
     command: str,
     stdout: str,
@@ -777,6 +932,8 @@ def _failure_aware_fallback(
 ) -> CompactResult:
     """Conservative compaction for failed commands with noisy output."""
     if exit_status == 0 or not _failure_compaction_enabled():
+        return _not_compacted(command, stdout, stderr, exit_status)
+    if _command_denies_failure_aware_fallback(command):
         return _not_compacted(command, stdout, stderr, exit_status)
 
     original_bytes = len(combined_original.encode("utf-8"))
@@ -1183,59 +1340,6 @@ def _git_diff_summary_line(
         summary += f", {insertions} insertion(s)(+), {deletions} deletion(s)(-)"
     summary += f" for: {command.strip()}"
     return summary
-
-
-def _compact_grep(
-    command: str,
-    stdout: str,
-    stderr: str,
-    exit_status: int,
-) -> tuple[str, str, bool]:
-    text = stdout if stdout.strip() else stderr
-    if not text.strip():
-        return stdout, stderr, False
-    lines = text.splitlines()
-    by_file: dict[str, list[str]] = defaultdict(list)
-    unparsed: list[str] = []
-    for line in lines:
-        if not line.strip():
-            continue
-        match = _GREP_RG_FILE_RE.match(line)
-        if match:
-            path, lineno, _content = match.groups()
-            by_file[path].append(lineno or "?")
-        else:
-            unparsed.append(line)
-    if not by_file:
-        return stdout, stderr, False
-    prefix = _common_path_prefix(list(by_file.keys()))
-    total = sum(len(items) for items in by_file.values())
-    header = (
-        f"{_grep_tool_name(command)} (exit {exit_status}): "
-        f"{total} match(es) in {len(by_file)} file(s)"
-    )
-    parts = [header]
-    max_files = 30
-    max_sample = 3
-    for index, (path, nums) in enumerate(sorted(by_file.items(), key=lambda item: item[0])):
-        if index >= max_files:
-            parts.append(f"... and {len(by_file) - max_files} more file(s)")
-            break
-        display = path[len(prefix) :] if prefix and path.startswith(prefix) else path
-        sample = ", ".join(nums[:max_sample])
-        extra = ""
-        if len(nums) > max_sample:
-            extra = f", +{len(nums) - max_sample} more"
-        parts.append(f"  {display}: {len(nums)} match(es) (lines {sample}{extra})")
-    if unparsed:
-        parts.append(f"({len(unparsed)} non-matching line(s) preserved below)")
-        parts.extend(unparsed[:10])
-    return "\n".join(parts), "", True
-
-
-def _grep_tool_name(command: str) -> str:
-    token = (command.strip().split() or ["grep"])[0]
-    return token.rsplit("/", 1)[-1]
 
 
 def _compact_find(
@@ -2355,24 +2459,6 @@ def _format_generic_large_output(
             )
     body_lines.extend(tail)
     return "\n".join(body_lines)
-
-
-def _common_path_prefix(paths: list[str]) -> str:
-    if not paths:
-        return ""
-    parts_list = [path.split("/") for path in paths]
-    common: list[str] = []
-    for segment_group in zip(*parts_list):
-        if len(set(segment_group)) == 1:
-            common.append(segment_group[0])
-        else:
-            break
-    if not common:
-        return ""
-    prefix = "/".join(common)
-    if "/" in prefix and not prefix.endswith("/"):
-        prefix += "/"
-    return prefix
 
 
 def _join_streams(stdout: str, stderr: str) -> str:

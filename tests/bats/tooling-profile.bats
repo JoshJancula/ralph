@@ -111,3 +111,18 @@ ralph-aggressive'
   printf '%s\n' "$output" | grep -qxF "RALPH_NATIVE_RESULT_COMPACT=1"
   printf '%s\n' "$output" | grep -qxF "RALPH_MODE=ralph"
 }
+
+# D4: named profiles control compaction channels, not exploration tool steering.
+@test "tooling-profile descriptions say compaction channels not exploration steering" {
+  local desc
+  for name in raw ralph-read-heavy ralph-compact ralph-aggressive; do
+    desc="$(jq -r --arg n "$name" '.profiles[$n].description' \
+      "$REPO_ROOT/bundle/.ralph/tooling-profiles.json")"
+    [[ "$desc" == *"Compaction channels only (not exploration steering)"* ]] \
+      || fail "profile $name description missing compaction-channels wording"
+    [[ "$desc" == *"native Read/Grep/Glob for exploration"* ]] \
+      || fail "profile $name description missing native exploration wording"
+    [[ "$desc" != *"primary path for read"* ]] \
+      || fail "profile $name description still steers proxy as primary path for read"
+  done
+}

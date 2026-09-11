@@ -632,7 +632,7 @@ ralph_mcp_proxy_owned_tool_search_schema_json() {
   jq -n -c '
     {
       name: "ralph_proxy_search",
-      description: "BM25-ranked lexical code search.",
+      description: "BM25-ranked lexical code search. Default cap 50 results per call; a footer reports when results were cut; page with head_limit.",
       inputSchema: {
         type: "object",
         properties: {
@@ -750,7 +750,7 @@ ralph_mcp_proxy_owned_tools_full_json() {
     [
       {
         name: "ralph_proxy_read",
-        description: "Read file with line/byte limits.",
+        description: "Read a file window. Default cap 250 lines / 32768 bytes per call; a footer reports when the window was cut; page with offset/limit.",
         inputSchema: {
           type: "object",
           properties: {
@@ -763,7 +763,7 @@ ralph_mcp_proxy_owned_tools_full_json() {
       },
       {
         name: "ralph_proxy_grep",
-        description: "Search files by pattern.",
+        description: "Search files by pattern. Default cap 50 matches per call; a footer reports when matches were cut; page with head_limit/offset.",
         inputSchema: {
           type: "object",
           properties: {
@@ -777,19 +777,21 @@ ralph_mcp_proxy_owned_tools_full_json() {
       },
       {
         name: "ralph_proxy_glob",
-        description: "Find files by glob pattern.",
+        description: "Find files by glob pattern. Default cap 100 paths per call; a footer reports when paths were cut; page with offset/limit.",
         inputSchema: {
           type: "object",
           properties: {
             glob_pattern: { type: "string", description: "Glob pattern." },
-            target_directory: { type: "string", description: "Search directory." }
+            target_directory: { type: "string", description: "Search directory." },
+            offset: { type: "integer", description: "Start path index (1-based)." },
+            limit: { type: "integer", description: "Path limit." }
           },
           required: ["glob_pattern"]
         }
       },
       {
         name: "ralph_proxy_shell",
-        description: "Execute allowlisted shell command.",
+        description: "Execute allowlisted shell command. Default cap 8192 bytes per call; a footer reports when output was cut; page with ralph_proxy_result_read.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1514,6 +1516,164 @@ ralph_mcp_proxy_append_readback_telemetry() {
     "$reason"
 }
 
+# Build one truncation footer line for ralph_proxy_read's exploration fast path.
+# Prints the footer with no trailing newline, or prints nothing when the window
+# was not policy-truncated. truncated_flag must already mean policy line/byte
+# truncation (caller-supplied limit satisfaction leaves it 0).
+ralph_mcp_proxy_read_truncation_footer_line() {
+  local truncated_flag="${1:-0}"
+  local metadata_json="${2:-}"
+  local line_start line_end line_limit line_count byte_count
+  local delivered next_offset byte_cap
+
+  [[ "$truncated_flag" == "1" ]] || return 0
+  [[ -n "$metadata_json" ]] || return 0
+  jq -e '.window' <<<"$metadata_json" >/dev/null 2>&1 || return 0
+
+  line_start="$(jq -r '.window.lineStart // empty' <<<"$metadata_json")"
+  line_end="$(jq -r '.window.lineEnd // empty' <<<"$metadata_json")"
+  line_limit="$(jq -r '.window.lineLimit // empty' <<<"$metadata_json")"
+  line_count="$(jq -r '.window.lineCount // empty' <<<"$metadata_json")"
+  byte_count="$(jq -r '.window.byteCount // empty' <<<"$metadata_json")"
+
+  [[ "$line_start" =~ ^[0-9]+$ && "$line_end" =~ ^[0-9]+$ ]] || return 0
+  [[ "$line_limit" =~ ^[0-9]+$ && "$line_count" =~ ^[0-9]+$ ]] || return 0
+  [[ "$byte_count" =~ ^[0-9]+$ ]] || byte_count=0
+
+  if [[ "$line_end" -ge "$line_start" ]]; then
+    delivered=$((line_end - line_start + 1))
+  else
+    delivered=0
+  fi
+  next_offset=$((line_end + 1))
+  if [[ "$next_offset" -lt 1 ]]; then
+    next_offset=1
+  fi
+
+  # Byte cap stops before the line budget is filled; line policy cap fills the
+  # budget while leaving later file lines unread (lineEnd < lineCount).
+  if [[ "$delivered" -lt "$line_limit" ]]; then
+    byte_cap="${RALPH_MCP_PROXY_POLICY_OWNED_MAX_READ_BYTES:-32768}"
+    printf '[ralph_proxy_read: bytes 1-%s shown (policy cap %s); continue with offset=%s]' \
+      "$byte_count" "$byte_cap" "$next_offset"
+    return 0
+  fi
+  if [[ "$line_end" -lt "$line_count" ]]; then
+    printf '[ralph_proxy_read: lines %s-%s of %s shown (policy cap %s); continue with offset=%s]' \
+      "$line_start" "$line_end" "$line_count" "$line_limit" "$next_offset"
+    return 0
+  fi
+  return 0
+}
+
+# Build one truncation footer line for ralph_proxy_grep's exploration fast path.
+# Prints the footer with no trailing newline, or prints nothing when every
+# collected match was delivered. sourceCapped results report a lower-bound
+# total because the collector stopped early.
+ralph_mcp_proxy_grep_truncation_footer_line() {
+  local metadata_json="${1:-}"
+  local match_count return_limit policy_cap shown
+  local source_capped source_cap_reason
+
+  [[ -n "$metadata_json" ]] || return 0
+  match_count="$(jq -r '.matchCount // empty' <<<"$metadata_json")"
+  return_limit="$(jq -r '.returnLimit // empty' <<<"$metadata_json")"
+  policy_cap="$(jq -r '.policyCap // empty' <<<"$metadata_json")"
+  [[ "$match_count" =~ ^[0-9]+$ && "$return_limit" =~ ^[0-9]+$ ]] || return 0
+  [[ "$policy_cap" =~ ^[0-9]+$ ]] || policy_cap="$return_limit"
+
+  if [[ "$match_count" -le "$return_limit" ]]; then
+    shown="$match_count"
+  else
+    shown="$return_limit"
+  fi
+
+  source_capped="$(jq -r 'if .sourceCapped == true then "1" else "0" end' <<<"$metadata_json")"
+  source_cap_reason="$(jq -r '.sourceCapReason // empty' <<<"$metadata_json")"
+
+  if [[ "$source_capped" == "1" ]]; then
+    [[ -n "$source_cap_reason" ]] || source_cap_reason="unknown"
+    printf '[ralph_proxy_grep: %s of at least %s matches shown; source search stopped early (%s)]' \
+      "$shown" "$match_count" "$source_cap_reason"
+    return 0
+  fi
+
+  if [[ "$match_count" -gt "$return_limit" ]]; then
+    printf '[ralph_proxy_grep: %s of %s matches shown (policy cap %s); narrow the pattern or path, or pass head_limit/offset]' \
+      "$shown" "$match_count" "$policy_cap"
+    return 0
+  fi
+  return 0
+}
+
+# Build one truncation footer line for ralph_proxy_glob's exploration fast path.
+# Prints the footer with no trailing newline, or prints nothing when the
+# delivered window reaches the end of the collected path list.
+ralph_mcp_proxy_glob_truncation_footer_line() {
+  local metadata_json="${1:-}"
+  local path_count return_limit policy_cap shown offset remaining end_index
+
+  [[ -n "$metadata_json" ]] || return 0
+  path_count="$(jq -r '.pathCount // empty' <<<"$metadata_json")"
+  return_limit="$(jq -r '.returnLimit // empty' <<<"$metadata_json")"
+  policy_cap="$(jq -r '.policyCap // empty' <<<"$metadata_json")"
+  offset="$(jq -r '.offset // 1' <<<"$metadata_json")"
+  [[ "$path_count" =~ ^[0-9]+$ && "$return_limit" =~ ^[0-9]+$ ]] || return 0
+  [[ "$policy_cap" =~ ^[0-9]+$ ]] || policy_cap="$return_limit"
+  if [[ ! "$offset" =~ ^[0-9]+$ ]] || [[ "$offset" -lt 1 ]]; then
+    offset=1
+  fi
+
+  remaining=$((path_count - offset + 1))
+  if [[ "$remaining" -lt 0 ]]; then
+    remaining=0
+  fi
+  if [[ "$remaining" -le "$return_limit" ]]; then
+    shown="$remaining"
+  else
+    shown="$return_limit"
+  fi
+  end_index=$((offset - 1 + shown))
+  if [[ "$end_index" -ge "$path_count" ]]; then
+    return 0
+  fi
+
+  printf '[ralph_proxy_glob: %s of %s paths shown (policy cap %s); narrow the pattern or pass offset/limit]' \
+    "$shown" "$path_count" "$policy_cap"
+  return 0
+}
+
+# Build one truncation footer line for ralph_proxy_shell when delivered bytes are
+# shorter than the captured output. result_id empty => store unavailable path.
+ralph_mcp_proxy_shell_truncation_footer_line() {
+  local shown="${1:-0}"
+  local total="${2:-0}"
+  local result_id="${3:-}"
+
+  if [[ -n "$result_id" ]]; then
+    printf '[ralph_proxy_shell: %s of %s bytes shown; full output: ralph_proxy_result_read resultId=%s]' \
+      "$shown" "$total" "$result_id"
+    return 0
+  fi
+  printf '[ralph_proxy_shell: %s of %s bytes shown; remainder not stored; re-run with a narrower command or redirect to a file]' \
+    "$shown" "$total"
+}
+
+# Append the shell byte-cap footer on its own final line.
+ralph_mcp_proxy_shell_append_truncation_footer() {
+  local preview="${1:-}"
+  local shown="${2:-0}"
+  local total="${3:-0}"
+  local result_id="${4:-}"
+  local footer
+
+  footer="$(ralph_mcp_proxy_shell_truncation_footer_line "$shown" "$total" "$result_id")"
+  if [[ -n "$preview" && "${preview: -1}" != $'\n' ]]; then
+    preview+=$'\n'
+  fi
+  printf '%s%s' "$preview" "$footer"
+}
+
 ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   local workspace="${1:-}"
   local tool_name="${2:-}"
@@ -1553,8 +1713,52 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
             RALPH_MCP_PROXY_LAST_RESULT_ID=""
             RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE=0
             export RALPH_MCP_PROXY_LAST_RESULT_ID RALPH_MCP_PROXY_LAST_RESULT_NEEDS_ENVELOPE
+            # ralph_proxy_read already records window truncation in metadata and
+            # truncated_flag; surface that on the inline fast path so agents can
+            # tell a short file from a policy-capped window.
+            if [[ "$tool_name" == "ralph_proxy_read" ]]; then
+              local read_footer=""
+              read_footer="$(ralph_mcp_proxy_read_truncation_footer_line "$truncated_flag" "$metadata_json")"
+              if [[ -n "$read_footer" ]]; then
+                if [[ -n "$preview_text" && "$preview_text" != *$'\n' ]]; then
+                  preview_text+=$'\n'
+                fi
+                preview_text+="${read_footer}"$'\n'
+              fi
+            elif [[ "$tool_name" == "ralph_proxy_grep" ]]; then
+              local grep_footer=""
+              grep_footer="$(ralph_mcp_proxy_grep_truncation_footer_line "$metadata_json")"
+              if [[ -n "$grep_footer" ]]; then
+                if [[ -n "$preview_text" && "$preview_text" != *$'\n' ]]; then
+                  preview_text+=$'\n'
+                fi
+                preview_text+="${grep_footer}"$'\n'
+              fi
+            elif [[ "$tool_name" == "ralph_proxy_glob" ]]; then
+              local glob_footer=""
+              glob_footer="$(ralph_mcp_proxy_glob_truncation_footer_line "$metadata_json")"
+              if [[ -n "$glob_footer" ]]; then
+                if [[ -n "$preview_text" && "$preview_text" != *$'\n' ]]; then
+                  preview_text+=$'\n'
+                fi
+                preview_text+="${glob_footer}"$'\n'
+              fi
+            fi
             ralph_mcp_proxy_tool_success_json "$preview_text"
             return 0
+          fi
+          # Source-capped grep under COMPACT=0 still takes the envelope path
+          # (incompleteness marker is correctness data), but also append the
+          # honest lower-bound footer onto the inline preview.
+          if [[ "$tool_name" == "ralph_proxy_grep" ]]; then
+            local grep_footer=""
+            grep_footer="$(ralph_mcp_proxy_grep_truncation_footer_line "$metadata_json")"
+            if [[ -n "$grep_footer" ]]; then
+              if [[ -n "$preview_text" && "$preview_text" != *$'\n' ]]; then
+                preview_text+=$'\n'
+              fi
+              preview_text+="${grep_footer}"$'\n'
+            fi
           fi
           ;;
       esac
@@ -1641,6 +1845,51 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   else
     result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$storage_text" "$tool_name" "$metadata_json" 2>/dev/null || true)"
   fi
+
+  # Shell D1: every response whose delivered text is shorter than the captured
+  # output ends with a visible byte-cap footer (store available or not). The
+  # "(lines omitted; full output in raw view)" marker is only honest when a
+  # resultId is delivered alongside it.
+  if [[ "$tool_name" == "ralph_proxy_shell" ]] \
+    && [[ "${RALPH_RESULT_WINDOWING_CHANNEL:-}" != "native_result_mcp_fallback" ]]; then
+    local shell_preview shell_returned shell_delivered
+    if [[ -n "$result_id" ]]; then
+      RALPH_MCP_PROXY_LAST_RESULT_ID="$result_id"
+      export RALPH_MCP_PROXY_LAST_RESULT_ID
+      if [[ -n "$compact_view" ]]; then
+        shell_preview="$compact_view"
+      else
+        shell_preview="$preview_text"
+      fi
+    else
+      shell_preview="$preview_text"
+      # Prefer the raw storage text when the compact view would claim a raw
+      # follow-up that does not exist.
+      if [[ "$shell_preview" == *"(lines omitted; full output in raw view)"* ]]; then
+        shell_preview="$storage_text"
+      fi
+    fi
+    if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
+      ralph_mcp_proxy_result_apply_preview_caps "$shell_preview" "$byte_cap" "$token_cap"
+      shell_preview="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+      shell_returned="$RALPH_MCP_PROXY_RESULT_CAP_RETURNED_BYTES"
+    else
+      shell_returned=${#shell_preview}
+      if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "$shell_returned" -gt "$byte_cap" ]]; then
+        shell_preview="${shell_preview:0:byte_cap}"
+        shell_returned="$byte_cap"
+      fi
+    fi
+    if [[ "$shell_returned" -lt "$original_bytes" ]]; then
+      shell_delivered="$(ralph_mcp_proxy_shell_append_truncation_footer \
+        "$shell_preview" "$shell_returned" "$original_bytes" "$result_id")"
+      ralph_mcp_proxy_tool_success_json "$shell_delivered"
+    else
+      ralph_mcp_proxy_tool_success_json "$shell_preview"
+    fi
+    return 0
+  fi
+
   if [[ -z "$result_id" ]]; then
     marker="$(ralph_mcp_proxy_truncation_marker)"
     if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
@@ -1981,7 +2230,8 @@ $text"
 ralph_mcp_proxy_read_dedupe_emit_cached() {
   local workspace="${1:-}"
   local entry_json="${2:-}"
-  local result_id storage_text metadata_json needs_envelope preview
+  local result_id storage_text metadata_json needs_envelope truncated
+  local prefix delivery footer preview
   local original_bytes returned_bytes envelope_json plan_key
   local next_actions_json breakpoints_json read_window byte_cap
 
@@ -1989,62 +2239,58 @@ ralph_mcp_proxy_read_dedupe_emit_cached() {
   storage_text="$(jq -r '.storageText // empty' <<< "$entry_json")"
   metadata_json="$(jq -r '.metadataJson // empty' <<< "$entry_json")"
   needs_envelope="$(jq -r '.needsEnvelope // 0' <<< "$entry_json")"
+  truncated="$(jq -r '.truncated // 0' <<< "$entry_json")"
 
-  preview="(duplicate read suppressed; use ralph_proxy_result_read with resultId)"
-  original_bytes=${#storage_text}
-  returned_bytes=${#preview}
-
-  byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool ralph_proxy_read)"
-  read_window=4096
-  if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]]; then
-    read_window="$byte_cap"
+  # Replay the same body (+ truncation footer when the first answer had one)
+  # so a repeat is never more or less complete than the original delivery.
+  prefix="(repeat of an earlier identical read in this session; file unchanged)"
+  delivery="$storage_text"
+  footer="$(ralph_mcp_proxy_read_truncation_footer_line "$truncated" "$metadata_json" 2>/dev/null || true)"
+  if [[ -n "$footer" ]]; then
+    if [[ -n "$delivery" && "${delivery: -1}" != $'\n' ]]; then
+      delivery+=$'\n'
+    fi
+    delivery+="${footer}"$'\n'
   fi
+  preview="${prefix}"$'\n'"${delivery}"
 
-  if [[ "$needs_envelope" == "1" && -n "$result_id" ]]; then
-    next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
-    breakpoints_json="$(ralph_mcp_proxy_result_envelope_default_breakpoints_json "$original_bytes" "$returned_bytes")"
-    envelope_json="$(ralph_mcp_proxy_result_envelope_build_json \
-      "$preview" \
-      "$original_bytes" \
-      "$returned_bytes" \
-      "$result_id" \
-      "$breakpoints_json" \
-      "$next_actions_json" \
-      "true" \
-      "" \
-      "" \
-      '{"deduped":true}')" || {
-      ralph_mcp_proxy_tool_success_json "$preview"
+  # Envelope path: keep the envelope contract when the first delivery used one,
+  # with the repeat prefix as the first preview line and the same body after it.
+  if [[ "$needs_envelope" == "1" ]]; then
+    if [[ -z "$result_id" ]]; then
+      plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
+      result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$storage_text" "ralph_proxy_read" "$metadata_json" 2>/dev/null || true)"
+    fi
+    if [[ -n "$result_id" ]]; then
+      original_bytes=${#storage_text}
+      returned_bytes=${#preview}
+      byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool ralph_proxy_read)"
+      read_window=4096
+      if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]]; then
+        read_window="$byte_cap"
+      fi
+      next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
+      breakpoints_json="$(ralph_mcp_proxy_result_envelope_default_breakpoints_json "$original_bytes" "$returned_bytes")"
+      envelope_json="$(ralph_mcp_proxy_result_envelope_build_json \
+        "$preview" \
+        "$original_bytes" \
+        "$returned_bytes" \
+        "$result_id" \
+        "$breakpoints_json" \
+        "$next_actions_json" \
+        "true" \
+        "" \
+        "" \
+        '{"deduped":true}')" || {
+        ralph_mcp_proxy_tool_success_json "$preview"
+        return 0
+      }
+      ralph_mcp_proxy_tool_success_json "$(jq -c . <<< "$envelope_json")"
       return 0
-    }
-    ralph_mcp_proxy_tool_success_json "$(jq -c . <<< "$envelope_json")"
-    return 0
+    fi
   fi
 
-  plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
-  result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$storage_text" "ralph_proxy_read" "$metadata_json" 2>/dev/null || true)"
-  if [[ -z "$result_id" ]]; then
-    ralph_mcp_proxy_tool_success_json "$preview"
-    return 0
-  fi
-
-  next_actions_json="$(ralph_mcp_proxy_result_envelope_default_next_actions_json "$result_id" "$read_window")"
-  breakpoints_json="$(ralph_mcp_proxy_result_envelope_default_breakpoints_json "$original_bytes" "$returned_bytes")"
-  envelope_json="$(ralph_mcp_proxy_result_envelope_build_json \
-    "$preview" \
-    "$original_bytes" \
-    "$returned_bytes" \
-    "$result_id" \
-    "$breakpoints_json" \
-    "$next_actions_json" \
-    "true" \
-    "" \
-    "" \
-    '{"deduped":true}')" || {
-    ralph_mcp_proxy_tool_success_json "$preview"
-    return 0
-  }
-  ralph_mcp_proxy_tool_success_json "$(jq -c . <<< "$envelope_json")"
+  ralph_mcp_proxy_tool_success_json "$preview"
 }
 
 ralph_mcp_proxy_read_dedupe_try_return() {
@@ -2134,16 +2380,54 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
   local tool_name="${2:-}"
   local cache_key="${3:-}"
   local entry_json="${4:-}"
-  local result_id storage_text metadata_json preview tool_label
-  local original_bytes returned_bytes envelope_json plan_key breakpoints_json next_actions_json read_window byte_cap
+  local result_id storage_text metadata_json truncated preview tool_label prefix
+  local delivery footer original_bytes returned_bytes envelope_json plan_key
+  local breakpoints_json next_actions_json read_window byte_cap
+  local source_capped_cached="0" needs_envelope=0
 
   result_id="$(jq -r '.resultId // empty' <<< "$entry_json")"
   storage_text="$(jq -r '.storageText // empty' <<< "$entry_json")"
   metadata_json="$(jq -r '.metadataJson // empty' <<< "$entry_json")"
+  truncated="$(jq -r '.truncated // 0' <<< "$entry_json")"
   tool_label="${tool_name#${RALPH_PROXY_TOOL_PREFIX}}"
-  preview="(duplicate ${tool_label} suppressed; use ralph_proxy_result_read with resultId)"
-  original_bytes=${#storage_text}
-  returned_bytes=${#preview}
+
+  # Replay the same delivered window (+ truncation / source-cap footer when the
+  # first answer had one) so a repeat is never more or less complete than the
+  # original delivery.
+  prefix="(repeat of an earlier identical ${tool_label} in this session; no writes since)"
+  delivery="$storage_text"
+  case "$tool_name" in
+    ralph_proxy_grep|ralph_proxy_search)
+      footer="$(ralph_mcp_proxy_grep_truncation_footer_line "$metadata_json" 2>/dev/null || true)"
+      ;;
+    ralph_proxy_glob)
+      footer="$(ralph_mcp_proxy_glob_truncation_footer_line "$metadata_json" 2>/dev/null || true)"
+      ;;
+    *)
+      footer=""
+      ;;
+  esac
+  if [[ -n "$footer" ]]; then
+    if [[ -n "$delivery" && "${delivery: -1}" != $'\n' ]]; then
+      delivery+=$'\n'
+    fi
+    delivery+="${footer}"$'\n'
+  fi
+  preview="${prefix}"$'\n'"${delivery}"
+
+  if [[ -n "$metadata_json" ]] && jq -e '.sourceCapped == true' <<<"$metadata_json" >/dev/null 2>&1; then
+    source_capped_cached="1"
+  fi
+  if [[ "$truncated" == "1" || "$source_capped_cached" == "1" || -n "$result_id" ]]; then
+    needs_envelope=1
+  fi
+
+  # Complete inline first delivery: return the body with the repeat prefix and
+  # do not invent a stored-result envelope the original call never had.
+  if [[ "$needs_envelope" != "1" ]]; then
+    ralph_mcp_proxy_tool_success_json "$preview"
+    return 0
+  fi
 
   if [[ -z "$result_id" ]]; then
     plan_key="$(ralph_mcp_proxy_result_tool_plan_key)"
@@ -2159,6 +2443,8 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
     return 0
   fi
 
+  original_bytes=${#storage_text}
+  returned_bytes=${#preview}
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "$tool_name")"
   read_window=4096
   if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]]; then
@@ -2169,11 +2455,6 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
   # A duplicate of a source-capped search must keep reporting incompleteness
   # on every replay -- it must never be re-emitted as a complete/full result
   # just because it came from the dedupe cache instead of a fresh search.
-  local source_capped_cached="0"
-  if [[ -n "$metadata_json" ]] && jq -e '.sourceCapped == true' <<<"$metadata_json" >/dev/null 2>&1; then
-    source_capped_cached="1"
-  fi
-
   if [[ "$tool_name" == "ralph_proxy_grep" || "$tool_name" == "ralph_proxy_search" ]]; then
     next_actions_json="$(ralph_mcp_proxy_result_envelope_grep_next_actions_json "$result_id" "" "$read_window" "" "$source_capped_cached")"
   else
@@ -2333,9 +2614,17 @@ ralph_mcp_proxy_owned_tool_read() {
     fi
   fi
 
+  # line_count is the absolute file line total. After the delivered window is
+  # full (or a byte cap stops intake), keep scanning so lineCount stays honest
+  # for truncation footers (lineEnd < lineCount).
+  local stored_line_end=0
+  local filling_window=1
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_count=$((line_count + 1))
     if [[ "$line_count" -lt "$offset" ]]; then
+      continue
+    fi
+    if [[ "$filling_window" -eq 0 ]]; then
       continue
     fi
     local window="$((line_count - offset + 1))"
@@ -2343,22 +2632,26 @@ ralph_mcp_proxy_owned_tool_read() {
       if [[ "$limit_policy_cap" -eq 1 ]]; then
         truncated=1
       fi
-      break
+      filling_window=0
+      continue
     fi
     local line_bytes=${#line}
     if [[ $((byte_count + line_bytes + 1)) -gt "$max_bytes" ]]; then
       truncated=1
-      break
+      filling_window=0
+      continue
     fi
     output+="$line"$'\n'
     byte_count=$((byte_count + line_bytes + 1))
+    stored_line_end=$line_count
   done <"$resolved"
 
-  local stored_line_end
-  if [[ "$line_count" -gt 0 ]]; then
-    stored_line_end=$((offset + line_count - 1))
-  else
-    stored_line_end="$offset"
+  if [[ "$stored_line_end" -le 0 ]]; then
+    if [[ "$offset" -gt 0 ]]; then
+      stored_line_end=$((offset - 1))
+    else
+      stored_line_end=0
+    fi
   fi
   local metadata_json
   metadata_json="$(
@@ -2873,18 +3166,27 @@ ralph_mcp_proxy_owned_tool_grep() {
       --argjson lineCap "$source_line_cap" \
       --argjson perLineCap "$source_per_line_cap" \
       --argjson lastLinePartial "$([[ "$source_last_line_partial" == "1" ]] && printf true || printf false)" \
+      --argjson matchCount "$match_count" \
+      --argjson returnLimit "$return_limit" \
+      --argjson policyCap "$max_matches" \
       '{storageLayout: "prefix", sourceComplete: false, sourceCapped: true, sourceCapReason: $reason,
         sourceCapLimitBytes: $byteCap, sourceCapLimitLines: $lineCap, sourceCapLimitPerLineBytes: $perLineCap,
-        sourceLastCapturedLinePartial: $lastLinePartial}')"
+        sourceLastCapturedLinePartial: $lastLinePartial,
+        matchCount: $matchCount, returnLimit: $returnLimit, policyCap: $policyCap}')"
   else
-    storage_metadata_json='{"storageLayout":"full","sourceComplete":true,"sourceCapped":false}'
+    storage_metadata_json="$(jq -nc \
+      --argjson matchCount "$match_count" \
+      --argjson returnLimit "$return_limit" \
+      --argjson policyCap "$max_matches" \
+      '{storageLayout:"full", sourceComplete:true, sourceCapped:false,
+        matchCount:$matchCount, returnLimit:$returnLimit, policyCap:$policyCap}')"
   fi
 
   if [[ "$truncated" -eq 0 ]]; then
     ralph_mcp_proxy_search_dedupe_store \
       "$cache_key" \
       "$mutation_counter" \
-      "$full_text" \
+      "$preview_text" \
       "$truncated" \
       "$storage_metadata_json" \
       "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
@@ -2937,7 +3239,7 @@ ralph_mcp_proxy_owned_tool_grep() {
   ralph_mcp_proxy_search_dedupe_store \
     "$cache_key" \
     "$mutation_counter" \
-    "$full_text" \
+    "$preview_text" \
     "$truncated" \
     "$storage_metadata_json" \
     "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
@@ -3615,10 +3917,13 @@ ralph_mcp_proxy_owned_tool_glob() {
   local workspace="${1:-}"
   local args_json; args_json="$(ralph_mcp_proxy_normalize_args_json "${2-}")"
   local glob_pattern target_dir max_results search_root tmp_out
-  local full_text preview_text result_count byte_cap truncated=0 cache_key mutation_counter
+  local full_text preview_text window_text result_count byte_cap truncated=0 cache_key mutation_counter
+  local offset limit return_limit storage_metadata_json end_index shown
 
   glob_pattern="$(jq -r '.glob_pattern // empty' <<< "$args_json")"
   target_dir="$(jq -r '.target_directory // "."' <<< "$args_json")"
+  offset="$(jq -r '.offset // 1' <<< "$args_json")"
+  limit="$(jq -r '.limit // empty' <<< "$args_json")"
   max_results="${RALPH_MCP_PROXY_POLICY_OWNED_MAX_GLOB_RESULTS:-200}"
 
   if [[ -z "$glob_pattern" ]]; then
@@ -3628,6 +3933,15 @@ ralph_mcp_proxy_owned_tool_glob() {
   if [[ "$glob_pattern" == /* ]]; then
     ralph_mcp_proxy_tool_error_json "ralph_proxy_glob: absolute glob patterns are not allowed"
     return 0
+  fi
+  if [[ ! "$offset" =~ ^[0-9]+$ ]] || [[ "$offset" -lt 1 ]]; then
+    offset=1
+  fi
+  return_limit="$max_results"
+  if [[ -n "$limit" && "$limit" =~ ^[0-9]+$ ]] && [[ "$limit" -gt 0 ]]; then
+    if [[ "$limit" -lt "$return_limit" ]]; then
+      return_limit="$limit"
+    fi
   fi
   if [[ "$target_dir" == "." ]]; then
     if ! search_root="$(ralph_mcp_proxy_workspace_realpath "$workspace")"; then
@@ -3699,26 +4013,46 @@ ralph_mcp_proxy_owned_tool_glob() {
   fi
 
   result_count="$(ralph_mcp_proxy_owned_tool_glob_count_paths "$full_text")"
-  preview_text="$full_text"
-  if [[ "$result_count" -gt "$max_results" ]]; then
+  if [[ "$offset" -gt 1 ]]; then
+    window_text="$(printf '%s' "$full_text" | tail -n +"$offset")"
+    if [[ -n "$window_text" && "$window_text" != *$'\n' ]]; then
+      window_text+=$'\n'
+    fi
+  else
+    window_text="$full_text"
+  fi
+  preview_text="$window_text"
+  shown="$(ralph_mcp_proxy_owned_tool_glob_count_paths "$preview_text")"
+  if [[ "$shown" -gt "$return_limit" ]]; then
     truncated=1
-    preview_text="$(ralph_mcp_proxy_owned_tool_grep_head_lines "$full_text" "$max_results")"
+    preview_text="$(ralph_mcp_proxy_owned_tool_grep_head_lines "$window_text" "$return_limit")"
+    shown="$return_limit"
+  fi
+  end_index=$((offset - 1 + shown))
+  if [[ "$end_index" -lt "$result_count" ]]; then
+    truncated=1
   fi
 
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "ralph_proxy_glob")"
   if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
     truncated=1
-  elif [[ "$result_count" -gt "$max_results" ]]; then
-    truncated=1
   fi
+
+  storage_metadata_json="$(jq -nc \
+    --argjson pathCount "$result_count" \
+    --argjson returnLimit "$return_limit" \
+    --argjson policyCap "$max_results" \
+    --argjson offset "$offset" \
+    '{storageLayout:"full", sourceComplete:true, sourceCapped:false,
+      pathCount:$pathCount, returnLimit:$returnLimit, policyCap:$policyCap, offset:$offset}')"
 
   if [[ "$truncated" -eq 0 ]]; then
     ralph_mcp_proxy_search_dedupe_store \
       "$cache_key" \
       "$mutation_counter" \
-      "$full_text" \
+      "$preview_text" \
       "$truncated" \
-      '{"storageLayout":"full"}' \
+      "$storage_metadata_json" \
       "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
     ralph_mcp_proxy_tool_success_json "$preview_text"
     return 0
@@ -3733,14 +4067,14 @@ ralph_mcp_proxy_owned_tool_glob() {
     "[]" \
     "" \
     "$glob_pattern" \
-    '{"storageLayout":"full"}'
+    "$storage_metadata_json"
 
   ralph_mcp_proxy_search_dedupe_store \
     "$cache_key" \
     "$mutation_counter" \
-    "$full_text" \
+    "$preview_text" \
     "$truncated" \
-    '{"storageLayout":"full"}' \
+    "$storage_metadata_json" \
     "${RALPH_MCP_PROXY_LAST_RESULT_ID:-}"
 }
 
@@ -3932,6 +4266,7 @@ ralph_mcp_proxy_owned_tool_shell_finish_success() {
 ralph_mcp_proxy_owned_tool_shell_compact() {
   local workspace="${1:-}" command="${2:-}" stdout="${3-}" stderr="${4-}" exit_code="${5:-0}"
   local max_shell_bytes="${6:-}" outcome_json preview_text store_needed result_id result_path envelope_json
+  local compacted_applied raw_combined source_text
 
   outcome_json="$(ralph_native_shell_compact_pipeline_json \
     "$workspace" \
@@ -3946,6 +4281,24 @@ ralph_mcp_proxy_owned_tool_shell_compact() {
   store_needed="$(jq -r '.storeNeeded // false' <<<"$outcome_json")"
   result_id="$(jq -r '.resultId // ""' <<<"$outcome_json")"
   result_path="$(jq -r '.resultPath // ""' <<<"$outcome_json")"
+  compacted_applied="$(jq -r '.compactedApplied // false' <<<"$outcome_json")"
+  raw_combined="$(jq -r '.rawCombined // ""' <<<"$outcome_json")"
+
+  # Compaction-declined passthrough: feed the true captured source into
+  # finish_success / shape_one_text so response-level byte caps get a visible
+  # footer instead of a silent 8192-byte hard cut.
+  if [[ "$compacted_applied" != "true" && "$compacted_applied" != "1" ]]; then
+    source_text="$raw_combined"
+    if [[ -z "$source_text" ]]; then
+      source_text="$preview_text"
+    fi
+    if [[ "$exit_code" -ne 0 ]]; then
+      ralph_mcp_proxy_tool_error_json "ralph_proxy_shell exited $exit_code: $preview_text"
+      return 0
+    fi
+    ralph_mcp_proxy_owned_tool_shell_finish_success "$workspace" "$source_text" "$max_shell_bytes"
+    return 0
+  fi
 
   if [[ "$store_needed" == "false" || "$store_needed" == "0" ]]; then
     if [[ "$exit_code" -ne 0 ]]; then

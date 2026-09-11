@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"fixture-codex-three-requests"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"call-1","type":"function_call","name":"ralph_proxy_read","arguments":"[redacted]"}}
+{"type":"item.completed","item":{"id":"call-2","type":"function_call","name":"ralph_proxy_shell","arguments":"[redacted]"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":110}}}}
+{"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"[redacted]"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":50,"output_tokens":20,"reasoning_output_tokens":2,"total_tokens":222},"last_token_usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":112}}}}
+{"type":"item.completed","item":{"id":"msg-2","type":"reasoning","text":"[redacted]"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":100,"output_tokens":30,"reasoning_output_tokens":4,"total_tokens":334},"last_token_usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":112}}}}
+{"type":"item.completed","item":{"id":"msg-3","type":"agent_message","text":"[redacted]"}}
+{"type":"turn.completed","usage":{"input_tokens":300,"cached_input_tokens":100,"output_tokens":30}}

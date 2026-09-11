@@ -62,7 +62,10 @@ for i in range(4000):
 
 @test "skipped compaction: delivered metrics equal original combined bytes, not stored bytes" {
   local input="$_tmp/input.json"
+  # duration_ms above LONG_RUNNING_THRESHOLD_MS forces the slow path so
+  # skip-path telemetry still runs for this tiny (non-compactable) payload.
   _bash_hook_input_file "small output" "" "$input"
+  jq --argjson d 60001 '.duration_ms = $d' "$input" >"${input}.tmp" && mv "${input}.tmp" "$input"
 
   run bash -c "bash '$HOOK' < '$input'"
   [ "$status" -eq 0 ]

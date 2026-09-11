@@ -257,19 +257,39 @@ run_plan_invoke_common_execute() {
   fi
   set +e
   set +o pipefail
+  local raw_stream_dir=""
+  local raw_stream_file=""
+  if [[ -n "${RALPH_PLAN_VERBOSE:-}" && "${RALPH_PLAN_VERBOSE}" != "0" ]]; then
+    raw_stream_dir="${RALPH_PLAN_WORKSPACE_ROOT:-${WORKSPACE:-.}/.ralph-workspace}/logs/${RALPH_PLAN_KEY:-plan}/raw"
+    raw_stream_file="$raw_stream_dir/${iteration:-0}-${runtime}.jsonl"
+    mkdir -p "$raw_stream_dir"
+  fi
+  local raw_stream_cmd=(cat)
+  if [[ -n "$raw_stream_file" ]]; then
+    raw_stream_cmd=(tee "$raw_stream_file")
+  fi
   if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
     if [[ -n "${OUTPUT_LOG:-}" ]]; then
-      "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" "$OUTPUT_LOG" "$_pretty"
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" "$OUTPUT_LOG" "$_pretty"
     else
-      "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
     fi
     exit_code="${PIPESTATUS[0]}"
   else
     if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -n "$python_warning" ]]; then
       echo "$python_warning" >&2
     fi
-    "$runner_fn" 2>&1 | tee -a "$OUTPUT_LOG"
+    if [[ -n "$raw_stream_file" ]]; then
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | tee -a "$OUTPUT_LOG"
+    else
+      "$runner_fn" 2>&1 | tee -a "$OUTPUT_LOG"
+    fi
     exit_code="${PIPESTATUS[0]}"
+  fi
+  if [[ -n "$raw_stream_dir" ]]; then
+    while IFS= read -r old_raw_file; do
+      rm -f -- "$old_raw_file"
+    done < <(ls -1t "$raw_stream_dir"/*.jsonl 2>/dev/null | tail -n +6)
   fi
   if [[ "$_had_pipefail" == "1" ]]; then
     set -o pipefail

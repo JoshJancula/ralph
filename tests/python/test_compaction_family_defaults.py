@@ -46,6 +46,54 @@ def _git_status_fixture() -> tuple[str, str]:
     return command, stdout
 
 
+def _grep_fixture() -> tuple[str, str]:
+    command = "grep -rn proxy ."
+    stdout = "\n".join(f"./src/file{i}.py:10:proxy match {i}" for i in range(40))
+    return command, stdout
+
+
+def _git_diff_fixture() -> tuple[str, str]:
+    command = "git diff"
+    stdout = "\n".join(
+        [
+            "diff --git a/src/a.py b/src/a.py",
+            "--- a/src/a.py",
+            "+++ b/src/a.py",
+            "@@ -1,3 +1,4 @@",
+        ]
+        + [f"+line {i}" for i in range(40)]
+    )
+    return command, stdout
+
+
+def _git_show_fixture() -> tuple[str, str]:
+    command = "git show HEAD"
+    stdout = "\n".join(
+        [
+            "commit abcdef0123456789",
+            "Author: Test <test@example.com>",
+            "Date:   Thu Sep 10 12:00:00 2026 -0400",
+            "",
+            "    test commit",
+            "",
+            "diff --git a/src/a.py b/src/a.py",
+            "--- a/src/a.py",
+            "+++ b/src/a.py",
+        ]
+        + [f"+line {i}" for i in range(40)]
+    )
+    return command, stdout
+
+
+def _git_log_fixture() -> tuple[str, str]:
+    command = "git log"
+    stdout = "\n".join(
+        f"commit {i:040d}\nAuthor: Test <test@example.com>\nDate: Thu Sep 10\n\n    msg {i}\n"
+        for i in range(30)
+    )
+    return command, stdout
+
+
 def _bats_fixture() -> tuple[str, str]:
     command = "bats tests/bats/foo.bats"
     stdout = "\n".join(f"ok {i} - test case {i}" for i in range(1, 30)) + "\n1..29"
@@ -75,9 +123,13 @@ def _unclassified_fixture() -> tuple[str, str]:
 # behavior of compact_shell_output at exit_status 0 and must only change when
 # a TODO deliberately updates them alongside a behavior change.
 _EXPECTED_TABLE: dict[str, tuple[object, str | None, str]] = {
-    "find": (_find_fixture, None, "not compacted"),
-    "ls": (_ls_fixture, None, "not compacted"),
-    "tree": (_tree_fixture, None, "not compacted"),
+    "find": (_find_fixture, soc.FAMILY_FIND, "not compacted"),
+    "ls": (_ls_fixture, soc.FAMILY_LS, "not compacted"),
+    "tree": (_tree_fixture, soc.FAMILY_TREE, "not compacted"),
+    "grep": (_grep_fixture, soc.FAMILY_GREP, "not compacted"),
+    "git_diff": (_git_diff_fixture, soc.FAMILY_GIT_DIFF, "not compacted"),
+    "git_show": (_git_show_fixture, soc.FAMILY_GIT_SHOW, "not compacted"),
+    "git_log": (_git_log_fixture, soc.FAMILY_GIT_LOG, "not compacted"),
     "git_status": (_git_status_fixture, soc.FAMILY_GIT_STATUS, "compacted"),
     "bats": (_bats_fixture, soc.FAMILY_BATS, "compacted"),
     "pytest": (_pytest_fixture, soc.FAMILY_PYTEST, "compacted"),
@@ -91,8 +143,13 @@ class TestCompactionFamilyDefaults(unittest.TestCase):
 
     def test_family_ids_are_present_in_core_registry(self) -> None:
         core_family_ids = {entry.family_id for entry in soc._CORE_FAMILY_REGISTRY}
+        source_family_ids = soc.SOURCE_OUTPUT_FAMILIES
         for label, (_builder, expected_family, _status) in _EXPECTED_TABLE.items():
             if expected_family is None:
+                continue
+            # Source-output families may classify without a core registry entry
+            # (grep/git_diff/git_show); they only need to be in SOURCE_OUTPUT_FAMILIES.
+            if expected_family in source_family_ids:
                 continue
             self.assertIn(
                 expected_family,

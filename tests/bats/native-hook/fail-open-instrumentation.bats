@@ -141,7 +141,9 @@ _debug_lines() {
   [ ! -e "$_tmp/debug.jsonl" ]
 }
 
-@test "bash hook: missing jq produces one missing_jq line" {
+@test "bash hook: missing jq exits before libraries (no debug line)" {
+  # Fast path exits 0 as soon as jq is absent, before sourcing native-hook
+  # libs — so missing_jq debug telemetry is intentionally unreachable.
   local stub_bin="$_tmp/stubbed-bash-path"
   mkdir -p "$stub_bin"
   for tool in bash cat mkdir rm ls date dirname mktemp printf sh tr; do
@@ -155,12 +157,12 @@ _debug_lines() {
   run bash -c "PATH='$stub_bin' bash '$BASH_HOOK' <<<'$bash_input'"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
-  [ "$(_debug_lines)" = "1" ]
-  run jq -r '.reasonCode' "$RALPH_NATIVE_HOOK_DEBUG_LOG"
-  [ "$output" = "missing_jq" ]
+  [ "$(_debug_lines)" = "0" ]
 }
 
 @test "bash hook: malformed tool_response produces one malformed_input line" {
+  # Non-object tool_response is ineligible for the tiny/fast skip, so the
+  # slow path still logs malformed_input.
   local bash_input
   bash_input="$(jq -n '{hook_event_name:"PostToolUse", tool_name:"Bash", tool_input:{command:"echo hi"}}')"
 

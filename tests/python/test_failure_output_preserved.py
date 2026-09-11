@@ -6,10 +6,14 @@ asserts that every distinct failing test name or error code present in the
 raw output is still present after compaction, covering both the dedicated
 family compactors (_compact_pytest, _compact_bats, _compact_tsc) and the
 generic failure-aware fallback that guards unmatched commands.
+
+Also asserts that normal non-zero exits (grep/rg no-match, diff differences,
+test/[, D2 source commands) stay byte-identical and are not failure-compacted.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -139,6 +143,72 @@ class TestCompactShellOutputEndToEnd(unittest.TestCase):
         result = soc.compact_shell_output("tsc --noEmit", raw, "", 1)
         for code in ("TS2322", "TS2554", "TS2307"):
             self.assertIn(code, result.stdout)
+
+
+def _build_noisy_nonzero_answer() -> str:
+    """Large failure-shaped text that failure-aware would otherwise compact."""
+    lines = [f"Compiling module chunk {index} ..." for index in range(60)]
+    lines.extend(
+        [
+            "ERROR: mismatched types at src/main.rs:42:9",
+            "expected `i32`, found `&str`",
+            "assertion `left == right` failed",
+        ]
+    )
+    lines.extend(f"Compiling dependency crate-{index} ..." for index in range(60, 100))
+    lines.append("SUMMARY: build failed with 1 error")
+    return "\n".join(lines)
+
+
+class TestNormalNonzeroExitNotFailureCompacted(unittest.TestCase):
+    """grep/diff/test/D2 source non-zero exits must stay verbatim."""
+
+    def setUp(self) -> None:
+        self._prior_opt_out = os.environ.get("RALPH_COMPACT_FAILURE")
+        os.environ.pop("RALPH_COMPACT_FAILURE", None)
+
+    def tearDown(self) -> None:
+        if self._prior_opt_out is None:
+            os.environ.pop("RALPH_COMPACT_FAILURE", None)
+        else:
+            os.environ["RALPH_COMPACT_FAILURE"] = self._prior_opt_out
+
+    def _assert_verbatim(self, command: str) -> None:
+        stdout = _build_noisy_nonzero_answer()
+        self.assertGreater(len(stdout.encode("utf-8")), soc._FAILURE_AWARE_MIN_BYTES)
+        # Control: unknown build command still failure-compacts this payload.
+        control = soc.compact_shell_output("make -j8 all", stdout, "", 1)
+        self.assertTrue(control.compacted)
+        self.assertEqual(control.family, soc.FAMILY_FAILURE_AWARE)
+
+        result = soc.compact_shell_output(command, stdout, "", 1)
+        self.assertEqual(result.stdout, stdout)
+        self.assertFalse(result.compacted)
+        self.assertEqual(result.status, "not compacted")
+
+    def test_grep_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("grep -n missing-token bundle/.ralph/mcp-server.sh")
+
+    def test_rg_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("rg missing-token bundle/.ralph/mcp-server.sh")
+
+    def test_diff_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("diff left.txt right.txt")
+
+    def test_git_diff_exit_code_verbatim(self) -> None:
+        self._assert_verbatim("git diff --exit-code HEAD~1")
+
+    def test_git_diff_quiet_verbatim(self) -> None:
+        self._assert_verbatim("git diff --quiet HEAD~1")
+
+    def test_test_builtin_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("test -f /tmp/does-not-exist")
+
+    def test_bracket_builtin_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("[ -f /tmp/does-not-exist ]")
+
+    def test_d2_source_cat_exit_1_verbatim(self) -> None:
+        self._assert_verbatim("cat /tmp/does-not-exist")
 
 
 if __name__ == "__main__":

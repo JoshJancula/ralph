@@ -238,8 +238,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     --)
       shift
-      BATS_ARGS+=("$@")
-      USER_PATHS=1
+      # Flag-only after `--` (e.g. `-- --filter name`) still runs the suite and
+      # forwards those args to bats. If the first operand is a bats flag, treat
+      # the remainder as BATS_FLAGS so populate_suite_paths still runs. A leading
+      # path operand marks USER_PATHS as before.
+      if [[ $# -gt 0 && "$1" == -* ]]; then
+        BATS_FLAGS+=("$@")
+      elif [[ $# -gt 0 ]]; then
+        BATS_ARGS+=("$@")
+        USER_PATHS=1
+      fi
       break
       ;;
     --count | --verbose-run | --print-output-on-failure | --show-output-of-passing-tests | --recursive | --no-tempdir-cleanup | --no-parallelize-across-files | --no-parallelize-within-files)

@@ -268,6 +268,48 @@ teardown_runtime_invoke_test() {
   rm -rf "$tmpdir"
 }
 
+@test "run_plan_invoke_common_execute preserves raw stream only when verbose" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    state_root="$2"
+    fixture="$state_root/fixture.jsonl"
+    mkdir -p "$state_root"
+    printf "%s\\n%s\\n" "{\"event\":\"first\"}" "{\"event\":\"second\"}" >"$fixture"
+    export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
+    export RALPH_PLAN_KEY=raw-stream-plan
+    export OUTPUT_LOG="$state_root/output.log"
+    export EXIT_CODE_FILE="$state_root/exit-code"
+    export RALPH_PLAN_CLI_RESUME=0
+    export RALPH_PLAN_CAPTURE_USAGE=0
+    : >"$OUTPUT_LOG"
+
+    fixture_runner() { cat "$fixture"; }
+    export RALPH_PLAN_VERBOSE=1
+    iteration=3
+    run_plan_invoke_common_execute fixture_runner fake-runtime ""
+    cmp "$fixture" "$state_root/logs/raw-stream-plan/raw/3-fake-runtime.jsonl"
+
+    rm -rf "$state_root/logs/raw-stream-plan/raw"
+    unset RALPH_PLAN_VERBOSE
+    iteration=4
+    run_plan_invoke_common_execute fixture_runner fake-runtime ""
+    [ ! -e "$state_root/logs/raw-stream-plan/raw/4-fake-runtime.jsonl" ]
+
+    for iteration in 5 6 7 8 9 10; do
+      export RALPH_PLAN_VERBOSE=1
+      run_plan_invoke_common_execute fixture_runner fake-runtime ""
+    done
+    [ "$(find "$state_root/logs/raw-stream-plan/raw" -maxdepth 1 -type f -name "*.jsonl" | wc -l | tr -d " ")" -eq 5 ]
+  ' _ "$COMMON_LIB" "$tmpdir"
+
+  [ "$status" -eq 0 ]
+  rm -rf "$tmpdir"
+}
+
 REASONING_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-reasoning-effort.sh"
 
 @test "reasoning effort precedence is deterministic" {

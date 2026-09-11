@@ -39,18 +39,20 @@ print(fingerprint(sys.argv[1]) or '')
 }
 
 @test "bash.json-derived payload with duration records an observation in the store" {
-  # bash.json carries a real duration_ms (11180) but its captured command is
-  # bail-shaped (semicolon inside -c), so fingerprint is None. Keep the
-  # fixture's duration and response shape; use a fingerprintable command so
-  # the store write path is exercised.
+  # bash.json carries a sub-promote duration and tiny stdout, which the
+  # compact-bash fast path would skip (no duration recording). Raise
+  # duration_ms above command_profiles.LONG_RUNNING_THRESHOLD_MS (60000) so
+  # the slow path still records. Fixture command is bail-shaped (semicolon
+  # inside -c), so fingerprint is None — override with a fingerprintable
+  # command so the store write path is exercised.
   local input expected_fp duration store
   input="$_tmp/input.json"
-  jq --arg cmd 'bash scripts/run-bats.sh' \
-    '.tool_input.command = $cmd' \
+  jq --arg cmd 'bash scripts/run-bats.sh' --argjson d 60001 \
+    '.tool_input.command = $cmd | .duration_ms = $d' \
     "$FIXTURE_DIR/bash.json" >"$input"
 
   duration="$(jq -r '.duration_ms' "$input")"
-  [ "$duration" = "11180" ]
+  [ "$duration" = "60001" ]
   expected_fp="$(_expected_fingerprint 'bash scripts/run-bats.sh')"
   [ -n "$expected_fp" ]
 

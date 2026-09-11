@@ -162,16 +162,27 @@ ralph_codex_killswitch_event_json() {
 ralph_codex_killswitch_from_input() {
   local input_json="${1:-}"
   local workspace="${2:-}"
-  local tool command event_json core
+  local tool="${3:-}"
+  local command="${4:-}"
+  local event_json core
 
   ralph_codex_killswitch_mode_off && {
-    ralph_codex_killswitch_record "$(jq -r '.tool_name // ""' <<<"$input_json")" "skip" false
+    ralph_codex_killswitch_record "${tool:-}" "skip" false
     return 0
   }
 
-  tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
-  command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  if [[ -z "$tool" || -z "$command" ]]; then
+    tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
+    command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
+  fi
   [[ -n "$workspace" && -n "$tool" ]] || return 0
+
+  # (b) Skip killswitch evaluation when no operator config exists and the
+  # stock bundle rules clearly do not match (or no bundle config at all).
+  if ! ralph_native_hook_killswitch_needs_full_evaluate "$workspace" "$command"; then
+    ralph_codex_killswitch_record "$tool" "skip" false
+    return 0
+  fi
 
   core="$(ralph_native_hook_resolve_bash_lib "$workspace" "killswitch/killswitch-core.sh" 2>/dev/null || true)"
   [[ -n "$core" && -f "$core" ]] || return 0
@@ -193,35 +204,51 @@ ralph_codex_pre_tool_main() {
   RALPH_CODEX_PRE_TOOL_INPUT="$(cat)" || ralph_codex_pre_tool_fail_open
 
   local event tool_name command
-  event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
-  tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
+  eval "$(jq -r '
+    "event=\(.hook_event_name // "" | @sh)\n" +
+    "tool_name=\(.tool_name // "" | @sh)\n" +
+    "command=\(.tool_input.command // "" | @sh)"
+  ' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")" || ralph_codex_pre_tool_fail_open
   if [[ "$event" != "PreToolUse" ]] || ! ralph_codex_pre_tool_shell_name "$tool_name"; then
     ralph_codex_killswitch_record "$tool_name" "nudge" false
     ralph_codex_pre_tool_fail_open
   fi
 
-  command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
   [[ -n "$command" ]] || ralph_codex_pre_tool_fail_open
 
-  local workspace plan_key rewritten_command invocation_id
+  local workspace plan_key rewritten_command invocation_id use_wrapper=0 use_rewrite=0
   workspace="$(ralph_codex_pre_tool_workspace)" || ralph_codex_pre_tool_fail_open
-  ralph_codex_killswitch_from_input "$RALPH_CODEX_PRE_TOOL_INPUT" "$workspace"
-  command -v python3 >/dev/null 2>&1 || ralph_codex_pre_tool_fail_open
+  ralph_codex_killswitch_from_input "$RALPH_CODEX_PRE_TOOL_INPUT" "$workspace" "$tool_name" "$command"
   [[ -n "$workspace" && -d "$workspace" ]] || ralph_codex_pre_tool_fail_open
   plan_key="$(ralph_codex_pre_tool_plan_key)"
 
+  if ralph_codex_pre_tool_truthy "${RALPH_NATIVE_SHELL_WRAPPER:-}"; then
+    use_wrapper=1
+  fi
+  if ralph_codex_pre_tool_truthy "${RALPH_BASH_REWRITE:-}"; then
+    use_rewrite=1
+  fi
+  if [[ "$use_wrapper" != "1" && "$use_rewrite" != "1" ]]; then
+    ralph_codex_pre_tool_fail_open
+  fi
+
   # Codex PostToolUse does not deliver duration_ms; pair via tool_use_id.
   # Mark before rewrite so the stored command is the agent's original intent.
-  invocation_id="$(jq -r '.tool_use_id // empty' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
-  ralph_native_hook_mark_inflight "$workspace" "$command" "$invocation_id" || true
+  if [[ "$use_wrapper" == "1" || "$use_rewrite" == "1" ]]; then
+    command -v python3 >/dev/null 2>&1 || true
+    invocation_id="$(jq -r '.tool_use_id // empty' <<<"$RALPH_CODEX_PRE_TOOL_INPUT")"
+    ralph_native_hook_mark_inflight "$workspace" "$command" "$invocation_id" || true
+  fi
 
   rewritten_command=""
 
-  if ralph_codex_pre_tool_truthy "${RALPH_NATIVE_SHELL_WRAPPER:-}"; then
+  if [[ "$use_wrapper" == "1" ]]; then
     rewritten_command="$(ralph_codex_pre_tool_try_wrapper "$command" "$workspace" "$plan_key")" && [[ -n "$rewritten_command" ]] && true
   fi
 
-  if [[ -z "$rewritten_command" ]] && ralph_codex_pre_tool_truthy "${RALPH_BASH_REWRITE:-}"; then
+  # (a) Skip rewrite/registry python3 when RALPH_BASH_REWRITE is not truthy.
+  if [[ -z "$rewritten_command" && "$use_rewrite" == "1" ]]; then
+    command -v python3 >/dev/null 2>&1 || ralph_codex_pre_tool_fail_open
     rewritten_command="$(ralph_codex_pre_tool_try_rewrite "$command" "$workspace" "$plan_key")" && [[ -n "$rewritten_command" ]] && true
   fi
 

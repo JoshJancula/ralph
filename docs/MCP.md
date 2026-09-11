@@ -41,6 +41,22 @@ The canonical MCP server implementation described in this doc is the Bash script
 - `tools/list` – advertises `ralph_run_plan`, `ralph_plan_status`, `ralph_orchestrator_run`, the five delegated-run tools, and proxy tools such as `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_shell`, and the async shell lifecycle tools when enabled.
 - `tools/call` – dispatches those tool names (orchestration, delegated-run, and bounded `ralph_proxy_*` handlers). Any other tool name yields `tool not found` (`-32601`).
 
+### Proxy exploration footers
+
+The bounded proxy tools keep truncation visible in plain-text responses. When a
+window is cut, `ralph_proxy_read` appends a footer such as
+`[ralph_proxy_read: lines 1-250 of 400 shown (policy cap 250); continue with
+offset=251]`; `ralph_proxy_grep` reports the shown match count and asks for a
+narrower pattern/path or `head_limit`/`offset`; and `ralph_proxy_glob` reports
+the shown path count and asks for a narrower pattern or `offset`/`limit`.
+
+`ralph_proxy_shell` appends a final byte-count footer when its response is
+shorter than the captured output: `[ralph_proxy_shell: <shown> of <total> bytes
+shown; full output: ralph_proxy_result_read resultId=<id>]` when the full result
+was stored, or a re-run/redirect instruction when storage was unavailable.
+These D1 footers are part of the response contract; do not treat a footer-bearing
+preview as complete source output.
+
 ### Delegated-run tools
 
 Graph-node MCP exposes exactly these five delegated-run tools:

@@ -4,22 +4,6 @@
   "description": "Labelled Ralph repository queries for offline ralph_proxy_search evaluation.",
   "queries": [
     {
-      "id": "exact-merge-prompt",
-      "category": "exact_symbol",
-      "query": "ralph_run_plan_merge_prompt",
-      "search_path": "bundle/.ralph/bash-lib/run-plan",
-      "relevant_paths": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
-      ],
-      "line_hints": [
-        556
-      ],
-      "symbol_hints": [
-        "ralph_run_plan_merge_prompt"
-      ],
-      "rationale": "Exact shell function that merges stable and volatile prompt segments."
-    },
-    {
       "id": "exact-score-candidate",
       "category": "exact_symbol",
       "query": "score_candidate filepath content terms",
@@ -83,17 +67,6 @@
         "render_markdown"
       ],
       "rationale": "Renders the between-todo continuation summary block."
-    },
-    {
-      "id": "concept-stable-prefix",
-      "category": "conceptual",
-      "query": "RALPH_PROMPT_STABLE_PREFIX stable prefix",
-      "relevant_paths": [
-        "docs/ENVIRONMENT.md",
-        "docs/README.md",
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
-      ],
-      "rationale": "Conceptual query for cache-friendly stable-first prompt assembly."
     },
     {
       "id": "concept-three-root-model",
@@ -439,7 +412,7 @@
     {
       "id": "mcp-permission-classify-path",
       "category": "mcp_policy",
-      "query": "ralph_classify_permission_block shell denial",
+      "query": "ralph_classify_permission_block permission-classify shell denial",
       "search_path": "bundle/.ralph/bash-lib",
       "relevant_paths": [
         "bundle/.ralph/bash-lib/permission-classify.sh"

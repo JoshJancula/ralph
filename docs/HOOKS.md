@@ -17,7 +17,7 @@ policy denial, not a compaction failure path.
 
 | File | Runtime | Hook event | Tool matcher | Env var (default) | Behavior (one sentence) | Fail-open behavior |
 |------|---------|------------|---------------|--------------------|-------------------------|---------------------|
-| `bundle/.claude/hooks/compact-bash-output.sh` | Claude | `PostToolUse` | `Bash` | `RALPH_BASH_COMPACT` (on by default; Claude's shipped `settings.json` sets `RALPH_BASH_COMPACT=1` on the hook invocation itself) | Runs the shared shell-output compactor on successful Bash stdout/stderr, stores the original, and replaces `tool_response` via `hookSpecificOutput.updatedToolOutput`, appending a stored-result footer. | Exits 0 (leaves output untouched) on missing `jq`, wrong event/tool, malformed `tool_response`, missing compactor library, or `RALPH_BASH_COMPACT` falsy; only fires on successful (exit 0) Bash calls because Claude does not deliver `tool_response` on failures. |
+| `bundle/.claude/hooks/compact-bash-output.sh` | Claude | `PostToolUse` | `Bash` | `RALPH_BASH_COMPACT` (on by default under Ralph native\|hybrid via `run-plan-args.sh` when unset; `RALPH_BASH_COMPACT=0` opts out) | Runs the shared shell-output compactor on successful Bash stdout/stderr, stores the original, and replaces `tool_response` via `hookSpecificOutput.updatedToolOutput`, appending a stored-result footer. | Exits 0 (leaves output untouched) on missing `jq`, wrong event/tool, malformed `tool_response`, missing compactor library, or `RALPH_BASH_COMPACT` falsy; only fires on successful (exit 0) Bash calls because Claude does not deliver `tool_response` on failures. |
 | `bundle/.claude/hooks/rewrite-bash-command.sh` | Claude | `PreToolUse` | `Bash` | `RALPH_BASH_REWRITE` (default off) | Runs the shared command-rewriter registry against `tool_input.command` and, if a rule applies, replaces the command via `hookSpecificOutput.updatedInput` before execution; also evaluates the killswitch policy (gated separately by `RALPH_MODE`, not by `RALPH_BASH_REWRITE`) on every Bash call regardless of the rewrite gate. | Exits 0 (command runs unchanged) on missing `jq`/`python3`, wrong event/tool, empty command, missing rewriter library, no matching rule, or `RALPH_BASH_REWRITE` falsy. |
 | `bundle/.claude/hooks/native-result-compact.sh` | Claude | `PostToolUse` | `Read\|Grep\|Glob` | `RALPH_NATIVE_RESULT_COMPACT` (default off; explicit opt-in) | Delegates to the shared `post-tool-native-result-compact-hook.sh`, which compacts Read/Grep/Glob output through the same envelope/store path as MCP proxy results and replaces the tool output. | Exits 0 (leaves output untouched) when the shared hook script is missing, when `RALPH_NATIVE_RESULT_COMPACT` is not explicitly truthy, or on any internal failure; `RALPH_BASH_COMPACT` truthiness does **not** enable this path (source-bearing Read/Grep/Glob output has a different safety contract than Bash stdout). |
 | `bundle/.claude/hooks/block-env-reads.sh` | Claude | `PreToolUse` | `Read\|Edit\|MultiEdit\|Glob\|Grep\|LS` | none (always active; not gated by an env var) | Inspects `path`/`file_path`/`filename` in the tool input and blocks (exit 1, stderr message) any call whose basename starts with `.env`. | This hook fails open only on missing/unmatched input (no path found -> allow); when it does match a `.env*` basename it deliberately blocks (exit 1) rather than fails open, because blocking secret reads is the point of the hook. |
@@ -35,6 +35,58 @@ policy denial, not a compaction failure path.
 | `bundle/.codex/hooks/post-tool-native-result-compact.sh` | Codex | `PostToolUse` | `read_file\|grep\|Glob\|Read\|Grep` | `RALPH_NATIVE_RESULT_COMPACT` (default off; explicit opt-in) | Delegates to the same shared `post-tool-native-result-compact-hook.sh` used by Claude/Cursor to compact native read/grep/glob output. | Exits 0 (leaves output untouched) when the shared hook is missing, the gate is off, or on any internal failure. |
 | `bundle/.opencode/plugins/ralph-runtime-hooks.ts` / `.mjs` | OpenCode | `tool.execute.before`, `tool.execute.after` (OpenCode plugin lifecycle hooks, not settings-file hooks) | `bash` (rewrite + compaction + duration pairing); `read\|grep\|glob\|search\|bash` (exploration result compaction) | `RALPH_BASH_REWRITE` (default off) for the pre-tool rewrite; `RALPH_NATIVE_RESULT_COMPACT` / `RALPH_BASH_COMPACT` / `RALPH_PROXY_SHELL_COMPACT` (see precedence below) for post-tool compaction; `RALPH_BASH_TELEMETRY_LOG` (unset by default) for telemetry | Before execution, marks an inflight start for `bash` (OpenCode after-hook has no duration field; keyed by `callID`) and optionally rewrites via the shared Python rewriter when `RALPH_BASH_REWRITE` is truthy; after execution, completes inflight pairing into `command_profiles`, then compacts `bash`/exploration output when enabled and appends telemetry when `RALPH_BASH_TELEMETRY_LOG` is set. Headless model-visible mutation via this plugin path is unproven on the current OpenCode build (see `SPIKE-output-mutation.md`); MCP proxy compaction remains the reliable path. | On any spawn failure, non-zero exit from the Python/bash helper, or JSON parse failure, the plugin returns the original command/output unchanged (no exception propagates to the tool call); the `.ts` file is the typed source and the `.mjs` file is the plain-JS twin actually loaded at runtime, kept behaviorally identical. |
 
+## Measured hook latency
+
+Re-measure with `bash scripts/hook-latency.sh` (default N=5). Payloads are derived from
+the small fixtures under `tests/fixtures/native-hook/`. OpenCode's plugin is listed as
+n/a because it is not a stdin bash hook.
+
+### F5 baseline (pre Part E)
+
+From the COMPACTION-CACHE-AUDIT plan overview (F5), 5-run mean on this machine class,
+payload `echo hi` / tiny Read -- the numbers Part E set out to improve:
+
+| Hook | unset | hybrid / notes |
+|------|-------|----------------|
+| claude `compact-bash-output.sh` | 830 ms | (even for 3-byte output) |
+| claude `rewrite-bash-command.sh` | 459 ms | 1423 ms `RALPH_MODE=hybrid` |
+| claude `block-env-reads.sh` | 124 ms | (every Read) |
+| claude/cursor `post-tool-native-result` | 174-180 ms | (feature OFF) |
+| cursor `pre-tool-shell-policy.sh` | 296 ms | 1307 ms hybrid+wrapper |
+| cursor `post-tool-shell-telemetry.sh` | 113 ms | |
+| cursor `pre-tool-exploration-policy.sh` | 101 ms | (feature OFF) |
+
+### Current measurement
+
+- Date: 2026-09-11
+- Machine: Darwin x86_64 (MacBookPro18,2 / Apple M1 Max)
+- Runs per cell: 5
+- Env states: `RALPH_MODE` unset; `RALPH_MODE=hybrid`; `RALPH_MODE=hybrid` + every
+  compaction channel on (`RALPH_BASH_COMPACT`, `RALPH_BASH_REWRITE`,
+  `RALPH_NATIVE_RESULT_COMPACT`, `RALPH_NATIVE_SHELL_WRAPPER`,
+  `RALPH_PROXY_SHELL_COMPACT` / `RALPH_CURSOR_MCP_HOOK_COMPACT`,
+  `RALPH_COMPACT_GENERIC_FALLBACK`, `RALPH_BASH_TELEMETRY_LOG`)
+
+| Hook | unset (ms) | hybrid (ms) | hybrid+all compact (ms) |
+|------|------------|-------------|-------------------------|
+| `bundle/.claude/hooks/compact-bash-output.sh` | 26.6 | 26.7 | 67.5 |
+| `bundle/.claude/hooks/rewrite-bash-command.sh` | 120.8 | 146.8 | 330.0 |
+| `bundle/.claude/hooks/native-result-compact.sh` | 26.8 | 26.5 | 1158.8 |
+| `bundle/.claude/hooks/block-env-reads.sh` | 28.2 | 27.9 | 27.9 |
+| `bundle/.claude/hooks/stop-continuation.sh` | 253.3 | 244.8 | 250.2 |
+| `bundle/.cursor/hooks/pre-tool-shell-policy.sh` | 117.2 | 140.3 | 411.1 |
+| `bundle/.cursor/hooks/pre-tool-exploration-policy.sh` | 74.7 | 74.5 | 74.9 |
+| `bundle/.cursor/hooks/pre-tool-proxy-read-handoff.sh` | 75.1 | 77.2 | 87.6 |
+| `bundle/.cursor/hooks/post-tool-shell-telemetry.sh` | 87.0 | 87.3 | 612.8 |
+| `bundle/.cursor/hooks/post-tool-native-result-compact.sh` | 29.2 | 26.0 | 1315.1 |
+| `bundle/.cursor/hooks/post-tool-mcp-compact.sh` | 88.4 | 78.9 | 4097.0 |
+| `bundle/.cursor/hooks/after-shell-telemetry.sh` | 330.9 | 334.0 | 442.0 |
+| `bundle/.cursor/hooks/stop-continuation.sh` | 248.5 | 248.2 | 244.6 |
+| `bundle/.codex/hooks/pre-tool-bash-policy.sh` | 136.7 | 175.8 | 439.5 |
+| `bundle/.codex/hooks/post-tool-bash-telemetry.sh` | 431.5 | 455.7 | 687.5 |
+| `bundle/.codex/hooks/post-tool-native-result-compact.sh` | 27.0 | 27.6 | 1319.1 |
+| `bundle/.opencode/plugins/ralph-runtime-hooks.ts` | n/a (OpenCode plugin) | n/a | n/a |
+
 ## Compactor family registry (`_CORE_FAMILY_REGISTRY`, `bundle/.ralph/python/shell-output-compact.py`)
 
 Every family below is registered with `safety_metadata={"safe": True, ...}` and
@@ -48,8 +100,8 @@ through the normal command-based classifier chain.
 |--------|------------|----------------|
 | `bats` | pattern classifier for `bats` invocations | Yes |
 | `git_status` | `CLASSIFIER_GIT_STATUS` (dedicated classifier) | Yes |
-| `git_log` | pattern classifier for `git log` | Yes |
-| `find` | pattern classifier for `find` | Yes |
+| `git_log` | source-output family; never compacted | No (never) |
+| `find` | source-output family; never compacted | No (never) |
 | `npm_test` | pattern classifier for `npm test` | Yes |
 | `vitest` | pattern classifier for `vitest` | Yes |
 | `tsc` | `CLASSIFIER_TSC` (dedicated classifier) | Yes |
@@ -64,13 +116,27 @@ through the normal command-based classifier chain.
 | `cargo_build` | dedicated classifier (`_classifier_cargo_build`) | Yes |
 | `maven_build` | dedicated classifier (`_classifier_maven_build`) | Yes |
 | `gradle_build` | dedicated classifier (`_classifier_gradle_build`) | Yes |
-| `ls` | pattern classifier for `ls` | Yes |
-| `tree` | pattern classifier for `tree` | Yes |
+| `ls` | source-output family; never compacted | No (never) |
+| `tree` | source-output family; never compacted | No (never) |
 | `docker_ps` | pattern classifier for `docker ps` | Yes |
 | `docker_logs` | pattern classifier for `docker logs` | Yes |
 | `kubectl` | pattern classifier for `kubectl` | Yes |
 | `gh_pr_view` | pattern classifier for `gh pr view` | Yes |
 | `gh_pr_list` | pattern classifier for `gh pr list` | Yes |
+
+The source-output denylist covers the following command families, including
+families handled outside the normal registry:
+
+| Source family | Shell compaction behavior |
+|---------------|---------------------------|
+| `git diff` | Never compacted |
+| `git show` | Never compacted |
+| `git log` | Never compacted |
+| `grep`/`rg` | Never compacted |
+| `find`, `ls`, `tree` | Never compacted |
+
+These source-bearing families are never compacted by the normal classifier,
+generic fallback, or failure fallback.
 | `generic_large` | `_classifier_never` (invoked as a size-triggered fallback, gated by `RALPH_COMPACT_GENERIC_FALLBACK`, not selected by command classification) | Only when `RALPH_COMPACT_GENERIC_FALLBACK=1` (default off) |
 | `failure_aware` | `_classifier_never` (invoked directly on non-zero-exit output, independent of the generic-fallback gate) | Yes (always applied to failure output regardless of `RALPH_COMPACT_GENERIC_FALLBACK`) |
 
@@ -143,11 +209,12 @@ itself performs no I/O and does not execute commands.
   back to `RALPH_BASH_COMPACT` OR `RALPH_PROXY_SHELL_COMPACT` when
   `RALPH_NATIVE_RESULT_COMPACT` is unset.
 - **`RALPH_BASH_COMPACT`** (Claude/OpenCode Bash stdout/stderr compaction):
-  no fallback chain; `0` disables, anything else (including Claude's shipped
-  `settings.json` value of `1`) enables. Cursor and Codex do not honor this
-  variable for output replacement (their shell hooks use the wrapper/rewrite
-  path instead; see `RALPH_BASH_REWRITE` below), only for their PostToolUse
-  telemetry-skip records.
+  no fallback chain; `0` disables, anything else enables. Under Ralph plan
+  runs, native|hybrid sets `RALPH_BASH_COMPACT=1` when unset via
+  `run-plan-args.sh`. Cursor and Codex do not honor this variable for output
+  replacement (their shell hooks use the wrapper/rewrite path instead; see
+  `RALPH_BASH_REWRITE` below), only for their PostToolUse telemetry-skip
+  records.
 - **`RALPH_PROXY_SHELL_COMPACT`** (Ralph MCP proxy shell/result compaction,
   and the fallback source for Cursor's `post-tool-mcp-compact.sh` and
   OpenCode's native-result fallback): `RALPH_CURSOR_MCP_HOOK_COMPACT` takes

@@ -78,9 +78,52 @@ killswitch_resolve_config_source() {
 }
 
 # Apply normalized canonical JSON into internal arrays.
+# Prefer jq (hook hot path); fall back to python3 when jq is unavailable.
 _killswitch_apply_normalized_json() {
   local normalized="${1:-}"
-  local raw_output
+  local raw_output line section
+
+  _KILLSWITCH_BANNED_TOOLS=()
+  _KILLSWITCH_BANNED_PATHS=()
+  _KILLSWITCH_ALLOWED_TOOLS=()
+  _KILLSWITCH_ALLOWED_PATHS=()
+  _KILLSWITCH_ALLOWED_COMMANDS=()
+  _KILLSWITCH_ALLOWED_PATTERNS=()
+  _KILLSWITCH_TOOL_DENYLIST=()
+  _KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON="[]"
+  _KILLSWITCH_CUSTOM_RULES_JSON="[]"
+
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$normalized"; then
+      return 1
+    fi
+    _KILLSWITCH_ENABLED="$(jq -r 'if .enabled == false then "false" else "true" end' <<<"$normalized")"
+    _KILLSWITCH_DRY_RUN="$(jq -r 'if .dry_run == true then "true" else "false" end' <<<"$normalized")"
+    _KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON="$(jq -c '(.denied_argument_patterns // [])' <<<"$normalized")"
+    _KILLSWITCH_CUSTOM_RULES_JSON="$(jq -c '(.custom_rules // [])' <<<"$normalized")"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_BANNED_TOOLS+=("$line")
+    done < <(jq -r '(.banned_tools // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_TOOL_DENYLIST+=("$line")
+    done < <(jq -r '(.tool_denylist // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_BANNED_PATHS+=("$line")
+    done < <(jq -r '(.banned_paths // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_ALLOWED_TOOLS+=("$line")
+    done < <(jq -r '(.allowed_tools // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_ALLOWED_PATHS+=("$line")
+    done < <(jq -r '(.allowed_paths // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_ALLOWED_COMMANDS+=("$line")
+    done < <(jq -r '(.allowed_commands // [])[]?' <<<"$normalized")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && _KILLSWITCH_ALLOWED_PATTERNS+=("$line")
+    done < <(jq -r '(.allowed_patterns // [])[]?' <<<"$normalized")
+    return 0
+  fi
 
   raw_output="$(printf '%s' "$normalized" | python3 -c '
 import json, sys
@@ -107,17 +150,7 @@ emit("denied_argument_patterns_json", [json.dumps(cfg.get("denied_argument_patte
 emit("custom_rules_json", [json.dumps(cfg.get("custom_rules") or [])])
 ' 2>/dev/null)" || return 1
 
-  _KILLSWITCH_BANNED_TOOLS=()
-  _KILLSWITCH_BANNED_PATHS=()
-  _KILLSWITCH_ALLOWED_TOOLS=()
-  _KILLSWITCH_ALLOWED_PATHS=()
-  _KILLSWITCH_ALLOWED_COMMANDS=()
-  _KILLSWITCH_ALLOWED_PATTERNS=()
-  _KILLSWITCH_TOOL_DENYLIST=()
-  _KILLSWITCH_DENIED_ARGUMENT_PATTERNS_JSON="[]"
-  _KILLSWITCH_CUSTOM_RULES_JSON="[]"
-
-  local section=""
+  section=""
   while IFS= read -r line; do
     if [[ "$line" == SECTION:* ]]; then
       section="${line#SECTION:}"
@@ -141,6 +174,7 @@ emit("custom_rules_json", [json.dumps(cfg.get("custom_rules") or [])])
 
 # Validate+normalize a config file via the shared normalizer. Prints canonical JSON.
 # Nonzero on invalid/unreadable; errors go to stderr with source and JSON path.
+# Fast path: already-canonical schema_version 2 objects skip the python3 normalizer.
 killswitch_normalize_config_file() {
   local config_file="${1:-}"
   if [[ -z "$config_file" ]]; then
@@ -150,6 +184,34 @@ killswitch_normalize_config_file() {
   if [[ ! -e "$config_file" ]]; then
     echo "${config_file}: \$: unreadable file: No such file or directory" >&2
     return 1
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    if jq -e '
+      type == "object"
+      and .schema_version == 2
+      and ((.enabled | type) == "boolean" or (.enabled | not))
+      and ((.dry_run | type) == "boolean" or (.dry_run | not))
+      and ((.banned_tools | type) == "array" or (.banned_tools | not))
+      and ((.tool_denylist | type) == "array" or (.tool_denylist | not))
+      and ((.custom_rules | type) == "array" or (.custom_rules | not))
+      and ((.denied_argument_patterns | type) == "array" or (.denied_argument_patterns | not))
+    ' "$config_file" >/dev/null 2>&1; then
+      jq -c '{
+        schema_version: 2,
+        enabled: (.enabled // true),
+        dry_run: (.dry_run // false),
+        banned_tools: (.banned_tools // []),
+        tool_denylist: (.tool_denylist // []),
+        allowed_tools: (.allowed_tools // []),
+        banned_paths: (.banned_paths // []),
+        allowed_paths: (.allowed_paths // []),
+        allowed_commands: (.allowed_commands // []),
+        allowed_patterns: (.allowed_patterns // []),
+        denied_argument_patterns: (.denied_argument_patterns // []),
+        custom_rules: (.custom_rules // [])
+      }' "$config_file"
+      return 0
+    fi
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     echo "killswitch: python3 is required to validate killswitch config" >&2

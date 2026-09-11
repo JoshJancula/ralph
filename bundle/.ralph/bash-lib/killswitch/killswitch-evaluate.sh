@@ -31,6 +31,25 @@ _killswitch_set_decision() {
 # arguments
 killswitch_parse_event() {
   local event_json="${1:-}"
+  # Prefer jq on the hook hot path; python3 remains the fallback.
+  if command -v jq &>/dev/null; then
+    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$event_json"; then
+      printf 'invalid\n'
+      return 0
+    fi
+    printf 'ok\n'
+    jq -r '.tool // .toolName // ""' <<< "$event_json"
+    jq -r '.resource // .path // .file // ""' <<< "$event_json"
+    jq -r '
+      (if (.arguments | type) == "object" or (.arguments | type) == "array" then
+        (.arguments | tostring)
+      else
+        ((.arguments // .args // "") | tostring)
+      end) | gsub("\n"; " ")
+    ' <<< "$event_json"
+    return 0
+  fi
+
   if command -v python3 &>/dev/null; then
     python3 - "$event_json" <<'PY'
 import json, sys
@@ -66,18 +85,6 @@ print(str(tool))
 print(str(resource))
 print(str(arguments).replace("\n", " "))
 PY
-    return 0
-  fi
-
-  if command -v jq &>/dev/null; then
-    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$event_json"; then
-      printf 'invalid\n'
-      return 0
-    fi
-    printf 'ok\n'
-    jq -r '.tool // .toolName // ""' <<< "$event_json"
-    jq -r '.resource // .path // .file // ""' <<< "$event_json"
-    jq -r 'if (.arguments | type) == "object" or (.arguments | type) == "array" then (.arguments | tostring) else ((.arguments // .args // "") | tostring) end' <<< "$event_json"
     return 0
   fi
 

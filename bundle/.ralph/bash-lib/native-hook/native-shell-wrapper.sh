@@ -488,11 +488,16 @@ ralph_native_shell_compact_pipeline_json() {
   if declare -F ralph_mcp_proxy_result_token_cap_for_tool >/dev/null 2>&1; then
     token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$store_tool")"
   fi
-  if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
-    ralph_mcp_proxy_result_apply_preview_caps "$preview_text" "$byte_cap" "$token_cap"
-    preview_text="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
-  elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
-    preview_text="${preview_text:0:byte_cap}"
+  # When compaction declined, leave the full source for finish_success /
+  # shape_one_text so a visible byte-cap footer can be attached. Cap only when
+  # compaction actually rewrote the streams.
+  if [[ "$compacted_applied" -eq 1 ]]; then
+    if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
+      ralph_mcp_proxy_result_apply_preview_caps "$preview_text" "$byte_cap" "$token_cap"
+      preview_text="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+    elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
+      preview_text="${preview_text:0:byte_cap}"
+    fi
   fi
   returned_bytes=${#preview_text}
 

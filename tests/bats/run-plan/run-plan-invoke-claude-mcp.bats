@@ -503,7 +503,6 @@ EOF
   export RALPH_MODE=ralph
   export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
   export PROMPT_STATIC="STABLE-PREFIX block"
-  export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT="abc123"
   export RALPH_PLAN_KEY="warm-none"
   export RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
 
@@ -556,8 +555,6 @@ EOF
     export RALPH_PLAN_INVOCATION_USAGE_FILE="$7"
     export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
     export PROMPT_STATIC="STABLE-PREFIX for warm"
-    export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT=fingerprint-warm
-    export RALPH_PROMPT_STABLE_PREFIX_BYTES=22
     export SELECTED_MODEL=test-model
     export ITERATION=3
 
@@ -580,7 +577,6 @@ assert rec["invocation_kind"] == "speculative_cache_warm"
 assert rec["session_strategy"] == "speculative_cache_warm"
 assert rec["output_tokens"] == 1
 assert rec["cache_creation_input_tokens"] == 900
-assert rec["stable_prefix_fingerprint"] == "fingerprint-warm"
 assert rec["todo_line"] == 42
 PY
   ' _ "$TEST_TMPDIR" "$WARM_LIB" "$TEARDOWN_LIB" "$core_lib" "$funcs" "$record" "$usage_file"
@@ -714,4 +710,3 @@ PY
   [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
   [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
 }
-

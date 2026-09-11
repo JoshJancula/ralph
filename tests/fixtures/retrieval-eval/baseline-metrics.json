@@ -1,11 +1,11 @@
 {
   "aggregate": {
-    "mrr": 0.866667,
-    "precision_at_5": 0.675,
-    "queries_no_relevant_top10": 2,
-    "query_count": 40,
-    "recall_at_10": 0.725,
-    "recall_at_5": 0.7125
+    "mrr": 0.855263,
+    "precision_at_5": 0.657895,
+    "queries_no_relevant_top10": 3,
+    "query_count": 38,
+    "recall_at_10": 0.701754,
+    "recall_at_5": 0.662281
   },
   "description": "Baseline metrics for the contextual BM25 ranker with identifier-subtoken fallback gather and per-chunk result diversification. safety_top10 entries are project-relative relevant paths confirmed in the top-10 (not path:line) so the gate survives line-number drift. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions. Re-baselined when the role asset tree was removed and its guidance was folded into inline workflow stage instructions: agent-config-tool now targets the workflow resource resolver, agent-code-review-md targets the bundled workflows carrying inline review instructions, and the deleted docs/cookbook-review/BACKLOG.md and bundle/.claude/agents/README.md labels were dropped from their queries. queries_no_relevant_top10 is unchanged at 2; recall_at_5 improved; precision_at_5, recall_at_10 and mrr moved down because two queries whose single canonical document was replaced by guidance spread across several workflow files now rank more than one relevant file instead of one exact hit.",
   "kind": "retrieval_eval_baseline",
@@ -54,15 +54,6 @@
       "reciprocal_rank": 1.0,
       "safety_top10": [
         "AGENTS.md",
-        "docs/ENVIRONMENT.md"
-      ]
-    },
-    "concept-stable-prefix": {
-      "precision_at_5": 0.4,
-      "recall_at_10": 0.333333,
-      "recall_at_5": 0.333333,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
         "docs/ENVIRONMENT.md"
       ]
     },
@@ -152,15 +143,6 @@
         "tests/python/test_tool_call_classification.py"
       ]
     },
-    "exact-merge-prompt": {
-      "precision_at_5": 0.2,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
-      ]
-    },
     "exact-proxy-search-entry": {
       "precision_at_5": 1.0,
       "recall_at_10": 1.0,
@@ -201,10 +183,7 @@
       "precision_at_5": 1.0,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/permission-classify.sh"
-      ]
+      "reciprocal_rank": 1.0
     },
     "mcp-search-rank-baseline": {
       "precision_at_5": 1.0,

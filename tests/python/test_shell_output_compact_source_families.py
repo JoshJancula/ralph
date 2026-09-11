@@ -22,7 +22,9 @@ _MODULE_PATH = (
 
 
 def test_source_output_families_contents():
-    assert soc.SOURCE_OUTPUT_FAMILIES == frozenset({"find", "ls", "tree"})
+    assert soc.SOURCE_OUTPUT_FAMILIES == frozenset(
+        {"find", "ls", "tree", "grep", "git_diff", "git_show", "git_log"}
+    )
 
 
 def test_source_output_families_is_frozenset():
@@ -42,7 +44,9 @@ def test_no_environment_variable_reenables_source_family_compaction(monkeypatch)
         monkeypatch.setenv(var, "1")
 
     reloaded = load_ralph_script("shell-output-compact.py")
-    assert reloaded.SOURCE_OUTPUT_FAMILIES == frozenset({"find", "ls", "tree"})
+    assert reloaded.SOURCE_OUTPUT_FAMILIES == frozenset(
+        {"find", "ls", "tree", "grep", "git_diff", "git_show", "git_log"}
+    )
 
 
 def test_module_source_has_no_source_family_env_var():

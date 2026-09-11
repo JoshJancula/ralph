@@ -11,6 +11,11 @@
 # storage path, compaction_skipped). See bundle/.ralph/bash-lib/hook-telemetry.sh.
 #
 # Gate: RALPH_BASH_COMPACT=1 (default on in native/hybrid when Ralph sets it; RALPH_BASH_COMPACT=0 opts out).
+# Fast path: before sourcing any library, env-check the gate and run one jq extraction of
+# output size + duration_ms. Exit 0 with no output when the gate is off, or when combined
+# stdout/stderr is under 512 bytes AND duration_ms is below the auto-background promote
+# threshold (command_profiles.LONG_RUNNING_THRESHOLD_MS). Slow commands still fall through
+# so duration recording can run even for tiny output.
 # Fail-open: never blocks the agent.
 # Killswitch enforcement runs pre-execution in the paired PreToolUse hook
 # (rewrite-bash-command.sh); this PostToolUse hook only compacts output
@@ -18,25 +23,80 @@
 
 set -uo pipefail
 
-ralph_bash_compact_main() {
-  ralph_native_hook_truthy "${RALPH_BASH_COMPACT:-}" || ralph_native_hook_fail_open
+# Keep in sync with bundle/.ralph/python/command_profiles.py LONG_RUNNING_THRESHOLD_MS.
+_RALPH_BASH_COMPACT_PROMOTE_MS=60000
+_RALPH_BASH_COMPACT_FAST_MAX_BYTES=512
 
-  if ! command -v jq >/dev/null 2>&1; then
-    ralph_native_hook_debug_log "missing_jq" "claude:bash_hook" "Bash" "jq not found on PATH"
+# --- Fast path (no library sources) ------------------------------------------
+case "${RALPH_BASH_COMPACT:-}" in
+  1 | true | yes | on) ;;
+  *) exit 0 ;;
+esac
+
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+RALPH_BASH_COMPACT_INPUT="$(cat)" || exit 0
+
+# Single jq extraction of gate-relevant fields. tool_response must be an object
+# to be eligible for the tiny/fast skip (malformed payloads fall through so the
+# slow path can emit debug telemetry).
+_RALPH_BASH_COMPACT_GATE_TSV="$(
+  jq -r '
+    [
+      (.hook_event_name // ""),
+      (.tool_name // ""),
+      (if (.tool_response | type) == "object" then "1" else "0" end),
+      (
+        if (.tool_response | type) == "object" then
+          ((.tool_response.stdout // "") | length)
+          + ((.tool_response.stderr // "") | length)
+        else
+          0
+        end
+      ),
+      (
+        if ((.duration_ms | type) == "number") and (.duration_ms >= 0) then
+          (.duration_ms | floor | tostring)
+        else
+          ""
+        end
+      )
+    ] | @tsv
+  ' <<<"$RALPH_BASH_COMPACT_INPUT" 2>/dev/null
+)" || exit 0
+
+IFS=$'\t' read -r _ralph_bash_gate_event _ralph_bash_gate_tool \
+  _ralph_bash_gate_ok_response _ralph_bash_gate_out_bytes _ralph_bash_gate_duration_ms \
+  <<<"$_RALPH_BASH_COMPACT_GATE_TSV" || exit 0
+
+if [[ "$_ralph_bash_gate_event" != "PostToolUse" || "$_ralph_bash_gate_tool" != "Bash" ]]; then
+  exit 0
+fi
+
+if [[ "$_ralph_bash_gate_ok_response" == "1" \
+  && "${_ralph_bash_gate_out_bytes:-0}" -lt "$_RALPH_BASH_COMPACT_FAST_MAX_BYTES" ]]; then
+  if [[ -z "${_ralph_bash_gate_duration_ms}" \
+    || "${_ralph_bash_gate_duration_ms}" -lt "$_RALPH_BASH_COMPACT_PROMOTE_MS" ]]; then
+    exit 0
+  fi
+fi
+
+# --- Slow path: source libraries and compact / record ------------------------
+ralph_bash_compact_main() {
+  # Gate, jq presence, and stdin capture already handled on the fast path.
+  # RALPH_BASH_COMPACT_INPUT is set in the caller scope.
+
+  if ! jq -e '.tool_response | type == "object"' <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
+    ralph_native_hook_debug_log "malformed_input" "claude:bash_hook" "Bash" "tool_response is missing or not an object"
     ralph_native_hook_fail_open
   fi
-
-  RALPH_BASH_COMPACT_INPUT="$(cat)" || ralph_native_hook_fail_open
 
   local event tool_name command stdout stderr interrupted is_image
   event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
   tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
   if [[ "$event" != "PostToolUse" || "$tool_name" != "Bash" ]]; then
-    ralph_native_hook_fail_open
-  fi
-
-  if ! jq -e '.tool_response | type == "object"' <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
-    ralph_native_hook_debug_log "malformed_input" "claude:bash_hook" "Bash" "tool_response is missing or not an object"
     ralph_native_hook_fail_open
   fi
 

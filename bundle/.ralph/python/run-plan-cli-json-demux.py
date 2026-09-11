@@ -37,7 +37,10 @@ _CODEX_CHAT_ITEM_TYPES = frozenset(
 
 
 def _tool_call_id(item: Dict[str, Any]) -> Optional[str]:
-    for key in ("callID", "callId", "call_id", "tool_call_id", "toolCallId", "id"):
+    for key in (
+        "callID", "callId", "call_id", "tool_call_id", "toolCallId",
+        "tool_use_id", "toolUseId", "id",
+    ):
         v = item.get(key)
         if isinstance(v, (str, int)) and str(v).strip():
             return str(v).strip()
@@ -88,6 +91,8 @@ def _merge_tool_call(
                 return
             seen.add(call_id)
     label = _normalize_tool_label((name or "unknown").strip() or "unknown")
+    if call_id:
+        acc.setdefault("_tool_names_by_id", {})[call_id] = label
     acc["tool_calls_total"] = int(acc.get("tool_calls_total", 0)) + 1
     by_tool = acc.setdefault("tool_calls_by_tool", {})
     if not isinstance(by_tool, dict):
@@ -98,6 +103,79 @@ def _merge_tool_call(
     if isinstance(seq, list) and len(seq) < _TOOL_SEQUENCE_CAP:
         seq.append(label)
     record_tool_target(acc, label, tool_input)
+
+
+def _result_text_bytes(value: Any) -> int:
+    """Return UTF-8 bytes represented by a tool result's textual payload."""
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, list):
+        return sum(_result_text_bytes(item) for item in value)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return _result_text_bytes(value["text"])
+        return 0
+    return 0
+
+
+def _record_tool_result(
+    acc: Dict[str, Any], value: Any, call_id: Optional[str] = None,
+    label: Optional[str] = None,
+) -> None:
+    if not _result_text_bytes(value):
+        return
+    names = acc.get("_tool_names_by_id") or {}
+    resolved = label or (names.get(call_id) if call_id else None) or "unknown"
+    resolved = _normalize_tool_label(str(resolved))
+    by_tool = acc.setdefault("tool_result_bytes_by_tool", {})
+    size = _result_text_bytes(value)
+    by_tool[resolved] = int(by_tool.get(resolved, 0)) + size
+    acc["tool_result_bytes_total"] = int(acc.get("tool_result_bytes_total", 0)) + size
+
+
+def _walk_claude_tool_results(obj: Any, acc: Dict[str, Any]) -> None:
+    if isinstance(obj, dict):
+        if obj.get("type") == "tool_result":
+            _record_tool_result(acc, obj.get("content"), _tool_call_id(obj))
+        for value in obj.values():
+            _walk_claude_tool_results(value, acc)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_claude_tool_results(item, acc)
+
+
+def _walk_opencode_tool_results(obj: Any, acc: Dict[str, Any], *, _depth: int = 0) -> None:
+    if _depth > 24:
+        return
+    if isinstance(obj, dict):
+        typ = str(obj.get("type") or "").strip().lower()
+        if typ in {"tool", "tool_result", "tool-result"}:
+            value = obj.get("output", obj.get("result", obj.get("content")))
+            _record_tool_result(acc, value, _tool_call_id(obj), _pick_tool_label(obj, fallback="unknown"))
+        for key, value in obj.items():
+            if key not in {"part", "properties"} and isinstance(value, (dict, list)):
+                _walk_opencode_tool_results(value, acc, _depth=_depth + 1)
+            elif key in {"part", "properties"}:
+                _walk_opencode_tool_results(value, acc, _depth=_depth + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_opencode_tool_results(item, acc, _depth=_depth + 1)
+
+
+def _walk_cursor_tool_results(obj: Any, acc: Dict[str, Any], *, _depth: int = 0) -> None:
+    if _depth > 24:
+        return
+    if isinstance(obj, dict):
+        typ = str(obj.get("type") or "").strip().lower().replace("-", "_")
+        if "tool_result" in typ or typ in {"tool_output", "tool_response"}:
+            value = obj.get("output", obj.get("result", obj.get("content")))
+            _record_tool_result(acc, value, _tool_call_id(obj), _pick_tool_label(obj, fallback="unknown"))
+        for value in obj.values():
+            if isinstance(value, (dict, list)):
+                _walk_cursor_tool_results(value, acc, _depth=_depth + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_cursor_tool_results(item, acc, _depth=_depth + 1)
 
 
 _ANTIGRAVITY_TOOL_CALL_RE = re.compile(r"^\*\s+([\w.]+)\(")
@@ -344,6 +422,8 @@ def extract_tool_calls(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                     )
         return
     if mode == "opencode":
+        if _opencode_has_tool_part(obj):
+            acc["_opencode_step_has_tool"] = True
         _walk_opencode_tool_parts(obj, acc)
         return
     if mode == "claude":
@@ -390,6 +470,32 @@ def _walk_opencode_tool_parts(obj: Any, acc: Dict[str, Any], *, _depth: int = 0)
             _walk_opencode_tool_parts(item, acc, _depth=_depth + 1)
 
 
+def _opencode_has_tool_part(obj: Any, *, _depth: int = 0) -> bool:
+    """Return whether an OpenCode event contains a tool part."""
+    if _depth > 24:
+        return False
+    if isinstance(obj, dict):
+        if str(obj.get("type") or "").strip().lower() in {"tool", "tool_call", "tool-call"}:
+            return True
+        return any(_opencode_has_tool_part(v, _depth=_depth + 1) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_opencode_has_tool_part(v, _depth=_depth + 1) for v in obj)
+    return False
+
+
+def _cursor_has_tool_call(obj: Any, *, _depth: int = 0) -> bool:
+    """Return whether a Cursor assistant event contains a tool call."""
+    if _depth > 24:
+        return False
+    if isinstance(obj, dict):
+        if obj.get("type") == "tool_call" or any(
+            key in obj for key in ("tool_call", "toolCall", "tool_calls", "toolCalls")
+        ):
+            return True
+        return any(_cursor_has_tool_call(v, _depth=_depth + 1) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_cursor_has_tool_call(v, _depth=_depth + 1) for v in obj)
+    return False
 def _coerce_nonneg_int(value: Any) -> int:
     try:
         out = int(value or 0)
@@ -605,11 +711,23 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
         # We must NOT recurse generically here to avoid double-counting usage payloads.
         payload = obj.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "token_count":
+            # A token_count event corresponds to one model request.  The
+            # turn.completed event is only the envelope for the whole codex
+            # exec and must not be used as a request counter.
+            acc["_codex_token_count_events"] = int(
+                acc.get("_codex_token_count_events", 0)
+            ) + 1
             info = payload.get("info")
             if isinstance(info, dict):
                 total = info.get("total_token_usage")
                 if isinstance(total, dict):
                     _apply_codex_usage_snapshot(total, acc, include_max=False)
+                    if "first_request_input_tokens" not in acc:
+                        acc["first_request_input_tokens"] = (
+                            int(acc.get("input_tokens") or 0)
+                            + int(acc.get("cache_read_input_tokens") or 0)
+                            + int(acc.get("cache_creation_input_tokens") or 0)
+                        )
                 last = info.get("last_token_usage")
                 if isinstance(last, dict):
                     last_total = int(last.get("total_tokens") or 0)
@@ -617,8 +735,41 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                         acc["max_turn_total_tokens"] = last_total
 
         event_type = obj.get("type")
-        if event_type in {"turn.completed", "turn_completed", "step_finish"}:
-            acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
+        if event_type == "item.completed":
+            item = obj.get("item")
+            item_type = str(item.get("type") or "").lower() if isinstance(item, dict) else ""
+            if isinstance(item, dict) and item_type in {"function_call", "custom_tool_call"}:
+                call_id = _tool_call_id(item)
+                if call_id:
+                    acc.setdefault("_tool_names_by_id", {})[call_id] = _normalize_tool_label(
+                        _pick_tool_label(item, fallback="unknown")
+                    )
+            if isinstance(item, dict) and item_type in {
+                "function_call_output", "custom_tool_call_output", "function_output"
+            }:
+                output = item.get("output", item.get("result", item.get("content")))
+                _record_tool_result(acc, output, _tool_call_id(item))
+            if item_type == "function_call":
+                acc["_codex_pending_function_call"] = True
+            if item_type in {
+                "agent_message",
+                "function_call",
+                "reasoning",
+            }:
+                # Older streams lack token_count events.  Keep a fallback
+                # count and select it in finalize_usage only when necessary.
+                acc["_codex_fallback_requests"] = int(
+                    acc.get("_codex_fallback_requests", 0)
+                ) + 1
+                if item_type != "function_call":
+                    acc["_codex_fallback_text_only_requests"] = int(
+                        acc.get("_codex_fallback_text_only_requests", 0)
+                    ) + 1
+        if isinstance(payload, dict) and payload.get("type") == "token_count":
+            if not acc.pop("_codex_pending_function_call", False):
+                acc["_codex_text_only_requests"] = int(
+                    acc.get("_codex_text_only_requests", 0)
+                ) + 1
         if event_type in {"turn.completed", "turn_completed", "result"}:
             usage = obj.get("usage")
             if isinstance(usage, dict):
@@ -684,6 +835,10 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                 tokens = part.get("tokens")
         if isinstance(tokens, dict):
             acc["tool_turns"] = int(acc.get("tool_turns", 0)) + 1
+            if not acc.pop("_opencode_step_has_tool", False):
+                acc["requests_without_tool_use"] = int(
+                    acc.get("requests_without_tool_use", 0)
+                ) + 1
             acc["input_tokens"] += int(tokens.get("input") or 0)
             acc["output_tokens"] += int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
             cache = tokens.get("cache")
@@ -701,6 +856,13 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                 if alt_read > 0:
                     cache_read = alt_read
                     acc["opencode_cache_fields_seen"] = 1
+            if obj.get("type") == "step_finish" and "first_request_input_tokens" not in acc:
+                acc["first_request_input_tokens"] = (
+                    int(tokens.get("input") or 0)
+                    + cache_read
+                    + int(cache.get("write") or 0) if isinstance(cache, dict)
+                    else int(tokens.get("input") or 0) + cache_read
+                )
             acc["cache_read_input_tokens"] += cache_read
 
             # Track per-step/per-invocation data so we can emit a best-guess
@@ -718,6 +880,7 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
                         "opencode_cache_key_injected": _opencode_cache_key_injected_from_env(),
                     }
                 )
+        _walk_opencode_tool_results(obj, acc)
         return
     if mode == "claude":
         # Claude stream-json emits one `assistant` event per CONTENT BLOCK, not per API
@@ -739,6 +902,8 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
         # Claude event variants can include an unrelated top-level `result` payload on
         # non-terminal events; treating any event with a `result` key as terminal discards
         # valid per-request usage.
+        _walk_claude_tool_uses(obj, acc)
+        _walk_claude_tool_results(obj, acc)
         is_result_event = obj.get("type") == "result"
 
         usage = obj.get("usage")
@@ -781,9 +946,28 @@ def extract_usage(obj: Any, mode: str, acc: Dict[str, Any]) -> None:
             per_message = acc.setdefault("_claude_msg_usage", {})
             if not msg_id:
                 msg_id = f"_anon_{len(per_message)}"
+            if obj.get("type") == "assistant" and "first_request_input_tokens" not in acc:
+                acc["first_request_input_tokens"] = (
+                    tokens["input_tokens"]
+                    + tokens["cache_read_input_tokens"]
+                    + tokens["cache_creation_input_tokens"]
+                )
             # Later blocks of one message carry a fuller snapshot, so keep the last.
             per_message[msg_id] = tokens
+            has_tool_use = False
+            for content_item in (message.get("content", []) if isinstance(message, dict) else []):
+                if isinstance(content_item, dict) and content_item.get("type") == "tool_use":
+                    has_tool_use = True
+                    break
+            msg_tools = acc.setdefault("_claude_msg_has_tool_use", {})
+            msg_tools[msg_id] = bool(msg_tools.get(msg_id, False) or has_tool_use)
         return
+    if mode == "cursor":
+        _walk_cursor_tool_results(obj, acc)
+        if obj.get("type") == "assistant" and not _cursor_has_tool_call(obj):
+            acc["requests_without_tool_use"] = int(
+                acc.get("requests_without_tool_use", 0)
+            ) + 1
     # Generic: look for common token field names across runtimes (cursor, etc.)
     for in_key in ("input_tokens", "inputTokens", "prompt_tokens", "promptTokens"):
         if in_key in obj:
@@ -854,6 +1038,10 @@ def _finalize_claude_usage(acc: Dict[str, Any]) -> None:
     per_message = acc.get("_claude_msg_usage") or {}
     # Distinct message ids are the real count of API responses; assistant events are not.
     acc["tool_turns"] = len(per_message)
+    msg_tools = acc.get("_claude_msg_has_tool_use") or {}
+    acc["requests_without_tool_use"] = sum(
+        1 for msg_id in per_message if not msg_tools.get(msg_id, False)
+    )
 
     deduped = {
         field: sum(int(u.get(field) or 0) for u in per_message.values())
@@ -873,6 +1061,18 @@ def finalize_usage(acc: Dict[str, Any], mode: str) -> None:
         acc["usage_unsupported"] = not bool(acc.get("_antigravity_step_usage_seen"))
     if mode == "claude":
         _finalize_claude_usage(acc)
+    if mode == "codex":
+        token_count_events = int(acc.get("_codex_token_count_events", 0))
+        fallback_requests = int(acc.get("_codex_fallback_requests", 0))
+        acc["tool_turns"] = token_count_events or fallback_requests
+        if token_count_events:
+            acc["requests_without_tool_use"] = int(
+                acc.get("_codex_text_only_requests", 0)
+            )
+        else:
+            acc["requests_without_tool_use"] = int(
+                acc.get("_codex_fallback_text_only_requests", 0)
+            )
     if mode == "opencode":
         # If the provider reported cache reads, we keep the measured field
         # and never imply cache savings.
@@ -1049,6 +1249,9 @@ def main() -> None:
         "cache_creation_1h_input_tokens": 0,
         "max_turn_total_tokens": 0,
         "tool_turns": 0,
+        "requests_without_tool_use": 0,
+        "tool_result_bytes_by_tool": {},
+        "tool_result_bytes_total": 0,
         "tool_calls_total": 0,
         "tool_calls_by_tool": {},
         "tool_calls_sequence": [],

@@ -541,6 +541,14 @@ ralph_mcp_proxy_load_policy() {
   local requested_name="${RALPH_MCP_PROXY_POLICY:-}"
   local raw_policy_json selected_json
 
+  # Once per process: hooks and MCP handlers re-enter this helper often.
+  if [[ -n "${RALPH_MCP_PROXY_POLICY_RESOLVED:-}" \
+    && "${RALPH_MCP_PROXY_POLICY_RESOLVED_WORKSPACE:-}" == "$workspace" \
+    && "${RALPH_MCP_PROXY_POLICY_RESOLVED_UPSTREAM:-}" == "$upstream_script" \
+    && "${RALPH_MCP_PROXY_POLICY_RESOLVED_NAME:-}" == "$requested_name" ]]; then
+    return 0
+  fi
+
   if ! ralph_mcp_proxy_policy_read_source_json "$workspace" "$upstream_script" "$requested_name"; then
     return 1
   fi
@@ -727,6 +735,11 @@ ralph_mcp_proxy_load_policy() {
   export RALPH_MCP_PROXY_POLICY_OWNED_MAX_SEARCH_CANDIDATES
   export RALPH_MCP_PROXY_POLICY_OWNED_MAX_SEARCH_RESULTS
   export RALPH_MCP_PROXY_POLICY_OWNED_MAX_REPOMAP_FILES
+
+  RALPH_MCP_PROXY_POLICY_RESOLVED=1
+  RALPH_MCP_PROXY_POLICY_RESOLVED_WORKSPACE="$workspace"
+  RALPH_MCP_PROXY_POLICY_RESOLVED_UPSTREAM="$upstream_script"
+  RALPH_MCP_PROXY_POLICY_RESOLVED_NAME="$requested_name"
 }
 
 ralph_mcp_proxy_tool_allowed() {

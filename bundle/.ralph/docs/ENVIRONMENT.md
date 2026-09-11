@@ -16,6 +16,12 @@ Ralph distinguishes three roots (see also [AGENTS.md](../AGENTS.md#three-root-mo
 
 `RALPH_MCP_WORKSPACE` is the project root passed to the MCP server. Plan-run injection also forwards `RALPH_PROJECT_ROOT`, `RALPH_AGENT_WORKSPACE`, and `RALPH_PLAN_WORKSPACE_ROOT` when set. Standalone servers that set only `RALPH_MCP_WORKSPACE` keep backward-compatible behavior.
 
+### Isolated graph run base
+
+Graph stages that request `workspaceMode: snapshot` or `workspaceMode: worktree` capture one immutable, backend-neutral source base under the graph run ledger. Snapshot mode accepts stable dirty and non-Git projects. Worktree mode additionally requires the project root to be a Git worktree root with no tracked or untracked changes after exclusions; Ralph never stashes, commits, or downgrades the request to shared mode.
+
+Every capture excludes `.git`, the state root, and cache directories named `.cache`, `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, or `.venv`. Set `RALPH_GRAPH_SECRET_EXCLUDES` to a newline-delimited list of project-relative files or directories that must also be excluded. Absolute paths and paths containing `..` are rejected. The resulting `run.json` records the three roots, filesystem identity, Ralph and capture-tool versions, and available Git HEAD, tree, index, and status fingerprints; secret contents and Git metadata are never copied into the frozen source directory.
+
 ### Graph admission budgets
 
 | Variable | Purpose |
@@ -26,6 +32,32 @@ Ralph distinguishes three roots (see also [AGENTS.md](../AGENTS.md#three-root-mo
 
 Admission decisions are written as JSONL under `.ralph-workspace/logs/<namespace>/graph-admission-<run-id>.jsonl`. Snapshot or worktree isolation does not change adapter safety because runtime configuration is discovered from the project root.
 
+## Process lifecycle and orphan prevention
+
+Python 3 is required for plan and orchestration execution. Ralph starts a detached guardian for each run and launches every runtime, orchestration stage, verification command, and speculative cache-warm command in a recorded OS session. Active state lives under `.ralph-workspace/processes/active/<run-id>/`; lifecycle events are appended to `process-lifecycle.jsonl`. Records contain process identity and routing metadata, never prompts, command output, or credentials.
+
+On interruption or owner death, Ralph stops the recorded scope root first, sends `TERM`, rescans for late children during the grace period, sends `KILL` to verified survivors, and performs a final rescan. Session identity and a random per-scope environment token cover descendants that create another process group or session. A canonical plan lease rejects a second active runner for the same plan.
+
+| Variable | Purpose |
+|----------|---------|
+| `RALPH_PROCESS_MAX_SCOPE_LIVE` | Maximum live processes in one managed scope before Ralph aborts it. Default `128`. |
+| `RALPH_PROCESS_MAX_RUN_LIVE` | Maximum unique live processes across a run before Ralph aborts all scopes. Default `256`. |
+| `RALPH_PROCESS_TERM_GRACE_SECONDS` | Rescanning `TERM` grace period. Default `5`. |
+| `RALPH_PROCESS_KILL_GRACE_SECONDS` | Final `KILL` and survivor-check period. Default `2`. |
+| `RALPH_PROCESS_SCAN_INTERVAL_SECONDS` | Interval for the guardian's session-only runaway-limit sample. Default `10`; normal child waiting is event-driven and escaped-session token discovery runs only during teardown. |
+| `RALPH_ALLOW_NESTED_RUNS` | Nested Ralph runs are rejected by default. Set `1` only for intentional nesting. Orchestrator-to-stage attachment is allowed automatically. |
+| `RALPH_PROCESS_MAX_NESTED_DEPTH` | Maximum intentional nested-run depth when nesting is enabled. Default `1`. |
+
+Process-limit aborts exit `78`; verified survivors after escalation exit `79`. Inspect or stop runs with:
+
+```bash
+ralph process list --workspace .
+ralph process list --workspace-root /path/to/state --json
+ralph process stop --run <run-id> --workspace .
+ralph process stop --plan PLAN.md --workspace .
+ralph process stop --all --workspace . --force
+```
+
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_PLAN_RUNTIME` | Default CLI runtime when `--runtime` is omitted (`cursor`, `claude`, `codex`, `opencode`, `antigravity`). |
@@ -34,6 +66,7 @@ Admission decisions are written as JSONL under `.ralph-workspace/logs/<namespace
 | `RALPH_AGENT_WORKSPACE` | Agent sandbox root for model execution and MCP proxy path policy. Default: directory that invoked `run-plan.sh`. Set via `--agent-workspace` or env before launch. |
 | `RALPH_ARTIFACT_NS` | Namespace for logs and templated artifact paths. Default: plan basename; orchestration may set from JSON `namespace`. |
 | `RALPH_PLAN_KEY` | Plan namespace (session dir name, metrics keys). Default: plan file basename (sanitized). |
+| `RALPH_PLAN_VERBOSE` | When truthy, preserves each raw merged CLI stream before demux at `.ralph-workspace/logs/<plan-key>/raw/<iteration>-<runtime>.jsonl`; only the newest five files per plan are retained. These files can reconstruct request counts after the run. |
 | `RALPH_STAGE_ID` | Set by orchestration per stage; forwarded into logs and usage JSON when present. |
 | `RALPH_ORCH_FILE` | Absolute path to the active orchestration file (set by the orchestrator; used for handoff injection). |
 | `WORKSPACE_ROOT_OVERRIDE` | Same meaning as `--workspace-root` on run-plan and orchestrator: directory that should contain (or be) `.ralph-workspace` data. |
@@ -55,7 +88,7 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 
 | Variable | Purpose |
 |----------|---------|
-| `RALPH_PLAN_SESSION_STRATEGY` | Session behavior between TODOs: `fresh` (default strict isolation), `resume` (continue context), `reset` (reuse session id and prefix a runtime reset command when configured), or `compact` (reuse session id and prefix a runtime-specific compact command before each TODO prompt). Interactive TTY runs prompt for session strategy unless already set via flag or env var. |
+| `RALPH_PLAN_SESSION_STRATEGY` | Session behavior **between distinct TODOs**: `fresh` (default strict isolation for the next TODO), `resume` (continue context), `reset` (reuse session id and prefix a runtime reset command when configured), or `compact` (reuse session id and prefix a runtime-specific compact command before each TODO prompt). Interactive TTY runs prompt for session strategy unless already set via flag or env var. Mid-TODO continuations (background job wait, human answer, post-verify repair) are **not** restarted from scratch by `fresh`: the runner resumes that TODO via its exact captured session id (tier 2) or the same live session (tier 1). See [Background jobs and durable TODO continuations](#background-jobs-and-durable-todo-continuations). |
 | `RALPH_PLAN_RESET_COMMAND` | Optional global reset command prefix used in reset mode before each TODO prompt (example: `/clear`). When set, overrides runtime-specific reset command defaults. |
 | `RALPH_PLAN_RESET_COMMAND_CLAUDE` / `RALPH_PLAN_RESET_COMMAND_CURSOR` / `RALPH_PLAN_RESET_COMMAND_CODEX` / `RALPH_PLAN_RESET_COMMAND_OPENCODE` / `RALPH_PLAN_RESET_COMMAND_ANTIGRAVITY` | Runtime-specific reset command prefix. Default for Claude is `/clear`; other runtimes default empty. |
 | `RALPH_PLAN_COMPACT_COMMAND` | Optional global compact command prefix used in compact mode before each TODO prompt. When set, overrides runtime-specific compact command defaults. |
@@ -71,6 +104,47 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 | `RALPH_PLAN_SESSION_MAX_TURNS` | Claude-specific session rotation threshold (default `8`). After this many invocations, the CLI session rotates to cap cache growth. Set `0` to disable rotation. Other runtimes are unaffected. |
 | `RALPH_CACHE_READ_PER_TURN_WARN` | `60000` | Threshold for the context-bloat hint emitted by `tool_call_target_telemetry.optimization_hint_line`. When the derived `cache_read_per_tool_turn` exceeds this integer cache-read token limit, Ralph emits the optimization hint that suggests trimming cached context or reducing tool turns. Cache-read fields are model/provider dependent and are telemetry only; they are not Ralph's primary context-control mechanism (see [OpenCode hybrid contract](TOOLING.md#opencode-hybrid-contract)). |
 | `RALPH_OPENCODE_SET_CACHE_KEY` | OpenCode-specific prompt-cache injection (default `1`). Injection runs in every `--ralph-mode` (`native`, `hybrid`, `ralph`, or unset), independent of MCP or native-hooks gating. When enabled and the merged ambient OpenCode config declares no cache settings for the selected provider, Ralph deep-merges `provider.<id>.options.setCacheKey: true` into the per-run temp `OPENCODE_CONFIG` (provider id is the segment of the model before the first `/`, e.g. `ollama-cloud/kimi-k2.6` -> `ollama-cloud`). For openai-compatible passthrough providers (currently `ollama-cloud`) Ralph additionally injects a per-model `prompt_cache_key` (`ralph-<plan-slug>`) because OpenCode's `setCacheKey` emits camelCase `promptCacheKey`, which those providers pass through verbatim and the upstream API ignores. A string-form ambient `provider` field (instead of null or object) causes a clean logged skip with no config changes. Ambient provider options are never overwritten. Set `0` to opt out. When opted out or when Ralph makes no changes (no injection, no MCP merge, no hooks staging), the user-supplied `OPENCODE_CONFIG` is passed through untouched. See the cache strategy notes in [`.opencode/README.md`](../.opencode/README.md#cache-strategy). |
+
+| `RALPH_LIVE_APPROVALS` | OpenCode in-band permission approvals (default `auto`). On `auto`, a plan run attaches `opencode run` to a loopback `opencode serve` whenever the transport is available and someone can answer a prompt (a terminal, or a pre-set `RALPH_PERMISSION_RESPONSE_DECISION`). A permission request is then answered on the server's own reply endpoint, so the agent continues in the same session instead of exiting and re-running the TODO. Answers are allow-once; broader grants stay with the operator-facing overlay. Set `0` to opt out and always take the exit-and-resume path. Graph runs are unaffected: they use this transport regardless. |
+| `RALPH_OPENCODE_SERVE_WATCH_TIMEOUT` | Socket timeout in seconds for the live-approval event stream (default `3600`). Only applies when live approvals are active. |
+
+## Background jobs and durable TODO continuations
+
+Opt-in helper so a TODO can wait on a long command without spending model turns on polling. Default is **off**. Prefer plan/TODO strict `verify:` for completion gates; background a command only when waiting inside the agent turn would cost extra model turns. Contract detail (tiers, Stop hooks, cost model): [TOOLING.md](TOOLING.md#background-jobs-and-stop-hook-continuation).
+
+`RALPH_BG_JOBS` is **opt-in and defaults to off**. No example below leaves it on by default.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RALPH_BG_JOBS` | `0` | Master opt-in. When `0`, no helper is advertised, no Stop hook is registered for continuation, and no runner wait phase runs for background jobs. Human-answer and post-verify continuation are **not** gated by this flag. Set `1` only when you intentionally want background job + hook/invocation continuation. |
+| `RALPH_BG_JOB_TIMEOUT` | `3600` | Per-job wall-clock seconds. Defaults above the common `--timeout` 30m agent-invocation budget so a backgrounded job can outlive one turn. |
+| `RALPH_BG_HOOK_TIMEOUT` | `5400` | Value written into each runtime's per-hook `timeout` for the Stop / stop / continue adapters. Must exceed `RALPH_BG_JOB_TIMEOUT` with headroom; vendor defaults (Claude 60s, Codex 600s, Antigravity 30s) are too short without this override. |
+| `RALPH_BG_MAX_PER_TODO` | `8` | Hard cap on background jobs (and Stop-hook re-entries) per logical TODO attempt. Exceeding it fails the TODO with an explicit reason rather than looping. |
+| `RALPH_BG_OUTPUT_MAX_BYTES` | `65536` | Cap on the bounded result injected into the continuation turn. Full stdout/stderr stay on disk under the session job store / result store. |
+| `RALPH_BG_TIER` | `auto` | `auto` probes per runtime (tier 1 hook when available and isolation works; else tier 2 invocation). `hook` forces tier 1 and fails loudly if unavailable. `invocation` forces tier 2. For tests and escape hatches. |
+| `RALPH_CONTINUATION_DEBUG` | unset | When set, logs tier selection, session choice, and degraded fallback. Never logs full command text beyond the recorded summary. |
+
+**Two tiers (supervisor-owned):**
+
+1. **Tier 1 (hook)** — preferred. The agent launches via `.ralph/ralph-bg.sh '<command>'` and ends the turn without a completion marker. The runtime Stop / stop hook blocks outside the model, waits for the job, injects a bounded result, and the **same session** continues. Requires process-group isolation (`setsid` or `python3` os.setsid); without isolation Ralph refuses tier 1 and falls back to tier 2.
+2. **Tier 2 (invocation)** — fallback when no usable end-of-turn hook exists, isolation is unavailable, or for human answers (which always cross invocations). The runner ends the invocation, waits outside the model, then starts a new invocation for the **same TODO** bound to its exact captured runtime session id. Never uses bare `--last`, `--continue`, or global-most-recent resume.
+
+**Exact-ID safety and degraded fallback (tier 2):** Session manifests under `$RALPH_SESSION_DIR/todo-sessions/` record capture quality `exact` or `degraded`. Exact capture resumes that session id. Degraded capture (no reliable id) starts a fresh invocation that still injects the bounded job or human-answer result once — it does not invent a wrong session via unsafe resume.
+
+**Lifecycle:** Job records live under `$RALPH_SESSION_DIR/bg-jobs/<job-id>/` with state `requested -> launched -> running -> terminal -> consumed`. Terminal status is one of `passed`, `failed`, `timed_out`, `cancelled`, `interrupted`, `unknown`. Continuations are consume-once. A continuation does **not** consume `RALPH_PLAN_TODO_MAX_ITERATIONS`; background work is bounded by `RALPH_BG_MAX_PER_TODO`.
+
+**Cancellation and recovery:** Plan teardown terminates outstanding jobs for the current identity and marks them terminal (`cancelled` / `interrupted` / timed out as appropriate). On restart, recovery adopts orphaned outstanding jobs whose owner died and writes `$RALPH_SESSION_DIR/bg-jobs/recovery-report.json`. Foreign-run records are left alone.
+
+**Example (opt-in):**
+
+```bash
+# Default: background jobs off (omit RALPH_BG_JOBS or leave it 0)
+.ralph/run-plan.sh --runtime claude --plan PLAN.md
+
+# Explicit opt-in for one run
+RALPH_BG_JOBS=1 RALPH_BG_JOB_TIMEOUT=3600 RALPH_BG_HOOK_TIMEOUT=5400 \
+  .ralph/run-plan.sh --runtime claude --plan PLAN.md
+```
 
 ## Limits, budgets, and timeouts
 
@@ -272,36 +346,43 @@ bash .ralph/models.sh remove claude claude-sonnet-4-6
 | `OPENCODE_PLAN_MODEL` | Model id for OpenCode; falls back chain through Codex/Claude/Cursor. |
 | `ANTIGRAVITY_PLAN_MODEL` | Model id for Antigravity (`agy`); falls back through `OPENCODE_PLAN_MODEL` then `CURSOR_PLAN_MODEL`. Must be an exact display string from `agy models` when passed to the CLI. |
 
+### Native subagents
+
+`nativeSubagents` controls only subagents supplied by the selected runtime; it
+does not create Ralph child processes. It accepts `off` or `inherit`.
+
+- Standard TODOs default to `inherit`.
+- Graph and orchestration agent stages default to `off` on a runtime with a
+  proven deny boundary (claude, codex) and to `inherit` on one without
+  (cursor, opencode, antigravity). Declaring `off` explicitly on an
+  unsupported runtime fails at preflight instead of silently not denying.
+- Consensus voters compile to `off`.
+- `inherit` leaves the runtime's ambient behavior unchanged. Activity is opaque
+  to Ralph and remains owned by the parent runtime process.
+- `off` uses the runtime's supported deny boundary before invocation. Ralph
+  does not enforce this through prompt text.
+
+The removed `subagents` and `delegation.native` fields have no environment
+variable aliases. Use delegated runs for explicit Ralph-managed child work.
+
 ### Antigravity model contract
 
 Ralph lists available models via `agy models`, preserves each exact display string returned by that command, and invokes the CLI with `agy --model "<exact model string from agy models>"`. Model ids are never normalized or remapped. Interactive selection uses the same strings; when `agy` is unavailable the menu falls back to placeholders such as `auto`.
 
-### Claude/Codex resolution order
+### Model precedence
 
-When `run-plan` selects a model for Claude or Codex on a leaf plan (highest wins):
+For standard leaf TODOs (`ralph run --plan`), the model order is (highest first):
 
-1. `--model <id>` CLI flag (or plan-header `model:`)
+1. CLI `--model <id>` (or a plan-header `model:` treated as the same pin)
 2. TODO `model:`
-3. Attended TTY: interactive picker showing the full saved-model catalog (plus custom entry). `models.json` is a catalog to choose from, not an auto-selected default.
-4. Non-interactive / no TTY: first saved model from `models.json` (CI/automation fallback only)
-5. Runtime-native default (omit Ralph `--model`)
+3. Attended TTY: interactive picker showing the full saved-model catalog for Claude/Codex (plus custom entry); Cursor/OpenCode/Antigravity use their discovery menus. `models.json` is a catalog to choose from, not an auto-selected default.
+4. Non-interactive / no TTY: the first saved model for Claude or Codex (CI/automation fallback only)
+5. The runtime-native default (omit Ralph `--model` so the CLI uses its own default)
 
-Profile-derived models and `*_PLAN_MODEL` env vars are not rungs for standard leaf resolution.
-Staged graph/orchestration/workflow runs use: stage or voter `model:` > saved > native
-(always non-interactive at the runner boundary).
-
-### Antigravity resolution order
-
-When `run-plan` selects a model for Antigravity (highest wins):
-
-1. `--model <id>` CLI flag
-2. TODO `model:`
-3. Attended TTY: interactive `agy models` menu
-4. Runtime-native default (omit Ralph `--model`)
-
-Saved `ralph models` entries do not apply to Antigravity.
-
-**Non-interactive:** Claude/Codex runs use the first saved model when CLI/TODO pins are unset; they fail only when nothing resolves and a model is required by the invoke path. Add a saved default with `ralph models add <runtime> <id>`, or pass `--model`. Cursor/OpenCode/Antigravity non-interactive runs require `--model` or an equivalent pin. For Antigravity, the model must be an exact display string from `agy models` so Ralph can pass it to `agy --model "<exact model string from agy models>"` unchanged.
+Graph, orchestration, and workflow runs reject a global `--model`; their order
+is stage or voter `model:` > saved runtime model > runtime-native default.
+Roles and bundled workflows never supply a model. Antigravity still receives
+the exact display string returned by `agy models` when a model is selected.
 
 ## Cursor-specific
 
@@ -331,11 +412,10 @@ Saved `ralph models` entries do not apply to Antigravity.
 | `CLAUDE_PLAN_CLI` | Claude Code CLI executable. |
 | `CLAUDE_PLAN_NO_ALLOWED_TOOLS` | `1` omits `--allowedTools`. |
 | `CLAUDE_PLAN_ALLOWED_TOOLS` | Overrides default tool list (comma-separated or as CLI expects). |
-| `CLAUDE_TOOLS_FROM_AGENT` | Tools string from agent config when not overridden. |
 | `RALPH_CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS` | When `1` (default), passes `--exclude-dynamic-system-prompt-sections` only when Ralph does not pass `--system-prompt` (resume/reset turns with empty `PROMPT_STATIC`). Claude ignores this flag when `--system-prompt` is supplied; fresh/checkpoint caching uses `--system-prompt "$PROMPT_STATIC"` instead. |
-| `RALPH_CLAUDE_MAX_BUDGET_USD` / `RALPH_AGENT_MAX_BUDGET` | Optional budget caps passed as `--max-budget-usd` when explicitly set. Ralph does not impose a Claude budget cap by default. A prebuilt agent's optional `max_budget_usd` config supplies `RALPH_AGENT_MAX_BUDGET`; `RALPH_CLAUDE_MAX_BUDGET_USD` takes precedence. |
+| `RALPH_CLAUDE_MAX_BUDGET_USD` | Optional Claude budget cap passed as `--max-budget-usd` when explicitly set. Ralph does not impose a Claude budget cap by default. |
 | `CLAUDE_PLAN_BARE` | `1`/truthy enables `claude --bare` (also via `--claude-bare`), `0` disables it (also via `--no-claude-bare`). Upstream says `--bare` "skips hooks, LSP, plugin sync, attribution, auto-memory, prefetches, keychain reads, and CLAUDE.md auto-discovery." This axis defaults to `0` and should be treated as an opt-in API-key mode. `CLAUDE_PLAN_MINIMAL` defaults to `1` and enables auth-safe flag composition (`--disable-slash-commands`, `--strict-mcp-config`, `--mcp-config '{"mcpServers":{}}'`, `--setting-sources project,local`, `--tools ...`). When reset mode is actively using a reset command, Ralph omits `--disable-slash-commands` so the reset command can run. `CLAUDE_PLAN_MINIMAL_TOOLS` defaults to `Bash,Read,Edit,Write` and overrides the tools list used in minimal mode. |
-| `CLAUDE_PLAN_MINIMAL_DISABLE_MCP` | When `1` (default) and Claude minimal mode is active, Ralph passes `--strict-mcp-config` and an empty `--mcp-config`. Set to `0` or use `--claude-allow-mcp` so project-defined MCP servers still load while other minimal flags remain. `--no-claude-allow-mcp` sets `1` explicitly. |
+| `CLAUDE_PLAN_MINIMAL_DISABLE_MCP` | Explicit override for how Claude minimal mode composes MCP discovery. Explicit `1` (also `--no-claude-allow-mcp`) locks down with `--strict-mcp-config` and an empty `--mcp-config`; explicit `0` (also `--claude-allow-mcp`) permits native MCP discovery. |
 | `CLAUDE_PLAN_PERMISSION_MODE` | Claude permission mode passed to `claude --permission-mode` (also via `--claude-permission-mode`). Allowed values: `default`, `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `plan`. Default: omit the flag and let Claude use its own default. Modes such as `auto`, `bypassPermissions`, and `dontAsk` can skip or auto-approve prompts, so use them only in trusted workspaces. |
 
 ## Antigravity-specific
@@ -350,8 +430,6 @@ Saved `ralph models` entries do not apply to Antigravity.
 `agy` reads project configuration from `.agents/` (agents, rules, skills), not `.antigravity/`. Ralph invokes headless prompts with `agy --print --output-format stream-json`, so plan logs show live tool and response events; it also widens `agy --print-timeout` to the per-invocation timeout.
 
 Ralph records the conversation id from the stream immediately, then confirms it from `${RALPH_GEMINI_HOME:-~/.gemini}/antigravity-cli/cache/last_conversations.json` after each TODO. It stores the id at `.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.antigravity.txt`; the next TODO resumes that conversation with `agy --conversation <id>`, keeping agy's session-tied prompt cache warm.
-
-Because `agy` is a TUI-first CLI, its text-mode piped stdout can carry ANSI cursor-control escapes and animated spinner/progress frames (redrawn in place with carriage returns). Ralph still sanitizes that fallback output before it reaches the TUI and compact plan log. In stream-json mode, Ralph renders only live response and tool events, and preserves the verbatim stream when `RALPH_PLAN_RAW_OUTPUT_LOG=1` is set. `agy` 1.1.9 reports per-step token and cache-read usage, which Ralph records when those events are present.
 
 ## Orchestrator
 
@@ -391,7 +469,6 @@ Single selector for Ralph tooling (MCP injection, proxy catalog, prompt guidance
 | Variable | Purpose |
 |----------|---------|
 | `RALPH_MODE` | `no`, `native`, `ralph`, or `hybrid`. Same as `--ralph-mode`. |
-| `RALPH_PROMPT_STABLE_PREFIX` | Cache-friendly prompt ordering. Default follows the rollout convention: enabled in `ralph`/`hybrid` unless set to `0`, disabled in `no`/`native` unless set to `1` (invalid values fail early). When enabled, every non-Claude runtime (Cursor, Codex, OpenCode, Antigravity) places the byte-identical stable block (agent context + namespace + guidance) before the per-TODO volatile text so the shared prefix is reused across TODOs. When disabled, OpenCode keeps its existing stable-first order and Cursor/Codex/Antigravity keep the legacy stable-last order. Claude always passes the stable block via `--system-prompt`. The stable-prefix byte count and a content-free fingerprint are recorded on invocation usage records (`stable_prefix_bytes`, `stable_prefix_fingerprint`). |
 | `RALPH_REASONING_EFFORT` | Per-agent and per-stage reasoning effort mapping. Default follows the rollout convention: enabled in `ralph`/`hybrid` unless set to `0`, disabled in `no`/`native` unless set to `1` (invalid values fail early). Portable values: `low`, `medium`, `high`, `xhigh`, `max`, `inherit`. Precedence: `--reasoning-effort` / `PLAN_REASONING_EFFORT_CLI` > runtime env (`CLAUDE_PLAN_REASONING_EFFORT`, `CODEX_PLAN_REASONING_EFFORT`, `CURSOR_PLAN_REASONING_EFFORT`, `OPENCODE_PLAN_REASONING_EFFORT`, `ANTIGRAVITY_PLAN_REASONING_EFFORT`, including orchestration stage overrides) > agent `reasoning_effort` in frontmatter/config > `inherit`. Claude maps supported values to `--effort` after capability detection. Codex maps to `model_reasoning_effort` via `exec --config` when the installed CLI accepts that key; otherwise logs once and uses `inherit`. Cursor, OpenCode, and Antigravity log once and use `inherit` until an adapter exposes a supported control. Invocation usage records include `reasoning_effort_resolved` and `reasoning_effort_applied`. |
 | `RALPH_CLAUDE_SPECULATIVE_CACHE_WARM` | Speculative Claude prompt-cache warming during the post-verification idle window. **Default off everywhere** (including `ralph`/`hybrid`); set to `1` to opt in. Ralph probes the installed Claude CLI for both `--cache-control` (explicit cache breakpoint) and `--max-output-tokens` (bounded output). Claude Code 2.1.x-style surfaces without `cache_control` report unsupported and perform no warm request. When enabled and supported, Ralph fires a bounded background warm using the stable `--system-prompt` prefix and records usage with `invocation_kind=speculative_cache_warm` separately from productive invocations. Invalid values fail early. |
 | `RALPH_CONTINUATION_SUMMARY` | Between-TODO continuation summary. Default follows the rollout convention: enabled in `ralph`/`hybrid` unless set to `0`, disabled in `no`/`native` unless set to `1` (invalid values fail early). When enabled, Ralph stores runner-verifiable state at `.ralph-workspace/sessions/<plan-key>/continuation-summary.json` and injects a deterministic Markdown block after the stable prompt prefix and before the current TODO (never before the first TODO). Disabled mode preserves current prompts and creates no summary state. Invocation usage records include `continuation_summary_bytes`, `continuation_summary_entry_count`, and `continuation_summary_truncation_count` (content-free metrics). |
@@ -406,9 +483,6 @@ Single selector for Ralph tooling (MCP injection, proxy catalog, prompt guidance
 | `RALPH_CONTINUATION_SUMMARY_GROUP_WINDOW` | Fixed TODO window size for deterministic consolidation when `RALPH_CONTINUATION_SUMMARY_GROUP_BY=window` (default `5`). |
 | `RALPH_CONTINUATION_SUMMARY_GROUP_BY` | Consolidation grouping mode: `window` (ordinal/line windows) or `stage` (orchestration `RALPH_STAGE_ID`). Default `window`. |
 | `RALPH_CONTINUATION_SUMMARY_MAX_RENDER_BYTES` | Max bytes for the rendered continuation Markdown block when hierarchical mode is enabled (default `16384`). Omitted sections are listed explicitly in the block. |
-| `RALPH_PROGRESSIVE_CONTEXT` | Progressive rule/skill disclosure for prebuilt agent context. Default follows the rollout convention: enabled in `ralph`/`hybrid` unless set to `0`, disabled in `no`/`native` unless set to `1` (invalid values fail early). When enabled, rules with `alwaysApply: true` always load in full in the stable prompt; optional rules and skills expose Tier 1 metadata (name, description, globs, path) in the stable prompt and load full bodies only when BM25-ranked as relevant or explicitly mentioned in the TODO (volatile prompt). Malformed or missing metadata falls back to legacy full loading with a warning. Native Claude `--agent` passthrough skips Ralph context assembly entirely. Set to `0` to restore legacy full loading. |
-| `RALPH_PROGRESSIVE_CONTEXT_THRESHOLD` | Minimum BM25 score for selecting an optional rule or skill body into the volatile prompt (default `1.5`). Invalid values fall back to the default. |
-| `RALPH_PROGRESSIVE_CONTEXT_MAX_ITEMS` | Maximum optional rule/skill bodies selected per TODO after explicit TODO mentions (default `8`). Invalid or non-positive values fall back to the default. |
 | `RALPH_PLAN_MEMORY` | Per-plan MCP memory store (`ralph_proxy_memory_*`). Default follows the rollout convention: enabled in `ralph`/`hybrid` unless set to `0`, disabled in `no`/`native` unless set to `1` (invalid values fail early). Memory lives under `.ralph-workspace/memory/<plan-key>/`, is isolated to the active plan key and state root, and treats stored content as untrusted model-authored data. Disabled mode advertises no memory tools and writes no memory directory. |
 | `RALPH_PLAN_MEMORY_MAX_ENTRIES` | Max memory entries per plan (default `100`). Invalid or non-positive values fall back to the default. |
 | `RALPH_PLAN_MEMORY_MAX_BYTES_PER_ENTRY` | Max bytes per memory entry (default `65536`). |
@@ -429,25 +503,29 @@ Operator guide (per-runtime setup, troubleshooting): [TOOLING.md](TOOLING.md#nat
 
 Native adapters activate automatically only after you explicitly select `native` or `hybrid`. When Ralph mode is **`ralph`** or **`hybrid`**, Ralph auto-enables `RALPH_PROXY_SHELL_COMPACT=1` unless you already set the variable (opt out with `RALPH_PROXY_SHELL_COMPACT=0`). When Ralph mode is **`native`** or **`hybrid`**, Ralph auto-enables `RALPH_BASH_COMPACT=1` unless you already set the variable (opt out with `RALPH_BASH_COMPACT=0`; Claude PostToolUse:Bash path only). See [TOOLING.md](TOOLING.md#enabling-and-disabling).
 
-### Native runtime configuration preservation
+### Native runtime configuration ownership
 
-Ralph preserves each runtime's native user, project, and local/private configuration chain. Configurations are discovered from the Ralph project root, not the state root or agent workspace. All mutations use reversible workspace overlays or temporary config files. Byte-exact originals are restored on success, failure, timeout, and signal cleanup.
+The selected runtime launches its normal primary/default agent. Native user,
+project, and local/private configuration owns rules, skills, hooks, plugins,
+MCP servers, permissions, memory, and runtime-native subagents. Ralph does not
+turn a role into an agent or inject role metadata into native configuration.
+Configurations are discovered from the Ralph project root, not the state root
+or agent workspace. Ralph may add only its protected `ralph` MCP server for the
+selected Ralph mode. All mutations use reversible workspace overlays or
+temporary config files, and byte-exact originals are restored on success,
+failure, timeout, and signal cleanup.
 
 | Runtime | Native config sources (precedence order) | Ralph additions |
 |---------|------------------------------------------|-----------------|
-| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Agent `mcp_servers` merged over ambient, then Ralph's protected `ralph` server in `ralph`/`hybrid` mode |
-| **Cursor** | `.cursor/` rules, skills, hooks, settings; existing `.cursor/mcp.json` | Agent `mcp_servers` merged with agent precedence, then Ralph's protected `ralph` server |
-| **Codex** | `~/.codex/config.toml`, trusted project `.codex/config.toml` (if project trusted) | Agent `mcp_servers` translated to `--config mcp_servers.<name>.*` overrides after native load |
-| **OpenCode** | Global, custom, project `opencode.json` (JSONC preserved) | Agent `mcp_servers` merged into temporary `OPENCODE_CONFIG` with native settings preserved |
-| **Antigravity** | `.agents/agents.md`, rules, skills, workflows; existing `.agents/mcp_config.json` | Agent `mcp_servers` merged into temporary `ANTIGRAVITY_CONFIG` only when needed |
+| **Claude** | `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, user/global rules, skills, hooks, plugins, permissions, memory | Ralph layers its protected `ralph` server in `ralph`/`hybrid` mode |
+| **Cursor** | `.cursor/` rules, skills, hooks, settings, and existing `.cursor/mcp.json` | Ralph layers its protected `ralph` server |
+| **Codex** | `~/.codex/config.toml` and trusted project `.codex/config.toml` | Ralph adds per-run `mcp_servers.ralph.*` overrides when enabled |
+| **OpenCode** | Global, custom, and project `opencode.json` (JSONC preserved) | Ralph merges its protected `ralph` server into a temporary config when enabled |
+| **Antigravity** | `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json` | Ralph uses a temporary config only when its protected server is needed |
 
-**Precedence** (highest to lowest): Native ambient > Agent definitions > Ralph's protected `ralph` server. Agent definitions with the same name as ambient servers override the ambient definition.
-
-**Reserved name**: The server name `ralph` is reserved; agents cannot reference, redefine, or replace it.
-
-**Secret policy**: Credential values in portable definitions must use `${ENV_VAR}` references. Literal secrets are rejected at validation.
-
-**Failure behavior**: Unresolved references, invalid definitions, missing environment variables, or attempts to use the reserved `ralph` name cause validation failures before model invocation. Error messages include the runtime, agent, missing server/env name, and searched source paths.
+**MCP precedence** is native ambient configuration first, with Ralph's
+protected `ralph` server layered only when the selected mode requires it. A
+role cannot define, override, or reference an MCP server.
 
 See [AGENTS.md](../AGENTS.md) and [TOOLING.md](../docs/TOOLING.md) for full details.
 
@@ -472,8 +550,8 @@ Because `SIGKILL` (or Activity Monitor force-kill) cannot invoke trap handlers, 
 | `RALPH_MCP_PROXY_POLICY_FILE` | Path to a JSON policy file used to override the built-in default (forwarded to the spawned MCP server so it actually takes effect in ralph mode). Use this to tighten or customize tool/shell permissions. |
 | `RALPH_MCP_PROXY_POLICY_INLINE` | Inline JSON policy (same purpose as `RALPH_MCP_PROXY_POLICY_FILE`, no file needed). |
 | `RALPH_PROXY_SHELL_ASYNC` | Defaults `1`. When Ralph MCP proxy tools are active, advertises `ralph_proxy_shell_start/wait/status/read/cancel` as a manual fallback surface for when a human is directly monitoring a long-running job—they are not the primary automation path. Runner-first verification remains the default path for commands proving TODO completion. Prefer `ralph_proxy_shell_wait` as the blocking call when manual monitoring is needed, treat `ralph_proxy_shell_status` as an occasional manual status check (never a polling loop), and inspect/cancel output through `ralph_proxy_shell_read` and `ralph_proxy_shell_cancel`. Set `0` to hide the async shell tools. |
-| `RALPH_PROXY_DEDUPE_READS` | on (default `1`). When proxy owned tools are active, suppress duplicate `ralph_proxy_read` responses for identical path/offset/limit when file size and mtime are unchanged within a single MCP server process. Returns a compact message with the prior `resultId` instead of replaying the file body. Set `0` to disable. |
-| `RALPH_PROXY_DEDUPE_SEARCH` | on (default `1`). When proxy owned tools are active, suppress duplicate `ralph_proxy_grep` and `ralph_proxy_glob` responses for identical canonicalized arguments while the in-process mutation counter is unchanged. A duplicate returns a compact envelope with the prior `resultId` instead of replaying the body; if the first response was small and had no `resultId`, the proxy stores it and returns a new `resultId`. Set `0` to disable. |
+| `RALPH_PROXY_DEDUPE_READS` | on (default `1`). When proxy owned tools are active, identical `ralph_proxy_read` calls for the same path/offset/limit within a single MCP server process reuse the prior response when file size and mtime are unchanged. A repeat returns the same body with a one-line prefix `(repeat of an earlier identical read in this session; file unchanged)`; nothing is withheld. Set `0` to disable. |
+| `RALPH_PROXY_DEDUPE_SEARCH` | on (default `1`). When proxy owned tools are active, identical `ralph_proxy_grep` and `ralph_proxy_glob` calls for the same canonicalized arguments reuse the prior response while the in-process mutation counter is unchanged. A repeat returns the same body (including any footer or source-cap notice) with a one-line prefix `(repeat of an earlier identical <grep|glob> in this session; no writes since)`; nothing is withheld. Set `0` to disable. |
 | `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS` | Max operations per `ralph_proxy_batch` call (default `8`). |
 | `RALPH_MCP_PROXY_BATCH_PREVIEW_CHARS` | Max preview characters per operation in `ralph_proxy_batch` results (default `200`). |
 | `RALPH_APPROVAL_TIMEOUT` | How long the unified MCP server waits for operator-approved tool calls before timing out. Defaults to `120` seconds and is raised to `RALPH_APPROVAL_TIMEOUT_CLAUDE` or `RALPH_APPROVAL_TIMEOUT_CODEX` (default `300`) for Claude and Codex so their CLI timeouts survive the approval wait; Cursor keeps the shorter window and relies on progress notifications. |
@@ -495,7 +573,7 @@ The **built-in default policy is permissive**: `proxyOwnedTools.allowAllCommands
 
 For long commands that cannot be declared as verification, use `ralph_proxy_shell_start` instead of a single blocking `ralph_proxy_shell` call. These async shell tools are a manual fallback surface for when a human is directly monitoring a job—they are not the primary automation path. The runner-first policy still prefers metadata-driven verification, so only fall back to these async helpers when the job truly needs manual intervention. `ralph_proxy_shell_start` returns a `jobId` immediately; use `ralph_proxy_shell_wait` (optionally with `waitSeconds`) as the blocking call to wait for completion. Treat `ralph_proxy_shell_status` as an occasional manual spot check—never use it as a polling loop—inspect output with `ralph_proxy_shell_read`, and cancel with `ralph_proxy_shell_cancel` if needed. The same shell policy and `proxyOwnedTools.shellTimeoutSeconds` limit apply.
 
-When proxy owned tools are active, `ralph_proxy_batch` runs multiple read-only operations (`ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`) in one MCP call. Shell, async shell, edit, write, and repomap are not allowed inside a batch; keep shell invocations separate for policy and side-effect safety. Duplicate `ralph_proxy_grep` and `ralph_proxy_glob` calls can also be suppressed by `RALPH_PROXY_DEDUPE_SEARCH=1` until the next mutating shell or async shell call. Ralph mode prompt guidance advertises batching for independent read/search/glob/result work.
+When proxy owned tools are active, `ralph_proxy_batch` runs multiple read-only operations (`ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`) in one MCP call. Shell, async shell, edit, write, and repomap are not allowed inside a batch; keep shell invocations separate for policy and side-effect safety. With `RALPH_PROXY_DEDUPE_SEARCH=1`, identical `ralph_proxy_grep` and `ralph_proxy_glob` calls until the next mutating shell or async shell call return the prior body with a one-line repeat prefix; nothing is withheld. Ralph mode prompt guidance advertises batching for independent read/search/glob/result work.
 
 ### Tool result storage retention
 
@@ -579,7 +657,7 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RALPH_BASH_COMPACT` | off in `no`/`ralph`; auto `1` in `native`/`hybrid` when unset | When `1`, `true`, `yes`, or `on`, compact native shell tool output via Claude PostToolUse:Bash hook that calls the shared compactors in `bundle/.ralph/bash-lib/compactors.sh`. Ralph sets `RALPH_BASH_COMPACT=1` in `native` and `hybrid` modes unless you already exported the variable; opt out with `RALPH_BASH_COMPACT=0`. Failed hooks must fail open and never block the agent. Only Claude ships a true PostToolUse:Bash adapter. Cursor and Codex use wrapper-based compaction instead (see `RALPH_NATIVE_SHELL_WRAPPER` below). |
+| `RALPH_BASH_COMPACT` | off in `no`/`ralph`; auto `1` in `native`/`hybrid` when unset | When `1`, `true`, `yes`, or `on`, compact native shell tool output via Claude PostToolUse:Bash hook that calls the shared compactors in `bundle/.ralph/bash-lib/compactors.sh`. Ralph sets `RALPH_BASH_COMPACT=1` in `native` and `hybrid` modes unless you already exported the variable; on Claude, opt out with `RALPH_BASH_COMPACT=0`. Failed hooks must fail open and never block the agent. Only Claude ships a true PostToolUse:Bash adapter. Cursor and Codex use wrapper-based compaction instead (see `RALPH_NATIVE_SHELL_WRAPPER` below). |
 | `RALPH_BASH_COMPACT_LOG` | unset | Optional JSONL audit path for each PostToolUse:Bash compaction attempt (Claude only): `commandHash`, `originalBytes`, `compactedBytes`, `storagePath` (when stored), `compactionSkipped`, `planKey`, `workspace`. No log lines when compaction is off or the event is not PostToolUse:Bash with a `tool_response`. |
 
 ### Native-hook fail-open debug logging (`RALPH_NATIVE_HOOK_DEBUG_LOG`)
@@ -590,7 +668,18 @@ This path does not depend on runtime hooks or plugins. It is the supported compa
 
 ### Live fixture provenance (native-result-compact tool shapes)
 
-Native-result compaction recognizes tool-response shapes captured from live runtime payloads rather than assumed schemas. Fixtures and their documented discrepancies live under [`tests/fixtures/native-hook/`](../tests/fixtures/native-hook/) (`read.json`, `grep-content.json`, `grep-files-with-matches.json`, `glob.json`, `bash.json`, `provenance.json`). Notable shape facts: Read's text lives at `tool_response.file.content`; Bash merges stdout and stderr into `tool_response.stdout`, and `tool_response.stderr` is always empty in the captured payloads. `ralph_native_hook_extract_tool_output_text` and the update-emission helpers (`ralph_native_hook_emit_claude_exploration_updated_output`, `ralph_native_hook_emit_cursor_updated_tool_output`) read and write these exact paths in place rather than adding a synthetic top-level `content` field, so shape is preserved end-to-end.
+Native-result compaction recognizes tool-response shapes captured from live runtime payloads rather than assumed schemas. Fixtures and their documented discrepancies live under [`tests/fixtures/native-hook/`](../tests/fixtures/native-hook/) (`read.json`, `grep-content.json`, `grep-files-with-matches.json`, `glob.json`, `bash.json`, `bash-background.json`, `provenance.json`). Notable shape facts: Read's text lives at `tool_response.file.content`; Bash merges stdout and stderr into `tool_response.stdout`, and `tool_response.stderr` is always empty in the captured payloads. `ralph_native_hook_extract_tool_output_text` and the update-emission helpers (`ralph_native_hook_emit_claude_exploration_updated_output`, `ralph_native_hook_emit_cursor_updated_tool_output`) read and write these exact paths in place rather than adding a synthetic top-level `content` field, so shape is preserved end-to-end.
+
+### Claude Bash duration and PreToolUse background injection (spike)
+
+Live headless spikes against a throwaway temp project (same capture method as [`tests/fixtures/native-hook/provenance.json`](../tests/fixtures/native-hook/provenance.json)).
+
+| Fact | Status | CLI version | Observation date | Evidence |
+|------|--------|-------------|------------------|----------|
+| PostToolUse payload carries top-level `.duration_ms`, plus `.tool_use_id` and `.session_id` | **PROVEN** | 2.1.207 (first capture); reconfirmed **2.1.260** | 2026-07-11; reconfirmed **2026-09-04** | [`bash.json`](../tests/fixtures/native-hook/bash.json) (`duration_ms`: 11180 on 2.1.207; 3915 on a short printf reconfirm) |
+| PreToolUse `hookSpecificOutput.updatedInput` with `run_in_background: true` (command preserved) is honored by the CLI | **PROVEN** | **2.1.260** | **2026-09-04** | [`bash-background.json`](../tests/fixtures/native-hook/bash-background.json): PostToolUse retains `tool_input.run_in_background`, `tool_response.backgroundTaskId` is set, stdout/stderr stay empty at launch, and `duration_ms` is launch time rather than sleep wall clock |
+
+`updatedInput` already replaces the whole `tool_input` object for `command` rewrites; this spike shows the same path can inject the native background flag and the CLI treats it as a real background Bash call (model receives a shell id / `BashOutput` path).
 
 ### Grep source capture caps (`RALPH_MCP_PROXY_POLICY_OWNED_GREP_SOURCE_*`)
 
@@ -656,8 +745,9 @@ Optimization-event counts (`optimization_events_total`, per-path event counts) d
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RALPH_COMPACT_GENERIC_FALLBACK` | `0` | Set to `1` to compact unknown large shell output with the generic `generic_large` fallback. It is disabled by default because unknown output can be source data. |
+| `RALPH_COMPACT_GENERIC_FALLBACK` | `0` | Set to `1` to compact unknown large shell output with the generic `generic_large` fallback. It is disabled by default because unknown output can be source data; even when enabled, the source denylist (`git diff`, `git show`, `git log`, `grep`/`rg`, `find`, `ls`, and `tree`) is never compacted. |
 | `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES` | `8192` | Byte threshold used only when `RALPH_COMPACT_GENERIC_FALLBACK=1`. Non-integer or negative values fall back to `8192`. |
+| `RALPH_COMPACT_FAILURE` | on | Failure-output compaction always runs for non-zero exits, but never compacts the source denylist (`git diff`, `git show`, `git log`, `grep`/`rg`, `find`, `ls`, and `tree`). |
 
 ### Wrapper-based native shell compaction (`RALPH_NATIVE_SHELL_WRAPPER`)
 
@@ -736,7 +826,7 @@ These Ralph feature gates follow the [rollout convention](#ralph-mode-plan-runs)
 | `RALPH_TOOL_EVAL` | Set to `live` for live cross-runtime tool-eval harness (offline replay is the CI default). |
 | `RALPH_TOOL_EVAL_FORCE_LIVE` | Set to `1` to allow live tool-eval in CI (default blocked). |
 
-Related variables documented elsewhere in this file: `RALPH_PROMPT_STABLE_PREFIX`, `RALPH_CONTINUATION_SUMMARY*`, `RALPH_PROGRESSIVE_CONTEXT*`, `RALPH_PLAN_MEMORY*`, `RALPH_MCP_CONTEXTUAL_SEARCH`, `RALPH_REASONING_EFFORT`, `RALPH_CLAUDE_SPECULATIVE_CACHE_WARM` (default off; capability-gated warm path).
+Related variables documented elsewhere in this file: `RALPH_CONTINUATION_SUMMARY*`, `RALPH_PLAN_MEMORY*`, `RALPH_MCP_CONTEXTUAL_SEARCH`, `RALPH_REASONING_EFFORT`, `RALPH_CLAUDE_SPECULATIVE_CACHE_WARM` (default off; capability-gated warm path).
 
 ## Knowledge graph (experimental, disabled by default)
 
