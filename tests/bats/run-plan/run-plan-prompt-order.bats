@@ -235,7 +235,7 @@ raise SystemExit(0 if not cs.hierarchical_continuation_enabled() else 1)
   PROMPT="todo text only"
   PROMPT_STATIC="STATIC-BLOCK"
   apply_merge "cursor" "$PROMPT" "$PROMPT_STATIC"
-  [ "$PROMPT" = "todo text only"$'\n'"STATIC-BLOCK" ]
+  [ "$PROMPT" = "STATIC-BLOCK"$'\n\n'"todo text only" ]
 }
 
 @test "progressive-context gate follows rollout defaults" {

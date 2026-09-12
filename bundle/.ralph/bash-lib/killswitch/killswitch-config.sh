@@ -189,6 +189,7 @@ killswitch_normalize_config_file() {
     if jq -e '
       type == "object"
       and .schema_version == 2
+      and ((keys - ["schema_version","enabled","dry_run","banned_tools","tool_denylist","allowed_tools","banned_paths","allowed_paths","allowed_commands","allowed_patterns","denied_argument_patterns","custom_rules"]) | length == 0)
       and ((.enabled | type) == "boolean" or (.enabled | not))
       and ((.dry_run | type) == "boolean" or (.dry_run | not))
       and ((.banned_tools | type) == "array" or (.banned_tools | not))
@@ -196,9 +197,9 @@ killswitch_normalize_config_file() {
       and ((.custom_rules | type) == "array" or (.custom_rules | not))
       and ((.denied_argument_patterns | type) == "array" or (.denied_argument_patterns | not))
     ' "$config_file" >/dev/null 2>&1; then
-      jq -c '{
+      jq '{
         schema_version: 2,
-        enabled: (.enabled // true),
+        enabled: (if .enabled == null then true else .enabled end),
         dry_run: (.dry_run // false),
         banned_tools: (.banned_tools // []),
         tool_denylist: (.tool_denylist // []),
