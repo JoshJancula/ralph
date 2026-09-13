@@ -1,0 +1,17 @@
+{
+  "mcpServers": [
+    {
+      "command": [
+        "bash",
+        "/path/to/workspace/.ralph/mcp-server.sh"
+      ],
+      "env": {
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        "RALPH_MCP_WORKSPACE": "/path/to/workspace"
+      },
+      "label": "Ralph plan runner host",
+      "name": "ralph-mcp",
+      "stdio": true
+    }
+  ]
+}

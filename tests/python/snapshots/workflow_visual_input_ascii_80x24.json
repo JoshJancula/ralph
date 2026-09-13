@@ -1,0 +1,470 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "Ralph fixture-seq-input  bug-fix | Sequential",
+    "Task  Fix the timeout",
+    "WAITING  Elapsed 0s  Updated just now  Stages 0/1",
+    "[------------------------------------------] 0/1",
+    "the run is waiting for the operator to answer an input request",
+    "Stages",
+    "> waiting    implement",
+    "+- Selected stage -------------------------------------------------------------+",
+    "| implement  executable  waiting                                               |",
+    "| Live tail  ralph workflow logs fixture-seq-input --stage implement --follow  |",
+    "| Next  answer the outstanding request                                         |",
+    "| Attempt  1  Duration  1m 0s                                                  |",
+    "| Blocker  input                                                               |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "+------------------------------------------------------------------------------+"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-seq-input",
+        "role": "path",
+        "width": 17
+      },
+      {
+        "col": 25,
+        "text": "bug-fix",
+        "role": "heading",
+        "width": 7
+      },
+      {
+        "col": 32,
+        "text": " | Sequential",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Fix the timeout                                                           ",
+        "role": "default",
+        "width": 74
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "WAITING",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 17,
+        "text": "0s",
+        "role": "default",
+        "width": 2
+      },
+      {
+        "col": 19,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 29,
+        "text": "just now",
+        "role": "default",
+        "width": 8
+      },
+      {
+        "col": 37,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 46,
+        "text": "0/1                               ",
+        "role": "default",
+        "width": 34
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[------------------------------------------] ",
+        "role": "muted",
+        "width": 45
+      },
+      {
+        "col": 45,
+        "text": "0/1",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "the run is waiting for the operator to answer an input request",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Stages",
+        "role": "heading",
+        "width": 6
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> waiting    implement                                                          ",
+        "role": "focus",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "-------------------------------------------------------------+",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "implement",
+        "role": "heading",
+        "width": 9
+      },
+      {
+        "col": 13,
+        "text": "executable",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 25,
+        "text": "waiting",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-seq-input --stage implement --follow",
+        "role": "command",
+        "width": 64
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 8,
+        "text": "answer the outstanding request",
+        "role": "command",
+        "width": 30
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "1m 0s                                                  ",
+        "role": "default",
+        "width": 55
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Blocker  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "input",
+        "role": "warning",
+        "width": 5
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}

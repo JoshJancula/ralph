@@ -81,6 +81,65 @@ _run_plan_invoke_opencode_stage_workspace_plugin() {
   printf '%s' "$plugin_dest"
 }
 
+# OpenCode may update its project-local plugin package metadata to the running
+# CLI version before the model is invoked.  Those files are runtime state, not
+# agent output: snapshot them into the ordinary overlay journal and restore
+# them before graph write-scope verification observes the workspace.
+run_plan_invoke_opencode_package_metadata_prepare() {
+  local workspace="" target backup_var existed_var name
+  workspace="$(_runtime_overlay_opencode_effective_workspace)" || return 0
+  mkdir -p "$workspace/.opencode" || return 1
+
+  for name in package.json package-lock.json bun.lock; do
+    target="$workspace/.opencode/$name"
+    backup_var="OPENCODE_PLAN_PACKAGE_${name//[^A-Za-z0-9]/_}_BACKUP"
+    existed_var="OPENCODE_PLAN_PACKAGE_${name//[^A-Za-z0-9]/_}_EXISTED"
+    printf -v "$existed_var" '%s' 0
+    printf -v "$backup_var" '%s' ""
+    if [[ -f "$target" ]]; then
+      printf -v "$existed_var" '%s' 1
+      if declare -F runtime_overlay_record_original_file >/dev/null 2>&1; then
+        runtime_overlay_record_original_file "$target" "$backup_var" 1
+      else
+        local fallback_backup
+        fallback_backup="$(mktemp "${TMPDIR:-/tmp}/ralph-opencode-${name//[^A-Za-z0-9]/_}-XXXXXX")"
+        cp -p "$target" "$fallback_backup" || return 1
+        printf -v "$backup_var" '%s' "$fallback_backup"
+      fi
+    elif declare -F runtime_overlay_record_generated_file >/dev/null 2>&1; then
+      runtime_overlay_record_generated_file "$target"
+    fi
+    export "$backup_var" "$existed_var"
+  done
+  OPENCODE_PLAN_PACKAGE_METADATA_PREPARED=1
+  export OPENCODE_PLAN_PACKAGE_METADATA_PREPARED
+}
+
+run_plan_invoke_opencode_package_metadata_cleanup() {
+  [[ "${OPENCODE_PLAN_PACKAGE_METADATA_PREPARED:-0}" == 1 ]] || return 0
+  local workspace="" target backup_var existed_var backup existed name rc=0
+  workspace="$(_runtime_overlay_opencode_effective_workspace)" || return 0
+  for name in package.json package-lock.json bun.lock; do
+    target="$workspace/.opencode/$name"
+    backup_var="OPENCODE_PLAN_PACKAGE_${name//[^A-Za-z0-9]/_}_BACKUP"
+    existed_var="OPENCODE_PLAN_PACKAGE_${name//[^A-Za-z0-9]/_}_EXISTED"
+    backup="${!backup_var:-}"
+    existed="${!existed_var:-0}"
+    if [[ "$existed" == 1 ]]; then
+      if [[ -f "$backup" ]]; then
+        cp -p "$backup" "$target" || rc=1
+      else
+        rc=1
+      fi
+    else
+      rm -f "$target" || rc=1
+    fi
+    unset "$backup_var" "$existed_var"
+  done
+  unset OPENCODE_PLAN_PACKAGE_METADATA_PREPARED
+  return "$rc"
+}
+
 _runtime_overlay_opencode_record_tool_access_telemetry() {
   local mode="${RALPH_MODE:-no}"
   case "$mode" in
@@ -241,25 +300,46 @@ run_plan_invoke_opencode_native_hooks_cleanup() {
   if [[ -n "${OPENCODE_PLAN_STAGED_PLUGIN_PATH:-}" && -f "$OPENCODE_PLAN_STAGED_PLUGIN_PATH" ]]; then
     rm -f "$OPENCODE_PLAN_STAGED_PLUGIN_PATH"
   fi
+  run_plan_invoke_opencode_package_metadata_cleanup || true
   unset OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE OPENCODE_PLAN_STAGED_PLUGIN_PATH
 }
 
 run_plan_invoke_opencode_native_hooks_prepare() {
   local requested="${RALPH_NATIVE_HOOKS:-}"
-  local overlay_mode="${RALPH_OPTIMIZATION_MODE:-}"
+  local tooling_profile="${RALPH_MODE:-}"
   local effective_workspace=""
   local mutation_note="OpenCode plugin loaded from workspace .opencode/plugins/; tool.execute.after output.output mutation is unproven on the headless run path; use MCP compaction (RALPH_PROXY_SHELL_COMPACT=1) for reliable token reduction"
+  local tier_selected="" tier_reason=""
 
   OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE=0
   export OPENCODE_PLAN_NATIVE_HOOKS_ACTIVE
+
+  if declare -F ralph_bg_tier_probe_apply >/dev/null 2>&1 \
+    && [[ -z "${RALPH_BG_TIER_SELECTED:-}" ]]; then
+    ralph_bg_tier_probe_apply "opencode" >/dev/null || true
+  fi
+  tier_selected="${RALPH_BG_TIER_SELECTED:-invocation}"
+  tier_reason="${RALPH_BG_TIER_REASON:-opencode-session-idle-not-a-turn-gate-client-injection-unproven}"
+  export RALPH_BG_TIER_SELECTED="$tier_selected"
+  export RALPH_BG_TIER_REASON="$tier_reason"
+  if declare -F runtime_overlay_set_bg_tier >/dev/null 2>&1; then
+    runtime_overlay_set_bg_tier "$tier_selected"
+  fi
+  if declare -F runtime_overlay_set_bg_tier_reason >/dev/null 2>&1; then
+    runtime_overlay_set_bg_tier_reason "$tier_reason"
+  fi
+  if [[ "$tier_selected" == "invocation" ]] \
+    && declare -F runtime_overlay_add_capability >/dev/null 2>&1; then
+    runtime_overlay_add_capability "opencode-bg-tier-invocation-fallback"
+  fi
 
   _runtime_overlay_opencode_record_tool_access_telemetry
 
   if declare -F runtime_overlay_set_native_hooks_requested >/dev/null 2>&1; then
     runtime_overlay_set_native_hooks_requested "${requested:-unset}"
   fi
-  if [[ -n "$overlay_mode" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
-    runtime_overlay_set_overlay_mode "$overlay_mode"
+  if [[ -n "$tooling_profile" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
+    runtime_overlay_set_overlay_mode "$tooling_profile"
   fi
 
   if ! ralph_native_hooks_want_activation; then

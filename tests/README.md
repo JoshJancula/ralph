@@ -79,7 +79,7 @@ bin/bats -T tests/bats/run-plan/run-plan-unified.bats
 
 ```bash
 bash scripts/capture-bats-timing.sh
-bash scripts/capture-bats-timing.sh -j 8
+bash scripts/capture-bats-timing.sh -j 4
 ```
 
 Output: `.ralph-workspace/logs/bats-timing/runs/<timestamp>/` with symlinks at `latest.json` and `latest.txt`.
@@ -100,7 +100,21 @@ CI installs GNU `parallel` before `bash scripts/run-bats.sh -j 4`.
 
 ### Local / operator-only tests
 
-See `tests/bats/local/README.md`. Not executed by the automated suite.
+See `tests/bats/local/README.md`. Not executed by the automated suite, and a
+direct invocation still requires `RALPH_RUN_REAL_RUNTIME_SMOKES=1`.
+
+### Real-runtime acceptance harnesses
+
+`tests/acceptance/` contains long-running graph acceptance harnesses that use
+authenticated provider CLIs and can consume LLM credits. They are shell scripts,
+not Bats files, so neither `bash scripts/run-bats.sh` nor CI discovers them.
+They also refuse to run unless the command includes their explicit opt-in flag;
+see [tests/acceptance/README.md](acceptance/README.md):
+
+```bash
+bash tests/acceptance/accept-cross-runtime-real-cli.sh --run-real-runtime-acceptance
+bash tests/acceptance/accept-parallel-implementation-real-cli.sh --run-real-runtime-acceptance
+```
 
 ## Test coverage split
 

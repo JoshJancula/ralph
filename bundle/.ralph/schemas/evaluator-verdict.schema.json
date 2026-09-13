@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "feedback"],
+  "required": ["status"],
   "properties": {
     "status": {
       "type": "string",
@@ -11,6 +11,53 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "summary"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "advisory"]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "requiredFix": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "verification": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["open", "fixed", "wontfix"]
+          },
+          "priorFindingId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          }
+        }
       }
     }
   }

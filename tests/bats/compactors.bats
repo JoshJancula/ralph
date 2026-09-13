@@ -40,6 +40,31 @@ assert_compactor_fixture() {
   [ "$actual" = "$expected" ]
 }
 
+assert_compactor_preserves_fixture() {
+  local case_name="$1"
+  local fixture_dir="$FIXTURE_ROOT/$case_name"
+  local fixture_command="" expected_stdout="" expected_stderr="" exit_status=""
+  fixture_command="$(<"$fixture_dir/command.txt")"
+  expected_stdout="$(<"$fixture_dir/stdout.txt")"
+  expected_stderr="$(<"$fixture_dir/stderr.txt")"
+  exit_status="$(<"$fixture_dir/exit_status.txt")"
+
+  run bash -c '
+    source "$1"
+    export RALPH_COMPACT_STDOUT="$2"
+    export RALPH_COMPACT_STDERR="$3"
+    ralph_compact_shell_output "$4" "$5"
+  ' _ "$COMPACTORS_LIB" "$expected_stdout" "$expected_stderr" "$fixture_command" "$exit_status"
+
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | jq -e --arg stdout "$expected_stdout" --arg stderr "$expected_stderr" '
+    .status == "not compacted"
+    and .compacted == false
+    and .stdout == $stdout
+    and .stderr == $stderr
+  '
+}
+
 @test "bats family: successful run matches pinned fixture" {
   assert_compactor_fixture bats-success
 }
@@ -52,12 +77,12 @@ assert_compactor_fixture() {
   assert_compactor_fixture git-status
 }
 
-@test "git diff family: hunks compact to stat summary" {
-  assert_compactor_fixture git-diff-hunks
+@test "git diff source remains verbatim" {
+  assert_compactor_preserves_fixture git-diff-hunks
 }
 
-@test "grep family matches pinned fixture" {
-  assert_compactor_fixture grep-matches
+@test "grep search output remains verbatim" {
+  assert_compactor_preserves_fixture grep-matches
 }
 
 @test "npm test family: passing run matches pinned fixture" {

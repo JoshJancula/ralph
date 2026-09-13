@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "case": "stale-run-recorded-running",
+  "description": "A run ledger still reports status running with a heartbeat far in the past and an owner PID that cannot be validated; classifiers must treat this as stale, not live.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-dddd0004",
+    "status": "running",
+    "heartbeatAt": "2026-08-01T00:00:00Z",
+    "observedAt": "2026-08-12T00:00:00Z",
+    "supervisorPid": 999999,
+    "ownerHostname": "fixture-host",
+    "staleReason": "heartbeat-expired"
+  }
+}

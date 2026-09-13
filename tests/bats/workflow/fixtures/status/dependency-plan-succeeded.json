@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-dep-succeeded","workflowId":"plan-delivery","mode":"dependency","entryKind":"plan","task":"Execute supplied plan","taskProvenance":"plan-overview","sourcePath":"/fixtures/plan-delivery.workflow.md","sourceKind":"bundled","state":"succeeded","inputPath":"/fixtures/input.plan.md","inputPlan":{"originalPath":"/fixtures/original.plan.md","sourcePath":"/fixtures/source.plan.md","manifestPath":"/fixtures/manifest.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","format":"yaml","totalTodos":3,"completedTodos":3,"openTodos":0},"createdAt":"2026-08-27T02:00:00Z","updatedAt":"2026-08-27T02:02:00Z"},
+  "stages": [
+    {"id":"integrate","state":"succeeded","stageKind":"supervisor","attempt":1,"completedTodos":0,"totalTodos":0,"artifacts":["/fixtures/integration.json"],"blocker":null,"createdAt":"2026-08-27T02:01:00Z","updatedAt":"2026-08-27T02:02:00Z"}
+  ],
+  "diagnosis": {"state":"succeeded","reasonCode":"none","summary":"no blocking condition was found","stageId":null,"requestKind":null,"requestId":null,"evidence":[],"retryable":true,"nextAction":null},
+  "nextAction": null
+}

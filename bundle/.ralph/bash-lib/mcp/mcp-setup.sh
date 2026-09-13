@@ -512,12 +512,28 @@ ralph_mcp_proxy_preflight() {
     return 1
   fi
 
-  local missing="" tool_name
+  local missing="" tool_name scope
+  scope="${RALPH_MCP_SCOPE:-operator}"
   for tool_name in $(ralph_mcp_proxy_required_tool_names); do
+    # Restricted graph scopes intentionally hide tools that create top-level
+    # work. Their preflight must validate the reduced catalog rather than
+    # treating the safety policy as a missing-tool regression.
+    if [[ "$scope" != operator ]]; then
+      case "$tool_name" in
+        ralph_run_plan|ralph_orchestrator_run) continue ;;
+      esac
+    fi
     if ! jq -e --arg n "$tool_name" '[.tools[]?.name] | index($n) != null' <<< "$tools_result" >/dev/null 2>&1; then
       missing+=" $tool_name"
     fi
   done
+  if [[ "$scope" == graph-node ]]; then
+    for tool_name in ralph_delegated_run_start ralph_delegated_run_status ralph_delegated_run_wait ralph_delegated_run_result ralph_delegated_run_cancel; do
+      if ! jq -e --arg n "$tool_name" '[.tools[]?.name] | index($n) != null' <<< "$tools_result" >/dev/null 2>&1; then
+        missing+=" $tool_name"
+      fi
+    done
+  fi
   if [[ -n "$missing" ]]; then
     rm -rf "$tmpdir"
     echo "Error: MCP preflight tools/list is missing required tools for RALPH_MODE=${ralph_mode}:${missing}." >&2

@@ -89,6 +89,7 @@ setup() {
   mkdir -p "$WS/.ralph-workspace"
   cp -R "$REPOMAP_FIXTURE/." "$WS/"
   export RALPH_MCP_WORKSPACE="$WS"
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   export RALPH_PLAN_WORKSPACE_ROOT="$WS/.ralph-workspace"
   export RALPH_PLAN_KEY="plan55-proxy-repomap"
   export RALPH_COMPACTORS_LIB_DIR="$REPO_ROOT/bundle/.ralph/bash-lib"

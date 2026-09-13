@@ -70,3 +70,21 @@ H_STUB_PY
 
   [ "$status" -eq 0 ]
 }
+
+@test "ralph_session exact uuid generation compatible with fresh todo-start capture" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  run bash -c '
+    set -euo pipefail
+    ralph_run_plan_log(){ :; }
+    source "$1"
+    RALPH_PLAN_SESSION_STRATEGY=fresh
+    unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID
+    ralph_session_derive_cli_resume
+    printf "cli_resume=%s\n" "${RALPH_PLAN_CLI_RESUME:-}"
+    printf "reason_default=%s\n" "${RALPH_PLAN_INVOCATION_REASON:-unset}"
+  ' _ "$RUN_PLAN_SESSION_FILE"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cli_resume=0"* ]]
+}

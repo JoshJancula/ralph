@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "runtime": "antigravity",
+  "configRoot": ".agents",
+  "mcpFile": "mcp_config.json",
+  "cli": "agy",
+  "printFlag": "--print",
+  "conversationFlag": "--conversation",
+  "modelFlag": "--model",
+  "modelsCommand": "agy models",
+  "pluginCommands": [
+    "list",
+    "import",
+    "install",
+    "uninstall",
+    "enable",
+    "disable",
+    "validate",
+    "link"
+  ],
+  "modelValuePolicy": "opaque-byte-preserved"
+}

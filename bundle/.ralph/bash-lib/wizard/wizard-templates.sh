@@ -22,7 +22,8 @@ _wizard_summary_init_colors() {
 
 # Renders a human-readable summary of the pipeline configuration.
 # Args: 1 pipeline_name, 2 namespace, 3 description, 4 session_resume_enabled, 5... stage entries
-# Global arrays used: stage_ids, stage_runtimes, stage_agents, stage_models, stage_session_strategy,
+# Global arrays used: stage_ids, stage_runtimes, stage_roles, stage_models,
+#                     stage_native_subagents, stage_session_strategy,
 #                     stage_context_budgets, stage_input_sources, stage_handoff_targets,
 #                     parallel_stage_waves, loop_sources, loop_targets, loop_max_iterations
 # Returns: prints summary to stdout.
@@ -48,8 +49,9 @@ wizard_render_summary() {
 
   # Stages table header
   printf '%sStages:%s\n' "$_WIZ_C_BOLD" "$_WIZ_C_RST"
-  printf '  %-12s %-10s %-15s %-20s %-10s %-10s\n' "ID" "Runtime" "Agent" "Model" "Session" "Budget"
-  printf '  %s\n' "${_WIZ_C_DIM}--------------------------------------------------------------------------------${_WIZ_C_RST}"
+  printf '  %-12s %-10s %-15s %-24s %-18s %-10s %-10s\n' \
+    "ID" "Runtime" "Role" "Model source" "Native subagents" "Session" "Budget"
+  printf '  %s\n' "${_WIZ_C_DIM}----------------------------------------------------------------------------------------------------------${_WIZ_C_RST}"
 
   # Stage rows
   local idx=0
@@ -57,17 +59,24 @@ wizard_render_summary() {
     # Extract values from the entry JSON (simplified extraction)
     local stage_id="${stage_ids[$idx]:-}"
     local runtime="${stage_runtimes[$idx]:-}"
-    local agent="${stage_agents[$idx]:-}"
+    local role="${stage_roles[$idx]:-}"
     local model="${stage_models[$idx]:-}"
+    local native_subagents="${stage_native_subagents[$idx]:-off}"
     local session_strategy="${stage_session_strategy[$idx]:-fresh}"
     local budget="${stage_context_budgets[$idx]:-}"
 
     # Truncate long values
-    [[ ${#agent} -gt 15 ]] && agent="${agent:0:12}..."
-    [[ ${#model} -gt 20 ]] && model="${model:0:17}..."
+    [[ ${#role} -gt 15 ]] && role="${role:0:12}..."
+    local model_source="runtime saved/default"
+    if [[ -n "$model" ]]; then
+      model_source="stage override (${model})"
+    fi
+    [[ ${#model_source} -gt 24 ]] && model_source="${model_source:0:21}..."
+    [[ ${#native_subagents} -gt 18 ]] && native_subagents="${native_subagents:0:15}..."
 
-    printf '  %-12s %-10s %-15s %-20s %-10s %-10s\n' \
-      "$stage_id" "$runtime" "$agent" "${model:-(default)}" "$session_strategy" "${budget:-(none)}"
+    printf '  %-12s %-10s %-15s %-24s %-18s %-10s %-10s\n' \
+      "$stage_id" "$runtime" "${role:-(none)}" "$model_source" "$native_subagents" \
+      "$session_strategy" "${budget:-(none)}"
     ((++idx))
   done
   printf '\n'

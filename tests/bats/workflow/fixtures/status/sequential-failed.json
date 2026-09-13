@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-seq-failed","workflowId":"bug-fix","mode":"sequential","entryKind":"task","task":"Fix the timeout","taskProvenance":"workflow","sourcePath":"/fixtures/bug-fix.workflow.md","sourceKind":"project","state":"failed","inputPath":"/fixtures/input.orch.json","inputPlan":null,"createdAt":"2026-08-27T03:00:00Z","updatedAt":"2026-08-27T03:01:00Z"},
+  "stages": [{"id":"implement","state":"failed","stageKind":"executable","attempt":1,"terminalResult":"failed","completedTodos":0,"totalTodos":0,"artifacts":[],"blocker":null,"createdAt":"2026-08-27T03:00:00Z","updatedAt":"2026-08-27T03:01:00Z"}],
+  "diagnosis": {"state":"blocked","reasonCode":"stage-failed","summary":"implement failed and no more specific cause was recorded","stageId":"implement","requestKind":null,"requestId":null,"evidence":["stage implement is failed"],"retryable":false,"nextAction":null},
+  "nextAction": null
+}

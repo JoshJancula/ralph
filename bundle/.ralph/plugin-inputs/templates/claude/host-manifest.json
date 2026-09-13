@@ -1,0 +1,7 @@
+{
+  "id": "{{PLUGIN_ID}}",
+  "runtime": "{{RUNTIME}}",
+  "version": "{{PLUGIN_VERSION}}",
+  "bootstrap": "{{SHARED_BOOTSTRAP_REL}}",
+  "exec": "{{SHARED_EXEC_REL}}"
+}

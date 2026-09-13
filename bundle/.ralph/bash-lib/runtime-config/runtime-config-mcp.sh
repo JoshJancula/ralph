@@ -3,10 +3,13 @@
 #
 # Public interface:
 #   ralph_runtime_config_mcp_script_path -- print python helper path
-#   ralph_runtime_config_mcp_needs_resolve -- true when ambient/agent/ralph overlay work is required
+#   ralph_runtime_config_mcp_needs_resolve -- true when ambient/ralph overlay work is required
 #   ralph_runtime_config_mcp_resolve -- build effective catalog; sets RALPH_RUNTIME_MCP_RESOLVE_PATH on success
 #   ralph_runtime_config_mcp_apply_summary -- push sanitized summary fields into runtime overlay
 #   ralph_runtime_config_mcp_cleanup -- remove ephemeral resolve artifact
+#
+# Precedence: native ambient configuration, then Ralph's protected server when mode enables it.
+# There is no profile/agent MCP layer.
 
 if [[ -n "${RALPH_RUNTIME_CONFIG_MCP_LOADED:-}" ]]; then
   return
@@ -86,33 +89,20 @@ ralph_runtime_config_mcp_needs_resolve() {
   local project_root="${2:-${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}}"
   local _ralph_mode="${RALPH_MODE:-no}"
   # For most runtimes, ralph/hybrid mode requires MCP overlay resolution so the
-  # effective catalog (ambient + agent + Ralph) is applied to the invocation.
+  # effective catalog (ambient + Ralph) is applied to the invocation.
   #
-  # Antigravity is different: it runs natively via `agy` and must receive the
-  # merged effective MCP catalog through a temporary per-run config file
-  # (ANTIGRAVITY_CONFIG) without persisting agent/run overlays.
+  # Antigravity is different: agy receives MCP only through ANTIGRAVITY_CONFIG,
+  # which replaces native `.agents/mcp_config.json` discovery. With no profile
+  # MCP layer, reconstruct only when Ralph's protected server must be injected
+  # (ralph/hybrid or tool_access=ralph). Otherwise leave native discovery untouched.
   if [[ "$runtime" == "antigravity" ]]; then
-    # Native-only runs should not write temporary config files; agy reads
-    # native `.agents/mcp_config.json` directly.
-    local has_agent_additions="0"
-    if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
-      has_agent_additions="1"
-    fi
-    if [[ -n "${PREBUILT_AGENT:-}" ]]; then
-      has_agent_additions="1"
-    fi
-
     case "$_ralph_mode" in
-      ralph|hybrid)
-        # In Ralph mode, per-run overlay is needed only when agent/Ralph MCP
-        # additions exist. Otherwise, keep pure native behavior.
-        [[ "$has_agent_additions" == "1" ]] && return 0 || return 1
-        ;;
-      *)
-        # Outside Ralph mode: only resolve when explicit agent additions exist.
-        [[ "$has_agent_additions" == "1" ]] && return 0 || return 1
-        ;;
+      ralph|hybrid) return 0 ;;
     esac
+    case "${RALPH_AGENT_TOOL_ACCESS:-}" in
+      ralph) return 0 ;;
+    esac
+    return 1
   fi
   case "$_ralph_mode" in
     # In ralph/hybrid mode we must resolve and apply the effective MCP catalog
@@ -122,12 +112,6 @@ ralph_runtime_config_mcp_needs_resolve() {
   case "${RALPH_AGENT_TOOL_ACCESS:-}" in
     ralph) return 0 ;;
   esac
-  if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
-    return 0
-  fi
-  if [[ -n "${PREBUILT_AGENT:-}" ]]; then
-    return 0
-  fi
   if [[ -n "$runtime" ]] && ralph_runtime_config_mcp_ambient_sources_exist "$runtime" "$project_root"; then
     return 0
   fi
@@ -148,16 +132,14 @@ ralph_runtime_config_mcp_format_failure() {
     printf '%s\n' "$payload" >&2
     return
   fi
-  local runtime agent reason server env_var message
+  local runtime reason server env_var message
   runtime="$(jq -r '.runtime // .error.runtime // empty' <<<"$payload")"
-  agent="$(jq -r '.agent // .error.agent // empty' <<<"$payload")"
   reason="$(jq -r '.error.reason // "mcp_resolve_failed"' <<<"$payload")"
   server="$(jq -r '.error.server // empty' <<<"$payload")"
   env_var="$(jq -r '.error.env_var // empty' <<<"$payload")"
   message="$(jq -r '.error.message // .summary.mcp_failure_reason // "MCP overlay resolve failed"' <<<"$payload")"
   printf 'Error: MCP overlay preflight failed' >&2
   [[ -n "$runtime" ]] && printf ' runtime=%s' "$runtime" >&2
-  [[ -n "$agent" ]] && printf ' agent=%s' "$agent" >&2
   printf ': %s' "$message" >&2
   [[ -n "$server" ]] && printf ' (server=%s)' "$server" >&2
   [[ -n "$env_var" ]] && printf ' (env=%s)' "$env_var" >&2
@@ -205,12 +187,18 @@ ralph_runtime_config_mcp_apply_summary() {
 ralph_runtime_config_mcp_resolve() {
   local runtime="${1:-${RUNTIME:-}}"
   local project_root="${2:-${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}}"
-  local agent="${3:-${PREBUILT_AGENT:-}}"
+  # Third argument was the profile agent id; retained as unused positional for
+  # call-site compatibility. Profile MCP is removed.
+  local _unused_agent="${3:-}"
   local workspace="${4:-${WORKSPACE:-$project_root}}"
-  local preset_agent_entries="${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}"
 
   runtime="$(ralph_normalize_runtime_name "$runtime")"
   ralph_runtime_config_mcp_cleanup
+
+  if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
+    echo "Error: RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON / profile MCP layer is removed; native ambient MCP then Ralph's protected server. Use ralph migrate agents-to-roles" >&2
+    return 1
+  fi
 
   if ! ralph_runtime_config_mcp_needs_resolve "$runtime" "$project_root"; then
     return 0
@@ -225,21 +213,11 @@ ralph_runtime_config_mcp_resolve() {
     return 1
   fi
 
-  local py_script server_script agent_entries="[]"
+  local py_script server_script
   py_script="$(ralph_runtime_config_mcp_script_path)"
   if [[ ! -f "$py_script" ]]; then
     echo "Error: runtime MCP overlay helper missing: $py_script" >&2
     return 1
-  fi
-
-  if [[ -n "$preset_agent_entries" ]]; then
-    agent_entries="$preset_agent_entries"
-  elif [[ -n "$agent" && -n "${AGENT_CONFIG_TOOL:-}" && -f "$AGENT_CONFIG_TOOL" ]]; then
-    local agents_root
-    if declare -F prebuilt_agents_root >/dev/null 2>&1; then
-      agents_root="$(prebuilt_agents_root "$workspace")"
-      agent_entries="$(bash "$AGENT_CONFIG_TOOL" mcp-servers "$agents_root" "$agent" 2>/dev/null || printf '[]')"
-    fi
   fi
 
   if declare -F ralph_mcp_proxy_server_script_path >/dev/null 2>&1; then
@@ -255,22 +233,18 @@ ralph_runtime_config_mcp_resolve() {
     --arg runtime "$runtime" \
     --arg project_root "$project_root" \
     --arg workspace "$workspace" \
-    --arg agent "$agent" \
     --arg ralph_mode "${RALPH_MODE:-no}" \
     --arg tool_access "${RALPH_AGENT_TOOL_ACCESS:-}" \
     --arg server_script "$server_script" \
     --arg home "${RALPH_RUNTIME_MCP_HOME:-${HOME:-}}" \
-    --argjson agent_mcp_servers "$agent_entries" \
     '{
       runtime: $runtime,
       project_root: $project_root,
       workspace: $workspace,
-      agent: $agent,
       ralph_mode: $ralph_mode,
       tool_access: $tool_access,
       ralph_server_script: $server_script,
-      home: $home,
-      agent_mcp_servers: $agent_mcp_servers
+      home: $home
     }')"
 
   if ! response_json="$(printf '%s' "$request_json" | python3 "$py_script" resolve 2>&1)"; then

@@ -744,6 +744,40 @@ ralph_mcp_proxy_result_store_tool_name_allowed() {
   [[ "$tool_name" == ralph_proxy_* ]]
 }
 
+# True when text already carries an honest truncation signal: the policy
+# truncation marker, a D1 exploration footer, or (caller-checked) a valid
+# envelope. Used so response-level reshaping after owned-tool delivery is
+# idempotent and cannot produce "...[truncated]...[truncated]".
+ralph_mcp_proxy_shape_text_already_honest() {
+  local text="${1:-}"
+  local check_text="$text"
+  local truncation_marker last_line marker_len
+
+  while [[ "$check_text" == *$'\n' ]]; do
+    check_text="${check_text%$'\n'}"
+  done
+  [[ -n "$check_text" ]] || return 1
+
+  truncation_marker="$(ralph_mcp_proxy_truncation_marker)"
+  if [[ -n "$truncation_marker" ]]; then
+    marker_len=${#truncation_marker}
+    if [[ ${#check_text} -ge "$marker_len" \
+      && "${check_text: -$marker_len}" == "$truncation_marker" ]]; then
+      return 0
+    fi
+  fi
+
+  last_line="${check_text##*$'\n'}"
+  # Match without a leading '[' -- bash [[ patterns treat '[' as a character class.
+  if [[ "$last_line" == *"ralph_proxy_shell:"*"bytes shown"*"]" ]] \
+    || [[ "$last_line" == *"ralph_proxy_read:"*"shown"*"]" ]] \
+    || [[ "$last_line" == *"ralph_proxy_grep:"*"shown"*"]" ]] \
+    || [[ "$last_line" == *"ralph_proxy_glob:"*"shown"*"]" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 ralph_mcp_proxy_shape_one_text() {
   local text="${1:-}"
   local byte_cap="${2:-0}"
@@ -756,6 +790,12 @@ ralph_mcp_proxy_shape_one_text() {
 
   if ralph_mcp_proxy_result_envelope_validate_json "$text" 2>/dev/null; then
     ralph_mcp_proxy_result_envelope_compact_text "$text"
+    return 0
+  fi
+
+  # Already shaped (marker or D1 footer): leave alone on the response-level pass.
+  if ralph_mcp_proxy_shape_text_already_honest "$text"; then
+    printf '%s' "$text"
     return 0
   fi
 
@@ -792,6 +832,36 @@ ralph_mcp_proxy_shape_one_text() {
   truncation_marker="$(ralph_mcp_proxy_truncation_marker)"
 
   original_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$text" 2>/dev/null || true)"
+
+  # Shell: store first so we know whether the omit marker is honest, then
+  # deliver plain text + D1 footer (not ...[truncated] / envelope-only).
+  if [[ "$tool_label" == "ralph_proxy_shell" && "$truncated" -eq 1 ]]; then
+    if [[ -n "$workspace" && -n "$plan_key" ]] \
+      && ralph_mcp_proxy_result_store_context_allows_storage "$method" "$tool_label"; then
+      compact_view="$(ralph_mcp_proxy_result_compact_view "$text" "$tool_label")"
+      if [[ -n "$compact_view" ]]; then
+        result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$text" "$tool_label" "" "$compact_view" 2>/dev/null || true)"
+      else
+        result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$text" "$tool_label" 2>/dev/null || true)"
+      fi
+    fi
+    if [[ -n "$result_id" && -n "$compact_view" ]]; then
+      preview="$compact_view"
+    else
+      preview="$text"
+    fi
+    ralph_mcp_proxy_result_apply_preview_caps "$preview" "$byte_cap" "$token_cap"
+    preview="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+    returned_bytes="$RALPH_MCP_PROXY_RESULT_CAP_RETURNED_BYTES"
+    if declare -F ralph_mcp_proxy_shell_append_truncation_footer >/dev/null 2>&1; then
+      ralph_mcp_proxy_shell_append_truncation_footer \
+        "$preview" "$returned_bytes" "$original_bytes" "$result_id"
+    else
+      printf '%s%s' "$preview" "$truncation_marker"
+    fi
+    return 0
+  fi
+
   if [[ "$truncated" -eq 1 ]]; then
     compact_view="$(ralph_mcp_proxy_result_compact_view "$text" "$tool_label")"
     preview="$compact_view"
@@ -819,6 +889,12 @@ ralph_mcp_proxy_shape_one_text() {
 
   if [[ -z "$result_id" ]]; then
     if [[ "$truncated" -eq 1 ]]; then
+      # Without a resultId, never leave the omit marker that promises a raw view.
+      if [[ "$preview" == *"(lines omitted; full output in raw view)"* ]]; then
+        ralph_mcp_proxy_result_apply_preview_caps "$text" "$byte_cap" "$token_cap"
+        preview="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+        returned_bytes="$RALPH_MCP_PROXY_RESULT_CAP_RETURNED_BYTES"
+      fi
       printf '%s%s' "$preview" "$truncation_marker"
     else
       printf '%s' "$text"

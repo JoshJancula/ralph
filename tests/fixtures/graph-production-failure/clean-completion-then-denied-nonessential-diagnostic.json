@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "case": "clean-completion-then-denied-nonessential-diagnostic",
+  "description": "A node completes cleanly, then a nonessential diagnostic follow-up request is denied; the denial must not retroactively mark the completed attempt as failed.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-gggg0007",
+    "nodeId": "node-fixture-diagnostic",
+    "events": [
+      {
+        "event": "node-succeeded",
+        "attemptId": "node-fixture-diagnostic__run-fixture-gggg0007__1"
+      },
+      {
+        "event": "diagnostic-denied",
+        "attemptId": "node-fixture-diagnostic__run-fixture-gggg0007__2",
+        "essential": false,
+        "decision": "deny"
+      }
+    ]
+  }
+}

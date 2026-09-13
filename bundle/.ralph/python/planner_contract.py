@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
-"""Bounded dynamic decomposition planner contract parsing and materialization."""
+"""Authored planner-output (v2) validation and deterministic plan rendering.
+
+Public CLI exposes pure validate/render helpers only. It never chooses a
+workflow-run registry path or mutates run state.
+
+Legacy classic dynamic-planner artifacts (rationale/items/verification) keep a
+clearly internal read-only parser for orchestration compatibility. That path
+never emits role fields into new workflow serialization.
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_SCHEMA = os.path.normpath(
     os.path.join(_MODULE_DIR, "..", "schemas", "planner-output.schema.json")
+)
+_DEFAULT_MANIFEST_SCHEMA = os.path.normpath(
+    os.path.join(_MODULE_DIR, "..", "schemas", "workflow-plan-manifest.schema.json")
+)
+_DEFAULT_VALIDATE_PLAN = os.path.normpath(
+    os.path.join(_MODULE_DIR, "..", "validate-plan.sh")
 )
 
 try:
@@ -21,22 +38,52 @@ except ModuleNotFoundError:  # pragma: no cover
     sys.path.insert(0, _MODULE_DIR)
     import artifact_json_schema as _ajs
 
-HARD_MAX_TODOS = 30
-HARD_MAX_STAGES = 12
-DEFAULT_MAX_TODOS = 15
-DEFAULT_MAX_STAGES = 6
-
+HARD_MAX_TODOS = 200
+DEFAULT_MAX_TODOS = 100
 VALID_RUNTIMES = frozenset({"cursor", "claude", "codex", "opencode", "antigravity"})
-DEFAULT_AGENTS = frozenset(
-    {"research", "architect", "implementation", "code-review", "qa", "security"}
+TODO_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+STAGE_ID_RE = TODO_ID_RE
+UTC_TS_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+
+FIXED_FRESH_SESSION_INSTRUCTIONS = (
+    "Execute exactly one TODO per Ralph iteration, in listed order. "
+    "Reread repository instructions and named upstream artifacts before editing. "
+    "Inspect current diffs before editing; preserve unrelated work. "
+    "Do not invent product decisions. "
+    "Run the TODO verification. "
+    "Complete only that TODO."
 )
-STAGE_ID_RE = re.compile(r"^[a-z0-9_]+(-[a-z0-9_]+)*$")
-GENERATED_SEGMENT = "/generated/"
-OPERATOR_PLAN_ROOT = ".ralph-workspace/orchestration-plans/"
+
+OPERATOR_INPUT_PROTOCOL_BODY = (
+    "Continue autonomously through ordinary implementation choices supported by repository evidence.\n"
+    "When a missing product decision, unavailable credential configuration, external fact, or "
+    "mutually exclusive requirement makes safe progress impossible:\n"
+    "1. Call `ralph workflow actions request --question <text> [--details <text>]`\n"
+    "2. Stop without completing the TODO and do not guess.\n"
+    "Credential questions must ask the operator to configure a named environment or native secret "
+    "source and reply when ready; never request the secret value.\n"
+    "Standalone plans cannot create workflow requests; this protocol applies only under an active "
+    "workflow-owned stage with supervisor-issued identity."
+)
+
+OPERATOR_INPUT_PROTOCOL_BLOCK = (
+    "<!-- OPERATOR_INPUT: START -->\n"
+    f"{OPERATOR_INPUT_PROTOCOL_BODY}\n"
+    "<!-- OPERATOR_INPUT: END -->"
+)
+
+def operator_input_protocol_block() -> str:
+    """Delimited OPERATOR_INPUT protocol rendered into generated plan instructions."""
+    return OPERATOR_INPUT_PROTOCOL_BLOCK
+
+
+# Keys forbidden on authored planner JSON (session owned by rendered plan).
+FORBIDDEN_TOP_LEVEL_EXTRA = frozenset({"sessionStrategy"})
 
 
 class PlannerContractError(Exception):
-    """Raised when a planner artifact or orchestration config is invalid."""
+    """Raised when a planner artifact, config, or manifest is invalid."""
 
 
 def _read_text(path: str) -> str:
@@ -55,105 +102,100 @@ def _load_json(path: str) -> dict[str, Any]:
     return data
 
 
-def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int) -> int:
-    raw = os.environ.get(name, "")
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise PlannerContractError(f"{name}: invalid integer {raw!r}") from exc
-    if value < minimum:
-        raise PlannerContractError(f"{name}: must be >= {minimum}")
-    if value > maximum:
-        raise PlannerContractError(f"{name}: cannot exceed hard maximum {maximum}")
-    return value
+def _yaml_scalar(value: str) -> str:
+    text = str(value)
+    if text == "":
+        return '""'
+    if any(ch in text for ch in (":", "#", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "%", "@", "`")):
+        return json.dumps(text)
+    if text.strip() != text or text.lower() in {"true", "false", "null", "yes", "no"}:
+        return json.dumps(text)
+    if text[:1] in {"'", '"'} or text[:1].isdigit() or text.startswith("- "):
+        return json.dumps(text)
+    return text
 
 
-def effective_hard_max(kind: str) -> int:
-    if kind == "todos":
-        return _env_int("RALPH_PLANNER_HARD_MAX_TODOS", HARD_MAX_TODOS, maximum=HARD_MAX_TODOS)
-    return _env_int("RALPH_PLANNER_HARD_MAX_STAGES", HARD_MAX_STAGES, maximum=HARD_MAX_STAGES)
-
-
-def _planner_config(stage: dict[str, Any]) -> dict[str, Any] | None:
-    planner = stage.get("planner")
-    if planner in (None, False, ""):
-        return None
-    if not isinstance(planner, dict):
-        raise PlannerContractError("planner: must be an object")
-    return planner
-
-
-def _non_empty_string_list(value: Any, field: str) -> list[str]:
-    if not isinstance(value, list) or not value:
-        raise PlannerContractError(f"planner.{field} must be a non-empty array")
-    out: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise PlannerContractError(f"planner.{field} entries must be non-empty strings")
-        out.append(item.strip())
+def _yaml_block(key: str, value: str, indent: int = 0) -> list[str]:
+    prefix = " " * indent
+    lines = str(value).splitlines() or [""]
+    if len(lines) == 1 and "\n" not in value and len(value) < 80:
+        return [f"{prefix}{key}: {_yaml_scalar(value)}"]
+    out = [f"{prefix}{key}: |"]
+    for line in lines:
+        out.append(f"{prefix}  {line}")
     return out
 
 
-def validate_planner_config(stage: dict[str, Any], stage_id: str) -> dict[str, Any]:
-    planner = _planner_config(stage)
-    if planner is None:
-        raise PlannerContractError(f"stage {stage_id!r}: missing planner config")
+def validate_planner_config(planner: dict[str, Any] | None, *, stage_id: str = "") -> dict[str, Any]:
+    """Validate authored planner config: only outputMode=plan-file and maxTodos."""
+    prefix = f"stage {stage_id!r} planner" if stage_id else "planner"
+    if planner in (None, False, ""):
+        raise PlannerContractError(f"{prefix}: missing planner config")
+    if not isinstance(planner, dict):
+        raise PlannerContractError(f"{prefix}: must be an object")
 
-    prefix = f"stage {stage_id!r} planner"
-    output_mode = planner.get("outputMode")
-    if output_mode not in ("plan-file", "stages"):
-        raise PlannerContractError(f"{prefix}: outputMode must be plan-file or stages")
+    removed = sorted(
+        set(planner)
+        & {
+            "allowedRoles",
+            "allowedRuntimes",
+            "allowedModels",
+            "maxStages",
+            "defaultRole",
+            "defaultRuntime",
+            "defaultModel",
+        }
+    )
+    if removed:
+        raise PlannerContractError(
+            f"{prefix}: {', '.join(removed)} was removed. "
+            "Use planner: {outputMode: plan-file, maxTodos: <n>} for a generated Ralph plan"
+        )
 
-    hard_todos = effective_hard_max("todos")
-    hard_stages = effective_hard_max("stages")
+    unknown = [key for key in planner if key not in {"outputMode", "maxTodos"}]
+    if unknown:
+        raise PlannerContractError(
+            f"{prefix}: unknown field {unknown[0]!r}; only outputMode and maxTodos are permitted"
+        )
 
-    max_todos = planner.get("maxTodos", DEFAULT_MAX_TODOS)
-    max_stages = planner.get("maxStages", DEFAULT_MAX_STAGES)
-    for field, value, hard in (
-        ("maxTodos", max_todos, hard_todos),
-        ("maxStages", max_stages, hard_stages),
-    ):
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise PlannerContractError(f"{prefix}: {field} must be a positive integer")
-        if value < 1:
-            raise PlannerContractError(f"{prefix}: {field} must be >= 1")
-        if value > hard:
-            raise PlannerContractError(f"{prefix}: {field} cannot exceed hard maximum {hard}")
+    output_mode = str(planner.get("outputMode") or "").strip()
+    if output_mode == "stages":
+        raise PlannerContractError(
+            f"{prefix}: outputMode stages was removed. "
+            "Use planner: {outputMode: plan-file, maxTodos: <n>} for a generated Ralph plan"
+        )
+    if output_mode != "plan-file":
+        raise PlannerContractError(f"{prefix}: outputMode must be plan-file")
 
-    allowed_runtimes = _non_empty_string_list(planner.get("allowedRuntimes"), "allowedRuntimes")
-    allowed_agents = _non_empty_string_list(planner.get("allowedAgents"), "allowedAgents")
-    allowed_models = _non_empty_string_list(planner.get("allowedModels"), "allowedModels")
+    if "maxTodos" in planner:
+        max_todos = planner.get("maxTodos")
+        if not isinstance(max_todos, int) or isinstance(max_todos, bool):
+            raise PlannerContractError(f"{prefix}: maxTodos must be an integer between 1 and {HARD_MAX_TODOS}")
+        if max_todos < 1 or max_todos > HARD_MAX_TODOS:
+            raise PlannerContractError(f"{prefix}: maxTodos must be an integer between 1 and {HARD_MAX_TODOS}")
+    else:
+        max_todos = DEFAULT_MAX_TODOS
 
-    unknown_runtimes = sorted(set(allowed_runtimes) - VALID_RUNTIMES)
-    if unknown_runtimes:
-        raise PlannerContractError(f"{prefix}: unknown allowedRuntimes: {unknown_runtimes}")
-
-    return {
-        "outputMode": output_mode,
-        "maxTodos": max_todos,
-        "maxStages": max_stages,
-        "allowedRuntimes": allowed_runtimes,
-        "allowedAgents": allowed_agents,
-        "allowedModels": allowed_models,
-    }
+    return {"outputMode": "plan-file", "maxTodos": max_todos}
 
 
 def validate_orchestration(orchestration: dict[str, Any]) -> None:
+    """Validate authored planner configs inside an orchestration JSON object."""
     stages = orchestration.get("stages") or []
     if not isinstance(stages, list):
         raise PlannerContractError("stages must be an array")
-
     for stage in stages:
         if not isinstance(stage, dict):
             continue
-        if _planner_config(stage) is not None:
-            stage_id = str(stage.get("id") or "")
-            validate_planner_config(stage, stage_id)
+        planner = stage.get("planner")
+        if planner in (None, False, ""):
+            continue
+        stage_id = str(stage.get("id") or "")
+        validate_planner_config(planner if isinstance(planner, dict) else None, stage_id=stage_id)
 
 
 def load_output(artifact_path: str, schema_path: str | None = None) -> dict[str, Any]:
+    """Load and schema-validate a planner-output v2 artifact."""
     schema_file = schema_path or _DEFAULT_SCHEMA
     try:
         schema = _ajs.load_schema_document(schema_file)
@@ -172,370 +214,372 @@ def load_output(artifact_path: str, schema_path: str | None = None) -> dict[str,
             f"planner artifact does not satisfy contract at {exc.json_path}: {exc}"
         ) from exc
 
-    return json.loads(raw)
-
-
-def _validate_stage_id(stage_id: str, *, context: str) -> None:
-    if not STAGE_ID_RE.match(stage_id):
-        raise PlannerContractError(f"{context}: invalid id {stage_id!r}")
-
-
-def _validate_portable_path(path: str, *, context: str) -> None:
-    try:
-        _ajs.validate_portable_path(context, path)
-    except ValueError as exc:
-        raise PlannerContractError(str(exc)) from exc
-
-
-def _generated_plan_dir(plan_key: str) -> str:
-    safe_key = plan_key.strip().strip("/")
-    if not safe_key:
-        raise PlannerContractError("plan key must not be empty")
-    _validate_portable_path(safe_key, context="plan key")
-    return f"{OPERATOR_PLAN_ROOT}{safe_key}/generated"
-
-
-def _assert_write_allowed(target_rel: str, *, plan_key: str) -> str:
-    _validate_portable_path(target_rel, context="generated output path")
-    generated_prefix = _generated_plan_dir(plan_key)
-    normalized = target_rel.replace("\\", "/")
-    if GENERATED_SEGMENT not in f"/{normalized.lstrip('/')}":
-        raise PlannerContractError(
-            f"generated output must live under {generated_prefix}: {target_rel}"
-        )
-    if ".." in normalized.split("/"):
-        raise PlannerContractError(f"path traversal is not permitted: {target_rel}")
-    return normalized
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise PlannerContractError(f"expected JSON object in {artifact_path}")
+    return data
 
 
 def validate_output(
     output: dict[str, Any],
-    planner: dict[str, Any],
     *,
-    known_agents: set[str] | None = None,
-    planner_stage_id: str = "",
+    max_todos: int = DEFAULT_MAX_TODOS,
 ) -> None:
-    items = output.get("items") or []
-    if not isinstance(items, list) or not items:
-        raise PlannerContractError("planner output items must be a non-empty array")
+    """Semantic validation for planner-output schema version 2."""
+    if not isinstance(output, dict):
+        raise PlannerContractError("planner output must be an object")
 
-    output_mode = planner["outputMode"]
-    limit = planner["maxStages"] if output_mode == "stages" else planner["maxTodos"]
-    hard = effective_hard_max("stages" if output_mode == "stages" else "todos")
-    if len(items) > limit:
+    unknown = [key for key in output if key not in {"schemaVersion", "name", "overview", "rationale", "todos"}]
+    for key in unknown:
+        if key in FORBIDDEN_TOP_LEVEL_EXTRA or key == "sessionStrategy":
+            raise PlannerContractError(
+                "planner output sessionStrategy is not permitted; "
+                "the rendered plan owns the fixed fresh session strategy"
+            )
+        raise PlannerContractError(f"planner output unknown key {key!r}")
+
+    if output.get("schemaVersion") != 2:
+        raise PlannerContractError("planner output schemaVersion must be 2")
+
+    for field in ("name", "overview", "rationale"):
+        value = output.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise PlannerContractError(f"planner output {field} must be non-empty text")
+
+    if not isinstance(max_todos, int) or isinstance(max_todos, bool):
+        raise PlannerContractError(f"maxTodos must be an integer between 1 and {HARD_MAX_TODOS}")
+    if max_todos < 1 or max_todos > HARD_MAX_TODOS:
+        raise PlannerContractError(f"maxTodos must be an integer between 1 and {HARD_MAX_TODOS}")
+
+    todos = output.get("todos")
+    if not isinstance(todos, list) or not todos:
+        raise PlannerContractError("planner output todos must be a non-empty array")
+    if len(todos) > max_todos:
         raise PlannerContractError(
-            f"planner output has {len(items)} items; limit is {limit} for outputMode {output_mode}"
+            f"planner output has {len(todos)} todos; configured maxTodos is {max_todos}"
         )
-    if len(items) > hard:
-        raise PlannerContractError(f"planner output exceeds hard maximum {hard}")
-
-    allowed_runtimes = set(planner["allowedRuntimes"])
-    allowed_agents = set(planner["allowedAgents"])
-    allowed_models = set(planner["allowedModels"])
-    agent_pool = set(known_agents or ()) | DEFAULT_AGENTS
+    if len(todos) > HARD_MAX_TODOS:
+        raise PlannerContractError(f"planner output exceeds hard maximum {HARD_MAX_TODOS}")
 
     seen_ids: set[str] = set()
+    for index, todo in enumerate(todos):
+        prefix = f"todos[{index}]"
+        if not isinstance(todo, dict):
+            raise PlannerContractError(f"{prefix} must be an object")
+        todo_unknown = [
+            key for key in todo if key not in {"id", "content", "verification", "status", "runtime", "model"}
+        ]
+        if todo_unknown:
+            if "sessionStrategy" in todo_unknown:
+                raise PlannerContractError(
+                    f"{prefix} sessionStrategy is not permitted; "
+                    "the rendered plan owns the fixed fresh session strategy"
+                )
+            raise PlannerContractError(f"{prefix} unknown key {todo_unknown[0]!r}")
+
+        todo_id = str(todo.get("id") or "").strip()
+        if not TODO_ID_RE.match(todo_id):
+            raise PlannerContractError(f"{prefix} id must be lowercase-hyphen kebab id")
+        if todo_id in seen_ids:
+            raise PlannerContractError(f"duplicate planner todo id: {todo_id}")
+        seen_ids.add(todo_id)
+
+        for field in ("content", "verification"):
+            value = todo.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise PlannerContractError(f"{prefix} {field} must be non-empty text")
+
+        status = todo.get("status")
+        if status != "pending":
+            raise PlannerContractError(f"{prefix} status must be pending")
+
+        runtime = todo.get("runtime")
+        model = todo.get("model")
+        if runtime is not None:
+            if not isinstance(runtime, str) or runtime not in VALID_RUNTIMES:
+                raise PlannerContractError(f"{prefix} runtime must be one of {sorted(VALID_RUNTIMES)}")
+        if model is not None:
+            if not isinstance(model, str) or not model.strip():
+                raise PlannerContractError(f"{prefix} model must be non-empty text when present")
+        # model-only / runtime-only / paired are all valid at planner JSON layer.
+        # Effective runtime for model-only is supplied by render defaults.
+
+
+def parse_legacy_planner_artifact(data: dict[str, Any]) -> dict[str, Any]:
+    """Internal read-only parser for classic dynamic-planner artifacts.
+
+    Accepts the historical {rationale, items[], verification} shape used by
+    RALPH_DYNAMIC_PLANNER orchestration tests. Never emits role fields and must
+    not enter new workflow serialization.
+    """
+    if not isinstance(data, dict):
+        raise PlannerContractError("legacy planner artifact must be an object")
+    if data.get("schemaVersion") == 2 or "todos" in data:
+        raise PlannerContractError("legacy parser does not accept planner-output v2")
+
+    rationale = data.get("rationale")
+    if not isinstance(rationale, str):
+        raise PlannerContractError("legacy planner rationale must be a string")
+    verification = data.get("verification")
+    if not isinstance(verification, str) or not verification.strip():
+        raise PlannerContractError("legacy planner verification must be non-empty text")
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        raise PlannerContractError("legacy planner items must be a non-empty array")
+
+    parsed_items: list[dict[str, str]] = []
+    seen: set[str] = set()
     for index, item in enumerate(items):
         if not isinstance(item, dict):
-            raise PlannerContractError(f"planner item[{index}] must be an object")
+            raise PlannerContractError(f"legacy items[{index}] must be an object")
         item_id = str(item.get("id") or "").strip()
-        _validate_stage_id(item_id, context=f"planner item[{index}]")
-        if item_id in seen_ids:
-            raise PlannerContractError(f"duplicate planner item id: {item_id}")
-        seen_ids.add(item_id)
-
+        if not STAGE_ID_RE.match(item_id.replace("_", "-")) and not re.match(
+            r"^[a-z0-9_]+(-[a-z0-9_]+)*$", item_id
+        ):
+            raise PlannerContractError(f"legacy items[{index}] invalid id {item_id!r}")
+        if item_id in seen:
+            raise PlannerContractError(f"legacy duplicate item id: {item_id}")
+        seen.add(item_id)
         content = item.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise PlannerContractError(f"planner item[{index}] content must be a non-empty string")
+            raise PlannerContractError(f"legacy items[{index}] content must be non-empty")
+        # Intentionally drop role/model/runtime from the returned view so callers
+        # cannot serialize roles into new workflow paths via this parser.
+        parsed_items.append({"id": item_id, "content": content.strip()})
 
-        runtime = str(item.get("runtime") or planner.get("defaultRuntime") or "").strip()
-        agent = str(item.get("agent") or planner.get("defaultAgent") or "").strip()
-        model = str(item.get("model") or "").strip()
-
-        if output_mode == "stages":
-            if not runtime:
-                raise PlannerContractError(f"planner item[{index}] runtime is required for stages output")
-            if not agent:
-                raise PlannerContractError(f"planner item[{index}] agent is required for stages output")
-            if runtime not in allowed_runtimes:
-                raise PlannerContractError(
-                    f"planner item[{index}] runtime {runtime!r} is not in allowedRuntimes"
-                )
-            if agent not in allowed_agents:
-                raise PlannerContractError(
-                    f"planner item[{index}] agent {agent!r} is not in allowedAgents"
-                )
-            if agent not in agent_pool:
-                raise PlannerContractError(f"planner item[{index}] unknown agent {agent!r}")
-            if model and model not in allowed_models:
-                raise PlannerContractError(
-                    f"planner item[{index}] model {model!r} is not in allowedModels"
-                )
-
-    for index, rel in enumerate(output.get("artifactRelationships") or []):
-        if not isinstance(rel, dict):
-            raise PlannerContractError(f"artifactRelationships[{index}] must be an object")
-        for key in ("from", "to"):
-            path = str(rel.get(key) or "").strip()
-            if not path:
-                raise PlannerContractError(f"artifactRelationships[{index}].{key} must be non-empty")
-            _validate_portable_path(path, context=f"artifactRelationships[{index}].{key}")
-
-    verification = output.get("verification")
-    if not isinstance(verification, str) or not verification.strip():
-        raise PlannerContractError("planner output verification must be a non-empty string")
-
-    if planner_stage_id and planner_stage_id in seen_ids:
-        raise PlannerContractError("planner output cannot include the planner stage id")
-
-
-def _render_plan_markdown(output: dict[str, Any], *, title: str) -> str:
-    lines = [
-        "---",
-        f"name: {title}",
-        "overview: Generated by Ralph planner stage",
-        "---",
-        "",
-        f"# {title}",
-        "",
-        output.get("rationale", "").strip(),
-        "",
-    ]
-    for item in output["items"]:
-        lines.append(f"- [ ] {str(item.get('content') or '').strip()}")
-    verification = str(output.get("verification") or "").strip()
-    if verification:
-        lines.extend(["", f"verification: |", f"  {verification}"])
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _build_stage_json(
-    item: dict[str, Any],
-    *,
-    plan_rel: str,
-    planner: dict[str, Any],
-    namespace: str,
-) -> dict[str, Any]:
-    stage: dict[str, Any] = {
-        "id": str(item["id"]),
-        "runtime": str(item["runtime"]),
-        "agent": str(item["agent"]),
-        "plan": plan_rel,
-        "sessionStrategy": "fresh",
-        "sessionResume": False,
-        "artifacts": [
-            {
-                "path": f".ralph-workspace/artifacts/{{{{ARTIFACT_NS}}}}/{item['id']}.md",
-                "required": True,
-            }
-        ],
+    return {
+        "rationale": rationale,
+        "items": parsed_items,
+        "verification": verification.strip(),
+        "artifactRelationships": data.get("artifactRelationships") or [],
     }
-    model = str(item.get("model") or "").strip()
-    if model:
-        stage["model"] = model
-    _ = namespace  # reserved for future artifact namespace hints
-    _ = planner
-    return stage
 
 
-def materialize_output(
+def render_plan_markdown(
     output: dict[str, Any],
-    planner: dict[str, Any],
     *,
-    workspace: str,
-    plan_key: str,
-    planner_stage_id: str,
-    namespace: str = "",
-    dry_run: bool = False,
-    known_agents: set[str] | None = None,
-) -> dict[str, Any]:
-    validate_output(
-        output,
-        planner,
-        known_agents=known_agents,
-        planner_stage_id=planner_stage_id,
-    )
-
-    generated_dir = _generated_plan_dir(plan_key)
-    output_mode = planner["outputMode"]
-    manifest: dict[str, Any] = {
-        "outputMode": output_mode,
-        "planKey": plan_key,
-        "generatedDir": generated_dir,
-        "rationale": output.get("rationale", ""),
-        "verification": output.get("verification", ""),
-        "artifactRelationships": output.get("artifactRelationships") or [],
-        "items": [],
-        "stages": [],
-        "files": [],
-    }
-
-    workspace_abs = os.path.abspath(workspace)
-
-    if output_mode == "plan-file":
-        plan_name = f"{planner_stage_id}-decomposition.plan.md"
-        plan_rel = f"{generated_dir}/{plan_name}"
-        _assert_write_allowed(plan_rel, plan_key=plan_key)
-        plan_abs = _ajs.resolve_project_path(workspace_abs, plan_rel)
-        if os.path.exists(plan_abs) and not dry_run:
-            raise PlannerContractError(
-                f"refusing to overwrite existing generated plan: {plan_rel}"
-            )
-        content = _render_plan_markdown(output, title=f"{planner_stage_id} decomposition")
-        manifest["files"].append({"path": plan_rel, "kind": "plan-file"})
-        manifest["planFile"] = plan_rel
-        if not dry_run:
-            os.makedirs(os.path.dirname(plan_abs), exist_ok=True)
-            with open(plan_abs, "x", encoding="utf-8") as handle:
-                handle.write(content)
-        for item in output["items"]:
-            manifest["items"].append({"id": item["id"], "content": item.get("content", "")})
-        return manifest
-
-    stages: list[dict[str, Any]] = []
-    for item in output["items"]:
-        plan_name = f"{item['id']}.plan.md"
-        plan_rel = f"{generated_dir}/{plan_name}"
-        _assert_write_allowed(plan_rel, plan_key=plan_key)
-        plan_abs = _ajs.resolve_project_path(workspace_abs, plan_rel)
-        if os.path.exists(plan_abs) and not dry_run:
-            raise PlannerContractError(
-                f"refusing to overwrite existing generated plan: {plan_rel}"
-            )
-        stage_plan = _render_plan_markdown(
-            {
-                "rationale": output.get("rationale", ""),
-                "items": [item],
-                "verification": output.get("verification", ""),
-            },
-            title=str(item["id"]),
-        )
-        stage = _build_stage_json(
-            item,
-            plan_rel=plan_rel,
-            planner=planner,
-            namespace=namespace,
-        )
-        if stage.get("planner"):
-            raise PlannerContractError("recursive planner stages are forbidden")
-        if stage.get("parallelStages"):
-            raise PlannerContractError("nested parallel waves are not supported")
-        stages.append(stage)
-        manifest["files"].append({"path": plan_rel, "kind": "stage-plan", "stageId": item["id"]})
-        if not dry_run:
-            os.makedirs(os.path.dirname(plan_abs), exist_ok=True)
-            with open(plan_abs, "x", encoding="utf-8") as handle:
-                handle.write(stage_plan)
-        manifest["items"].append(
-            {
-                "id": item["id"],
-                "runtime": item.get("runtime"),
-                "agent": item.get("agent"),
-                "model": item.get("model", ""),
-            }
-        )
-
-    manifest["stages"] = stages
-    return manifest
-
-
-def render_planner_prompt_block(
-    *,
-    planner: dict[str, Any],
-    schema_path: str,
-    plan_key: str,
+    default_runtime: str,
+    default_model: str = "",
 ) -> str:
-    generated_dir = _generated_plan_dir(plan_key)
-    return (
-        "## Planner stage\n\n"
-        "Write exactly one JSON object to the declared planner artifact path.\n"
-        "Do not wrap the JSON in markdown fences.\n\n"
-        "Required shape:\n"
-        '{"rationale":"...","items":[{"id":"worker-1","content":"...","runtime":"cursor","agent":"implementation"}],"artifactRelationships":[],"verification":"..."}\n\n'
-        f"- outputMode: {planner['outputMode']}\n"
-        f"- maxTodos: {planner['maxTodos']}\n"
-        f"- maxStages: {planner['maxStages']}\n"
-        f"- allowedRuntimes: {json.dumps(planner['allowedRuntimes'])}\n"
-        f"- allowedAgents: {json.dumps(planner['allowedAgents'])}\n"
-        f"- allowedModels: {json.dumps(planner['allowedModels'])}\n"
-        f"- generated output directory: {generated_dir}\n"
-        f"- contract schema: {schema_path}\n"
-        "- item ids must be lowercase-hyphen stage ids.\n"
-        "- do not emit planner stages, parallel waves, or paths outside the generated directory.\n"
-    )
+    """Render a deterministic YAML-frontmatter Ralph plan from planner-output v2."""
+    validate_output(output)
+    runtime = str(default_runtime or "").strip()
+    if runtime not in VALID_RUNTIMES:
+        raise PlannerContractError(
+            f"default runtime must be one of {sorted(VALID_RUNTIMES)} (got {runtime!r})"
+        )
+    model = str(default_model or "").strip()
 
-
-def format_dry_run_summary(manifest: dict[str, Any]) -> str:
-    lines = [
-        "Planner decomposition:",
-        f"  outputMode: {manifest.get('outputMode')}",
-        f"  items: {len(manifest.get('items') or [])}",
+    lines: list[str] = [
+        "---",
+        f"name: {_yaml_scalar(str(output['name']).strip())}",
+        f"overview: {_yaml_scalar(str(output['overview']).strip())}",
+        "execution: standard",
+        f"runtime: {runtime}",
     ]
-    if manifest.get("planFile"):
-        lines.append(f"  planFile: {manifest['planFile']}")
-    for item in manifest.get("items") or []:
-        if manifest.get("outputMode") == "stages":
-            lines.append(
-                "  - {id}: runtime={runtime} agent={agent} model={model}".format(
-                    id=item.get("id"),
-                    runtime=item.get("runtime"),
-                    agent=item.get("agent"),
-                    model=item.get("model") or "(default)",
-                )
-            )
-        else:
-            lines.append(f"  - {item.get('id')}: {item.get('content', '')[:80]}")
-    verification = str(manifest.get("verification") or "").strip()
-    if verification:
-        lines.append(f"  verification: {verification[:120]}")
+    if model:
+        lines.append(f"model: {_yaml_scalar(model)}")
+    lines.append("sessionStrategy: fresh")
+    instructions = (
+        f"{FIXED_FRESH_SESSION_INSTRUCTIONS}\n\n{OPERATOR_INPUT_PROTOCOL_BLOCK}"
+    )
+    lines.extend(_yaml_block("instructions", instructions))
+    lines.append("todos:")
+
+    for todo in output["todos"]:
+        lines.append(f"  - id: {todo['id']}")
+        todo_runtime = str(todo.get("runtime") or "").strip()
+        todo_model = str(todo.get("model") or "").strip()
+        if todo_runtime:
+            lines.append(f"    runtime: {todo_runtime}")
+        if todo_model:
+            lines.append(f"    model: {_yaml_scalar(todo_model)}")
+        lines.extend(_yaml_block("content", str(todo["content"]).strip(), indent=4))
+        lines.extend(_yaml_block("verification", str(todo["verification"]).strip(), indent=4))
+        lines.append("    status: pending")
+
+    lines.append("---")
+    lines.append("")
+    rationale = str(output.get("rationale") or "").strip()
+    if rationale:
+        lines.append(rationale)
+        lines.append("")
     return "\n".join(lines)
 
 
-def discover_agents(workspace: str) -> set[str]:
-    agents: set[str] = set(DEFAULT_AGENTS)
-    for root_name in (".ralph/agents", ".cursor/agents", ".claude/agents"):
-        root = os.path.join(workspace, root_name)
-        if not os.path.isdir(root):
-            continue
-        for entry in os.listdir(root):
-            if entry.startswith("."):
-                continue
-            path = os.path.join(root, entry)
-            if os.path.isfile(path) and entry.endswith(".md"):
-                agents.add(entry[:-3])
-            elif os.path.isdir(path):
-                agents.add(entry)
-    return agents
+def render_and_validate_plan(
+    output: dict[str, Any],
+    *,
+    default_runtime: str,
+    default_model: str = "",
+    output_path: str,
+    validate_plan_sh: str | None = None,
+    max_todos: int = DEFAULT_MAX_TODOS,
+) -> str:
+    """Render planner JSON to output_path and run validate-plan.sh. Pure aside from that path."""
+    validate_output(output, max_todos=max_todos)
+    text = render_plan_markdown(
+        output,
+        default_runtime=default_runtime,
+        default_model=default_model,
+    )
+    abs_out = os.path.abspath(output_path)
+    parent = os.path.dirname(abs_out) or "."
+    if not os.path.isdir(parent):
+        raise PlannerContractError(f"output directory does not exist: {parent}")
+    with open(abs_out, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+    validator = validate_plan_sh or _DEFAULT_VALIDATE_PLAN
+    if not os.path.isfile(validator):
+        raise PlannerContractError(f"validate-plan.sh not found: {validator}")
+    completed = subprocess.run(
+        ["bash", validator, abs_out],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise PlannerContractError(
+            f"validate-plan.sh failed for {abs_out}"
+            + (f": {detail}" if detail else "")
+        )
+    return text
+
+
+def sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_manifest(
+    *,
+    producer_stage_id: str,
+    producer_attempt: int,
+    source_artifact: str,
+    plan_path: str,
+    todo_count: int | None = None,
+    plan_sha256: str | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Pure builder for generated-plan manifest version 1 (no registry writes)."""
+    stage_id = str(producer_stage_id or "").strip()
+    if not STAGE_ID_RE.match(stage_id):
+        raise PlannerContractError(f"producerStageId must be lowercase-hyphen: {stage_id!r}")
+    if not isinstance(producer_attempt, int) or isinstance(producer_attempt, bool) or producer_attempt < 1:
+        raise PlannerContractError("producerAttempt must be an integer >= 1")
+
+    source_abs = os.path.abspath(source_artifact)
+    plan_abs = os.path.abspath(plan_path)
+    if not source_abs.startswith("/"):
+        raise PlannerContractError("sourceArtifact must be an absolute path")
+    if not plan_abs.startswith("/"):
+        raise PlannerContractError("planPath must be an absolute path")
+
+    if todo_count is None:
+        if not os.path.isfile(plan_abs):
+            raise PlannerContractError(f"plan path not found for todo count: {plan_abs}")
+        # Count YAML todo ids; caller may pass an explicit count instead.
+        todo_count = sum(
+            1
+            for line in _read_text(plan_abs).splitlines()
+            if re.match(r"^  - id: ", line)
+        )
+    if not isinstance(todo_count, int) or isinstance(todo_count, bool) or todo_count < 1:
+        raise PlannerContractError("todoCount must be an integer >= 1")
+    if todo_count > HARD_MAX_TODOS:
+        raise PlannerContractError(f"todoCount cannot exceed hard maximum {HARD_MAX_TODOS}")
+
+    digest = plan_sha256 or sha256_file(plan_abs)
+    if not SHA256_RE.match(digest):
+        raise PlannerContractError("planSha256 must be a 64-char lowercase hex digest")
+
+    timestamp = created_at or utc_now()
+    if not UTC_TS_RE.match(timestamp):
+        raise PlannerContractError("createdAt must be UTC YYYY-MM-DDTHH:MM:SSZ")
+
+    return {
+        "schemaVersion": 1,
+        "producerStageId": stage_id,
+        "producerAttempt": producer_attempt,
+        "sourceArtifact": source_abs,
+        "planPath": plan_abs,
+        "planSha256": digest,
+        "todoCount": todo_count,
+        "createdAt": timestamp,
+    }
+
+
+def validate_manifest(
+    manifest: dict[str, Any],
+    *,
+    schema_path: str | None = None,
+) -> None:
+    schema_file = schema_path or _DEFAULT_MANIFEST_SCHEMA
+    try:
+        schema = _ajs.load_schema_document(schema_file)
+        _ajs.assert_supported_schema(schema, "$")
+        _ajs.validate_json_text(json.dumps(manifest), schema)
+    except (ValueError, _ajs.UnsupportedSchemaKeywordError, _ajs.SchemaValidationError) as exc:
+        raise PlannerContractError(f"plan manifest invalid: {exc}") from exc
+
+    if manifest.get("schemaVersion") != 1:
+        raise PlannerContractError("plan manifest schemaVersion must be 1")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Ralph planner contract tools")
+    parser = argparse.ArgumentParser(description="Ralph planner-output v2 contract tools")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    validate_orch = sub.add_parser("validate-orchestration", help="Validate planner stage config")
+    validate_orch = sub.add_parser(
+        "validate-orchestration",
+        help="Validate authored planner stage configs (plan-file only)",
+    )
     validate_orch.add_argument("--orchestration", required=True)
 
-    parse_cmd = sub.add_parser("parse-output", help="Parse and validate a planner artifact")
-    parse_cmd.add_argument("--artifact", required=True)
-    parse_cmd.add_argument("--planner-json", required=True)
-    parse_cmd.add_argument("--planner-stage-id", default="")
-    parse_cmd.add_argument("--workspace", default="")
-    parse_cmd.add_argument("--schema", default="")
+    validate_cmd = sub.add_parser("validate-output", help="Validate a planner-output v2 artifact")
+    validate_cmd.add_argument("--artifact", required=True)
+    validate_cmd.add_argument("--max-todos", type=int, default=DEFAULT_MAX_TODOS)
+    validate_cmd.add_argument("--schema", default="")
 
-    apply_cmd = sub.add_parser("apply-output", help="Validate and materialize planner output")
-    apply_cmd.add_argument("--artifact", required=True)
-    apply_cmd.add_argument("--planner-json", required=True)
-    apply_cmd.add_argument("--workspace", required=True)
-    apply_cmd.add_argument("--plan-key", required=True)
-    apply_cmd.add_argument("--planner-stage-id", required=True)
-    apply_cmd.add_argument("--namespace", default="")
-    apply_cmd.add_argument("--dry-run", action="store_true")
-    apply_cmd.add_argument("--schema", default="")
+    render_cmd = sub.add_parser(
+        "render-plan",
+        help="Render planner-output v2 to a YAML plan and run validate-plan.sh",
+    )
+    render_cmd.add_argument("--artifact", required=True)
+    render_cmd.add_argument("--default-runtime", required=True)
+    render_cmd.add_argument("--default-model", default="")
+    render_cmd.add_argument("--output", required=True)
+    render_cmd.add_argument("--max-todos", type=int, default=DEFAULT_MAX_TODOS)
+    render_cmd.add_argument("--schema", default="")
+    render_cmd.add_argument("--validate-plan", default=_DEFAULT_VALIDATE_PLAN)
 
-    prompt_cmd = sub.add_parser("prompt-block", help="Render planner prompt instructions")
-    prompt_cmd.add_argument("--planner-json", required=True)
-    prompt_cmd.add_argument("--plan-key", required=True)
-    prompt_cmd.add_argument("--schema", default=_DEFAULT_SCHEMA)
+    manifest_cmd = sub.add_parser("validate-manifest", help="Validate a generated-plan manifest")
+    manifest_cmd.add_argument("--manifest", required=True)
+    manifest_cmd.add_argument("--schema", default="")
+
+    build_cmd = sub.add_parser("build-manifest", help="Build a pure generated-plan manifest JSON")
+    build_cmd.add_argument("--producer-stage-id", required=True)
+    build_cmd.add_argument("--producer-attempt", type=int, required=True)
+    build_cmd.add_argument("--source-artifact", required=True)
+    build_cmd.add_argument("--plan-path", required=True)
+    build_cmd.add_argument("--todo-count", type=int, default=0)
+    build_cmd.add_argument("--plan-sha256", default="")
+    build_cmd.add_argument("--created-at", default="")
+
+    legacy_cmd = sub.add_parser(
+        "parse-legacy-output",
+        help="Internal read-only parse of classic dynamic-planner artifacts",
+    )
+    legacy_cmd.add_argument("--artifact", required=True)
 
     args = parser.parse_args(argv)
 
@@ -544,45 +588,51 @@ def main(argv: list[str] | None = None) -> int:
             validate_orchestration(_load_json(args.orchestration))
             return 0
 
-        planner = json.loads(args.planner_json)
-
-        if args.command == "parse-output":
+        if args.command == "validate-output":
             schema = args.schema or None
             output = load_output(args.artifact, schema)
-            known = discover_agents(args.workspace) if args.workspace else None
-            validate_output(
-                output,
-                planner,
-                known_agents=known,
-                planner_stage_id=args.planner_stage_id,
-            )
+            validate_output(output, max_todos=args.max_todos)
             print(json.dumps(output, sort_keys=True))
             return 0
 
-        if args.command == "apply-output":
+        if args.command == "render-plan":
             schema = args.schema or None
             output = load_output(args.artifact, schema)
-            known = discover_agents(args.workspace)
-            manifest = materialize_output(
+            render_and_validate_plan(
                 output,
-                planner,
-                workspace=args.workspace,
-                plan_key=args.plan_key,
-                planner_stage_id=args.planner_stage_id,
-                namespace=args.namespace,
-                dry_run=args.dry_run,
-                known_agents=known,
+                default_runtime=args.default_runtime,
+                default_model=args.default_model,
+                output_path=args.output,
+                validate_plan_sh=args.validate_plan,
+                max_todos=args.max_todos,
             )
+            print(os.path.abspath(args.output))
+            return 0
+
+        if args.command == "validate-manifest":
+            manifest = _load_json(args.manifest)
+            validate_manifest(manifest, schema_path=args.schema or None)
             print(json.dumps(manifest, sort_keys=True))
             return 0
 
-        if args.command == "prompt-block":
-            block = render_planner_prompt_block(
-                planner=planner,
-                schema_path=args.schema,
-                plan_key=args.plan_key,
+        if args.command == "build-manifest":
+            manifest = build_manifest(
+                producer_stage_id=args.producer_stage_id,
+                producer_attempt=args.producer_attempt,
+                source_artifact=args.source_artifact,
+                plan_path=args.plan_path,
+                todo_count=args.todo_count or None,
+                plan_sha256=args.plan_sha256 or None,
+                created_at=args.created_at or None,
             )
-            sys.stdout.write(block)
+            validate_manifest(manifest)
+            print(json.dumps(manifest, sort_keys=True))
+            return 0
+
+        if args.command == "parse-legacy-output":
+            raw = _load_json(args.artifact)
+            parsed = parse_legacy_planner_artifact(raw)
+            print(json.dumps(parsed, sort_keys=True))
             return 0
     except PlannerContractError as exc:
         print(str(exc), file=sys.stderr)

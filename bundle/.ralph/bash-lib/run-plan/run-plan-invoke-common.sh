@@ -5,6 +5,69 @@ if [[ -n "${RALPH_RUN_PLAN_INVOKE_COMMON_LOADED:-}" ]]; then
 fi
 RALPH_RUN_PLAN_INVOKE_COMMON_LOADED=1
 
+# This is the single resolved invocation contract for native subagents.
+# Routing owns plan precedence and baseline restoration; adapters must consume
+# this variable and must not parse plan metadata themselves.
+# Standard contract: nativeSubagents is off|inherit (default inherit). inherit
+# changes no runtime argv/config. `on` was removed.
+ralph_run_plan_native_subagents_mode() {
+  local mode="${RALPH_PLAN_NATIVE_SUBAGENTS:-${RALPH_PLAN_SUBAGENTS:-inherit}}"
+  case "$mode" in
+    inherit|off) printf '%s' "$mode" ;;
+    on)
+      echo "Error: nativeSubagents=on was removed; use inherit or off (got '$mode')." >&2
+      return 1
+      ;;
+    *)
+      echo "Error: resolved nativeSubagents mode must be inherit or off (got '$mode')." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Compatibility alias: adapters still call the old name until per-runtime TODOs.
+ralph_run_plan_subagents_mode() {
+  ralph_run_plan_native_subagents_mode
+}
+
+ralph_run_plan_subagents_log_contract() {
+  local runtime="$1"
+  local mode
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+    ralph_run_plan_log "nativeSubagents contract: runtime=$runtime mode=$mode"
+  fi
+}
+
+# The capability matrix is deliberately fail-closed when enabling delegation.
+# `off` is portable: Ralph does not add a native dispatch surface, while a
+# runtime with a proven surface (currently Claude) also gets its explicit deny
+# control. `on` was removed from the resolved contract.
+ralph_run_plan_subagents_require_runtime_capability() {
+  local runtime="$1"
+  local mode
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  [[ "$mode" == "inherit" || "$mode" == "off" ]] && return 0
+  echo "Error: nativeSubagents=$mode is unsupported for runtime $runtime until its native delegation capability is proven; refusing to expose ambient delegation." >&2
+  return 1
+}
+
+# ralph_run_plan_native_subagent_verify_runtime <runtime>
+#
+# Ralph-controlled native children were removed. Ambient nativeSubagents=off|inherit
+# is enforced by runtime adapters. Legacy RALPH_PLAN_NATIVE_SUBAGENT_MODE is ignored.
+ralph_run_plan_native_subagent_verify_runtime() {
+  return 0
+}
+
+# ralph_run_plan_native_subagent_append_contract
+#
+# No Ralph-child prompt contracts are injected. Kept as a no-op for callers that
+# still invoke this hook before building argv.
+ralph_run_plan_native_subagent_append_contract() {
+  return 0
+}
+
 _ralph_invoke_common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -F ralph_apply_mode_compaction_defaults >/dev/null 2>&1; then
   # shellcheck source=run-plan-args.sh
@@ -124,15 +187,29 @@ run_plan_invoke_common_record_cli_pid() {
 run_plan_invoke_common_launch_cli() {
   local runtime="$1"
   shift
+  local -a launch_cmd=("$@")
+
+  # A Ralph-run Codex process can be launched from an existing Codex session
+  # (for example, an IDE terminal opened by Codex).  Those parent-session
+  # markers make the child CLI attempt to attach to the parent's in-process
+  # app server.  That connection is intentionally unavailable to the child
+  # sandbox, so the CLI exits before the model receives the TODO.  They are
+  # transport markers, not user configuration or authentication; remove them
+  # only for the child invocation.  An explicit escape hatch remains for a
+  # caller that intentionally manages that parent/child connection.
+  if [[ "$runtime" == "codex" && "${CODEX_PLAN_PRESERVE_PARENT_RUNTIME_ENV:-0}" != "1" ]]; then
+    launch_cmd=(env -u CODEX_SANDBOX -u CODEX_PERMISSION_PROFILE -u CODEX_THREAD_ID -u CODEX_CI "${launch_cmd[@]}")
+  fi
+
   if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
-    ralph_process_scope_exec runtime "$runtime" "$@"
+    ralph_process_scope_exec runtime "$runtime" "${launch_cmd[@]}"
     return $?
   fi
 
   # Direct helper tests and third-party callers may source an invoker outside
   # run-plan. Preserve that API while the actual Ralph runner always initializes
   # the required supervisor before reaching this function.
-  "$@" &
+  "${launch_cmd[@]}" &
   local cli_pid=$!
   run_plan_invoke_common_record_cli_pid "$cli_pid"
   wait "$cli_pid"
@@ -180,19 +257,39 @@ run_plan_invoke_common_execute() {
   fi
   set +e
   set +o pipefail
+  local raw_stream_dir=""
+  local raw_stream_file=""
+  if [[ -n "${RALPH_PLAN_VERBOSE:-}" && "${RALPH_PLAN_VERBOSE}" != "0" ]]; then
+    raw_stream_dir="${RALPH_PLAN_WORKSPACE_ROOT:-${WORKSPACE:-.}/.ralph-workspace}/logs/${RALPH_PLAN_KEY:-plan}/raw"
+    raw_stream_file="$raw_stream_dir/${iteration:-0}-${runtime}.jsonl"
+    mkdir -p "$raw_stream_dir"
+  fi
+  local raw_stream_cmd=(cat)
+  if [[ -n "$raw_stream_file" ]]; then
+    raw_stream_cmd=(tee "$raw_stream_file")
+  fi
   if [[ ( "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ) ]] && command -v python3 &>/dev/null; then
     if [[ -n "${OUTPUT_LOG:-}" ]]; then
-      "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" "$OUTPUT_LOG" "$_pretty"
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" "$OUTPUT_LOG" "$_pretty"
     else
-      "$runner_fn" 2>&1 | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | python3 "$demux_py" "$runtime" "${SESSION_ID_FILE:-}" "${USAGE_FILE:-}" | tee -a "$OUTPUT_LOG"
     fi
     exit_code="${PIPESTATUS[0]}"
   else
     if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" ]] && [[ -n "$python_warning" ]]; then
       echo "$python_warning" >&2
     fi
-    "$runner_fn" 2>&1 | tee -a "$OUTPUT_LOG"
+    if [[ -n "$raw_stream_file" ]]; then
+      "$runner_fn" 2>&1 | "${raw_stream_cmd[@]}" | tee -a "$OUTPUT_LOG"
+    else
+      "$runner_fn" 2>&1 | tee -a "$OUTPUT_LOG"
+    fi
     exit_code="${PIPESTATUS[0]}"
+  fi
+  if [[ -n "$raw_stream_dir" ]]; then
+    while IFS= read -r old_raw_file; do
+      rm -f -- "$old_raw_file"
+    done < <(ls -1t "$raw_stream_dir"/*.jsonl 2>/dev/null | tail -n +6)
   fi
   if [[ "$_had_pipefail" == "1" ]]; then
     set -o pipefail
@@ -205,4 +302,7 @@ run_plan_invoke_common_execute() {
     set +e
   fi
   echo "$exit_code" >"$EXIT_CODE_FILE"
+  if declare -F ralph_session_todo_capture_after_invocation >/dev/null 2>&1; then
+    ralph_session_todo_capture_after_invocation || true
+  fi
 }

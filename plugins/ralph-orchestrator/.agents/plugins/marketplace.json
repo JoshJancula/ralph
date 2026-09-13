@@ -1,0 +1,16 @@
+{
+  "name": "ralph-plugins",
+  "interface": {
+    "displayName": "Ralph plugins"
+  },
+  "plugins": [
+    {
+      "name": "ralph-orchestrator",
+      "source": {
+        "source": "local",
+        "path": "./codex"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

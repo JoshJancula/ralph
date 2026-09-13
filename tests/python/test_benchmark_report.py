@@ -13,7 +13,10 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from ralph_script_loader import load_ralph_script
+# Add the tests/python directory to the path for importing ralph_script_loader
+sys.path.insert(0, str(Path(__file__).parent))
+
+from ralph_script_loader import load_ralph_script  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

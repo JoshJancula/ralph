@@ -78,6 +78,7 @@ wait_for_pid_gone() {
 }
 
 @test "scope process cap terminates the session and exits 78" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local exports
   exports="$(env RALPH_PROCESS_SCAN_INTERVAL_SECONDS=0.1 python3 "$SUPERVISOR_PY" init \
     --state-root "$STATE_ROOT" --project-root "$TEST_TMPDIR" --plan "$PLAN_FILE" \
@@ -94,6 +95,7 @@ wait_for_pid_gone() {
 }
 
 @test "detached guardian reaps a runtime and an escaped session after owner SIGKILL" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local launcher="$TEST_TMPDIR/launcher.sh"
   local run_dir_file="$TEST_TMPDIR/run-dir"
   local root_pid_file="$TEST_TMPDIR/root-pid"

@@ -11,13 +11,14 @@ if ! declare -F ralph_warn >/dev/null 2>&1; then
 fi
 
 # Public interface:
-#   collect_incoming_handoffs -- scan orchestration JSON and return handoffs targeting a stage.
+#   collect_incoming_handoffs -- scan stage outputArtifacts handoffs targeting a stage.
 #   extract_handoff_tasks -- parse ## Tasks section of handoff markdown, emit unchecked items.
 #   inject_handoffs_into_plan -- append/replace handoff blocks into plan file with idempotent guards.
 #   ralph_artifact_schema_validation_enabled -- rollout gate for post-stage JSON schema checks.
 #   verify_stage_artifact_schemas -- validate produced artifacts against declared schemas.
 #   ralph_artifact_provenance_enabled -- rollout gate for post-stage provenance checks.
 #   verify_stage_artifact_provenance -- validate produced artifact citations when declared.
+# Handoff paths and artifact contracts come only from stage declarations; roles never supply them.
 
 ralph_artifact_schema_validation_enabled() {
   local gate="${RALPH_ARTIFACT_SCHEMA_VALIDATION:-}"

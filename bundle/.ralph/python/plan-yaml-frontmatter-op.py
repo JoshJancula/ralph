@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Operate on a yaml-format plan frontmatter: get_next, count, set_status."""
+"""Operate on a yaml-format plan frontmatter: get_next, count, progress, set_status."""
+import json
 import re
 import sys
 
@@ -39,6 +40,7 @@ for idx, line in enumerate(fm_lines):
         current = {
             "start": idx,
             "end": idx,
+            "id": "",
             "content": "",
             "status": "",
             "content_line": None,
@@ -54,6 +56,8 @@ for idx, line in enumerate(fm_lines):
             elif key == "status":
                 current["status"] = value
                 current["status_line"] = idx
+            elif key == "id":
+                current["id"] = value
         continue
 
     if current is None:
@@ -74,6 +78,8 @@ for idx, line in enumerate(fm_lines):
         elif key == "status":
             current["status"] = value
             current["status_line"] = idx
+        elif key == "id":
+            current["id"] = value
         continue
 
     current["end"] = idx
@@ -91,6 +97,23 @@ if operation == "get_next":
 if operation == "count":
     done = sum(1 for item in todo_items if item.get("status") == "completed")
     print(f"{done} {len(todo_items)}")
+    raise SystemExit(0)
+
+if operation == "progress":
+    # Live plan progress for an in-flight stage: how far the control plan has
+    # actually got, and which todo is next. Emitted as JSON so callers merge it
+    # without reparsing positional text.
+    done = sum(1 for item in todo_items if item.get("status") == "completed")
+    current_id = ""
+    for item in todo_items:
+        if item.get("status") != "completed":
+            current_id = item.get("id", "")
+            break
+    print(json.dumps({
+        "completedTodos": done,
+        "totalTodos": len(todo_items),
+        "currentTodoId": current_id or None,
+    }))
     raise SystemExit(0)
 
 if operation == "set_status":

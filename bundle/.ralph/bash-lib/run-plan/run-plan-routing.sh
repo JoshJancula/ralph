@@ -27,26 +27,11 @@ fi
 
 unset _run_plan_routing_dir
 
-# Resolve the selected agent's normalized mcp_servers and export only the
-# per-invocation overlay entries for runtime-config resolution. Clears any
-# stale preset when the agent has no MCP additions.
+# Profile MCP overlay export removed. Native ambient MCP then Ralph's protected
+# server is composed by runtime-config-mcp; callers must not set
+# RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON. Kept as a no-op for call-site cleanup.
 ralph_run_plan_export_agent_mcp_overlay() {
-  local workspace="${1:-${WORKSPACE:-}}"
-  local agent="${2:-${PREBUILT_AGENT:-}}"
-
   unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
-  [[ -n "$agent" ]] || return 0
-  if [[ ! -f "${AGENT_CONFIG_TOOL:-}" ]]; then
-    return 0
-  fi
-
-  local agents_root _entries
-  agents_root="$(prebuilt_agents_root "$workspace")"
-  _entries="$(bash "$AGENT_CONFIG_TOOL" mcp-servers "$agents_root" "$agent" 2>/dev/null || printf '[]')"
-  if [[ -n "$_entries" && "$_entries" != "[]" ]]; then
-    RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="$_entries"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
-  fi
   return 0
 }
 
@@ -123,9 +108,6 @@ ralph_run_plan_routing_ensure_runtime_cli() {
 ralph_run_plan_routing_resolve_current_context() {
   local runtime="${RUNTIME:-}"
   local workspace="${WORKSPACE:-}"
-  local agent_root
-  local agent_model=""
-  local runtime_env_model=""
 
   if [[ -z "$runtime" ]]; then
     echo "Error: runtime is required for context resolution." >&2
@@ -139,84 +121,26 @@ ralph_run_plan_routing_resolve_current_context() {
   PREBUILT_AGENT_CONTEXT=""
   CLAUDE_TOOLS_FROM_AGENT=""
   RALPH_AGENT_MAX_BUDGET=""
+  PREBUILT_AGENT=""
 
-  if [[ -n "${PREBUILT_AGENT:-}" ]]; then
-    if [[ ! -f "$AGENT_CONFIG_TOOL" ]]; then
-      echo -e "${C_R}agent-config-tool.sh is required for prebuilt agent validation and context.${C_RST}" >&2
-      ralph_run_plan_log "ERROR: missing $AGENT_CONFIG_TOOL for agent $PREBUILT_AGENT"
-      return 1
+  # Graph/orchestration / generated workflow-plan model order at the run-plan
+  # boundary: TODO pin (PLAN_MODEL_CLI) > stage/voter (PLAN_STAGE_MODEL) >
+  # saved > native. Per-TODO routing writes explicit models and runtime-only
+  # clears into PLAN_MODEL_CLI; empty means "no TODO/baseline pin" so the
+  # switched runtime resolves saved/native rather than carrying the stage model.
+  if [[ "${RALPH_MODEL_SCOPE:-}" == "staged" ]]; then
+    local staged_model_pin="${PLAN_MODEL_CLI-}"
+    if [[ -z "${PLAN_MODEL_CLI+x}" ]]; then
+      staged_model_pin="${PLAN_STAGE_MODEL:-}"
     fi
-    agent_root="$(prebuilt_agents_root "$workspace")"
-    ralph_run_plan_log "agent discovery ($runtime): root=$agent_root ids=[$(list_prebuilt_agent_ids "$workspace" | paste -sd', ' -)]"
-    if ! validate_prebuilt_agent_config "$workspace" "$PREBUILT_AGENT"; then
-      echo -e "${C_R}Invalid agent config for '${PREBUILT_AGENT}'.${C_RST} See .cursor/agents/README.md" >&2
-      ralph_run_plan_log "ERROR: validate failed for agent $PREBUILT_AGENT"
-      return 1
-    fi
-    agent_model="$(read_prebuilt_agent_model "$workspace" "$PREBUILT_AGENT")" || {
-      echo -e "${C_R}Could not read model for prebuilt agent${C_RST} $PREBUILT_AGENT" >&2
-      ralph_run_plan_log "ERROR: model read failed for $PREBUILT_AGENT"
+    SELECTED_MODEL="$(ralph_resolve_staged_plan_model "$runtime" "$staged_model_pin")" || {
+      if [[ "$runtime" == "claude" || "$runtime" == "codex" ]]; then
+        ralph_run_plan_die_unresolved_claude_codex_model "$runtime"
+      fi
+      echo -e "${C_R}Could not resolve staged model for runtime${C_RST} $runtime" >&2
       return 1
     }
-
-    case "$runtime" in
-      claude|codex)
-        SELECTED_MODEL="$(ralph_resolve_claude_codex_plan_model "$runtime" "$agent_model")" || {
-          ralph_run_plan_die_unresolved_claude_codex_model "$runtime"
-        }
-        if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
-          ralph_run_plan_log "using CLI --model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-        elif { [[ "$runtime" == "claude" && -n "${CLAUDE_PLAN_MODEL:-}" ]] \
-          || [[ "$runtime" == "codex" && -n "${CODEX_PLAN_MODEL:-}" ]] \
-          || [[ -n "${CURSOR_PLAN_MODEL:-}" ]]; }; then
-          ralph_run_plan_log "runtime env model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-        elif [[ -n "$agent_model" ]]; then
-          ralph_run_plan_log "prebuilt agent config model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-        else
-          ralph_run_plan_log "saved-model default: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-        fi
-        ;;
-      *)
-        SELECTED_MODEL="$agent_model"
-        runtime_env_model=""
-        case "$runtime" in
-          cursor) runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
-          opencode) runtime_env_model="${OPENCODE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
-          antigravity) SELECTED_MODEL="$(ralph_resolve_antigravity_plan_model "$agent_model")" || true ;;
-        esac
-        if [[ "$runtime" != "antigravity" && -n "$runtime_env_model" ]]; then
-          SELECTED_MODEL="$runtime_env_model"
-          ralph_run_plan_log "runtime env model override: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-        fi
-        if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
-          SELECTED_MODEL="$PLAN_MODEL_CLI"
-          ralph_run_plan_log "CLI --model overrides prebuilt agent default model (agent=$PREBUILT_AGENT)"
-        fi
-        ;;
-    esac
-
-    if [[ "$runtime" == "claude" ]]; then
-      PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=0 format_prebuilt_agent_context_block "$workspace" "$PREBUILT_AGENT")" || {
-        echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
-        ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
-        return 1
-      }
-      agent_root="$(prebuilt_agents_root "$workspace")"
-      CLAUDE_TOOLS_FROM_AGENT="$(bash "$AGENT_CONFIG_TOOL" allowed-tools "$agent_root" "$PREBUILT_AGENT" 2>/dev/null || true)"
-      [[ -n "$CLAUDE_TOOLS_FROM_AGENT" ]] && ralph_run_plan_log "allowed_tools from agent config: $CLAUDE_TOOLS_FROM_AGENT"
-      RALPH_AGENT_MAX_BUDGET="$(bash "$AGENT_CONFIG_TOOL" max-budget "$agent_root" "$PREBUILT_AGENT" 2>/dev/null || true)"
-      export RALPH_AGENT_MAX_BUDGET
-      [[ -n "$RALPH_AGENT_MAX_BUDGET" ]] && ralph_run_plan_log "max_budget_usd from agent config: $RALPH_AGENT_MAX_BUDGET"
-    else
-      PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=1 format_prebuilt_agent_context_block "$workspace" "$PREBUILT_AGENT")" || {
-        echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
-        ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
-        return 1
-      }
-      CLAUDE_TOOLS_FROM_AGENT=""
-    fi
-    ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
-    ralph_run_plan_export_agent_mcp_overlay "$workspace" "$PREBUILT_AGENT"
+    ralph_run_plan_log "staged model (TODO/baseline pin > stage > saved > native): ${SELECTED_MODEL:-native default} pin=${staged_model_pin:-} stage_model=${PLAN_STAGE_MODEL:-}"
   elif [[ "$runtime" == "claude" || "$runtime" == "codex" ]]; then
     if [[ "${INTERACTIVE_SELECT_MODEL_FLAG:-0}" == "1" ]]; then
       case "$runtime" in
@@ -263,6 +187,7 @@ ralph_run_plan_routing_capture_baseline() {
   _RALPH_RP_BASE_SESSION_ID_FILE_LEGACY="${SESSION_ID_FILE_LEGACY:-}"
   _RALPH_RP_BASE_RALPH_PLAN_SESSION_STRATEGY="${RALPH_PLAN_SESSION_STRATEGY:-}"
   _RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET="${RALPH_PLAN_CONTEXT_BUDGET:-}"
+  _RALPH_RP_BASE_RALPH_PLAN_SUBAGENTS="${RALPH_PLAN_SUBAGENTS:-inherit}"
   _RALPH_RP_BASE_RALPH_PLAN_FILE_PATH="${RALPH_PLAN_FILE_PATH:-}"
   _RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME="${RALPH_PLAN_CLI_RESUME:-}"
   _RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH="${RALPH_CURRENT_PLAN_PATH:-}"
@@ -270,7 +195,7 @@ ralph_run_plan_routing_capture_baseline() {
   _RALPH_RP_BASE_RALPH_CURRENT_TODO_ORDINAL="${RALPH_CURRENT_TODO_ORDINAL:-}"
   _RALPH_RP_BASE_RALPH_CURRENT_TODO_ID="${RALPH_CURRENT_TODO_ID:-}"
   _RALPH_RP_BASE_RALPH_CURRENT_TODO_HASH="${RALPH_CURRENT_TODO_HASH:-}"
-  _RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}"
+  unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
   _RALPH_RP_BASE_RALPH_INVOKED_CLI="${RALPH_INVOKED_CLI:-}"
   _RALPH_RP_BASE_CLAUDE_CLI="${CLAUDE_CLI:-}"
   _RALPH_RP_BASE_CURSOR_CLI="${CURSOR_CLI:-}"
@@ -305,6 +230,7 @@ ralph_run_plan_routing_restore_baseline() {
   SESSION_ID_FILE_LEGACY="${_RALPH_RP_BASE_SESSION_ID_FILE_LEGACY:-}"
   RALPH_PLAN_SESSION_STRATEGY="${_RALPH_RP_BASE_RALPH_PLAN_SESSION_STRATEGY:-}"
   RALPH_PLAN_CONTEXT_BUDGET="${_RALPH_RP_BASE_RALPH_PLAN_CONTEXT_BUDGET:-}"
+  RALPH_PLAN_SUBAGENTS="${_RALPH_RP_BASE_RALPH_PLAN_SUBAGENTS:-inherit}"
   RALPH_PLAN_FILE_PATH="${_RALPH_RP_BASE_RALPH_PLAN_FILE_PATH:-}"
   RALPH_PLAN_CLI_RESUME="${_RALPH_RP_BASE_RALPH_PLAN_CLI_RESUME:-}"
   RALPH_CURRENT_PLAN_PATH="${_RALPH_RP_BASE_RALPH_CURRENT_PLAN_PATH:-}"
@@ -312,12 +238,7 @@ ralph_run_plan_routing_restore_baseline() {
   RALPH_CURRENT_TODO_ORDINAL="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_ORDINAL:-}"
   RALPH_CURRENT_TODO_ID="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_ID:-}"
   RALPH_CURRENT_TODO_HASH="${_RALPH_RP_BASE_RALPH_CURRENT_TODO_HASH:-}"
-  if [[ -n "${_RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" ]]; then
-    RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="${_RALPH_RP_BASE_RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
-  else
-    unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
-  fi
+  unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
   RALPH_INVOKED_CLI="${_RALPH_RP_BASE_RALPH_INVOKED_CLI:-}"
   CLAUDE_CLI="${_RALPH_RP_BASE_CLAUDE_CLI:-}"
   CURSOR_CLI="${_RALPH_RP_BASE_CURSOR_CLI:-}"
@@ -329,7 +250,7 @@ ralph_run_plan_routing_restore_baseline() {
   ANTIGRAVITY_PLAN_GUTTER_ITER="${_RALPH_RP_BASE_ANTIGRAVITY_PLAN_GUTTER_ITER:-}"
   RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY="${_RALPH_RP_BASE_RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY:-}"
   export RALPH_RUNTIME_ROOT SESSION_ID_FILE SESSION_ID_FILE_LEGACY RALPH_PLAN_SESSION_STRATEGY
-  export RALPH_PLAN_CONTEXT_BUDGET RALPH_PLAN_CLI_RESUME RALPH_INVOKED_CLI
+  export RALPH_PLAN_CONTEXT_BUDGET RALPH_PLAN_SUBAGENTS RALPH_PLAN_CLI_RESUME RALPH_INVOKED_CLI
   export RALPH_CURRENT_PLAN_PATH RALPH_CURRENT_TODO_LINE RALPH_CURRENT_TODO_ORDINAL
   export RALPH_CURRENT_TODO_ID RALPH_CURRENT_TODO_HASH
   export CLAUDE_CLI CURSOR_CLI CODEX_CLI OPENCODE_CLI ANTIGRAVITY_CLI
@@ -349,10 +270,10 @@ data = json.loads(sys.argv[1])
 fields = [
     data.get("stage", "") or "",
     data.get("runtime", "") or "",
-    data.get("agent", "") or "",
     data.get("model", "") or "",
     data.get("sessionStrategy", "") or "",
     data.get("contextBudget", "") or "",
+    data.get("nativeSubagents", "") or "inherit",
     data.get("planFile", "") or "",
 ]
 # Use a non-whitespace delimiter so Bash preserves empty middle fields.
@@ -368,10 +289,10 @@ ralph_run_plan_routing_apply_effective_todo_context() {
   local todo_id="${5:-}"
   local eff_stage=""
   local eff_runtime=""
-  local eff_agent=""
   local eff_model=""
   local eff_session_strategy=""
   local eff_context_budget=""
+  local eff_subagents="inherit"
   local eff_plan_file=""
 
   ralph_run_plan_routing_restore_baseline
@@ -384,7 +305,7 @@ ralph_run_plan_routing_apply_effective_todo_context() {
     return 0
   fi
 
-  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_plan_file <<< "$(
+  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_model eff_session_strategy eff_context_budget eff_subagents eff_plan_file <<< "$(
     ralph_run_plan_routing_effective_metadata_fields "$plan_path" "$todo_target"
   )"; then
     return 1
@@ -405,11 +326,15 @@ ralph_run_plan_routing_apply_effective_todo_context() {
   if [[ -n "$eff_runtime" ]]; then
     RUNTIME="$eff_runtime"
   fi
-  if [[ -n "$eff_agent" ]]; then
-    PREBUILT_AGENT="$eff_agent"
-  fi
   if [[ -n "$eff_model" ]]; then
     PLAN_MODEL_CLI="$eff_model"
+  elif [[ -n "$eff_runtime" && "$eff_runtime" != "${_RALPH_RP_BASE_RUNTIME:-}" ]]; then
+    # Runtime-only switch: the pinned baseline model belongs to the baseline
+    # runtime and must not carry across; the switched runtime resolves its own
+    # saved/native default. Paired runtime+model still pins PLAN_MODEL_CLI, and
+    # model-only TODOs keep the baseline runtime so they never reach this branch.
+    PLAN_MODEL_CLI=""
+    ralph_run_plan_log "TODO routing: runtime-only switch to $eff_runtime; baseline model not carried across runtimes"
   fi
   if [[ -n "$eff_session_strategy" ]]; then
     RALPH_PLAN_SESSION_STRATEGY="$eff_session_strategy"
@@ -417,6 +342,8 @@ ralph_run_plan_routing_apply_effective_todo_context() {
   if [[ -n "$eff_context_budget" ]]; then
     RALPH_PLAN_CONTEXT_BUDGET="$eff_context_budget"
   fi
+  RALPH_PLAN_SUBAGENTS="$eff_subagents"
+  export RALPH_PLAN_SUBAGENTS
   RALPH_PLAN_FILE_PATH="$eff_plan_file"
   export RALPH_PLAN_FILE_PATH
 
@@ -434,6 +361,6 @@ ralph_run_plan_routing_apply_effective_todo_context() {
     fi
   fi
 
-  ralph_run_plan_log "TODO routing: line=$line_num id=${todo_id:-$todo_target} runtime=${RUNTIME:-} agent=${PREBUILT_AGENT:-} model=${SELECTED_MODEL:-} sessionStrategy=${RALPH_PLAN_SESSION_STRATEGY:-} contextBudget=${RALPH_PLAN_CONTEXT_BUDGET:-} planFile=${RALPH_PLAN_FILE_PATH:-}"
+  ralph_run_plan_log "TODO routing: line=$line_num id=${todo_id:-$todo_target} runtime=${RUNTIME:-} agent=${PREBUILT_AGENT:-} model=${SELECTED_MODEL:-} sessionStrategy=${RALPH_PLAN_SESSION_STRATEGY:-} contextBudget=${RALPH_PLAN_CONTEXT_BUDGET:-} subagents=${RALPH_PLAN_SUBAGENTS:-inherit} planFile=${RALPH_PLAN_FILE_PATH:-}"
   return 0
 }

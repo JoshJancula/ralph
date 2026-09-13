@@ -1,0 +1,194 @@
+{
+  "width": 40,
+  "height": 12,
+  "plain": [
+    "Ralph fixture-dep-approval",
+    "feature-delivery \u00b7 Dependency",
+    "WAITING  Ship the feature",
+    "0/1 stages  0s",
+    "> waiting   \u2500\u2500 approve-plan",
+    "approve-plan  approval  waiting",
+    "Live tail  press l for the exact command",
+    "Next  answer the outstanding request",
+    "Question  Approve the implementation pl\u2026",
+    "Request  outstanding",
+    "Changes target  implement",
+    "Attempt  1  Duration  1m 0s"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-approval",
+        "role": "path",
+        "width": 20
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "feature-delivery \u00b7 Dependency",
+        "role": "muted",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "WAITING",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Ship the feature               ",
+        "role": "default",
+        "width": 33
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "0/1 stages",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "0s",
+        "role": "muted",
+        "width": 2
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> waiting   \u2500\u2500 approve-plan             ",
+        "role": "focus",
+        "width": 40
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "approve-plan",
+        "role": "heading",
+        "width": 12
+      },
+      {
+        "col": 14,
+        "text": "approval",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 24,
+        "text": "waiting",
+        "role": "warning",
+        "width": 7
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 11,
+        "text": "press l for the exact command",
+        "role": "command",
+        "width": 29
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "answer the outstanding request",
+        "role": "command",
+        "width": 30
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Question  ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 10,
+        "text": "Approve the implementation pl\u2026",
+        "role": "default",
+        "width": 30
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Request  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "outstanding",
+        "role": "warning",
+        "width": 11
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Changes target  ",
+        "role": "muted",
+        "width": 16
+      },
+      {
+        "col": 16,
+        "text": "implement",
+        "role": "path",
+        "width": 9
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 9,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 10,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 22,
+        "text": "1m 0s             ",
+        "role": "default",
+        "width": 18
+      }
+    ]
+  ]
+}

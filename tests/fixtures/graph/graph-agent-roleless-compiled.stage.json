@@ -1,0 +1,25 @@
+{
+  "_inlineTodos": [
+    {
+      "content": "create the input",
+      "id": "source-1",
+      "status": "pending",
+      "verification": ""
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "shared/input.md",
+      "required": true
+    }
+  ],
+  "id": "source",
+  "nativeSubagents": "inherit",
+  "outputArtifacts": [
+    {
+      "path": "shared/input.md",
+      "required": true
+    }
+  ],
+  "runtime": "cursor"
+}

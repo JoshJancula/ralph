@@ -1,0 +1,80 @@
+name: Ralph plugin authenticated smoke (Claude)
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/claude
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require authenticated smoke secret
+        run: |
+          set -euo pipefail
+          test -n "$ANTHROPIC_API_KEY"
+          echo "::add-mask::$ANTHROPIC_API_KEY"
+
+      - name: Install Claude Code and repository plugin
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: claude plugin marketplace add --scope user'
+            echo 'mock: claude plugin install --scope user'
+            exit 0
+          fi
+          # Exact Claude adapter argv (non-TTY approved install uses --yes).
+          npm install --global @anthropic-ai/claude-code
+          claude plugin marketplace add --scope user "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR"
+          claude plugin install --scope user ralph-orchestrator@ralph-plugins --yes
+
+      - name: Smoke discovery
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: claude plugin list --json'
+          else
+            claude plugin list --json
+          fi
+
+      - name: Smoke read-only doctor
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: /ralph-doctor'
+          else
+            claude -p '/ralph-doctor' --output-format text
+          fi
+
+      - name: Smoke safe workflow
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: /ralph-workflow'
+          else
+            claude -p '/ralph-workflow' --output-format text
+          fi
+
+      - name: Uninstall repository plugin
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: claude plugin uninstall --scope user'
+            echo 'mock: claude plugin marketplace remove --scope user'
+          else
+            claude plugin uninstall --scope user ralph-orchestrator@ralph-plugins
+            claude plugin marketplace remove --scope user ralph-plugins
+          fi

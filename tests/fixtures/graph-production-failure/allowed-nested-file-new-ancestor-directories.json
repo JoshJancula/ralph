@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "case": "allowed-nested-file-new-ancestor-directories",
+  "description": "A changed leaf is inside a declared writeScope glob but requires newly created ancestor directories; those ancestor directories must be accepted, not flagged as out of scope.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "nodeId": "node-fixture-scope-nested",
+    "writeScopes": ["src/feature/**"],
+    "changedPaths": ["src/feature/new-subdir/nested/file.txt"],
+    "newAncestorDirectories": [
+      "src/feature/new-subdir",
+      "src/feature/new-subdir/nested"
+    ]
+  }
+}

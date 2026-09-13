@@ -1,0 +1,79 @@
+name: Ralph plugin authenticated smoke (Antigravity)
+
+on:
+  schedule:
+    - cron: '37 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Weekly cron job that drives a real vendor CLI with an API key. Without a
+    # cap a hung CLI bills the 360-minute default every week, per runtime.
+    timeout-minutes: 20
+    env:
+      ANTIGRAVITY_API_KEY: ${{ secrets.ANTIGRAVITY_API_KEY }}
+      RALPH_PLUGIN_DIR: plugins/ralph-orchestrator/antigravity
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require authenticated smoke secret
+        run: |
+          set -euo pipefail
+          test -n "$ANTIGRAVITY_API_KEY"
+          echo "::add-mask::$ANTIGRAVITY_API_KEY"
+
+      - name: Install Antigravity and repository plugin
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: agy plugin install'
+            exit 0
+          fi
+          # Exact Antigravity adapter argv: agy plugin install <package>
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/ralph-antigravity-plugin"
+          cp -R "$GITHUB_WORKSPACE/$RALPH_PLUGIN_DIR" "$RUNNER_TEMP/ralph-antigravity-plugin/ralph-orchestrator"
+          "$HOME/.local/bin/agy" plugin install "$RUNNER_TEMP/ralph-antigravity-plugin/ralph-orchestrator"
+
+      - name: Smoke discovery
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: agy plugin list'
+          else
+            agy plugin list
+          fi
+
+      - name: Smoke read-only doctor
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-doctor'
+          else
+            agy --print 'Run the installed ralph-doctor workflow only; do not modify files.'
+          fi
+
+      - name: Smoke safe workflow
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: ralph-workflow'
+          else
+            agy --print 'Run the installed ralph-workflow discovery workflow only; do not modify files.'
+          fi
+
+      - name: Uninstall repository plugin
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ "${RALPH_SMOKE_MOCK:-0}" == "1" ]]; then
+            echo 'mock: agy plugin uninstall'
+          else
+            agy plugin uninstall ralph-orchestrator
+          fi

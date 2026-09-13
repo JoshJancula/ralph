@@ -49,6 +49,19 @@ load_server_libs() {
   source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
   # shellcheck source=bash-lib/mcp-proxy/mcp-proxy-approvals.sh
   source "$SCRIPT_DIR/bash-lib/mcp-proxy/mcp-proxy-approvals.sh"
+  # shellcheck source=bash-lib/graph/graph-delegation-mcp.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-delegation-mcp.sh"
+  # G05: ralph_graph_run consumes the pure G04 preview builder for its
+  # two-step preview/confirm transaction; it never reconstructs the preview
+  # tuple by hand.
+  # shellcheck source=bash-lib/graph/graph-compile.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-compile.sh"
+  # shellcheck source=bash-lib/graph/graph-preflight.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-preflight.sh"
+  # shellcheck source=bash-lib/graph/graph-run-base.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-run-base.sh"
+  # shellcheck source=bash-lib/graph/graph-state.sh
+  source "$SCRIPT_DIR/bash-lib/graph/graph-state.sh"
 }
 
 load_server_libs
@@ -270,6 +283,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 readonly ORCHESTRATOR_SCRIPT=".ralph/orchestrator.sh"
+readonly GRAPH_RUN_SCRIPT=".ralph/graph-run.sh"
 MCP_AUTH_TOKEN="${RALPH_MCP_AUTH_TOKEN:-}"
 
 WORKSPACE_ROOT=""
@@ -282,14 +296,20 @@ _BASE_TOOL_LIST_JSON=$(
   "tools": [
     {
       "name": "ralph_run_plan",
-      "description": "Execute a plan.",
+      "description": "Execute a plan on the selected runtime with optional instruction-only role guidance. The runtime supplies the agent.",
       "inputSchema": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "workspace": { "type": "string", "description": "Workspace root path." },
           "plan_path": { "type": "string", "description": "Plan file path." },
           "runtime": { "type": "string", "description": "Runtime: cursor, claude, codex, opencode, antigravity." },
-          "agent": { "type": "string", "description": "Agent name." },
+          "role": { "type": "string", "description": "Optional instruction-only SDLC role id." },
+          "nativeSubagents": {
+            "type": "string",
+            "enum": ["off", "inherit"],
+            "description": "Whether the selected runtime may use its native subagents."
+          },
           "tool_access": {
             "type": "string",
             "enum": ["native", "ralph"],
@@ -302,7 +322,19 @@ _BASE_TOOL_LIST_JSON=$(
             "description": "Environment variable overrides."
           }
         },
-        "required": ["workspace", "plan_path", "runtime", "agent"]
+        "required": ["workspace", "plan_path", "runtime"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runtime": { "type": "string" },
+          "role": { "type": "string" },
+          "modelSource": { "type": "string" },
+          "nativeSubagents": { "type": "string", "enum": ["off", "inherit"] },
+          "delegatedRunId": { "type": "string" }
+        },
+        "required": ["runtime", "modelSource", "nativeSubagents"]
       }
     },
     {
@@ -333,6 +365,87 @@ _BASE_TOOL_LIST_JSON=$(
           }
         },
         "required": ["workspace", "orchestration_path"]
+      }
+    },
+    {
+      "name": "ralph_graph_run",
+      "description": "G05: two-step preview/confirm transaction. Selecting this tool is not consent. Without confirmed:true, returns requires_confirmation, the complete G04 invocation preview (resolved plan/namespace/roots, node table, parallelism, policies), the exact CLI command, and confirmation_id, and executes nothing -- no ledger, log, workspace, or process is created. With confirmed:true, confirmation_id is required and must exactly match a freshly rebuilt preview's id; a mismatch returns a fresh preview and still executes nothing. Only a matching confirmed call invokes the graph run, using exactly the previously displayed command.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": { "type": "string", "description": "Workspace root path." },
+          "plan_path": { "type": "string", "description": "Graph plan file path (must have mode: dependency, or the legacy execution: graph)." },
+          "namespace": { "type": "string", "description": "Namespace for run artifacts (defaults to plan name)." },
+          "max_parallel": {
+            "type": "integer",
+            "description": "Maximum concurrent graph nodes (default 2).",
+            "minimum": 1
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Set true only on a second call that echoes back confirmation_id from a prior preview response. False or omitted (the default) always previews only."
+          },
+          "confirmation_id": {
+            "type": "string",
+            "description": "The confirmation_id from a prior preview response. Required when confirmed:true; must exactly match the freshly rebuilt preview's id or the call is refused and a fresh preview is returned instead."
+          },
+          "env_overrides": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variable overrides."
+          }
+        },
+        "required": ["workspace", "plan_path"]
+      }
+    },
+    {
+      "name": "ralph_graph_status",
+      "description": "Read-only. Reports the status of a graph run from the run-state ledger. Never creates a run, mutates a ledger, or invokes a model; safe to call at any time, including against a live in-progress run.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspace": { "type": "string", "description": "Workspace root path." },
+          "plan_path": { "type": "string", "description": "Graph plan file path." },
+          "namespace": { "type": "string", "description": "Namespace for the graph run." },
+          "run": {
+            "type": "string",
+            "description": "Run id or the literal token 'latest' (default: latest)."
+          }
+        },
+        "required": ["workspace", "plan_path"]
+      }
+    },
+    {
+      "name": "ralph_artifact_contract",
+      "description": "List the artifacts this stage may read and must produce. Call this before doing the stage's work. Returns each artifact's name, whether it is JSON, and its schema when it has one. You address artifacts by name; paths are never yours to choose.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "ralph_read_artifact",
+      "description": "Read a stage input by name, as listed by ralph_artifact_contract. Use this instead of reading artifact files by path.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Artifact name from ralph_artifact_contract." }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "ralph_write_artifact",
+      "description": "Produce a stage output by name. Pass `data` for a JSON artifact or `content` for a text one. The artifact is validated against its schema before anything is written, so a validation error means nothing landed on disk and you should fix the content and call again. This is the only way to write into the artifact directory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Artifact name from ralph_artifact_contract." },
+          "data": { "type": "object", "description": "Artifact body for a JSON artifact." },
+          "content": { "type": "string", "description": "Artifact body for a text artifact." }
+        },
+        "required": ["name"]
       }
     },
     {
@@ -401,11 +514,14 @@ get_tool_list_result() {
         ;;
     esac
     result_tools_json="$(ralph_mcp_proxy_result_tools_json)"
+    local delegation_tools_json
+    delegation_tools_json="$(graph_delegated_run_mcp_tools_json)"
     TOOL_LIST_RESULT=$(
       jq -c \
         --argjson proxy "$proxy_json" \
         --argjson result "$result_tools_json" \
-        '.tools += $proxy | .tools += $result | .tools |= sort_by(.name)' \
+        --argjson delegation "$delegation_tools_json" \
+        '.tools += $proxy | .tools += $result | .tools += $delegation | .tools |= sort_by(.name)' \
         <<< "$_BASE_TOOL_LIST_JSON"
     )
     if ralph_mcp_proxy_compact_tool_catalog_active; then
@@ -416,7 +532,7 @@ get_tool_list_result() {
           .tools |= map(
             . as $tool
             | ($tool.name // "") as $n
-            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run") then .
+            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run" or $n == "ralph_graph_run" or $n == "ralph_graph_status" or $n == "ralph_delegated_run_start" or $n == "ralph_delegated_run_status" or $n == "ralph_delegated_run_wait" or $n == "ralph_delegated_run_result" or $n == "ralph_delegated_run_cancel") then .
               elif ($core | index($n)) != null then .
               else empty
               end
@@ -425,10 +541,284 @@ get_tool_list_result() {
         ' <<< "$TOOL_LIST_RESULT"
       )
     fi
+    # Scope-based catalog filtering.  This is a usability hint; handler-level
+    # enforcement is the actual security boundary.
+    local hidden_tools_json='[]'
+    local hidden_name
+    while IFS= read -r hidden_name; do
+      [[ -n "$hidden_name" ]] || continue
+      hidden_tools_json="$(jq -c --arg n "$hidden_name" '. + [$n]' <<<"$hidden_tools_json")"
+    done < <(graph_delegated_run_mcp_catalog_hidden_tools)
+    if [[ "$(jq 'length' <<<"$hidden_tools_json")" -gt 0 ]]; then
+      TOOL_LIST_RESULT=$(
+        jq -c --argjson hidden "$hidden_tools_json" \
+          '.tools |= map(select((.name // "") as $n | ($hidden | index($n)) == null))' \
+          <<< "$TOOL_LIST_RESULT"
+      )
+    fi
     tools_array="$(jq -c '.tools' <<<"$TOOL_LIST_RESULT")"
     ralph_mcp_proxy_record_tools_list_telemetry "$tools_array"
   fi
   printf '%s' "$TOOL_LIST_RESULT"
+}
+
+# ---------------------------------------------------------------------------
+# Artifact contract tools.
+#
+# The orchestrator publishes each stage's artifact contract (see
+# orch_stage_write_contract) at RALPH_STAGE_CONTRACT, with every path already
+# token-expanded. These tools are the only sanctioned way for an agent to read
+# stage inputs and produce stage outputs, which is what lets stage instructions
+# stop restating artifact paths, namespaces, and schemas in prose.
+# ---------------------------------------------------------------------------
+
+# Absolute path for a contract entry.
+#
+# Prefer the resolvedPath the orchestrator computed: RALPH_PLAN_WORKSPACE_ROOT
+# means the plan state root in the orchestrator but the workspace root in this
+# server (see the notes near the runner env setup), so resolving it here a
+# second time would silently write artifacts where stage verification does not
+# look. The WORKSPACE_ROOT join is only a fallback for contracts written
+# without a workspace.
+artifact_abs_path() {
+  local entry_json="$1"
+  local resolved rel
+  resolved="$(echo "$entry_json" | jq -r '.resolvedPath // empty')"
+  if [[ -n "$resolved" ]]; then
+    printf '%s' "$resolved"
+    return 0
+  fi
+  rel="$(echo "$entry_json" | jq -r '.path')"
+  if [[ "$rel" == /* ]]; then
+    printf '%s' "$rel"
+  else
+    printf '%s/%s' "${WORKSPACE_ROOT%/}" "$rel"
+  fi
+}
+
+# Load the stage contract, or fail with a message explaining the absence.
+load_stage_contract() {
+  local contract_path="${RALPH_STAGE_CONTRACT:-}"
+  if [[ -z "$contract_path" ]]; then
+    ralph_mcp_log "artifact tools: RALPH_STAGE_CONTRACT is unset"
+    return 1
+  fi
+  if [[ ! -f "$contract_path" ]]; then
+    ralph_mcp_log "artifact tools: contract file missing: $contract_path"
+    return 1
+  fi
+  cat "$contract_path"
+}
+
+# Names available in one direction of the contract, comma separated, for errors.
+contract_names() {
+  local contract_json="$1"
+  local direction="$2"
+  echo "$contract_json" | jq -r --arg d "$direction" '[.[$d][]?.name] | join(", ")'
+}
+
+handle_artifact_contract() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+
+  local contract_json
+  if ! contract_json="$(load_stage_contract)"; then
+    send_error "$id_present" "$id_raw" "-32000" \
+      "no artifact contract is published for this stage; this stage declares no artifacts, or it is not running under the orchestrator"
+    return
+  fi
+
+  local summary_text
+  summary_text="$(
+    echo "$contract_json" | jq -r '
+      def line: "  - " + .name
+        + (if .format == "json" then " (json)" else " (text)" end)
+        + (if (.required // true) then "" else " [optional]" end)
+        + (if .schema then " schema: " + .schema else "" end);
+      "Stage: " + (.stageId // "?") + "\n"
+      + "Inputs you may read with ralph_read_artifact:\n"
+      + (if ((.requires // []) | length) > 0 then ([.requires[] | line] | join("\n")) else "  (none)" end)
+      + "\n"
+      + "Outputs you must produce with ralph_write_artifact:\n"
+      + (if ((.produces // []) | length) > 0 then ([.produces[] | line] | join("\n")) else "  (none)" end)
+    '
+  )"
+
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$summary_text" \
+      --argjson contract "$contract_json" \
+      '{content:[{type:"text",text:$text}],structuredContent:$contract,isError:false}'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+handle_read_artifact() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+
+  local name_arg
+  name_arg="$(echo "$args_json" | jq -r '.name // empty')"
+  if [[ -z "$name_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "name is required"
+    return
+  fi
+
+  local contract_json
+  if ! contract_json="$(load_stage_contract)"; then
+    send_error "$id_present" "$id_raw" "-32000" \
+      "no artifact contract is published for this stage"
+    return
+  fi
+
+  # Declared inputs first; a stage may also read back what it produced.
+  local entry
+  entry="$(
+    echo "$contract_json" | jq -c --arg n "$name_arg" \
+      'first((.requires[]?, .produces[]?) | select(.name == $n)) // empty'
+  )"
+  if [[ -z "$entry" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" \
+      "unknown artifact name: $name_arg (readable inputs: $(contract_names "$contract_json" "requires"))"
+    return
+  fi
+
+  local rel abs
+  rel="$(echo "$entry" | jq -r '.path')"
+  abs="$(artifact_abs_path "$entry")"
+  if [[ ! -f "$abs" ]]; then
+    send_error "$id_present" "$id_raw" "-32000" \
+      "artifact '$name_arg' has not been produced yet"
+    return
+  fi
+
+  local content
+  content="$(cat "$abs")"
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$content" \
+      --arg name "$name_arg" \
+      --arg path "$rel" \
+      '{content:[{type:"text",text:$text}],structuredContent:{name:$name,path:$path},isError:false}'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+handle_write_artifact() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+
+  local name_arg
+  name_arg="$(echo "$args_json" | jq -r '.name // empty')"
+  if [[ -z "$name_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "name is required"
+    return
+  fi
+
+  local has_content has_data
+  has_content="$(echo "$args_json" | jq -r 'has("content")')"
+  has_data="$(echo "$args_json" | jq -r 'has("data")')"
+  if [[ "$has_content" != "true" && "$has_data" != "true" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "provide either content (string) or data (object)"
+    return
+  fi
+  if [[ "$has_content" == "true" && "$has_data" == "true" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "provide content or data, not both"
+    return
+  fi
+
+  local contract_json
+  if ! contract_json="$(load_stage_contract)"; then
+    send_error "$id_present" "$id_raw" "-32000" \
+      "no artifact contract is published for this stage"
+    return
+  fi
+
+  local entry
+  entry="$(
+    echo "$contract_json" | jq -c --arg n "$name_arg" \
+      'first(.produces[]? | select(.name == $n)) // empty'
+  )"
+  if [[ -z "$entry" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" \
+      "this stage does not declare an artifact named '$name_arg' (it may produce: $(contract_names "$contract_json" "produces"))"
+    return
+  fi
+
+  local rel abs schema_rel
+  rel="$(echo "$entry" | jq -r '.path')"
+  schema_rel="$(echo "$entry" | jq -r '.schema // empty')"
+  abs="$(artifact_abs_path "$entry")"
+
+  local artifact_dir
+  artifact_dir="$(dirname "$abs")"
+  if ! mkdir -p "$artifact_dir"; then
+    send_error "$id_present" "$id_raw" "-32000" "cannot create artifact directory: $artifact_dir"
+    return
+  fi
+
+  # Stage the content beside the target so validation happens before anything
+  # lands at the contracted path, and the final move is atomic.
+  local tmp_path
+  tmp_path="$(mktemp "${artifact_dir}/.ralph-artifact.XXXXXX")" || {
+    send_error "$id_present" "$id_raw" "-32000" "cannot stage artifact write"
+    return
+  }
+  if [[ "$has_data" == "true" ]]; then
+    echo "$args_json" | jq '.data' >"$tmp_path"
+  else
+    echo "$args_json" | jq -r '.content' >"$tmp_path"
+  fi
+
+  if [[ -n "$schema_rel" ]]; then
+    local schema_abs validator_out
+    schema_abs="${WORKSPACE_ROOT%/}/$schema_rel"
+    if [[ ! -f "$schema_abs" ]]; then
+      rm -f "$tmp_path"
+      send_error "$id_present" "$id_raw" "-32000" "schema file not found: $schema_rel"
+      return
+    fi
+    local schema_py="${RALPH_ACTIVE_DIR:-${RALPH_DIR:-.ralph}}/python/artifact_json_schema.py"
+    if [[ -f "$schema_py" ]] && command -v python3 >/dev/null 2>&1; then
+      if ! validator_out="$(python3 "$schema_py" validate-artifact --schema "$schema_abs" --file "$tmp_path" 2>&1)"; then
+        rm -f "$tmp_path"
+        send_error "$id_present" "$id_raw" "-32602" \
+          "artifact '$name_arg' does not match $schema_rel -- $validator_out. Nothing was written; fix the content and call ralph_write_artifact again."
+        return
+      fi
+    else
+      ralph_mcp_log "artifact tools: schema validator unavailable; writing '$name_arg' unvalidated"
+    fi
+  fi
+
+  if ! mv -f "$tmp_path" "$abs"; then
+    rm -f "$tmp_path"
+    send_error "$id_present" "$id_raw" "-32000" "cannot write artifact: $rel"
+    return
+  fi
+
+  local bytes
+  bytes="$(wc -c <"$abs" | tr -d ' ')"
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "Wrote artifact '$name_arg' ($bytes bytes)$([[ -n "$schema_rel" ]] && printf ', schema valid')." \
+      --arg name "$name_arg" \
+      --arg path "$rel" \
+      --arg schema "$schema_rel" \
+      --argjson bytes "$bytes" \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{name:$name,path:$path,bytes:$bytes,schema_validated:($schema != "")},
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
 }
 
 handle_complete_todo() {
@@ -678,7 +1068,7 @@ handle_run_plan() {
   local args_json="$1"
   local id_present="$2"
   local id_raw="$3"
-  local workspace_arg plan_arg runtime_arg agent_arg non_interactive_arg tool_access_arg
+  local workspace_arg plan_arg runtime_arg role_arg native_subagents_arg non_interactive_arg tool_access_arg
   if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" != "1" ]]; then
     send_error "$id_present" "$id_raw" "-32004" "Nested Ralph runs are disabled for managed runtime sessions (set RALPH_ALLOW_NESTED_RUNS=1 to opt in)"
     return
@@ -694,11 +1084,16 @@ handle_run_plan() {
   workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
   plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
   runtime_arg="$(echo "$args_json" | jq -r '.runtime // empty')"
-  agent_arg="$(echo "$args_json" | jq -r '.agent // empty')"
+  role_arg="$(echo "$args_json" | jq -r '.role // empty')"
+  native_subagents_arg="$(echo "$args_json" | jq -r '.nativeSubagents // "inherit"')"
   non_interactive_arg="$(echo "$args_json" | jq -r '.non_interactive // "true"')"
   tool_access_arg="$(echo "$args_json" | jq -r '.tool_access // empty')"
-  if [[ -z "$workspace_arg" || -z "$plan_arg" || -z "$runtime_arg" || -z "$agent_arg" ]]; then
-    send_error "$id_present" "$id_raw" "-32602" "workspace, plan_path, runtime, and agent are required"
+  if ! echo "$args_json" | jq -e 'type == "object" and ((keys - ["workspace","plan_path","runtime","role","nativeSubagents","tool_access","non_interactive","env_overrides"]) | length == 0)' >/dev/null 2>&1; then
+    send_error "$id_present" "$id_raw" "-32602" "removed or unknown MCP field; use runtime, optional role, and nativeSubagents (the runtime supplies the agent)"
+    return
+  fi
+  if [[ -z "$workspace_arg" || -z "$plan_arg" || -z "$runtime_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace, plan_path, and runtime are required"
     return
   fi
   if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
@@ -710,9 +1105,11 @@ handle_run_plan() {
   if ! ensure_safe_argument "$runtime_arg" "runtime" "$id_present" "$id_raw"; then
     return
   fi
-  if ! ensure_safe_argument "$agent_arg" "agent" "$id_present" "$id_raw"; then
-    return
-  fi
+  if [[ -n "$role_arg" ]] && ! ensure_safe_argument "$role_arg" "role" "$id_present" "$id_raw"; then return; fi
+  case "$native_subagents_arg" in
+    off|inherit) ;;
+    *) send_error "$id_present" "$id_raw" "-32602" "nativeSubagents must be off or inherit"; return ;;
+  esac
   if ! ensure_safe_argument "$non_interactive_arg" "non_interactive" "$id_present" "$id_raw"; then
     return
   fi
@@ -802,11 +1199,15 @@ handle_run_plan() {
   if [[ "$non_interactive_arg" != "false" && "$non_interactive_arg" != "0" ]]; then
     runtime_command+=("--non-interactive")
   fi
-  runtime_command+=("--runtime" "$runtime_lower" "--plan" "$plan_path" "--agent" "$agent_arg")
+  runtime_command+=("--runtime" "$runtime_lower" "--plan" "$plan_path")
+  if [[ -n "$role_arg" ]]; then
+    runtime_command+=("--role" "$role_arg")
+  fi
   if [[ "$tool_access_mode" == "ralph" ]]; then
     runtime_command+=("--tool-access" "ralph")
   fi
   runtime_command+=("--workspace" "$workspace_path")
+  env_override_assignments+=("RALPH_PLAN_NATIVE_SUBAGENTS=$native_subagents_arg")
   if [[ -n "$tool_access_mode" && "$env_override_tool_access_seen" != "true" ]]; then
     env_override_assignments+=("RALPH_AGENT_TOOL_ACCESS=$tool_access_mode")
   fi
@@ -827,7 +1228,20 @@ handle_run_plan() {
   command_text="${command_text%" "}"
   local timestamp
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local summary="Plan run exit code $exit_code (runtime=$runtime_lower agent=$agent_arg)."
+  local model_source="runtime saved/default"
+  local model_env_name
+  case "$runtime_lower" in
+    cursor) model_env_name="CURSOR_PLAN_MODEL" ;;
+    claude) model_env_name="CLAUDE_PLAN_MODEL" ;;
+    codex) model_env_name="CODEX_PLAN_MODEL" ;;
+    opencode) model_env_name="OPENCODE_PLAN_MODEL" ;;
+    antigravity) model_env_name="ANTIGRAVITY_PLAN_MODEL" ;;
+  esac
+  if [[ -n "${!model_env_name:-}" ]]; then
+    model_source="runtime model override"
+  fi
+  local delegated_run_id="${RALPH_DELEGATED_RUN_ID:-${RALPH_GRAPH_DELEGATED_RUN_ID:-}}"
+  local summary="Plan run exit code $exit_code (runtime=$runtime_lower role=${role_arg:-none})."
   local result_json
   result_json="$(
     jq -n \
@@ -835,7 +1249,10 @@ handle_run_plan() {
       --arg workspace "$workspace_path" \
       --arg plan_path "$plan_path" \
       --arg runtime "$runtime_lower" \
-      --arg agent "$agent_arg" \
+      --arg role "$role_arg" \
+      --arg model_source "$model_source" \
+      --arg native_subagents "$native_subagents_arg" \
+      --arg delegated_run_id "$delegated_run_id" \
       --arg command "$command_text" \
       --arg timestamp "$timestamp" \
       --arg stdout_tail "$stdout_tail" \
@@ -847,21 +1264,26 @@ handle_run_plan() {
       --argjson timeout false \
       '{
         content:[{type:"text",text:$text}],
-        structuredContent:{
-          workspace:$workspace,
-          plan_path:$plan_path,
-          runtime:$runtime,
-          agent:$agent,
-          exit_code:$exit_code,
-          timeout:$timeout,
-          duration_seconds:$duration,
-          stdout_tail:$stdout_tail,
-          stderr_tail:$stderr_tail,
-          stdout_truncated:$stdout_truncated,
-          stderr_truncated:$stderr_truncated,
-          command:$command,
-          timestamp:$timestamp
-        },
+        structuredContent:(
+          {
+            workspace:$workspace,
+            plan_path:$plan_path,
+            runtime:$runtime,
+            modelSource:$model_source,
+            nativeSubagents:$native_subagents,
+            exit_code:$exit_code,
+            timeout:$timeout,
+            duration_seconds:$duration,
+            stdout_tail:$stdout_tail,
+            stderr_tail:$stderr_tail,
+            stdout_truncated:$stdout_truncated,
+            stderr_truncated:$stderr_truncated,
+            command:$command,
+            timestamp:$timestamp
+          }
+          + (if $role == "" then {} else {role:$role} end)
+          + (if $delegated_run_id == "" then {} else {delegatedRunId:$delegated_run_id} end)
+        ),
         isError:false
       }'
   )"
@@ -979,6 +1401,386 @@ handle_orchestrator_run() {
   send_result "$id_present" "$id_raw" "$result_json"
 }
 
+# graph_mcp_build_run_preview <workspace-path> <plan-path>
+#
+# G04/G05: read-only. Compiles the plan into a scratch graph.json purely to
+# build the run invocation preview; creates no ledger, log, or workspace,
+# and never invokes a runtime CLI. Always builds the confirmed-noninteractive
+# preview -- an MCP call is never a TTY -- so the returned commandArgv
+# already includes --yes and is exactly what a confirmed call executes.
+# Prints the preview JSON (schemaVersion..confirmationId) on stdout; returns
+# 1 with a stderr message when compile or preview construction fails.
+graph_mcp_build_run_preview() {
+  local workspace_path="$1" plan_path="$2"
+  local tmp_graph roots_json project_root state_root agent_workspace preview
+
+  tmp_graph="$(mktemp "${TMPDIR:-/tmp}/ralph-mcp-graph-preview.XXXXXX")" || return 1
+  if ! graph_compile_plan "$plan_path" "$tmp_graph" 1 >/dev/null 2>&1; then
+    rm -f "$tmp_graph"
+    echo "Error: failed to compile plan for preview: $plan_path" >&2
+    return 1
+  fi
+
+  roots_json="$(
+    RALPH_PROJECT_ROOT="$workspace_path" \
+    RALPH_AGENT_WORKSPACE="$workspace_path" \
+    RALPH_PLAN_WORKSPACE_ROOT="$workspace_path/.ralph-workspace" \
+    graph_run_base_resolve_roots "$workspace_path"
+  )" || {
+    rm -f "$tmp_graph"
+    echo "Error: failed to resolve graph roots for preview" >&2
+    return 1
+  }
+  project_root="$(jq -r '.projectRoot' <<<"$roots_json")"
+  state_root="$(jq -r '.stateRoot' <<<"$roots_json")"
+  agent_workspace="$(jq -r '.agentWorkspace' <<<"$roots_json")"
+
+  preview="$(graph_preflight_build_preview run confirmed-noninteractive "$plan_path" "$tmp_graph" \
+    "$project_root" "$state_root" "$agent_workspace")" || {
+    rm -f "$tmp_graph"
+    echo "Error: failed to build invocation preview" >&2
+    return 1
+  }
+  rm -f "$tmp_graph"
+  printf '%s\n' "$preview"
+}
+
+# graph_mcp_send_preview_result <id_present> <id_raw> <preview-json> [note]
+#
+# G05: sends the requires_confirmation response. Executes nothing and
+# creates no ledger, log, or workspace. [note] is empty for the initial
+# preview and explains a stale/mismatched confirmation_id on a re-preview.
+graph_mcp_send_preview_result() {
+  local id_present="$1" id_raw="$2" preview="$3" note="${4:-}"
+  local command_text confirmation_id summary result_json
+  command_text="$(jq -r '.commandText' <<<"$preview")"
+  confirmation_id="$(jq -r '.confirmationId' <<<"$preview")"
+  if [[ -n "$note" ]]; then
+    summary="$note Nothing was executed. Exact command: $command_text"
+  else
+    summary="Preview only; selecting this tool is not consent and nothing was executed. Call again with confirmed:true and this confirmation_id to run exactly: $command_text"
+  fi
+  result_json="$(
+    jq -n \
+      --arg text "$summary" \
+      --argjson preview "$preview" \
+      --arg command "$command_text" \
+      --arg confirmation_id "$confirmation_id" \
+      --arg note "$note" \
+      '{
+        content:[{type:"text", text:$text}],
+        structuredContent: ({
+          requires_confirmation: true,
+          preview: $preview,
+          command: $command,
+          confirmation_id: $confirmation_id
+        } + (if $note == "" then {} else {note: $note} end)),
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+# handle_graph_run implements G05: selecting this tool is not consent.
+#
+#   - Without confirmed:true: builds the G04 preview (via
+#     graph_mcp_build_run_preview, never reconstructed by hand) and returns
+#     requires_confirmation, the complete preview, the exact command, and
+#     confirmation_id. No ledger, log, process, or workspace is created.
+#   - With confirmed:true: confirmation_id is required and must exactly
+#     match a freshly rebuilt preview's id (the plan is recompiled and the
+#     preview rebuilt from scratch; nothing is trusted from the prior call).
+#     A mismatch returns a fresh preview and still executes nothing.
+#   - Only a match invokes exactly preview.commandArgv -- the same argv
+#     that was displayed and hashed, never a hand-rebuilt command.
+handle_graph_run() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local workspace_arg plan_arg namespace_arg max_parallel_arg confirmed_arg confirmation_id_arg
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" != "1" ]]; then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph runs are disabled for managed runtime sessions (set RALPH_ALLOW_NESTED_RUNS=1 to opt in)"
+    return
+  fi
+  local process_depth="${RALPH_PROCESS_RUN_DEPTH:-0}" process_max_depth="${RALPH_PROCESS_MAX_NESTED_DEPTH:-1}"
+  [[ "$process_depth" =~ ^[0-9]+$ ]] || process_depth=0
+  [[ "$process_max_depth" =~ ^[0-9]+$ ]] || process_max_depth=1
+  if [[ -n "${RALPH_PROCESS_RUN_ID:-}" && "${RALPH_ALLOW_NESTED_RUNS:-0}" == "1" ]] \
+    && (( process_depth >= process_max_depth )); then
+    send_error "$id_present" "$id_raw" "-32004" "Nested Ralph run depth limit reached"
+    return
+  fi
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  namespace_arg="$(echo "$args_json" | jq -r '.namespace // empty')"
+  max_parallel_arg="$(echo "$args_json" | jq -r '.max_parallel // empty')"
+  confirmed_arg="$(echo "$args_json" | jq -r 'if .confirmed == true then "true" else "false" end')"
+  confirmation_id_arg="$(echo "$args_json" | jq -r '.confirmation_id // empty')"
+  if [[ -z "$workspace_arg" || -z "$plan_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace and plan_path are required"
+    return
+  fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$plan_arg" "plan_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$namespace_arg" ]] && ! ensure_safe_argument "$namespace_arg" "namespace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$max_parallel_arg" ]] && ! ensure_safe_argument "$max_parallel_arg" "max_parallel" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$confirmation_id_arg" ]] && ! ensure_safe_argument "$confirmation_id_arg" "confirmation_id" "$id_present" "$id_raw"; then
+    return
+  fi
+  local workspace_path
+  if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+    return
+  fi
+  local plan_path
+  if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    return
+  fi
+  if [[ ! -f "$plan_path" ]]; then
+    send_error "$id_present" "$id_raw" "-32000" "Plan file not found: $plan_path"
+    return
+  fi
+  local graph_run_script="$workspace_path/$GRAPH_RUN_SCRIPT"
+  if [[ ! -f "$graph_run_script" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "graph-run.sh not found at $graph_run_script"
+    return
+  fi
+  if [[ -n "$namespace_arg" || -n "$max_parallel_arg" ]]; then
+    # The G04 preview builder's commandArgv is exactly the internal graph
+    # engine invocation `graph-run.sh run <plan> [--yes]`; it does not encode ad hoc --namespace/--max-parallel
+    # overrides. Rather than silently drop them (which would let the
+    # displayed command and the executed command diverge), refuse before
+    # building any preview.
+    send_error "$id_present" "$id_raw" "-32602" \
+      "namespace and max_parallel overrides are not supported by this preview/confirm transaction; omit them (the plan's resolved defaults are previewed and executed) or set them in the plan itself"
+    return
+  fi
+
+  local preview
+  if ! preview="$(graph_mcp_build_run_preview "$workspace_path" "$plan_path")"; then
+    send_error "$id_present" "$id_raw" "-32000" "failed to build the graph run preview for $plan_path"
+    return
+  fi
+  local current_confirmation_id
+  current_confirmation_id="$(jq -r '.confirmationId' <<<"$preview")"
+
+  if [[ "$confirmed_arg" != "true" ]]; then
+    graph_mcp_send_preview_result "$id_present" "$id_raw" "$preview" ""
+    return
+  fi
+  if [[ -z "$confirmation_id_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "confirmation_id is required when confirmed:true"
+    return
+  fi
+  if [[ "$confirmation_id_arg" != "$current_confirmation_id" ]]; then
+    graph_mcp_send_preview_result "$id_present" "$id_raw" "$preview" \
+      "confirmation_id did not match the current preview (stale or the plan/graph changed since it was issued)."
+    return
+  fi
+
+  # Match: invoke exactly preview.commandArgv, run from inside the resolved
+  # workspace and pinned to the exact three roots the preview was built
+  # against, never a hand-rebuilt command. This process's own exported
+  # RALPH_PROJECT_ROOT/RALPH_AGENT_WORKSPACE/RALPH_PLAN_WORKSPACE_ROOT (set
+  # once from RALPH_MCP_WORKSPACE at server startup) must not silently leak
+  # into and override the previewed roots for this one invocation.
+  local -a command=()
+  while IFS= read -r part; do
+    command+=("$part")
+  done < <(jq -r '.commandArgv[]' <<<"$preview")
+  local preview_project_root preview_agent_workspace preview_state_root
+  preview_project_root="$(jq -r '.roots.projectRoot' <<<"$preview")"
+  preview_agent_workspace="$(jq -r '.roots.agentWorkspace' <<<"$preview")"
+  preview_state_root="$(jq -r '.roots.stateRoot' <<<"$preview")"
+  local -a exec_command=(
+    bash -c 'cd "$1" && shift && export RALPH_PROJECT_ROOT="$1" RALPH_AGENT_WORKSPACE="$2" RALPH_PLAN_WORKSPACE_ROOT="$3" && shift 3 && exec "$@"'
+    -- "$workspace_path" "$preview_project_root" "$preview_agent_workspace" "$preview_state_root" "${command[@]}"
+  )
+
+  execute_tool_command "${exec_command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
+  local command_text
+  command_text="$(jq -r '.commandText' <<<"$preview")"
+  local namespace
+  namespace="$(jq -r '.namespace' <<<"$preview")"
+  local run_id="" run_status="unknown"
+  # graph_state_* resolves its state root from RALPH_GRAPH_STATE_ROOT or
+  # RALPH_PLAN_WORKSPACE_ROOT; this server process already exports
+  # RALPH_PLAN_WORKSPACE_ROOT=<workspace root> (not <workspace>/.ralph-workspace)
+  # for unrelated tools, so the ledger lookup must pin the same state root
+  # the just-completed run actually used.
+  if run_id="$(RALPH_GRAPH_STATE_ROOT="$preview_state_root" graph_state_resolve_run_id "$workspace_path" "$namespace" "latest" 2>/dev/null)" && [[ -n "$run_id" ]]; then
+    local run_file
+    run_file="$(RALPH_GRAPH_STATE_ROOT="$preview_state_root" graph_state_run_file "$workspace_path" "$namespace" "$run_id" 2>/dev/null || true)"
+    if [[ -n "$run_file" && -f "$run_file" ]]; then
+      run_status="$(graph_state_field "$run_file" "status" 2>/dev/null || echo "unknown")"
+    fi
+  fi
+  local status_command attach_command
+  status_command="ralph workflow status $(printf '%q' "${run_id:-latest}")"
+  attach_command="ralph workflow watch $(printf '%q' "${run_id:-latest}")"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # The subprocess starting and even exiting 0 does not by itself mean the
+  # graph run succeeded (the scheduler may still be running, awaiting an
+  # operator, or the node work may have failed); report the ledger-derived
+  # run id/status and let the caller confirm with ralph_graph_status.
+  local summary="Graph run invoked: $command_text (exit $exit_code). Run id: ${run_id:-unknown}, ledger status: $run_status. Use ralph_graph_status or: $status_command"
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$summary" \
+      --arg workspace "$workspace_path" \
+      --arg plan_path "$plan_path" \
+      --arg command "$command_text" \
+      --arg timestamp "$timestamp" \
+      --arg stdout_tail "$stdout_tail" \
+      --arg stderr_tail "$stderr_tail" \
+      --arg run_id "$run_id" \
+      --arg run_status "$run_status" \
+      --arg status_command "$status_command" \
+      --arg attach_command "$attach_command" \
+      --arg confirmation_id "$current_confirmation_id" \
+      --argjson exit_code "$exit_code" \
+      --argjson duration "$duration" \
+      --argjson stdout_truncated "$stdout_trunc" \
+      --argjson stderr_truncated "$stderr_trunc" \
+      --argjson timeout false \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{
+          workspace:$workspace,
+          plan_path:$plan_path,
+          run_id: (if $run_id == "" then null else $run_id end),
+          run_status:$run_status,
+          status_command:$status_command,
+          attach_command:$attach_command,
+          confirmation_id:$confirmation_id,
+          exit_code:$exit_code,
+          timeout:$timeout,
+          duration_seconds:$duration,
+          stdout_tail:$stdout_tail,
+          stderr_tail:$stderr_tail,
+          stdout_truncated:$stdout_truncated,
+          stderr_truncated:$stderr_truncated,
+          command:$command,
+          timestamp:$timestamp
+        },
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+handle_graph_status() {
+  local args_json="$1"
+  local id_present="$2"
+  local id_raw="$3"
+  local workspace_arg plan_arg namespace_arg run_arg
+  workspace_arg="$(echo "$args_json" | jq -r '.workspace // empty')"
+  plan_arg="$(echo "$args_json" | jq -r '.plan_path // empty')"
+  namespace_arg="$(echo "$args_json" | jq -r '.namespace // empty')"
+  run_arg="$(echo "$args_json" | jq -r '.run // "latest"')"
+  if [[ -z "$workspace_arg" || -z "$plan_arg" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace and plan_path are required"
+    return
+  fi
+  if ! ensure_safe_argument "$workspace_arg" "workspace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$plan_arg" "plan_path" "$id_present" "$id_raw"; then
+    return
+  fi
+  if [[ -n "$namespace_arg" ]] && ! ensure_safe_argument "$namespace_arg" "namespace" "$id_present" "$id_raw"; then
+    return
+  fi
+  if ! ensure_safe_argument "$run_arg" "run" "$id_present" "$id_raw"; then
+    return
+  fi
+  local workspace_path
+  if ! workspace_path="$(resolve_workspace "$workspace_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "workspace not allowed: $workspace_arg"
+    return
+  fi
+  local plan_path
+  if ! plan_path="$(resolve_plan_path "$workspace_path" "$plan_arg")"; then
+    send_error "$id_present" "$id_raw" "-32602" "plan path invalid or outside workspace: $plan_arg"
+    return
+  fi
+  local graph_run_script="$workspace_path/$GRAPH_RUN_SCRIPT"
+  if [[ ! -f "$graph_run_script" ]]; then
+    send_error "$id_present" "$id_raw" "-32602" "graph-run.sh not found at $graph_run_script"
+    return
+  fi
+  local command=("bash" "$graph_run_script" "status" "$plan_path")
+  if [[ -n "$namespace_arg" ]]; then
+    command+=("--namespace" "$namespace_arg")
+  fi
+  command+=("--run" "$run_arg")
+  execute_tool_command "${command[@]}"
+  local exit_code="$EXECUTE_TOOL_COMMAND_EXIT_CODE"
+  local duration="$EXECUTE_TOOL_COMMAND_DURATION_SECONDS"
+  local stdout_tail="$EXECUTE_TOOL_COMMAND_STDOUT_TAIL"
+  local stderr_tail="$EXECUTE_TOOL_COMMAND_STDERR_TAIL"
+  local stdout_trunc="$EXECUTE_TOOL_COMMAND_STDOUT_TRUNCATED"
+  local stderr_trunc="$EXECUTE_TOOL_COMMAND_STDERR_TRUNCATED"
+  local command_text
+  command_text="$(printf '%s ' "${command[@]}")"
+  command_text="${command_text%" "}"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local summary="Graph status (read-only) exit code $exit_code."
+  local result_json
+  result_json="$(
+    jq -n \
+      --arg text "$summary" \
+      --arg workspace "$workspace_path" \
+      --arg plan_path "$plan_path" \
+      --arg command "$command_text" \
+      --arg timestamp "$timestamp" \
+      --arg stdout_tail "$stdout_tail" \
+      --arg stderr_tail "$stderr_tail" \
+      --argjson exit_code "$exit_code" \
+      --argjson duration "$duration" \
+      --argjson stdout_truncated "$stdout_trunc" \
+      --argjson stderr_truncated "$stderr_trunc" \
+      --argjson timeout false \
+      '{
+        content:[{type:"text",text:$text}],
+        structuredContent:{
+          read_only:true,
+          workspace:$workspace,
+          plan_path:$plan_path,
+          exit_code:$exit_code,
+          timeout:$timeout,
+          duration_seconds:$duration,
+          stdout_tail:$stdout_tail,
+          stderr_tail:$stderr_tail,
+          stdout_truncated:$stdout_truncated,
+          stderr_truncated:$stderr_truncated,
+          command:$command,
+          timestamp:$timestamp
+        },
+        isError:false
+      }'
+  )"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
 handle_list_tools() {
   local id_present="$1"
   local id_raw="$2"
@@ -988,23 +1790,10 @@ handle_list_tools() {
 handle_resources_list() {
   local id_present="$1"
   local id_raw="$2"
-  local description="Aggregates every configured Cursor, Claude, Codex, OpenCode, and Antigravity agent into a shared catalog."
-  local result
-  result="$(
-    jq -n \
-      --arg uri "$RALPH_MCP_AGENT_CATALOG_RESOURCE_URI" \
-      --arg desc "$description" \
-      '{
-        resources:[{
-          uri:$uri,
-          name:"ralph/agents",
-          title:"Ralph agent catalog",
-          description:$desc,
-          mimeType:"text/markdown"
-        }]
-      }'
-  )"
-  send_result "$id_present" "$id_raw" "$result"
+  # Runtime configuration owns executable runtime configuration. Ralph exposes
+  # no portable agent resource; roles are instruction-only and are resolved by
+  # the role CLI in the project runtime.
+  send_result "$id_present" "$id_raw" '{"resources":[]}'
 }
 
 handle_resources_read() {
@@ -1017,26 +1806,7 @@ handle_resources_read() {
     send_error "$id_present" "$id_raw" "-32602" "uri is required"
     return
   fi
-  if [[ "$uri" != "$RALPH_MCP_AGENT_CATALOG_RESOURCE_URI" ]]; then
-    send_error "$id_present" "$id_raw" "-32002" "resource not found: $uri" "{\"uri\": \"$uri\"}"
-    return
-  fi
-  local catalog
-  catalog="$(generate_agent_catalog_markdown)"
-  local result
-  result="$(
-    jq -n \
-      --arg uri "$uri" \
-      --arg text "$catalog" \
-      '{
-        contents:[{
-          uri:$uri,
-          mimeType:"text/markdown",
-          text:$text
-        }]
-      }'
-  )"
-  send_result "$id_present" "$id_raw" "$result"
+  send_error "$id_present" "$id_raw" "-32002" "resource not found: $uri" "{\"uri\": \"$uri\"}"
 }
 
 handle_prompts_list() {
@@ -1189,6 +1959,36 @@ handle_call_tool() {
       ;;
     ralph_orchestrator_run)
       handle_orchestrator_run "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_graph_run)
+      handle_graph_run "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_graph_status)
+      handle_graph_status "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegated_run_start)
+      handle_delegated_run_start "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegated_run_status)
+      handle_delegated_run_status "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegated_run_wait)
+      handle_delegated_run_wait "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegated_run_result)
+      handle_delegated_run_result "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_delegated_run_cancel)
+      handle_delegated_run_cancel "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_artifact_contract)
+      handle_artifact_contract "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_read_artifact)
+      handle_read_artifact "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_write_artifact)
+      handle_write_artifact "$args_json" "$id_present" "$id_raw"
       ;;
     ralph_complete_todo)
       handle_complete_todo "$args_json" "$id_present" "$id_raw"

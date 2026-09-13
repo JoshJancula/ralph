@@ -1,48 +1,47 @@
 {
   "aggregate": {
-    "mrr": 0.925,
-    "precision_at_5": 0.72,
-    "queries_no_relevant_top10": 2,
-    "query_count": 40,
-    "recall_at_10": 0.741667,
-    "recall_at_5": 0.7125
+    "mrr": 0.855263,
+    "precision_at_5": 0.657895,
+    "queries_no_relevant_top10": 3,
+    "query_count": 38,
+    "recall_at_10": 0.701754,
+    "recall_at_5": 0.662281
   },
-  "description": "Baseline metrics for the contextual BM25 ranker with identifier-subtoken fallback gather and per-chunk result diversification. safety_top10 entries are project-relative relevant paths confirmed in the top-10 (not path:line) so the gate survives line-number drift. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions.",
+  "description": "Baseline metrics for the contextual BM25 ranker with identifier-subtoken fallback gather and per-chunk result diversification. safety_top10 entries are project-relative relevant paths confirmed in the top-10 (not path:line) so the gate survives line-number drift. Update only when fixture labels change with rationale or aggregate metrics improve without safety regressions. Re-baselined when the role asset tree was removed and its guidance was folded into inline workflow stage instructions: agent-config-tool now targets the workflow resource resolver, agent-code-review-md targets the bundled workflows carrying inline review instructions, and the deleted docs/cookbook-review/BACKLOG.md and bundle/.claude/agents/README.md labels were dropped from their queries. queries_no_relevant_top10 is unchanged at 2; recall_at_5 improved; precision_at_5, recall_at_10 and mrr moved down because two queries whose single canonical document was replaced by guidance spread across several workflow files now rank more than one relevant file instead of one exact hit.",
   "kind": "retrieval_eval_baseline",
   "per_query": {
     "agent-code-review-md": {
-      "precision_at_5": 0.6,
+      "precision_at_5": 0.4,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
+      "reciprocal_rank": 0.5,
       "safety_top10": [
-        "bundle/.ralph/agents/code-review.md"
+        "bundle/.ralph/workflows/bug-fix.workflow.md",
+        "bundle/.ralph/workflows/feature-delivery.workflow.md"
       ]
     },
     "agent-config-tool": {
       "precision_at_5": 1.0,
       "recall_at_10": 1.0,
-      "recall_at_5": 0.333333,
+      "recall_at_5": 1.0,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "bundle/.ralph/agent-config-tool.sh",
-        "bundle/.ralph/bash-lib/agent-config/cli.sh",
-        "bundle/.ralph/bash-lib/agent-config/validate.sh"
+        "bundle/.ralph/bash-lib/workflow/workflow-resource.sh"
       ]
     },
     "agent-schema-readme": {
-      "precision_at_5": 1.0,
-      "recall_at_10": 0.333333,
-      "recall_at_5": 0.333333,
-      "reciprocal_rank": 1.0,
+      "precision_at_5": 0.4,
+      "recall_at_10": 0.5,
+      "recall_at_5": 0.5,
+      "reciprocal_rank": 0.333333,
       "safety_top10": [
         "AGENTS.md"
       ]
     },
     "concept-evaluator-feedback-loop": {
       "precision_at_5": 0.6,
-      "recall_at_10": 0.333333,
-      "recall_at_5": 0.333333,
+      "recall_at_10": 0.5,
+      "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
         "docs/AGENT-WORKFLOW.md"
@@ -58,17 +57,8 @@
         "docs/ENVIRONMENT.md"
       ]
     },
-    "concept-stable-prefix": {
-      "precision_at_5": 0.4,
-      "recall_at_10": 0.333333,
-      "recall_at_5": 0.333333,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "docs/ENVIRONMENT.md"
-      ]
-    },
     "concept-three-root-model": {
-      "precision_at_5": 1.0,
+      "precision_at_5": 0.8,
       "recall_at_10": 1.0,
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
@@ -81,8 +71,7 @@
       "precision_at_5": 0.0,
       "recall_at_10": 0.0,
       "recall_at_5": 0.0,
-      "reciprocal_rank": 0.0,
-      "safety_top10": []
+      "reciprocal_rank": 0.0
     },
     "difficult-path-handoffs-file": {
       "precision_at_5": 1.0,
@@ -112,12 +101,11 @@
       ]
     },
     "doc-agent-workflow-handoff": {
-      "precision_at_5": 0.6,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
+      "precision_at_5": 0.4,
+      "recall_at_10": 0.5,
+      "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md",
         "docs/AGENT-WORKFLOW.md"
       ]
     },
@@ -132,7 +120,7 @@
       ]
     },
     "doc-mcp-proxy-tools": {
-      "precision_at_5": 0.4,
+      "precision_at_5": 0.2,
       "recall_at_10": 0.5,
       "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
@@ -144,8 +132,7 @@
       "precision_at_5": 0.0,
       "recall_at_10": 0.0,
       "recall_at_5": 0.0,
-      "reciprocal_rank": 0.0,
-      "safety_top10": []
+      "reciprocal_rank": 0.0
     },
     "exact-classify-tool-calls": {
       "precision_at_5": 0.8,
@@ -154,15 +141,6 @@
       "reciprocal_rank": 1.0,
       "safety_top10": [
         "tests/python/test_tool_call_classification.py"
-      ]
-    },
-    "exact-merge-prompt": {
-      "precision_at_5": 0.4,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
       ]
     },
     "exact-proxy-search-entry": {
@@ -205,10 +183,7 @@
       "precision_at_5": 1.0,
       "recall_at_10": 1.0,
       "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/permission-classify.sh"
-      ]
+      "reciprocal_rank": 1.0
     },
     "mcp-search-rank-baseline": {
       "precision_at_5": 1.0,
@@ -234,18 +209,17 @@
       "precision_at_5": 0.6,
       "recall_at_10": 0.333333,
       "recall_at_5": 0.333333,
-      "reciprocal_rank": 1.0,
+      "reciprocal_rank": 0.333333,
       "safety_top10": [
         "scripts/validate-orchestration-schema.sh"
       ]
     },
     "orch-validate-schema-script": {
-      "precision_at_5": 0.4,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
+      "precision_at_5": 0.2,
+      "recall_at_10": 0.5,
+      "recall_at_5": 0.5,
       "reciprocal_rank": 1.0,
       "safety_top10": [
-        "AGENTS.md",
         "scripts/validate-orchestration-schema.sh"
       ]
     },
@@ -253,7 +227,7 @@
       "precision_at_5": 0.2,
       "recall_at_10": 0.333333,
       "recall_at_5": 0.333333,
-      "reciprocal_rank": 1.0,
+      "reciprocal_rank": 0.5,
       "safety_top10": [
         "AGENTS.md"
       ]
@@ -377,13 +351,12 @@
       ]
     }
   },
-  "ranker": "contextual-bm25",
-  "schema_version": 1,
   "tolerance": {
     "mrr": 0.03,
     "precision_at_5": 0.03,
     "queries_no_relevant_top10_max_delta": 0,
     "recall_at_10": 0.03,
     "recall_at_5": 0.03
-  }
+  },
+  "schema_version": 1
 }

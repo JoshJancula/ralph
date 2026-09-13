@@ -3,6 +3,8 @@
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
 TEARDOWN_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/ralph-process-teardown.sh"
+BG_STATE_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-job-state.sh"
+BG_TEARDOWN_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-teardown.sh"
 CLEANUP_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-cleanup.sh"
 
 setup_file() {
@@ -18,7 +20,18 @@ setup() {
   export WORKSPACE="$TEST_TMPDIR/workspace"
   export RALPH_PLAN_KEY="teardown-test"
   export RALPH_ARTIFACT_NS="teardown-test"
-  mkdir -p "$WORKSPACE"
+  export RALPH_SESSION_DIR="$TEST_TMPDIR/session"
+  export RALPH_PROJECT_ROOT="$WORKSPACE"
+  export RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
+  export RALPH_AGENT_WORKSPACE="$WORKSPACE"
+  export RALPH_CURRENT_TODO_LINE="2"
+  export RALPH_CURRENT_TODO_ORDINAL="2"
+  export RALPH_CURRENT_TODO_HASH="teardown-hash"
+  export RUNTIME="cursor"
+  mkdir -p "$WORKSPACE" "$RALPH_SESSION_DIR"
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  # shellcheck disable=SC1090
+  source "$BG_STATE_LIB"
 }
 
 teardown() {
@@ -191,7 +204,6 @@ EOF
     export RUNTIME=claude
     export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
     export PROMPT_STATIC="warm-teardown-prefix"
-    export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT=teardown-fp
 
     ralph_claude_speculative_cache_warm_maybe_start 7
     pid="$(ralph_claude_speculative_cache_warm_read_pid)"
@@ -244,4 +256,135 @@ EOF
   ' _ "$TEARDOWN_LIB" "$CLEANUP_LIB"
 
   [ "$status" -eq 129 ]
+}
+
+@test "agent teardown preserves outstanding durable background jobs" {
+  local job_id job_pid
+  sleep 120 &
+  job_pid=$!
+  job_id="job-teardown-preserve"
+  ralph_bg_job_create "$job_id" "sleep 120" "test" 120 1 "$$" >/dev/null
+  ralph_bg_job_mark_launched "$job_id" "$job_pid" "setsid" "true" >/dev/null
+  ralph_bg_job_mark_running "$job_id" >/dev/null
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    export RALPH_SESSION_DIR="$3"
+    export RALPH_PLAN_KEY="$4"
+    export RALPH_CURRENT_TODO_LINE=2
+    export RALPH_CURRENT_TODO_ORDINAL=2
+    export RALPH_CURRENT_TODO_HASH=teardown-hash
+    export RUNTIME=cursor
+    ralph_run_plan_agent_teardown
+    kill -0 "$5"
+    state="$(ralph_bg_job_read "$6" 1 | jq -r .state)"
+    [[ "$state" == "running" ]]
+  ' _ "$TEARDOWN_LIB" "$BG_STATE_LIB" "$RALPH_SESSION_DIR" "$RALPH_PLAN_KEY" "$job_pid" "$job_id"
+
+  [ "$status" -eq 0 ]
+  kill -0 "$job_pid" 2>/dev/null && kill -KILL "$job_pid" 2>/dev/null || true
+}
+
+@test "plan-exit teardown cancels outstanding tier-1 background job" {
+  local job_id job_pid
+  sleep 120 &
+  job_pid=$!
+  job_id="job-teardown-cancel"
+  ralph_bg_job_create "$job_id" "sleep 120" "test" 120 1 "$$" >/dev/null
+  ralph_bg_job_mark_launched "$job_id" "$job_pid" "setsid" "true" >/dev/null
+  ralph_bg_job_mark_running "$job_id" >/dev/null
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    export RALPH_SESSION_DIR="$2"
+    export RALPH_PLAN_KEY="$3"
+    export RALPH_CURRENT_TODO_LINE=2
+    export RALPH_CURRENT_TODO_ORDINAL=2
+    export RALPH_CURRENT_TODO_HASH=teardown-hash
+    export RUNTIME=cursor
+    ralph_run_plan_process_teardown_on_exit
+    if kill -0 "$4" 2>/dev/null; then
+      exit 9
+    fi
+    status="$(ralph_bg_job_read "$5" 1 | jq -r .terminal_status)"
+    [[ "$status" == "cancelled" ]]
+  ' _ "$TEARDOWN_LIB" "$RALPH_SESSION_DIR" "$RALPH_PLAN_KEY" "$job_pid" "$job_id"
+
+  [ "$status" -eq 0 ]
+  kill -0 "$job_pid" 2>/dev/null && kill -KILL "$job_pid" 2>/dev/null || true
+}
+
+@test "plan-exit teardown marks background job interrupted on signal exit status" {
+  local job_id
+  job_id="job-teardown-interrupted"
+  ralph_bg_job_create "$job_id" "sleep 120" "test" 120 1 "$$" >/dev/null
+  ralph_bg_job_mark_launched "$job_id" 999996 "setsid" "true" >/dev/null
+  ralph_bg_job_mark_running "$job_id" >/dev/null
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    export RALPH_SESSION_DIR="$2"
+    export RALPH_PLAN_KEY="$3"
+    export RALPH_CURRENT_TODO_LINE=2
+    export RALPH_CURRENT_TODO_ORDINAL=2
+    export RALPH_CURRENT_TODO_HASH=teardown-hash
+    export RUNTIME=cursor
+    export EXIT_STATUS=interrupted
+    ralph_run_plan_process_teardown_on_exit
+    status="$(ralph_bg_job_read "$4" 1 | jq -r .terminal_status)"
+    [[ "$status" == "interrupted" ]]
+  ' _ "$TEARDOWN_LIB" "$RALPH_SESSION_DIR" "$RALPH_PLAN_KEY" "$job_id"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "background job safe terminate skips pid reuse mismatch" {
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    sleep 300 &
+    unrelated_pid=$!
+    kill -0 "$unrelated_pid"
+    record="$(ralph_bg_job_create_record_json "job-pid-reuse" "sleep 120" "test" 120 1 "$$")"
+    record="$(jq -c \
+      --argjson job_pid "$unrelated_pid" \
+      --arg job_process_start_id "wrong-start-id" \
+      --arg state "$RALPH_BG_JOB_STATE_RUNNING" \
+      ".job_pid = \$job_pid | .job_process_start_id = \$job_process_start_id | .state = \$state | .isolated = true" <<<"$record")"
+    if ralph_bg_job_safe_terminate "$record"; then
+      exit 8
+    fi
+    kill -0 "$unrelated_pid"
+    kill -TERM "$unrelated_pid" 2>/dev/null || true
+  ' _ "$BG_TEARDOWN_LIB"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "native shell pid_running validates process start id" {
+  local wrapper_lib start_id
+  wrapper_lib="$REPO_ROOT/bundle/.ralph/bash-lib/native-hook/native-shell-wrapper.sh"
+  # shellcheck disable=SC1090
+  source "$wrapper_lib"
+  start_id="$(ralph_native_shell_process_start_id_of_pid $$)"
+  [[ -n "$start_id" ]]
+  run ralph_native_shell_pid_running "$$" "$start_id"
+  [ "$status" -eq 0 ]
+  run ralph_native_shell_pid_running "$$" "wrong-start-id"
+  [ "$status" -eq 1 ]
+}
+
+@test "restart recovery runs from bg teardown library" {
+  # shellcheck disable=SC1090
+  source "$BG_TEARDOWN_LIB"
+  export RALPH_BG_JOBS=1
+  ralph_bg_job_create "job-recover-lib" "echo recover" "test" 60 1 888888 >/dev/null
+  ralph_bg_job_recover_on_restart
+  [[ -f "$RALPH_SESSION_DIR/bg-jobs/recovery-report.json" ]]
+  run jq -r '.[0].jobId' "$RALPH_SESSION_DIR/bg-jobs/recovery-report.json"
+  [ "$output" = "job-recover-lib" ]
 }

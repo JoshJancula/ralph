@@ -2,11 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bash-lib/help-render.sh
+source "$SCRIPT_DIR/bash-lib/help-render.sh"
 # shellcheck source=bash-lib/plan-todo.sh
 source "$SCRIPT_DIR/bash-lib/plan-todo.sh"
 
 usage() {
-  cat <<'USAGE'
+  cat <<'USAGE' | ralph_help_render
 Usage: ralph split-plan --plan <path> [--out <path>|--in-place] [--json]
 
 Preview or apply Ralph executable TODO normalization. Preview mode writes the

@@ -38,6 +38,7 @@ setup_orchestrator_workspace() {
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-planner.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/orchestrator/orchestrator-stages.sh" "$workspace/.ralph/bash-lib/orchestrator/"
   cp "$REPO_ROOT/.ralph/bash-lib/review-status.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/.ralph/bash-lib/atomic-json.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-teardown.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/bash-lib/ralph-process-supervisor.sh" "$workspace/.ralph/bash-lib/"
   cp "$REPO_ROOT/.ralph/python/ralph_process_supervisor.py" "$workspace/.ralph/python/"
@@ -117,7 +118,6 @@ create_dry_run_orchestration() {
   "stages": [
     {
       "id": "dry",
-      "agent": "dry-runner",
       "runtime": "cursor",
       "plan": "stages/dry-plan.md",
       "artifacts": [
@@ -145,7 +145,6 @@ create_loop_orchestration() {
   "stages": [
     {
       "id": "start",
-      "agent": "start-agent",
       "runtime": "cursor",
       "plan": "stages/start.plan.md",
       "artifacts": [
@@ -157,7 +156,6 @@ create_loop_orchestration() {
     },
     {
       "id": "review",
-      "agent": "review-agent",
       "runtime": "cursor",
       "plan": "stages/review.plan.md",
       "artifacts": [
@@ -191,7 +189,6 @@ create_handoff_injection_orchestration() {
   "stages": [
     {
       "id": "producer",
-      "agent": "producer-agent",
       "runtime": "cursor",
       "plan": "stages/producer.plan.md",
       "outputArtifacts": [
@@ -204,7 +201,6 @@ create_handoff_injection_orchestration() {
     },
     {
       "id": "consumer",
-      "agent": "consumer-agent",
       "runtime": "cursor",
       "plan": "stages/consumer.plan.md"
     }
@@ -226,7 +222,6 @@ create_human_ack_orchestration() {
   "stages": [
     {
       "id": "human-ack-stage",
-      "agent": "human-ack-agent",
       "runtime": "cursor",
       "plan": "stages/human-ack.plan.md",
       "humanAck": {
@@ -263,7 +258,6 @@ create_parallel_orchestration() {
   "stages": [
     {
       "id": "$stage_one_id",
-      "agent": "parallel-agent-one",
       "runtime": "$runtime",
       "plan": "$stage_one_plan",
       "artifacts": [
@@ -275,7 +269,6 @@ create_parallel_orchestration() {
     },
     {
       "id": "$stage_two_id",
-      "agent": "$stage_two_agent",
       "runtime": "$runtime",
       "plan": "$stage_two_plan",
       "artifacts": [
@@ -357,7 +350,7 @@ BAD
   [ "$status" -ne 0 ] \
     && [[ "$output" == *"Orchestrator parse error: invalid JSON"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run prints each planned step" {
@@ -369,10 +362,11 @@ BAD
   run env ORCHESTRATOR_DRY_RUN=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] \
     && [[ "$output" == *"DRY RUN step 1: .ralph/run-plan.sh (runtime=cursor)"* ]] \
-    && [[ "$output" == *"--agent dry-runner --plan stages/dry-plan.md"* ]] \
+    && [[ "$output" == *"--plan stages/dry-plan.md"* ]] \
+    && [[ "$output" != *"--role"* ]] \
     && [[ "$output" == *"expected artifacts: .ralph-workspace/artifacts/bats-dry/dry-output.md"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator ignores inherited workspace root env override" {
@@ -385,7 +379,7 @@ BAD
   local log_dir="$workspace/.ralph-workspace/logs"
   [ -d "$log_dir" ] || return 1
   [ ! -e "$workspace/.agents/logs/orchestrator-dry-run.orch.log" ] || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run maps sessionResume true to --session-strategy resume" {
@@ -400,7 +394,6 @@ BAD
   "stages": [
     {
       "id": "resume-stage",
-      "agent": "resume-agent",
       "runtime": "cursor",
       "plan": "stages/resume.plan.md",
       "sessionResume": true,
@@ -421,7 +414,7 @@ RESUME
     && [[ "$output" == *"--session-strategy resume"* ]] \
     && [[ "$output" != *"--session-strategy fresh"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run prefers sessionStrategy over sessionResume" {
@@ -435,7 +428,6 @@ RESUME
   "stages": [
     {
       "id": "strategy-stage",
-      "agent": "strategy-agent",
       "runtime": "cursor",
       "plan": "stages/strategy.plan.md",
       "sessionStrategy": "reset",
@@ -457,7 +449,7 @@ STRATEGY
     && [[ "$output" == *"--session-strategy reset"* ]] \
     && [[ "$output" != *"--session-strategy resume"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run shows parallel wave steps" {
@@ -471,7 +463,7 @@ STRATEGY
     && [[ "$output" == *"DRY RUN step 1:"* ]] \
     && [[ "$output" == *"DRY RUN step 2:"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator runs parallel waves successfully" {
@@ -491,7 +483,7 @@ STRATEGY
   [[ "$captured" == *"parallel-stage-one.plan.md"* ]] || { echo "missing stage one capture: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
   [[ "$captured" == *"parallel-stage-two.plan.md"* ]] || { echo "missing stage two capture: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator prefixes parallel wave console output and advertises follow logs" {
@@ -536,7 +528,7 @@ STRATEGY
     || { echo "FAIL: unexpected ANSI in stage two log"; cat "$stage_two_log"; rm -f "$capture_file" "$tty_output" "$clean_output"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file" "$tty_output" "$clean_output"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator reports a failing stage in a parallel wave" {
@@ -554,7 +546,7 @@ STRATEGY
     && [[ "$output" == *"beta-two:1"* ]] \
     || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator surfaces artifact verification failures in parallel mode" {
@@ -572,7 +564,7 @@ STRATEGY
     && [[ "$output" == *"beta-two.md"* ]] \
     || { echo "FAIL: $output"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "validator accepts parallelStages with loopControl" {
@@ -589,7 +581,6 @@ STRATEGY
   "stages": [
     {
       "id": "stage-one",
-      "agent": "parallel-agent-one",
       "runtime": "cursor",
       "plan": "stages/parallel-loop.plan.md",
       "loopControl": {
@@ -610,7 +601,7 @@ ORCH
   run bash "$REPO_ROOT/scripts/validate-orchestration-schema.sh" "$orch_file" 2>&1
   [ "$status" -eq 0 ] \
     || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator sanitizes stage id before RALPH_STAGE_ID export" {
@@ -624,7 +615,6 @@ ORCH
   "stages": [
     {
       "id": "My Stage/1",
-      "agent": "sanitize-agent",
       "runtime": "cursor",
       "plan": "stages/sanitize.plan.md",
       "artifacts": [
@@ -647,7 +637,7 @@ SANITIZE_ORCH
   [[ "$output" == *".ralph-workspace/artifacts/bats-sanitization/my-stage-1.md"* ]]
   [[ "$output" == *"humanAck"* ]]
   [[ "$output" == *"my-stage-1.ack"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "validate-orchestration-schema rejects unsafe stage id" {
@@ -660,7 +650,6 @@ SANITIZE_ORCH
   "stages": [
     {
       "id": "unsafe stage/1",
-      "agent": "unsafe-agent",
       "runtime": "cursor",
       "plan": "stages/unsafe.plan.md",
       "artifacts": [
@@ -693,7 +682,6 @@ BAD_ORCH
   "stages": [
     {
       "id": "invalid-session",
-      "agent": "invalid-agent",
       "runtime": "cursor",
       "plan": "stages/invalid-session.plan.md",
       "sessionResume": "not-a-boolean"
@@ -709,7 +697,7 @@ BAD
     && [[ "$output_lc" == *"sessionresume"* ]] \
     && [[ "$output_lc" == *"boolean"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator rejects invalid sessionStrategy values" {
@@ -724,7 +712,6 @@ BAD
   "stages": [
     {
       "id": "invalid-strategy",
-      "agent": "invalid-agent",
       "runtime": "cursor",
       "plan": "stages/invalid-strategy.plan.md",
       "sessionStrategy": "not-a-strategy"
@@ -742,7 +729,7 @@ BAD
     && [[ "$output_lc" == *"resume"* ]] \
     && [[ "$output_lc" == *"reset"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator rejects grader stage with resume sessionStrategy" {
@@ -757,7 +744,6 @@ BAD
   "stages": [
     {
       "id": "grade",
-      "agent": "qa",
       "runtime": "cursor",
       "plan": "stages/grade.plan.md",
       "sessionStrategy": "resume",
@@ -775,7 +761,7 @@ BAD
     && [[ "$output_lc" == *"grader"* ]] \
     && [[ "$output_lc" == *"fresh"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator loops back to an earlier stage when configured" {
@@ -789,7 +775,7 @@ BAD
     && [[ "$output" == *"Step 2 completed with feedback loop"* ]] \
     && [[ "$output" == *"Looping back to: start (iteration 2)"* ]] \
     || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator injects handoffs before run-plan invocation" {
@@ -829,39 +815,7 @@ HANDOFF
   [[ "$captured" == *"Injected task from producer stage"* ]] \
     || { echo "FAIL: consumer plan missing injected task: $captured"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
-}
-
-create_agent_config_workspace() {
-  local workspace="$1"
-  local agent_id="$2"
-  local artifact_path="$3"
-  local runtime="${4:-cursor}"
-  local agents_dir
-  if [[ "$runtime" == "cursor" ]]; then
-    agents_dir="$workspace/.cursor/agents"
-  elif [[ "$runtime" == "codex" ]]; then
-    agents_dir="$workspace/.codex/agents"
-  else
-    agents_dir="$workspace/.claude/agents"
-  fi
-  mkdir -p "$agents_dir/$agent_id"
-  cat > "$agents_dir/$agent_id/config.json" <<CFG
-{
-  "name": "$agent_id",
-  "model": "test-model",
-  "description": "test agent for bats",
-  "rules": [],
-  "skills": [],
-  "output_artifacts": [
-    {
-      "path": "$artifact_path",
-      "required": true
-    }
-  ]
-}
-CFG
-  cp "$REPO_ROOT/.ralph/agent-config-tool.sh" "$workspace/.ralph/"
+  ralph_test_rm_workspace "$workspace"
 }
 
 setup_model_capture_workspace() {
@@ -871,8 +825,16 @@ setup_model_capture_workspace() {
   cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
 #!/usr/bin/env bash
 set -euo pipefail
+runtime_arg=""
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--runtime" ]; then
+    j=$((i + 1)); runtime_arg="${!j:-}"
+  fi
+done
 {
-  printf 'RUNTIME=%s\n' "${1:-}"
+  printf 'RUNTIME=%s\n' "$runtime_arg"
+  printf 'RALPH_MODEL_SCOPE=%s\n' "${RALPH_MODEL_SCOPE:-}"
+  printf 'PLAN_STAGE_MODEL=%s\n' "${PLAN_STAGE_MODEL:-}"
   printf 'CURSOR_PLAN_MODEL=%s\n' "${CURSOR_PLAN_MODEL:-}"
   printf 'CLAUDE_PLAN_MODEL=%s\n' "${CLAUDE_PLAN_MODEL:-}"
   printf 'CLAUDE_PLAN_BARE=%s\n' "${CLAUDE_PLAN_BARE:-}"
@@ -921,7 +883,6 @@ STUB
   "stages": [
     {
       "id": "stage1",
-      "agent": "test-agent",
       "runtime": "cursor",
       "plan": "stages/stage1.plan.md",
       "model": "gpt-5.4-mini-medium",
@@ -942,11 +903,15 @@ ORCH
 
   local captured
   captured="$(cat "$capture_file")"
-  [[ "$captured" == *"CURSOR_PLAN_MODEL=gpt-5.4-mini-medium"* ]] \
-    || { echo "FAIL: expected CURSOR_PLAN_MODEL=gpt-5.4-mini-medium in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  # Staged runs carry the stage model as PLAN_STAGE_MODEL under the staged
+  # model scope; per-runtime *_PLAN_MODEL env is no longer a resolution rung.
+  [[ "$captured" == *"PLAN_STAGE_MODEL=gpt-5.4-mini-medium"* ]] \
+    || { echo "FAIL: expected PLAN_STAGE_MODEL=gpt-5.4-mini-medium in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"RALPH_MODEL_SCOPE=staged"* ]] \
+    || { echo "FAIL: expected RALPH_MODEL_SCOPE=staged in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator sets CLAUDE_PLAN_MODEL for claude stage and CODEX_PLAN_MODEL for codex stage" {
@@ -963,7 +928,6 @@ ORCH
   "stages": [
     {
       "id": "claude-stage",
-      "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
       "model": "claude-sonnet-4-6",
@@ -974,7 +938,6 @@ ORCH
     },
     {
       "id": "codex-stage",
-      "agent": "codex-agent",
       "runtime": "codex",
       "plan": "stages/codex-stage.plan.md",
       "model": "gpt-5.1-codex-mini",
@@ -997,13 +960,14 @@ ORCH
 
   local captured
   captured="$(cat "$capture_file")"
-  [[ "$captured" == *"CLAUDE_PLAN_MODEL=claude-sonnet-4-6"* ]] \
-    || { echo "FAIL: missing CLAUDE_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
-  [[ "$captured" == *"CODEX_PLAN_MODEL=gpt-5.1-codex-mini"* ]] \
-    || { echo "FAIL: missing CODEX_PLAN_MODEL; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  # Each stage forwards its own model as PLAN_STAGE_MODEL, per runtime step.
+  [[ "$captured" == *"PLAN_STAGE_MODEL=claude-sonnet-4-6"* ]] \
+    || { echo "FAIL: missing claude stage model; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
+  [[ "$captured" == *"PLAN_STAGE_MODEL=gpt-5.1-codex-mini"* ]] \
+    || { echo "FAIL: missing codex stage model; captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator forwards CODEX_PLAN_SANDBOX to run-plan" {
@@ -1020,7 +984,6 @@ ORCH
   "stages": [
     {
       "id": "codex-stage",
-      "agent": "codex-agent",
       "runtime": "codex",
       "plan": "stages/codex-stage.plan.md",
       "model": "gpt-5.1-codex-mini",
@@ -1045,7 +1008,7 @@ ORCH
     || { echo "FAIL: expected CODEX_PLAN_SANDBOX=read-only in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator does not forward CLAUDE_PLAN_BARE (it is an internal default in invoke-claude)" {
@@ -1066,7 +1029,6 @@ ORCH
   "stages": [
     {
       "id": "claude-stage",
-      "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
       "sessionResume": false,
@@ -1091,7 +1053,7 @@ ORCH
     || { echo "FAIL: expected CLAUDE_PLAN_BARE=0 in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator forwards CLAUDE_PLAN_MINIMAL and CLAUDE_PLAN_MINIMAL_TOOLS when set" {
@@ -1108,7 +1070,6 @@ ORCH
   "stages": [
     {
       "id": "claude-stage",
-      "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
       "sessionResume": false,
@@ -1143,7 +1104,7 @@ ORCH
     || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_DISABLE_MCP_PRESENT=x in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator forwards CLAUDE_PLAN_MINIMAL vars when set" {
@@ -1160,7 +1121,6 @@ ORCH
   "stages": [
     {
       "id": "claude-stage",
-      "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
       "sessionResume": false,
@@ -1188,7 +1148,7 @@ ORCH
     || { echo "FAIL: expected CLAUDE_PLAN_MINIMAL_TOOLS_PRESENT line in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator forwards CLAUDE_PLAN_PERMISSION_MODE to run-plan" {
@@ -1205,7 +1165,6 @@ ORCH
   "stages": [
     {
       "id": "claude-stage",
-      "agent": "claude-agent",
       "runtime": "claude",
       "plan": "stages/claude-stage.plan.md",
       "sessionResume": false,
@@ -1229,7 +1188,7 @@ ORCH
     || { echo "FAIL: expected CLAUDE_PLAN_PERMISSION_MODE=auto in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator forwards stage mcpProxyPolicy ahead of ambient env vars" {
@@ -1246,7 +1205,6 @@ ORCH
   "stages": [
     {
       "id": "cursor-stage",
-      "agent": "cursor-agent",
       "runtime": "cursor",
       "plan": "stages/cursor-stage.plan.md",
       "mcpProxyPolicy": "stage-policy",
@@ -1271,7 +1229,7 @@ ORCH
     || { echo "FAIL: expected stage policy override in captured: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator does not set model env var when stage omits model field" {
@@ -1288,7 +1246,6 @@ ORCH
   "stages": [
     {
       "id": "no-model-stage",
-      "agent": "no-model-agent",
       "runtime": "cursor",
       "plan": "stages/no-model.plan.md",
       "sessionResume": false,
@@ -1314,7 +1271,7 @@ ORCH
     || { echo "unexpected CURSOR_PLAN_MODEL set: $captured"; rm -f "$capture_file"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator keeps console ANSI, writes plain log output, forwards pretty on TTY, and honors NO_COLOR" {
@@ -1335,7 +1292,6 @@ ORCH
   "stages": [
     {
       "id": "stage1",
-      "agent": "pretty-agent",
       "runtime": "cursor",
       "plan": "stages/stage1.plan.md",
       "artifacts": [
@@ -1367,80 +1323,13 @@ ORCH
     || { echo "FAIL: expected NO_COLOR output without ANSI"; rm -f "$capture_file" "$tty_output" "$plain_output"; rm -rf "$workspace"; return 1; }
 
   rm -f "$capture_file" "$tty_output" "$plain_output"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
-@test "orchestrator uses stage artifacts and skips agent config merge when stage defines artifacts" {
-  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
-  local workspace
-  workspace="$(setup_orchestrator_workspace)"
-
-  # Agent config declares a different artifact than the stage
-  create_agent_config_workspace "$workspace" "test-agent" \
-    ".ralph-workspace/artifacts/skip-merge/agent-default.md" "cursor"
-
-  local orch_file="$workspace/skip-merge.orch.json"
-  cat <<'ORCH' > "$orch_file"
-{
-  "name": "bats skip merge",
-  "namespace": "skip-merge",
-  "stages": [
-    {
-      "id": "step1",
-      "agent": "test-agent",
-      "agentSource": "prebuilt",
-      "runtime": "cursor",
-      "plan": "stages/step1.plan.md",
-      "artifacts": [
-        {
-          "path": ".ralph-workspace/artifacts/skip-merge/stage-defined.md",
-          "required": true
-        }
-      ]
-    }
-  ]
-}
-ORCH
-  write_plan_file "$workspace" "stages/step1.plan.md"
-  write_artifact_file "$workspace" ".ralph-workspace/artifacts/skip-merge/stage-defined.md"
-  # Do NOT create agent-default.md — if it is added as required, the run will fail
-
-  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
-  [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
-  rm -rf "$workspace"
-}
-
-@test "orchestrator falls back to agent config artifacts when stage defines none" {
-  [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
-  local workspace
-  workspace="$(setup_orchestrator_workspace)"
-
-  create_agent_config_workspace "$workspace" "fallback-agent" \
-    ".ralph-workspace/artifacts/fallback-ns/fallback.md" "cursor"
-
-  local orch_file="$workspace/fallback.orch.json"
-  cat <<'ORCH' > "$orch_file"
-{
-  "name": "bats fallback",
-  "namespace": "fallback-ns",
-  "stages": [
-    {
-      "id": "fallback-stage",
-      "agent": "fallback-agent",
-      "agentSource": "prebuilt",
-      "runtime": "cursor",
-      "plan": "stages/fallback.plan.md"
-    }
-  ]
-}
-ORCH
-  write_plan_file "$workspace" "stages/fallback.plan.md"
-  write_artifact_file "$workspace" ".ralph-workspace/artifacts/fallback-ns/fallback.md"
-
-  run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
-  [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
-  rm -rf "$workspace"
-}
+# The profile artifact-fallback tests that lived here were removed with the
+# feature itself: stage declarations are now the only authority for input and
+# output artifacts. Stage-declared and roleless artifact routing is covered by
+# tests/bats/orchestration/orchestration-role-artifacts.bats.
 
 @test "orchestrator expands STAGE_ID token in stage artifacts" {
   [[ -n "${CI:-}" ]] && skip "Temporarily skipped in CI due shell-specific output variance"
@@ -1455,7 +1344,6 @@ ORCH
   "stages": [
     {
       "id": "my-step",
-      "agent": "id-agent",
       "runtime": "cursor",
       "plan": "stages/my-step.plan.md",
       "artifacts": [
@@ -1474,7 +1362,7 @@ ORCH
 
   run bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || { echo "FAIL output: $output"; return 1; }
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run shows STAGE_ID-expanded artifact paths" {
@@ -1490,7 +1378,6 @@ ORCH
   "stages": [
     {
       "id": "cr1",
-      "agent": "dry-agent",
       "runtime": "cursor",
       "plan": "stages/cr1.plan.md",
       "artifacts": [
@@ -1509,7 +1396,7 @@ ORCH
   [ "$status" -eq 0 ] \
     && [[ "$output" == *"expected artifacts:"*"cr1.md"* ]] \
     || { echo "FAIL output: $output"; return 1; }
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator honors humanAck gates when enabled" {
@@ -1528,7 +1415,7 @@ ORCH
   : >"$ack_file"
   run env ORCHESTRATOR_HUMAN_ACK=1 bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || return 1
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 # Generate a stub run-plan that ignores SIGINT/SIGTERM/SIGHUP and spawns descendants.
@@ -1609,7 +1496,6 @@ create_ctrlc_sequential_orchestration() {
   "stages": [
     {
       "id": "ignore-ctrlc",
-      "agent": "ctrlc-agent",
       "runtime": "cursor",
       "plan": "stages/ctrlc.plan.md"
     }
@@ -1633,13 +1519,11 @@ create_ctrlc_parallel_orchestration() {
   "stages": [
     {
       "id": "alpha",
-      "agent": "ctrlc-agent-alpha",
       "runtime": "cursor",
       "plan": "stages/ctrlc-alpha.plan.md"
     },
     {
       "id": "beta",
-      "agent": "ctrlc-agent-beta",
       "runtime": "cursor",
       "plan": "stages/ctrlc-beta.plan.md"
     }
@@ -1695,7 +1579,7 @@ wait_for_ctrlc_fixture() {
   report_ctrlc_startup_failure "$workspace" "$output_file"
   kill -TERM "$launcher_pid" 2>/dev/null || true
   wait "$launcher_pid" 2>/dev/null || true
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   return 1
 }
 
@@ -1739,10 +1623,11 @@ ctrlc_expected_log() {
   final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
   [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator teardown stops sequential run-plan and descendant processes on SIGTERM" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local workspace output_dir orch_file log_file
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"
@@ -1772,7 +1657,7 @@ ctrlc_expected_log() {
   final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
   [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator teardown stops sequential run-plan and descendant processes on SIGHUP" {
@@ -1806,7 +1691,7 @@ ctrlc_expected_log() {
   final_line_count="$(wc -l < "$log_file" 2>/dev/null || echo 0)"
   [ "$initial_line_count" -eq "$final_line_count" ] || { echo "FAIL: log still growing ($initial_line_count -> $final_line_count)"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGINT" {
@@ -1844,10 +1729,11 @@ ctrlc_expected_log() {
   [ "$count_a_initial" -eq "$count_a_final" ] || { echo "FAIL: log A still growing ($count_a_initial -> $count_a_final)"; rm -rf "$workspace"; return 1; }
   [ "$count_b_initial" -eq "$count_b_final" ] || { echo "FAIL: log B still growing ($count_b_initial -> $count_b_final)"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator teardown stops parallel wave run-plan processes and descendants on SIGTERM" {
+  ps -p $$ -o pid= >/dev/null 2>&1 || skip "process-table enumeration unavailable in this sandbox"
   local workspace output_dir orch_file log_a log_b
   workspace="$(setup_ctrlc_workspace)"
   output_dir="$workspace/ctrlc-logs"
@@ -1882,7 +1768,7 @@ ctrlc_expected_log() {
   [ "$count_a_initial" -eq "$count_a_final" ] || { echo "FAIL: log A still growing ($count_a_initial -> $count_a_final)"; rm -rf "$workspace"; return 1; }
   [ "$count_b_initial" -eq "$count_b_final" ] || { echo "FAIL: log B still growing ($count_b_initial -> $count_b_final)"; rm -rf "$workspace"; return 1; }
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator validates produced artifact JSON when schema validation is enabled" {
@@ -1898,7 +1784,6 @@ ctrlc_expected_log() {
   "stages": [
     {
       "id": "review",
-      "agent": "schema-agent",
       "runtime": "cursor",
       "plan": "stages/schema.plan.md",
       "artifacts": [
@@ -1917,7 +1802,7 @@ ORCH
   printf '%s\n' '{"status":"approved","feedback":[]}' > "$workspace/.ralph-workspace/artifacts/bats-schema/review.json"
   run env RALPH_ARTIFACT_SCHEMA_VALIDATION=1 RALPH_MODE=no bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator rejects invalid produced artifact JSON before advancing" {
@@ -1933,7 +1818,6 @@ ORCH
   "stages": [
     {
       "id": "review",
-      "agent": "schema-agent",
       "runtime": "cursor",
       "plan": "stages/schema-fail.plan.md",
       "artifacts": [
@@ -1949,12 +1833,14 @@ ORCH
 ORCH
   write_plan_file "$workspace" "stages/schema-fail.plan.md"
   mkdir -p "$workspace/.ralph-workspace/artifacts/bats-schema-fail"
-  printf '%s\n' '{"status":"approved"}' > "$workspace/.ralph-workspace/artifacts/bats-schema-fail/review.json"
+  # "feedback" is optional since findings[] was introduced, so an omitted key is
+  # valid; an out-of-enum status keeps this fixture genuinely schema-invalid.
+  printf '%s\n' '{"status":"maybe"}' > "$workspace/.ralph-workspace/artifacts/bats-schema-fail/review.json"
   run env RALPH_ARTIFACT_SCHEMA_VALIDATION=1 RALPH_MODE=no bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -ne 0 ]
   [[ "$output" == *"artifact schema validation failed"* ]]
   [[ "$output" == *"stage=review"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 setup_router_capture_workspace() {
@@ -2009,7 +1895,6 @@ create_router_orchestration() {
   "stages": [
     {
       "id": "router",
-      "agent": "router-agent",
       "runtime": "cursor",
       "plan": "stages/router.plan.md",
       "router": {
@@ -2027,7 +1912,6 @@ create_router_orchestration() {
     },
     {
       "id": "branch-a",
-      "agent": "branch-a-agent",
       "runtime": "cursor",
       "plan": "stages/branch-a.plan.md",
       "artifacts": [
@@ -2039,7 +1923,6 @@ create_router_orchestration() {
     },
     {
       "id": "branch-b",
-      "agent": "branch-b-agent",
       "runtime": "cursor",
       "plan": "stages/branch-b.plan.md",
       "artifacts": [
@@ -2051,7 +1934,6 @@ create_router_orchestration() {
     },
     {
       "id": "tail",
-      "agent": "tail-agent",
       "runtime": "cursor",
       "plan": "stages/tail.plan.md",
       "artifacts": [
@@ -2092,7 +1974,7 @@ ORCH
   [ -f "$summary_file" ]
   grep -Fq '"status":"skipped"' "$summary_file" || { echo "FAIL missing skipped usage record: $(cat "$summary_file")"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   rm -f "$stage_log"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 setup_planner_capture_workspace() {
@@ -2132,14 +2014,12 @@ if [[ "${RALPH_PLANNER_STAGE:-0}" == "1" ]]; then
     {
       "id": "worker-1",
       "content": "First generated worker slice",
-      "runtime": "cursor",
-      "agent": "implementation"
+      "runtime": "cursor"
     },
     {
       "id": "worker-2",
       "content": "Second generated worker slice",
-      "runtime": "cursor",
-      "agent": "implementation"
+      "runtime": "cursor"
     }
   ],
   "artifactRelationships": [],
@@ -2158,16 +2038,15 @@ fi
 exit 0
 STUB
   chmod +x "$workspace/.ralph/run-plan.sh"
-  create_agent_config_workspace "$workspace" "architect" ".ralph-workspace/artifacts/bats-planner/planner-output.json"
-  create_agent_config_workspace "$workspace" "implementation" ".ralph-workspace/artifacts/bats-planner/worker.md"
   printf '%s' "$workspace"
 }
 
+# LEGACY-orchestration fixture: classic items/stages dynamic planner (gated).
+# Intentionally omits planner-output v2 schema so classic items JSON is not
+# rejected by the workflow plan-file contract.
 create_planner_orchestration() {
   local workspace="$1"
   local orch_path="$workspace/planner.orch.json"
-  mkdir -p "$workspace/schemas"
-  cp "$REPO_ROOT/bundle/.ralph/schemas/planner-output.schema.json" "$workspace/schemas/"
   cat <<'ORCH' > "$orch_path"
 {
   "name": "bats planner",
@@ -2175,7 +2054,6 @@ create_planner_orchestration() {
   "stages": [
     {
       "id": "planner",
-      "agent": "architect",
       "runtime": "cursor",
       "plan": "stages/planner.plan.md",
       "planner": {
@@ -2183,20 +2061,18 @@ create_planner_orchestration() {
         "maxTodos": 8,
         "maxStages": 3,
         "allowedRuntimes": ["cursor"],
-        "allowedAgents": ["implementation"],
+        "allowedRoles": ["implementation"],
         "allowedModels": ["auto"]
       },
       "artifacts": [
         {
           "path": ".ralph-workspace/artifacts/bats-planner/planner-output.json",
-          "required": true,
-          "schema": "schemas/planner-output.schema.json"
+          "required": true
         }
       ]
     },
     {
       "id": "tail",
-      "agent": "tail-agent",
       "runtime": "cursor",
       "plan": "stages/tail.plan.md",
       "artifacts": [
@@ -2211,7 +2087,6 @@ create_planner_orchestration() {
 ORCH
   write_plan_file "$workspace" "stages/planner.plan.md"
   write_plan_file "$workspace" "stages/tail.plan.md"
-  create_agent_config_workspace "$workspace" "tail-agent" ".ralph-workspace/artifacts/bats-planner/tail.md"
   write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-planner/tail.md"
   printf '%s' "$orch_path"
 }
@@ -2221,18 +2096,20 @@ ORCH
   workspace="$(setup_planner_capture_workspace)"
   stage_log="$(mktemp)"
   orch_file="$(create_planner_orchestration "$workspace")"
-  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no RALPH_ARTIFACT_SCHEMA_VALIDATION=1 \
+  # LEGACY path: gate on, no v2 schema validation.
+  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no RALPH_ARTIFACT_SCHEMA_VALIDATION=0 \
+    RALPH_ALLOW_NESTED_RUNS=1 \
     PLANNER_STAGE_LOG="$stage_log" \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
-  [[ "$output" == *"Planner decomposition:"* ]] || { echo "FAIL missing planner summary: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Planner decomposition"* ]] || { echo "FAIL missing planner summary: $output"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   grep -Fxq planner "$stage_log" || { echo "FAIL planner stage not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   grep -Fxq worker-1 "$stage_log" || { echo "FAIL worker-1 not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   grep -Fxq worker-2 "$stage_log" || { echo "FAIL worker-2 not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   grep -Fxq tail "$stage_log" || { echo "FAIL tail not executed"; rm -f "$stage_log"; rm -rf "$workspace"; return 1; }
   [ -f "$workspace/.ralph-workspace/orchestration-plans/bats-planner/generated/worker-1.plan.md" ]
   rm -f "$stage_log"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "orchestrator dry-run shows planner decomposition when artifact exists" {
@@ -2247,18 +2124,436 @@ ORCH
     {
       "id": "worker-1",
       "content": "Preview worker",
-      "runtime": "cursor",
-      "agent": "implementation"
+      "runtime": "cursor"
     }
   ],
   "artifactRelationships": [],
   "verification": "bash scripts/run-bats.sh tests/bats/plan/validate-plan.bats"
 }
 JSON
-  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no ORCHESTRATOR_DRY_RUN=1 \
+  run env RALPH_DYNAMIC_PLANNER=1 RALPH_MODE=no ORCHESTRATOR_DRY_RUN=1 RALPH_ARTIFACT_SCHEMA_VALIDATION=0 \
+    RALPH_ALLOW_NESTED_RUNS=1 \
     bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
   [ "$status" -eq 0 ] || { echo "FAIL: $output"; rm -rf "$workspace"; return 1; }
-  [[ "$output" == *"Planner decomposition:"* ]] || { echo "FAIL missing dry-run planner summary: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Planner decomposition"* ]] || { echo "FAIL missing dry-run planner summary: $output"; rm -rf "$workspace"; return 1; }
   [[ "$output" == *"worker-1"* ]] || { echo "FAIL missing worker preview: $output"; rm -rf "$workspace"; return 1; }
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
+}
+
+# ---------------------------------------------------------------------------
+# Workflow plan-file planner: prompt contract + run-scoped publication
+# Exactly one entry-point test with sourced helper cases (test-design.md).
+# ---------------------------------------------------------------------------
+
+setup_workflow_planner_libs() {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/artifacts.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/orchestrator/orchestrator-planner.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-state.sh"
+  if ! declare -F ralph_orchestrator_log >/dev/null 2>&1; then
+    ralph_orchestrator_log() { printf '%s\n' "$*" >&2; }
+  fi
+  export WORKFLOW_STATE_SKIP_FSYNC=1
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_ACTIVE_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_ALLOW_NESTED_RUNS=1
+}
+
+write_planner_v2_fixture() {
+  local dest="$1"
+  mkdir -p "$(dirname -- "$dest")"
+  cat >"$dest" <<'JSON'
+{
+  "schemaVersion": 2,
+  "name": "demo-generated-plan",
+  "overview": "Implement the demo change from planner JSON",
+  "rationale": "Fewest independently verifiable TODOs for the demo.",
+  "todos": [
+    {
+      "id": "implement-core",
+      "content": "Update owned files for the demo change.",
+      "verification": "test -f README.md",
+      "status": "pending"
+    },
+    {
+      "id": "write-handoff",
+      "content": "Write .ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md summarizing work.",
+      "verification": "test -s .ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md",
+      "status": "pending"
+    }
+  ]
+}
+JSON
+}
+
+setup_workflow_planner_entry_workspace() {
+  local workspace registry_root run_id orch_path
+  workspace="$(setup_orchestrator_workspace)"
+  mkdir -p "$workspace/.ralph/python" "$workspace/.ralph/bash-lib/workflow" \
+    "$workspace/.ralph/schemas" "$workspace/schemas"
+  cp "$REPO_ROOT/bundle/.ralph/python/planner_contract.py" "$workspace/.ralph/python/"
+  cp "$REPO_ROOT/bundle/.ralph/python/artifact_json_schema.py" "$workspace/.ralph/python/"
+  cp "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-state.sh" "$workspace/.ralph/bash-lib/workflow/"
+  cp "$REPO_ROOT/bundle/.ralph/bash-lib/atomic-json.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/bundle/.ralph/bash-lib/ralph-wait.sh" "$workspace/.ralph/bash-lib/"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/planner-output.schema.json" "$workspace/.ralph/schemas/"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/planner-output.schema.json" "$workspace/schemas/"
+  cp "$REPO_ROOT/bundle/.ralph/schemas/workflow-plan-manifest.schema.json" "$workspace/.ralph/schemas/"
+  # validate-plan.sh pulls plan-todo from bundle layout; wrap to the repo copy.
+  cat > "$workspace/.ralph/validate-plan.sh" <<EOF
+#!/usr/bin/env bash
+exec bash "$REPO_ROOT/bundle/.ralph/validate-plan.sh" "\$@"
+EOF
+  chmod +x "$workspace/.ralph/validate-plan.sh"
+
+  cat <<'STUB' > "$workspace/.ralph/run-plan.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+ws_root=""
+while (($# > 0)); do
+  case "$1" in
+    --workspace) ws_root="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$ws_root" ]] || ws_root="$(pwd)"
+  mkdir -p "$ws_root/.ralph-workspace/artifacts/bats-wf-planner"
+  # Capture prompt contract the orchestrator injected for the planner stage.
+  if [[ -n "${RALPH_WORKFLOW_STAGE_INSTRUCTIONS:-}" ]]; then
+    printf '%s\n' "$RALPH_WORKFLOW_STAGE_INSTRUCTIONS" > "$ws_root/.ralph-workspace/artifacts/bats-wf-planner/captured-prompt.txt"
+  fi
+  cat > "$ws_root/.ralph-workspace/artifacts/bats-wf-planner/planner-output.json" <<'JSON'
+{
+  "schemaVersion": 2,
+  "name": "demo-generated-plan",
+  "overview": "Implement the demo change from planner JSON",
+  "rationale": "Fewest independently verifiable TODOs for the demo.",
+  "todos": [
+    {
+      "id": "implement-core",
+      "content": "Update owned files for the demo change.",
+      "verification": "test -f README.md",
+      "status": "pending"
+    },
+    {
+      "id": "write-handoff",
+      "content": "Write .ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md summarizing work.",
+      "verification": "test -s .ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md",
+      "status": "pending"
+    }
+  ]
+}
+JSON
+exit 0
+STUB
+  chmod +x "$workspace/.ralph/run-plan.sh"
+
+  mkdir -p "$workspace/.ralph-workspace/artifacts/bats-wf-planner"
+  printf '# investigation\n' > "$workspace/.ralph-workspace/artifacts/bats-wf-planner/investigation.md"
+
+  registry_root="$workspace/.ralph-workspace"
+  mkdir -p "$registry_root/workflow-inputs"
+  cat > "$registry_root/workflow-inputs/wf.md" <<'WF'
+---
+kind: workflow
+mode: sequential
+overview: bats workflow planner
+---
+# bats
+WF
+  cat > "$registry_root/workflow-inputs/sample.orch.json" <<'ORCH'
+{"name":"bats","namespace":"bats-wf-planner","stages":[]}
+ORCH
+
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-state.sh"
+  export WORKFLOW_STATE_SKIP_FSYNC=1
+  export WORKFLOW_STATE_FIXED_NOW="2026-08-26T12:00:00Z"
+  run_id="$(
+    workflow_state_create \
+      --state-root "$registry_root" \
+      --source-path "$registry_root/workflow-inputs/wf.md" \
+      --source-kind project \
+      --mode sequential \
+      --entry-kind task \
+      --task "Fix the flaky timeout" \
+      --task-provenance explicit \
+      --input-file "$registry_root/workflow-inputs/sample.orch.json" \
+      --workflow-id bats-wf-planner
+  )"
+
+  orch_path="$workspace/wf-planner.orch.json"
+  cat > "$orch_path" <<ORCH
+{
+  "name": "bats workflow planner",
+  "namespace": "bats-wf-planner",
+  "task": "Fix the flaky timeout",
+  "stages": [
+    {
+      "id": "plan-implementation",
+      "runtime": "cursor",
+      "model": "planner-model",
+      "plan": "stages/plan-implementation.plan.md",
+      "instructions": "Investigate and emit planner JSON only.",
+      "planner": {
+        "outputMode": "plan-file",
+        "maxTodos": 40
+      },
+      "inputArtifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-wf-planner/investigation.md",
+          "required": true
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-wf-planner/planner-output.json",
+          "required": true,
+          "schema": "schemas/planner-output.schema.json"
+        }
+      ]
+    },
+    {
+      "id": "implement",
+      "runtime": "claude",
+      "model": "consumer-model",
+      "planFrom": "plan-implementation",
+      "instructions": "Execute the generated plan and write the handoff.",
+      "workspaceMode": "snapshot",
+      "writeScopes": ["**"],
+      "agentGitAccess": "off",
+      "plan": "stages/implement.plan.md",
+      "inputArtifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-wf-planner/investigation.md",
+          "required": true
+        },
+        {
+          "path": ".ralph-workspace/artifacts/bats-wf-planner/planner-output.json",
+          "required": true
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md",
+          "required": true
+        }
+      ],
+      "loopControl": {
+        "loopBackTo": "implement",
+        "maxIterations": 2,
+        "onExhausted": "fail"
+      }
+    }
+  ]
+}
+ORCH
+  write_plan_file "$workspace" "stages/plan-implementation.plan.md"
+  write_plan_file "$workspace" "stages/implement.plan.md"
+  # Consumer plan is not executed in --single-stage; still need a file for orch parse.
+  write_artifact_file "$workspace" ".ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md"
+
+  printf '%s\t%s\t%s' "$workspace" "$run_id" "$orch_path"
+}
+
+@test "plan-file planner prompt consumer contract recommended plan run-scoped planner publication ungated workflow planner invalid planner artifact legacy planner isolation" {
+  # Cost: one stubbed orchestrator --single-stage (~few seconds) plus sourced helpers.
+  # No runtime/network; RALPH_WAIT_SCALE=0. Justifies entry-point because the
+  # contract is the orchestrator hook wiring itself (test-design.md).
+  local workspace run_id orch_file registry_run prompt_file plan_path manifest
+  local planner_stage consumer_json zero_prompt routing_line
+  local helper_ws artifact_bad
+
+  export RALPH_WAIT_SCALE=0
+  setup_workflow_planner_libs
+
+  # --- Sourced helper: consumer prompt + default routing from consumer ---
+  planner_stage='{"id":"plan-implementation","runtime":"cursor","model":"planner-model","planner":{"outputMode":"plan-file","maxTodos":40},"instructions":"Plan only.","inputArtifacts":[{"path":".ralph-workspace/artifacts/bats-wf-planner/investigation.md"}],"artifacts":[{"path":".ralph-workspace/artifacts/bats-wf-planner/planner-output.json","required":true,"schema":"bundle/.ralph/schemas/planner-output.schema.json"}]}'
+  consumer_json='{"id":"implement","runtime":"claude","model":"consumer-model","planFrom":"plan-implementation","instructions":"Execute generated plan.","workspaceMode":"snapshot","writeScopes":["**"],"agentGitAccess":"off","inputArtifacts":[{"path":".ralph-workspace/artifacts/bats-wf-planner/investigation.md"}],"artifacts":[{"path":".ralph-workspace/artifacts/bats-wf-planner/implementation-handoff.md","required":true}],"loopControl":{"loopBackTo":"implement","maxIterations":2,"onExhausted":"fail"}}'
+  export RALPH_ARTIFACT_NS="bats-wf-planner"
+  export RALPH_WORKFLOW_TASK="Fix the flaky timeout"
+  unset RALPH_WORKFLOW_REGISTRY_RUN RALPH_WORKFLOW_FALLBACK_RUNTIME
+  run orch_planner_build_plan_file_prompt "$planner_stage" "Fix the flaky timeout" \
+    ".ralph-workspace/artifacts/bats-wf-planner/planner-output.json" 40 "$consumer_json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Ralph plan-file planner contract"* ]]
+  [[ "$output" == *"Fix the flaky timeout"* ]]
+  [[ "$output" == *"schemaVersion\":2"* ]] || [[ "$output" == *'"schemaVersion":2'* ]]
+  [[ "$output" == *"maxTodos ceiling"* ]]
+  [[ "$output" == *"consumer stage ID: implement"* ]]
+  [[ "$output" == *"implementation-handoff.md"* ]]
+  [[ "$output" == *"workspaceMode: snapshot"* ]]
+  [[ "$output" == *"agentGitAccess: off"* ]]
+  [[ "$output" == *"provenance=consumer"* ]]
+  [[ "$output" == *"effective default runtime=claude"* ]]
+  [[ "$output" == *"model=consumer-model"* ]]
+  [[ "$output" == *"mandatory consumer handoff"* ]]
+  [[ "$output" != *"Recommended next-step plan"* ]]
+
+  routing_line="$(orch_planner_resolve_default_routing "$planner_stage" "$consumer_json")"
+  [[ "$routing_line" == $'claude\tconsumer-model\tconsumer' ]]
+
+  # --- Sourced helper: zero-consumer recommended plan + fallback routing ---
+  export RALPH_WORKFLOW_FALLBACK_RUNTIME="opencode"
+  export RALPH_WORKFLOW_FALLBACK_MODEL="fallback-model"
+  zero_prompt="$(orch_planner_build_plan_file_prompt \
+    '{"id":"recommend-plan","planner":{"outputMode":"plan-file","maxTodos":100},"artifacts":[{"path":".ralph-workspace/artifacts/bats-wf-planner/recommended-plan.json","required":true}]}' \
+    "Synthesize next steps" \
+    ".ralph-workspace/artifacts/bats-wf-planner/recommended-plan.json" \
+    100 \
+    "")"
+  [[ "$zero_prompt" == *"Recommended next-step plan"* ]]
+  [[ "$zero_prompt" == *"zero planFrom consumers"* ]]
+  [[ "$zero_prompt" == *"provenance=fallback"* ]]
+  [[ "$zero_prompt" == *"runtime=opencode"* ]]
+  [[ "$zero_prompt" == *"model=fallback-model"* ]]
+  [[ "$zero_prompt" != *"Sole consumer contract"* ]]
+  routing_line="$(orch_planner_resolve_default_routing \
+    '{"id":"recommend-plan","planner":{"outputMode":"plan-file","maxTodos":100}}' "")"
+  [[ "$routing_line" == $'opencode\tfallback-model\tfallback' ]]
+  unset RALPH_WORKFLOW_FALLBACK_RUNTIME RALPH_WORKFLOW_FALLBACK_MODEL
+
+  # --- Sourced helper: materializer hook failure => invalid-artifact, no manifest ---
+  helper_ws="$(mktemp -d)"
+  mkdir -p "$helper_ws/workflow-inputs"
+  printf 'x\n' > "$helper_ws/workflow-inputs/wf.md"
+  printf '{"stages":[]}\n' > "$helper_ws/workflow-inputs/sample.orch.json"
+  run_id="$(
+    workflow_state_create \
+      --state-root "$helper_ws" \
+      --source-path "$helper_ws/workflow-inputs/wf.md" \
+      --source-kind project \
+      --mode sequential \
+      --entry-kind task \
+      --task "hook fail" \
+      --task-provenance explicit \
+      --input-file "$helper_ws/workflow-inputs/sample.orch.json" \
+      --workflow-id hook-fail
+  )"
+  artifact_bad="$helper_ws/bad-planner.json"
+  write_planner_v2_fixture "$artifact_bad"
+  # Corrupt after write so materializer fails validation.
+  printf '{not-json' > "$artifact_bad"
+  export RALPH_WORKFLOW_REGISTRY_RUN="$helper_ws/workflow-runs/$run_id"
+  export WORKSPACE="$helper_ws"
+  export ORCH_FILE="$helper_ws/empty.orch.json"
+  printf '{"stages":[]}\n' > "$ORCH_FILE"
+  export C_R="" C_BOLD="" C_RST="" C_Y=""
+  step_rc=0
+  ORCH_PLANNER_FAIL_REASON=""
+  # Call directly (not bats `run`) so ORCH_PLANNER_FAIL_REASON stays in-process.
+  orch_planner_apply_workflow_plan_file \
+    '{"id":"plan-implementation","planner":{"outputMode":"plan-file","maxTodos":40},"runtime":"cursor","artifacts":[{"path":"bad-planner.json","required":true}]}' \
+    "plan-implementation" 1 step_rc || true
+  [ "$step_rc" -ne 0 ]
+  [ "${ORCH_PLANNER_FAIL_REASON:-}" = "invalid-artifact" ]
+  [ ! -e "$helper_ws/workflow-runs/$run_id/plans/plan-implementation/attempt-1.manifest.json" ]
+  [ ! -e "$helper_ws/workflow-runs/$run_id/plans/plan-implementation/attempt-1.plan.md" ]
+  unset RALPH_WORKFLOW_REGISTRY_RUN
+  rm -rf "$helper_ws"
+
+  # --- Entry-point: stubbed model stage publishes run-scoped plan (ungated) ---
+  IFS=$'\t' read -r workspace run_id orch_file <<<"$(setup_workflow_planner_entry_workspace)"
+  registry_run="$workspace/.ralph-workspace/workflow-runs/$run_id"
+  # Gates explicitly off: workflow plan-file must still publish.
+  run env RALPH_DYNAMIC_PLANNER=0 RALPH_MODE=no RALPH_ARTIFACT_SCHEMA_VALIDATION=0 \
+    RALPH_ALLOW_NESTED_RUNS=1 \
+    RALPH_WAIT_SCALE=0 \
+    RALPH_WORKFLOW_REGISTRY_RUN="$registry_run" \
+    RALPH_WORKFLOW_RUN_ID="$run_id" \
+    RALPH_WORKFLOW_STAGE_ATTEMPT=1 \
+    RALPH_WORKFLOW_TASK="Fix the flaky timeout" \
+    RALPH_ARTIFACT_NS="bats-wf-planner" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" \
+      --orchestration "$orch_file" \
+      --single-stage plan-implementation \
+      --run-id "$run_id" \
+      --attempt-id "attempt-1" \
+      "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL entry-point: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" == *"Planner plan-file published"* ]] || { echo "FAIL missing publish banner: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" != *"orchestration-plans"* ]] || { echo "FAIL leaked legacy generated writer: $output"; rm -rf "$workspace"; return 1; }
+  plan_path="$registry_run/plans/plan-implementation/attempt-1.plan.md"
+  manifest="$registry_run/plans/plan-implementation/attempt-1.manifest.json"
+  [ -f "$plan_path" ] || { echo "FAIL missing run-scoped plan"; rm -rf "$workspace"; return 1; }
+  [ -f "$manifest" ] || { echo "FAIL missing run-scoped manifest"; rm -rf "$workspace"; return 1; }
+  grep -q 'runtime: claude' "$plan_path" || { echo "FAIL freeze did not use consumer runtime"; rm -rf "$workspace"; return 1; }
+  grep -q 'model: consumer-model' "$plan_path" || { echo "FAIL freeze did not use consumer model"; rm -rf "$workspace"; return 1; }
+  grep -q 'sessionStrategy: fresh' "$plan_path"
+  [ "$(jq -r '.schemaVersion,.producerStageId,.producerAttempt' "$manifest" | paste -sd, -)" = "1,plan-implementation,1" ]
+  [ ! -e "$workspace/.ralph-workspace/orchestration-plans/bats-wf-planner/generated" ]
+  prompt_file="$workspace/.ralph-workspace/artifacts/bats-wf-planner/captured-prompt.txt"
+  [ -s "$prompt_file" ]
+  grep -q 'Ralph plan-file planner contract' "$prompt_file"
+  grep -q 'consumer stage ID: implement' "$prompt_file"
+  grep -q 'Fix the flaky timeout' "$prompt_file"
+
+  # --- Legacy planner isolation: classic stages path remains gate-controlled ---
+  ralph_test_rm_workspace "$workspace"
+
+  workspace="$(setup_planner_capture_workspace)"
+  orch_file="$(create_planner_orchestration "$workspace")"
+  run env RALPH_DYNAMIC_PLANNER=0 RALPH_MODE=no RALPH_ARTIFACT_SCHEMA_VALIDATION=0 \
+    RALPH_ALLOW_NESTED_RUNS=1 \
+    PLANNER_STAGE_LOG="$(mktemp)" \
+    bash "$REPO_ROOT/.ralph/orchestrator.sh" --orchestration "$orch_file" "$workspace" 2>&1
+  [ "$status" -eq 0 ] || { echo "FAIL legacy isolation: $output"; rm -rf "$workspace"; return 1; }
+  [[ "$output" != *"Planner decomposition"* ]]
+  [ ! -e "$workspace/.ralph-workspace/orchestration-plans/bats-planner/generated" ]
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "planner consumer resolution tolerates rework clones and rejects only divergent routing" {
+  # Regression: rework derivation clones the consumer stage once per rework
+  # round (implement -> implement-r1 -> implement-r2) and every clone inherits
+  # planFrom. Treating that as "multiple planFrom consumers" failed every
+  # rework-bearing workflow, including the bundled bug-fix workflow, the moment
+  # its planner stage finished. Clones that agree on routing are not ambiguous.
+  local orch_file agreeing divergent consumer rc
+
+  export RALPH_WAIT_SCALE=0
+  setup_workflow_planner_libs
+
+  orch_file="$BATS_TEST_TMPDIR/agreeing.orch.json"
+  cat >"$orch_file" <<'JSON'
+{"stages":[
+  {"id":"plan-implementation","runtime":"codex","model":"planner-model","planner":{"outputMode":"plan-file","maxTodos":40}},
+  {"id":"implement","runtime":"cursor","model":"auto","planFrom":"plan-implementation"},
+  {"id":"implement-r1","runtime":"cursor","model":"auto","planFrom":"plan-implementation"},
+  {"id":"implement-r2","runtime":"cursor","model":"auto","planFrom":"plan-implementation"}
+]}
+JSON
+
+  rc=0
+  consumer="$(orch_planner_find_consumer_json "$orch_file" "plan-implementation")" || rc=$?
+  [ "$rc" -eq 0 ]
+  [ "$(echo "$consumer" | jq -r '.id')" = "implement" ]
+  [ "$(echo "$consumer" | jq -r '.runtime')" = "cursor" ]
+
+  # Shared routing is what actually gets frozen into the generated plan.
+  [[ "$(orch_planner_resolve_default_routing \
+      '{"id":"plan-implementation","runtime":"codex"}' "$consumer")" == $'cursor\tauto\tconsumer' ]]
+
+  # Genuinely divergent routing stays a hard failure, and names the collision.
+  divergent="$BATS_TEST_TMPDIR/divergent.orch.json"
+  jq '(.stages[] | select(.id=="implement-r2") | .runtime) = "claude"' \
+    "$orch_file" >"$divergent"
+  rc=0
+  orch_planner_find_consumer_json "$divergent" "plan-implementation" >/dev/null || rc=$?
+  [ "$rc" -eq 2 ]
+
+  run orch_planner_consumer_conflict_detail "$divergent" "plan-implementation"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"implement=cursor/auto"* ]]
+  [[ "$output" == *"implement-r2=claude/auto"* ]]
+
+  # Zero consumers remains a non-error empty result, not an ambiguity.
+  rc=0
+  consumer="$(orch_planner_find_consumer_json "$orch_file" "no-such-planner")" || rc=$?
+  [ "$rc" -eq 0 ]
+  [ -z "$consumer" ]
 }

@@ -8,14 +8,21 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import textwrap
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+# ralph_term provides shared capability/color/symbol/width primitives. The
+# fallback path preserves behavior if the module is unavailable.
 
 try:
     import pretty_result_store as _RESULT_STORE
 except ImportError:
     _RESULT_STORE = None  # type: ignore[assignment]
+
+try:
+    import ralph_term as _TERM
+except ImportError:
+    _TERM = None  # type: ignore[assignment]
 
 
 def _load_demux_module() -> Any:
@@ -48,6 +55,18 @@ _WRITE_TOOL_NAMES = frozenset(
         "notebookedit",
         "edit",
         "multiedit",
+    }
+)
+# Direct reads already identify their source in the preceding tool-call line
+# (for example, ``read(bundle/.ralph/...)``).  The pretty log should preserve
+# its compact preview without adding a second result-store navigation UI for
+# the same file.
+_DIRECT_SOURCE_READ_TOOL_NAMES = frozenset(
+    {
+        "read",
+        "read_file",
+        "ralph_proxy_read",
+        "resources/read",
     }
 )
 # Pre-rendered patch text keys (codex apply_patch and similar).
@@ -180,10 +199,19 @@ def _safe_str(value: Any) -> str:
 
 
 def _truncate(text: str, limit: int = 80) -> str:
+    if _TERM is not None:
+        return _TERM.truncate(text, limit)
     text = text.strip()
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _visible_len(text: str) -> int:
+    """Length of a string ignoring ANSI SGR escape sequences."""
+    if _TERM is not None:
+        return _TERM.visible_len(text)
+    return len(_ANSI_ESCAPE_RE.sub("", text))
 
 
 def _display_path(value: str) -> str:
@@ -632,11 +660,6 @@ def _lang_for_path(path: str) -> Optional[str]:
     return _LANG_BY_EXT.get(ext.lower())
 
 
-def _visible_len(text: str) -> int:
-    """Length of a string ignoring ANSI SGR escape sequences."""
-    return len(_ANSI_ESCAPE_RE.sub("", text))
-
-
 def highlight_code_line(
     text: str, lang: Optional[str], palette: Optional[Mapping[str, str]]
 ) -> str:
@@ -734,40 +757,75 @@ class PrettyRenderer:
         self.tool_calls_total = 0
         self.turns_seen = 0
         on = self.color_depth > 0
-        self.reset = "\033[0m" if on else ""
-        # Soft foreground reset: clears color without dropping a diff background.
-        self.softfg = "\033[39m" if on else ""
-        self.dim = "\033[2m" if on else ""
-        self.bold = "\033[1m" if on else ""
-        self.green = self._c("32", "38;5;71")
-        self.red = self._c("31", "38;5;167")
-        self.cyan = self._c("36", "38;5;80")
-        # Semantic tones for tool calls and links.
-        self.path = self._c("36", "38;5;37")
-        self.toolname = self._c("36", "38;5;81")
-        self.arg = self._c("33", "38;5;179")
-        self.linkdim = self._c("2", "38;5;244")
-        # Diff line markers and backgrounds (backgrounds only at 256-color).
-        self.add_fg = self._c("32", "38;5;114")
-        self.del_fg = self._c("31", "38;5;174")
-        self.bg_add = self._c("", "48;5;22")
-        self.bg_del = self._c("", "48;5;52")
-        # Syntax token colors (pure SGR colors so the soft fg reset clears them).
-        self._syntax_palette = {
-            "kw": self._c("35", "38;5;176"),
-            "str": self._c("32", "38;5;150"),
-            "num": self._c("33", "38;5;179"),
-            "comment": self._c("90", "38;5;245"),
-            "func": self._c("36", "38;5;81"),
-            "type": self._c("33", "38;5;115"),
-            "reset": self.softfg,
-        }
-        self.bullet = "*" if self.ascii_only else "●"
-        self.branch = "-" if self.ascii_only else "└"
-        self.vbar = "|" if self.ascii_only else "│"
-        self.spinner = "~" if self.ascii_only else "⟳"
-        self.rule = "-" if self.ascii_only else "─"
-        self.width = self._detect_width()
+        if _TERM is not None:
+            self._style = _TERM.Style(self.color_depth, ascii_only=self.ascii_only)
+            self.reset = self._style("reset")
+            # Soft foreground reset: clears color without dropping a diff background.
+            self.softfg = self._style.soft_fg_reset
+            self.dim = self._style("muted")
+            self.bold = self._style.bold
+            self.green = self._style("success")
+            self.red = self._style("failure")
+            self.cyan = self._style("accent")
+            # Semantic tones for tool calls and links.
+            self.path = self._style("path")
+            self.toolname = self._style("command")
+            self.arg = self._style("warning")
+            self.linkdim = self._style("muted")
+            # Diff line markers and backgrounds (backgrounds only at 256-color).
+            self.add_fg = _TERM.resolve_color_code(self.color_depth, "32", "38;5;114")
+            self.del_fg = _TERM.resolve_color_code(self.color_depth, "31", "38;5;174")
+            self.bg_add = _TERM.resolve_color_code(self.color_depth, "", "48;5;22")
+            self.bg_del = _TERM.resolve_color_code(self.color_depth, "", "48;5;52")
+            # Syntax token colors (pure SGR colors so the soft fg reset clears them).
+            self._syntax_palette = {
+                "kw": _TERM.resolve_color_code(self.color_depth, "35", "38;5;176"),
+                "str": _TERM.resolve_color_code(self.color_depth, "32", "38;5;150"),
+                "num": _TERM.resolve_color_code(self.color_depth, "33", "38;5;179"),
+                "comment": _TERM.resolve_color_code(self.color_depth, "90", "38;5;245"),
+                "func": _TERM.resolve_color_code(self.color_depth, "36", "38;5;81"),
+                "type": _TERM.resolve_color_code(self.color_depth, "33", "38;5;115"),
+                "reset": self.softfg,
+            }
+            symbols = _TERM.Symbols(ascii_only=self.ascii_only)
+            self.bullet = symbols.bullet
+            self.branch = symbols.branch
+            self.vbar = symbols.vbar
+            self.spinner = symbols.spinner
+            self.rule = symbols.rule
+            self.width = _TERM.detect_width()
+        else:
+            self._style = None
+            self.reset = "\033[0m" if on else ""
+            self.softfg = "\033[39m" if on else ""
+            self.dim = "\033[2m" if on else ""
+            self.bold = "\033[1m" if on else ""
+            self.green = self._c("32", "38;5;71")
+            self.red = self._c("31", "38;5;167")
+            self.cyan = self._c("36", "38;5;80")
+            self.path = self._c("36", "38;5;37")
+            self.toolname = self._c("36", "38;5;81")
+            self.arg = self._c("33", "38;5;179")
+            self.linkdim = self._c("2", "38;5;244")
+            self.add_fg = self._c("32", "38;5;114")
+            self.del_fg = self._c("31", "38;5;174")
+            self.bg_add = self._c("", "48;5;22")
+            self.bg_del = self._c("", "48;5;52")
+            self._syntax_palette = {
+                "kw": self._c("35", "38;5;176"),
+                "str": self._c("32", "38;5;150"),
+                "num": self._c("33", "38;5;179"),
+                "comment": self._c("90", "38;5;245"),
+                "func": self._c("36", "38;5;81"),
+                "type": self._c("33", "38;5;115"),
+                "reset": self.softfg,
+            }
+            self.bullet = "*" if self.ascii_only else "●"
+            self.branch = "-" if self.ascii_only else "└"
+            self.vbar = "|" if self.ascii_only else "│"
+            self.spinner = "~" if self.ascii_only else "⟳"
+            self.rule = "-" if self.ascii_only else "─"
+            self.width = self._detect_width()
         # Streaming text is buffered so partial fragments coalesce into full
         # lines instead of each delta getting its own bulleted row.
         self._text_buf = ""
@@ -783,6 +841,8 @@ class PrettyRenderer:
         self._pending_tool_count = 0
     def _c(self, code16: str, code256: str) -> str:
         """Resolve a color to the active depth: 256-color, basic ANSI, or none."""
+        if _TERM is not None:
+            return _TERM.resolve_color_code(self.color_depth, code16, code256)
         if self.color_depth >= 256 and code256:
             return f"\033[{code256}m"
         if self.color_depth >= 16 and code16:
@@ -791,6 +851,8 @@ class PrettyRenderer:
 
     @staticmethod
     def _detect_width() -> int:
+        if _TERM is not None:
+            return _TERM.detect_width()
         try:
             cols = shutil.get_terminal_size((100, 24)).columns
         except (ValueError, OSError):
@@ -814,10 +876,13 @@ class PrettyRenderer:
         """Render a non-JSON plain line for the TUI; return None to pass through raw."""
         # Rust tracing ERROR lines
         if re.search(r"^\d{4}-\d{2}-\d{2}T\S+\s+ERROR\b", line):
-            truncated = _truncate(line, 160)
-            if len(line) > len(truncated):
-                truncated += f" (full text in {self.log_path})"
-            return [f"{self.red}{truncated}{self.reset}"]
+            # Only truncate the rendered line. The pointer that used to be
+            # appended here named self.log_path -- the very file this renderer
+            # writes into -- so it could never lead anywhere, and it cost the
+            # reader the tail of the error it was pointing at. Runtimes repeat
+            # the operative text on the following "Error:" line, which is not
+            # truncated, so the ellipsis alone is honest.
+            return [f"{self.red}{_truncate(line, 160)}{self.reset}"]
         # Rust tracing WARN lines
         if re.search(r"^\d{4}-\d{2}-\d{2}T\S+\s+WARN\b", line):
             return [f"{self.dim}{line}{self.reset}"]
@@ -1355,11 +1420,18 @@ class PrettyRenderer:
         if envelope is not None:
             link_source = _envelope_store_ref(envelope)
         out = self._break_text_run(flush_pending_tool=True)
+        direct_source_read = tool_name.lower() in _DIRECT_SOURCE_READ_TOOL_NAMES
         body_lines, overflow_stored = self._render_result_body(
             preview,
             is_error=is_error,
             store_text=store_text or None,
+            store_overflow=not direct_source_read,
         )
+        if direct_source_read:
+            # The source path is already in the tool-call line.  Do not create
+            # a duplicate raw/compacted result-store navigation trail merely
+            # to support the TUI preview.
+            return out + body_lines
         out.extend(body_lines)
         stored = None
         if _RESULT_STORE is not None:
@@ -1407,6 +1479,7 @@ class PrettyRenderer:
         *,
         is_error: bool,
         store_text: Optional[str] = None,
+        store_overflow: bool = True,
     ) -> Tuple[List[str], Optional[Tuple[str, str]]]:
         body_lines = body.splitlines() or [body]
         visible = [line.rstrip() for line in body_lines if line.rstrip()]
@@ -1442,8 +1515,11 @@ class PrettyRenderer:
             elif body_bytes > len(shown[0].encode("utf-8")):
                 hidden = 1
         if hidden > 0:
-            full_text = store_text if store_text is not None else body
-            pointer, stored_ref = self._overflow_pointer(hidden, full_text)
+            if store_overflow:
+                full_text = store_text if store_text is not None else body
+                pointer, stored_ref = self._overflow_pointer(hidden, full_text)
+            else:
+                pointer = f"... +{hidden} more lines (source path shown in read call)"
             out.append(f"{self.dim}{self.branch} {pointer}{self.reset}")
         return out, stored_ref
 
@@ -1794,7 +1870,7 @@ class PrettyRenderer:
         body = f"{fg}{marker}{self.softfg} {highlighted}"
         if bg:
             # Pad the background to a solid block; +5 = gutter(4) + leading space.
-            visible = 2 + len(content)
+            visible = 2 + (_TERM.visible_len(content) if _TERM is not None else len(content))
             pad = " " * max(0, (self.width - 5) - visible)
             return f"{self.dim}{gutter}{self.reset} {bg}{body}{pad}{self.reset}"
         return f"{self.dim}{gutter}{self.reset} {body}{self.reset}"

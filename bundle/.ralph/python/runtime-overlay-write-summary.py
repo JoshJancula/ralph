@@ -226,6 +226,8 @@ def build_runtime_summary(state_dir: str, helper: str, runtime: str) -> dict[str
         "cache_key_injected": cache_key_injected,
         "cache_key_injected_provider_id": cache_key_provider,
         "overlay_mode": os.environ.get("RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE", ""),
+        "bg_tier": os.environ.get("RUNTIME_OVERLAY_SUMMARY_BG_TIER_VALUE", ""),
+        "bg_tier_reason": os.environ.get("RUNTIME_OVERLAY_SUMMARY_BG_TIER_REASON_VALUE", ""),
         "generated_files": list_from_env("RUNTIME_OVERLAY_ARRAY_GENERATED_FILES"),
         "mutated_files": list_from_env("RUNTIME_OVERLAY_ARRAY_MUTATED_FILES"),
         "warnings": list_from_env("RUNTIME_OVERLAY_ARRAY_WARNINGS"),
@@ -284,7 +286,7 @@ def build_runtime_summary(state_dir: str, helper: str, runtime: str) -> dict[str
             "mcp_optimization",
             ("cursor-mcp-optimization",),
             "RUNTIME_OVERLAY_SUMMARY_OVERLAY_MODE_VALUE",
-            ("RALPH_OPTIMIZATION_MODE",),
+            (),
             capabilities,
         ),
     }

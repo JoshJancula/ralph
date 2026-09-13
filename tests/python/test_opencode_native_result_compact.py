@@ -208,6 +208,83 @@ class NativeResultCompactCliTests(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+MJS_PLUGIN = REPO_ROOT / "bundle" / ".opencode" / "plugins" / "ralph-runtime-hooks.mjs"
+TS_PLUGIN = REPO_ROOT / "bundle" / ".opencode" / "plugins" / "ralph-runtime-hooks.ts"
+
+
+def _extract_function(source: str, name: str) -> str:
+    """Extract a top-level `function <name>(...) { ... }` block by brace matching."""
+    marker = f"function {name}("
+    start = source.index(marker)
+    brace_start = source.index("{", start)
+    depth = 0
+    for idx in range(brace_start, len(source)):
+        if source[idx] == "{":
+            depth += 1
+        elif source[idx] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : idx + 1]
+    raise AssertionError(f"unbalanced braces extracting function {name}")
+
+
+def _strip_ts_types(fn_source: str) -> str:
+    """Strip the TypeScript-only annotations from the two known plugin functions."""
+    fn_source = fn_source.replace(
+        "function truthy(value: string | undefined | null): boolean",
+        "function truthy(value)",
+    )
+    fn_source = fn_source.replace(
+        "function nativeResultCompactEnabled(): boolean",
+        "function nativeResultCompactEnabled()",
+    )
+    return fn_source
+
+
+@unittest.skipUnless(shutil.which("node"), "node required")
+class NativeResultCompactGateTests(unittest.TestCase):
+    """Regression coverage for the RALPH_BASH_COMPACT gate leak (opencode)."""
+
+    def _run_gate(self, plugin_path: Path, strip_types: bool, env: dict[str, str]) -> bool:
+        source = plugin_path.read_text(encoding="utf-8")
+        truthy_fn = _extract_function(source, "truthy")
+        gate_fn = _extract_function(source, "nativeResultCompactEnabled")
+        if strip_types:
+            truthy_fn = _strip_ts_types(truthy_fn)
+            gate_fn = _strip_ts_types(gate_fn)
+        script = f"{truthy_fn}\n{gate_fn}\nconsole.log(JSON.stringify(nativeResultCompactEnabled()));"
+        run_env = os.environ.copy()
+        run_env.pop("RALPH_NATIVE_RESULT_COMPACT", None)
+        run_env.pop("RALPH_BASH_COMPACT", None)
+        run_env.pop("RALPH_PROXY_SHELL_COMPACT", None)
+        run_env.update(env)
+        proc = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            env=run_env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout.strip())
+
+    def test_bash_compact_alone_does_not_enable_native_result_compact_mjs(self) -> None:
+        result = self._run_gate(MJS_PLUGIN, strip_types=False, env={"RALPH_BASH_COMPACT": "1"})
+        self.assertFalse(result)
+
+    def test_bash_compact_alone_does_not_enable_native_result_compact_ts(self) -> None:
+        result = self._run_gate(TS_PLUGIN, strip_types=True, env={"RALPH_BASH_COMPACT": "1"})
+        self.assertFalse(result)
+
+    def test_native_result_compact_flag_still_enables_gate(self) -> None:
+        result = self._run_gate(MJS_PLUGIN, strip_types=False, env={"RALPH_NATIVE_RESULT_COMPACT": "1"})
+        self.assertTrue(result)
+
+    def test_no_env_disables_gate(self) -> None:
+        result = self._run_gate(MJS_PLUGIN, strip_types=False, env={})
+        self.assertFalse(result)
+
+
 class OpencodeOutputCarrierTests(unittest.TestCase):
     def test_carriers_receive_compacted_envelope(self) -> None:
         envelope = {

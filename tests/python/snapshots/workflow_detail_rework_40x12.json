@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-dep-changes",
+  "feature-delivery | Dependency",
+  "BLOCKED  Execute supplied plan",
+  "0/1 stages  0s",
+  "> blocked   \u2500\u2500 approve-plan",
+  "approve-plan  approval  blocked",
+  "Live tail  press l for the exact command",
+  "Next  reset to the approval changes tar\u2026",
+  "Question  Approve the implementation pl\u2026",
+  "Request  answered",
+  "Changes target  implement",
+  "Attempt  1  Duration  1m 0s"
+]

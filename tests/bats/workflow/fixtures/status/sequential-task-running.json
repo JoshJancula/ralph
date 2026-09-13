@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-seq-running","workflowId":"bug-fix","mode":"sequential","entryKind":"task","task":"Fix the timeout","taskProvenance":"explicit","sourcePath":"/fixtures/bug-fix.workflow.md","sourceKind":"project","state":"running","inputPath":"/fixtures/input.orch.json","inputPlan":null,"createdAt":"2026-08-27T01:00:00Z","updatedAt":"2026-08-27T01:01:00Z"},
+  "stages": [
+    {"id":"research","state":"succeeded","stageKind":"executable","attempt":1,"completedTodos":0,"totalTodos":0,"artifacts":["/fixtures/research.md"],"blocker":null,"createdAt":"2026-08-27T01:00:00Z","updatedAt":"2026-08-27T01:00:30Z"},
+    {"id":"implement","state":"running","stageKind":"plan-backed","attempt":1,"planPath":"/fixtures/control.plan.md","planRunId":"implement-run-1","planSourceKind":"generated","planSourceStageId":"plan-implementation","originalPlanPath":null,"sourcePlanPath":"/fixtures/source.plan.md","controlPlanPath":"/fixtures/control.plan.md","currentTodoId":"implement-core","completedTodos":2,"totalTodos":5,"artifacts":["/fixtures/implementation.md"],"blocker":null,"createdAt":"2026-08-27T01:00:30Z","updatedAt":"2026-08-27T01:01:00Z"}
+  ],
+  "diagnosis": {"state":"running","reasonCode":"live-owner","summary":"another supervisor owns this run and is still making progress","stageId":null,"requestKind":null,"requestId":null,"evidence":["owner pid 4242"],"retryable":true,"nextAction":null},
+  "nextAction": null
+}

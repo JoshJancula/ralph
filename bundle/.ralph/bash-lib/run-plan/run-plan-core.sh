@@ -7,7 +7,11 @@
 ##   RALPH_ARTIFACT_NS -- artifact namespace (defaults to plan key).
 ##   OUTPUT_LOG -- file path for tee'd assistant CLI output.
 ##   RALPH_PLAN_SESSION_STRATEGY -- fresh | resume | reset | compact.
-##   RALPH_PLAN_CLI_RESUME -- derived compatibility flag (1 for resume/reset/compact).
+##   RALPH_PLAN_CLI_RESUME -- derived compatibility flag (1 for resume/reset/compact or todo-continue).
+##   RALPH_PLAN_INVOCATION_REASON -- todo-start | todo-continue (supervisor-owned).
+##   RALPH_TODO_SESSION_MANIFEST_PATH -- per-TODO session manifest for the active attempt.
+##   RALPH_TODO_SESSION_MANIFEST_KEY -- sanitized manifest key for the active TODO.
+##   RALPH_TODO_SESSION_MANIFEST_DIR -- todo-sessions directory under RALPH_SESSION_DIR.
 ##   RALPH_PLAN_RESET_COMMAND(_<RUNTIME>) -- optional reset command prefix for reset strategy prompts.
 ##   RALPH_PLAN_COMPACT_COMMAND(_<RUNTIME>) -- optional prefix for compact strategy prompts
 ##
@@ -39,6 +43,8 @@ if [[ -z "${SCRIPT_DIR:-}" ]]; then
 fi
 
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/ralph-wait.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-approvals.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-loopback.sh"
@@ -56,6 +62,15 @@ source "$SCRIPT_DIR/bash-lib/permission-classify.sh"
 source "$SCRIPT_DIR/bash-lib/human-interaction.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/bash-lib/ui-prompt.sh"
+# Loaded for graph nodes only at the claim gate below; the helper itself is
+# inert unless scheduler identity variables are present.
+source "$SCRIPT_DIR/bash-lib/graph/graph-delegation-completion.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-bg-completion-gate.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-bg-teardown.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-bg-invocation-wait.sh"
 
 # The main runner sources run-plan-args.sh before this file. Some tests source
 # run-plan-core.sh directly, so tolerate that load order and skip argument
@@ -114,15 +129,38 @@ Choose the stored-result view by information need:
 EOF
 }
 
+# Cost model for waits and verification (runtime-neutral). Cheapest first.
+# Background-job guidance is separate and gated on RALPH_BG_JOBS=1.
+ralph_mode_prompt_guidance_cost_model() {
+  cat <<'EOF'
+## Verification and wait cost model (cheapest first)
+1. Prefer strict runner-owned `verify:` / plan-level `verify:` for final proof. The runner executes those out-of-process; do not rerun them through agent-side shell helpers.
+2. For any other command that fits in one tool call, use **one blocking call** and wait inside that call. Do not background work that a single blocking wait can finish.
+3. **Agent-authored polling loops are forbidden** (for example `while grep -c ...; sleep` over a log file). Never spend model turns polling a log or job status — that pattern wastes conversation turns.
+- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only (e.g., `ls`, `cat`, `grep`, `git status`). Do not run test/lint/build/install/docs-check commands through `ralph_proxy_shell`; those block the MCP transport and risk dropping the connection.
+- Async proxy shell tools (`ralph_proxy_shell_start` / `wait` / `status` / `read` / `cancel`) are a **manual human-monitoring fallback only**, not the automation path. Prefer runner-first `verify:` and one blocking call.
+- When you must use async tools manually (including agent-run `verification:` only), launch once with `ralph_proxy_shell_start` and block with `ralph_proxy_shell_wait`, passing `waitSeconds` near its **600** cap (the default is only 60). Treat `ralph_proxy_shell_status` as an occasional spot check — never a polling loop. Inspect output with `ralph_proxy_shell_read`; cancel with `ralph_proxy_shell_cancel` when needed.
+EOF
+}
+
+# Opt-in background-job guidance. Emitted only when RALPH_BG_JOBS=1.
+ralph_mode_prompt_guidance_background() {
+  [[ "${RALPH_BG_JOBS:-0}" == "1" ]] || return 0
+  cat <<'EOF'
+## Background jobs (opt-in; RALPH_BG_JOBS=1)
+When work would outlive the tool timeout, start one background job via `.ralph/ralph-bg.sh '<command>'`, then end your turn without claiming completion. Do not convert a single blocking call into a background job. The runner or Stop hook continues this same TODO with a compact result — do not redo the TODO from scratch and do not poll the job.
+EOF
+}
+
 ralph_mode_prompt_guidance_common_footer() {
   cat <<'EOF'
 Prefer targeted search and partial file/log reads first.
 If the TODO already names exact commands or files, start there before rereading README/AGENTS or remapping the repo.
+EOF
+  ralph_mode_prompt_guidance_cost_model
+  ralph_mode_prompt_guidance_background
+  cat <<'EOF'
 - Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. TODO `verification:` is agent-run verification instructions; TODO `verify:` and plan-level `verify:` are strict runner-executed commands. The runner executes strict verify commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary when verification fails—do not rerun strict verify commands through agent-side shell helpers.
-- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only (e.g., `ls`, `cat`, `grep`, `git status`). Do not run test/lint/build/install/docs-check commands through `ralph_proxy_shell`; those block the MCP transport and risk dropping the connection. Use `ralph_proxy_shell_start` + `ralph_proxy_shell_wait` for any command that could take more than a few seconds.
-- The async shell tools (`shell_start`, `shell_wait`, `shell_status`, `shell_read`, `shell_cancel`) are a manual fallback surface for when a human is directly monitoring a job. They are not the primary path for agent automation—prefer runner-first `verify:` metadata for verification. When you must use async tools, `shell_wait` is the blocking call; `shell_status` is an occasional spot check, never a polling loop.
-- When you must rerun a verification manually (agent-run `verification:` only), launch it with `ralph_proxy_shell_start` and block on completion with `ralph_proxy_shell_wait` (pass `waitSeconds` to control how long the server waits) so the wait happens server-side and `shell_status` does not flood the cache.
-- Treat `ralph_proxy_shell_status` as an occasional manual progress check—avoid short-interval polling loops, inspect output through `ralph_proxy_shell_read`, and cancel with `ralph_proxy_shell_cancel` when you need to intervene.
 EOF
 }
 
@@ -233,51 +271,43 @@ ralph_mode_prompt_guidance_ralph_catalog() {
   case "$runtime" in
     claude)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Claude exposes Ralph tools with MCP-qualified names; use these as your primary path for read/search/shell and stored-result retrieval:
-- `mcp__ralph__ralph_proxy_read`
-- `mcp__ralph__ralph_proxy_grep`
-- `mcp__ralph__ralph_proxy_glob`
-- `mcp__ralph__ralph_proxy_shell`
-- `mcp__ralph__ralph_proxy_batch` for multiple independent read/search/glob/result operations in one MCP call
-- The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual fallback for when a human is monitoring a long-running job—they are not the primary automation path. Prefer runner-first `verify:` metadata for verification and `mcp__ralph__ralph_proxy_shell` for synchronous commands. When async tools are needed, `mcp__ralph__ralph_proxy_shell_wait` is the blocking call; `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-Native `Bash` is unavailable in ralph mode: run every command through `mcp__ralph__ralph_proxy_shell`, and never ask the operator to enable native `Bash` access.
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `mcp__ralph__ralph_proxy_shell` (native `Bash` is unavailable in ralph mode; in hybrid it is discouraged for noisy output).
+- Use `mcp__ralph__ralph_proxy_result_*` to page stored shell output.
+- `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `mcp__ralph__ralph_proxy_batch`.
+- The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `mcp__ralph__ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "mcp__ralph__ralph_proxy_result_read" \
         "mcp__ralph__ralph_proxy_result_search" \
         "mcp__ralph__ralph_proxy_result_summary"
       cat <<'EOF'
-Native `Read`, `Edit`, and `Write` remain available for modifying files. Claude Code requires a native `Read` of a file before you can `Edit` or `Write` it, and a `ralph_proxy_read` does NOT satisfy that requirement: when you intend to change an existing file (for example marking a TODO checkbox), `Read` it natively first, then `Edit`/`Write` it. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifying files. Claude Code requires a native `Read` of a file before you can `Edit` or `Write` it. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     cursor)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Cursor registers Ralph tools as `ralph_proxy_*` (or `mcp__ralph__ralph_proxy_*` when only MCP-qualified names appear). Use Ralph tooling as your primary path for read/search/shell and stored-result retrieval:
-
-- `ralph_proxy_read` for file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` for code search
-- `ralph_proxy_glob` for finding paths by pattern
-- `ralph_proxy_shell` for exploratory, verification, and log-heavy shell commands (git status, tests, builds, directory listings)
-- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual fallback for when a human is monitoring a long-running job—they are not the primary automation path. Prefer runner-first `verify:` metadata for verification and `ralph_proxy_shell` for synchronous commands. When async tools are needed, `ralph_proxy_shell_wait` is the blocking call; `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
+Ralph tooling is preflight-checked before this invocation. Cursor registers Ralph tools as `ralph_proxy_*` (or `mcp__ralph__ralph_proxy_*` when only MCP-qualified names appear). Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native `Shell` is discouraged for noisy output in ralph/hybrid.
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "ralph_proxy_result_read" \
         "ralph_proxy_result_search" \
         "ralph_proxy_result_summary"
       cat <<'EOF'
-Native `Read`, `Edit`, and `Write` remain available for modifying files. Use native `Read` only immediately before `Edit` or `Write` on a file that will be modified; use Ralph tooling for all exploration and verification. When you intend to change a file, read it before editing, then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifying files. When you intend to change a file, read it before editing, then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     opencode)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Use Ralph tooling as your primary path for read/search/shell and stored-result retrieval:
-- `ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default); prefer this for exploratory commands, test verification, builds, and log inspection
-
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native shell is discouraged for noisy output in ralph/hybrid.
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
         "ralph_proxy_result_read" \
@@ -285,7 +315,7 @@ EOF
         "ralph_proxy_result_summary"
       cat <<'EOF'
 If a referenced file lives outside the workspace and OpenCode denies the read as `external_directory`, continue with local workspace files or write `pending-human.txt` instead of retrying the same denied path.
-Native `Read`, `Edit`, and `Write` remain available for modifications. Use native `Read` only immediately before `Edit` or `Write` on a file that will be modified; use Ralph tooling for exploration first. When you intend to change a file, read it before editing and then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
+Native `Read`, `Edit`, and `Write` remain available for modifications. When you intend to change a file, read it before editing and then use your host edit/write tools. Never tell the operator you lack edit access -- you have it.
 EOF
       ;;
     codex)
@@ -293,23 +323,11 @@ EOF
       ;;
     *)
       cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. The host may expose Ralph tools with direct names (`ralph_proxy_*`) or MCP-qualified names (`mcp__ralph__ralph_proxy_*`); use whichever is available as your primary path for read/search/shell and stored-result retrieval:
-
-Direct names (if available):
-- `ralph_proxy_read`
-- `ralph_proxy_grep`
-- `ralph_proxy_glob`
-- `ralph_proxy_shell`
-- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual fallback for when a human is monitoring a long-running job—they are not the primary automation path. Prefer runner-first `verify:` metadata for verification and `ralph_proxy_shell` for synchronous commands. When async tools are needed, `ralph_proxy_shell_wait` is the blocking call; `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-MCP-qualified names (standard on most hosts):
-- `mcp__ralph__ralph_proxy_read`
-- `mcp__ralph__ralph_proxy_grep`
-- `mcp__ralph__ralph_proxy_glob`
-- `mcp__ralph__ralph_proxy_shell`
-- The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual fallback for when a human is monitoring a long-running job—they are not the primary automation path. Prefer runner-first `verify:` metadata for verification and `mcp__ralph__ralph_proxy_shell` for synchronous commands. When async tools are needed, `mcp__ralph__ralph_proxy_shell_wait` is the blocking call; `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
-
-Native `Bash` is unavailable in ralph mode: run commands through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only namespaced tools exist), and never ask the operator to enable native `Bash` access.
+Ralph tooling is preflight-checked before this invocation. The host may expose Ralph tools with direct names (`ralph_proxy_*`) or MCP-qualified names (`mcp__ralph__ralph_proxy_*`); use whichever names the host registers. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only namespaced tools exist); native `Bash` is unavailable in ralph mode and discouraged for noisy output in hybrid.
+- Use `ralph_proxy_result_*` (or `mcp__ralph__ralph_proxy_result_*`) to page stored shell output.
+- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch` / `mcp__ralph__ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel` or `mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` (or the MCP-qualified wait tool) and pass `waitSeconds` near its 600 cap (default is only 60); status tools are an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol
       cat <<'EOF'
@@ -325,39 +343,16 @@ ralph_mode_prompt_guidance_ralph_catalog_codex() {
   if [[ "${RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY:-0}" == "1" ]] || [[ "${RALPH_STRICT_PROXY:-0}" == "1" ]]; then
     strict=1
   fi
+  cat <<'EOF'
+Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` (including `read_file` where the host exposes that name) are the primary exploration tools.
+- Run every shell command through `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` (native `command_execution` is discouraged for noisy output in ralph/hybrid).
+- Use `ralph_proxy_result_*` to page stored shell output.
+- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
+EOF
   if [[ "$mode" == "hybrid" ]]; then
     cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Prefer Ralph tooling when it is healthy for read/search/shell and stored-result retrieval. Native adapters are available as fallback when MCP or proxy paths are slow, failing, or unsuitable; use them freely when they are the better fit.
-
-Ralph tooling available in this runtime:
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` / `mcp__ralph__ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` / `mcp__ralph__ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default; prefer this for exploratory commands like git status, tests, builds, and log inspection)
-
-Prefer Ralph tooling first:
-- Use `ralph_proxy_read` for large file reads instead of native `command_execution` running `cat` or similar
-- Use `ralph_proxy_grep` for code search instead of native `command_execution` running grep/rg
-- Use `ralph_proxy_glob` for finding paths instead of native `command_execution` running find
-- Use `ralph_proxy_shell` for exploratory commands, test runs, build verification, and log inspection; Ralph compacts large outputs automatically
-
-Use native adapters only when Ralph tooling is insufficient or when the runtime requires a native edit flow. Do not treat native read/search/shell tools as an equal-weight alternative to Ralph tooling.
-EOF
-  else
-    cat <<'EOF'
-Ralph tooling is preflight-checked before this invocation. Ralph tooling is your primary path for read/search/shell and stored-result retrieval:
-
-Ralph tooling available in this runtime:
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` for bounded file reads (use offset/limit for partial reads)
-- `ralph_proxy_grep` / `mcp__ralph__ralph_proxy_grep` for bounded code search (capped at 50 matches by default)
-- `ralph_proxy_glob` / `mcp__ralph__ralph_proxy_glob` for bounded path discovery (capped at 100 results by default)
-- `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` for bounded shell output (capped at 8192 bytes by default; prefer this for exploratory commands like git status, tests, builds, and log inspection)
-
-Use Ralph tooling for exploration and verification:
-- Use `ralph_proxy_read` for large file reads instead of native `command_execution` running `cat` or similar
-- Use `ralph_proxy_grep` for code search instead of native `command_execution` running grep/rg
-- Use `ralph_proxy_glob` for finding paths instead of native `command_execution` running find
-- Use `ralph_proxy_shell` for exploratory commands, test runs, build verification, and log inspection; Ralph compacts large outputs automatically
+When Ralph tooling is slow, failing, or unsuitable for a given call, use native adapters freely, including native edit flows and other runtime-specific needs.
 EOF
   fi
   ralph_mode_prompt_guidance_stored_result_protocol \
@@ -366,7 +361,7 @@ EOF
     "ralph_proxy_result_summary"
   if [[ "$strict" == "1" ]]; then
     cat <<'EOF'
-Strict proxy is active: do not fall back to native read/search/shell when Ralph tooling is required. If the first Ralph tooling call fails, stop and write one structured request to `pending-human.txt` rather than probing with native adapters.
+Strict proxy is active: do not fall back to native shell when Ralph shell tooling is required. If the first Ralph shell call fails, stop and write one structured request to `pending-human.txt` rather than probing with native `command_execution`. Native Read/Grep/Glob remain the primary exploration path.
 EOF
   fi
   cat <<'EOF'
@@ -408,7 +403,7 @@ ralph_mode_prompt_guidance_hybrid() {
       ralph_mode_prompt_guidance_ralph_catalog "$runtime"
       cat <<'EOF'
 
-Native adapters are available as fallback when Ralph tooling is slow, failing, or unsuitable. Prefer Ralph tooling when it is healthy for read/search/shell and stored-result retrieval; use native runtime tools freely when the MCP or proxy path is the better fit, including native edit flows and other runtime-specific needs.
+When Ralph tooling is slow, failing, or unsuitable for a given call, use native runtime tools freely, including native edit flows and other runtime-specific needs.
 EOF
       ;;
   esac
@@ -484,6 +479,19 @@ ralph_apply_runtime_prompt_guidance() {
   PROMPT+=$'\n\n'"${guidance}"
 }
 
+# Append why a resumed turn was interrupted, when the runner knows.
+# A permission pause exits the CLI mid-task; the resumed session still holds the
+# whole transcript, so say what happened rather than let the agent infer that it
+# failed and start the TODO over.
+ralph_run_plan_resume_intro_with_reason() {
+  local intro="${1:-}"
+  if [[ "${RALPH_CONTINUATION_ROUTE:-}" == "permission" ]]; then
+    printf '%s\n' "${intro} The previous turn stopped on a permission request that the operator has now approved; continue from where it stopped and do not redo work you already completed."
+    return 0
+  fi
+  printf '%s\n' "$intro"
+}
+
 # Agent completion instructions for per-TODO prompts (paragraph style for resume/reset/compact).
 # Optional 4th arg: pass "1" to also request VERIFICATION STATUS / VERIFICATION_RESULT: PASS/FAIL from the agent.
 ralph_run_plan_agent_completion_prompt_block() {
@@ -525,7 +533,7 @@ EOF
   if [[ "$request_verify_verdict" == "1" ]]; then
     cat <<EOF
 
-Run each verification step listed for this TODO yourself now. When you report the result through the completion footer, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. The legacy \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` paths remain accepted for compatibility. Omitting a verification verdict or helper call reopens this TODO.
+Run each verification step listed for this TODO yourself now. When you report the result through the completion footer, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` are also accepted. Omitting a verification verdict or helper call reopens this TODO.
 EOF
   fi
 }
@@ -541,8 +549,13 @@ ralph_run_plan_fresh_completion_rules_block() {
 - When done, mark \`- [ ]\` on line ${line_num} as \`- [x]\` and stop.
 - If no code or file change is needed because the TODO is already satisfied, say that explicitly before marking it done. Include the files or commands you checked and the reason no edit was necessary.
 - After completing and checking off the TODO, print \`TODO_COMPLETION: COMPLETE\` on its own line. \`AGENT_INVOCATION_COMPLETE\` is still accepted for compatibility.
-- If operator input is needed first, write your question to \`${pending_human}\` and stop without marking [x]. The runner will capture it as a structured human-request record. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO.
 EOF
+    if declare -F ralph_run_plan_operator_input_prompt_suffix >/dev/null 2>&1 \
+      && ralph_run_plan_operator_input_prompt_suffix; then
+      :
+    else
+      printf '%s\n' "- If operator input is needed first, write your question to \`${pending_human}\` and stop without marking [x]. The runner will capture it as a structured human-request record. Do not print \`AGENT_INVOCATION_COMPLETE\` unless you completed and checked off the TODO."
+    fi
   else
     cat <<EOF
 - After finishing the TODO, emit a structured completion footer on its own lines:
@@ -554,79 +567,237 @@ EOF
 
   If verification was not needed, use \`TODO_VERIFICATION: SKIPPED\`. \`AGENT_INVOCATION_COMPLETE\` and \`mcp__ralph__ralph_complete_todo\` remain accepted for compatibility, but the runner reads the structured footer directly.
 - If no code or file change is needed because the TODO is already satisfied, say that explicitly before calling the helper. Include the files or commands you checked and the reason no edit was necessary.
-- If verification fails, emit \`TODO_VERIFICATION: FAIL: <reason>\` so the runner reopens the TODO, or call the helper with \`outcome=needs_retry\` and \`verification_status=fail\` plus a short reason. The legacy helper path remains accepted for compatibility.
-- If operator input is needed first, write your question to \`${pending_human}\` and stop without calling the helper. The runner will capture it as a structured human-request record.
+- If verification fails, emit \`TODO_VERIFICATION: FAIL: <reason>\` so the runner reopens the TODO, or call the helper with \`outcome=needs_retry\` and \`verification_status=fail\` plus a short reason. The completion helper is also accepted.
 EOF
+    if declare -F ralph_run_plan_operator_input_prompt_suffix >/dev/null 2>&1 \
+      && ralph_run_plan_operator_input_prompt_suffix; then
+      :
+    else
+      printf '%s\n' "- If operator input is needed first, write your question to \`${pending_human}\` and stop without calling the helper. The runner will capture it as a structured human-request record."
+    fi
   fi
   if [[ "$request_verify_verdict" == "1" ]]; then
-    printf '%s\n' "- Run each verification step listed for this TODO yourself now. When you report the result, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. The legacy \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` paths remain accepted for compatibility. Omitting a verification verdict reopens this TODO."
+    printf '%s\n' "- Run each verification step listed for this TODO yourself now. When you report the result, use \`TODO_VERIFICATION: PASS\` if every step passes (also use pass if there were no steps or nothing required checking), \`TODO_VERIFICATION: FAIL: <reason>\` if any fail, or \`TODO_VERIFICATION: SKIPPED\` if verification was not needed. \`VERIFICATION_RESULT: PASS|FAIL\` and \`mcp__ralph__ralph_complete_todo\` are also accepted. Omitting a verification verdict reopens this TODO."
   fi
 }
 
+# ralph_run_plan_workflow_operator_input_active
+# True when this plan invocation is under a workflow-owned ordinary stage.
+ralph_run_plan_workflow_operator_input_active() {
+  if declare -F ralph_workflow_active_for_operator_input >/dev/null 2>&1; then
+    ralph_workflow_active_for_operator_input
+    return $?
+  fi
+  [[ -n "${RALPH_WORKFLOW_REGISTRY_RUN:-}" && -d "${RALPH_WORKFLOW_REGISTRY_RUN}" \
+    && -n "${RALPH_WORKFLOW_RUN_ID:-}" \
+    && -n "${RALPH_WORKFLOW_STAGE_ID:-}" \
+    && -n "${RALPH_WORKFLOW_STAGE_ATTEMPT:-}" ]]
+}
+
+# ralph_run_plan_ensure_workflow_actions_lib
+# Lazily source workflow-actions helpers when workflow identity is present.
+ralph_run_plan_ensure_workflow_actions_lib() {
+  declare -F workflow_action_prepare_attempt_capability_env >/dev/null 2>&1 && return 0
+  local lib="${SCRIPT_DIR}/bash-lib/workflow/workflow-actions.sh"
+  [[ -f "$lib" ]] || return 1
+  # shellcheck source=/dev/null
+  source "$lib"
+}
+
+# ralph_run_plan_prepare_workflow_operator_input
+# Mint/export attempt-bound capability + resolve optional response injection path
+# for this TODO. Prints nothing that contains a nonce. Returns 0 when inactive.
+ralph_run_plan_prepare_workflow_operator_input() {
+  local todo_id="${1:-}" cap_path pending_rid
+  unset RALPH_WORKFLOW_OPERATOR_INPUT_RESPONSE_FILE 2>/dev/null || true
+  ralph_run_plan_workflow_operator_input_active || return 0
+  ralph_run_plan_ensure_workflow_actions_lib || {
+    ralph_run_plan_log "ERROR: workflow actions library missing for operator-input capability"
+    return 1
+  }
+  cap_path="$(workflow_action_prepare_attempt_capability_env \
+    --registry-run "$RALPH_WORKFLOW_REGISTRY_RUN" \
+    --run-id "$RALPH_WORKFLOW_RUN_ID" \
+    --stage-id "$RALPH_WORKFLOW_STAGE_ID" \
+    --attempt-id "$RALPH_WORKFLOW_STAGE_ATTEMPT")" || return 1
+  # Resolve answered-unconsumed injection for this TODO only (no nonce in logs).
+  pending_rid="$(workflow_action_find_pending_input_request_id \
+    "$RALPH_WORKFLOW_REGISTRY_RUN" "$RALPH_WORKFLOW_RUN_ID" \
+    "$RALPH_WORKFLOW_STAGE_ID" "$RALPH_WORKFLOW_STAGE_ATTEMPT" 2>/dev/null || true)"
+  if [[ -n "$pending_rid" ]]; then
+    local decision inj
+    decision="$(workflow_action_decision_read "$RALPH_WORKFLOW_REGISTRY_RUN" "$pending_rid" 2>/dev/null || true)"
+    if [[ -n "$decision" && "$(printf '%s' "$decision" | jq -r '.decision // empty')" == "answer" ]]; then
+      inj="$(workflow_action_injection_path "$RALPH_WORKFLOW_REGISTRY_RUN" "$pending_rid" 2>/dev/null || true)"
+      if [[ -z "$inj" || ! -f "$inj" ]]; then
+        inj="$(workflow_action_stage_input_injection "$RALPH_WORKFLOW_REGISTRY_RUN" "$pending_rid" \
+          ${todo_id:+--todo-id "$todo_id"} 2>/dev/null || true)"
+      fi
+      if [[ -n "$inj" && -f "$inj" ]]; then
+        export RALPH_WORKFLOW_OPERATOR_INPUT_RESPONSE_FILE="$inj"
+      fi
+    fi
+  fi
+  ralph_run_plan_log "workflow operator-input capability ready path=$(basename "$cap_path") stage=${RALPH_WORKFLOW_STAGE_ID} attempt=${RALPH_WORKFLOW_STAGE_ATTEMPT}"
+  return 0
+}
+
+# ralph_run_plan_operator_input_prompt_suffix
+# Text that replaces pending-human guidance when workflow operator-input is active.
+ralph_run_plan_operator_input_prompt_suffix() {
+  if ralph_run_plan_workflow_operator_input_active; then
+    cat <<'EOF'
+- If operator input is needed first, call `ralph workflow actions request --question <text> [--details <text>]`, stop without marking [x], and do not guess. Do not write pending-human.txt for product/credential/external decisions under an active workflow run.
+EOF
+    return 0
+  fi
+  return 1
+}
+
+# ralph_run_plan_revoke_workflow_operator_input_capability
+ralph_run_plan_revoke_workflow_operator_input_capability() {
+  ralph_run_plan_workflow_operator_input_active || return 0
+  ralph_run_plan_ensure_workflow_actions_lib || return 0
+  workflow_action_revoke_attempt_capability \
+    "$RALPH_WORKFLOW_REGISTRY_RUN" \
+    "$RALPH_WORKFLOW_RUN_ID" \
+    "$RALPH_WORKFLOW_STAGE_ID" \
+    "$RALPH_WORKFLOW_STAGE_ATTEMPT" 2>/dev/null || true
+  workflow_action_clear_attempt_capability_env 2>/dev/null || true
+  unset RALPH_WORKFLOW_OPERATOR_INPUT_RESPONSE_FILE 2>/dev/null || true
+}
+
+# ralph_run_plan_gate_workflow_operator_input_after_turn <plan-path> <plan-format> <todo-target> <line-num>
+# After a model turn, refuse checkbox/stage success when this attempt has
+# outstanding or answered-unconsumed input. Persists progress, revokes
+# capability, tears down runtime overlays, and exits 3 (waiting).
+ralph_run_plan_gate_workflow_operator_input_after_turn() {
+  local plan_path="${1:-}" plan_format="${2:-}" todo_target="${3:-}" line_num="${4:-}"
+  local pending_rid blocker
+  ralph_run_plan_workflow_operator_input_active || return 0
+  ralph_run_plan_ensure_workflow_actions_lib || return 0
+  if ! workflow_action_attempt_blocks_success \
+      "$RALPH_WORKFLOW_REGISTRY_RUN" "$RALPH_WORKFLOW_RUN_ID" \
+      "$RALPH_WORKFLOW_STAGE_ID" "$RALPH_WORKFLOW_STAGE_ATTEMPT"; then
+    return 0
+  fi
+
+  # Keep the TODO unchecked / reopen if the agent checked it.
+  if [[ -n "$plan_path" && -n "$todo_target" ]] && declare -F plan_reopen_todo_by_format >/dev/null 2>&1; then
+    plan_reopen_todo_by_format "$plan_path" "$plan_format" "$todo_target" 2>/dev/null || true
+  fi
+
+  pending_rid="$(workflow_action_find_pending_input_request_id \
+    "$RALPH_WORKFLOW_REGISTRY_RUN" "$RALPH_WORKFLOW_RUN_ID" \
+    "$RALPH_WORKFLOW_STAGE_ID" "$RALPH_WORKFLOW_STAGE_ATTEMPT" 2>/dev/null || true)"
+  if [[ -n "$pending_rid" ]] && declare -F workflow_action_input_blocker_json >/dev/null 2>&1; then
+    blocker="$(workflow_action_input_blocker_json \
+      --request-id "$pending_rid" --run-id "$RALPH_WORKFLOW_RUN_ID" --retryable false 2>/dev/null || true)"
+    if [[ -n "$blocker" ]]; then
+      export RALPH_WORKFLOW_STAGE_BLOCKER_JSON="$blocker"
+    fi
+  fi
+
+  ralph_run_plan_log "operator-input outstanding or answered-unconsumed; refusing completion and waiting (exit 3) line=${line_num:-unknown} request=${pending_rid:-unknown}"
+  if declare -F workflow_action_continuation_persist_on_wait >/dev/null 2>&1; then
+    workflow_action_continuation_persist_on_wait "$plan_path" "${RALPH_CURRENT_TODO_ID:-}" >/dev/null 2>&1 || true
+  fi
+  ralph_run_plan_revoke_workflow_operator_input_capability
+  if declare -F ralph_runtime_overlay_cleanup_if_needed >/dev/null 2>&1; then
+    ralph_runtime_overlay_cleanup_if_needed
+  fi
+  exit 3
+}
+
 # Stable per-plan namespace block for PROMPT_STATIC (no TODO text, timestamps, or temp paths).
+#
+# G12: delegates to the one prompt-helper owner, ralph_artifact_namespace_prompt_block
+# (bash-lib/run-plan/run-plan-artifacts.sh), which also names any
+# orchestrator-declared required artifact's resolved absolute destination
+# (RALPH_REQUIRED_ARTIFACT_PATHS_JSON) and states plainly that those are
+# supervisor outputs, not source edits. Falls back to the original bare
+# namespace line only if that helper is unavailable for any reason.
 ralph_run_plan_namespace_prompt_block() {
   if [[ -z "${RALPH_ARTIFACT_NS:-}" && -z "${RALPH_PLAN_KEY:-}" ]]; then
+    return 0
+  fi
+  if declare -F ralph_artifact_namespace_prompt_block >/dev/null 2>&1; then
+    ralph_artifact_namespace_prompt_block
+    printf '\n'
     return 0
   fi
   printf '%s\n' "Artifact namespace: RALPH_ARTIFACT_NS=${RALPH_ARTIFACT_NS:-}  RALPH_PLAN_KEY=${RALPH_PLAN_KEY:-}"
   printf '%s\n' "Use namespace-aware artifact paths when writing handoff files."
 }
 
-# Assemble PROMPT_STATIC from stable blocks only (namespace + prebuilt agent context).
+# Join non-empty prompt parts with a blank line between each.
+# Order is caller-defined; empty parts are omitted (no extra separators).
+ralph_run_plan_join_prompt_parts() {
+  local out=""
+  local part
+  for part in "$@"; do
+    [[ -n "$part" ]] || continue
+    if [[ -n "$out" ]]; then
+      out+=$'\n\n'
+    fi
+    out+="$part"
+  done
+  printf '%s' "$out"
+}
+
+# Assemble the common prompt layers in contract order for every runtime:
+#   preamble, contracts, task.
+# Workflow stage instructions (when present) are already part of the task body,
+# injected immediately before TODO content by the caller.
+ralph_run_plan_assemble_prompt_ordered() {
+  local preamble="${1:-}"
+  local contracts="${2:-}"
+  local task="${3:-}"
+  ralph_run_plan_join_prompt_parts "$preamble" "$contracts" "$task"
+}
+
+# Assemble the stable prefix (PROMPT_STATIC): contracts (namespace) only.
+# Profile/agent context is no longer included here (module retained, unused).
 ralph_run_plan_assemble_prompt_static() {
   local ns_block="${1:-}"
-  local agent_context="${2:-}"
-  if [[ -n "$agent_context" ]]; then
-    if [[ -n "$ns_block" ]]; then
-      printf '%s\n\n%s' "$ns_block" "$agent_context"
-    else
-      printf '%s' "$agent_context"
-    fi
-  elif [[ -n "$ns_block" ]]; then
-    printf '%s' "$ns_block"
-  fi
+  ralph_run_plan_assemble_prompt_ordered "" "$ns_block" ""
 }
 
-# Rollout gate for stable-prefix-first prompt ordering across non-Claude runtimes.
-# Ralph/hybrid mode enables it unless RALPH_PROMPT_STABLE_PREFIX=0.
-# Native/no mode leaves it disabled unless RALPH_PROMPT_STABLE_PREFIX=1.
-# Invalid values fail early (return 2). When disabled, OpenCode keeps its existing
-# stable-first ordering and Cursor/Codex/Antigravity keep the legacy stable-last order.
-ralph_run_plan_stable_prefix_enabled() {
-  local gate="${RALPH_PROMPT_STABLE_PREFIX:-}"
-  if [[ -n "$gate" ]]; then
-    case "$gate" in
-      0) return 1 ;;
-      1) return 0 ;;
-      *)
-        if declare -F ralph_run_plan_log >/dev/null 2>&1; then
-          ralph_run_plan_log "RALPH_PROMPT_STABLE_PREFIX: invalid value '$gate' (use 0 or 1)"
-        fi
-        echo "RALPH_PROMPT_STABLE_PREFIX: invalid value '$gate' (use 0 or 1)" >&2
-        return 2
-        ;;
-    esac
+# Rebuild the stable prefix for resumed turns. Keep this in sync with the
+# fresh-turn assembly below: runtime/mode guidance and the namespace contract
+# are stable, while TODO and continuation details belong in PROMPT.
+ralph_run_plan_rebuild_prompt_static() {
+  local ns_block preamble mode_guidance
+  ns_block="$(ralph_run_plan_namespace_prompt_block)"
+  preamble="$(ralph_runtime_prompt_guidance "$RUNTIME")"
+  mode_guidance=""
+  if [[ "${RALPH_MODE:-no}" != "no" ]]; then
+    mode_guidance="$(ralph_mode_prompt_guidance "$RUNTIME" "${RALPH_MODE:-no}")"
   fi
-  case "${RALPH_MODE:-no}" in
-    ralph|hybrid) return 0 ;;
-    *) return 1 ;;
-  esac
+  if [[ -n "$preamble" && -n "$mode_guidance" ]]; then
+    preamble="${preamble}"$'\n\n'"${mode_guidance}"
+  elif [[ -n "$mode_guidance" ]]; then
+    preamble="$mode_guidance"
+  fi
+  ralph_run_plan_assemble_prompt_ordered "$preamble" "$ns_block" ""
 }
 
-# Merge the stable block (PROMPT_STATIC) and the volatile block (PROMPT) for a runtime.
-# Operates on the global PROMPT/PROMPT_STATIC variables.
-#   - claude: never merged here (stable goes to --system-prompt in the invoker).
-#   - non-claude with stable-prefix enabled, or OpenCode always: stable block first.
-#   - other non-claude with stable-prefix disabled: legacy stable-last ordering.
-ralph_run_plan_merge_prompt() {
+# Apply common prompt assembly at the shared boundary.
+# Sets PROMPT / PROMPT_STATIC so delivered order is preamble, contracts, task
+# for every runtime (Claude keeps the stable prefix in --append-system-prompt).
+# Operates on the global PROMPT (task body already built by the caller).
+ralph_run_plan_apply_ordered_prompt_assembly() {
   local runtime="${1:-}"
-  [[ -z "${PROMPT_STATIC:-}" ]] && return 0
-  [[ "$runtime" == "claude" ]] && return 0
+  local preamble="${2:-}"
+  local contracts="${3:-}"
+  local task="${PROMPT:-}"
 
-  if [[ "$runtime" == "opencode" ]] || ralph_run_plan_stable_prefix_enabled; then
-    PROMPT="${PROMPT_STATIC}"$'\n\n'"${PROMPT}"
+  PROMPT_STATIC="$(ralph_run_plan_assemble_prompt_ordered "$preamble" "$contracts" "")"
+  if [[ "$runtime" == "claude" ]]; then
+    PROMPT="$task"
   else
-    PROMPT+=$'\n'"$PROMPT_STATIC"
+    # Non-Claude CLIs get one fully ordered prompt; do not use stable-last merge.
+    PROMPT="$(ralph_run_plan_assemble_prompt_ordered "$preamble" "$contracts" "$task")"
   fi
 }
 
@@ -778,9 +949,21 @@ ralph_run_plan_continuation_summary_refresh_metrics() {
   metrics_json="$(PYTHONPATH="${SCRIPT_DIR}/python${PYTHONPATH:+:$PYTHONPATH}" \
     python3 "$py" metrics --state "$state_path" 2>/dev/null)" || metrics_json=""
   if [[ -n "$metrics_json" ]]; then
-    RALPH_CONTINUATION_SUMMARY_BYTES="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("continuation_summary_bytes",0))' "$metrics_json" 2>/dev/null || echo 0)"
-    RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("continuation_summary_entry_count",0))' "$metrics_json" 2>/dev/null || echo 0)"
-    RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("continuation_summary_truncation_count",0))' "$metrics_json" 2>/dev/null || echo 0)"
+    # One interpreter start for all three counters.
+    _cont_fields="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    d = {}
+keys = ('continuation_summary_bytes', 'continuation_summary_entry_count',
+        'continuation_summary_truncation_count')
+print('\\x1f'.join(str(d.get(k, 0)) for k in keys))
+" "$metrics_json" 2>/dev/null || printf '0\x1f0\x1f0')"
+    IFS=$'\x1f' read -r RALPH_CONTINUATION_SUMMARY_BYTES RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT \
+      RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT <<<"$_cont_fields"
+    : "${RALPH_CONTINUATION_SUMMARY_BYTES:=0}" "${RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT:=0}"
+    : "${RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT:=0}"
   fi
   export RALPH_CONTINUATION_SUMMARY_BYTES RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT
 }
@@ -946,6 +1129,14 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-routing.sh"
 if ! declare -F expand_artifact_tokens >/dev/null 2>&1; then
   source "$SCRIPT_DIR/bash-lib/artifacts.sh"
 fi
+# G12: the artifact namespace prompt helper (ralph_artifact_namespace_prompt_block)
+# is the one owner of the artifact-namespace prompt block, including naming
+# any orchestrator-declared required artifact's resolved absolute
+# destination. ralph_run_plan_namespace_prompt_block below delegates to it.
+# shellcheck source=/dev/null
+if ! declare -F ralph_artifact_namespace_prompt_block >/dev/null 2>&1; then
+  source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-artifacts.sh"
+fi
 
 ralph_parse_duration() {
   local duration_str="${1:-}"
@@ -1024,6 +1215,36 @@ run_plan_mark_and_confirm() {
   return 0
 }
 
+# Graph mutating nodes provide a scheduler-owned baseline and scope policy.
+# Validate the workspace before a TODO checkbox can advance, so an out-of-scope
+# edit cannot be hidden by a later correction or a successful node exit.
+ralph_graph_write_scope_verify_todo() {
+  local todo_key="$1" safe_key output
+  [[ -n "${RALPH_GRAPH_CHANGESET_BASELINE:-}" ]] || return 0
+  [[ -n "${RALPH_GRAPH_CHANGESET_HELPER:-}" && -f "$RALPH_GRAPH_CHANGESET_HELPER" ]] || {
+    ralph_run_plan_log "ERROR: graph changeset helper missing"
+    return 1
+  }
+  safe_key="$(printf '%s' "$todo_key" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  output="$RALPH_PLAN_WORKSPACE_ROOT/artifacts/${RALPH_ARTIFACT_NS:-graph}/changeset-checkpoints/${RALPH_GRAPH_NODE_ID}/${RALPH_GRAPH_ATTEMPT_ID}/${safe_key}.json"
+  if ! output="$(python3 "$RALPH_GRAPH_CHANGESET_HELPER" capture \
+    --workspace "${RALPH_AGENT_WORKSPACE:-$WORKSPACE}" \
+    --baseline "$RALPH_GRAPH_CHANGESET_BASELINE" \
+    --output "$output" \
+    --node-id "$RALPH_GRAPH_NODE_ID" \
+    --attempt-id "$RALPH_GRAPH_ATTEMPT_ID" \
+    --workspace-mode "$RALPH_GRAPH_WORKSPACE_MODE" \
+    --base-identity "$RALPH_GRAPH_BASE_IDENTITY" \
+    --write-scopes-json "$RALPH_GRAPH_WRITE_SCOPES_JSON" 2>&1)"; then
+      output="${output//$'\n'/; }"
+      if [[ "${#output}" -gt 2000 ]]; then
+        output="${output:0:2000}..."
+      fi
+      ralph_run_plan_log "ERROR: graph write-scope verification failed before TODO completion: $todo_key${output:+; $output}"
+      return 1
+  fi
+}
+
 ralph_run_plan_artifact_abs_path() {
   local artifact_path="$1"
   if [[ "$artifact_path" == /* ]]; then
@@ -1065,8 +1286,8 @@ PY
 ralph_run_plan_seed_yaml_bootstrap_context() {
   local plan_path="$1"
   local plan_format next line_num todo_id todo_target _seed_next_rest
-  local eff_stage="" eff_runtime="" eff_agent="" eff_model=""
-  local eff_session_strategy="" eff_context_budget="" eff_plan_file=""
+  local eff_stage="" eff_runtime="" eff_model=""
+  local eff_session_strategy="" eff_context_budget="" eff_subagents="inherit" eff_plan_file=""
 
   plan_format="$(plan_detect_format "$plan_path" 2>/dev/null || printf 'default')"
   if ! plan_format_is_yaml "$plan_format"; then
@@ -1087,7 +1308,7 @@ ralph_run_plan_seed_yaml_bootstrap_context() {
   todo_id="${_seed_next_rest%%|*}"
   todo_target="${todo_id:-$line_num}"
 
-  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_agent eff_model eff_session_strategy eff_context_budget eff_plan_file <<< "$(
+  if ! IFS=$'\x1f' read -r eff_stage eff_runtime eff_model eff_session_strategy eff_context_budget eff_subagents eff_plan_file <<< "$(
     ralph_run_plan_routing_effective_metadata_fields "$plan_path" "$todo_target"
   )"; then
     return 1
@@ -1096,12 +1317,11 @@ ralph_run_plan_seed_yaml_bootstrap_context() {
   if [[ -z "${RUNTIME:-}" && -n "$eff_runtime" ]]; then
     RUNTIME="$eff_runtime"
   fi
-  if [[ -z "${PREBUILT_AGENT:-}" && -n "$eff_agent" ]]; then
-    PREBUILT_AGENT="$eff_agent"
-  fi
   if [[ -z "${PLAN_MODEL_CLI:-}" && -n "$eff_model" ]]; then
     PLAN_MODEL_CLI="$eff_model"
   fi
+  RALPH_PLAN_SUBAGENTS="$eff_subagents"
+  export RALPH_PLAN_SUBAGENTS
 }
 
 ralph_run_plan_pipeline_input_artifacts_prepare() {
@@ -1359,7 +1579,13 @@ if [[ "${RALPH_RUN_PLAN_LIBRARY_ONLY:-0}" == "1" ]]; then
   return 0
 fi
 
-AGENT_CONFIG_TOOL="$SCRIPT_DIR/agent-config-tool.sh"
+# Bare `source run-plan-core.sh` (guidance dumps, ad-hoc function checks) does not
+# load the run-plan.sh prelude where prompt_select_runtime lives. Stop after
+# defining helpers instead of falling into the interactive runtime picker and
+# exiting the caller's shell via `|| exit 1`.
+if ! declare -F prompt_select_runtime >/dev/null 2>&1; then
+  return 0
+fi
 
 # Read plan header runtime/model early (PLAN_OVERRIDE and WORKSPACE are set by arg parser).
 # These serve as defaults when --runtime / --model / env vars are not provided.
@@ -1422,12 +1648,32 @@ export RALPH_SHARED_RALPH_DIR="$SCRIPT_DIR"
 source "$SELECT_MODEL_SCRIPT"
 
 # Log to file and optionally stdout (if CURSOR_PLAN_VERBOSE=1)
+# Logging runs dozens of times per invocation, so it must not fork. The
+# timestamp uses bash's printf when the running bash supports %()T (4.2+) and
+# falls back to date(1) on bash 3.2; the log directory is created once per
+# path instead of on every line, and ${path%/*} replaces dirname(1).
+_RALPH_LOG_TS_BUILTIN=""
+_RALPH_LOG_DIR_READY=""
 ralph_run_plan_log() {
   local ts
   local log_path="${LOG_FILE:-}"
-  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  if [[ -z "$_RALPH_LOG_TS_BUILTIN" ]]; then
+    if printf '%(%Y)T' -1 >/dev/null 2>&1; then
+      _RALPH_LOG_TS_BUILTIN=1
+    else
+      _RALPH_LOG_TS_BUILTIN=0
+    fi
+  fi
+  if [[ "$_RALPH_LOG_TS_BUILTIN" == "1" ]]; then
+    printf -v ts '%(%Y-%m-%d %H:%M:%S)T' -1
+  else
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  fi
   if [[ -n "$log_path" ]]; then
-    mkdir -p "$(dirname "$log_path")"
+    if [[ "$_RALPH_LOG_DIR_READY" != "$log_path" ]]; then
+      mkdir -p "${log_path%/*}"
+      _RALPH_LOG_DIR_READY="$log_path"
+    fi
     echo "[$ts] $*" >> "$log_path"
   fi
   if [[ "${CURSOR_PLAN_VERBOSE:-0}" == "1" ]]; then
@@ -1649,8 +1895,6 @@ source "$_run_plan_agent_dir/bash-lib/run-plan/run-plan-agent.sh"
 source "$_run_plan_agent_dir/bash-lib/run-plan/run-plan-reasoning-effort.sh"
 # shellcheck source=/dev/null
 source "$_run_plan_agent_dir/bash-lib/run-plan/run-plan-claude-speculative-cache-warm.sh"
-# shellcheck source=/dev/null
-source "$_run_plan_agent_dir/bash-lib/agent-source/adapters/adapter-native-md.sh"
 unset _run_plan_agent_dir
 # RUN_PLAN_AGENT_HELPERS_END
 
@@ -1685,7 +1929,18 @@ fi
 RALPH_PLAN_WORKSPACE_ROOT="${RALPH_PLAN_WORKSPACE_ROOT:-$DEFAULT_RALPH_PLAN_WORKSPACE_ROOT}"
 export RALPH_PROJECT_ROOT="$WORKSPACE"
 export RALPH_PLAN_WORKSPACE_ROOT
-RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+# Graph scheduler / Sequential workflow engine set RALPH_GRAPH_NODE_LOG_DIR to
+# the contained attempt directory:
+#   Dependency: <run-dir>/logs/nodes/<safe-node-id>/<attempt-id>/
+#   Sequential: <registry-run>/engine/logs/stages/<stage>/attempt-<n>/
+# Never create or append to the namespace-only logs/<namespace>/nodes/ tree.
+if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  RALPH_LOG_DIR="$RALPH_GRAPH_NODE_LOG_DIR"
+elif [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]; then
+  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+else
+  RALPH_LOG_DIR="$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_ARTIFACT_NS"
+fi
 unset RALPH_MCP_PROXY_LOG_FILE
 
 # Acquire the canonical plan lease and start (or structurally attach to) the
@@ -1712,6 +1967,12 @@ fi
 if declare -F runtime_overlay_init_state >/dev/null 2>&1; then
   runtime_overlay_init_state "$RUNTIME" "$RALPH_PLAN_KEY"
   _RALPH_RUNTIME_OVERLAY_ACTIVE=1
+  if declare -F ralph_bg_tier_probe_apply >/dev/null 2>&1; then
+    if ! ralph_bg_tier_probe_apply "$RUNTIME"; then
+      echo "Error: background tier probe failed (RALPH_BG_TIER=hook requires tier-1 hook support)" >&2
+      exit 1
+    fi
+  fi
   # Mark cleanup as not-yet-done so EXIT/signal traps run registered cleanup.
   _RALPH_RUNTIME_OVERLAY_CLEANUP_DONE=0
   ralph_runtime_overlay_chain_exit_trap ""
@@ -1726,6 +1987,10 @@ fi
 ralph_run_plan_record_workspace_registry "$WORKSPACE" "$RUNTIME" "$RALPH_PLAN_KEY"
 
 ralph_session_init "$WORKSPACE" "$PLAN_LOG_NAME"
+
+if declare -F ralph_bg_job_recover_on_restart >/dev/null 2>&1; then
+  ralph_bg_job_recover_on_restart || true
+fi
 
 if [[ -f "$RALPH_SESSION_DIR/killswitch-override.json" ]]; then
   RALPH_KILLSWITCH_OVERRIDE_FILE="$RALPH_SESSION_DIR/killswitch-override.json"
@@ -1742,15 +2007,20 @@ if [[ -f "$RALPH_SESSION_DIR/runtime-permission-overrides.sh" ]]; then
   source "$RALPH_RUNTIME_PERMISSION_OVERRIDES_FILE"
 fi
 
-if [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
+if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  LOG_FILE="$RALPH_LOG_DIR/agent.log"
+  OUTPUT_LOG="$RALPH_LOG_DIR/agent.log"
+elif [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
 else
   LOG_FILE="$CURSOR_PLAN_LOG"
 fi
-if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
-  OUTPUT_LOG="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}-output.log"
-else
-  OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
+if [[ -z "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
+  if [[ -z "${CURSOR_PLAN_OUTPUT_LOG:-}" ]]; then
+    OUTPUT_LOG="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}-output.log"
+  else
+    OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
+  fi
 fi
 # Destination for captured CLI stdout/stderr (tee); subprocesses may append via invoke helpers.
 export OUTPUT_LOG
@@ -1857,8 +2127,8 @@ if ! ralph_run_plan_non_interactive_model_preflight_ok; then
       ralph_run_plan_die_unresolved_claude_codex_model "$RUNTIME"
       ;;
     *)
-      ralph_run_plan_log "ERROR: --non-interactive requires --agent <name>, --model <id>, or CURSOR_PLAN_MODEL"
-      echo -e "${C_R}${C_BOLD}Non-interactive mode requires a prebuilt agent, --model <id>, or CURSOR_PLAN_MODEL.${C_RST}" >&2
+      ralph_run_plan_log "ERROR: --non-interactive requires --model <id> or CURSOR_PLAN_MODEL"
+      echo -e "${C_R}${C_BOLD}Non-interactive mode requires --model <id> or CURSOR_PLAN_MODEL.${C_RST}" >&2
       exit 1
       ;;
   esac
@@ -1924,10 +2194,9 @@ ralph_restart_command_hint() {
   if [[ -n "${RALPH_ORCH_FILE:-}" ]]; then
     printf '.ralph/orchestrator.sh --orchestration %s' "$(printf '%q' "$RALPH_ORCH_FILE")"
   else
-    printf '%s --non-interactive --plan %s --agent %s --workspace %s' \
+    printf '%s --non-interactive --plan %s --workspace %s' \
       "$RALPH_RUN_PLAN_RELATIVE" \
       "$(printf '%q' "$PLAN_PATH")" \
-      "$(printf '%q' "${PREBUILT_AGENT:-agent}")" \
       "$(printf '%q' "$WORKSPACE")"
   fi
 }
@@ -2159,6 +2428,12 @@ ralph_prepare_permission_pause() {
   fi
 
   printf '%s\n' "$prompt_text" >"$PENDING_HUMAN"
+  # Record which graph run owns this pause so a later run does not inherit a
+  # question only this run can answer. See
+  # ralph_session_discard_foreign_run_pause.
+  if [[ -n "${RALPH_GRAPH_RUN_ID:-}" && -n "${PENDING_HUMAN_OWNER:-}" ]]; then
+    printf '%s\n' "$RALPH_GRAPH_RUN_ID" >"$PENDING_HUMAN_OWNER"
+  fi
   if declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
     ralph_write_human_request_artifact \
       "$RALPH_SESSION_DIR" \
@@ -2267,6 +2542,15 @@ ralph_try_consume_human_response() {
       _response_decision="$(ralph_permission_operator_response_decision "$_pa")"
     fi
 
+    ralph_human_continuation_finalize_success() {
+      local _route="${1:-generic}" _perm_decision="${2:-}"
+      if declare -F ralph_human_continuation_persist >/dev/null 2>&1; then
+        ralph_human_continuation_persist "$_route" "$_perm_decision" >/dev/null \
+          || ralph_run_plan_log "WARN: human-answer continuation record not persisted"
+      fi
+      rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+    }
+
     if [[ "$_request_kind" == "permission" ]] || [[ -n "$_response_classification" ]] || [[ -n "$_response_blocked_cmd" ]] || [[ -n "$_response_blocked_path" ]] || [[ -n "$_response_blocked_tool" ]]; then
       if [[ "$_response_decision" == "allow" ]] && declare -F ralph_apply_permission_operator_response >/dev/null 2>&1; then
         local _permission_apply_result_file
@@ -2288,13 +2572,13 @@ ralph_try_consume_human_response() {
       case "$_response_decision" in
         allow)
           ralph_run_plan_log "Operator allowed human request; prepared ${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-OpenCode permission overlay}"
+          if [[ -n "${RALPH_PERMISSION_APPLY_DEGRADED:-}" ]]; then
+            ralph_run_plan_log "WARN: permission approved but overlay setup was incomplete (${RALPH_PERMISSION_APPLY_DEGRADED}); the runtime may block the same action again"
+            echo -e "${C_Y}Permission approved. Note: could not fully record the exception (${RALPH_PERMISSION_APPLY_DEGRADED}); the runtime may block the same action again.${C_RST}" >&2
+          fi
           RALPH_PERMISSION_RESPONSE_DECISION="allow"
           export RALPH_PERMISSION_RESPONSE_DECISION
-          RALPH_PLAN_CLI_RESUME=1
-          export RALPH_PLAN_CLI_RESUME
-          RALPH_PLAN_SESSION_STRATEGY="resume"
-          export RALPH_PLAN_SESSION_STRATEGY
-          rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+          ralph_human_continuation_finalize_success "permission" "allow"
           ralph_run_plan_log "Applied structured human response; continuing plan run"
           return 0
           ;;
@@ -2302,10 +2586,10 @@ ralph_try_consume_human_response() {
           ralph_run_plan_log "Operator denied human request; TODO will remain open"
           RALPH_PERMISSION_RESPONSE_DECISION="deny"
           export RALPH_PERMISSION_RESPONSE_DECISION
-          RALPH_PLAN_SESSION_STRATEGY="${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
-          export RALPH_PLAN_SESSION_STRATEGY
-          RALPH_PLAN_CLI_RESUME="${RALPH_PLAN_CLI_RESUME:-0}"
-          export RALPH_PLAN_CLI_RESUME
+          # A deny stops this run only. Leaving the request on disk would make
+          # every later run consume the same stale answer and exit immediately
+          # without ever prompting, with no way for the operator to recover.
+          rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
           return 0
           ;;
         *)
@@ -2316,16 +2600,12 @@ ralph_try_consume_human_response() {
     fi
 
     if [[ "$_request_kind" != "permission" ]] && [[ -n "$_request_question" ]]; then
-      RALPH_PLAN_CLI_RESUME=1
-      export RALPH_PLAN_CLI_RESUME
-      RALPH_PLAN_SESSION_STRATEGY="resume"
-      export RALPH_PLAN_SESSION_STRATEGY
-      rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+      ralph_human_continuation_finalize_success "guidance" ""
       ralph_run_plan_log "Applied guidance answer from operator-response.txt; continuing plan run"
       return 0
     fi
 
-    rm -f "$PENDING_HUMAN" "$OPERATOR_RESPONSE_FILE"
+    ralph_human_continuation_finalize_success "generic" ""
     ralph_run_plan_log "Applied answer from operator-response.txt; continuing plan run"
     return 0
   fi
@@ -2346,7 +2626,11 @@ ralph_human_input_write_offline_instructions() {
     _request_kind="permission"
   fi
 
-  if [[ "$_request_kind" == "permission" ]] && [[ -t 0 ]] && [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; then
+  local _permission_tty_ok=0
+  if [[ -t 0 ]] && [[ -r /dev/tty ]] && [[ -w /dev/tty ]]; then
+    _permission_tty_ok=1
+  fi
+  if [[ "$_request_kind" == "permission" ]] && { [[ -n "${RALPH_PERMISSION_PREAPPROVED_DECISION:-}" ]] || [[ "$_permission_tty_ok" == "1" ]]; }; then
     local _permission_decision=""
     local _permission_prompt=""
     local _permission_runtime=""
@@ -2377,26 +2661,23 @@ ralph_human_input_write_offline_instructions() {
     if [[ -n "${_permission_blocked_path:-}" ]]; then
       _permission_prompt+="Blocked path: ${_permission_blocked_path}"$'\n'
     fi
-    _permission_prompt+=$'\nAllow this permission request? [y/N]: '
-    printf '%s' "$_permission_prompt" >/dev/tty
-    # The CLI process may have left the terminal in raw or non-blocking mode.
-    # Reset to canonical blocking mode and drain any buffered keystrokes that
-    # accumulated while the agent was running; both calls are no-op on failure.
-    stty sane </dev/tty 2>/dev/null || true
-    while IFS= read -r -t 0 _ </dev/tty 2>/dev/null; do :; done 2>/dev/null || true
-    IFS= read -r _permission_decision </dev/tty || _permission_decision=""
-    if [[ -z "$_permission_decision" ]]; then
-      ralph_run_plan_log "WARN: permission prompt read returned empty; defaulting to deny (terminal may not be interactive)"
+    if [[ -n "${RALPH_PERMISSION_PREAPPROVED_DECISION:-}" ]]; then
+      _permission_decision="$RALPH_PERMISSION_PREAPPROVED_DECISION"
+      ralph_run_plan_log "Permission request auto-answered '${_permission_decision}' from RALPH_PERMISSION_RESPONSE_DECISION"
+      printf '%sPermission request auto-answered: %s (RALPH_PERMISSION_RESPONSE_DECISION)\n' \
+        "$_permission_prompt" "$_permission_decision" >&2
+    else
+      _permission_prompt+=$'\nAllow this permission request? [y/N]: '
+      local _permission_read_rc=0
+      _permission_decision="$(ralph_permission_prompt_operator_decision "$_permission_prompt")" \
+        || _permission_read_rc=$?
+      if [[ "$_permission_read_rc" -ne 0 ]]; then
+        # EOF or a read error is not an operator answer. Recording it as a deny
+        # would both stop the run and misreport who decided.
+        ralph_run_plan_log "WARN: permission prompt read failed (rc=$_permission_read_rc); no operator answer captured"
+        return 1
+      fi
     fi
-    _permission_decision="$(printf '%s' "$_permission_decision" | tr '[:upper:]' '[:lower:]')"
-    case "$_permission_decision" in
-      y|yes|allow)
-        _permission_decision="allow"
-        ;;
-      *)
-        _permission_decision="deny"
-        ;;
-    esac
     if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
       ralph_write_operator_response_template "$_request_file" "$OPERATOR_RESPONSE_FILE"
     fi
@@ -2414,6 +2695,32 @@ ralph_human_input_write_offline_instructions() {
       return 0
     fi
     return 1
+  fi
+
+  if [[ "$_request_kind" != "permission" ]] \
+    && { [[ -n "${RALPH_GUIDANCE_RESPONSE_ANSWER:-}" ]] || [[ "$_permission_tty_ok" == "1" ]]; } \
+    && [[ -f "$PENDING_HUMAN" ]] && [[ -s "$PENDING_HUMAN" ]] \
+    && declare -F ralph_guidance_prompt_operator_answer >/dev/null 2>&1; then
+    local _guidance_question _guidance_prompt _guidance_answer _guidance_read_rc=0
+    _guidance_question="$(<"$PENDING_HUMAN")"
+    _guidance_prompt=$'\nGuidance requested -- the plan is paused waiting for your answer.\n\n'
+    _guidance_prompt+="${_guidance_question}"$'\n\n'
+    _guidance_prompt+=$'Type your answer and press Enter (leave blank to fall back to editing operator-response.txt): '
+    _guidance_answer="$(ralph_guidance_prompt_operator_answer "$_guidance_prompt")" || _guidance_read_rc=$?
+    if [[ "$_guidance_read_rc" -eq 0 ]] && [[ -n "$_guidance_answer" ]]; then
+      if declare -F ralph_write_operator_response_template >/dev/null 2>&1; then
+        ralph_write_operator_response_template "$_request_file" "$OPERATOR_RESPONSE_FILE"
+      fi
+      jq -n \
+        --arg answer "$_guidance_answer" \
+        '{placeholder: false, kind: "guidance", decision: "answer", runtime: "", classification: "", blocked_command_or_tool: "", blocked_path: "", blocked_tool: "", reason: "terminal bridge response", answer: $answer}' \
+        >"$OPERATOR_RESPONSE_FILE"
+      if ralph_try_consume_human_response; then
+        return 0
+      fi
+      return 1
+    fi
+    ralph_run_plan_log "WARN: guidance prompt read failed or was left blank (rc=$_guidance_read_rc); falling back to file-based instructions"
   fi
 
   if [[ "$_request_kind" != "permission" ]] && declare -F ralph_write_human_request_artifact >/dev/null 2>&1; then
@@ -2466,11 +2773,22 @@ ralph_human_input_write_offline_instructions() {
     fi
   } >"$HUMAN_INPUT_MD"
 
-  if [[ "$_request_kind" == "permission" ]] && declare -F ralph_forward_human_question_to_orchestrator >/dev/null 2>&1; then
-    if ralph_forward_human_question_to_orchestrator "$PENDING_HUMAN" "$PLAN_PATH"; then
-      ralph_run_plan_log "Forwarded permission pause via human-ack bridge"
-    else
-      ralph_run_plan_log "human-ack bridge unavailable or failed for permission pause; falling back to file-based instructions"
+  if declare -F ralph_forward_human_question_to_orchestrator >/dev/null 2>&1; then
+    if [[ "$_request_kind" == "permission" ]]; then
+      export RALPH_HUMAN_QUESTION_KIND=permission
+      if ralph_forward_human_question_to_orchestrator "$PENDING_HUMAN" "$PLAN_PATH"; then
+        ralph_run_plan_log "Forwarded permission pause via human-ack bridge"
+      else
+        ralph_run_plan_log "human-ack bridge unavailable or failed for permission pause; falling back to file-based instructions"
+      fi
+      unset RALPH_HUMAN_QUESTION_KIND 2>/dev/null || true
+    elif ralph_run_plan_workflow_operator_input_active 2>/dev/null; then
+      unset RALPH_HUMAN_QUESTION_KIND 2>/dev/null || true
+      if ralph_forward_human_question_to_orchestrator "$PENDING_HUMAN" "$PLAN_PATH"; then
+        ralph_run_plan_log "Forwarded operator input via workflow common action request"
+      else
+        ralph_run_plan_log "workflow action request unavailable; falling back to file-based instructions"
+      fi
     fi
   fi
 
@@ -2512,6 +2830,17 @@ ralph_human_pause_for_operator_offline() {
   exit 4
 }
 
+# Capture an operator-supplied pre-approval before the per-request resets below
+# clear it. This is the non-interactive escape hatch: exporting
+# RALPH_PERMISSION_RESPONSE_DECISION=allow (or deny) answers every permission
+# prompt for the whole run, including runs with no TTY.
+RALPH_PERMISSION_PREAPPROVED_DECISION="$(printf '%s' "${RALPH_PERMISSION_RESPONSE_DECISION:-}" | tr '[:upper:]' '[:lower:]')"
+case "$RALPH_PERMISSION_PREAPPROVED_DECISION" in
+  allow|deny) ;;
+  *) RALPH_PERMISSION_PREAPPROVED_DECISION="" ;;
+esac
+export RALPH_PERMISSION_PREAPPROVED_DECISION
+
 RALPH_PERMISSION_RESPONSE_DECISION=""
 if ralph_try_consume_human_response; then
   if [[ "${RALPH_PERMISSION_RESPONSE_DECISION:-}" == "deny" ]]; then
@@ -2519,7 +2848,10 @@ if ralph_try_consume_human_response; then
     echo "" >&2
     echo -e "${C_R}${C_BOLD}Permission request was denied by the operator; stopping plan run.${C_RST}" >&2
     echo -e "${C_DIM}Plan: $PLAN_PATH${C_RST}" >&2
-    _ralph_write_plan_usage_summary "$done_count" "$total_count"
+    echo -e "${C_DIM}Re-run the same command to retry; you will be prompted again. Pre-approve with RALPH_PERMISSION_RESPONSE_DECISION=allow.${C_RST}" >&2
+    if declare -F _ralph_write_plan_usage_summary >/dev/null 2>&1; then
+      _ralph_write_plan_usage_summary "$done_count" "$total_count"
+    fi
     ralph_runtime_overlay_cleanup_if_needed
     exit 1
   fi
@@ -2540,6 +2872,7 @@ ralph_run_plan_log "session dir=$RALPH_SESSION_DIR"
 ralph_session_prompt_cli_resume
 # Session strategy is interactive when unset on TTY; CLI resume flag is derived for compatibility.
 export RALPH_PLAN_SESSION_STRATEGY
+ralph_session_derive_cli_resume
 export RALPH_PLAN_CLI_RESUME
 
 # Load workspace preferences if RALPH_MODE is not yet resolved.
@@ -2844,134 +3177,31 @@ trap 'ralph_run_plan_interrupt_trap_handler INT' INT
 trap 'ralph_run_plan_interrupt_trap_handler TERM' TERM
 trap 'ralph_run_plan_interrupt_trap_handler HUP' HUP
 
-# Resolve agent/model: prebuilt (--agent / --select-agent) overrides manual model selection
+# Resolve model: prebuilt profile selection was removed.
 PREBUILT_AGENT_CONTEXT=""
 RALPH_AGENT_NATIVE_NAME=""
-RALPH_AGENT_NATIVE_PASSTHROUGH="${RALPH_AGENT_NATIVE_PASSTHROUGH:-1}"
+PREBUILT_AGENT=""
+CLAUDE_TOOLS_FROM_AGENT=""
+RALPH_AGENT_MAX_BUDGET=""
 prompt_agent_source_mode "$WORKSPACE"
-if [[ "$INTERACTIVE_SELECT_AGENT_FLAG" == "1" ]]; then
-  PREBUILT_AGENT="$(prompt_select_prebuilt_agent "$WORKSPACE")" || exit 1
-fi
 
-if [[ -n "$PREBUILT_AGENT" ]]; then
-  if [[ ! -f "$AGENT_CONFIG_TOOL" ]]; then
-    echo -e "${C_R}agent-config-tool.sh is required for prebuilt agent validation and context.${C_RST}" >&2
-    ralph_run_plan_log "ERROR: missing $AGENT_CONFIG_TOOL for agent $PREBUILT_AGENT"
-    exit 1
-  fi
-  _agents_root="$(prebuilt_agents_root "$WORKSPACE")"
-  _discovered="$(list_prebuilt_agent_ids "$WORKSPACE" | paste -sd', ' -)"
-  ralph_run_plan_log "agent discovery ($RUNTIME): root=$_agents_root ids=[${_discovered:-none}]"
-  if ! validate_prebuilt_agent_config "$WORKSPACE" "$PREBUILT_AGENT"; then
-    echo -e "${C_R}Invalid agent config for '${PREBUILT_AGENT}'.${C_RST} See .cursor/agents/README.md" >&2
-    ralph_run_plan_log "ERROR: validate failed for agent $PREBUILT_AGENT"
-    exit 1
-  fi
-  _prebuilt_agent_model="$(read_prebuilt_agent_model "$WORKSPACE" "$PREBUILT_AGENT")" || {
-    echo -e "${C_R}Could not read model for prebuilt agent${C_RST} $PREBUILT_AGENT" >&2
-    ralph_run_plan_log "ERROR: model read failed for $PREBUILT_AGENT"
+# Graph/orchestration stage and voter models: stage/voter > saved > native.
+# Profile models and global --model / *_PLAN_MODEL are not rungs.
+# Attended Claude/Codex leaf resolution prompts with the full saved-model catalog
+# (see _select_model_resolve_claude_codex_chain). INTERACTIVE_SELECT_MODEL_FLAG
+# remains a one-shot override used only when explicitly set by callers.
+if [[ "${RALPH_MODEL_SCOPE:-}" == "staged" ]]; then
+  SELECTED_MODEL="$(ralph_resolve_staged_plan_model "$RUNTIME" "${PLAN_STAGE_MODEL:-}")" || {
+    if [[ "$RUNTIME" == "claude" || "$RUNTIME" == "codex" ]]; then
+      ralph_run_plan_die_unresolved_claude_codex_model "$RUNTIME"
+    fi
+    echo -e "${C_R}Could not resolve staged model for runtime${C_RST} $RUNTIME" >&2
     exit 1
   }
-  case "$RUNTIME" in
-    claude|codex)
-      SELECTED_MODEL="$(ralph_resolve_claude_codex_plan_model "$RUNTIME" "$_prebuilt_agent_model")" || {
-        ralph_run_plan_die_unresolved_claude_codex_model "$RUNTIME"
-      }
-      if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
-        ralph_run_plan_log "using CLI --model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-      elif { [[ "$RUNTIME" == "claude" && -n "${CLAUDE_PLAN_MODEL:-}" ]] \
-        || [[ "$RUNTIME" == "codex" && -n "${CODEX_PLAN_MODEL:-}" ]] \
-        || [[ -n "${CURSOR_PLAN_MODEL:-}" ]]; }; then
-        ralph_run_plan_log "runtime env model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-      elif [[ -n "$_prebuilt_agent_model" ]]; then
-        ralph_run_plan_log "prebuilt agent config model: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-      else
-        ralph_run_plan_log "saved-model default: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-      fi
-      ;;
-    *)
-      SELECTED_MODEL="$_prebuilt_agent_model"
-      # Runtime-specific model env vars set by the orchestrator for per-stage overrides
-      # take precedence over the agent config default, but yield to an explicit --model flag.
-      _runtime_env_model=""
-      case "$RUNTIME" in
-        cursor) _runtime_env_model="${CURSOR_PLAN_MODEL:-}" ;;
-        opencode) _runtime_env_model="${OPENCODE_PLAN_MODEL:-${CURSOR_PLAN_MODEL:-}}" ;;
-        antigravity) SELECTED_MODEL="$(ralph_resolve_antigravity_plan_model "$_prebuilt_agent_model")" || true ;;
-      esac
-      if [[ "$RUNTIME" != "antigravity" && -n "$_runtime_env_model" ]]; then
-        SELECTED_MODEL="$_runtime_env_model"
-        ralph_run_plan_log "runtime env model override: $SELECTED_MODEL (agent=$PREBUILT_AGENT)"
-      fi
-      if [[ -n "${PLAN_MODEL_CLI:-}" ]]; then
-        SELECTED_MODEL="$PLAN_MODEL_CLI"
-        ralph_run_plan_log "CLI --model overrides prebuilt agent default model (agent=$PREBUILT_AGENT)"
-      fi
-      ;;
-  esac
-
-  # Native --agent passthrough: when resolved kind is native-md AND RUNTIME==claude
-  # AND passthrough is enabled (default), skip context building and pass the name to claude CLI.
-  _agent_resolved_kind=""
-  _agent_resolved_path=""
-  if [[ "$RUNTIME" == "claude" ]] && [[ "${RALPH_AGENT_NATIVE_PASSTHROUGH}" != "0" ]]; then
-    # Resolve agent source to check if it's native-md
-    _resolve_out=""
-    _resolve_rc=0
-    _resolve_out="$(ralph_agent_resolve_source "$PREBUILT_AGENT" "$RUNTIME" "$WORKSPACE")" || _resolve_rc=$?
-    if [[ $_resolve_rc -eq 0 ]]; then
-      _agent_resolved_kind="${_resolve_out%%	*}"
-      _agent_resolved_path="${_resolve_out#*	}"
-      if [[ "$_agent_resolved_kind" == "native-md" ]]; then
-        # Extract the agent name from the native path and set for passthrough
-        RALPH_AGENT_NATIVE_NAME="$PREBUILT_AGENT"
-        ralph_run_plan_log "native-md agent passthrough enabled: $RALPH_AGENT_NATIVE_NAME (skipping context building)"
-        export RALPH_AGENT_NATIVE_NAME
-      fi
-    fi
-  fi
-
-  # Build PREBUILT_AGENT_CONTEXT unless native passthrough is active
-  if [[ -z "$RALPH_AGENT_NATIVE_NAME" ]]; then
-    _ralph_progressive_ctx_part=""
-    if ralph_run_plan_progressive_context_enabled; then
-      _ralph_progressive_ctx_part="stable"
-      export RALPH_PROGRESSIVE_CONTEXT_PART="stable"
-      unset RALPH_PROGRESSIVE_TODO_TEXT
-    fi
-    if [[ "$RUNTIME" == "claude" ]]; then
-      PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=0 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
-        echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
-        ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
-        exit 1
-      }
-    else
-      PREBUILT_AGENT_CONTEXT="$(RALPH_COMPACT_CONTEXT=1 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || {
-        echo -e "${C_R}Could not build run context for agent${C_RST} $PREBUILT_AGENT" >&2
-        ralph_run_plan_log "ERROR: context build failed for $PREBUILT_AGENT"
-        exit 1
-      }
-    fi
-    if [[ -n "$_ralph_progressive_ctx_part" ]]; then
-      unset RALPH_PROGRESSIVE_CONTEXT_PART
-    fi
-  fi
-  ralph_run_plan_log "prebuilt agent id=$PREBUILT_AGENT model=$SELECTED_MODEL (config validated)"
-  ralph_run_plan_export_agent_mcp_overlay "$WORKSPACE" "$PREBUILT_AGENT"
-  if [[ "$RUNTIME" == "claude" ]]; then
-    _agents_root_for_tools="$(prebuilt_agents_root "$WORKSPACE")"
-    CLAUDE_TOOLS_FROM_AGENT="$(bash "$AGENT_CONFIG_TOOL" allowed-tools "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
-    [[ -n "$CLAUDE_TOOLS_FROM_AGENT" ]] && ralph_run_plan_log "allowed_tools from agent config: $CLAUDE_TOOLS_FROM_AGENT"
-    RALPH_AGENT_MAX_BUDGET="$(bash "$AGENT_CONFIG_TOOL" max-budget "$_agents_root_for_tools" "$PREBUILT_AGENT" 2>/dev/null || true)"
-    export RALPH_AGENT_MAX_BUDGET
-    [[ -n "$RALPH_AGENT_MAX_BUDGET" ]] && ralph_run_plan_log "max_budget_usd from agent config: $RALPH_AGENT_MAX_BUDGET"
-  else
-    CLAUDE_TOOLS_FROM_AGENT=""
-  fi
+  ralph_run_plan_log "staged model (stage/voter > saved > native): ${SELECTED_MODEL:-native default} stage_model=${PLAN_STAGE_MODEL:-}"
 elif [[ "$RUNTIME" == "claude" || "$RUNTIME" == "codex" ]]; then
   if [[ "${INTERACTIVE_SELECT_MODEL_FLAG:-0}" == "1" ]]; then
-    # User explicitly chose "Select a model directly": force the interactive picker
-    # (saved models + custom entry) instead of silently resolving a saved default.
+    # Explicit force: show the picker even if a CLI/TODO pin exists upstream.
     case "$RUNTIME" in
       claude) SELECTED_MODEL="$(_claude_select_model_interactive)" ;;
       codex)  SELECTED_MODEL="$(_codex_select_model_interactive)" ;;
@@ -2996,9 +3226,15 @@ elif [[ "$RUNTIME" == "claude" || "$RUNTIME" == "codex" ]]; then
   fi
   SELECTED_MODEL="$(tr -d '\r' <<<"${SELECTED_MODEL:-}")"
 # Pin the resolved model so per-todo routing can reuse it without re-prompting each TODO.
-if [[ -z "${PLAN_MODEL_CLI:-}" && -n "${SELECTED_MODEL:-}" ]]; then
+# Staged/generated workflow runs: always pin the stage-resolved SELECTED_MODEL so a
+# plan-header leftover cannot become the baseline above stage/invocation defaults.
+if [[ "${RALPH_MODEL_SCOPE:-}" == "staged" ]]; then
+  PLAN_MODEL_CLI="${SELECTED_MODEL:-}"
+elif [[ -z "${PLAN_MODEL_CLI:-}" && -n "${SELECTED_MODEL:-}" ]]; then
   PLAN_MODEL_CLI="$SELECTED_MODEL"
 fi
+# Clear any one-shot force-picker flag after the baseline selection.
+INTERACTIVE_SELECT_MODEL_FLAG=0
 # One-time note when model was not specified via --model or plan header, so user knows
 # about per-todo overrides. Example: add 'model: <id>' and 'runtime: <name>' to a todo entry.
 if [[ -z "${_plan_model_from_cli:-}" && -z "${_plan_header_model:-}" && "${NON_INTERACTIVE_FLAG:-0}" == "0" && -n "${SELECTED_MODEL:-}" ]]; then
@@ -3006,9 +3242,6 @@ if [[ -z "${_plan_model_from_cli:-}" && -z "${_plan_header_model:-}" && "${NON_I
 fi
 
 _prebuilt_agent_reasoning_effort=""
-if [[ -n "${PREBUILT_AGENT:-}" ]]; then
-  _prebuilt_agent_reasoning_effort="$(read_prebuilt_agent_reasoning_effort "$WORKSPACE" "$PREBUILT_AGENT" 2>/dev/null || true)"
-fi
 if ! ralph_validate_reasoning_effort_config "${PLAN_REASONING_EFFORT_CLI:-}" "reasoning_effort"; then
   exit 1
 fi
@@ -3026,11 +3259,9 @@ export SELECTED_REASONING_EFFORT
 RALPH_PLAN_REASONING_EFFORT_RESOLVED="$SELECTED_REASONING_EFFORT"
 export RALPH_PLAN_REASONING_EFFORT_RESOLVED
 if [[ -n "${PLAN_REASONING_EFFORT_CLI:-}" ]]; then
-  ralph_run_plan_log "using CLI --reasoning-effort: $SELECTED_REASONING_EFFORT (agent=${PREBUILT_AGENT:-none})"
+  ralph_run_plan_log "using CLI --reasoning-effort: $SELECTED_REASONING_EFFORT"
 elif [[ -n "$(ralph_reasoning_effort_runtime_env_value "$RUNTIME" 2>/dev/null || true)" ]]; then
-  ralph_run_plan_log "runtime env reasoning_effort: $SELECTED_REASONING_EFFORT (agent=${PREBUILT_AGENT:-none})"
-elif [[ -n "${_prebuilt_agent_reasoning_effort:-}" ]]; then
-  ralph_run_plan_log "prebuilt agent reasoning_effort: $SELECTED_REASONING_EFFORT (agent=$PREBUILT_AGENT)"
+  ralph_run_plan_log "runtime env reasoning_effort: $SELECTED_REASONING_EFFORT"
 fi
 
 ralph_run_plan_routing_capture_baseline
@@ -3566,6 +3797,9 @@ PY
   else
     echo -e "${C_DIM}Total elapsed time: ${_elapsed_fmt}${C_RST}"
   fi
+  if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" && -f "$_summary_dir/plan-usage-summary.json" ]]; then
+    cp "$_summary_dir/plan-usage-summary.json" "$RALPH_GRAPH_NODE_LOG_DIR/usage.json" 2>/dev/null || true
+  fi
   _RALPH_PLAN_SUMMARY_FINALIZED=1
 }
 
@@ -3624,6 +3858,95 @@ _ralph_runtime_overlay_summary_snapshot_for_usage() {
   fi
 }
 
+# Export bounded continuation / background telemetry for the invocation usage
+# record. Never includes command text, secrets, or unbounded job output.
+ralph_run_plan_capture_bg_continuation_usage_telemetry() {
+  local continuation_json="${1:-}"
+  local tier="${RALPH_BG_TIER_SELECTED:-}"
+  local elapsed="" status="" reason=""
+
+  [[ -n "$continuation_json" ]] || return 0
+  reason="${RALPH_USAGE_CONTINUATION_REASON:-bg-job}"
+  elapsed="$(jq -r '.elapsedSeconds // empty' <<<"$continuation_json" 2>/dev/null || true)"
+  status="$(jq -r '.status // empty' <<<"$continuation_json" 2>/dev/null || true)"
+
+  export RALPH_USAGE_CONTINUATION_REASON="$reason"
+  if [[ "$elapsed" =~ ^[0-9]+$ ]]; then
+    export RALPH_USAGE_WAIT_DURATION_SECONDS="$elapsed"
+  fi
+  if [[ -n "$status" && "$status" != "null" ]]; then
+    export RALPH_USAGE_TERMINAL_STATUS="$status"
+  fi
+  case "$tier" in
+    hook)
+      export RALPH_USAGE_SESSION_CONTINUITY="held"
+      ;;
+    invocation|*)
+      export RALPH_USAGE_SESSION_CONTINUITY="resumed"
+      ;;
+  esac
+}
+
+ralph_run_plan_refresh_continuation_usage_telemetry() {
+  local attempt_key="" tier="${RALPH_BG_TIER_SELECTED:-}" tier_reason="${RALPH_BG_TIER_REASON:-}"
+  local continuity="${RALPH_USAGE_SESSION_CONTINUITY:-}"
+  local degraded="${RALPH_USAGE_DEGRADED_FALLBACK:-}"
+  local continuation_reason="${RALPH_USAGE_CONTINUATION_REASON:-}"
+
+  if [[ -z "$continuation_reason" && -n "${RALPH_PLAN_INVOCATION_REASON:-}" ]]; then
+    continuation_reason="${RALPH_PLAN_INVOCATION_REASON}"
+  fi
+
+  if [[ -z "$continuity" ]]; then
+    if [[ "$tier" == "hook" && "${RALPH_PLAN_INVOCATION_REASON:-}" == "${RALPH_TODO_INVOCATION_REASON_CONTINUE:-todo-continue}" ]]; then
+      continuity="held"
+    elif [[ "${RALPH_PLAN_INVOCATION_REASON:-}" == "${RALPH_TODO_INVOCATION_REASON_CONTINUE:-todo-continue}" ]]; then
+      if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+        continuity="resumed"
+      fi
+    fi
+  fi
+
+  if [[ -z "$degraded" ]]; then
+    case "${RALPH_TODO_SESSION_CAPTURE_STATUS:-${RALPH_SESSION_TODO_CAPTURE:-}}" in
+      degraded)
+        degraded="session-capture-degraded"
+        ;;
+    esac
+    if [[ -z "$degraded" && "${RALPH_TODO_SESSION_CAPTURE:-}" == "${RALPH_TODO_SESSION_CAPTURE_DEGRADED:-degraded}" ]]; then
+      degraded="session-capture-degraded"
+    fi
+  fi
+
+  if declare -F ralph_bg_job_attempt_key >/dev/null 2>&1 && declare -F ralph_bg_job_identity_json >/dev/null 2>&1; then
+    attempt_key="$(ralph_bg_job_attempt_key "$(ralph_bg_job_identity_json)" 2>/dev/null || true)"
+  elif declare -F ralph_session_todo_attempt_key >/dev/null 2>&1 && declare -F ralph_session_todo_identity_json >/dev/null 2>&1; then
+    attempt_key="$(ralph_session_todo_attempt_key "$(ralph_session_todo_identity_json)" 2>/dev/null || true)"
+  fi
+
+  # Prefer already-exported RALPH_BG_TIER_*; never invent command text.
+  # Use if/fi (not `[[ ... ]] && export`) so empty optional fields do not trip
+  # set -e on macOS bash 3.2.
+  if [[ -n "$tier" ]]; then
+    export RALPH_USAGE_BG_TIER="$tier"
+  fi
+  if [[ -n "$tier_reason" ]]; then
+    export RALPH_USAGE_BG_TIER_REASON="$tier_reason"
+  fi
+  if [[ -n "$continuation_reason" ]]; then
+    export RALPH_USAGE_CONTINUATION_REASON="$continuation_reason"
+  fi
+  if [[ -n "$attempt_key" ]]; then
+    export RALPH_USAGE_LOGICAL_ATTEMPT="$attempt_key"
+  fi
+  if [[ -n "$continuity" ]]; then
+    export RALPH_USAGE_SESSION_CONTINUITY="$continuity"
+  fi
+  if [[ -n "$degraded" ]]; then
+    export RALPH_USAGE_DEGRADED_FALLBACK="$degraded"
+  fi
+}
+
 _ralph_append_invocation_usage_history() {
   local _path="$1"
   local _iteration="$2"
@@ -3660,6 +3983,10 @@ _ralph_append_invocation_usage_history() {
   local _overlay_fields_py="${SCRIPT_DIR:-}/python/ralph_overlay_usage_fields.py"
   if [[ ! -f "$_overlay_fields_py" ]]; then
     _overlay_fields_py=""
+  fi
+
+  if declare -F ralph_run_plan_refresh_continuation_usage_telemetry >/dev/null 2>&1; then
+    ralph_run_plan_refresh_continuation_usage_telemetry
   fi
 
   mkdir -p "$(dirname "$_path")"
@@ -3727,7 +4054,7 @@ _ralph_append_invocation_usage_history() {
       _extra_fields+=",\"completion_override_used\":false"
     fi
   fi
-  _extra_fields+=",\"prompt_bytes\":${_prompt_bytes},\"todo_bytes\":${_todo_bytes},\"todo_continuation_lines\":${_todo_continuation_lines},\"direct_verification\":$([[ "$_direct_verification" == "1" ]] && printf true || printf false),\"tool_turns\":${_tool_turns}"
+  _extra_fields+=",\"prompt_bytes\":${_prompt_bytes},\"todo_bytes\":${_todo_bytes},\"todo_continuation_lines\":${_todo_continuation_lines},\"direct_verification\":$([[ "$_direct_verification" == "1" ]] && printf true || printf false),\"tool_turns\":${_tool_turns},\"requests_without_tool_use\":0"
   _extra_fields+=",\"ralph_proxy_calls\":0,\"other_mcp_calls\":0,\"native_read_like_calls\":0,\"native_write_like_calls\":0,\"native_file_read_calls\":0,\"native_read_compatibility_calls\":0,\"native_search_calls\":0,\"native_shell_calls\":0,\"ralph_mcp_calls\":0,\"runtime_hook_rewrite_calls\":0,\"runtime_hook_compaction_calls\":0,\"unknown_tool_calls\":0"
   _extra_fields+=",\"native_hooks_effective\":false,\"native_hook_events\":0,\"hook_compactions\":0,\"hook_rewrites\":0,\"hook_original_bytes\":0,\"hook_compacted_bytes\":0,\"mcp_effective\":false,\"runtime_overlay_mode\":\"\",\"runtime_overlay_warnings\":[]"
   if [[ -n "$_split_parent_id" ]]; then
@@ -3735,6 +4062,39 @@ _ralph_append_invocation_usage_history() {
   fi
   if [[ -n "$_rate_limit_status" ]]; then
     _extra_fields+=",\"rate_limit_status\":\"${_rate_limit_status}\""
+  fi
+  # Continuation / background telemetry (env only; never command text or output).
+  local _bg_tier="${RALPH_USAGE_BG_TIER:-${RALPH_BG_TIER_SELECTED:-}}"
+  local _bg_tier_reason="${RALPH_USAGE_BG_TIER_REASON:-${RALPH_BG_TIER_REASON:-}}"
+  local _cont_reason="${RALPH_USAGE_CONTINUATION_REASON:-}"
+  local _logical_attempt="${RALPH_USAGE_LOGICAL_ATTEMPT:-}"
+  local _session_cont="${RALPH_USAGE_SESSION_CONTINUITY:-}"
+  local _degraded_fb="${RALPH_USAGE_DEGRADED_FALLBACK:-}"
+  local _wait_dur="${RALPH_USAGE_WAIT_DURATION_SECONDS:-}"
+  local _term_status="${RALPH_USAGE_TERMINAL_STATUS:-}"
+  if [[ -n "$_bg_tier" ]]; then
+    _extra_fields+=",\"bg_tier\":\"${_bg_tier//\"/}\""
+  fi
+  if [[ -n "$_bg_tier_reason" ]]; then
+    _extra_fields+=",\"bg_tier_reason\":\"${_bg_tier_reason//\"/}\""
+  fi
+  if [[ -n "$_cont_reason" ]]; then
+    _extra_fields+=",\"continuation_reason\":\"${_cont_reason//\"/}\""
+  fi
+  if [[ -n "$_logical_attempt" ]]; then
+    _extra_fields+=",\"logical_attempt\":\"${_logical_attempt//\"/}\""
+  fi
+  if [[ -n "$_session_cont" ]]; then
+    _extra_fields+=",\"session_continuity\":\"${_session_cont//\"/}\""
+  fi
+  if [[ -n "$_degraded_fb" ]]; then
+    _extra_fields+=",\"degraded_fallback\":\"${_degraded_fb//\"/}\""
+  fi
+  if [[ "$_wait_dur" =~ ^[0-9]+$ ]]; then
+    _extra_fields+=",\"wait_duration_seconds\":${_wait_dur}"
+  fi
+  if [[ -n "$_term_status" ]]; then
+    _extra_fields+=",\"terminal_status\":\"${_term_status//\"/}\""
   fi
 
   cat >"$_path" <<USAGE_EOF
@@ -3906,12 +4266,12 @@ ralph_run_plan_cleanup_orphans() {
     if [[ "$plan_abs" == "$other_abs" ]]; then
       ralph_run_plan_log "cleaning up orphaned plan runner from previous run (pid=$pid)"
       kill -TERM "$pid" 2>/dev/null || true
-      sleep 1
+      ralph_wait 1
       if kill -0 "$pid" 2>/dev/null; then
         kill -KILL "$pid" 2>/dev/null || true
       fi
     fi
-  done < <(ps -eo pid=,ppid=,args= | awk '$2 == 1 && $0 ~ /ralph-run-plan/ {print $1, substr($0, index($0,$3))}')
+  done < <(ps -eo pid=,ppid=,args= 2>/dev/null | awk '$2 == 1 && $0 ~ /ralph-run-plan/ {print $1, substr($0, index($0,$3))}')
 }
 
 if [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
@@ -4110,6 +4470,11 @@ while true; do
     export RALPH_CURRENT_TODO_ORDINAL
     export RALPH_CURRENT_TODO_ID
     export RALPH_CURRENT_TODO_HASH
+    # Release any identity frozen for the previous invocation's post-processing;
+    # the live RALPH_CURRENT_TODO_* above are authoritative from here.
+    if declare -F ralph_session_todo_identity_thaw >/dev/null 2>&1; then
+      ralph_session_todo_identity_thaw
+    fi
 
     if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
       if ! ralph_run_plan_pipeline_input_artifacts_prepare "$PLAN_PATH" "$todo_target" "$line_num"; then
@@ -4135,7 +4500,6 @@ while true; do
         --runtime "$RUNTIME" \
         --plan "$_nested_plan_file" \
         --workspace "$WORKSPACE" \
-        ${PREBUILT_AGENT:+--agent "$PREBUILT_AGENT"} \
         ${PLAN_MODEL_CLI:+--model "$PLAN_MODEL_CLI"} || _nested_exit=$?
       if [[ "$_nested_exit" -ne 0 ]]; then
         ralph_run_plan_log "ERROR: nested plan failed (exit=$_nested_exit) for planFile=$_nested_plan_file"
@@ -4149,6 +4513,10 @@ while true; do
           exit 1
         fi
       fi
+      if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+        ralph_runtime_overlay_cleanup_if_needed
+        exit 1
+      fi
       if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
         ralph_run_plan_log "planFile stage completed: todo=$todo_target planFile=$_nested_plan_file"
         ralph_run_plan_routing_restore_baseline
@@ -4156,7 +4524,7 @@ while true; do
       continue
     fi
 
-    # Legacy direct-verification path. Disabled by default so agent-authored
+    # Direct-verification path. Disabled by default so agent-authored
     # VERIFICATION_RESULT can complete the TODO without rerunning the command.
     if [[ "${RALPH_PLAN_VERIFY_DIRECT:-0}" == "1" ]]; then
       _direct_command=""
@@ -4199,6 +4567,10 @@ while true; do
               ralph_runtime_overlay_cleanup_if_needed
               exit 1
             fi
+          fi
+          if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+            ralph_runtime_overlay_cleanup_if_needed
+            exit 1
           fi
           if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
             _direct_completed=1
@@ -4279,7 +4651,7 @@ while true; do
     ralph_run_plan_log "todo classification: class=$todo_class hash=$todo_hash format=$_plan_format_display ordinal=$task_ordinal"
 
     # Refresh resume env from runtime-specific session-id files / flags before building PROMPT (compact vs full context).
-    ralph_session_apply_resume_strategy
+    ralph_session_todo_prepare_invocation
 
     _hc_included_bytes=0
     _ds_stage_count=0
@@ -4287,26 +4659,25 @@ while true; do
     RALPH_RUN_PLAN_RESET_COMMAND_USED=0
     export RALPH_RUN_PLAN_RESET_COMMAND_USED
     _session_strategy="${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
+    _agent_verify_strategy_override=0
 
-    # Post-verification reopen override: a TODO that was already implemented but
-    # failed post-verification should reuse prior context and fix the failing
-    # verification, not re-implement from scratch. Force compact mode when the
-    # runtime supports it, otherwise plain resume. This flag is set only for the
-    # immediate retry after a post-verification reopen and is cleared once the
-    # next prompt is built.
+    # Agent-reported verification failure retry still uses compact/resume strategy
+    # override when available. Runner-owned post-verification repair uses the
+    # tier-2 continuation record and todo-continue session resolver instead.
     if [[ "$_post_verify_reopen_retry_active" == "1" ]]; then
       _post_verify_reopen_retry_active=0
+      _agent_verify_strategy_override=1
       if [[ -n "${_ralph_compact_command_for_runtime:-}" ]]; then
-        ralph_run_plan_log "post-verification reopen retry line=$line_num: forcing compact resume (strategy=$_session_strategy → compact) with prior failure context"
+        ralph_run_plan_log "agent verification reopen retry line=$line_num: forcing compact resume (strategy=$_session_strategy -> compact) with prior failure context"
         _session_strategy="compact"
       else
-        ralph_run_plan_log "post-verification reopen retry line=$line_num: compact resume unavailable for runtime=$RUNTIME; falling back to plain resume (strategy=$_session_strategy → resume) with prior failure context"
+        ralph_run_plan_log "agent verification reopen retry line=$line_num: compact resume unavailable for runtime=$RUNTIME; falling back to plain resume (strategy=$_session_strategy -> resume) with prior failure context"
         _session_strategy="resume"
       fi
       RALPH_PLAN_SESSION_STRATEGY="$_session_strategy"
       export RALPH_PLAN_SESSION_STRATEGY
       # Re-apply resume strategy so session id/bare flags align with the override.
-      ralph_session_apply_resume_strategy
+      ralph_session_todo_prepare_invocation
       # Recompute effective strategy in case apply changed it (e.g. no stored id and bare not allowed).
       _session_strategy="${RALPH_PLAN_SESSION_STRATEGY:-$_session_strategy}"
     fi
@@ -4353,7 +4724,8 @@ while true; do
           _resume_intro="Reusing bare CLI resume in reset mode (last-session semantics; isolated CI only)."
         fi
       fi
-      PROMPT_STATIC=""
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       PROMPT="${_reset_prefix}$_resume_intro
 
 **TODO (line $line_num):** $todo_prompt_body
@@ -4366,7 +4738,7 @@ Reset contract:
 $(ralph_run_plan_agent_completion_prompt_block "$line_num" "$PLAN_PATH" "$PENDING_ABS" "$_request_verify_verdict")
 
 Start with the exact files or commands named in the TODO. Do not reread README/AGENTS or remap the repo unless the TODO requires missing context.
-Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side shell helpers. Only rerun verification manually for agent-run \`verification:\` instructions—launch once with an appropriate timeout, wait for completion (prefer \`ralph_proxy_shell_wait\`), avoid backgrounding or polling. The async shell tools are a manual fallback for when a human is directly monitoring a job; \`shell_wait\` is the blocking call only in that context, and \`shell_status\` is an occasional spot check, never a polling loop."
+Cost model: prefer strict \`verify:\` for final proof; use one blocking call for anything that fits; never author polling loops (\`while grep -c ...; sleep\` over a log). Async proxy shell tools are a manual human-monitoring fallback only—when used, block with \`ralph_proxy_shell_wait\` and pass \`waitSeconds\` near its 600 cap (default is only 60); \`shell_status\` is an occasional spot check, never a polling loop. Continuation prompts stay compact: continue this TODO from the evidence above; do not redo it from scratch."
 
     elif [[ "$_session_strategy" == "compact" ]] && ([[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]])); then
       _prompt_mode="compact"
@@ -4415,7 +4787,8 @@ Verification ownership: long-running verification and completion checks belong t
           _resume_intro="Reusing bare CLI resume in compact mode (last-session semantics; isolated CI only)."
         fi
       fi
-      PROMPT_STATIC=""
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       _compact_label="${_compact_command:-the compact command}"
       PROMPT="${_compact_prefix}$_resume_intro
 
@@ -4430,7 +4803,7 @@ Compact contract:
 $(ralph_run_plan_agent_completion_prompt_block "$line_num" "$PLAN_PATH" "$PENDING_ABS" "$_request_verify_verdict")
 
 Start with the exact files or commands named in the TODO. Do not reread README/AGENTS.md or remap the repo unless the TODO requires missing context.
-Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side shell helpers. Only rerun verification manually for agent-run \`verification:\` instructions—launch once with an appropriate timeout, wait for completion (prefer \`ralph_proxy_shell_wait\`), avoid backgrounding or polling. The async shell tools are a manual fallback for when a human is directly monitoring a job; \`shell_wait\` is the blocking call only in that context, and \`shell_status\` is an occasional spot check, never a polling loop."
+Cost model: prefer strict \`verify:\` for final proof; use one blocking call for anything that fits; never author polling loops (\`while grep -c ...; sleep\` over a log). Async proxy shell tools are a manual human-monitoring fallback only—when used, block with \`ralph_proxy_shell_wait\` and pass \`waitSeconds\` near its 600 cap (default is only 60); \`shell_status\` is an occasional spot check, never a polling loop. Continuation prompts stay compact: continue this TODO from the evidence above; do not redo it from scratch."
 
     elif [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
       _prompt_mode="resume"
@@ -4439,7 +4812,8 @@ Verification ownership: long-running verification and completion checks belong t
       else
         _resume_intro="Continuing via bare CLI resume (last-session semantics; isolated CI only)."
       fi
-      PROMPT_STATIC=""
+      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
+      PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
       PROMPT="$_resume_intro
 
 **TODO (line $line_num):** $todo_prompt_body
@@ -4447,7 +4821,7 @@ Verification ownership: long-running verification and completion checks belong t
 $(ralph_run_plan_agent_completion_prompt_block "$line_num" "$PLAN_PATH" "$PENDING_ABS" "$_request_verify_verdict")
 
 Start with the exact files or commands named in the TODO. Do not reread README/AGENTS or remap the repo unless the TODO requires missing context.
-Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side shell helpers. Only rerun verification manually for agent-run \`verification:\` instructions—run once with a timeout and wait for completion instead of backgrounding a watcher and polling its output. The async shell tools are a manual fallback surface, not the primary automation path."
+Cost model: prefer strict \`verify:\` for final proof; use one blocking call for anything that fits; never author polling loops. Async proxy shell tools are a manual human-monitoring fallback only—when used, block with \`ralph_proxy_shell_wait\` and pass \`waitSeconds\` near its 600 cap; \`shell_status\` is never a polling loop. Continue this TODO from prior evidence; do not redo it from scratch."
 
     else
       # Per-TODO variable portion -- kept short so PROMPT_STATIC carries the bulk.
@@ -4461,10 +4835,12 @@ Rules:
 - Use the repo toolchain documented in README/AGENTS.md. Follow verification steps in the plan.
 - If the TODO already specifies exact files or commands, start there. Do not reread README/AGENTS.md or remap the repo unless the TODO requires missing context.
 - Prefer targeted search and partial file/log reads first; avoid full log reads unless needed.
-- \`ralph_proxy_shell\` (synchronous) is for short bounded exploratory commands only (e.g., \`ls\`, \`cat\`, \`grep\`, \`git status\`). Do not run test/lint/build/install/docs-check commands through \`ralph_proxy_shell\`; those block the MCP transport and risk dropping the connection. Use \`ralph_proxy_shell_start\` + \`ralph_proxy_shell_wait\` for any command that could take more than a few seconds.
-- Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side \`ralph_proxy_shell_start\` + \`ralph_proxy_shell_status\` loops; those helpers are a manual fallback for when a human is directly monitoring a job, not the primary automation path.
-- When you must rerun a verification manually (agent-run \`verification:\` only), launch it with \`ralph_proxy_shell_start\`, block on completion with \`ralph_proxy_shell_wait\` (pass \`waitSeconds\` to control how long the server waits), treat \`ralph_proxy_shell_status\` as an occasional manual progress check, inspect the stored output with \`ralph_proxy_shell_read\`, and cancel with \`ralph_proxy_shell_cancel\` when necessary.
-- The async shell tools are a manual fallback surface for when a human is monitoring a job. \`shell_wait\` is the blocking call only in that manual context; \`shell_status\` is an occasional spot check, never a polling loop.
+- Cost model (cheapest first): prefer strict runner-owned \`verify:\` for final proof; use one blocking call for anything that fits in one; background only work that outlives the tool timeout (when enabled).
+- Agent-authored polling loops are forbidden (for example \`while grep -c ...; sleep\` over a log file). Never spend model turns polling a log or job status.
+- \`ralph_proxy_shell\` (synchronous) is for short bounded exploratory commands only (e.g., \`ls\`, \`cat\`, \`grep\`, \`git status\`). Do not run test/lint/build/install/docs-check commands through \`ralph_proxy_shell\`; those block the MCP transport and risk dropping the connection.
+- Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict \`verify:\` / plan-level \`verify:\` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through agent-side shell helpers.
+- When you must rerun a verification manually (agent-run \`verification:\` only), launch it with \`ralph_proxy_shell_start\`, block on completion with \`ralph_proxy_shell_wait\` (pass \`waitSeconds\` near its 600 cap; default is only 60), treat \`ralph_proxy_shell_status\` as an occasional manual progress check, inspect the stored output with \`ralph_proxy_shell_read\`, and cancel with \`ralph_proxy_shell_cancel\` when necessary.
+- The async shell tools are a manual human-monitoring fallback only. \`shell_wait\` is the blocking call only in that manual context; \`shell_status\` is an occasional spot check, never a polling loop.
 $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_request_verify_verdict")"
 
     fi
@@ -4472,11 +4848,50 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     if [[ "$_prompt_mode" == "fresh" ]]; then
       case "${RALPH_MODE:-no}" in
         ralph|hybrid)
-          PROMPT+=$'\n- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only. Do not run test/lint/build/install commands through `ralph_proxy_shell`; those block the MCP transport. Use `ralph_proxy_shell_start` + `ralph_proxy_shell_wait` for any command that could take more than a few seconds.'
+          PROMPT+=$'\n- Cost model: prefer strict `verify:` for final proof; one blocking call when it fits; never author polling loops (`while grep -c ...; sleep`).'
+          PROMPT+=$'\n- `ralph_proxy_shell` (synchronous) is for short bounded exploratory commands only. Do not run test/lint/build/install commands through `ralph_proxy_shell`; those block the MCP transport.'
           PROMPT+=$'\n- Verification ownership: long-running verification and completion checks belong to the runner, not the agent loop. The runner executes strict `verify:` / plan-level `verify:` commands out-of-process, stores full output as a compact artifact, and reopens the TODO with a short failure summary—do not rerun those commands through `ralph_proxy_shell_start` + `ralph_proxy_shell_status` loops; only rerun verification manually for agent-run `verification:` instructions.'
-          PROMPT+=$'\n- The async shell tools are a manual fallback for when a human is directly monitoring a job. `shell_wait` is the blocking call only in that context; `shell_status` is an occasional spot check, never a polling loop.'
+          PROMPT+=$'\n- The async shell tools are a manual human-monitoring fallback only. When used, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `shell_status` is an occasional spot check, never a polling loop.'
+          if [[ "${RALPH_BG_JOBS:-0}" == "1" ]]; then
+            PROMPT+=$'\n- Background jobs (RALPH_BG_JOBS=1): for work that outlives the tool timeout, start `.ralph/ralph-bg.sh '\''<command>'\''` and end the turn without claiming completion. Do not poll; do not redo the TODO from scratch when the runner continues with the result.'
+          fi
           ;;
       esac
+    fi
+
+    # Attempt-bound action capability + optional answered-input injection.
+    if declare -F ralph_run_plan_prepare_workflow_operator_input >/dev/null 2>&1; then
+      ralph_run_plan_prepare_workflow_operator_input "${todo_id:-}" || true
+    fi
+
+    # Workflow stage instructions + OPERATOR_INPUT (+ optional RESPONSE) immediately
+    # before TODO content. Order: stage instructions, protocol, response, TODO.
+    # Never mutates plan files; never includes capability nonce.
+    _wsi_block=""
+    _oi_block=""
+    _oir_block=""
+    if declare -F ralph_workflow_stage_instructions_prompt_block >/dev/null 2>&1; then
+      _wsi_block="$(ralph_workflow_stage_instructions_prompt_block)"
+    fi
+    if ralph_run_plan_workflow_operator_input_active 2>/dev/null; then
+      if declare -F ralph_workflow_operator_input_protocol_prompt_block >/dev/null 2>&1; then
+        _oi_block="$(ralph_workflow_operator_input_protocol_prompt_block)"
+      fi
+      if declare -F ralph_workflow_operator_input_response_prompt_block >/dev/null 2>&1; then
+        _oir_block="$(ralph_workflow_operator_input_response_prompt_block)"
+      fi
+    fi
+    _wf_prefix=""
+    for _wf_part in "$_wsi_block" "$_oi_block" "$_oir_block"; do
+      [[ -n "$_wf_part" ]] || continue
+      if [[ -n "$_wf_prefix" ]]; then
+        _wf_prefix="${_wf_prefix}"$'\n\n'"${_wf_part}"
+      else
+        _wf_prefix="$_wf_part"
+      fi
+    done
+    if [[ -n "$_wf_prefix" ]]; then
+      PROMPT="${_wf_prefix}"$'\n\n'"$PROMPT"
     fi
 
     if ! ralph_rubric_grader_stage_active; then
@@ -4490,6 +4905,13 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     fi
     if [[ -n "${_structured_output_prompt_block:-}" ]]; then
       PROMPT="${_structured_output_prompt_block}"$'\n\n'"$PROMPT"
+    fi
+
+    if [[ -n "${RALPH_RUN_PLAN_BG_JOB_CONTINUATION:-}" ]]; then
+      ralph_run_plan_capture_bg_continuation_usage_telemetry "$RALPH_RUN_PLAN_BG_JOB_CONTINUATION"
+      PROMPT+=$'\n\n'"$(ralph_bg_invocation_format_prompt_block "$RALPH_RUN_PLAN_BG_JOB_CONTINUATION")"
+      ralph_bg_invocation_mark_continuation_consumed "$RALPH_RUN_PLAN_BG_JOB_CONTINUATION" >/dev/null 2>&1 || true
+      unset RALPH_RUN_PLAN_BG_JOB_CONTINUATION
     fi
 
     if [[ -n "${POST_VERIFICATION_FAILURE_SUMMARY:-}" || -n "${POST_VERIFICATION_FAILURE_REASON:-}" ]]; then
@@ -4531,96 +4953,28 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       fi
     fi
 
+    # Common prompt assembly boundary (every runtime):
+    # preamble, contracts (namespace), task.
+    # Stage instructions (when set) already precede TODO content inside PROMPT.
+    # Do not inject the old profile context block (module retained, unused here).
     _ns_block="$(ralph_run_plan_namespace_prompt_block)"
-    if ralph_run_plan_progressive_context_enabled && [[ -n "${PREBUILT_AGENT:-}" ]] && [[ -z "${RALPH_AGENT_NATIVE_NAME:-}" ]]; then
-      export RALPH_PROGRESSIVE_CONTEXT_PART="volatile"
-      export RALPH_PROGRESSIVE_TODO_TEXT="$todo_prompt_text"
-      _progressive_volatile_ctx=""
-      if [[ "$RUNTIME" == "claude" ]]; then
-        _progressive_volatile_ctx="$(RALPH_COMPACT_CONTEXT=0 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || _progressive_volatile_ctx=""
-      else
-        _progressive_volatile_ctx="$(RALPH_COMPACT_CONTEXT=1 format_prebuilt_agent_context_block "$WORKSPACE" "$PREBUILT_AGENT")" || _progressive_volatile_ctx=""
-      fi
-      unset RALPH_PROGRESSIVE_CONTEXT_PART
-      unset RALPH_PROGRESSIVE_TODO_TEXT
-      if [[ -n "$_progressive_volatile_ctx" ]]; then
-        PROMPT="${_progressive_volatile_ctx}"$'\n\n'"${PROMPT}"
-      fi
+    _preamble="$(ralph_runtime_prompt_guidance "$RUNTIME")"
+    _mode_guidance=""
+    if [[ "${RALPH_MODE:-no}" != "no" ]]; then
+      _mode_guidance="$(ralph_mode_prompt_guidance "$RUNTIME" "${RALPH_MODE:-no}")"
     fi
-    PROMPT_STATIC="$(ralph_run_plan_assemble_prompt_static "$_ns_block" "$PREBUILT_AGENT_CONTEXT")"
-    # Cursor, Codex, Antigravity, and OpenCode do not support Claude's --system-prompt split.
-    # Merge the stable block into PROMPT instead of injecting fake cache-control text markers
-    # (no CLI exposes cache_control). With stable-prefix ordering enabled (Ralph/hybrid default)
-    # every non-Claude runtime places the byte-identical stable block first so the shared prefix
-    # is reused across TODOs; the legacy stable-last order remains available via the escape hatch.
-    ralph_run_plan_merge_prompt "$RUNTIME"
-    case "${PREBUILT_AGENT:-}" in
-      research|security|code-review)
-        ralph_run_plan_log "skipping downstream stage context for read-only agent: $PREBUILT_AGENT"
-        ;;
-      *)
-        if [[ -n "${RALPH_ORCH_FILE:-}" && -f "${RALPH_ORCH_FILE}" && -n "$PREBUILT_AGENT" && -f "$AGENT_CONFIG_TOOL" ]]; then
-          _downstream_raw="$(bash "$AGENT_CONFIG_TOOL" downstream-stages "$RALPH_ORCH_FILE" "$PREBUILT_AGENT" "${RALPH_ARTIFACT_NS:-}" 2>/dev/null)" || _downstream_raw=""
-          if [[ -n "$_downstream_raw" ]]; then
-            PROMPT+=$'\n'"## Stage Plan Generation Responsibility"
-            PROMPT+=$'\n'"The downstream stages below rely on you to create their plan files before they run. Complete the {{TODOS}} and {{ADDITIONAL_CONTEXT}} markers for each listed stage, write the plan file at the plan path, and hand the completed artifact off before moving ahead."
-            _ds_stage_entries=()
-            _ds_stage_id=""
-            _ds_plan_path=""
-            while IFS= read -r _ds_line || [[ -n "$_ds_line" ]]; do
-              if [[ "$_ds_line" == "---" ]]; then
-                if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" ]]; then
-                  _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path")
-                  _ds_stage_id=""
-                  _ds_plan_path=""
-                fi
-                continue
-              fi
-              case "$_ds_line" in
-                STAGE_ID=*) _ds_stage_id="${_ds_line#STAGE_ID=}";;
-                PLAN_PATH=*) _ds_plan_path="${_ds_line#PLAN_PATH=}";;
-              esac
-            done <<< "$_downstream_raw"
-            if [[ -n "$_ds_stage_id" || -n "$_ds_plan_path" ]]; then
-              _ds_stage_entries+=("$_ds_stage_id|$_ds_plan_path")
-            fi
-            if [[ ${#_ds_stage_entries[@]} -gt 0 ]]; then
-              _ds_stage_list=""
-              _ds_stage_limit="${RALPH_DOWNSTREAM_STAGE_LIMIT:-1}"
-              if [[ "${RALPH_PLAN_CONTEXT_BUDGET:-standard}" == "lean" ]]; then
-                _ds_stage_limit="${RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME:-0}"
-              fi
-              _ds_stage_count=0
-              for _ds_entry in "${_ds_stage_entries[@]}"; do
-                if [[ "$_ds_stage_limit" -gt 0 && "$_ds_stage_count" -ge "$_ds_stage_limit" ]]; then
-                  break
-                fi
-                _ds_stage_id="${_ds_entry%%|*}"
-                _ds_plan_path="${_ds_entry#*|}"
-                PROMPT+=$'\n'"- Stage ID: ${_ds_stage_id:-unknown}, plan path: ${_ds_plan_path:-none}"
-                _ds_stage_list+="${_ds_stage_id:-unknown}, "
-                _ds_stage_count=$(( _ds_stage_count + 1 ))
-              done
-              _ds_stage_list="${_ds_stage_list%, }"
-              ralph_run_plan_log "downstream stage plan context appended for: ${_ds_stage_list:-none} (limit=${_ds_stage_limit})"
-            fi
-          fi
-        fi
-        ;;
-    esac
+    if [[ -n "$_preamble" && -n "$_mode_guidance" ]]; then
+      _preamble="${_preamble}"$'\n\n'"${_mode_guidance}"
+    elif [[ -n "$_mode_guidance" ]]; then
+      _preamble="$_mode_guidance"
+    fi
+    ralph_run_plan_apply_ordered_prompt_assembly "$RUNTIME" "$_preamble" "$_ns_block"
 
-    ralph_apply_runtime_prompt_guidance "$RUNTIME"
-    ralph_apply_mode_prompt_guidance "$RUNTIME" "${RALPH_MODE:-no}"
+    # Preamble (mode/runtime guidance) is applied above in ordered assembly.
 
-    # Export PROMPT_STATIC: Claude invoke passes it via --system-prompt; other runtimes already
-    # merged it into PROMPT (no fake cache-control markers).
+    # Export PROMPT_STATIC: Claude invoke passes it via --append-system-prompt; other runtimes already
+    # received the fully ordered prompt (no fake cache-control markers).
     export PROMPT_STATIC
-    # Stable-prefix telemetry: fingerprint + byte count, never the prompt contents. Exported so
-    # invocation usage capture can record them alongside per-invocation usage.
-    RALPH_PROMPT_STABLE_PREFIX_BYTES="${#PROMPT_STATIC}"
-    RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT="$(ralph_run_plan_stable_prefix_fingerprint "$PROMPT_STATIC")"
-    export RALPH_PROMPT_STABLE_PREFIX_BYTES RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT
-    ralph_run_plan_log "stable prefix: bytes=${RALPH_PROMPT_STABLE_PREFIX_BYTES} fingerprint=${RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT:-none}"
     ralph_run_plan_continuation_summary_refresh_metrics
     ralph_run_plan_log "continuation summary: bytes=${RALPH_CONTINUATION_SUMMARY_BYTES:-0} entries=${RALPH_CONTINUATION_SUMMARY_ENTRY_COUNT:-0} truncations=${RALPH_CONTINUATION_SUMMARY_TRUNCATION_COUNT:-0}"
     # Prompt size measurement and warning.
@@ -4642,14 +4996,18 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       _invoke_resume_note=" resume=bare"
       _banner_resume_note=", bare resume"
     fi
-    if [[ "$_prompt_mode" == "compact" ]]; then
-      _invoke_resume_note+=" strategy_override=post-verify-compact"
-      _banner_resume_note+=", post-verify compact retry"
-    elif [[ "$_prompt_mode" == "resume" && "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" != "resume" && "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" != "reset" ]]; then
-      _invoke_resume_note+=" strategy_override=post-verify-resume"
-      _banner_resume_note+=", post-verify resume retry"
+    if [[ "$_agent_verify_strategy_override" == "1" && "$_prompt_mode" == "compact" ]]; then
+      _invoke_resume_note+=" strategy_override=agent-verify-compact"
+      _banner_resume_note+=", agent-verify compact retry"
+    elif [[ "$_agent_verify_strategy_override" == "1" && "$_prompt_mode" == "resume" ]]; then
+      _invoke_resume_note+=" strategy_override=agent-verify-resume"
+      _banner_resume_note+=", agent-verify resume retry"
+    elif [[ "${RALPH_POST_VERIFY_REPAIR_CONTINUATION:-}" == "1" ]]; then
+      _invoke_resume_note+=" continuation=post-verification-repair"
+      _banner_resume_note+=", post-verification repair"
     fi
-    ralph_run_plan_log "invoking $RALPH_INVOKED_CLI (model=${SELECTED_MODEL:-default})${_invoke_resume_note}${PREBUILT_AGENT:+ prebuilt_agent=$PREBUILT_AGENT} | Ralph Mode: ${RALPH_MODE:-no}"
+    unset RALPH_POST_VERIFY_REPAIR_CONTINUATION
+    ralph_run_plan_log "invoking $RALPH_INVOKED_CLI (model=${SELECTED_MODEL:-default})${_invoke_resume_note} | Ralph Mode: ${RALPH_MODE:-no}"
 
     # Optional: run compression audit mode before invocation if enabled
     if [[ "${RALPH_AUDIT_COMPRESSION:-0}" == "1" ]]; then
@@ -4776,6 +5134,15 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     while kill -0 "$AGENT_PID" 2>/dev/null; do
       ralph_run_plan_approvals_check_pending || true
       sleep "$AGENT_POLL_INTERVAL"
+      # Runtime invokers write the CLI result before their outer process group
+      # fully unwinds. Do not let a lingering wrapper keep a completed TODO
+      # running forever: once the authoritative exit sidecar exists, reap the
+      # invocation group and continue through the normal completion path.
+      if [[ -f "$EXIT_CODE_FILE" ]]; then
+        ralph_run_plan_log "$RALPH_INVOKED_CLI wrote its exit result; reaping lingering invocation wrapper (pid=$AGENT_PID)"
+        ralph_run_plan_agent_teardown
+        break
+      fi
       if ! kill -0 "$AGENT_PID" 2>/dev/null; then
         break
       fi
@@ -4865,6 +5232,21 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     ralph_run_plan_log "$RALPH_INVOKED_CLI finished (exit=$exit_code elapsed=${_inv_elapsed}s)"
     _inv_effective_runtime="$RUNTIME"
     _inv_effective_model="${SELECTED_MODEL:-}"
+    # Bind the CLI session id to this TODO from the supervisor. The invocation
+    # wrapper does the same on its way out, but the reaper above tears the
+    # wrapper down as soon as EXIT_CODE_FILE appears -- which the wrapper writes
+    # one line before it captures -- so that call is racy and can be lost. This
+    # one runs with the TODO identity and effective RUNTIME still live, and is
+    # idempotent with the wrapper's.
+    if declare -F ralph_session_todo_capture_after_invocation >/dev/null 2>&1; then
+      ralph_session_todo_capture_after_invocation || true
+    fi
+    # Everything below restores the routing baseline, which clears
+    # RALPH_CURRENT_TODO_* -- but permission classification, the operator pause,
+    # and continuation persistence all still belong to this TODO.
+    if declare -F ralph_session_todo_identity_freeze >/dev/null 2>&1; then
+      ralph_session_todo_identity_freeze || true
+    fi
     ralph_run_plan_routing_restore_baseline
     ralph_runtime_overlay_cleanup_if_needed
     GIT_STATUS_AT_END="$(git -C "$WORKSPACE" status --short --untracked-files=all 2>/dev/null || true)"
@@ -4933,6 +5315,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
             echo "" >&2
             echo -e "${C_R}${C_BOLD}Permission request was denied by the operator; stopping plan run.${C_RST}" >&2
             echo -e "${C_DIM}Plan: $PLAN_PATH  Line $line_num${C_RST}" >&2
+            echo -e "${C_DIM}Re-run the same command to retry; you will be prompted again. Pre-approve with RALPH_PERMISSION_RESPONSE_DECISION=allow.${C_RST}" >&2
             _ralph_write_plan_usage_summary "$done_count" "$total_count"
             ralph_runtime_overlay_cleanup_if_needed
             exit 1
@@ -4940,7 +5323,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
           if [[ "${RALPH_PERMISSION_RESPONSE_DECISION:-}" == "allow" ]]; then
             ralph_run_plan_log "Permission approved by operator; retrying TODO line $line_num (attempts_on_line reset)"
             attempts_on_line=0
-            sleep 1
+            ralph_wait 1
             continue
           fi
         fi
@@ -4972,13 +5355,23 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     if [[ -f "$USAGE_FILE" ]]; then
       if command -v python3 &>/dev/null; then
         _inv_usage_json="$(<"$USAGE_FILE")"
-        _inv_input="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_output="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('output_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_cache_create="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_creation_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_cache_read="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('cache_read_input_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_max_turn="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('max_turn_total_tokens',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_tool_turns="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('tool_turns',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
-        _inv_tool_calls_total="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('tool_calls_total',0))" "$_inv_usage_json" 2>/dev/null || echo 0)"
+        # One interpreter start for all seven fields: python3 costs ~60ms per
+        # spawn and this runs on every invocation.
+        _inv_fields="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    d = {}
+keys = ('input_tokens', 'output_tokens', 'cache_creation_input_tokens',
+        'cache_read_input_tokens', 'max_turn_total_tokens', 'tool_turns',
+        'tool_calls_total')
+print('\\x1f'.join(str(d.get(k, 0)) for k in keys))
+" "$_inv_usage_json" 2>/dev/null || printf '0\x1f0\x1f0\x1f0\x1f0\x1f0\x1f0')"
+        IFS=$'\x1f' read -r _inv_input _inv_output _inv_cache_create _inv_cache_read \
+          _inv_max_turn _inv_tool_turns _inv_tool_calls_total <<<"$_inv_fields"
+        : "${_inv_input:=0}" "${_inv_output:=0}" "${_inv_cache_create:=0}" "${_inv_cache_read:=0}"
+        : "${_inv_max_turn:=0}" "${_inv_tool_turns:=0}" "${_inv_tool_calls_total:=0}"
       fi
     fi
 
@@ -4990,7 +5383,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
         unset RALPH_RUN_PLAN_NEW_SESSION_ID
         unset RALPH_RUN_PLAN_RESUME_BARE
         _reset_retry_done_for_line=1
-        sleep 1
+        ralph_wait 1
         continue
       fi
     fi
@@ -5040,7 +5433,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       unset RALPH_RUN_PLAN_NEW_SESSION_ID
       unset RALPH_RUN_PLAN_RESUME_BARE
       _opencode_empty_resume_retry_done_for_line=1
-      sleep 1
+      ralph_wait 1
       continue
     fi
     if [[ "$_inv_effective_runtime" == "claude" ]] && \
@@ -5056,7 +5449,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       unset RALPH_RUN_PLAN_NEW_SESSION_ID
       unset RALPH_RUN_PLAN_RESUME_BARE
       _claude_empty_resume_retry_done_for_line=1
-      sleep 1
+      ralph_wait 1
       continue
     fi
     # Compute per-invocation cache_hit_ratio = cache_read / (input + cache_read + cache_create).
@@ -5096,7 +5489,25 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
     if [[ "$_inv_completion_sentinel" == "1" ]] || _ralph_completion_sentinel_seen_in_text "$_inv_output_segment"; then
       _inv_completion_sentinel_seen=1
     fi
+    # Workflow operator-input: refuse checkbox/stage success while outstanding
+    # or answered-unconsumed input exists for this attempt (exit 3 / waiting).
+    if declare -F ralph_run_plan_gate_workflow_operator_input_after_turn >/dev/null 2>&1; then
+      ralph_run_plan_gate_workflow_operator_input_after_turn "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"
+    fi
+
     if [[ "$exit_code" -eq 0 ]] && [[ "$_inv_todo_completed" == "1" ]] && [[ ! -f "$PENDING_HUMAN" ]]; then
+      if declare -F ralph_run_plan_gate_bg_job_before_completion >/dev/null 2>&1; then
+        if ! ralph_run_plan_gate_bg_job_before_completion "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num" "$task_ordinal" "$todo_id" "$todo_hash"; then
+          _inv_todo_completed=0
+          _inv_plan_complete=0
+          if declare -F ralph_bg_invocation_try_schedule_continuation >/dev/null 2>&1 \
+            && ralph_bg_invocation_try_schedule_continuation; then
+            ralph_wait 1
+            continue
+          fi
+          continue
+        fi
+      fi
       if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
         if ! ralph_run_plan_pipeline_output_artifacts_verify "$PLAN_PATH" "$todo_target" "$line_num"; then
           if plan_reopen_todo_by_format "$PLAN_PATH" "$plan_format" "$todo_target"; then
@@ -5137,6 +5548,33 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       fi
 
       if [[ "$_claim_complete" == "1" ]]; then
+        if [[ -n "${RALPH_GRAPH_NAMESPACE:-}" && -n "${RALPH_GRAPH_RUN_ID:-}" && -n "${RALPH_GRAPH_NODE_ID:-}" && -n "${RALPH_GRAPH_ATTEMPT_ID:-}" ]]; then
+          _delegation_gate_dir="$RALPH_PLAN_WORKSPACE_ROOT/artifacts/${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-plan}}/delegations/${RALPH_GRAPH_NODE_ID}/${RALPH_GRAPH_ATTEMPT_ID}"
+          if graph_delegation_completion_gate "$WORKSPACE" "$RALPH_GRAPH_NAMESPACE" "$RALPH_GRAPH_RUN_ID" "$RALPH_GRAPH_NODE_ID" "$RALPH_GRAPH_ATTEMPT_ID" "$_delegation_gate_dir"; then
+            _delegation_gate_rc=0
+          else
+            _delegation_gate_rc=$?
+          fi
+          case "$_delegation_gate_rc" in
+            0)
+              [[ -z "${GRAPH_DELEGATION_GATE_INPUT_ARTIFACTS:-}" ]] || export RALPH_DELEGATION_INPUT_ARTIFACTS="$GRAPH_DELEGATION_GATE_INPUT_ARTIFACTS"
+              [[ -z "${GRAPH_DELEGATION_GATE_INTEGRATION_INPUTS:-}" ]] || export RALPH_DELEGATION_INTEGRATION_INPUTS="$GRAPH_DELEGATION_GATE_INTEGRATION_INPUTS"
+              ;;
+            10|11|12)
+              _inv_todo_completed=0; _inv_plan_complete=0
+              POST_VERIFICATION_FAILURE_REASON="delegation_completion_gate"
+              POST_VERIFICATION_FAILURE_SUMMARY="${GRAPH_DELEGATION_GATE_EVIDENCE:-delegated child has not reached a completion-safe state}"
+              if [[ "$_delegation_gate_rc" == "12" ]]; then
+                ralph_write_human_action_file "Delegated child retry budget exhausted for graph node ${RALPH_GRAPH_NODE_ID}. ${POST_VERIFICATION_FAILURE_SUMMARY}" || true
+                ralph_run_plan_log "delegation completion gate escalated to pending human for line=$line_num"
+              else
+                ralph_run_plan_log "delegation completion gate blocked line=$line_num: ${POST_VERIFICATION_FAILURE_SUMMARY}"
+              fi
+              continue
+              ;;
+            *) ralph_run_plan_log "ERROR: delegation completion gate failed rc=$_delegation_gate_rc"; ralph_runtime_overlay_cleanup_if_needed; exit 1 ;;
+          esac
+        fi
         if declare -F plan_pipeline_has_metadata >/dev/null 2>&1 && plan_pipeline_has_metadata "$PLAN_PATH"; then
           if ! ralph_run_plan_pipeline_output_artifacts_verify "$PLAN_PATH" "$todo_target" "$line_num"; then
             read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
@@ -5153,8 +5591,29 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
             exit 1
           fi
         fi
+        if ! ralph_graph_write_scope_verify_todo "${todo_id:-todo-$line_num}"; then
+          read -r done_count total_count <<< "$(count_todos "$PLAN_PATH")"
+          _ralph_write_plan_usage_summary "$done_count" "$total_count"
+          ralph_runtime_overlay_cleanup_if_needed
+          exit 1
+        fi
+        if declare -F ralph_run_plan_gate_bg_job_before_completion >/dev/null 2>&1; then
+          if ! ralph_run_plan_gate_bg_job_before_completion "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num" "$task_ordinal" "$todo_id" "$todo_hash"; then
+            _inv_todo_completed=0
+            _inv_plan_complete=0
+            if declare -F ralph_bg_invocation_try_schedule_continuation >/dev/null 2>&1 \
+              && ralph_bg_invocation_try_schedule_continuation; then
+              ralph_wait 1
+              continue
+            fi
+            continue
+          fi
+        fi
         if run_plan_mark_and_confirm "$PLAN_PATH" "$plan_format" "$todo_target" "$line_num"; then
           ralph_run_plan_log "runner marked TODO complete for line=$line_num"
+          if declare -F ralph_session_todo_retire_at_boundary >/dev/null 2>&1; then
+            ralph_session_todo_retire_at_boundary || true
+          fi
           _inv_todo_completed=1
           if ! _inv_next_after=$(get_next_todo "$PLAN_PATH"); then
             _inv_plan_complete=1
@@ -5508,7 +5967,16 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
                 exit 1
               fi
               _post_verify_reopen_retry_active=1
-              ralph_run_plan_log "TODO line $line_num reopened by post-verification; preserving attempts_on_line=$attempts_on_line and forcing compact resume for fix-up retry"
+              ralph_run_plan_log "TODO line $line_num reopened by post-verification; preserving attempts_on_line=$attempts_on_line"
+              if declare -F ralph_post_verify_repair_persist >/dev/null 2>&1; then
+                ralph_post_verify_repair_persist \
+                  "${POST_VERIFICATION_FAILURE_REASON:-strict_verify_command_failed}" \
+                  "${POST_VERIFICATION_FAILURE_SUMMARY:-}" \
+                  "${POST_VERIFICATION_FAILURE_ARTIFACT:-}" \
+                  "${POST_VERIFICATION_FAILURE_COMMAND:-}" \
+                  "$line_num" >/dev/null \
+                  || ralph_run_plan_log "WARN: post-verification repair continuation not persisted"
+              fi
               echo "" >&2
               echo -e "${C_Y}${C_BOLD}Post-verification failed for TODO line $line_num${C_RST}" >&2
               echo -e "${C_DIM}TODO reopened; retry budget preserved (attempt $attempts_on_line/$GUTTER_ITERATIONS); next retry will preserve prior context${C_RST}" >&2
@@ -5680,6 +6148,12 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       # Clear the per-session manual-ack file after any successful TODO completion.
       rm -f "$(ralph_plan_manual_ack_path)" 2>/dev/null || true
       rm -f "$PENDING_HUMAN"
+      if declare -F ralph_run_plan_revoke_workflow_operator_input_capability >/dev/null 2>&1; then
+        ralph_run_plan_revoke_workflow_operator_input_capability
+      fi
+      if declare -F ralph_session_todo_identity_thaw >/dev/null 2>&1; then
+        ralph_session_todo_identity_thaw
+      fi
       break
     fi
 
@@ -5763,7 +6237,7 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
         else
           attempts_on_line=0
         fi
-        sleep 1
+        ralph_wait 1
         continue
       fi
       ralph_human_pause_for_operator_offline
@@ -5775,7 +6249,14 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       else
         attempts_on_line=0
       fi
-      sleep 1
+      ralph_wait 1
+      continue
+    fi
+
+    if declare -F ralph_bg_invocation_try_schedule_continuation >/dev/null 2>&1 \
+      && ralph_bg_invocation_try_schedule_continuation; then
+      ralph_run_plan_log "tier2 invocation-boundary: continuation invocation for line=$line_num (gutter budget preserved)"
+      ralph_wait 1
       continue
     fi
 
@@ -5798,6 +6279,6 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       exit 1
     fi
     ralph_run_plan_log "TODO line $line_num still open (attempt $attempts_on_line/$_todo_retry_limit); retrying"
-    sleep 2
+    ralph_wait 2
   done
 done

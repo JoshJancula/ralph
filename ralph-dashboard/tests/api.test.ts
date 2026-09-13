@@ -2,6 +2,8 @@ type Response =
   | { status: number; body: unknown }
   | { status: number; body: { error: string } };
 
+import { parseDelegatedRunRecord } from '../src/server/dashboard-api';
+
 function getRoots(): Response {
   return {
     status: 200,
@@ -64,6 +66,49 @@ function getTemplate(name?: string): Response {
 }
 
 describe('API', () => {
+  describe('roles and delegated-run data contracts', () => {
+    it('accepts the new delegated-run fields and drops legacy child labels', () => {
+      const record = parseDelegatedRunRecord(
+        {
+          schemaVersion: 2,
+          delegatedRunId: 'delegated-run-001',
+          task: 'legacy storage detail that must not be returned',
+          runtime: 'codex',
+          role: 'research',
+        },
+        {
+          schemaVersion: 2,
+          delegatedRunId: 'delegated-run-001',
+          status: 'succeeded',
+          workspaceMode: 'snapshot',
+          verification: 'passed',
+          usage: { input_tokens: 4 },
+          resultArtifact: 'legacy-result.json',
+        },
+      );
+
+      expect(record).toEqual({
+        delegatedRunId: 'delegated-run-001',
+        runtime: 'codex',
+        role: 'research',
+        workspaceMode: 'snapshot',
+        status: 'succeeded',
+        verification: 'passed',
+        usage: { input_tokens: 4 },
+      });
+      expect(record).not.toHaveProperty('delegationId');
+      expect(record).not.toHaveProperty('task');
+      expect(record).not.toHaveProperty('resultArtifact');
+    });
+
+    it('rejects old delegationId records instead of translating them', () => {
+      expect(parseDelegatedRunRecord(
+        { schemaVersion: 1, delegationId: 'old-child', runtime: 'codex' },
+        { schemaVersion: 1, delegationId: 'old-child', status: 'succeeded' },
+      )).toBeNull();
+    });
+  });
+
   describe('GET /api/roots', () => {
     it('returns JSON array with all five keys and exists boolean', () => {
       const res = getRoots();

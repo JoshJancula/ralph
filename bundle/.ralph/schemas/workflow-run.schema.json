@@ -1,0 +1,187 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runId",
+    "workflowId",
+    "sourcePath",
+    "sourceKind",
+    "mode",
+    "entryKind",
+    "task",
+    "taskProvenance",
+    "inputPath",
+    "inputPlan",
+    "state",
+    "createdAt",
+    "updatedAt",
+    "owner",
+    "engine"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflowId": {
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "sourcePath": {
+      "type": "string",
+      "pattern": "^/.+$"
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": [
+        "project",
+        "global",
+        "bundled",
+        "file",
+        "legacy-orchestration"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["sequential", "dependency"]
+    },
+    "entryKind": {
+      "type": "string",
+      "enum": ["task", "plan"]
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskProvenance": {
+      "type": "string",
+      "enum": [
+        "explicit",
+        "workflow",
+        "plan-overview",
+        "plan-filename"
+      ]
+    },
+    "inputPath": {
+      "type": "string",
+      "pattern": "^/.+$"
+    },
+    "inputPlan": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "originalPath",
+        "sourcePath",
+        "manifestPath",
+        "sha256",
+        "format",
+        "totalTodos",
+        "completedTodos",
+        "openTodos"
+      ],
+      "properties": {
+        "originalPath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "sourcePath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "manifestPath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["classic", "yaml"]
+        },
+        "totalTodos": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completedTodos": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "openTodos": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "stale",
+        "failed",
+        "cancelled",
+        "succeeded"
+      ]
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "owner": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "hostname",
+        "processStartId",
+        "heartbeatAt"
+      ],
+      "properties": {
+        "pid": {
+          "type": ["integer", "null"]
+        },
+        "hostname": {
+          "type": ["string", "null"]
+        },
+        "processStartId": {
+          "type": ["string", "null"]
+        },
+        "heartbeatAt": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        }
+      }
+    },
+    "engine": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "statePath",
+        "namespace"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["orchestration", "graph"]
+        },
+        "statePath": {
+          "type": "string",
+          "pattern": "^/.+$"
+        },
+        "namespace": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

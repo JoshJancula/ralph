@@ -74,8 +74,6 @@ class TestRuntimeConfigMcp(unittest.TestCase):
             "xdg_config_home": str(self.home / ".config"),
             "ralph_mode": "no",
             "tool_access": "",
-            "agent": "",
-            "agent_mcp_servers": [],
             "ralph_server_script": "",
         }
         payload.update(overrides)
@@ -89,24 +87,24 @@ class TestRuntimeConfigMcp(unittest.TestCase):
         ambient = next(item for item in result["catalog_redacted"] if item["name"] == "ambient")
         self.assertEqual(ambient["command"], "project-cmd")
 
-    def test_agent_reference_requires_ambient(self) -> None:
+    def test_no_profile_layer_rejects_agent_mcp_servers(self) -> None:
         with self.assertRaises(rcm.McpResolveError) as ctx:
             self._resolve(agent_mcp_servers=["missing-server"])
-        self.assertEqual(ctx.exception.reason, "missing_ambient_server")
+        self.assertEqual(ctx.exception.reason, "removed_profile_mcp_layer")
+        self.assertIn("ralph migrate", str(ctx.exception))
 
-    def test_agent_definition_overrides_ambient(self) -> None:
-        result = self._resolve(
-            agent_mcp_servers=[
-                {
-                    "name": "other",
-                    "transport": "stdio",
-                    "command": "agent-cmd",
-                }
-            ]
-        )
-        other = next(item for item in result["catalog_redacted"] if item["name"] == "other")
-        self.assertEqual(other["command"], "agent-cmd")
-        self.assertTrue(any("agent:other overrides" in d for d in result["summary"]["mcp_override_decisions"]))
+    def test_no_profile_layer_rejects_agent_definition(self) -> None:
+        with self.assertRaises(rcm.McpResolveError) as ctx:
+            self._resolve(
+                agent_mcp_servers=[
+                    {
+                        "name": "other",
+                        "transport": "stdio",
+                        "command": "agent-cmd",
+                    }
+                ]
+            )
+        self.assertEqual(ctx.exception.reason, "removed_profile_mcp_layer")
 
     def test_ralph_server_applied_last(self) -> None:
         script = str(self.project / ".ralph" / "mcp-server.sh")
@@ -118,6 +116,8 @@ class TestRuntimeConfigMcp(unittest.TestCase):
         )
         self.assertIn("ralph", result["summary"]["mcp_effective_names"])
         self.assertTrue(any("ralph:protected overlay" in d for d in result["summary"]["mcp_override_decisions"]))
+        ambient = next(item for item in result["catalog_redacted"] if item["name"] == "ambient")
+        self.assertEqual(ambient["command"], "project-cmd")
 
     def test_ralph_telemetry_log_env_forwarding(self) -> None:
         script = str(self.project / ".ralph" / "mcp-server.sh")
@@ -291,48 +291,55 @@ class TestRuntimeConfigMcp(unittest.TestCase):
         self.assertIn("summary", result)
 
     def test_reserved_ralph_name_protection(self) -> None:
-        """Test that reserved 'ralph' name cannot be used."""
-        # This should be handled by agent-config-mcp.py validation
-        # but runtime-config should also enforce it
-        with self.assertRaises(rcm.McpResolveError) as ctx:
-            self._resolve(
-                agent_mcp_servers=[
-                    {
-                        "name": "ralph",
-                        "transport": "stdio",
-                        "command": "malicious",
+        """Ambient cannot own the reserved ralph name; protected overlay wins."""
+        (self.project / ".cursor" / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "ralph": {"command": "malicious"},
+                        "ambient": {"command": "project-cmd"},
                     }
-                ]
-            )
+                }
+            ),
+            encoding="utf-8",
+        )
+        script = str(self.project / ".ralph" / "mcp-server.sh")
+        os.makedirs(os.path.dirname(script), exist_ok=True)
+        Path(script).write_text("# stub\n", encoding="utf-8")
+        result = self._resolve(ralph_mode="ralph", ralph_server_script=script)
+        ralph = next(item for item in result["catalog_redacted"] if item["name"] == "ralph")
+        self.assertEqual(ralph["command"], "bash")
+        self.assertEqual(ralph["layer"], "ralph")
 
     def test_overlay_collision_precedence(self) -> None:
-        """Test precedence: ambient < agent < ralph."""
-        # Setup ambient
+        """Test precedence: ambient then ralph (no profile layer)."""
         script = str(self.project / ".ralph" / "mcp-server.sh")
         os.makedirs(os.path.dirname(script), exist_ok=True)
         Path(script).write_text("# stub\n", encoding="utf-8")
 
-        # Agent override
         result = self._resolve(
             ralph_mode="ralph",
             ralph_server_script=script,
-            agent_mcp_servers=[
-                {
-                    "name": "ambient",
-                    "transport": "stdio",
-                    "command": "agent-override-cmd",
-                }
-            ],
         )
 
-        # Agent should override ambient
         ambient = next(item for item in result["catalog_redacted"] if item["name"] == "ambient")
-        self.assertEqual(ambient["command"], "agent-override-cmd")
-
-        # Ralph should be last
+        self.assertEqual(ambient["command"], "project-cmd")
         self.assertIn("ralph", result["summary"]["mcp_effective_names"])
         decisions = result["summary"]["mcp_override_decisions"]
         self.assertTrue(any("ralph:protected" in d for d in decisions))
+        with self.assertRaises(rcm.McpResolveError) as ctx:
+            self._resolve(
+                ralph_mode="ralph",
+                ralph_server_script=script,
+                agent_mcp_servers=[
+                    {
+                        "name": "ambient",
+                        "transport": "stdio",
+                        "command": "agent-override-cmd",
+                    }
+                ],
+            )
+        self.assertEqual(ctx.exception.reason, "removed_profile_mcp_layer")
 
     def test_malformed_env_reference_rejected(self) -> None:
         """Test that malformed ${VAR} references are rejected.
