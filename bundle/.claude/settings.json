@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "RALPH_BASH_COMPACT=1 .claude/hooks/compact-bash-output.sh"
+            "command": ".claude/hooks/compact-bash-output.sh"
           }
         ]
       },
