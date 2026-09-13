@@ -105,6 +105,13 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   [[ "$output" == *"cannot be combined with explicit test paths"* ]]
 }
 
+@test "run-bats recognizes explicit paths after leading bats flags" {
+  run bash "$REPO_ROOT/scripts/run-bats.sh" --no-setup-fixtures --list-suite -- \
+    --print-output-on-failure tests/bats/run-bats-runner.bats
+  [ "$status" -eq 0 ]
+  [ "$output" = "tests/bats/run-bats-runner.bats" ]
+}
+
 # --- Fast-tier cost budget --------------------------------------------------
 #
 # The fast tier is what CI gates every push on, so a file the checked-in timing

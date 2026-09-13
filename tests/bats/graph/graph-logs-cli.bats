@@ -532,7 +532,11 @@ attach_cmd() {
   wait_for_file_match "$out" 'rotate-src'
   printf 'after-trunc\n' >"$log_file"
   wait_for_file_match "$out" 'after-trunc'
-  rm -f "$log_file"
+  # Keep the old inode allocated while creating the replacement. Removing and
+  # immediately recreating the path lets Linux reuse the same inode; if the new
+  # file is at least as large as the prior offset, no follower can distinguish
+  # that from an append it has already consumed.
+  mv "$log_file" "${log_file}.1"
   printf 'after-rotate\n' >"$log_file"
   wait_for_file_match "$out" 'after-rotate'
   mark_attempt_terminal impl impl-1 succeeded

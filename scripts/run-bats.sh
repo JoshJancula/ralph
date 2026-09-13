@@ -239,14 +239,22 @@ while [[ $# -gt 0 ]]; do
     --)
       shift
       # Flag-only after `--` (e.g. `-- --filter name`) still runs the suite and
-      # forwards those args to bats. If the first operand is a bats flag, treat
-      # the remainder as BATS_FLAGS so populate_suite_paths still runs. A leading
-      # path operand marks USER_PATHS as before.
-      if [[ $# -gt 0 && "$1" == -* ]]; then
-        BATS_FLAGS+=("$@")
-      elif [[ $# -gt 0 ]]; then
+      # forwards those args to bats. Inspect the whole remainder for paths:
+      # bats flags commonly come before their file operands, so looking only at
+      # the first argument would mistake an explicit-file run for a suite run
+      # and append those files to the entire default tier.
+      post_dash_has_paths=0
+      for arg in "$@"; do
+        if [[ "$arg" == *.bats || -d "$arg" ]]; then
+          post_dash_has_paths=1
+          break
+        fi
+      done
+      if [[ "$post_dash_has_paths" -eq 1 ]]; then
         BATS_ARGS+=("$@")
         USER_PATHS=1
+      elif [[ $# -gt 0 ]]; then
+        BATS_FLAGS+=("$@")
       fi
       break
       ;;
@@ -294,7 +302,11 @@ if [[ "$LIST_SUITE" -eq 1 ]]; then
     done
     BATS_ARGS=("${filtered[@]}")
   fi
-  printf '%s\n' "${BATS_ARGS[@]}"
+  # --list-suite lists test files, never bats flags that accompanied explicit
+  # paths after `--`.
+  for arg in "${BATS_ARGS[@]}"; do
+    [[ "$arg" == *.bats ]] && printf '%s\n' "$arg"
+  done
   exit 0
 fi
 

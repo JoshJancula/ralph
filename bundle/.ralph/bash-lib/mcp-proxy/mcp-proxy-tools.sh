@@ -1853,6 +1853,7 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
   if [[ "$tool_name" == "ralph_proxy_shell" ]] \
     && [[ "${RALPH_RESULT_WINDOWING_CHANNEL:-}" != "native_result_mcp_fallback" ]]; then
     local shell_preview shell_returned shell_delivered
+    local shell_delivered_bytes shell_delivered_tokens
     if [[ -n "$result_id" ]]; then
       RALPH_MCP_PROXY_LAST_RESULT_ID="$result_id"
       export RALPH_MCP_PROXY_LAST_RESULT_ID
@@ -1883,10 +1884,32 @@ ralph_mcp_proxy_owned_tool_maybe_envelope_text_result() {
     if [[ "$shell_returned" -lt "$original_bytes" ]]; then
       shell_delivered="$(ralph_mcp_proxy_shell_append_truncation_footer \
         "$shell_preview" "$shell_returned" "$original_bytes" "$result_id")"
-      ralph_mcp_proxy_tool_success_json "$shell_delivered"
     else
-      ralph_mcp_proxy_tool_success_json "$shell_preview"
+      shell_delivered="$shell_preview"
     fi
+    original_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$storage_text" 2>/dev/null || true)"
+    returned_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$shell_preview" 2>/dev/null || true)"
+    if declare -F ralph_hook_telemetry_utf8_byte_count >/dev/null 2>&1; then
+      shell_delivered_bytes="$(ralph_hook_telemetry_utf8_byte_count "$shell_delivered" 2>/dev/null || true)"
+    fi
+    if [[ -z "$shell_delivered_bytes" ]]; then
+      shell_delivered_bytes="$(printf '%s' "$shell_delivered" | wc -c | tr -d ' ')"
+    fi
+    shell_delivered_tokens="$(ralph_mcp_proxy_result_estimate_tokens "$shell_delivered" 2>/dev/null || true)"
+    ralph_mcp_proxy_append_windowing_telemetry \
+      "$workspace" \
+      "$tool_name" \
+      "$original_bytes" \
+      "$shell_returned" \
+      "$original_tokens" \
+      "$returned_tokens" \
+      "$byte_cap" \
+      "$result_id" \
+      "$inline_candidate_bytes" \
+      "$inline_candidate_tokens" \
+      "$shell_delivered_bytes" \
+      "$shell_delivered_tokens"
+    ralph_mcp_proxy_tool_success_json "$shell_delivered"
     return 0
   fi
 
