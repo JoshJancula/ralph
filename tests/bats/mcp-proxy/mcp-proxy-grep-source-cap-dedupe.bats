@@ -69,8 +69,11 @@ invoke_grep_pair_to_files() {
     --arg prefix "$SEARCH_DEDUPE_GREP_PREFIX" '
     .deduped == true
     and (.preview | startswith($prefix))
-    and (.preview | test("stopped early"))
-    and (.preview | test("duplicate grep suppressed") | not)
+    # The preview is intentionally large. Use literal matching here so older
+    # jq/oniguruma builds do not exhaust their regex retry limit while scanning
+    # the captured grep body on Linux CI.
+    and (.preview | contains("stopped early"))
+    and (.preview | contains("duplicate grep suppressed") | not)
   ' <<<"$second_env"
   [ "$status" -eq 0 ]
   run jq -e '.sourceComplete == false' <<<"$second_env"
