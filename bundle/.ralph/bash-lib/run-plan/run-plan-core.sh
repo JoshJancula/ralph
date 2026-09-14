@@ -2010,6 +2010,7 @@ fi
 if [[ -n "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/agent.log"
   OUTPUT_LOG="$RALPH_LOG_DIR/agent.log"
+  RALPH_PLAN_ANSI_OUTPUT_LOG="$RALPH_LOG_DIR/agent.ansi.log"
 elif [[ -z "${CURSOR_PLAN_LOG:-}" ]]; then
   LOG_FILE="$RALPH_LOG_DIR/plan-runner-${PLAN_LOG_NAME}.log"
 else
@@ -2022,12 +2023,21 @@ if [[ -z "${RALPH_GRAPH_NODE_LOG_DIR:-}" ]]; then
     OUTPUT_LOG="$CURSOR_PLAN_OUTPUT_LOG"
   fi
 fi
+if [[ -z "${RALPH_PLAN_ANSI_OUTPUT_LOG:-}" ]]; then
+  if [[ "$OUTPUT_LOG" == *.log ]]; then
+    RALPH_PLAN_ANSI_OUTPUT_LOG="${OUTPUT_LOG%.log}.ansi.log"
+  else
+    RALPH_PLAN_ANSI_OUTPUT_LOG="${OUTPUT_LOG}.ansi.log"
+  fi
+fi
 # Destination for captured CLI stdout/stderr (tee); subprocesses may append via invoke helpers.
 export OUTPUT_LOG
+export RALPH_PLAN_ANSI_OUTPUT_LOG
 
 ralph_assert_path_not_env_secret "Plan file" "$PLAN_PATH"
 ralph_assert_path_not_env_secret "Plan log" "$LOG_FILE"
 ralph_assert_path_not_env_secret "Output log" "$OUTPUT_LOG"
+ralph_assert_path_not_env_secret "ANSI output log" "$RALPH_PLAN_ANSI_OUTPUT_LOG"
 
 case "$RUNTIME" in
   cursor)

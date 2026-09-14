@@ -2423,12 +2423,13 @@ workflow_cli_logs_usage() {
   cat >&2 <<'USAGE'
 Usage: ralph workflow logs <exact-run-id> [--stage <id>] [--attempt <n>]
                                   [--stream agent|supervisor|combined]
-                                  [--tail N] [--follow] [--no-follow]
+                                  [--tail N] [--color auto|always|never] [--follow] [--no-follow]
 
   --stage <id>    Public stage id (defaults to the current blocker/active stage)
   --attempt <n>   Attempt number (defaults to the stage ledger attempt)
   --stream        agent (default), supervisor, or combined
   --tail N        Print only the last N log lines (default 80)
+  --color MODE    Use renderer-owned ANSI sidecars: auto (default), always, or never
   --follow        Wait for new log bytes until the stage is terminal
   --no-follow     Print the current tail and exit even when the stage is running
 
@@ -2630,7 +2631,7 @@ workflow_cli_cmd_logs() {
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --stage|--attempt|--stream|--tail)
+      --stage|--attempt|--stream|--tail|--color)
         if [[ $# -lt 2 ]]; then
           echo "Error: $arg requires a value" >&2
           exit 2

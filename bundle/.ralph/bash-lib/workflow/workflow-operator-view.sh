@@ -835,6 +835,50 @@ workflow_operator_redact_log_line() {
   printf '%s\n' "$line"
 }
 
+# workflow_operator_present_log_line <line>
+# ANSI sidecars are emitted by Ralph's renderer, not copied from agent output.
+# Still refuse any escape other than SGR before writing to the operator's tty.
+workflow_operator_present_log_line() {
+  local line="${1:-}" plain remaining max="${WORKFLOW_OPERATOR_LOG_LINE_MAX:-500}"
+  if [[ "${WORKFLOW_OPERATOR_COLOR_LOGS:-0}" != "1" ]]; then
+    workflow_operator_redact_log_line "$line"
+    return
+  fi
+  plain="$(printf '%s' "$line" | LC_ALL=C sed -E $'s/\\x1b\\[[0-9;]*m//g')"
+  remaining="$plain"
+  if [[ "$remaining" == *$'\033'* || "$line" == *$'\r'* || "$line" == *$'\n'* || "$line" == *$'\t'* ]]; then
+    workflow_operator_redact_log_line "$plain"
+    return
+  fi
+  if declare -F graph_operator_text_looks_like_credential >/dev/null 2>&1 \
+    && graph_operator_text_looks_like_credential "$plain"; then
+    printf '[REDACTED]\n'
+    return
+  fi
+  if [[ "${#plain}" -gt "$max" ]]; then
+    workflow_operator_redact_log_line "$plain"
+    return
+  fi
+  printf '%s\n' "$line"
+}
+
+# workflow_operator_presentation_log_path <plain-log-path>
+# Prefer a renderer-owned ANSI sidecar only for the agent stream. Older runs
+# and non-agent logs retain their original plain path.
+workflow_operator_presentation_log_path() {
+  local path="$1" ansi_path=""
+  if [[ "${WORKFLOW_OPERATOR_COLOR_LOGS:-0}" == "1" && "$path" == */agent.log ]]; then
+    ansi_path="${path%.log}.ansi.log"
+    # A runner that bypasses the JSON demux may only populate agent.log. Do
+    # not let its pre-created but empty sidecar hide that real output.
+    if [[ -f "$ansi_path" && ! -L "$ansi_path" && ( -s "$ansi_path" || ! -s "$path" ) ]]; then
+      printf '%s\n' "$ansi_path"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$path"
+}
+
 # workflow_operator_format_engine_event_line <public-event-json>
 workflow_operator_format_engine_event_line() {
   local event="${1:-}" ts stage attempt name new_state details
@@ -950,7 +994,7 @@ workflow_operator_follow_file_size() {
 }
 
 # workflow_operator_follow_emit_lines <path>
-# Print newly appended lines from a text file; redact each line.
+# Print newly appended lines from a text file using the selected presentation policy.
 workflow_operator_follow_emit_lines() {
   local path="$1" size="" new_bytes
   [[ -n "$path" && -f "$path" && ! -L "$path" ]] || return 0
@@ -965,7 +1009,7 @@ workflow_operator_follow_emit_lines() {
   fi
   new_bytes=$((size - WORKFLOW_OP_FOLLOW_OFFSET))
   tail -c "$new_bytes" "$path" 2>/dev/null | while IFS= read -r line || [[ -n "$line" ]]; do
-    workflow_operator_redact_log_line "$line"
+    workflow_operator_present_log_line "$line"
   done
   WORKFLOW_OP_FOLLOW_OFFSET="$size"
 }
@@ -1161,22 +1205,22 @@ workflow_operator_logs_print_paths() {
     [[ -n "$path" && -f "$path" && ! -L "$path" ]] || continue
     if [[ -n "$tail_n" && "$tail_n" =~ ^[1-9][0-9]*$ ]]; then
       tail -n "$tail_n" "$path" | while IFS= read -r line || [[ -n "$line" ]]; do
-        workflow_operator_redact_log_line "$line"
+        workflow_operator_present_log_line "$line"
       done
     else
       while IFS= read -r line || [[ -n "$line" ]]; do
-        workflow_operator_redact_log_line "$line"
+        workflow_operator_present_log_line "$line"
       done <"$path"
     fi
   done <"$paths_file"
 }
 
 # workflow_operator_logs <state-root> <run-id> [options...]
-# Options: --stage --attempt --stream --tail --follow --no-follow
+# Options: --stage --attempt --stream --tail --color --follow --no-follow
 workflow_operator_logs() {
   local state_root="$1" run_id="$2"
   shift 2
-  local stage_id="" attempt_n="" stream="agent" tail_n="${RALPH_WORKFLOW_LOG_TAIL_LINES:-80}"
+  local stage_id="" attempt_n="" stream="agent" tail_n="${RALPH_WORKFLOW_LOG_TAIL_LINES:-80}" color="auto"
   local follow=0 follow_explicit=0 arg
 
   while [[ $# -gt 0 ]]; do
@@ -1186,6 +1230,7 @@ workflow_operator_logs() {
       --attempt) attempt_n="${2:-}"; shift 2 ;;
       --stream) stream="${2:-}"; shift 2 ;;
       --tail) tail_n="${2:-}"; shift 2 ;;
+      --color) color="${2:-}"; shift 2 ;;
       --follow) follow=1; follow_explicit=1; shift ;;
       --no-follow) follow=0; follow_explicit=1; shift ;;
       *)
@@ -1196,6 +1241,12 @@ workflow_operator_logs() {
   done
 
   workflow_logs_validate_public_stream "$stream" || return 2
+  case "$color" in
+    auto) [[ -t 1 && -z "${NO_COLOR:-}" ]] && WORKFLOW_OPERATOR_COLOR_LOGS=1 || WORKFLOW_OPERATOR_COLOR_LOGS=0 ;;
+    always) WORKFLOW_OPERATOR_COLOR_LOGS=1 ;;
+    never) WORKFLOW_OPERATOR_COLOR_LOGS=0 ;;
+    *) echo "Error: workflow logs --color must be auto, always, or never" >&2; return 2 ;;
+  esac
 
   _WORKFLOW_OPVIEW_STATE_ROOT="$state_root"
   local status_json mode registry_run engine_dir namespace
@@ -1232,14 +1283,14 @@ workflow_operator_logs() {
       }
       while IFS= read -r path || [[ -n "$path" ]]; do
         [[ -n "$path" ]] || continue
-        printf '%s\n' "$path" >>"$paths_tmp"
+        workflow_operator_presentation_log_path "$path" >>"$paths_tmp"
         paths_found=1
       done < <(workflow_dep_stage_log_select "$run_dir" "$resolved_stage" "$node_json" "$resolved_attempt" "$stream" 2>/dev/null || true)
       ;;
     sequential)
       while IFS= read -r path || [[ -n "$path" ]]; do
         [[ -n "$path" ]] || continue
-        printf '%s\n' "$path" >>"$paths_tmp"
+        workflow_operator_presentation_log_path "$path" >>"$paths_tmp"
         paths_found=1
       done < <(workflow_seq_stage_log_select "$registry_run" "$resolved_stage" "$resolved_attempt" "$stream" 2>/dev/null || true)
       ;;
@@ -1249,8 +1300,8 @@ workflow_operator_logs() {
       ;;
   esac
 
-  printf '# workflow logs  run=%s  stage=%s  attempt=%s  stream=%s\n' \
-    "$run_id" "$resolved_stage" "$resolved_attempt" "$stream" >&2
+  printf '# workflow logs  run=%s  stage=%s  attempt=%s  stream=%s  color=%s\n' \
+    "$run_id" "$resolved_stage" "$resolved_attempt" "$stream" "$color" >&2
 
   if [[ "$paths_found" -eq 0 ]]; then
     if workflow_operator_stage_is_active "$stage_json"; then
@@ -1291,14 +1342,14 @@ workflow_operator_logs() {
         node_json="$(graph_state_read_node "$state_root" "$namespace" "$run_id" "$resolved_stage" 2>/dev/null || true)"
         while IFS= read -r path || [[ -n "$path" ]]; do
           [[ -n "$path" ]] || continue
-          printf '%s\n' "$path" >>"$paths_tmp"
+          workflow_operator_presentation_log_path "$path" >>"$paths_tmp"
           paths_found=1
         done < <(workflow_dep_stage_log_select "$run_dir" "$resolved_stage" "$node_json" "$resolved_attempt" "$stream" 2>/dev/null || true)
         ;;
       sequential)
         while IFS= read -r path || [[ -n "$path" ]]; do
           [[ -n "$path" ]] || continue
-          printf '%s\n' "$path" >>"$paths_tmp"
+          workflow_operator_presentation_log_path "$path" >>"$paths_tmp"
           paths_found=1
         done < <(workflow_seq_stage_log_select "$registry_run" "$resolved_stage" "$resolved_attempt" "$stream" 2>/dev/null || true)
         ;;

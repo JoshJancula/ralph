@@ -892,6 +892,23 @@ write_seq_events() {
   [[ "$output" == *"seq-agent-1"* ]]
 }
 
+@test "logs color always uses the trusted agent ANSI sidecar and never keeps plain logs" {
+  local run_id="run-20260826T110000Z-logs-color"
+  local log_dir
+  seed_sequential_plan_run "$CASE" "$run_id"
+  write_seq_stage_logs "$CASE" "$run_id" "implement" 1
+  log_dir="$CASE/workflow-runs/$run_id/engine/logs/stages/implement/attempt-1"
+  printf '\033[32mseq-agent-color\033[0m\n' >"$log_dir/agent.ansi.log"
+
+  wf_cli logs "$run_id" --stage implement --stream agent --color always --no-follow
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\033[32mseq-agent-color\033[0m'* ]]
+
+  wf_cli logs "$run_id" --stage implement --stream agent --color never --no-follow
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'seq-agent-1\nseq-agent-2'* ]]
+}
+
 @test "logs follow prints new lines and exits when stage becomes terminal" {
   local run_id="run-20260826T110000Z-logs-follow"
   seed_sequential_plan_run "$CASE" "$run_id"
@@ -925,6 +942,7 @@ write_seq_events() {
   log_dir="$PREPARE_SEQ_LOG_DIR"
   [[ "$log_dir" == "$registry_run/engine/logs/stages/implement/attempt-1" ]]
   [ -f "$log_dir/agent.log" ]
+  [ -f "$log_dir/agent.ansi.log" ]
   [ -f "$log_dir/runner.log" ]
   [ ! -L "$log_dir" ]
   [ ! -L "$log_dir/agent.log" ]

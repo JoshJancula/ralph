@@ -609,6 +609,28 @@ EOF
   rm -rf "$tmp_dir"
 }
 
+@test "demux writes a renderer-owned ANSI sidecar while leaving the durable log plain" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
+
+  local tmp_dir usage_file output_file ansi_file
+  tmp_dir="$(mktemp -d)"
+  usage_file="$tmp_dir/usage.json"
+  output_file="$tmp_dir/agent.log"
+  ansi_file="$tmp_dir/agent.ansi.log"
+  cat <<'EOF' >"$tmp_dir/stream.ndjson"
+{"type":"assistant","message":{"content":[{"type":"text","text":"VERIFICATION_RESULT: PASS"}]}}
+EOF
+
+  RALPH_PLAN_ANSI_OUTPUT_LOG="$ansi_file" \
+    python3 "$REPO_ROOT/bundle/.ralph/python/run-plan-cli-json-demux.py" \
+      claude /dev/null "$usage_file" "$output_file" 0 <"$tmp_dir/stream.ndjson" >/dev/null
+
+  [ -f "$ansi_file" ]
+  ! grep -q $'\033\[' "$output_file"
+  grep -q $'\033\[' "$ansi_file"
+  rm -rf "$tmp_dir"
+}
+
 @test "runner accepts first-pass VERIFICATION_RESULT PASS for prose verification without extra retry" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"

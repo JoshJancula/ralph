@@ -395,7 +395,7 @@ workflow_seq_stage_attempt_log_dir() {
 # absolute attempt log directory. Does not follow symlinks or escape engine/.
 workflow_seq_prepare_stage_logs() {
   local registry_run="$1" stage_id="$2" attempt_n="$3"
-  local engine_dir log_dir runner agent prefix
+  local engine_dir log_dir runner agent ansi_agent prefix
   engine_dir="$(workflow_seq_engine_dir "$registry_run")" || return 1
   log_dir="$(workflow_seq_stage_attempt_log_dir "$registry_run" "$stage_id" "$attempt_n")" || return 1
   prefix="$engine_dir/logs/stages/"
@@ -413,12 +413,14 @@ workflow_seq_prepare_stage_logs() {
   mkdir -p "$log_dir" || return 1
   runner="$log_dir/runner.log"
   agent="$log_dir/agent.log"
-  if [[ -L "$runner" || -L "$agent" ]]; then
+  ansi_agent="$log_dir/agent.ansi.log"
+  if [[ -L "$runner" || -L "$agent" || -L "$ansi_agent" ]]; then
     echo "Error: sequential stage log file is a symlink under $log_dir" >&2
     return 1
   fi
   : >>"$runner" || return 1
   : >>"$agent" || return 1
+  : >>"$ansi_agent" || return 1
   printf '%s\n' "$log_dir"
 }
 

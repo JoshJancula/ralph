@@ -1234,9 +1234,11 @@ def main() -> None:
     sid: Optional[str] = None
     sid_written = False
     output_log = None
+    ansi_output_log = None
     raw_output_log = None
     renderer = None
     log_renderer = None
+    ansi_log_renderer = None
     stdout_broken = False
     completion_sentinel_seen = False
     antigravity_text_streamed = False
@@ -1286,6 +1288,30 @@ def main() -> None:
             output_log = None
             raw_output_log = None
             log_renderer = None
+
+    # Durable text logs deliberately remain plain: they are searched, consumed
+    # by CI, and may contain model-authored text.  A separate opt-in sidecar is
+    # safe to display in an interactive terminal because it is rendered here
+    # with Ralph-owned SGR sequences, rather than preserving terminal controls
+    # from the runtime stream.
+    ansi_output_log_path = os.environ.get("RALPH_PLAN_ANSI_OUTPUT_LOG", "").strip()
+    if ansi_output_log_path and PrettyRenderer is not None:
+        try:
+            os.makedirs(os.path.dirname(ansi_output_log_path) or ".", exist_ok=True)
+            ansi_output_log = open(ansi_output_log_path, "a", encoding="utf-8", buffering=1)
+            ansi_log_renderer = PrettyRenderer(
+                mode,
+                color=True,
+                ascii_only=os.environ.get("RALPH_PLAN_PRETTY_ASCII") == "1",
+                log_path=ansi_output_log_path,
+                color_depth=16,
+            )
+        except OSError as exc:
+            sys.stderr.write(
+                f"warning: unable to open ANSI output log {ansi_output_log_path}: {exc}\n"
+            )
+            ansi_output_log = None
+            ansi_log_renderer = None
 
     # Opt-in raw token/usage capture for opencode (e.g. ollama-cloud cache
     # debugging). Lets us distinguish "cache never hit" from "cache hit but not
@@ -1373,6 +1399,12 @@ def main() -> None:
                     )
                 else:
                     _write_lines(output_log, plain_lines)
+            if ansi_output_log is not None:
+                try:
+                    ansi_rendered = ansi_log_renderer.render_plain(line) if ansi_log_renderer is not None else None
+                except Exception:
+                    ansi_rendered = None
+                _write_lines(ansi_output_log, ansi_rendered if ansi_rendered is not None else plain_lines)
             if pretty and renderer is not None:
                 try:
                     rendered = renderer.render_plain(line)
@@ -1442,6 +1474,8 @@ def main() -> None:
             )
         if output_log is not None and plain_lines:
             _write_output_log(output_log, log_renderer, o, plain_lines)
+        if ansi_output_log is not None and plain_lines:
+            _write_output_log(ansi_output_log, ansi_log_renderer, o, plain_lines)
         if pretty and renderer is not None and plain_lines:
             try:
                 rendered = renderer.render_event(o)
@@ -1466,8 +1500,17 @@ def main() -> None:
             log_leftover = None
         if log_leftover and output_log is not None:
             _write_lines(output_log, log_leftover)
+    if ansi_log_renderer is not None:
+        try:
+            ansi_log_leftover = ansi_log_renderer.flush()
+        except Exception:
+            ansi_log_leftover = None
+        if ansi_log_leftover and ansi_output_log is not None:
+            _write_lines(ansi_output_log, ansi_log_leftover)
     if output_log is not None:
         output_log.close()
+    if ansi_output_log is not None:
+        ansi_output_log.close()
     if raw_output_log is not None:
         raw_output_log.close()
     if opencode_usage_log is not None:
