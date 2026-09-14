@@ -85,6 +85,7 @@ jobs:
             if bash scripts/run-bats.sh -j 1 -- \
               --print-output-on-failure \
               tests/bats/mcp-proxy/mcp-proxy-grep-source-cap-dedupe.bats \
+              tests/bats/run-plan/run-plan-runtime-invocation.bats \
               tests/bats/native-hook/bash-compact-delivered-metrics.bats \
               tests/bats/native-hook/fail-open-instrumentation.bats \
               tests/bats/native-hook/native-result-shapes.bats; then

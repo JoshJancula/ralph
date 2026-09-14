@@ -220,6 +220,7 @@ teardown_runtime_invoke_test() {
 }
 
 @test "antigravity launcher records live CLI PID and preserves exit status" {
+  bats_skip_known_ci_flakes
   local record pid_marker
   setup_runtime_invoke_test "$ANTIGRAVITY_LIB"
   record="$TEST_TMPDIR/agy.args"

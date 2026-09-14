@@ -134,6 +134,7 @@ bats_skip_known_ci_flakes() {
       skip "quarantined on CI: Linux-only failure, still runs locally (RALPH_RUN_LINUX_QUARANTINE=1 to run)"
       ;;
     "mcp-proxy-grep-source-cap-dedupe.bats:duplicate of a source-capped grep stays deduped AND still reports partial-source state" | \
+    "run-plan-runtime-invocation.bats:antigravity launcher records live CLI PID and preserves exit status" | \
     "bash-compact-delivered-metrics.bats:applied compaction with a storage footer: delivered exceeds legacy compactedBytes by the footer" | \
     "fail-open-instrumentation.bats:below-threshold (small content, not expanded) is not logged as an error" | \
     "fail-open-instrumentation.bats:already-compacted envelope content is not logged as an error" | \
