@@ -209,8 +209,10 @@ class TestUsageUnsupportedRendering(unittest.TestCase):
         self.assertIn("n/a", cache_read_line)
         cache_write_line = next(line for line in text.splitlines() if "Cache Write" in line)
         self.assertIn("n/a", cache_write_line)
-        cache_hit_line = next(line for line in text.splitlines() if "Cache Hit" in line)
-        self.assertIn("n/a", cache_hit_line)
+        write_cost_line = next(line for line in text.splitlines() if "Write Cost" in line)
+        self.assertIn("n/a", write_cost_line)
+        context_line = next(line for line in text.splitlines() if "Context/Req" in line)
+        self.assertIn("n/a", context_line)
         tool_calls_line = next(line for line in text.splitlines() if "Tool Calls" in line)
         self.assertIn("2", tool_calls_line)
 
@@ -218,6 +220,54 @@ class TestUsageUnsupportedRendering(unittest.TestCase):
         text = _render_plain()
         input_line = next(line for line in text.splitlines() if "Input" in line)
         self.assertNotIn("n/a", input_line)
+
+
+class TestCacheCostFraming(unittest.TestCase):
+    """Cache writes bill at ~1.25x and reads at ~0.1x, so token counts alone
+    misrepresent cost. The summary reports the write premium's share of cached
+    spend and context-per-request instead of a cache hit ratio (which is pinned
+    near 100% in any cached agent loop and therefore never varies)."""
+
+    def test_write_share_reflects_price_weighting_not_token_counts(self) -> None:
+        # Unreported TTL split defaults to the 1h rate: 100 writes * 2.0 = 200;
+        # 200 reads * 0.10 = 20. Writes are a third of the tokens, 91% of cost.
+        text = _render_plain(cache_create="100", cache_read="200")
+        line = next(l for l in text.splitlines() if "Write Cost" in l)
+        self.assertIn("91% of cache spend", line)
+
+    def test_measured_five_minute_ttl_prices_lower(self) -> None:
+        usage = json.loads(_sample_usage_json())
+        usage["cache_creation_5m_input_tokens"] = 100
+        usage["cache_creation_1h_input_tokens"] = 0
+        text = _render_plain(
+            cache_create="100", cache_read="200", usage_json=json.dumps(usage)
+        )
+        line = next(l for l in text.splitlines() if "Write Cost" in l)
+        self.assertIn("86% of cache spend", line)
+
+    def test_amortized_writes_report_low_share(self) -> None:
+        # A long invocation that re-reads what it wrote: 1000 writes (2000) vs
+        # 200000 reads (20000) -> writes are 9% of spend.
+        text = _render_plain(cache_create="1000", cache_read="200000")
+        line = next(l for l in text.splitlines() if "Write Cost" in l)
+        self.assertIn("9% of cache spend", line)
+
+    def test_zero_cache_activity_does_not_divide_by_zero(self) -> None:
+        text = _render_plain(cache_create="0", cache_read="0")
+        line = next(l for l in text.splitlines() if "Write Cost" in l)
+        self.assertIn("0% of cache spend", line)
+
+    def test_context_per_request_uses_api_request_count(self) -> None:
+        usage = json.loads(_sample_usage_json())
+        usage["tool_turns"] = 4
+        text = _render_plain(cache_read="80000", usage_json=json.dumps(usage))
+        line = next(l for l in text.splitlines() if "Context/Req" in l)
+        self.assertIn("20,000", line)
+
+    def test_context_per_request_absent_without_request_count(self) -> None:
+        text = _render_plain(cache_read="80000")
+        line = next(l for l in text.splitlines() if "Context/Req" in l)
+        self.assertIn("-", line)
 
 
 if __name__ == "__main__":

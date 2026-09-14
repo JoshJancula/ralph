@@ -110,29 +110,13 @@ EOF
   command -v python3 >/dev/null || skip "python3 required"
   command -v jq >/dev/null || skip "jq required"
 
-  # Create a log file with git diff-like output
+  # Create a log file with large numbered output whose shape is safe for the
+  # generic fallback even though command provenance is absent.
   log_file="$TEST_WORKSPACE/.ralph-workspace/logs/TESTPLAN/git.jsonl"
-  git_diff_output=$(cat <<'EOF'
-diff --git a/file.txt b/file.txt
-index 123456..abcdef 100644
---- a/file.txt
-+++ b/file.txt
-@@ -1,10 +1,10 @@
--old line 1
--old line 2
--old line 3
--old line 4
--old line 5
-+new line 1
-+new line 2
-+new line 3
-+new line 4
-+new line 5
-EOF
-)
+  shape_output="$(awk 'BEGIN { for (i = 1; i <= 500; i++) print i " repeated build output line with enough filler text" }')"
 
   jq -n \
-    --arg stdout "$git_diff_output" \
+    --arg stdout "$shape_output" \
     '{command: "", stdout: $stdout, stderr: "", exit_status: 0}' \
     > "$log_file"
 

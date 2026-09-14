@@ -890,7 +890,7 @@ setup() {
   [[ "$output" == *"ralph_bash=unset"* ]]
 }
 
-@test "ralph_apply_mode_compaction_defaults enables RALPH_NATIVE_RESULT_COMPACT for native and hybrid modes" {
+@test "ralph_apply_mode_compaction_defaults leaves native exploration compaction opt-in" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
   run bash -c '
@@ -904,8 +904,8 @@ setup() {
   ' _ "$(dirname "$RUN_PLAN_SH")"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"native_result=1"* ]]
-  [[ "$output" == *"hybrid_result=1"* ]]
+  [[ "$output" == *"native_result=unset"* ]]
+  [[ "$output" == *"hybrid_result=unset"* ]]
 }
 
 @test "ralph_apply_mode_transcript_eviction_defaults enables safe eviction for ralph and hybrid modes" {

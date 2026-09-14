@@ -28,18 +28,8 @@ ralph_cursor_exploration_truthy() {
 ralph_cursor_exploration_nudge_active() {
   case "${RALPH_NATIVE_EXPLORATION_NUDGE:-}" in
     1 | true | yes | on) return 0 ;;
-    0 | false | no | off) return 1 ;;
+    *) return 1 ;;
   esac
-  case "${RALPH_MODE:-}" in
-    hybrid | native) return 1 ;;
-    ralph) return 0 ;;
-  esac
-  if [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; then
-    case "${RALPH_NATIVE_HOOKS:-}" in
-      off | 0 | false | no) return 0 ;;
-    esac
-  fi
-  return 1
 }
 
 ralph_cursor_exploration_workspace() {

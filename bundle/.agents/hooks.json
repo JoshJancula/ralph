@@ -33,6 +33,12 @@
       {
         "command": ".agents/hooks/after-shell-telemetry.sh"
       }
+    ],
+    "Stop": [
+      {
+        "command": ".agents/hooks/stop-continuation.sh",
+        "timeout": 5400
+      }
     ]
   }
 }

@@ -146,6 +146,18 @@ teardown() {
   [ "$output" = "OK" ]
 }
 
+@test "ralph_mcp_proxy_preflight validates the restricted graph-node catalog" {
+  run bash -c 'source "$1" && RALPH_MODE=hybrid RALPH_MCP_SCOPE=graph-node ralph_mcp_proxy_preflight "$2" "$3"' _ "$SETUP_FILE" "$MCP_SERVER" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+}
+
+@test "ralph_mcp_proxy_preflight accepts delegated-child scope without spawn tools" {
+  run bash -c 'source "$1" && RALPH_MODE=hybrid RALPH_MCP_SCOPE=delegated-child ralph_mcp_proxy_preflight "$2" "$3"' _ "$SETUP_FILE" "$MCP_SERVER" "$REPO_ROOT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "OK" ]
+}
+
 @test "ralph_mcp_proxy_preflight fails when tools/list returns a null nextCursor" {
   [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
   command -v jq > /dev/null || skip "jq required"

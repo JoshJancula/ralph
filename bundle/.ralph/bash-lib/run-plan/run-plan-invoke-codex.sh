@@ -7,10 +7,22 @@ RALPH_RUN_PLAN_INVOKE_CODEX_LOADED=1
 
 # Public interface:
 #   run_plan_invoke_codex_mcp_config_prepare / run_plan_invoke_codex_mcp_config_cleanup -- ralph-mode ephemeral MCP config.
+#   run_plan_invoke_codex_agents_enabled_deny_supported -- help-only probe for exec --config (nativeSubagents=off).
+#   run_plan_invoke_codex_native_subagents_preflight -- fail closed when off lacks deny-control support.
 #   ralph_run_plan_invoke_codex -- run Codex directly with the canonical Ralph-owned invoke path; exports env for
 #     the demux pipeline (OUTPUT_LOG, EXIT_CODE_FILE, SESSION_ID_FILE, RALPH_PLAN_CLI_RESUME, resume session/bare
 #     flags, CODEX_PLAN_CLI, CODEX_PLAN_MODEL, CODEX_PLAN_SANDBOX,
 #     CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX).
+#   run_plan_invoke_codex_app_server_supported -- graph-only feature-detect of `codex app-server` via help (no model call).
+#   run_plan_invoke_codex_app_server_capture_request -- parse one JSON-RPC approval request into thread/turn/item/type/resource/choices.
+#   run_plan_invoke_codex_graph_approval_capabilities -- advertise only enforceable Codex lifetimes (once+run).
+#   run_plan_invoke_codex_graph_approval_parse_permission -- elevate a captured/raw approval into the G15 contract.
+#   run_plan_invoke_codex_app_server_capture_from_command -- handshake a stdio JSON-RPC app-server and capture the first approval request.
+#   run_plan_invoke_codex_app_server_map_decision -- map once/session/deny/exact-amendment onto a Codex JSON-RPC result.
+#   run_plan_invoke_codex_app_server_session_start -- handshake a stdio JSON-RPC app-server, capture the first approval, keep it alive.
+#   run_plan_invoke_codex_app_server_respond -- send one mapped decision; duplicate resolves are idempotent.
+#   run_plan_invoke_codex_app_server_close / run_plan_invoke_codex_app_server_cleanup -- close on completion, cancellation, or supervisor cleanup.
+#   run_plan_invoke_codex_app_server_start_or_fallback -- feature-detect, then start or return a safe overlay fallback.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-invoke-common.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../mcp/mcp-setup.sh"
@@ -784,12 +796,27 @@ run_plan_invoke_codex_mcp_config_prepare() {
     return 1
   fi
 
-  # Prefer the shared effective catalog (ambient user/project config.toml +
-  # selected-agent overrides + Ralph's protected server) when the runtime-config
-  # resolver has produced it. Codex keeps loading ~/.codex/config.toml and the
-  # trusted project .codex/config.toml natively; the resolver catalog is only
-  # used to translate the effective servers into per-run --config overrides.
-  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
+  # Ambient-MCP boundary rule: a Ralph profile must layer Ralph's own server
+  # onto Codex's native user/project config.toml loading rather than handing
+  # Codex a reconstructed copy of every ambient server. Codex always loads
+  # ~/.codex/config.toml and the trusted project .codex/config.toml natively
+  # regardless of any --config overrides passed here, so pure-ambient servers
+  # (no agent override, not Ralph's own server) never need to be re-emitted --
+  # native loading already surfaces them, and re-emitting them from the JSON
+  # catalog snapshot can only ever be a lossy copy (fields the JSON shape does
+  # not capture, e.g. transport-specific timeouts, silently drop). Only use
+  # the shared effective-catalog reconstruction (RALPH_RUNTIME_MCP_RESOLVE_PATH)
+  # when an agent has declared explicit mcp_servers overrides that must win
+  # over the ambient entry of the same name -- that is the one case Codex has
+  # no invocation-local mechanism to express short of a --config override, so
+  # the safest current (reconstruct-and-override) behavior is retained and the
+  # limitation is recorded via runtime_overlay_set_mcp_override_decisions in
+  # the caller instead of silently reproducing every ambient server.
+  local _codex_agent_mcp_present=0
+  if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
+    _codex_agent_mcp_present=1
+  fi
+  if [[ "$_codex_agent_mcp_present" == "1" && -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
     CODEX_PLAN_MCP_CONFIG_PATH="$RALPH_RUNTIME_MCP_RESOLVE_PATH"
     CODEX_PLAN_MCP_CONFIG_OWNED=0
     export CODEX_PLAN_MCP_CONFIG_PATH CODEX_PLAN_MCP_CONFIG_OWNED
@@ -812,8 +839,69 @@ run_plan_invoke_codex_mcp_config_prepare() {
   ralph_mcp_overlay_register_runtime_cleanup run_plan_invoke_codex_mcp_config_cleanup
 }
 
+# run_plan_invoke_codex_agents_enabled_deny_supported [cli]
+# Help-only. Never starts a session or sends a prompt. Returns 0 when the
+# installed Codex CLI advertises exec --config (vehicle for agents.enabled=false).
+run_plan_invoke_codex_agents_enabled_deny_supported() {
+  local cli_name="${1:-${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}}"
+  local exec_help
+
+  if ! command -v "$cli_name" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! exec_help="$("$cli_name" exec --help 2>/dev/null)"; then
+    return 1
+  fi
+  [[ "$exec_help" == *"--config"* ]]
+}
+
+# run_plan_invoke_codex_native_subagents_preflight [cli]
+# nativeSubagents=off requires the proven --config agents.enabled=false deny
+# before invocation. inherit preserves ambient behavior and skips this probe.
+# Never uses prompt-only suppression.
+run_plan_invoke_codex_native_subagents_preflight() {
+  local cli_name="${1:-${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}}"
+  local mode
+
+  mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+  [[ "$mode" == "off" ]] || return 0
+
+  if ! declare -F graph_runtime_native_subagents_off_supported >/dev/null 2>&1; then
+    # shellcheck source=../graph/graph-runtime-capabilities.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../graph" && pwd)/graph-runtime-capabilities.sh"
+  fi
+
+  if ! graph_runtime_native_subagents_off_supported codex; then
+    echo "Error: nativeSubagents=off is unsupported for runtime codex (no proven deny boundary); refusing to invoke (use nativeSubagents=inherit)." >&2
+    return 1
+  fi
+
+  if run_plan_invoke_codex_agents_enabled_deny_supported "$cli_name"; then
+    return 0
+  fi
+  echo "Error: nativeSubagents=off requires Codex CLI support for --config (agents.enabled=false); refusing to invoke (upgrade Codex CLI or use nativeSubagents=inherit)." >&2
+  return 1
+}
+
 ralph_run_plan_invoke_codex() {
   ralph_run_plan_sync_mode_knobs
+  ralph_run_plan_subagents_log_contract codex || return 1
+  ralph_run_plan_subagents_require_runtime_capability codex || return 1
+  ralph_run_plan_native_subagent_verify_runtime codex || return 1
+
+  # Resolve CLI early so nativeSubagents=off preflight can help-probe before argv.
+  if [[ -n "${CODEX_CLI:-}" ]]; then
+    export CODEX_PLAN_CLI="$CODEX_CLI"
+  elif [[ -z "${CODEX_PLAN_CLI:-}" ]] && command -v codex &>/dev/null; then
+    export CODEX_PLAN_CLI="codex"
+  fi
+
+  # nativeSubagents=off: verify deny control before building argv / invoking.
+  # inherit: skip; do not alter ambient native-subagent availability.
+  if ! run_plan_invoke_codex_native_subagents_preflight "${CODEX_PLAN_CLI:-codex}"; then
+    return 1
+  fi
+
   # Demux/tee inputs: combined output log, sidecar exit code, session id file path.
   export OUTPUT_LOG EXIT_CODE_FILE SESSION_ID_FILE
   # Codex wrapper reads this to decide resume behavior and JSON parsing.
@@ -832,14 +920,6 @@ ralph_run_plan_invoke_codex() {
     unset RALPH_RUN_PLAN_RESUME_BARE
   else
     unset RALPH_RUN_PLAN_RESUME_BARE
-  fi
-
-  if [[ -n "${CODEX_CLI:-}" ]]; then
-    # Executable name or path for the Codex binary (wrapper reads CODEX_PLAN_CLI).
-    export CODEX_PLAN_CLI="$CODEX_CLI"
-  elif [[ -z "${CODEX_PLAN_CLI:-}" ]] && command -v codex &>/dev/null; then
-    # Default binary on PATH when CODEX_CLI and CODEX_PLAN_CLI were unset.
-    export CODEX_PLAN_CLI="codex"
   fi
 
   if [[ -n "${SELECTED_MODEL:-}" && "$SELECTED_MODEL" != "auto" ]]; then
@@ -862,12 +942,18 @@ ralph_run_plan_invoke_codex() {
   if [[ -n "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON:-}" && "${RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON}" != "[]" ]]; then
     _agent_mcp_present=1
   fi
-  local _resolver_catalog_present=0
-  if [[ -n "${RALPH_RUNTIME_MCP_RESOLVE_PATH:-}" && -f "$RALPH_RUNTIME_MCP_RESOLVE_PATH" ]]; then
-    _resolver_catalog_present=1
-  fi
+  # The mere existence of a resolver catalog is not a reason to build an
+  # overlay. Codex natively loads ~/.codex/config.toml and the trusted project
+  # .codex/config.toml, so ambient servers already reach the model without any
+  # --config override. Treating "ambient servers exist" as an overlay trigger
+  # sent runs with RALPH_MODE=no down the Ralph-only generator, which always
+  # emits an mcp_servers.ralph entry; that server refuses to start under
+  # RALPH_MODE=no and took the whole Codex session down with
+  # "required MCP servers failed to initialize". Overlay only when Ralph's own
+  # server is actually wanted, or when an agent declared overrides that Codex
+  # has no other way to express.
   local _mcp_overlay_required=0
-  if [[ "$_ralph_mcp_active" == "1" || "$_agent_mcp_present" == "1" || "$_resolver_catalog_present" == "1" ]]; then
+  if [[ "$_ralph_mcp_active" == "1" || "$_agent_mcp_present" == "1" ]]; then
     _mcp_overlay_required=1
   fi
   local codex_mcp_config_path=""
@@ -894,6 +980,23 @@ ralph_run_plan_invoke_codex() {
     # per-run --config overrides stay accurate for both paths.
     if jq -e '.mcp_servers // empty' "$codex_mcp_config_path" >/dev/null 2>&1; then
       codex_mcp_effective_catalog=1
+    fi
+
+    # Ambient-MCP boundary rule (see run_plan_invoke_codex_mcp_config_prepare):
+    # record which composition this run used so the limitation is visible
+    # rather than silent when the reconstructed-catalog fallback was needed.
+    local _codex_mcp_overlay_decision
+    if [[ "$codex_mcp_effective_catalog" == "1" ]]; then
+      if [[ "$_ralph_mcp_active" == "1" ]]; then
+        _codex_mcp_overlay_decision="profile_ralph_agent_overrides_reconstructed_catalog"
+      else
+        _codex_mcp_overlay_decision="profile_raw_agent_overrides_reconstructed_catalog"
+      fi
+    else
+      _codex_mcp_overlay_decision="profile_ralph_layered_native_config_toml"
+    fi
+    if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
+      runtime_overlay_set_mcp_override_decisions "$_codex_mcp_overlay_decision"
     fi
 
     local validation_error
@@ -943,10 +1046,15 @@ ralph_run_plan_invoke_codex() {
           ;;
       esac
     fi
-  elif declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
-    runtime_overlay_set_mcp_effective "false"
+  else
+    if declare -F runtime_overlay_set_mcp_effective >/dev/null 2>&1; then
+      runtime_overlay_set_mcp_effective "false"
+    fi
     if declare -F runtime_overlay_set_proxy_shell_compact_effective >/dev/null 2>&1; then
       runtime_overlay_set_proxy_shell_compact_effective "false"
+    fi
+    if declare -F runtime_overlay_set_mcp_override_decisions >/dev/null 2>&1; then
+      runtime_overlay_set_mcp_override_decisions "raw_native_no_overlay"
     fi
   fi
 
@@ -955,9 +1063,16 @@ ralph_run_plan_invoke_codex() {
   local -a _codex_structured_output_args=()
   run_plan_invoke_common_add_structured_output_flag _codex_structured_output_args codex "${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}"
 
+  # nativeSubagents=off uses --config agents.enabled=false (proven deny). inherit
+  # leaves argv untouched so ambient multi-agent tools stay available.
+  local subagents_mode
+  subagents_mode="$(ralph_run_plan_native_subagents_mode)" || return 1
+
   run_plan_invoke_codex_cli() {
     local cli="${CODEX_PLAN_CLI:-${CURSOR_PLAN_CLI:-codex}}"
     local sandbox="${CODEX_PLAN_SANDBOX:-workspace-write}"
+    local agent_workspace="${RALPH_AGENT_WORKSPACE:-$WORKSPACE}"
+    local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$agent_workspace/.ralph-workspace}"
     local -a args=()
 
     case "$sandbox" in
@@ -1001,10 +1116,18 @@ ralph_run_plan_invoke_codex() {
     local user_runtime_root="${RALPH_GLOBAL_RUNTIME_HOME:-$HOME}/.codex"
     if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
       if [[ "${CODEX_PLAN_NO_ADD_AGENTS_DIR:-0}" != "1" ]]; then
-        local _agent_ws_abs
-        _agent_ws_abs="$(cd "${RALPH_AGENT_WORKSPACE:-$WORKSPACE}" && pwd)"
-        mkdir -p "$_agent_ws_abs/.ralph-workspace"
-        args+=(--add-dir "$_agent_ws_abs/.ralph-workspace")
+        local _agent_ws_abs _state_root_abs
+        _agent_ws_abs="$(cd "$agent_workspace" && pwd)"
+        mkdir -p "$state_root"
+        _state_root_abs="$(cd "$state_root" && pwd)"
+        if [[ "$_state_root_abs" == "$_agent_ws_abs/.ralph-workspace" ]]; then
+          args+=(--add-dir "$_agent_ws_abs/.ralph-workspace")
+        else
+          # Three-root runs keep durable artifacts outside the model's project
+          # tree. Grant exactly that state root instead of creating a shadow
+          # .ralph-workspace under the agent workspace.
+          args+=(--add-dir "$_state_root_abs")
+        fi
       fi
       if [[ -n "${CODEX_GLOBAL_RUNTIME_ROOT:-}" ]] && [[ -d "$CODEX_GLOBAL_RUNTIME_ROOT" ]]; then
         global_runtime_root="$CODEX_GLOBAL_RUNTIME_ROOT"
@@ -1036,7 +1159,7 @@ ralph_run_plan_invoke_codex() {
         :
         ;;
       *)
-        if ! git -C "$WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        if ! git -C "$agent_workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
           args+=(--skip-git-repo-check)
         fi
         ;;
@@ -1075,6 +1198,10 @@ ralph_run_plan_invoke_codex() {
       fi
     fi
 
+    if [[ "$subagents_mode" == "off" ]]; then
+      _run_plan_invoke_codex_append_config args 'agents.enabled=false'
+    fi
+
     if [[ "${RALPH_PLAN_CLI_RESUME:-0}" == "1" || "${RALPH_PLAN_CAPTURE_USAGE:-1}" == "1" ]]; then
       args+=(--json)
     fi
@@ -1092,7 +1219,7 @@ ralph_run_plan_invoke_codex() {
 
     args+=("$PROMPT")
 
-    cd "$WORKSPACE" || {
+    cd "$agent_workspace" || {
       return 1
     }
     run_plan_invoke_common_launch_cli codex "$cli" "${args[@]}"
@@ -1111,6 +1238,1067 @@ ralph_run_plan_invoke_codex() {
   if declare -F runtime_overlay_write_summary >/dev/null 2>&1; then
     runtime_overlay_write_summary || true
   fi
+}
+
+# Graph-only Codex app-server approval transport (request capture).
+# Feature detection is help-only and never starts a model. Live capture talks
+# to a caller-supplied stdio JSON-RPC command (tests use a fake server).
+# Normal non-graph `ralph_run_plan_invoke_codex` does not call these helpers.
+
+run_plan_invoke_codex_app_server_graph_enabled() {
+  case "${RALPH_GRAPH_APPROVAL:-}" in
+    1|true|yes|on)
+      return 0
+      ;;
+  esac
+  [[ -n "${RALPH_GRAPH_NODE_ID:-}" ]]
+}
+
+_run_plan_invoke_codex_app_server_capability_missing() {
+  local cli_name="${1:-codex}"
+  local app_help
+  local -a missing=()
+
+  if ! command -v "$cli_name" >/dev/null 2>&1; then
+    printf '%s\n' "codex cli"
+    return 0
+  fi
+
+  if ! app_help="$("$cli_name" app-server --help 2>/dev/null)"; then
+    missing+=("codex app-server")
+    printf '%s\n' "${missing[@]}"
+    return 0
+  fi
+
+  if [[ "$app_help" != *"app-server"* && "$app_help" != *"initialize"* && "$app_help" != *"JSON-RPC"* && "$app_help" != *"json-rpc"* && "$app_help" != *"jsonrpc"* ]]; then
+    missing+=("codex app-server protocol")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf '%s\n' "${missing[@]}"
+  fi
+}
+
+run_plan_invoke_codex_app_server_supported() {
+  local cli_name="${1:-${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}}"
+  local missing
+  missing="$(_run_plan_invoke_codex_app_server_capability_missing "$cli_name")"
+  [[ -z "$missing" ]]
+}
+
+run_plan_invoke_codex_app_server_is_approval_method() {
+  case "${1:-}" in
+    item/commandExecution/requestApproval|item/fileChange/requestApproval|item/permissions/requestApproval)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# run_plan_invoke_codex_app_server_capture_request <json-rpc-object>
+# Prints one compact JSON object with thread, turn, item, requestType,
+# resource, and choices. Fail-closed on missing identity or non-approval methods.
+run_plan_invoke_codex_app_server_capture_request() {
+  local raw="${1:-}"
+  local captured
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: Codex app-server approval capture requires a JSON-RPC object" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex app-server approval capture" >&2
+    return 1
+  fi
+
+  captured="$(printf '%s' "$raw" | jq -ce '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      elif ($v | type) == "array" then ($v | map(tostring) | join(" "))
+      else "" end;
+    def choices_default($type):
+      if $type == "file" then ["accept","acceptForSession","decline"]
+      elif $type == "network" then ["accept","acceptForSession","applyNetworkPolicyAmendment","decline"]
+      elif $type == "permissions" then ["grant-subset"]
+      else ["accept","acceptForSession","acceptWithExecpolicyAmendment","decline"] end;
+    if type != "object" then
+      error("Codex app-server approval capture requires a JSON-RPC object")
+    elif (has("id") | not) then
+      error("Codex app-server approval request is missing JSON-RPC id")
+    elif (.method | type) != "string" then
+      error("Codex app-server message is not an approval request")
+    elif (.method != "item/commandExecution/requestApproval"
+          and .method != "item/fileChange/requestApproval"
+          and .method != "item/permissions/requestApproval") then
+      error("Codex app-server message is not an approval request: \(.method)")
+    else
+      (.params // {}) as $p
+      | (if .method == "item/fileChange/requestApproval" then "file"
+         elif .method == "item/permissions/requestApproval" then "permissions"
+         elif ($p.networkApprovalContext | type) == "object" then "network"
+         else "command" end) as $type
+      | (str($p.threadId)) as $thread
+      | (str($p.turnId)) as $turn
+      | (str($p.itemId)) as $item
+      | (if $type == "file" then str($p.grantRoot)
+         elif $type == "network" then str($p.networkApprovalContext.host // $p.networkApprovalContext.hostname)
+         elif $type == "permissions" then
+           (if ($p.permissions.fileSystem.write | type) == "array"
+               and ($p.permissions.fileSystem.write | length) > 0 then
+              str($p.permissions.fileSystem.write[0])
+            elif $p.permissions.network.enabled == true then "network"
+            else "" end)
+         else
+           (str($p.command) | if . != "" then . else str($p.cwd) end)
+         end) as $resource
+      | (if ($p.availableDecisions | type) == "array" and ($p.availableDecisions | length) > 0 then
+           ($p.availableDecisions | map(select(type == "string" or type == "number") | tostring) | map(select(. != "")))
+         else choices_default($type) end) as $choices
+      | if $thread == "" or $turn == "" or $item == "" then
+          error("Codex app-server approval request is missing thread, turn, or item")
+        elif $resource == "" then
+          error("Codex app-server approval request is missing resource")
+        elif ($choices | length) == 0 then
+          error("Codex app-server approval request is missing choices")
+        else
+          {
+            schemaVersion: 1,
+            runtime: "codex",
+            thread: $thread,
+            turn: $turn,
+            item: $item,
+            requestType: $type,
+            resource: $resource,
+            choices: $choices,
+            requestId: .id,
+            method: .method
+          }
+          + (if ($p.permissions | type) == "object" then {permissions: $p.permissions} else {} end)
+          + (if $p.proposedExecpolicyAmendment != null then {proposedExecpolicyAmendment: $p.proposedExecpolicyAmendment} else {} end)
+          + (if ($p.networkApprovalContext | type) == "object" then {networkApprovalContext: $p.networkApprovalContext} else {} end)
+          + (if str($p.command) != "" then {command: str($p.command)} else {} end)
+        end
+    end
+  ' 2>/dev/null)" || {
+    echo "Error: Codex app-server approval capture failed" >&2
+    return 1
+  }
+
+  printf '%s\n' "$captured"
+}
+
+_run_plan_invoke_codex_graph_approval_ensure_adapter() {
+  if declare -F ralph_approval_adapter_capabilities >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan-approval-adapter.sh"
+}
+
+# run_plan_invoke_codex_graph_approval_capabilities [cli]
+# App-server can enforce once (accept) and run (acceptForSession). always-policy
+# stays unsupported: Codex has no native project-always lifetime Ralph can
+# enforce through app-server without ambient writes.
+run_plan_invoke_codex_graph_approval_capabilities() {
+  local cli_name="${1:-${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}}"
+  local live="false"
+  local proof
+
+  _run_plan_invoke_codex_graph_approval_ensure_adapter || return 1
+  if run_plan_invoke_codex_app_server_supported "$cli_name"; then
+    live="true"
+  fi
+  proof="$(jq -nc --argjson live "$live" '{
+    liveRequestStreaming: $live,
+    sameOperationResponse: $live,
+    sessionContinuation: true,
+    lifetimes: {once: true, run: true, "always-policy": false}
+  }')"
+  ralph_approval_adapter_capabilities codex "$proof"
+}
+
+# run_plan_invoke_codex_graph_approval_parse_permission <event-or-captured-json>
+# Elevates a Codex app-server approval (raw JSON-RPC or captured request) into
+# the G15 actionable contract. Choices/lifetimes come from Codex capabilities
+# (once+run), never from native accept/decline tokens and never always-policy.
+run_plan_invoke_codex_graph_approval_parse_permission() {
+  local raw="${1:-}"
+  local captured fields caps request_type tool action effect
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: Codex graph approval parse requires a permission event or request" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex graph approval parse" >&2
+    return 1
+  fi
+  if ! printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: Codex graph approval parse requires a JSON object" >&2
+    return 1
+  fi
+  _run_plan_invoke_codex_graph_approval_ensure_adapter || return 1
+
+  if printf '%s' "$raw" | jq -e '
+    def lower($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then ($v | ascii_downcase)
+      else "" end;
+    (lower(.tool // .permissionRequest.tool // "")) == "permission"
+    and (lower(.action // .permissionRequest.action // "")) == "permission"
+    and (lower(.effect // .permissionRequest.effect // "")) == "write"
+  ' >/dev/null 2>&1; then
+    ralph_approval_adapter_permission_unknown codex \
+      "generic permission/permission/write is not actionable"
+    return 0
+  fi
+
+  if printf '%s' "$raw" | jq -e 'has("requestId") and has("requestType") and has("resource")' >/dev/null 2>&1; then
+    captured="$raw"
+  elif printf '%s' "$raw" | jq -e 'has("method") and (.method | type) == "string"' >/dev/null 2>&1; then
+    if ! run_plan_invoke_codex_app_server_is_approval_method "$(printf '%s' "$raw" | jq -r '.method // empty')"; then
+      ralph_approval_adapter_permission_unknown codex \
+        "Codex permission input is not an approval request"
+      return 0
+    fi
+    captured="$(run_plan_invoke_codex_app_server_capture_request "$raw")" || {
+      ralph_approval_adapter_permission_unknown codex \
+        "Codex permission event is missing actionable identity"
+      return 0
+    }
+  else
+    ralph_approval_adapter_permission_unknown codex \
+      "Codex permission input lacks native session/request identity"
+    return 0
+  fi
+
+  request_type="$(printf '%s' "$captured" | jq -r '.requestType // empty')"
+  case "$request_type" in
+    command)
+      tool="bash"
+      action="execute"
+      effect="write"
+      ;;
+    file)
+      tool="edit"
+      action="edit"
+      effect="write"
+      ;;
+    network)
+      tool="webfetch"
+      action="fetch"
+      effect="network"
+      ;;
+    permissions)
+      tool="permissions"
+      action="grant"
+      effect="write"
+      ;;
+    *)
+      ralph_approval_adapter_permission_unknown codex \
+        "Codex permission event has an unknown request type"
+      return 0
+      ;;
+  esac
+
+  fields="$(printf '%s' "$captured" | jq -ce \
+    --arg tool "$tool" \
+    --arg action "$action" \
+    --arg effect "$effect" '
+    def str($v):
+      if $v == null then ""
+      elif ($v | type) == "string" then $v
+      elif ($v | type) == "number" then ($v | tostring)
+      else "" end;
+    {
+      runtime: "codex",
+      sessionId: str(.thread // .sessionId // ""),
+      nativeRequestId: str(.requestId // .item // .id // ""),
+      tool: $tool,
+      action: $action,
+      resource: str(.resource // .command // ""),
+      effect: $effect,
+      reason: ("Codex " + $tool + " " + $action + " requires approval for " + str(.resource // .command // "")),
+      expiresAt: null
+    }
+  ' 2>/dev/null)" || {
+    ralph_approval_adapter_permission_unknown codex \
+      "Codex permission event is missing actionable identity"
+    return 0
+  }
+
+  caps="$(run_plan_invoke_codex_graph_approval_capabilities "${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}")" || return 1
+  ralph_approval_adapter_build_permission_record "$fields" "$caps"
+}
+
+# run_plan_invoke_codex_app_server_capture_from_command <command> [args...]
+# Graph-only. Starts the command as a stdio JSON-RPC server, sends initialize
+# plus initialized, and prints the first captured approval request.
+run_plan_invoke_codex_app_server_capture_from_command() {
+  local cmd="${1:-}"
+  shift || true
+  local tmpdir to_srv from_srv captured rc=0
+  local timeout_raw timeout=5
+
+  if [[ -z "$cmd" ]]; then
+    echo "Error: Codex app-server capture requires a JSON-RPC command" >&2
+    return 1
+  fi
+  if ! run_plan_invoke_codex_app_server_graph_enabled; then
+    echo "Error: Codex app-server approval capture is graph-only" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex app-server approval capture" >&2
+    return 1
+  fi
+  if [[ ! -x "$cmd" ]] && ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: Codex app-server command not found: $cmd" >&2
+    return 1
+  fi
+
+  timeout_raw="${RALPH_CODEX_APP_SERVER_CAPTURE_TIMEOUT:-5}"
+  if [[ "$timeout_raw" =~ ^[1-9][0-9]*$ ]]; then
+    timeout="$timeout_raw"
+  fi
+
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ralph-codex-app-server.XXXXXX")" || {
+    echo "Error: failed to create Codex app-server capture temp dir" >&2
+    return 1
+  }
+  to_srv="$tmpdir/to-server.fifo"
+  from_srv="$tmpdir/from-server.fifo"
+  if ! mkfifo "$to_srv" "$from_srv" 2>/dev/null; then
+    rm -rf "$tmpdir"
+    echo "Error: failed to create Codex app-server capture fifos" >&2
+    return 1
+  fi
+
+  captured="$(
+    "$cmd" "$@" <"$to_srv" >"$from_srv" 2>"$tmpdir/stderr.log" &
+    local pid=$!
+    local line method sent_initialized=0 read_status=0
+    exec 3>"$to_srv"
+    exec 4<"$from_srv"
+    trap 'exec 3>&- 4<&-; kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+    printf '%s\n' '{"id":0,"method":"initialize","params":{"clientInfo":{"name":"ralph","title":"Ralph","version":"1"}}}' >&3
+    while true; do
+      read_status=0
+      IFS= read -r -t "$timeout" line <&4 || read_status=$?
+      if [[ "$read_status" -ne 0 ]]; then
+        echo "Error: Codex app-server did not emit an approval request" >&2
+        exit 1
+      fi
+      [[ -n "$line" ]] || continue
+      if ! printf '%s' "$line" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        continue
+      fi
+      if [[ "$sent_initialized" == "0" ]] && printf '%s' "$line" | jq -e 'has("result")' >/dev/null 2>&1; then
+        printf '%s\n' '{"method":"initialized","params":{}}' >&3
+        sent_initialized=1
+        continue
+      fi
+      method="$(printf '%s' "$line" | jq -r '.method // empty')"
+      if run_plan_invoke_codex_app_server_is_approval_method "$method"; then
+        run_plan_invoke_codex_app_server_capture_request "$line" || exit 1
+        exit 0
+      fi
+    done
+  )" || rc=$?
+
+  rm -rf "$tmpdir"
+  if [[ "$rc" -ne 0 || -z "$captured" ]]; then
+    [[ "$rc" -ne 0 ]] || echo "Error: Codex app-server did not emit an approval request" >&2
+    return 1
+  fi
+  printf '%s\n' "$captured"
+}
+
+# Graph-only Codex app-server approval transport (response + lifecycle).
+# Sessions stay alive across the operator wait. Decisions map to native
+# Codex JSON-RPC results. Duplicate `serverRequest/resolved` is idempotent.
+# Unsupported protocol or an unadvertised native choice falls back safely.
+
+_run_plan_invoke_codex_app_server_timeout() {
+  local timeout_raw="${RALPH_CODEX_APP_SERVER_CAPTURE_TIMEOUT:-5}"
+  if [[ "$timeout_raw" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$timeout_raw"
+  else
+    printf '5'
+  fi
+}
+
+_run_plan_invoke_codex_app_server_registry_path() {
+  printf '%s' "${RALPH_CODEX_APP_SERVER_REGISTRY:-${TMPDIR:-/tmp}/ralph-codex-app-server.sessions}"
+}
+
+_run_plan_invoke_codex_app_server_registry_add() {
+  local session_dir="$1" registry
+  registry="$(_run_plan_invoke_codex_app_server_registry_path)"
+  mkdir -p "$(dirname "$registry")" 2>/dev/null || true
+  if [[ -f "$registry" ]] && grep -Fxq -- "$session_dir" "$registry" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$session_dir" >>"$registry"
+}
+
+_run_plan_invoke_codex_app_server_registry_remove() {
+  local session_dir="$1" registry tmp
+  registry="$(_run_plan_invoke_codex_app_server_registry_path)"
+  [[ -f "$registry" ]] || return 0
+  tmp="${registry}.tmp.$$"
+  grep -Fxv -- "$session_dir" "$registry" >"$tmp" 2>/dev/null || true
+  mv "$tmp" "$registry" 2>/dev/null || rm -f "$tmp"
+}
+
+_run_plan_invoke_codex_app_server_normalize_ralph_decision() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  case "$raw" in
+    once|allow-once) printf 'once' ;;
+    session|allow-run|run) printf 'session' ;;
+    deny) printf 'deny' ;;
+    amendment|exact|exact-amendment|acceptwithexecpolicyamendment|applynetworkpolicyamendment)
+      printf 'amendment'
+      ;;
+    cancel|cancellation) printf 'cancel' ;;
+    *) return 1 ;;
+  esac
+}
+
+# run_plan_invoke_codex_app_server_fallback [reason]
+# Safe overlay-fallback object when app-server or a native choice is unsupported.
+run_plan_invoke_codex_app_server_fallback() {
+  local reason="${1:-unsupported}"
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "{\"schemaVersion\":1,\"runtime\":\"codex\",\"fallback\":true,\"reason\":\"${reason}\",\"path\":\"overlay\"}"
+    return 0
+  fi
+  jq -nc --arg reason "$reason" '{
+    schemaVersion: 1,
+    runtime: "codex",
+    fallback: true,
+    reason: $reason,
+    path: "overlay"
+  }'
+}
+
+# run_plan_invoke_codex_app_server_map_decision <captured-or-raw-json> <ralph-decision> [extra-json]
+# Maps once->accept, session->acceptForSession, deny->decline, exact amendment
+# -> acceptWithExecpolicyAmendment or applyNetworkPolicyAmendment. Permissions
+# grants copy only the requested subset. Unadvertised native choices fall back.
+run_plan_invoke_codex_app_server_map_decision() {
+  local raw="${1:-}"
+  local decision_raw="${2:-}"
+  local extra="${3:-}"
+  local captured ralph request_type native scope result_json mapped
+
+  if [[ -z "$raw" ]]; then
+    echo "Error: Codex app-server decision mapping requires a captured request" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex app-server decision mapping" >&2
+    return 1
+  fi
+  if ! ralph="$(_run_plan_invoke_codex_app_server_normalize_ralph_decision "$decision_raw")"; then
+    echo "Error: Codex app-server decision is unsupported: ${decision_raw:-<empty>}" >&2
+    return 1
+  fi
+  if [[ -n "$extra" ]] && ! printf '%s' "$extra" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    echo "Error: Codex app-server decision extra must be a JSON object" >&2
+    return 1
+  fi
+  [[ -n "$extra" ]] || extra='{}'
+
+  if printf '%s' "$raw" | jq -e 'has("requestId") and has("requestType") and has("choices")' >/dev/null 2>&1; then
+    captured="$raw"
+  elif printf '%s' "$raw" | jq -e 'has("method") and (.method | type) == "string" and (.method | test("requestApproval$"))' >/dev/null 2>&1; then
+    captured="$(run_plan_invoke_codex_app_server_capture_request "$raw")" || return 1
+  else
+    echo "Error: Codex app-server decision mapping requires a captured or raw approval request" >&2
+    return 1
+  fi
+
+  request_type="$(printf '%s' "$captured" | jq -r '.requestType // empty')"
+  native=""
+  scope=""
+  case "$ralph" in
+    once)
+      if [[ "$request_type" == "permissions" ]]; then
+        native="grant-subset"
+        scope="turn"
+      else
+        native="accept"
+      fi
+      ;;
+    session)
+      if [[ "$request_type" == "permissions" ]]; then
+        native="grant-subset"
+        scope="session"
+      else
+        native="acceptForSession"
+      fi
+      ;;
+    deny)
+      native="decline"
+      ;;
+    cancel)
+      native="cancel"
+      ;;
+    amendment)
+      case "$request_type" in
+        network) native="applyNetworkPolicyAmendment" ;;
+        command) native="acceptWithExecpolicyAmendment" ;;
+        *)
+          run_plan_invoke_codex_app_server_fallback "unsupported-decision"
+          return 2
+          ;;
+      esac
+      ;;
+  esac
+
+  if [[ "$native" != "cancel" ]] && ! printf '%s' "$captured" | jq -e --arg n "$native" '.choices | index($n) != null' >/dev/null 2>&1; then
+    run_plan_invoke_codex_app_server_fallback "unsupported-decision"
+    return 2
+  fi
+
+  result_json="$(
+    printf '%s' "$captured" | jq -c \
+      --arg ralph "$ralph" \
+      --arg native "$native" \
+      --arg scope "$scope" \
+      --argjson extra "$extra" '
+      def argv($s):
+        if ($s | type) == "array" then $s
+        elif ($s | type) == "string" then ($s | split(" ") | map(select(. != "")))
+        else [] end;
+      . as $req
+      | if $native == "grant-subset" then
+          (if ($extra.permissions | type) == "object" then $extra.permissions
+           elif ($req.permissions | type) == "object" then $req.permissions
+           else {} end) as $perms
+          | {scope: (if $scope == "" then "turn" else $scope end), permissions: $perms}
+        elif $native == "acceptWithExecpolicyAmendment" then
+          (if ($extra.execpolicy_amendment | type) == "array" then $extra.execpolicy_amendment
+           elif ($req.proposedExecpolicyAmendment | type) == "array" then $req.proposedExecpolicyAmendment
+           elif ($req.proposedExecpolicyAmendment.command | type) == "array" then $req.proposedExecpolicyAmendment.command
+           else argv($req.command // $req.resource // "") end) as $amend
+          | {decision: {acceptWithExecpolicyAmendment: {execpolicy_amendment: $amend}}}
+        elif $native == "applyNetworkPolicyAmendment" then
+          (if ($extra.network_policy_amendment | type) == "object" then $extra.network_policy_amendment
+           else {
+             host: ($req.networkApprovalContext.host // $req.resource),
+             action: ($extra.action // "allow")
+           } end) as $amend
+          | {decision: {applyNetworkPolicyAmendment: {network_policy_amendment: $amend}}}
+        else
+          {decision: $native}
+        end
+    '
+  )" || {
+    echo "Error: Codex app-server decision mapping failed" >&2
+    return 1
+  }
+
+  mapped="$(
+    printf '%s' "$captured" | jq -nc \
+      --argjson req "$captured" \
+      --argjson result "$result_json" \
+      --arg ralph "$ralph" \
+      --arg native "$native" '{
+        schemaVersion: 1,
+        runtime: "codex",
+        fallback: false,
+        ralphDecision: $ralph,
+        native: $native,
+        requestId: $req.requestId,
+        thread: $req.thread,
+        turn: $req.turn,
+        item: $req.item,
+        requestType: $req.requestType,
+        response: {id: $req.requestId, result: $result}
+      }'
+  )" || {
+    echo "Error: Codex app-server decision mapping failed" >&2
+    return 1
+  }
+
+  printf '%s\n' "$mapped"
+}
+
+_run_plan_invoke_codex_app_server_write_broker() {
+  local dest="$1"
+  cat >"$dest" <<'BROKER'
+#!/usr/bin/env bash
+set -euo pipefail
+trap '' HUP
+session_dir="$1"
+shift
+cmd="$1"
+shift || true
+
+to_srv="$session_dir/to-server.fifo"
+from_srv="$session_dir/from-server.fifo"
+
+teardown_server() {
+  exec 3>&- 4<&- 2>/dev/null || true
+  if [[ -n "${pid:-}" ]]; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+}
+
+# Open both fifos read-write so startup cannot deadlock if the other
+# end is late or the server exits during initialize.
+exec 3<>"$to_srv"
+exec 4<>"$from_srv"
+"$cmd" "$@" <&3 >&4 2>"$session_dir/stderr.log" &
+pid=$!
+printf '%s\n' "$pid" >"$session_dir/pid"
+trap 'teardown_server' EXIT
+
+printf '%s\n' '{"id":0,"method":"initialize","params":{"clientInfo":{"name":"ralph","title":"Ralph","version":"1"}}}' >&3
+
+sent_initialized=0
+state="starting"
+printf '%s\n' "$state" >"$session_dir/state"
+
+write_result() {
+  local duplicate="$1" resolved="$2"
+  local sent="{}"
+  if [[ -f "$session_dir/response.sent.json" ]]; then
+    sent="$(cat "$session_dir/response.sent.json")"
+  fi
+  jq -nc --argjson sent "$sent" --argjson duplicate "$duplicate" --argjson resolved "$resolved" '{
+    schemaVersion: 1,
+    duplicate: $duplicate,
+    resolved: $resolved,
+    response: $sent
+  }' >"$session_dir/result.json"
+}
+
+handle_line() {
+  local line="$1" method
+  [[ -n "$line" ]] || return 0
+  if ! printf '%s' "$line" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "$sent_initialized" == "0" ]] && printf '%s' "$line" | jq -e 'has("result")' >/dev/null 2>&1; then
+    printf '%s\n' '{"method":"initialized","params":{}}' >&3
+    sent_initialized=1
+    return 0
+  fi
+  method="$(printf '%s' "$line" | jq -r '.method // empty')"
+  if [[ "$method" == "item/commandExecution/requestApproval" || "$method" == "item/fileChange/requestApproval" || "$method" == "item/permissions/requestApproval" ]]; then
+    printf '%s\n' "$line" >"$session_dir/raw-request.json"
+    return 0
+  fi
+  if [[ "$method" == "serverRequest/resolved" ]]; then
+    printf '%s\n' "$line" >"$session_dir/resolved.json"
+    state="resolved"
+    printf '%s\n' "$state" >"$session_dir/state"
+    if [[ ! -f "$session_dir/result.json" ]]; then
+      if [[ -f "$session_dir/response.sent.json" ]]; then
+        write_result false true
+      else
+        write_result true true
+      fi
+    fi
+  fi
+}
+
+# Capture helper is inlined enough to record raw; parent parses captured JSON.
+while true; do
+  if [[ -f "$session_dir/close.flag" ]]; then
+    printf '%s\n' "closed" >"$session_dir/state"
+    exit 0
+  fi
+  if [[ -f "$session_dir/response.inbox" ]]; then
+    current_state="$(cat "$session_dir/state" 2>/dev/null || true)"
+    if [[ "$current_state" == "resolved" || "$current_state" == "responded" || -f "$session_dir/response.sent.json" ]]; then
+      mv "$session_dir/response.inbox" "$session_dir/response.inbox.ignored" 2>/dev/null || rm -f "$session_dir/response.inbox"
+      write_result true true
+    else
+      cat "$session_dir/response.inbox" >&3
+      mv "$session_dir/response.inbox" "$session_dir/response.sent.json"
+      state="responded"
+      printf '%s\n' "$state" >"$session_dir/state"
+    fi
+  fi
+  read_status=0
+  IFS= read -r -t 0.2 line <&4 || read_status=$?
+  if [[ "$read_status" -eq 0 ]]; then
+    handle_line "${line:-}"
+    if [[ -f "$session_dir/raw-request.json" && ! -f "$session_dir/request.ready" ]]; then
+      printf '%s\n' "1" >"$session_dir/request.ready"
+      if [[ "$state" == "starting" ]]; then
+        state="waiting"
+        printf '%s\n' "$state" >"$session_dir/state"
+      fi
+    fi
+  elif ! kill -0 "$pid" 2>/dev/null; then
+    # The server can exit with lines still buffered in the fifo -- it may write
+    # the approval request and terminate in the same breath. Exiting on the
+    # death signal alone discards those bytes, so a fast server is
+    # indistinguishable from one that never emitted a request. Drain first.
+    while IFS= read -r -t 0.2 line <&4; do
+      handle_line "${line:-}"
+      if [[ -f "$session_dir/raw-request.json" && ! -f "$session_dir/request.ready" ]]; then
+        printf '%s\n' "1" >"$session_dir/request.ready"
+        if [[ "$state" == "starting" ]]; then
+          state="waiting"
+          printf '%s\n' "$state" >"$session_dir/state"
+        fi
+      fi
+    done
+    if [[ ! -f "$session_dir/close.flag" && ! -f "$session_dir/request.ready" ]]; then
+      printf '%s\n' "server-exit" >"$session_dir/failed"
+    fi
+    printf '%s\n' "closed" >"$session_dir/state"
+    exit 0
+  fi
+done
+BROKER
+  chmod +x "$dest"
+}
+
+_run_plan_invoke_codex_app_server_wait_file() {
+  local path="$1"
+  local timeout="$2"
+  local start="$SECONDS"
+  while (( SECONDS - start < timeout )); do
+    [[ -f "$path" ]] && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+_run_plan_invoke_codex_app_server_reap() {
+  local target="$1" waited=0
+  [[ -n "$target" ]] || return 0
+  kill "$target" 2>/dev/null || true
+  while (( waited < 20 )); do
+    kill -0 "$target" 2>/dev/null || return 0
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  kill -9 "$target" 2>/dev/null || true
+}
+
+run_plan_invoke_codex_app_server_session_alive() {
+  local session_dir="${1:-}"
+  local pid
+  [[ -n "$session_dir" && -d "$session_dir" ]] || return 1
+  [[ -f "$session_dir/state" ]] || return 1
+  case "$(cat "$session_dir/state" 2>/dev/null || true)" in
+    closed|failed) return 1 ;;
+  esac
+  pid="$(cat "$session_dir/pid" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+# run_plan_invoke_codex_app_server_session_start <command> [args...]
+# Graph-only. Starts the command as a stdio JSON-RPC server, captures the first
+# approval request, and keeps the server alive until close/cleanup.
+run_plan_invoke_codex_app_server_session_start() {
+  local cmd="${1:-}"
+  shift || true
+  local session_dir timeout captured rc=0 broker_pid
+
+  if [[ -z "$cmd" ]]; then
+    echo "Error: Codex app-server session requires a JSON-RPC command" >&2
+    return 1
+  fi
+  if ! run_plan_invoke_codex_app_server_graph_enabled; then
+    echo "Error: Codex app-server approval capture is graph-only" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex app-server approval capture" >&2
+    return 1
+  fi
+  if [[ ! -x "$cmd" ]] && ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: Codex app-server command not found: $cmd" >&2
+    return 1
+  fi
+
+  timeout="$(_run_plan_invoke_codex_app_server_timeout)"
+  session_dir="$(mktemp -d "${TMPDIR:-/tmp}/ralph-codex-app-server-session.XXXXXX")" || {
+    echo "Error: failed to create Codex app-server session dir" >&2
+    return 1
+  }
+  if ! mkfifo "$session_dir/to-server.fifo" "$session_dir/from-server.fifo" 2>/dev/null; then
+    rm -rf "$session_dir"
+    echo "Error: failed to create Codex app-server session fifos" >&2
+    return 1
+  fi
+
+  _run_plan_invoke_codex_app_server_write_broker "$session_dir/broker.sh"
+  _run_plan_invoke_codex_app_server_registry_add "$session_dir"
+
+  nohup "$session_dir/broker.sh" "$session_dir" "$cmd" "$@" \
+    >"$session_dir/broker.stdout" 2>"$session_dir/broker.log" &
+  broker_pid=$!
+  printf '%s\n' "$broker_pid" >"$session_dir/broker.pid"
+  disown "$broker_pid" 2>/dev/null || true
+
+  if ! _run_plan_invoke_codex_app_server_wait_file "$session_dir/request.ready" "$timeout"; then
+    if [[ -f "$session_dir/failed" ]]; then
+      echo "Error: Codex app-server session failed before an approval request" >&2
+    else
+      echo "Error: Codex app-server did not emit an approval request" >&2
+    fi
+    if [[ -s "$session_dir/broker.log" ]]; then
+      echo "Error: Codex app-server broker log:" >&2
+      tail -n 20 "$session_dir/broker.log" >&2 || true
+    fi
+    if [[ -s "$session_dir/stderr.log" ]]; then
+      echo "Error: Codex app-server stderr:" >&2
+      tail -n 20 "$session_dir/stderr.log" >&2 || true
+    fi
+    run_plan_invoke_codex_app_server_close "$session_dir" supervisor >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  captured="$(run_plan_invoke_codex_app_server_capture_request "$(cat "$session_dir/raw-request.json")")" || rc=$?
+  if [[ "$rc" -ne 0 || -z "$captured" ]]; then
+    run_plan_invoke_codex_app_server_close "$session_dir" supervisor >/dev/null 2>&1 || true
+    echo "Error: Codex app-server approval capture failed" >&2
+    return 1
+  fi
+  printf '%s\n' "$captured" >"$session_dir/request.json"
+
+  jq -nc \
+    --arg dir "$session_dir" \
+    --argjson request "$captured" \
+    --arg pid "$(cat "$session_dir/pid" 2>/dev/null || printf '')" \
+    --arg brokerPid "$(cat "$session_dir/broker.pid" 2>/dev/null || printf '')" '{
+      schemaVersion: 1,
+      runtime: "codex",
+      fallback: false,
+      sessionDir: $dir,
+      pid: (if $pid == "" then null else ($pid | tonumber) end),
+      brokerPid: (if $brokerPid == "" then null else ($brokerPid | tonumber) end),
+      alive: true,
+      request: $request
+    }'
+}
+
+# run_plan_invoke_codex_app_server_respond <session-dir> <ralph-decision-or-mapped-json> [extra-json]
+run_plan_invoke_codex_app_server_respond() {
+  local session_dir="${1:-}"
+  local decision="${2:-}"
+  local extra="${3:-}"
+  local mapped response_json timeout start state result_json map_rc
+
+  if [[ -z "$session_dir" || ! -d "$session_dir" ]]; then
+    echo "Error: Codex app-server respond requires a live session dir" >&2
+    return 1
+  fi
+  if [[ -z "$decision" ]]; then
+    echo "Error: Codex app-server respond requires a decision" >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is required for Codex app-server respond" >&2
+    return 1
+  fi
+
+  state="$(cat "$session_dir/state" 2>/dev/null || true)"
+  if [[ "$state" == "closed" ]]; then
+    echo "Error: Codex app-server session is closed" >&2
+    return 1
+  fi
+  if [[ "$state" == "resolved" || "$state" == "responded" || -f "$session_dir/response.sent.json" ]]; then
+    jq -nc \
+      --arg dir "$session_dir" \
+      --argjson resolved true '{
+        schemaVersion: 1,
+        runtime: "codex",
+        sessionDir: $dir,
+        duplicate: true,
+        resolved: $resolved,
+        reason: "already-resolved"
+      }'
+    return 0
+  fi
+
+  if printf '%s' "$decision" | jq -e 'type == "object" and has("response")' >/dev/null 2>&1; then
+    mapped="$decision"
+  else
+    if [[ ! -f "$session_dir/request.json" ]]; then
+      echo "Error: Codex app-server session is missing a captured request" >&2
+      return 1
+    fi
+    mapped="$(run_plan_invoke_codex_app_server_map_decision "$(cat "$session_dir/request.json")" "$decision" "$extra")" && map_rc=0 || map_rc=$?
+    if [[ "$map_rc" -eq 2 ]]; then
+      printf '%s\n' "$mapped"
+      return 2
+    fi
+    if [[ "$map_rc" -ne 0 ]]; then
+      return "$map_rc"
+    fi
+  fi
+  if printf '%s' "$mapped" | jq -e '.fallback == true' >/dev/null 2>&1; then
+    printf '%s\n' "$mapped"
+    return 2
+  fi
+
+  response_json="$(printf '%s' "$mapped" | jq -c '.response')"
+  rm -f "$session_dir/result.json"
+  printf '%s\n' "$response_json" >"$session_dir/response.inbox"
+
+  timeout="$(_run_plan_invoke_codex_app_server_timeout)"
+  start="$SECONDS"
+  while (( SECONDS - start < timeout )); do
+    if [[ -f "$session_dir/result.json" ]]; then
+      result_json="$(cat "$session_dir/result.json")"
+      jq -nc \
+        --arg dir "$session_dir" \
+        --argjson mapped "$mapped" \
+        --argjson result "$result_json" '{
+          schemaVersion: 1,
+          runtime: "codex",
+          sessionDir: $dir,
+          fallback: false,
+          duplicate: $result.duplicate,
+          resolved: $result.resolved,
+          ralphDecision: $mapped.ralphDecision,
+          native: $mapped.native,
+          response: $mapped.response
+        }'
+      return 0
+    fi
+    if [[ -f "$session_dir/resolved.json" && -f "$session_dir/response.sent.json" ]]; then
+      jq -nc \
+        --arg dir "$session_dir" \
+        --argjson mapped "$mapped" '{
+          schemaVersion: 1,
+          runtime: "codex",
+          sessionDir: $dir,
+          fallback: false,
+          duplicate: false,
+          resolved: true,
+          ralphDecision: $mapped.ralphDecision,
+          native: $mapped.native,
+          response: $mapped.response
+        }'
+      return 0
+    fi
+    sleep 0.05
+  done
+
+  if [[ -f "$session_dir/response.sent.json" ]]; then
+    jq -nc \
+      --arg dir "$session_dir" \
+      --argjson mapped "$mapped" '{
+        schemaVersion: 1,
+        runtime: "codex",
+        sessionDir: $dir,
+        fallback: false,
+        duplicate: false,
+        resolved: false,
+        ralphDecision: $mapped.ralphDecision,
+        native: $mapped.native,
+        response: $mapped.response
+      }'
+    return 0
+  fi
+
+  echo "Error: Codex app-server did not accept an approval response" >&2
+  return 1
+}
+
+# run_plan_invoke_codex_app_server_close <session-dir> [reason]
+# reason: completion | cancellation | supervisor. Idempotent.
+run_plan_invoke_codex_app_server_close() {
+  local session_dir="${1:-}"
+  local reason="${2:-completion}"
+  local pid broker_pid state mapped
+
+  if [[ -z "$session_dir" || ! -d "$session_dir" ]]; then
+    jq -nc --arg reason "$reason" '{schemaVersion:1,runtime:"codex",closed:true,reason:$reason,duplicate:true}'
+    return 0
+  fi
+
+  state="$(cat "$session_dir/state" 2>/dev/null || true)"
+  if [[ "$reason" == "cancellation" && "$state" == "waiting" ]]; then
+    mapped="$(run_plan_invoke_codex_app_server_map_decision "$(cat "$session_dir/request.json" 2>/dev/null || echo '{}')" cancel 2>/dev/null || true)"
+    if [[ -n "$mapped" ]] && printf '%s' "$mapped" | jq -e '.response' >/dev/null 2>&1; then
+      printf '%s\n' "$(printf '%s' "$mapped" | jq -c '.response')" >"$session_dir/response.inbox"
+      sleep 0.05
+    fi
+  fi
+
+  printf '%s\n' "$reason" >"$session_dir/close.reason"
+  printf '%s\n' "1" >"$session_dir/close.flag"
+
+  pid="$(cat "$session_dir/pid" 2>/dev/null || true)"
+  broker_pid="$(cat "$session_dir/broker.pid" 2>/dev/null || true)"
+  _run_plan_invoke_codex_app_server_wait_file "$session_dir/state" 1 || true
+  local start="$SECONDS"
+  while (( SECONDS - start < 2 )); do
+    if [[ -n "$broker_pid" ]] && ! kill -0 "$broker_pid" 2>/dev/null; then
+      break
+    fi
+    if [[ "$(cat "$session_dir/state" 2>/dev/null || true)" == "closed" ]] && \
+       { [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; }; then
+      break
+    fi
+    sleep 0.05
+  done
+
+  _run_plan_invoke_codex_app_server_reap "$pid"
+  _run_plan_invoke_codex_app_server_reap "$broker_pid"
+  printf '%s\n' "closed" >"$session_dir/state"
+  _run_plan_invoke_codex_app_server_registry_remove "$session_dir"
+
+  jq -nc --arg dir "$session_dir" --arg reason "$reason" '{
+    schemaVersion: 1,
+    runtime: "codex",
+    sessionDir: $dir,
+    closed: true,
+    reason: $reason
+  }'
+}
+
+# run_plan_invoke_codex_app_server_cleanup
+# Supervisor cleanup: close every tracked app-server session.
+run_plan_invoke_codex_app_server_cleanup() {
+  local registry session_dir
+  registry="$(_run_plan_invoke_codex_app_server_registry_path)"
+  if [[ ! -f "$registry" ]]; then
+    return 0
+  fi
+  while IFS= read -r session_dir; do
+    [[ -n "$session_dir" ]] || continue
+    run_plan_invoke_codex_app_server_close "$session_dir" supervisor >/dev/null 2>&1 || true
+  done <"$registry"
+  rm -f "$registry"
+}
+
+# run_plan_invoke_codex_app_server_start_or_fallback [cli] [app-server-args...]
+# Feature-detect without a model call. Unsupported protocol returns overlay fallback.
+run_plan_invoke_codex_app_server_start_or_fallback() {
+  local cli="${1:-${CODEX_PLAN_CLI:-${CODEX_CLI:-codex}}}"
+  shift || true
+  if ! run_plan_invoke_codex_app_server_graph_enabled; then
+    echo "Error: Codex app-server approval capture is graph-only" >&2
+    return 1
+  fi
+  if ! run_plan_invoke_codex_app_server_supported "$cli"; then
+    run_plan_invoke_codex_app_server_fallback "unsupported"
+    return 2
+  fi
+  run_plan_invoke_codex_app_server_session_start "$cli" app-server "$@"
 }
 
 # Direct execution: when invoked as a script (not sourced), treat $1 as prompt

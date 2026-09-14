@@ -7,7 +7,8 @@ source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/run-plan/run-plan-cor
 unset RALPH_RUN_PLAN_LIBRARY_ONLY
 
 json_field() {
-  printf '%s' "$1" | jq -r "$2"
+  # Bats merges stderr warnings into $output; take the final JSON payload line.
+  printf '%s\n' "$1" | awk 'END{print}' | jq -r "$2"
 }
 
 @test "plan_normalize_path resolves relative to workspace" {
@@ -777,7 +778,6 @@ pipeline:
   stages:
     - id: review
       runtime: codex
-      agent: code-review
       model: gpt-5
       sessionStrategy: resume
       contextBudget: lean
@@ -814,7 +814,6 @@ EOF
   run plan_pipeline_effective_metadata_json "$plan_file" review-1
   [ "$status" -eq 0 ]
   [ "$(json_field "$output" '.runtime')" = "codex" ]
-  [ "$(json_field "$output" '.agent')" = "code-review" ]
   [ "$(json_field "$output" '.model')" = "gpt-5" ]
   [ "$(json_field "$output" '.sessionStrategy')" = "resume" ]
   [ "$(json_field "$output" '.contextBudget')" = "lean" ]
@@ -836,13 +835,10 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
     - id: review
       runtime: codex
-      agent: code-review
     - id: qa
       runtime: claude
-      agent: qa
   parallelStages:
     - [research, review]
     - [qa]
@@ -862,7 +858,6 @@ EOF
   run plan_pipeline_effective_metadata_json "$plan_file" research-1
   [ "$status" -eq 0 ]
   [ "$(json_field "$output" '.runtime')" = "cursor" ]
-  [ "$(json_field "$output" '.agent')" = "research" ]
   rm "$plan_file"
 }
 
@@ -875,7 +870,6 @@ pipeline:
   stages:
     - id: review
       runtime: codex
-      agent: code-review
       produces:
         - path: shared/output.md
           required: false
@@ -908,7 +902,6 @@ pipeline:
   stages:
     - id: review
       runtime: claude
-      agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -922,12 +915,11 @@ EOF
   run plan_pipeline_effective_metadata_json "$plan_file" review-1
   [ "$status" -eq 0 ]
   [ "$(json_field "$output" '.runtime')" = "claude" ]
-  [ "$(json_field "$output" '.agent')" = "code-review" ]
   [ "$(json_field "$output" '.model')" = "gpt-5" ]
   rm "$plan_file"
 }
 
-@test "plan_pipeline_effective_metadata_json rejects a staged TODO overriding only runtime" {
+@test "plan_pipeline_effective_metadata_json accepts a staged TODO overriding only runtime" {
   plan_file="$(mktemp)"
   cat <<'EOF' > "$plan_file"
 ---
@@ -936,7 +928,6 @@ pipeline:
   stages:
     - id: review
       runtime: claude
-      agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -948,7 +939,329 @@ todos:
 EOF
 
   run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "codex" ]
+  rm "$plan_file"
+}
+
+@test "staged TODO overriding only runtime drops the baseline stage model" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      model: claude-4
+todos:
+  - id: review-1
+    stage: review
+    runtime: codex
+    content: review the change
+    verification: confirm outputs
+    status: pending
+---
+EOF
+
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "codex" ]
+  [ "$(json_field "$output" '.model')" = "" ]
+  rm "$plan_file"
+}
+
+@test "next TODO after a runtime-only switch sees baseline restore of runtime and model" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      model: claude-4
+todos:
+  - id: review-1
+    stage: review
+    runtime: codex
+    content: review the change on codex
+    verification: confirm outputs
+    status: pending
+  - id: review-2
+    stage: review
+    content: review the change on the baseline runtime
+    verification: confirm outputs
+    status: pending
+---
+EOF
+
+  run plan_pipeline_effective_metadata_json "$plan_file" review-2
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "claude" ]
+  [ "$(json_field "$output" '.model')" = "claude-4" ]
+  rm "$plan_file"
+}
+
+@test "generated-plan TODO overriding only runtime drops the baseline header model" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: generated-runtime-switch
+overview: Runtime-only TODO in a generated leaf plan
+runtime: cursor
+model: auto
+sessionStrategy: fresh
+todos:
+  - id: switch-runtime
+    runtime: claude
+    content: Switch runtime only; the header model must not carry across.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  run plan_pipeline_effective_metadata_json "$plan_file" switch-runtime
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "claude" ]
+  [ "$(json_field "$output" '.model')" = "" ]
+  rm "$plan_file"
+}
+
+@test "staged TODO overriding only runtime requires a fresh session" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      sessionStrategy: resume
+todos:
+  - id: review-1
+    stage: review
+    runtime: codex
+    content: review the change
+    verification: confirm outputs
+    status: pending
+---
+EOF
+
+  run plan_pipeline_validate_plan "$plan_file"
   [ "$status" -ne 0 ]
+  [[ "$output" == *"sessionStrategy: fresh"* ]]
+  rm "$plan_file"
+}
+
+@test "staged TODO overriding only runtime passes with an explicit fresh session" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      sessionStrategy: resume
+todos:
+  - id: review-1
+    stage: review
+    runtime: codex
+    sessionStrategy: fresh
+    content: review the change
+    verification: confirm outputs
+    status: pending
+---
+EOF
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "codex" ]
+  [ "$(json_field "$output" '.sessionStrategy')" = "fresh" ]
+  rm "$plan_file"
+}
+
+# --- mode: as the uniform public key (plans, not just workflows) -----------
+# AGENTS.md: authored frontmatter uses mode: sequential|dependency; a plain
+# plan (no kind: workflow) also accepts mode: standard, mapping 1:1 to the
+# internal execution: standard|orchestration|graph. execution: itself remains
+# a permanently accepted legacy alias (never removed, never documented as
+# current syntax).
+
+@test "plan mode: dependency validates the same as legacy execution: graph" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: mode-dependency-plan
+overview: A plain plan authored with mode instead of execution
+mode: dependency
+instructions: Execute one TODO at a time.
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+todos:
+  - id: research-1
+    stage: research
+    content: look into it
+    verification: confirm outputs
+    status: pending
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  rm "$plan_file"
+}
+
+@test "plan mode: sequential validates the same as legacy execution: orchestration" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: mode-sequential-plan
+overview: A plain plan authored with mode instead of execution
+mode: sequential
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    verification: confirm outputs
+    status: pending
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  rm "$plan_file"
+}
+
+@test "plan mode: standard validates a flat TODO queue with no pipeline" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: mode-standard-plan
+overview: A plain single-agent plan authored with mode instead of execution
+mode: standard
+todos:
+  - id: task-1
+    content: do a thing
+    verification: confirm it worked
+    status: pending
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  rm "$plan_file"
+}
+
+@test "plan mode: standard is rejected on a workflow (kind: workflow is always multi-stage)" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: bad-workflow-mode
+kind: workflow
+mode: standard
+overview: invalid combination
+pipeline:
+  stages:
+    - id: only
+      runtime: cursor
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid mode value"* ]]
+  rm "$plan_file"
+}
+
+@test "plan mode and execution together are rejected" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: mode-and-execution
+overview: mutually exclusive keys
+mode: dependency
+execution: graph
+pipeline:
+  stages:
+    - id: only
+      runtime: cursor
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mode and execution must not both be set"* ]]
+  rm "$plan_file"
+}
+
+@test "plan engine: is refused as a workflow-only legacy key" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+name: plan-with-engine
+overview: engine: never applied to plans
+engine: graph
+pipeline:
+  stages:
+    - id: only
+      runtime: cursor
+---
+EOF
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"engine: is a workflow-only legacy key"* ]]
+  rm "$plan_file"
+}
+
+@test "unstaged TODO overriding only runtime requires a fresh session at the plan header" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: header-resume-switch
+overview: Plan header resume session with a runtime-only TODO switch
+runtime: cursor
+sessionStrategy: resume
+todos:
+  - id: switch-runtime
+    runtime: claude
+    content: Switch runtime only under a resume plan header.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"sessionStrategy: fresh"* ]]
+  rm "$plan_file"
+}
+
+@test "TODO overriding only runtime rejects an invalid runtime" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: invalid-runtime-only
+overview: Runtime-only TODO with an unsupported runtime
+runtime: cursor
+todos:
+  - id: switch-runtime
+    runtime: not-a-runtime
+    content: Switch to an unsupported runtime.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid runtime"* ]]
   rm "$plan_file"
 }
 
@@ -980,7 +1293,6 @@ pipeline:
   stages:
     - id: review
       runtime: not-a-runtime
-      agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -1004,7 +1316,6 @@ pipeline:
   stages:
     - id: Review
       runtime: codex
-      agent: code-review
 todos:
   - id: review-1
     stage: Review
@@ -1027,7 +1338,7 @@ execution: orchestration
 pipeline:
   stages:
     - id: review
-      runtime: codex
+      runtime: not-a-runtime
 todos:
   - id: review-1
     stage: review
@@ -1051,7 +1362,6 @@ pipeline:
   stages:
     - id: review
       runtime: codex
-      agent: code-review
       loopBackTo: review
       maxIterations: 1
       loopCheck:
@@ -1166,13 +1476,11 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: codex
-      agent: code-review
       requires:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
@@ -1202,6 +1510,429 @@ EOF
   rm -rf "$tmpd"
 }
 
+@test "plan_pipeline_orch_json preserves router and grader metadata" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/router-grader.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: route
+      runtime: cursor
+      router:
+        allowedTargets:
+          - review
+          - publish
+        terminalOutcomes:
+          - done
+        defaultTarget: review
+        onInvalid: default
+    - id: review
+      runtime: codex
+      grader: true
+      rubric: |
+        Score the response against the rubric.
+        Return a short summary.
+todos:
+  - id: route-1
+    stage: route
+    content: route the work
+    status: pending
+  - id: review-1
+    stage: review
+    content: review the work
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].router.allowedTargets[0]')" = "review" ]
+  [ "$(json_field "$output" '.stages[0].router.allowedTargets[1]')" = "publish" ]
+  [ "$(json_field "$output" '.stages[0].router.terminalOutcomes[0]')" = "done" ]
+  [ "$(json_field "$output" '.stages[0].router.defaultTarget')" = "review" ]
+  [ "$(json_field "$output" '.stages[0].router.onInvalid')" = "default" ]
+  [ "$(json_field "$output" '.stages[1].grader')" = "true" ]
+  [ "$(json_field "$output" '.stages[1].rubric')" = $'Score the response against the rubric.\nReturn a short summary.' ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json preserves graph stage fields" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-stage.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  maxParallel: 3
+  edgeDerivation: artifacts
+  failurePolicy: cancel
+  stages:
+    - id: consensus
+      type: consensus
+      policy: majority
+      onVoterError: fail
+      verdictSchema: .ralph-workspace/schemas/verdict.json
+      quorum: 2
+      minRuntimes: 3
+      voters:
+        - id: voter-a
+          runtime: cursor
+          model: gpt-5
+          sessionStrategy: fresh
+          contextBudget: lean
+        - id: voter-b
+          runtime: codex
+          model: gpt-5
+          sessionStrategy: resume
+          contextBudget: standard
+        - id: voter-c
+          runtime: claude
+          model: claude-4
+          sessionStrategy: reset
+          contextBudget: full
+    - id: agent-stage
+      type: agent
+      runtime: cursor
+      dependsOn: [consensus]
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+  - id: agent-1
+    stage: agent-stage
+    content: run agent stage
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].type')" = "consensus" ]
+  [ "$(json_field "$output" '.stages[0].policy')" = "majority" ]
+  [ "$(json_field "$output" '.stages[0].onVoterError')" = "fail" ]
+  [ "$(json_field "$output" '.stages[0].verdictSchema')" = ".ralph-workspace/schemas/verdict.json" ]
+  [ "$(json_field "$output" '.stages[0].quorum')" = "2" ]
+  [ "$(json_field "$output" '.stages[0].minRuntimes')" = "3" ]
+  [ "$(json_field "$output" '.stages[0].voters | length')" = "3" ]
+  [ "$(json_field "$output" '.stages[0].voters[0].id')" = "voter-a" ]
+  [ "$(json_field "$output" '.stages[0].voters[1].runtime')" = "codex" ]
+  [ "$(json_field "$output" '.stages[0].voters[2].contextBudget')" = "full" ]
+  [ "$(json_field "$output" '.stages[1].type')" = "agent" ]
+  [ "$(json_field "$output" '.maxParallel')" = "3" ]
+  [ "$(json_field "$output" '.edgeDerivation')" = "artifacts" ]
+  [ "$(json_field "$output" '.failurePolicy')" = "cancel" ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json builds artifact producer and precondition maps for graph plans" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-edges.plan.md"
+  cp "$REPO_ROOT/tests/fixtures/graph/graph-edges.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.artifactProducers["shared/input.md"]')" = "source" ]
+  [ "$(json_field "$output" '.artifactProducers["shared/output.md"]')" = "transform" ]
+  [ "$(json_field "$output" '.graphEdges | length')" = "2" ]
+  [ "$(json_field "$output" '.graphEdges[0].from')" = "source" ]
+  [ "$(json_field "$output" '.graphEdges[0].to')" = "transform" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons | length')" = "2" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons[0]')" = "declared" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons[1]')" = "artifact:shared/input.md" ]
+  [ "$(json_field "$output" '.graphEdges[1].from')" = "transform" ]
+  [ "$(json_field "$output" '.graphEdges[1].to')" = "sink" ]
+  [ "$(json_field "$output" '.graphEdges[1].reasons | length')" = "2" ]
+  [ "$(json_field "$output" '.graphEdges[1].reasons[0]')" = "declared" ]
+  [ "$(json_field "$output" '.graphEdges[1].reasons[1]')" = "artifact:shared/output.md" ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects duplicate artifact producers" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-duplicate-producer.plan.md"
+  cp "$REPO_ROOT/tests/fixtures/graph/graph-duplicate-producer.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"shared/output.md"* ]]
+  [[ "$output" == *"left"* ]]
+  [[ "$output" == *"right"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json emits declared and derived edges with a single merged entry" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-declared-derived.plan.md"
+  cp "$REPO_ROOT/tests/fixtures/graph/graph-declared-derived.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.graphEdges | length')" = "1" ]
+  [ "$(json_field "$output" '.graphEdges[0].from')" = "source" ]
+  [ "$(json_field "$output" '.graphEdges[0].to')" = "consumer" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons | length')" = "2" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons[0]')" = "declared" ]
+  [ "$(json_field "$output" '.graphEdges[0].reasons[1]')" = "artifact:shared/output.md" ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json detects dependency cycles in traversal order" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-cycle.plan.md"
+  cp "$REPO_ROOT/tests/fixtures/graph/graph-cycle.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cycle detected"* ]]
+  [[ "$output" == *"a -> b -> c -> a"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json records unproduced requires entries as external preconditions" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-unproduced-requires.plan.md"
+  cp "$REPO_ROOT/tests/fixtures/graph/graph-unproduced-requires.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.externalPreconditions | length')" = "1" ]
+  [ "$(json_field "$output" '.externalPreconditions[0].path')" = "external/input.md" ]
+  [ "$(json_field "$output" '.externalPreconditions[0].consumer')" = "consumer" ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json allows VOTER_ID-templated consensus producers" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-consensus-voter.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: consensus
+      type: consensus
+      runtime: cursor
+      voters:
+        - id: voter-a
+          runtime: cursor
+          model: gpt-5
+          sessionStrategy: fresh
+          contextBudget: lean
+        - id: voter-b
+          runtime: cursor
+          model: gpt-5
+          sessionStrategy: fresh
+          contextBudget: lean
+      produces:
+        - path: votes/{{VOTER_ID}}/summary.md
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run the consensus node
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.artifactProducers["votes/voter-a/summary.md"]')" = "consensus:voter-a" ]
+  [ "$(json_field "$output" '.artifactProducers["votes/voter-b/summary.md"]')" = "consensus:voter-b" ]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects invalid graph stage type values" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-type-invalid.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: consensus
+      type: not-a-type
+      runtime: cursor
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown stage field"* || "$output" == *"invalid"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects invalid edgeDerivation values" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-edge-invalid.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  edgeDerivation: unsupported
+  stages:
+    - id: consensus
+      runtime: cursor
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"edgeDerivation"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects invalid failurePolicy values" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-failure-invalid.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  failurePolicy: pause
+  stages:
+    - id: consensus
+      runtime: cursor
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"failurePolicy"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects misspelled graph pipeline fields in strict mode" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-strict-pipeline.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  maxParalel: 2
+  edgeDerivaton: both
+  failurePolcy: drain
+  stages:
+    - id: consensus
+      runtime: cursor
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"maxParalel"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects misspelled graph stage and voter fields in strict mode" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-strict-stage.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: consensus
+      runtime: cursor
+      typ: consensus
+      depnedsOn: [other]
+      voters:
+        - id: voter-a
+          runtime: cursor
+          model: gpt-5
+          sessionStrategy: fresh
+          contextBudget: lean
+          extra: nope
+todos:
+  - id: consensus-1
+    stage: consensus
+    content: run consensus
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"typ"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects invalid router targets" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/router-invalid.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: route
+      runtime: cursor
+      router:
+        allowedTargets:
+          - review
+        defaultTarget: publish
+todos:
+  - id: route-1
+    stage: route
+    content: route the work
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"router.defaultTarget"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline_orch_json rejects grader stages that do not use fresh sessions" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/grader-session-strategy.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: codex
+      grader: true
+      rubric: Evaluate the result.
+      sessionStrategy: resume
+todos:
+  - id: review-1
+    stage: review
+    content: review the work
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"grader stages require fresh"* ]]
+  rm -rf "$tmpd"
+}
+
 @test "plan_pipeline_orch_json nests loopBackTo/maxIterations under loopControl" {
   tmpd="$(mktemp -d)"
   plan_file="$tmpd/loop-demo.plan.md"
@@ -1212,7 +1943,6 @@ pipeline:
   stages:
     - id: build
       runtime: cursor
-      agent: implementation
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/build-check.md
           required: true
@@ -1233,4 +1963,755 @@ EOF
   [ "$(json_field "$output" '.stages[0].loopControl.loopBackTo')" = "build" ]
   [ "$(json_field "$output" '.stages[0].loopControl.maxIterations')" = "3" ]
   rm -rf "$tmpd"
+}
+
+@test "parse_string_list handles inline flow form" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/string-list-inline.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: compile
+      runtime: cursor
+      dependsOn: [prepare, setup]
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/compile.md
+          required: true
+todos:
+  - id: compile-1
+    stage: compile
+    content: compile
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].dependsOn | length')" = "2" ]
+  [ "$(json_field "$output" '.stages[0].dependsOn[0]')" = "prepare" ]
+  [ "$(json_field "$output" '.stages[0].dependsOn[1]')" = "setup" ]
+  rm -rf "$tmpd"
+}
+
+@test "parse_string_list handles block form" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/string-list-block.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: compile
+      runtime: cursor
+      dependsOn:
+        - prepare
+        - setup
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/compile.md
+          required: true
+todos:
+  - id: compile-1
+    stage: compile
+    content: compile
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].dependsOn | length')" = "2" ]
+  [ "$(json_field "$output" '.stages[0].dependsOn[0]')" = "prepare" ]
+  [ "$(json_field "$output" '.stages[0].dependsOn[1]')" = "setup" ]
+  rm -rf "$tmpd"
+}
+
+@test "parse_string_list handles empty list" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/string-list-empty.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: compile
+      runtime: cursor
+      dependsOn: []
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/compile.md
+          required: true
+todos:
+  - id: compile-1
+    stage: compile
+    content: compile
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].dependsOn | length')" = "0" ]
+  rm -rf "$tmpd"
+}
+
+@test "parse_string_list handles single-element inline list" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/string-list-single.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: compile
+      runtime: cursor
+      dependsOn: [prepare]
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/compile.md
+          required: true
+todos:
+  - id: compile-1
+    stage: compile
+    content: compile
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].dependsOn | length')" = "1" ]
+  [ "$(json_field "$output" '.stages[0].dependsOn[0]')" = "prepare" ]
+  rm -rf "$tmpd"
+}
+
+@test "parse_string_list strips YAML quotes from writeScopes globs" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/write-scopes-quoted.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  maxParallel: 1
+  publishMode: manual
+  stages:
+    - id: implementation
+      runtime: cursor
+      workspaceMode: shared
+      writeScopes:
+        - "**"
+      agentGitAccess: off
+      acknowledgeSharedMutationRisk: true
+      parallelMutation: allow
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
+          required: true
+todos:
+  - id: implementation-1
+    stage: implementation
+    content: implement
+    status: pending
+    verification: handoff exists
+---
+EOF
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.nodes[] | select(.id == "implementation") | .stage.writeScopes[0]')" = "**" ]
+  rm -rf "$tmpd"
+}
+
+@test "parse_string_list fails on unbalanced bracket inline list" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/string-list-unbalanced.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: compile
+      runtime: cursor
+      dependsOn: [prepare
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/compile.md
+          required: true
+todos:
+  - id: compile-1
+    stage: compile
+    content: compile
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unbalanced brackets"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "unknown frontmatter keys fail in strict orchestration mode" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/strict-keys.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: codex
+      boguS: true
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"boguS"* ]]
+  [[ "$output" == *"review"* ]]
+  [[ "$output" == *"unknown stage field"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "unknown frontmatter keys stay lenient when strict mode is disabled" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/lenient-keys.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: codex
+      boguS: true
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+
+  export RALPH_PLAN_STRICT_KEYS=0
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  unset RALPH_PLAN_STRICT_KEYS
+  rm -rf "$tmpd"
+}
+
+@test "existing fixture plans still parse with stray keys when strict mode is disabled" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/orch-json-characterization.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../../tests/fixtures/orchestration/orch-json-characterization.plan.md" "$plan_file"
+  python3 - <<'PY' "$plan_file"
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("    status: pending\n---\n", "    status: pending\n    strayKey: true\n---\n", 1)
+path.write_text(text)
+PY
+
+  export RALPH_PLAN_STRICT_KEYS=0
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  unset RALPH_PLAN_STRICT_KEYS
+  rm -rf "$tmpd"
+}
+
+@test "plan_pipeline nativeSubagents accepts off and inherit and defaults graph stages per runtime" {
+  for value in inherit off; do
+    plan_file="$(mktemp)"
+    cat > "$plan_file" <<EOF
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+      nativeSubagents: ${value}
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+    run plan_pipeline_effective_metadata_json "$plan_file" review-1
+    [ "$status" -eq 0 ]
+    [ "$(json_field "$output" '.nativeSubagents')" = "$value" ]
+    [ "$(json_field "$output" 'has("subagents")')" = "false" ]
+    run plan_pipeline_orch_json "$plan_file"
+    [ "$status" -eq 0 ]
+    [ "$(json_field "$output" '.stages[0].nativeSubagents')" = "$value" ]
+    rm "$plan_file"
+  done
+
+  # Graph agent stages default to off where off can be enforced, and to
+  # inherit on a runtime with no proven deny boundary.
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: codex
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.nativeSubagents')" = "off" ]
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].nativeSubagents')" = "off" ]
+  [ "$(json_field "$output" '.stages[0] | has("subagents")')" = "false" ]
+  rm "$plan_file"
+
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.nativeSubagents')" = "inherit" ]
+  rm "$plan_file"
+}
+
+@test "plan_pipeline nativeSubagents rejects invalid values including the removed on" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+      nativeSubagents: maybe
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nativeSubagents"* ]]
+  rm "$plan_file"
+
+  # "on" was removed along with Ralph-owned native children.
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+      nativeSubagents: on
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -ne 0 ]
+  rm "$plan_file"
+}
+
+@test "plan_pipeline nativeSubagents resolves todo over stage" {
+  plan_file="$(mktemp)"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+      nativeSubagents: off
+todos:
+  - id: review-1
+    stage: review
+    nativeSubagents: inherit
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_todo_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.nativeSubagents')" = "inherit" ]
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.nativeSubagents')" = "inherit" ]
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.stages[0].nativeSubagents')" = "off" ]
+  rm "$plan_file"
+}
+
+@test "plan_pipeline rejects misspelled subagents under strict mode" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/subagents-misspelled.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: review
+      runtime: cursor
+      subagent: on
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"subagent"* ]]
+  rm -rf "$tmpd"
+}
+
+@test "plan omitting nativeSubagents keeps orch stage byte-identical and graph stage matches orch" {
+  tmpd="$(mktemp -d)"
+  plan_file="$tmpd/graph-edges.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-edges.plan.md" "$plan_file"
+
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  orch_payload="$(printf '%s\n' "$output" | awk 'END{print}')"
+  [ "$(json_field "$orch_payload" '[.stages[] | has("subagents")] | any')" = "false" ]
+  expected_stage="$(printf '%s' "$orch_payload" | jq -cS '.stages[] | select(.id=="source")')"
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  graph_payload="$(printf '%s\n' "$output" | awk 'END{print}')"
+  # Graph compilation adds its frozen delegation policy; the shared
+  # orchestration projection remains byte-identical once that graph-only
+  # field is excluded.
+  actual_stage="$(printf '%s' "$graph_payload" | jq -cS '.nodes[] | select(.id=="source") | .stage | del(.delegation)')"
+  [ "$actual_stage" = "$expected_stage" ]
+
+  # Explicit inherit must appear in both emitters identically (shared build_orch_stage).
+  plan_file="$tmpd/with-native-subagents.plan.md"
+  cat <<'EOF' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: source
+      runtime: cursor
+      nativeSubagents: inherit
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/source.md
+todos:
+  - id: source-1
+    stage: source
+    content: produce source
+    status: pending
+---
+EOF
+  run plan_pipeline_orch_json "$plan_file"
+  [ "$status" -eq 0 ]
+  orch_payload="$(printf '%s\n' "$output" | awk 'END{print}')"
+  expected_stage="$(printf '%s' "$orch_payload" | jq -cS '.stages[] | select(.id=="source")')"
+  [ "$(json_field "$expected_stage" '.nativeSubagents')" = "inherit" ]
+
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  graph_payload="$(printf '%s\n' "$output" | awk 'END{print}')"
+  actual_stage="$(printf '%s' "$graph_payload" | jq -cS '.nodes[] | select(.id=="source") | .stage | del(.delegation)')"
+  [ "$actual_stage" = "$expected_stage" ]
+  rm -rf "$tmpd"
+}
+
+@test "removed role field: rejects standard TODO role naming inline workflow instructions" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+todos:
+  - id: t1
+    runtime: cursor
+    role: research
+    content: Do the work.
+    status: pending
+---
+PLAN
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role"* ]]
+  [[ "$output" == *"inline workflow instructions"* ]]
+  rm "$plan_file"
+}
+
+@test "removed role field: rejects stage role naming inline workflow instructions" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+      role: research
+todos:
+  - id: research-1
+    stage: research
+    content: Investigate.
+    status: pending
+---
+PLAN
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role"* ]]
+  [[ "$output" == *"inline workflow instructions"* ]]
+  rm "$plan_file"
+}
+
+@test "removed role field: rejects voter role naming inline workflow instructions" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: implement
+      runtime: cursor
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/out.md
+          required: true
+    - id: review
+      type: consensus
+      dependsOn:
+        - implement
+      policy: majority
+      quorum: 2
+      minRuntimes: 2
+      voters:
+        - id: a
+          runtime: cursor
+          role: research
+        - id: b
+          runtime: claude
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/{{VOTER_ID}}-verdict.json
+          required: true
+todos:
+  - id: implement-1
+    stage: implement
+    content: Implement.
+    status: pending
+---
+PLAN
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role"* ]]
+  [[ "$output" == *"inline workflow instructions"* ]]
+  rm "$plan_file"
+}
+
+@test "removed role field: rejects repair diagnose role naming inline workflow instructions" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+kind: workflow
+engine: graph
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+  repairRounds:
+    id: epoch
+    rounds: 1
+    dependsOn:
+      - research
+    integrate: {}
+    gate:
+      profile: unit
+    diagnose:
+      runtime: cursor
+      role: research
+    reintegrate: {}
+    lanes:
+      - id: lane-a
+        runtime: cursor
+        content: Fix the failing scope
+  verificationProfiles:
+    - name: unit
+      steps:
+        - name: noop
+          command: true
+todos:
+  - id: research-1
+    stage: research
+    content: Investigate {{TASK}}
+    status: pending
+---
+PLAN
+  run plan_workflow_validate "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role"* ]]
+  [[ "$output" == *"inline workflow instructions"* ]]
+  rm "$plan_file"
+}
+
+@test "removed role field: compiled projection omits role and keeps type agent" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+execution: graph
+pipeline:
+  stages:
+    - id: research
+      type: agent
+      runtime: cursor
+      nativeSubagents: off
+      instructions: Stay focused on evidence.
+      produces:
+        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/notes.md
+          required: true
+todos:
+  - id: research-1
+    stage: research
+    content: Investigate.
+    status: pending
+---
+PLAN
+  run plan_pipeline_graph_json "$plan_file"
+  [ "$status" -eq 0 ]
+  graph_payload="$(printf '%s\n' "$output" | awk 'END{print}')"
+  node="$(printf '%s' "$graph_payload" | jq -c '.nodes[] | select(.id=="research")')"
+  [ "$(printf '%s' "$node" | jq -r '.type')" = "agent" ]
+  [ "$(printf '%s' "$node" | jq -r '.stage | has("role")')" = "false" ]
+  [ "$(printf '%s' "$node" | jq -r '.stage.nativeSubagents')" = "off" ]
+  [ "$(printf '%s' "$node" | jq -r '.stage.instructions')" = "Stay focused on evidence." ]
+  rm "$plan_file"
+}
+
+@test "removed role field: effective metadata omits role key" {
+  plan_file="$(mktemp)"
+  cat <<'PLAN' > "$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: codex
+      model: gpt-5
+todos:
+  - id: review-1
+    stage: review
+    content: Review the change.
+    status: pending
+---
+PLAN
+  run plan_pipeline_effective_metadata_json "$plan_file" review-1
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" 'has("role")')" = "false" ]
+  [ "$(json_field "$output" '.runtime')" = "codex" ]
+  rm "$plan_file"
+}
+
+# Generated Ralph plan leaf validation: plan header runtime + model-only TODOs
+# (define-generated-ralph-plan-contract)
+
+@test "plan default runtime accepts a model-only generated TODO" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: generated-demo
+overview: Generated leaf plan
+execution: standard
+runtime: cursor
+model: auto
+sessionStrategy: fresh
+instructions: |
+  Execute exactly one TODO per iteration.
+todos:
+  - id: implement-core
+    content: Update owned files.
+    verification: test -f README.md
+    status: pending
+  - id: model-only-todo
+    model: gpt-5
+    content: Use plan default runtime with an explicit model.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  run plan_pipeline_effective_metadata_json "$plan_file" model-only-todo
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "cursor" ]
+  [ "$(json_field "$output" '.model')" = "gpt-5" ]
+  rm "$plan_file"
+}
+
+@test "model-only generated TODO inherits plan default runtime" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: generated-inherit
+overview: Model-only inherits header runtime
+runtime: claude
+todos:
+  - id: model-only-generated-todo
+    model: claude-4
+    content: Inherit effective runtime from plan frontmatter.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -eq 0 ]
+  run plan_pipeline_effective_metadata_json "$plan_file" model-only-generated-todo
+  [ "$status" -eq 0 ]
+  [ "$(json_field "$output" '.runtime')" = "claude" ]
+  [ "$(json_field "$output" '.model')" = "claude-4" ]
+  rm "$plan_file"
+}
+
+@test "missing effective runtime rejects model-only TODO without plan default runtime" {
+  plan_file="$(mktemp)"
+  cat <<'EOFPLAN' > "$plan_file"
+---
+name: missing-runtime
+overview: No plan or TODO runtime
+todos:
+  - id: model-only-orphan
+    model: gpt-5
+    content: Model override without any effective runtime.
+    verification: true
+    status: pending
+---
+EOFPLAN
+
+  run plan_pipeline_validate_plan "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"effective runtime"* ]] || [[ "$output" == *"runtime"* ]]
+  rm "$plan_file"
 }

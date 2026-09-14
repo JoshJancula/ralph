@@ -15,3 +15,23 @@ ralph_orchestrator_log() {
     echo "[$(ralph_orchestrator_timestamp)] $*" >&2
   fi
 }
+
+# ralph_orchestrator_supervisor_log_rel
+# Relative path under a Sequential engine directory for supervisor output.
+ralph_orchestrator_supervisor_log_rel() {
+  printf 'logs/supervisor.log\n'
+}
+
+# ralph_orchestrator_stage_log_rel <stage-id> <attempt-n> <kind>
+# kind is agent or runner (supervisor stream maps to runner).
+ralph_orchestrator_stage_log_rel() {
+  local stage_id="$1" attempt="$2" kind="${3:-agent}"
+  case "$kind" in
+    agent|runner) ;;
+    *)
+      echo "Error: orchestrator stage log kind must be agent or runner" >&2
+      return 1
+      ;;
+  esac
+  printf 'logs/stages/%s/attempt-%s/%s.log\n' "$stage_id" "$attempt" "$kind"
+}

@@ -1,6 +1,7 @@
 import { Component, computed, inject } from '@angular/core';
 import { Routes } from '@angular/router';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
+import { GraphHubComponent } from './components/graph-hub/graph-hub.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
 import { UsageHubComponent } from './components/usage-hub/usage-hub.component';
@@ -9,7 +10,7 @@ import { NavService } from './services/nav.service';
 @Component({
   selector: 'app-workspace-view',
   standalone: true,
-  imports: [FileViewerComponent, LogViewerComponent, PlanHubComponent, UsageHubComponent],
+  imports: [FileViewerComponent, GraphHubComponent, LogViewerComponent, PlanHubComponent, UsageHubComponent],
   template: `
     @switch (viewKind()) {
       @case ('plan') {
@@ -17,6 +18,9 @@ import { NavService } from './services/nav.service';
       }
       @case ('usage') {
         <ralph-usage-hub></ralph-usage-hub>
+      }
+      @case ('graph-runs') {
+        <ralph-graph-hub></ralph-graph-hub>
       }
       @case ('browse') {
         <div class="browse-state">
@@ -134,7 +138,7 @@ export class WorkspaceViewComponent {
   private readonly nav = inject(NavService);
   readonly activeRoot = this.nav.activeRoot;
   readonly activeFile = this.nav.activeFile;
-  readonly viewKind = computed<'plan' | 'usage' | 'file' | 'log' | 'browse' | 'empty'>(() => {
+  readonly viewKind = computed<'plan' | 'usage' | 'graph-runs' | 'file' | 'log' | 'browse' | 'empty'>(() => {
     const root = this.activeRoot();
     const file = this.activeFile();
 
@@ -149,6 +153,9 @@ export class WorkspaceViewComponent {
     }
     if (root === 'plans') {
       return 'plan';
+    }
+    if (root === 'graph-runs') {
+      return 'graph-runs';
     }
     if (
       root === 'docs' ||

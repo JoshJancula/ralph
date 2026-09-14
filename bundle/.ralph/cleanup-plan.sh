@@ -43,6 +43,7 @@ cleanup_plan_run_namespace_cleanup() {
   cleanup_plan_delete_artifact_dir "$artifact_dir"
   cleanup_plan_delete_tool_results_dir "$tool_results_dir"
   cleanup_plan_remove_human_action_file "$workspace_root"
+  cleanup_plan_prune_graph_runs "$workspace_root" "$namespace"
 }
 
 main() {

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# PostToolUse:Bash telemetry for Codex (observability only).
+# PostToolUse:Bash telemetry + duration learning for Codex.
 #
 # Native shell compaction is handled via PreToolUse wrapper in pre-tool-bash-policy.sh.
-# This hook is telemetry-only: it records byte counts and command hashes for audit.
-# Note: Codex PostToolUse model-visible output mutation is unproven on the current CLI build.
+# Codex PostToolUse payloads do not include duration_ms (observed keys: cwd,
+# hook_event_name, model, permission_mode, session_id, tool_input, tool_name,
+# tool_response, tool_use_id, transcript_path, turn_id). Duration learning uses
+# pre/post inflight pairing keyed by tool_use_id.
 #
 # Optional JSONL audit path: RALPH_BASH_TELEMETRY_LOG
 # Gate: RALPH_NATIVE_HOOKS=on|auto with optimization mode, or RALPH_BASH_TELEMETRY_LOG set.
@@ -78,24 +80,46 @@ ralph_codex_post_tool_main() {
   RALPH_CODEX_POST_TOOL_INPUT="$(cat)" || ralph_codex_post_tool_fail_open
 
   local event tool_name command stdout stderr combined_bytes command_hash log_path
+  local workspace plan_key timestamp line invocation_id duration_raw duration_ms fingerprint
   event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
   tool_name="$(jq -r '.tool_name // ""' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
   if [[ "$event" != "PostToolUse" ]] || ! ralph_codex_post_tool_shell_name "$tool_name"; then
     ralph_codex_post_tool_fail_open
   fi
 
-  log_path="${RALPH_BASH_TELEMETRY_LOG:-}"
-  [[ -n "$log_path" ]] || ralph_codex_post_tool_fail_open
-
   command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
   stdout="$(jq -r '.tool_response.stdout // ""' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
   stderr="$(jq -r '.tool_response.stderr // ""' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
-  combined_bytes="$(ralph_codex_post_tool_byte_count "$(ralph_codex_post_tool_combine_streams "$stdout" "$stderr")")"
-  command_hash="$(ralph_codex_post_tool_sha256 "$command")"
-
-  local workspace plan_key timestamp line
+  invocation_id="$(jq -r '.tool_use_id // empty' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
   workspace="$(ralph_codex_post_tool_workspace)"
   plan_key="$(ralph_codex_post_tool_plan_key)"
+
+  _NATIVE_HOOK_BOOTSTRAP="${BASH_SOURCE%/*}/../../.ralph/bash-lib/native-hook/native-hook-bootstrap.sh"
+  if [[ ! -f "$_NATIVE_HOOK_BOOTSTRAP" ]]; then
+    _NATIVE_HOOK_BOOTSTRAP="${RALPH_HOME:-${HOME:-}/.ralph}/bundle/.ralph/bash-lib/native-hook/native-hook-bootstrap.sh"
+  fi
+  if [[ -n "$workspace" && -f "$_NATIVE_HOOK_BOOTSTRAP" ]]; then
+    # shellcheck source=/dev/null
+    source "$_NATIVE_HOOK_BOOTSTRAP"
+    ralph_native_hook_bootstrap_source_lib || true
+    # Forward-compat: if Codex ever adds duration_ms, prefer it over pairing.
+    duration_raw="$(jq -r '.duration_ms // .duration // empty' <<<"$RALPH_CODEX_POST_TOOL_INPUT")"
+    duration_ms=""
+    if [[ "$duration_raw" =~ ^[0-9]+$ ]]; then
+      duration_ms="$duration_raw"
+      fingerprint="$(ralph_native_hook_command_fingerprint "$workspace" "$command" 2>/dev/null || true)"
+      ralph_native_hook_maybe_record_duration \
+        "$workspace" "$command" "$fingerprint" "$duration_ms" "false" || true
+    else
+      ralph_native_hook_complete_inflight "$workspace" "$command" "$invocation_id" || true
+    fi
+  fi
+
+  log_path="${RALPH_BASH_TELEMETRY_LOG:-}"
+  [[ -n "$log_path" ]] || ralph_codex_post_tool_fail_open
+
+  combined_bytes="$(ralph_codex_post_tool_byte_count "$(ralph_codex_post_tool_combine_streams "$stdout" "$stderr")")"
+  command_hash="$(ralph_codex_post_tool_sha256 "$command")"
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   line="$(

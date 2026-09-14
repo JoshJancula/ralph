@@ -48,7 +48,7 @@ class TestCookbookOfflineE2E(unittest.TestCase):
             f'RUNTIME="{spec["runtime"]}"\n'
             f"PROMPT='{todo}'\n"
             f"PROMPT_STATIC='{stable}'\n"
-            'ralph_run_plan_merge_prompt "$RUNTIME"\n'
+            'PROMPT="$(ralph_run_plan_assemble_prompt_ordered "" "$PROMPT_STATIC" "$PROMPT")"\n'
             'printf "%s" "$PROMPT"\n'
         )
         proc = subprocess.run(

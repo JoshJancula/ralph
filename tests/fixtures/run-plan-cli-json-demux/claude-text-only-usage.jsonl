@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"id":"msg-text-1","role":"assistant","content":[{"type":"text","text":"[redacted]"}],"usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"msg-tool-1","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{}}],"usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"msg-text-2","role":"assistant","content":[{"type":"thinking","thinking":"[redacted]"}],"usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"msg-tool-2","role":"assistant","content":[{"type":"tool_use","id":"tool-2","name":"Read","input":{}}],"usage":{"input_tokens":1,"output_tokens":1}}}

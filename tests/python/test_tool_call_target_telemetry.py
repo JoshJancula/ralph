@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "bundle" / ".ralph" / "python"))
 
@@ -67,6 +69,31 @@ class TestToolCallTargetTelemetry(unittest.TestCase):
         hint = optimization_hint_line(usage)
         self.assertIn("result_read", hint)
         self.assertIn("result_search", hint)
+
+    def test_optimization_hint_line_ignores_ambient_plan_env_without_plan_key(self) -> None:
+        # Sequence-only callers must not inherit workspace result-windowing.jsonl
+        # via ambient RALPH_PLAN_KEY / RALPH_ARTIFACT_NS (agent-session pollution).
+        usage = {
+            "tool_calls_sequence": [
+                "ralph_proxy_read",
+                "ralph_proxy_grep",
+                "ralph_proxy_result_read",
+                "ralph_proxy_result_read",
+                "ralph_proxy_shell_status",
+            ]
+        }
+        with mock.patch.dict(
+            os.environ,
+            {"RALPH_PLAN_KEY": "PLAN15.plan", "RALPH_ARTIFACT_NS": "PLAN15.plan"},
+            clear=False,
+        ):
+            hint = optimization_hint_line(usage)
+        self.assertEqual(
+            hint,
+            "HINT: 2 result_read(s) without prior result_search, 1 repeated result_read call(s)",
+        )
+        self.assertNotIn("stored-result reread", hint)
+        self.assertNotIn("view=raw", hint)
 
     def test_stored_result_readback_guidance(self) -> None:
         text = stored_result_readback_guidance(

@@ -1,0 +1,369 @@
+{
+  "request": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "requestId",
+      "kind",
+      "runId",
+      "stageId",
+      "attemptId",
+      "choices",
+      "createdAt"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "integer",
+        "enum": [1]
+      },
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "kind": {
+        "type": "string",
+        "enum": ["permission", "approval", "input"]
+      },
+      "runId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stageId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "attemptId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "choices": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "enum": [
+            "allow-once",
+            "allow-run",
+            "allow-always",
+            "deny",
+            "approve",
+            "request-changes",
+            "cancel",
+            "answer"
+          ]
+        }
+      },
+      "createdAt": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      },
+      "question": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "details": {
+        "type": ["string", "null"],
+        "maxLength": 2000
+      },
+      "evidence": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        }
+      },
+      "changesTarget": {
+        "type": ["string", "null"],
+        "minLength": 1
+      },
+      "expiresAt": {
+        "type": ["string", "null"],
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      },
+      "nonce": {
+        "type": ["string", "null"],
+        "minLength": 8,
+        "maxLength": 128
+      },
+      "runtime": {
+        "type": ["string", "null"],
+        "enum": ["cursor", "claude", "codex", "opencode", "antigravity", null]
+      },
+      "namespace": {
+        "type": ["string", "null"]
+      },
+      "action": {
+        "type": ["string", "null"],
+        "minLength": 1
+      },
+      "resource": {
+        "type": ["string", "null"],
+        "minLength": 1
+      },
+      "effect": {
+        "type": ["string", "null"],
+        "enum": ["read", "write", "network", null]
+      },
+      "classification": {
+        "type": ["string", "null"]
+      },
+      "sessionId": {
+        "type": ["string", "null"]
+      },
+      "continuationIdentity": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["identity", "attemptKey"],
+        "properties": {
+          "identity": {
+            "type": "object"
+          },
+          "attemptKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "controlPlanPath": {
+            "type": ["string", "null"]
+          },
+          "todoId": {
+            "type": ["string", "null"]
+          },
+          "runtime": {
+            "type": ["string", "null"]
+          },
+          "session": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  },
+  "decision": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "requestId",
+      "kind",
+      "runId",
+      "stageId",
+      "attemptId",
+      "decision",
+      "actorSource",
+      "decidedAt"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "integer",
+        "enum": [1]
+      },
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "kind": {
+        "type": "string",
+        "enum": ["permission", "approval", "input"]
+      },
+      "runId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stageId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "attemptId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "decision": {
+        "type": "string",
+        "enum": [
+          "allow-once",
+          "allow-run",
+          "allow-always",
+          "deny",
+          "approve",
+          "request-changes",
+          "cancel",
+          "answer"
+        ]
+      },
+      "message": {
+        "type": ["string", "null"],
+        "maxLength": 2000
+      },
+      "actorSource": {
+        "type": "string",
+        "enum": ["cli", "tui", "human", "adapter", "test"]
+      },
+      "decidedAt": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      },
+      "nonce": {
+        "type": ["string", "null"],
+        "minLength": 8,
+        "maxLength": 128
+      },
+      "runtime": {
+        "type": ["string", "null"],
+        "enum": ["cursor", "claude", "codex", "opencode", "antigravity", null]
+      },
+      "granted": {
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "required": ["action", "resource", "effect"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effect": {
+            "type": "string",
+            "enum": ["read", "write", "network"]
+          }
+        }
+      },
+      "continuationIdentity": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["identity", "attemptKey"],
+        "properties": {
+          "identity": {
+            "type": "object"
+          },
+          "attemptKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "controlPlanPath": {
+            "type": ["string", "null"]
+          },
+          "todoId": {
+            "type": ["string", "null"]
+          },
+          "runtime": {
+            "type": ["string", "null"]
+          },
+          "session": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  },
+  "consumed": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "requestId",
+      "kind",
+      "runId",
+      "stageId",
+      "attemptId",
+      "decision",
+      "consumedAt",
+      "consumer"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "integer",
+        "enum": [1]
+      },
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "kind": {
+        "type": "string",
+        "enum": ["permission", "approval", "input"]
+      },
+      "runId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stageId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "attemptId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "decision": {
+        "type": "string",
+        "enum": [
+          "allow-once",
+          "allow-run",
+          "allow-always",
+          "deny",
+          "approve",
+          "request-changes",
+          "cancel",
+          "answer"
+        ]
+      },
+      "consumedAt": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      },
+      "consumer": {
+        "type": "string",
+        "enum": ["resume", "stage", "test", "reset"]
+      },
+      "continuationIdentity": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["identity", "attemptKey"],
+        "properties": {
+          "identity": {
+            "type": "object"
+          },
+          "attemptKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "controlPlanPath": {
+            "type": ["string", "null"]
+          },
+          "todoId": {
+            "type": ["string", "null"]
+          },
+          "runtime": {
+            "type": ["string", "null"]
+          },
+          "session": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

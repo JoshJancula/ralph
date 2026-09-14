@@ -2,8 +2,7 @@
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
 
-adapter_dir="$REPO_ROOT/bundle/.ralph/bash-lib/agent-source/adapters"
-frontmatter_lib="$REPO_ROOT/bundle/.ralph/bash-lib/agent-source/frontmatter.sh"
+frontmatter_lib="$REPO_ROOT/bundle/.ralph/bash-lib/canonical-frontmatter.sh"
 runtime_normalize="$REPO_ROOT/bundle/.ralph/bash-lib/runtime-normalize.sh"
 
 setup() {
@@ -21,12 +20,6 @@ _source_sync_lib() {
   export SCRIPT_DIR="$REPO_ROOT/scripts"
   # shellcheck disable=SC1090
   eval "$(sed '/^sync_assets_main "\$@"/d' "$REPO_ROOT/scripts/sync-runtime-assets.sh")"
-}
-
-_load_adapter_libs() {
-  source "$runtime_normalize"
-  source "$frontmatter_lib"
-  source "$adapter_dir/adapter-ralph-md.sh"
 }
 
 _write_mcp_canonical() {
@@ -57,36 +50,17 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "sync-runtime-assets render carries mcp_servers from canonical frontmatter" {
+@test "sync-runtime-assets render rejects profile mcp_servers in canonical frontmatter" {
   _source_sync_lib
-  _load_adapter_libs
+  source "$runtime_normalize"
+  source "$frontmatter_lib"
 
   mkdir -p "$_tmp/bundle/.ralph/agents"
   local canonical="$_tmp/bundle/.ralph/agents/mcp-sync.md"
   _write_mcp_canonical "$canonical"
 
-  local sync_file adapter_out
-  sync_file="$_cache/sync.json"
-  sync_assets_render_agent_config_json bundle claude mcp-sync "$canonical" "bundle/.ralph/agents/mcp-sync.md" >"$sync_file"
-  adapter_out="$(agent_adapter_ralph_md_to_config_json mcp-sync claude "$_tmp" "$_cache" bundle)"
-
-  [[ -f "$sync_file" ]] || { echo "sync render produced no file" >&2; return 1; }
-  [[ -f "$adapter_out" ]] || { echo "adapter produced no file" >&2; return 1; }
-
-  python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    sync_cfg = json.load(f)
-with open(sys.argv[2]) as f:
-    adapter_cfg = json.load(f)
-sync_m = sync_cfg.get('mcp_servers', [])
-adapter_m = adapter_cfg.get('mcp_servers', [])
-assert sync_m == adapter_m, (sync_m, adapter_m)
-assert len(sync_m) == 2, sync_m
-assert sync_m[0] == {'name': 'ambient-server', 'reference': True}
-assert sync_m[1]['name'] == 'portable-http'
-assert sync_m[1]['transport'] == 'http'
-" "$sync_file" "$adapter_out"
+  run sync_assets_render_agent_config_json bundle claude mcp-sync "$canonical" "bundle/.ralph/agents/mcp-sync.md"
+  [ "$status" -ne 0 ]
 }
 
 @test "sync-runtime-assets render omits mcp_servers when frontmatter absent" {
@@ -130,9 +104,16 @@ EOF
 }
 
 @test "skill package validation accepts canonical repo-context skill" {
-  run env RALPH_MODE=hybrid RALPH_SKILL_PACKAGE_VALIDATION=1 \
-    bash "$REPO_ROOT/bundle/.ralph/agent-config-tool.sh" validate-skill \
-    "$REPO_ROOT/bundle/.ralph/skills" repo-context
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/skill-package.sh"
+  export RALPH_MODE=hybrid RALPH_SKILL_PACKAGE_VALIDATION=1
+
+  # Guard against a vacuous pass: ralph_validate_skill_package returns 0
+  # unconditionally when validation is disabled, so a dropped env gate would
+  # make the acceptance assertion below prove nothing. Assert it is active.
+  ralph_skill_package_validation_enabled
+
+  run ralph_validate_skill_package "$REPO_ROOT/bundle/.ralph/skills/repo-context" repo-context
   [ "$status" -eq 0 ]
 }
 

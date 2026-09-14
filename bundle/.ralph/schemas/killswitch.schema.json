@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ralph killswitch configuration",
+  "description": "Canonical schema version 2. Input may use documented camelCase aliases (dryRun, bannedTools, toolDenylist, bannedPaths, allowedTools, allowedPaths, allowedCommands, allowedPatterns, deniedArgumentPatterns, customRules) or nested alias containers tools.deny / tools.denylist and arguments.denyPatterns. The shared Python normalizer rejects duplicate canonical/alias pairs, unknown keys, wrong types, invalid regex, and invalid custom-rule shapes, then emits deterministic snake_case JSON.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "dry_run",
+    "banned_tools",
+    "tool_denylist",
+    "allowed_tools",
+    "banned_paths",
+    "allowed_paths",
+    "allowed_commands",
+    "allowed_patterns",
+    "denied_argument_patterns",
+    "custom_rules"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [2],
+      "description": "Config format version. Must be 2."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Set to false to temporarily disable the killswitch (overrides env)."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "When true, log violations without killing the runner. Alias: dryRun."
+    },
+    "banned_tools": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Tool names or glob patterns disallowed before invocation. Alias: bannedTools."
+    },
+    "tool_denylist": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Exact tool names denied for unified MCP/native policy. Aliases: toolDenylist, tools.deny, tools.denylist."
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Tool allowlist exceptions. Alias: allowedTools."
+    },
+    "banned_paths": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "File/path glob patterns the killswitch will block. Alias: bannedPaths."
+    },
+    "allowed_paths": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Path allowlist exceptions. Alias: allowedPaths."
+    },
+    "allowed_commands": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Command substring allowlist exceptions. Alias: allowedCommands."
+    },
+    "allowed_patterns": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Command regex allowlist exceptions. Alias: allowedPatterns."
+    },
+    "denied_argument_patterns": {
+      "type": "array",
+      "description": "Argument deny rules. Aliases: deniedArgumentPatterns, arguments.denyPatterns.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern"],
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "Optional tool name; empty/omitted matches any tool."
+          },
+          "argument": {
+            "type": "string",
+            "description": "Optional argument key to extract before matching."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Literal or regex pattern depending on mode."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["regex", "literal", "substring", "contains"],
+            "default": "regex",
+            "description": "Match mode for pattern (default regex)."
+          }
+        }
+      }
+    },
+    "custom_rules": {
+      "type": "array",
+      "description": "Command rules using plain string matching (match) or regex (pattern). Alias: customRules.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable rule name for logging."
+          },
+          "match": {
+            "type": "string",
+            "description": "Plain substring to match against the command (case-sensitive)."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Regex pattern to match against the command."
+          },
+          "target": {
+            "type": "string",
+            "enum": ["command"],
+            "default": "command",
+            "description": "What to match against (currently only 'command')."
+          }
+        },
+        "required": ["name"],
+        "oneOf": [
+          {"required": ["match"], "not": {"required": ["pattern"]}},
+          {"required": ["pattern"], "not": {"required": ["match"]}}
+        ]
+      }
+    }
+  }
+}

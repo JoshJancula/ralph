@@ -93,6 +93,14 @@ set -euo pipefail
 runtime_label="$runtime_label"
 record_file="$record_file"
 plan_file="$plan_file"
+
+# The real Codex CLI advertises exec --config; Ralph probes for it before it
+# will enforce nativeSubagents=off.
+if [[ "\${1:-}" == "exec" && "\${2:-}" == "--help" ]]; then
+  printf '%s\n' "Usage: codex exec" "  --config <key=value>"
+  exit 0
+fi
+
 prompt="\${!#}"
 model=""
 resume=""
@@ -143,8 +151,20 @@ esac
 case "\$prompt" in
   *"- Stage ID:"*) prompt_has_stage=1 ;;
 esac
+prompt_has_wsi=0
+prompt_wsi_before_todo=0
+case "\$prompt" in
+  *"WORKFLOW_STAGE_INSTRUCTIONS: START"*) prompt_has_wsi=1 ;;
+esac
+if [[ "\$prompt_has_wsi" -eq 1 ]]; then
+  wsi_idx="\${prompt%%<!-- WORKFLOW_STAGE_INSTRUCTIONS: START -->*}"
+  todo_idx="\${prompt%%Complete exactly this TODO*}"
+  if [[ "\${#wsi_idx}" -lt "\${#todo_idx}" ]]; then
+    prompt_wsi_before_todo=1
+  fi
+fi
 
-printf '%s|%s|%s|%s|%s|%s|%s\n' "\$runtime_label" "\${SESSION_ID_FILE:-}" "\$resume" "\$model" "\$prompt_has_codex" "\$prompt_has_cursor" "\$prompt_has_stage" >>"\$record_file"
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "\$runtime_label" "\${SESSION_ID_FILE:-}" "\$resume" "\$model" "\$prompt_has_codex" "\$prompt_has_cursor" "\$prompt_has_stage" "\$prompt_has_wsi" "\$prompt_wsi_before_todo" >>"\$record_file"
 
 python3 - "\$plan_file" <<'PY'
 from pathlib import Path
@@ -254,13 +274,11 @@ pipeline:
   stages:
     - id: alpha
       runtime: cursor
-      agent: alpha
       model: cursor-base-model
       sessionStrategy: fresh
       contextBudget: standard
     - id: beta
       runtime: cursor
-      agent: alpha
       model: cursor-base-model
       sessionStrategy: fresh
       contextBudget: standard
@@ -268,7 +286,6 @@ todos:
   - id: first
     stage: alpha
     runtime: codex
-    agent: alpha
     model: codex-override-model
     status: open
     content: First routed TODO
@@ -292,7 +309,7 @@ EOF
     export CURSOR_PLAN_MODEL="cursor-base-model"
     unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
     unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
-    "$4" --runtime cursor --plan PLAN-codex.md --agent alpha --non-interactive
+    "$4" --runtime cursor --plan PLAN-codex.md --non-interactive
   ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
 
   [ "$status" -eq 0 ]
@@ -304,14 +321,18 @@ EOF
   [ "${#codex_lines[@]}" -ge 1 ]
 
   codex_last_index=$(( ${#codex_lines[@]} - 1 ))
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${codex_lines[$codex_last_index]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${codex_lines[$codex_last_index]}"
   [ "$runtime" = "codex" ]
   [[ "$session_file" == *"/session-id.codex.txt" ]]
   [ "$resume" = "" ]
   [ "$model" = "codex-override-model" ]
-  [ "$codex_rule" = "1" ]
+  # Native runtime configuration owns rules and skills; Ralph never inlines
+  # their paths into the prompt. External Ralph roles are gone; stage
+  # instructions are injected only when the orchestrator sets the env.
+  [ "$codex_rule" = "0" ]
   [ "$cursor_rule" = "0" ]
   [ "$stage_ctx" = "0" ]
+  [ "$wsi_ctx" = "0" ]
 
   plan_cursor="$workspace/PLAN-cursor.md"
   cat >"$plan_cursor" <<'EOF'
@@ -321,7 +342,6 @@ pipeline:
   stages:
     - id: beta
       runtime: cursor
-      agent: alpha
       model: cursor-base-model
       sessionStrategy: fresh
       contextBudget: standard
@@ -329,7 +349,6 @@ todos:
   - id: second
     stage: beta
     runtime: cursor
-    agent: alpha
     status: open
     content: Second routed TODO
 ---
@@ -352,7 +371,7 @@ EOF
     export CURSOR_PLAN_MODEL="cursor-base-model"
     unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
     unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
-    "$4" --runtime cursor --plan PLAN-cursor.md --agent alpha --non-interactive
+    "$4" --runtime cursor --plan PLAN-cursor.md --non-interactive
   ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
 
   [ "$status" -eq 0 ]
@@ -364,16 +383,69 @@ EOF
   [ "${#cursor_lines[@]}" -ge 1 ]
 
   cursor_last_index=$(( ${#cursor_lines[@]} - 1 ))
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[$cursor_last_index]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[$cursor_last_index]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [ "$resume" = "" ]
   [ "$model" = "cursor-base-model" ]
   [ "$codex_rule" = "0" ]
-  [ "$cursor_rule" = "1" ]
+  [ "$cursor_rule" = "0" ]
   [ "$stage_ctx" = "0" ]
+  [ "$wsi_ctx" = "0" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "subagents routing resolves TODO over stage and restores baseline between TODOs" {
+  local plan_file
+  plan_file="$(mktemp)"
+  cat >"$plan_file" <<'EOF'
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+      runtime: claude
+      subagents: off
+    - id: implement
+      runtime: codex
+      subagents: off
+todos:
+  - id: review-1
+    stage: review
+    subagents: on
+    content: review
+    status: pending
+  - id: implement-1
+    stage: implement
+    content: implement
+    status: pending
+---
+EOF
+  run bash -c '
+    source "$1/bundle/.ralph/bash-lib/plan-todo.sh"
+    source "$1/bundle/.ralph/bash-lib/run-plan/run-plan-routing.sh"
+    fields="$(ralph_run_plan_routing_effective_metadata_fields "$2" review-1)"
+    IFS="$(printf "\\037")" read -r _ _ _ _ _ mode _ <<< "$fields"
+    [ "$mode" = on ]
+    ralph_run_plan_routing_resolve_current_context() { :; }
+    ralph_run_plan_routing_set_session_context() { :; }
+    ralph_run_plan_log() { :; }
+    RUNTIME=cursor
+    RALPH_PLAN_SUBAGENTS=inherit
+    ralph_run_plan_routing_capture_baseline
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 1 review-1 review-1
+    [ "$RUNTIME" = claude ]
+    [ "$RALPH_PLAN_SUBAGENTS" = on ]
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 2 implement-1 implement-1
+    [ "$RUNTIME" = codex ]
+    [ "$RALPH_PLAN_SUBAGENTS" = off ]
+    ralph_run_plan_routing_restore_baseline
+    [ "$RUNTIME" = cursor ]
+    [ "$RALPH_PLAN_SUBAGENTS" = inherit ]
+  ' _ "$REPO_ROOT" "$plan_file"
+  [ "$status" -eq 0 ]
+  rm "$plan_file"
 }
 
 @test "yaml todo routing bootstraps non-interactive runs without a global model" {
@@ -445,7 +517,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "2" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "routing sessionStrategy override changes resume behavior for one TODO only" {
@@ -466,7 +538,6 @@ pipeline:
   stages:
     - id: alpha
       runtime: cursor
-      agent: alpha
       model: cursor-base-model
       sessionStrategy: fresh
       contextBudget: standard
@@ -500,7 +571,7 @@ EOF
     export CURSOR_PLAN_MODEL="cursor-base-model"
     unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
     unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
-    "$4" --runtime cursor --plan PLAN.md --agent alpha --non-interactive
+    "$4" --runtime cursor --plan PLAN.md --non-interactive
   ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
 
   [ "$status" -eq 0 ]
@@ -511,21 +582,21 @@ EOF
   done < <(extract_log_lines "$cursor_log")
   [ "${#cursor_lines[@]}" -eq 2 ]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[0]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[0]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [[ "$resume" == "--resume:cursor-session-1" ]]
   [ "$model" = "cursor-base-model" ]
   [ "$stage_ctx" = "0" ]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[1]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[1]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [ "$resume" = "" ]
   [ "$model" = "cursor-base-model" ]
   [ "$stage_ctx" = "0" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "routing contextBudget override changes prompt context for one TODO only" {
@@ -549,7 +620,6 @@ pipeline:
   stages:
     - id: alpha
       runtime: cursor
-      agent: alpha
       model: cursor-base-model
       sessionStrategy: fresh
       contextBudget: standard
@@ -583,7 +653,7 @@ EOF
     export RALPH_ORCH_FILE="$4"
     unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
     unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
-    "$6" --runtime cursor --plan PLAN.md --agent alpha --non-interactive
+    "$6" --runtime cursor --plan PLAN.md --non-interactive
   ' _ "$workspace" "$bin_dir" "$session_home" "$orch_file" "$plan_log" "$RUN_PLAN_SH" "$registry_file"
 
   [ "$status" -eq 0 ]
@@ -600,17 +670,17 @@ EOF
   done < <(extract_log_lines "$plan_log" | grep -F "context footprint:")
   [ "${#context_lines[@]}" -eq 2 ]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[0]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[0]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [[ "${context_lines[0]}" == *"context_budget=lean"* ]]
 
-  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx <<< "${cursor_lines[1]}"
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[1]}"
   [ "$runtime" = "cursor" ]
   [[ "$session_file" == *"/session-id.cursor.txt" ]]
   [[ "${context_lines[1]}" == *"context_budget=standard"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan-routing.sh has a source guard and no set -euo pipefail" {
@@ -681,7 +751,7 @@ EOF
   [ "$runtime" = "cursor" ]
   [ "$model" = "header-model" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "plan header model is overridden by --model flag" {
@@ -734,5 +804,61 @@ EOF
   [ "$runtime" = "cursor" ]
   [ "$model" = "cli-model" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "routing injects workflow stage instructions before TODO content" {
+  local workspace bin_dir session_home plan_file cursor_log registry_file
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  registry_file="$(mktemp)"
+  mkdir -p "$bin_dir" "$session_home"
+
+  plan_file="$workspace/PLAN.md"
+  cat >"$plan_file" <<'EOF'
+---
+name: stage-instructions-order
+runtime: cursor
+model: cursor-base-model
+todos:
+  - id: only
+    content: First routed TODO
+    status: open
+---
+EOF
+
+  cursor_log="$workspace/cursor.log"
+  write_stub_cli "$bin_dir" cursor-agent cursor "$cursor_log" "$plan_file"
+
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    export RALPH_PLAN_NO_CAFFEINATE=1
+    export RALPH_LAUNCHER_PID=$$
+    export RALPH_WORKSPACES_FILE="$5"
+    export CURSOR_PLAN_MODEL="cursor-base-model"
+    export RALPH_WORKFLOW_STAGE_INSTRUCTIONS="Investigate before editing."
+    unset CODEX_PLAN_MODEL CLAUDE_PLAN_MODEL OPENCODE_PLAN_MODEL
+    unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
+    "$4" --runtime cursor --plan PLAN.md --non-interactive
+  ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH" "$registry_file"
+
+  [ "$status" -eq 0 ]
+
+  cursor_lines=()
+  while IFS= read -r line; do
+    cursor_lines+=("$line")
+  done < <(extract_log_lines "$cursor_log")
+  [ "${#cursor_lines[@]}" -ge 1 ]
+
+  IFS='|' read -r runtime session_file resume model codex_rule cursor_rule stage_ctx wsi_ctx wsi_before <<< "${cursor_lines[$(( ${#cursor_lines[@]} - 1 ))]}"
+  [ "$runtime" = "cursor" ]
+  [ "$wsi_ctx" = "1" ]
+  [ "$wsi_before" = "1" ]
+
+  ralph_test_rm_workspace "$workspace"
 }

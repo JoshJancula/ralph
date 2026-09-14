@@ -1,0 +1,82 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inputSha256",
+    "state",
+    "currentStageIds",
+    "loopIterations",
+    "completedWaves",
+    "owner",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "inputSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "waiting",
+        "blocked",
+        "stale",
+        "failed",
+        "cancelled",
+        "succeeded"
+      ]
+    },
+    "currentStageIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+      }
+    },
+    "loopIterations": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "completedWaves": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "owner": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "hostname",
+        "processStartId",
+        "heartbeatAt"
+      ],
+      "properties": {
+        "pid": {
+          "type": ["integer", "null"]
+        },
+        "hostname": {
+          "type": ["string", "null"]
+        },
+        "processStartId": {
+          "type": ["string", "null"]
+        },
+        "heartbeatAt": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "updatedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

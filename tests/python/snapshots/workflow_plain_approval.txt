@@ -1,0 +1,9 @@
+Workflow status
+State: waiting (human-approval)
+Run: fixture-dep-approval | Workflow: feature-delivery | Mode: dependency
+Task: Ship the feature
+Summary: the run is waiting for the operator to decide an approval gate
+Stage: approve-plan [waiting]
+Question: Approve the implementation plan?
+Evidence: 1 item(s)
+Action: answer the outstanding request: ralph workflow actions list fixture-dep-approval

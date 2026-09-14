@@ -370,6 +370,11 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
       basePath: join(roots.workspaceRoot, 'orchestration-plans'),
       writable: false,
     },
+    'graph-runs': {
+      label: 'Graph Runs',
+      basePath: join(roots.workspaceRoot, 'graph-runs'),
+      writable: false,
+    },
     docs: {
       label: 'Docs',
       basePath: resolveRalphDocumentationDir(roots.projectRoot),

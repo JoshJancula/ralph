@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "runtime": "antigravity",
+  "outputDirectory": "plugins/ralph-orchestrator/antigravity",
+  "contract": "bundle/.ralph/plugin-inputs/contracts/antigravity.json",
+  "capabilities": {
+    "nativeAgents": true,
+    "nativeHooks": true,
+    "mcp": true,
+    "rules": false,
+    "skills": true,
+    "workflows": true
+  },
+  "copies": [
+    {
+      "source": "bundle/.agents/skills/repo-context/SKILL.md",
+      "destination": "skills/repo-context/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/hooks.json",
+      "destination": "hooks.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-shell-policy.sh",
+      "destination": "hooks/pre-tool-shell-policy.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-proxy-read-handoff.sh",
+      "destination": "hooks/pre-tool-proxy-read-handoff.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/pre-tool-exploration-policy.sh",
+      "destination": "hooks/pre-tool-exploration-policy.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-shell-telemetry.sh",
+      "destination": "hooks/post-tool-shell-telemetry.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-native-result-compact.sh",
+      "destination": "hooks/post-tool-native-result-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/post-tool-mcp-compact.sh",
+      "destination": "hooks/post-tool-mcp-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.agents/hooks/after-shell-telemetry.sh",
+      "destination": "hooks/after-shell-telemetry.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
+      "destination": "shared/ralph-plugin-bootstrap.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-exec.sh",
+      "destination": "shared/ralph-plugin-exec.sh",
+      "mode": "0755"
+    }
+  ],
+  "templates": [
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/antigravity/host-manifest.json",
+      "destination": "host-manifest.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "skills/ralph-doctor/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "skills/ralph-plan/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "skills/ralph-run/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "skills/ralph-status/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "skills/ralph-workflow/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "workflows/ralph-doctor.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "workflows/ralph-plan.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "workflows/ralph-run.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "workflows/ralph-status.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "workflows/ralph-workflow.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/antigravity/mcp_config.json",
+      "destination": "mcp_config.json",
+      "mode": "0644"
+    }
+  ]
+}

@@ -187,6 +187,28 @@ ralph_native_shell_append_footer() {
   printf '%s%s' "$preview" "$footer"
 }
 
+ralph_native_shell_process_pgid() {
+  local pid="${1:-}" value=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  value="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import os, sys; print(os.getpgid(int(sys.argv[1])))' "$pid" 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+ralph_native_shell_process_sid() {
+  local pid="${1:-}" value=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  value="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import os, sys; print(os.getsid(int(sys.argv[1])))' "$pid" 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
 # Execute a shell command once in workspace; prints JSON with stdout, stderr, exitCode.
 ralph_native_shell_launch_process_group() {
   local workspace="${1:-}" command="${2:-}" shell_exe="${3:-bash}" stdout_path="${4:-}" stderr_path="${5:-}"
@@ -215,9 +237,9 @@ ralph_native_shell_launch_process_group() {
       # process (and, inside the MCP server, the stdio transport with it).
       # Poll briefly until the child detaches into its own group.
       local _launch_self_pgid _launch_waited=0
-      _launch_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+      _launch_self_pgid="$(ralph_native_shell_process_pgid $$ 2>/dev/null || true)"
       while (( _launch_waited < 40 )); do
-        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+        pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
         [[ -n "$pgid" ]] || break
         [[ -z "$_launch_self_pgid" || "$pgid" != "$_launch_self_pgid" ]] && break
         sleep 0.05
@@ -229,9 +251,9 @@ ralph_native_shell_launch_process_group() {
         isolated="false"
       fi
     else
-      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+      pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
     fi
-    sid="$(ps -o sess= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    sid="$(ralph_native_shell_process_sid "$pid" 2>/dev/null || true)"
   fi
   [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="$pid"
   [[ "$sid" =~ ^[0-9]+$ ]] || sid="$pgid"
@@ -264,10 +286,14 @@ ralph_native_shell_terminate_spawned_job() {
   # dies and the client drops every ralph tool mid-session.
   if [[ "$isolated" == "true" || "$isolated" == "1" ]]; then
     local _term_self_pgid _term_live_pgid
-    _term_self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
-    _term_live_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    _term_self_pgid="$(ralph_native_shell_process_pgid $$ 2>/dev/null || true)"
+    _term_live_pgid="$(ralph_native_shell_process_pgid "$pid" 2>/dev/null || true)"
     [[ -n "$_term_live_pgid" ]] && pgid="$_term_live_pgid"
     if [[ -n "$_term_self_pgid" && "$pgid" == "$_term_self_pgid" ]]; then
+      isolated="false"
+    elif [[ -z "$_term_live_pgid" && "$pgid" != "$pid" ]]; then
+      # Without a live group identity, only pgid==pid is safe for a job Ralph
+      # itself launched with setsid. Never group-kill an unverified group.
       isolated="false"
     fi
   fi
@@ -293,14 +319,69 @@ ralph_native_shell_terminate_spawned_job() {
   printf '%s\n' "$escalated"
 }
 
+# Best-effort process-start identity for <pid>.
+# Exit 0: process exists; start identity printed on stdout.
+# Exit 1: process is dead or pid is invalid.
+# Exit 2: process inspection is unavailable or restricted.
+ralph_native_shell_process_start_id_of_pid() {
+  local pid="${1:-}" start=""
+
+  if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  if [[ -d "/proc" ]]; then
+    if [[ -d "/proc/$pid" ]]; then
+      if command -v stat >/dev/null 2>&1; then
+        start="$(stat -c %Z "/proc/$pid" 2>/dev/null || stat -f %B "/proc/$pid" 2>/dev/null || true)"
+      fi
+      if [[ -n "$start" ]]; then
+        printf '%s\n' "$start"
+        return 0
+      fi
+      return 2
+    fi
+    return 1
+  fi
+
+  if command -v ps >/dev/null 2>&1; then
+    start="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | head -n1)"
+    if [[ -n "$start" ]]; then
+      printf '%s\n' "$start"
+      return 0
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      return 2
+    fi
+    return 1
+  fi
+
+  return 2
+}
+
 ralph_native_shell_pid_running() {
   local pid="${1:-}"
-  local stat=""
+  local expected_start_id="${2:-}"
+  local stat="" current_start="" start_rc=0
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
-  [[ -n "$stat" ]] || return 0
+  [[ -n "$stat" ]] || {
+    if [[ -n "$expected_start_id" && "$expected_start_id" != "unknown" ]]; then
+      current_start="$(ralph_native_shell_process_start_id_of_pid "$pid")" || start_rc=$?
+      if (( start_rc == 0 )) && [[ "$current_start" != "$expected_start_id" ]]; then
+        return 1
+      fi
+    fi
+    return 0
+  }
   [[ "$stat" == Z* ]] && return 1
+  if [[ -n "$expected_start_id" && "$expected_start_id" != "unknown" ]]; then
+    current_start="$(ralph_native_shell_process_start_id_of_pid "$pid")" || start_rc=$?
+    if (( start_rc == 0 )) && [[ "$current_start" != "$expected_start_id" ]]; then
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -407,11 +488,16 @@ ralph_native_shell_compact_pipeline_json() {
   if declare -F ralph_mcp_proxy_result_token_cap_for_tool >/dev/null 2>&1; then
     token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$store_tool")"
   fi
-  if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
-    ralph_mcp_proxy_result_apply_preview_caps "$preview_text" "$byte_cap" "$token_cap"
-    preview_text="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
-  elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
-    preview_text="${preview_text:0:byte_cap}"
+  # When compaction declined, leave the full source for finish_success /
+  # shape_one_text so a visible byte-cap footer can be attached. Cap only when
+  # compaction actually rewrote the streams.
+  if [[ "$compacted_applied" -eq 1 ]]; then
+    if declare -F ralph_mcp_proxy_result_apply_preview_caps >/dev/null 2>&1; then
+      ralph_mcp_proxy_result_apply_preview_caps "$preview_text" "$byte_cap" "$token_cap"
+      preview_text="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+    elif [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]] && [[ "${#preview_text}" -gt "$byte_cap" ]]; then
+      preview_text="${preview_text:0:byte_cap}"
+    fi
   fi
   returned_bytes=${#preview_text}
 

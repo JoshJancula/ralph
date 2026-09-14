@@ -1,0 +1,8 @@
+Workflow status
+State: waiting (operator-input)
+Run: fixture-seq-input | Workflow: bug-fix | Mode: sequential
+Task: Fix the timeout
+Summary: the run is waiting for the operator to answer an input request
+Stage: implement [waiting]
+Question: Which staging configuration should Ralph use?
+Action: answer the outstanding request: ralph workflow actions list fixture-seq-input

@@ -59,13 +59,18 @@ ralph_cursor_mcp_compact_normalize_tool_name() {
   local raw="${1:-}"
   raw="${raw#MCP:}"
   raw="${raw#ralph-}"
+  # The Ralph MCP server is registered as "ralph", so Cursor/Antigravity deliver
+  # its tools as mcp__ralph__ralph_proxy_*. Strip that namespace so the scope
+  # check below can match by the ralph_proxy_* prefix. Third-party namespaces are
+  # intentionally left untouched; this hook never rewrites their results.
+  raw="${raw#mcp__ralph__}"
   printf '%s\n' "$raw"
 }
 
 ralph_cursor_mcp_compact_is_ralph_proxy_tool() {
   local tool_name="${1:-}"
   case "$tool_name" in
-    ralph_proxy_read | ralph_proxy_grep | ralph_proxy_glob | ralph_proxy_shell) return 0 ;;
+    ralph_proxy_*) return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -39,6 +39,8 @@ After enabling, you can ask Claude to create an agent team in natural language; 
 
 Ralph provides **plan-driven runs** (one markdown plan with `- [ ]` / `- [x]` TODOs, driven by `.ralph/run-plan.sh` with required **`--plan`**) and **multi-stage orchestration** (`.ralph/orchestrator.sh` with JSON stages and artifact handoffs). Agent teams add **parallel, multi-agent work inside a single Claude Code session**, with a shared task list and direct communication between teammates.
 
+Ralph's bundled `research`, `architect`, `implementation`, `code-review`, `qa`, and `security` resources are instruction-only roles under `.ralph/roles/`; they are not Claude Code native agents. Ralph installs no native runtime agents. Claude supplies and owns the actual agent sessions, teams, and subagents. A Claude team or subagent therefore remains distinct from a Ralph role, and a Ralph delegated run is a separate Ralph-supervised execution boundary.
+
 ### How they fit together
 
 - **Ralph plan / run-plan**: One agent (or one human) works through a single plan file; the runner loops until all TODOs are done. Good for sequential work and clear checkpoints.
@@ -62,20 +64,20 @@ You can combine them: for example, the **lead** runs or follows a Ralph plan and
 3. The lead creates the team, populates the shared task list (aligned with plan TODOs or sub-goals), and assigns or lets teammates self-claim. Teammates write to Ralph-style artifact paths so the lead (or a later orchestrator stage) can consume them.
 4. When the team is done, the lead can mark plan items complete, run the Ralph runner to continue the loop, or hand off to the next orchestrator stage.
 
-### Pattern 2: Ralph agent roles as teammate roles
+### Pattern 2: Use Ralph roles as teammate guidance
 
-Ralph ships prebuilt agents (e.g. `research`, `architect`, `implementation`, `code-review`, `qa`, `security`) under `.claude/agents/`. Each has a `config.json` for Ralph tooling and a peer `.md` file with YAML frontmatter for Claude Code. You can spawn teammates that mirror these roles:
+Ralph ships six bundled roles (for example, `research`, `architect`, `implementation`, `code-review`, `qa`, and `security`) under `.ralph/roles/`. They provide instruction guidance only; they do not create or select Claude Code native agents. You can spawn native Claude teammates and give them prompts that mirror a Ralph role's focus:
 
 ```text
 Create an agent team to review PR #142. Spawn three teammates:
-- One focused on security (use the same scope as .claude/agents/security): token handling, session management, input validation
+- One focused on security (use the same scope as the Ralph `security` role): token handling, session management, input validation
 - One focused on performance impact
 - One focused on test coverage
 
 Have them each write findings to .ralph-workspace/artifacts/pr-142/review-<focus>.md and then discuss to produce a single .ralph-workspace/artifacts/pr-142/synthesis.md.
 ```
 
-Give each teammate enough context in the spawn prompt: paths to relevant files, artifact locations (e.g. `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/...`), and any Ralph conventions (e.g. no emoji, repo-context skill). Teammates load project context (e.g. CLAUDE.md, MCP, skills) but not the lead’s conversation history, so include task-specific details in the prompt.
+Give each teammate enough context in the spawn prompt: paths to relevant files, artifact locations (e.g. `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/...`), the Ralph role guidance to follow, and any Ralph conventions (e.g. no emoji, repo-context skill). Teammates load project context (e.g. CLAUDE.md, MCP, skills) but not the lead’s conversation history, so include task-specific details in the prompt. Keep Claude's native team/subagent configuration in Claude's own runtime files; Ralph upgrades remove only its six generated legacy profiles and preserve unrelated native files.
 
 ### Pattern 3: Parallel research or competing hypotheses
 
@@ -207,4 +209,4 @@ This hybrid approach leverages Claude Code's strength in parallel exploration an
 - **Claude Code agent teams**: [Orchestrate teams of Claude Code sessions](https://code.claude.com/docs/en/agent-teams) (enable, control, best practices, limitations)
 - **Ralph workflow**: [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) (plan-first loop, orchestrator, runners, subagents/teams overview)
 - **Ralph MCP**: [MCP.md](MCP.md) (Ralph MCP server and workspace config)
-- **Claude agents in your workspace**: `.claude/agents/README.md` (dual-purpose config: `config.json` for Ralph, `.md` for Claude Code)
+- **Ralph roles**: [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) (instruction-only roles and their relationship to runtime agents)

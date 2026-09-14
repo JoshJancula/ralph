@@ -34,14 +34,13 @@ _runtime_overlay_cursor_hooks_source_dir() {
 }
 
 _runtime_overlay_cursor_ralph_hook_script_names() {
-  printf '%s\n' pre-tool-shell-policy.sh post-tool-shell-telemetry.sh post-tool-native-result-compact.sh post-tool-mcp-compact.sh after-shell-telemetry.sh
+  printf '%s\n' pre-tool-shell-policy.sh post-tool-shell-telemetry.sh post-tool-native-result-compact.sh post-tool-mcp-compact.sh after-shell-telemetry.sh stop-continuation.sh
 }
 
 ralph_cursor_optimization_mode_enables_mcp_proxy_compaction() {
-  case "${RALPH_OPTIMIZATION_MODE:-}" in
-    bounded|governed) return 0 ;;
-    *) return 1 ;;
-  esac
+  # The legacy optimization-mode env var is rejected at argument-parse time,
+  # so it can never legitimately be set here; this always falls through to false.
+  return 1
 }
 
 ralph_native_hooks_want_activation() {
@@ -138,6 +137,7 @@ required = {
     "post-tool-native-result-compact.sh",
     "post-tool-mcp-compact.sh",
     "after-shell-telemetry.sh",
+    "stop-continuation.sh",
 }
 
 try:
@@ -156,7 +156,7 @@ def scan_entries(entries):
         if base in required:
             found.add(base)
 
-for event in ("preToolUse", "postToolUse", "afterShellExecution"):
+for event in ("preToolUse", "postToolUse", "afterShellExecution", "stop"):
     scan_entries(hooks.get(event))
 
 if found == required:
@@ -171,22 +171,34 @@ runtime_overlay_cursor_preserve_durable_install() {
   runtime_overlay_cursor_hooks_detected_in_file "$hooks_file"
 }
 
+runtime_overlay_cursor_hook_timeout() {
+  local timeout="${RALPH_BG_HOOK_TIMEOUT:-5400}"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=5400
+  printf '%s\n' "$timeout"
+}
+
 runtime_overlay_cursor_merge_hooks_file() {
   local target="$1"
   local template="$2"
-  python3 - "$target" "$template" <<'PY'
+  local include_stop="${3:-0}"
+  local hook_timeout
+  hook_timeout="$(runtime_overlay_cursor_hook_timeout)"
+  python3 - "$target" "$template" "$include_stop" "$hook_timeout" <<'PY'
 import copy
 import json
 import os
 import sys
 
-target, template = sys.argv[1:]
+target, template, include_stop_raw, hook_timeout_raw = sys.argv[1:]
+include_stop = include_stop_raw == "1"
+hook_timeout = int(hook_timeout_raw) if hook_timeout_raw.isdigit() else 5400
 
 RALPH_BASES = {
     "pre-tool-shell-policy.sh",
     "post-tool-shell-telemetry.sh",
     "post-tool-mcp-compact.sh",
     "after-shell-telemetry.sh",
+    "stop-continuation.sh",
 }
 
 
@@ -205,7 +217,7 @@ def entry_basename(entry):
     return os.path.basename(entry_command(entry))
 
 
-def merge_entries(existing, template_entries):
+def merge_entries(existing, template_entries, event):
     existing_cmds = {entry_command(e) for e in existing}
     existing_bases = {entry_basename(e) for e in existing if entry_basename(e)}
     for entry in template_entries:
@@ -217,7 +229,10 @@ def merge_entries(existing, template_entries):
             continue
         if any(cmd.endswith(b) for b in existing_bases if b):
             continue
-        existing.append(copy.deepcopy(entry))
+        merged = copy.deepcopy(entry)
+        if event == "stop":
+            merged["timeout"] = hook_timeout
+        existing.append(merged)
         existing_cmds.add(cmd)
         if base:
             existing_bases.add(base)
@@ -232,8 +247,13 @@ template_hooks = template_data.get("hooks") or {}
 hooks = data.setdefault("hooks", {})
 
 for event, template_entries in template_hooks.items():
+    if event == "stop" and not include_stop:
+        continue
     hooks.setdefault(event, [])
-    merge_entries(hooks[event], template_entries)
+    merge_entries(hooks[event], template_entries, event)
+
+if not include_stop:
+    hooks.pop("stop", None)
 
 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
 with open(target, "w") as fh:
@@ -284,6 +304,14 @@ run_plan_invoke_cursor_hooks_config_cleanup() {
   local idx backup script_target
 
   if [[ -n "$target" ]] && runtime_overlay_cursor_preserve_durable_install "$target"; then
+    if declare -F runtime_overlay_forget_recorded_file >/dev/null 2>&1; then
+      runtime_overlay_forget_recorded_file "$target"
+      if [[ "${CURSOR_PLAN_HOOKS_SCRIPT_TARGETS+set}" == "set" && "${#CURSOR_PLAN_HOOKS_SCRIPT_TARGETS[@]}" -gt 0 ]]; then
+        for ((idx = 0; idx < ${#CURSOR_PLAN_HOOKS_SCRIPT_TARGETS[@]}; idx++)); do
+          runtime_overlay_forget_recorded_file "${CURSOR_PLAN_HOOKS_SCRIPT_TARGETS[idx]}"
+        done
+      fi
+    fi
     unset CURSOR_PLAN_HOOKS_CONFIG_TARGET
     unset CURSOR_PLAN_HOOKS_CONFIG_BACKUP
     unset CURSOR_PLAN_HOOKS_CONFIG_HAD_FILE
@@ -332,7 +360,7 @@ run_plan_invoke_cursor_hooks_config_cleanup() {
 
 run_plan_invoke_cursor_hooks_config_prepare() {
   local workspace="${WORKSPACE:-}"
-  local target had_file=0 template backup_path=""
+  local target had_file=0 template backup_path="" include_stop=0
 
   if [[ -z "$workspace" ]]; then
     echo "Error: WORKSPACE is required for Cursor native hook overlay." >&2
@@ -367,7 +395,11 @@ run_plan_invoke_cursor_hooks_config_prepare() {
     fi
   fi
 
-  if ! runtime_overlay_cursor_merge_hooks_file "$target" "$template"; then
+  if declare -F ralph_bg_tier_stop_hook_enabled >/dev/null 2>&1 && ralph_bg_tier_stop_hook_enabled; then
+    include_stop=1
+  fi
+
+  if ! runtime_overlay_cursor_merge_hooks_file "$target" "$template" "$include_stop"; then
     echo "Error: failed to merge Ralph Cursor hooks into $target" >&2
     return 1
   fi
@@ -477,7 +509,7 @@ ralph_cursor_record_active_native_hooks_summary() {
 
 run_plan_invoke_cursor_native_hooks_prepare() {
   local requested="${RALPH_NATIVE_HOOKS:-}"
-  local overlay_mode="${RALPH_OPTIMIZATION_MODE:-}"
+  local tooling_profile="${RALPH_MODE:-}"
   local headless_proof_note output_mutation_note mcp_hook_note native_result_note mcp_optimization_note wrapper_note
   headless_proof_note="Cursor native hooks on cursor-agent 2026.06.03-0bbb28e (2026-06-04): workspace .cursor/hooks.json with --workspace and --trust; preToolUse Shell input rewrite is agent-visible; postToolUse updated_mcp_tool_output is agent-visible for Ralph MCP tools on the tested headless build."
   output_mutation_note="RALPH_BASH_COMPACT is ignored for Cursor native Shell hooks: postToolUse updated_tool_output does not change agent-visible Shell output on the tested headless build."
@@ -489,8 +521,8 @@ run_plan_invoke_cursor_native_hooks_prepare() {
   if declare -F runtime_overlay_set_native_hooks_requested >/dev/null 2>&1; then
     runtime_overlay_set_native_hooks_requested "${requested:-unset}"
   fi
-  if [[ -n "$overlay_mode" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
-    runtime_overlay_set_overlay_mode "$overlay_mode"
+  if [[ -n "$tooling_profile" ]] && declare -F runtime_overlay_set_overlay_mode >/dev/null 2>&1; then
+    runtime_overlay_set_overlay_mode "$tooling_profile"
   fi
 
   ralph_cursor_apply_mcp_optimization_defaults

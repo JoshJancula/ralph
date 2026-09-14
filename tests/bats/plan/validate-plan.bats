@@ -7,6 +7,7 @@ setup() {
   TEST_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/ralph-validate-plan.XXXXXX")"
   VALIDATE_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/validate-plan.sh"
   RUN_PLAN_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/run-plan.sh"
+  VALIDATE_GRAPH_SCHEMA_SH="$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/validate-graph-schema.sh"
 }
 
 teardown() {
@@ -48,20 +49,13 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
-      produces:
-        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
-          required: true
     - id: review
       runtime: codex
-      agent: code-review
       loopBackTo: research
       maxIterations: 2
       loopCheck:
         path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
       produces:
-        - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.md
-          required: true
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
           required: true
   parallelStages:
@@ -72,16 +66,39 @@ todos:
     stage: research
     content: research the change
     status: pending
-    produces:
-      - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
-        required: true
   - id: review-1
     stage: review
     content: review the change
     status: pending
-    produces:
-      - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review-status.md
-        required: true
+---
+EOF
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan routes graph execution to graph validation" {
+  plan_file="$TEST_TMPDIR/graph.plan.md"
+  cp "$BATS_TEST_DIRNAME/../../fixtures/graph/graph-edges.plan.md" "$plan_file"
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan routes orchestration execution to orchestration validation" {
+  plan_file="$TEST_TMPDIR/orchestration.plan.md"
+  cat <<'EOF' >"$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: research
+      runtime: cursor
+todos:
+  - id: research-1
+    stage: research
+    content: research the change
+    status: pending
 ---
 EOF
 
@@ -100,13 +117,11 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: codex
-      agent: code-review
       loopBackTo: research
       maxIterations: 2
       onExhausted: $on_exhausted
@@ -154,7 +169,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
 todos:
   - id: review-1
     stage: missing
@@ -177,10 +191,8 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
     - id: review
       runtime: codex
-      agent: code-review
 todos:
   - id: review-1
     stage: review
@@ -203,7 +215,6 @@ pipeline:
   stages:
     - id: Review
       runtime: cursor
-      agent: research
 todos:
   - id: review-1
     stage: Review
@@ -217,8 +228,10 @@ EOF
   [[ "$output" == *"stage Review id: invalid stage id format"* ]]
 }
 
-@test "validate-plan rejects a stage missing both agent and model" {
-  plan_file="$TEST_TMPDIR/missing-routing.plan.md"
+@test "validate-plan accepts a roleless stage that declares only a runtime" {
+  # Roles are optional and the model falls back to the saved or runtime-native
+  # default, so a runtime alone is complete routing.
+  plan_file="$TEST_TMPDIR/roleless-routing.plan.md"
   cat <<'EOF' >"$plan_file"
 ---
 execution: orchestration
@@ -235,8 +248,28 @@ todos:
 EOF
 
   run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -eq 0 ]
+}
+
+@test "validate-plan rejects a stage missing a runtime" {
+  plan_file="$TEST_TMPDIR/missing-runtime.plan.md"
+  cat <<'EOF' >"$plan_file"
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: review
+todos:
+  - id: review-1
+    stage: review
+    content: review the change
+    status: pending
+---
+EOF
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"stage review routing: must declare agent or model"* ]]
+  [[ "$output" == *"missing runtime"* ]]
 }
 
 @test "validate-plan accepts a stage with planFile (no agent/model required)" {
@@ -282,29 +315,6 @@ EOF
   [[ "$output" == *"planFile"* ]]
 }
 
-@test "validate-plan rejects a routing-rule violation" {
-  plan_file="$TEST_TMPDIR/routing-violation.plan.md"
-  cat <<'EOF' >"$plan_file"
----
-execution: orchestration
-pipeline:
-  stages:
-    - id: review
-      runtime: cursor
-      agent: research
-todos:
-  - id: review-1
-    stage: review
-    runtime: codex
-    content: review the change
-    status: pending
----
-EOF
-
-  run bash "$VALIDATE_PLAN_SH" "$plan_file"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"todo review-1 runtime: overriding a staged runtime requires agent or model"* ]]
-}
 
 @test "validate-plan rejects invalid artifact shorthand" {
   plan_file="$TEST_TMPDIR/artifact-shorthand.plan.md"
@@ -315,7 +325,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       produces:
         - .ralph-workspace/artifacts/{{ARTIFACT_NS}}/review.md
 todos:
@@ -340,7 +349,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       produces:
         - path: /tmp/review.md
 todos:
@@ -365,7 +373,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       produces:
         - path: ../review.md
 todos:
@@ -390,7 +397,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{FOO}}/review.md
 todos:
@@ -415,7 +421,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       loopBackTo: missing
       maxIterations: 2
       loopCheck:
@@ -448,7 +453,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       loopBackTo: research
       maxIterations: 0
       loopCheck:
@@ -458,7 +462,6 @@ pipeline:
           required: true
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
@@ -487,7 +490,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
       loopBackTo: research
       maxIterations: 2
       produces:
@@ -495,7 +497,6 @@ pipeline:
           required: true
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
@@ -524,13 +525,11 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: cursor
-      agent: research
       loopBackTo: research
       maxIterations: 2
       loopCheck:
@@ -563,7 +562,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
   parallelStages: [review]
 todos:
   - id: review-1
@@ -587,13 +585,10 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
     - id: review
       runtime: codex
-      agent: code-review
     - id: qa
       runtime: claude
-      agent: qa
   parallelStages:
     - [research, review]
     - [qa]
@@ -618,10 +613,8 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
     - id: review
       runtime: codex
-      agent: code-review
   parallelStages:
     - [research]
     - [research, review]
@@ -636,6 +629,30 @@ EOF
   run bash "$VALIDATE_PLAN_SH" "$plan_file"
   [ "$status" -ne 0 ]
   [[ "$output" == *"pipeline.parallelStages[2][1]: duplicate stage 'research' across parallel waves"* ]]
+}
+
+
+
+
+
+@test "removed agent: rejects profile-selecting agent on a standard TODO" {
+  plan_file="$TEST_TMPDIR/standard-removed-agent.plan.md"
+  cat <<'EOF' >"$plan_file"
+---
+execution: standard
+todos:
+  - id: task-1
+    content: do the thing
+    agent: research
+    status: pending
+---
+EOF
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"todo task-1 agent:"* ]]
+  [[ "$output" == *"was removed"* ]]
+  [[ "$output" == *"instructions: text"* ]]
 }
 
 @test "run-plan fails fast on an invalid pipeline plan" {
@@ -655,7 +672,6 @@ pipeline:
   stages:
     - id: review
       runtime: cursor
-      agent: research
 todos:
   - id: review-1
     stage: missing
@@ -667,4 +683,24 @@ EOF
   run env -u RALPH_AGENT_TOOL_ACCESS PATH="$workspace/bin:$PATH" bash "$RUN_PLAN_SH" --runtime cursor --model test-model --non-interactive --workspace "$workspace" --plan invalid.plan.md
   [ "$status" -ne 0 ]
   [[ "$output" == *"todo review-1 stage: unknown stage 'missing'"* ]]
+}
+
+@test "standard todo role: a stale role field is refused naming inline instructions" {
+  plan_file="$TEST_TMPDIR/standard-role-removed.plan.md"
+  cat <<'EOF' >"$plan_file"
+---
+execution: standard
+todos:
+  - id: task-1
+    content: do the thing
+    role: research
+    status: pending
+---
+EOF
+
+  run bash "$VALIDATE_PLAN_SH" "$plan_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"role:"* ]]
+  [[ "$output" == *"was removed"* ]]
+  [[ "$output" == *"instructions: text"* ]]
 }

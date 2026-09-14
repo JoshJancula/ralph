@@ -2,7 +2,7 @@
 
 ## Plan-first loop
 
-1. Use `ralph create plan` to scaffold a single plan. `--format classic` creates the zero-dependency markdown checklist path; `--format yaml` creates the flat YAML-frontmatter TODO queue. For a staged multi-agent pipeline, use `ralph create orc`.
+1. Use `ralph create plan` to scaffold a single plan. `--format classic` creates the zero-dependency markdown checklist path; `--format yaml` creates the flat YAML-frontmatter TODO queue. For a staged multi-agent pipeline, use `ralph create workflow --mode sequential`.
 2. Write tasks with the expected syntax for the chosen format: classic uses markdown checkboxes (`- [ ]` todo, `- [x]` done); yaml uses frontmatter TODOs; orchestration uses stage TODOs plus artifacts.
 3. Open tasks in classic plans must use that exact `- [ ]` form (space inside the brackets). `- []` is not a task line and is ignored by the runners.
 4. Run a runner until all items are checked:
@@ -16,11 +16,52 @@
 
 **Three-root model:** Ralph separates the **project root** (folder with `.ralph/` and project-relative plans), the **state root** (directory containing `.ralph-workspace/` logs, artifacts, and sessions; default `<project>/.ralph-workspace`, overridable via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`), and the **agent workspace** (sandboxed work tree for model file access; default: the directory that invoked `run-plan.sh`, overridable via `--agent-workspace` or `RALPH_AGENT_WORKSPACE`). Most plan and doc paths resolve against the project root; paths under `.ralph-workspace/` resolve against the state root. YAML-format runs still write the normal plan-runner logs under `.ralph-workspace/logs/` and artifacts under `.ralph-workspace/artifacts/`. See [AGENTS.md](../AGENTS.md#three-root-model) for defaults, compatibility, and examples.
 
-3. With **`--agent <id>`**, the runner loads that id under `.cursor/agents/`, `.claude/agents/`, `.codex/agents/`, `.opencode/agents/`, or Ralph's Antigravity metadata under `.agents/agents/`. Try **`architect`** or **`research`** after install. Native Antigravity personas are also listed in `.agents/agents.md`. The **agent-config-tool** under `.ralph/` validates and builds context for all runtimes.
+Stage guidance for reusable SDLCs lives in workflow stage `instructions:` (non-empty text). There is no separate public role resource or CLI for instruction packs.
+
+## Workflow operator input
+
+Inside a workflow-owned stage or generated-plan TODO, continue autonomously when
+repository evidence supports the choice. When a missing product decision,
+unavailable credential *configuration*, external fact, or mutually exclusive
+requirement blocks safe progress, request operator input and **stop without
+completing the TODO**:
+
+```bash
+ralph workflow actions request --question "Should CSV export include refunded invoices?" \
+  [--details "Affects report totals and tax lines."]
+```
+
+Never put secret values in the question or details—ask the operator to configure
+a named environment or native secret source and reply when ready. At most one
+outstanding `input` request per attempt. The request does not grant permission
+and does not mutate the plan.
+
+Outstanding input leaves the TODO unchecked, marks the stage/run non-retryable
+`waiting`, and exits **3** (persisted wait, not failure). The operator answers
+with the same run and request IDs from `ralph workflow actions list` / status:
+
+```bash
+ralph workflow actions list run-20260827T200100Z-human-verified-delivery-c0ffee
+ralph workflow actions respond run-20260827T200100Z-human-verified-delivery-c0ffee req-input-42 \
+  --decision answer --message "Include refunded invoices as negative lines." --yes
+ralph workflow resume run-20260827T200100Z-human-verified-delivery-c0ffee --yes
+```
+
+`--decision answer` requires a non-empty `--message`. Resume injects the answer
+and request ID into a delimited block for **the same TODO's** next fresh
+invocation exactly once, then continues the same mutable control plan. Use
+`--decision cancel` to cancel the run instead.
+
+Standalone leaf plans (outside a workflow run) still use the session
+`pending-human.txt` / `operator-response.txt` bridge below. Do not call
+`ralph workflow actions request` from a standalone plan.
+
+Full choose/inspect/start/status/approval/reset journeys with exact run IDs:
+[WORKFLOWS.md](WORKFLOWS.md#operation-command-map).
 
 ## Multi-stage orchestration
 
-1. Use `ralph create orc` (interactive wizard) to scaffold a staged workflow. It outputs a yaml `.plan.md` with a `pipeline:` block. Each stage carries inline content or delegates to a separate plan via `planFile:`.
+1. Use `ralph create workflow --mode sequential` to scaffold a staged workflow. It outputs a yaml `.plan.md` with a `pipeline:` block. Each stage carries inline content or delegates to a separate plan via `planFile:`.
 2. Each stage declares its `runtime` (`cursor` | `claude` | `codex` | `opencode` | `antigravity`), `agent`, and either inline todos or a `planFile`.
 3. Run: `ralph run --plan path/to/pipeline.plan.md`. The orchestration plan is auto-detected and dispatched to `orchestrator.sh`.
 
@@ -148,12 +189,14 @@ Each stage drives the unified plan runner, which in turn writes logs and cleaned
 
 ### Using the runners
 
-1. **Create plans** with `ralph create plan` (`--format classic` for the zero-dependency checklist, `--format yaml` for the flat YAML TODO queue) or `ralph create orc` for staged workflows. YAML and orchestration plans require `python3`; classic plans do not.
+1. **Create plans** with `ralph create plan` (`--format classic` for the zero-dependency checklist, `--format yaml` for the flat YAML TODO queue) or `ralph create workflow --mode sequential` for staged workflows. YAML and orchestration plans require `python3`; classic plans do not.
 2. **Install the vendor CLI** you use (Cursor agent, `claude`, `codex`, `opencode`, or `agy`) so the runner can invoke it. Then run:
    - **`.ralph/run-plan.sh --runtime cursor|claude|codex|opencode|antigravity --plan <path>`** -- the single plan runner (**`--plan` is required**). Each runtime has its own env prefix (`CURSOR_PLAN_*`, `CLAUDE_PLAN_*`, `CODEX_PLAN_*`, `OPENCODE_PLAN_*`, `ANTIGRAVITY_PLAN_*`) and supports the same optional flags (`--agent`, `--select-agent`, `--non-interactive`, `--model`, etc.). Antigravity model ids come from `agy models` and are passed unchanged to `agy --model "<exact model string from agy models>"`.
-3. **Handle human input**: The runner follows an **interactive-first flow**: TTY-attached runs prompt inline on `/dev/tty` and continue in the same process (multiline answers may include blank lines; end input with a line containing only `.`). When stdin/stdout are not a TTY (for example under the orchestrator), `.ralph/run-plan.sh` still **pauses in-process**: under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** it writes `pending-human.txt`, `HUMAN-INPUT-REQUIRED.md`, and a placeholder `operator-response.txt`, then polls until you save a real answer (override poll interval with `RALPH_HUMAN_POLL_INTERVAL`). Optional escalation via `RALPH_HUMAN_ACK_TOOL` can run first for bridges (the orchestrator script itself does not expose `--human-ack`). Set `RALPH_HUMAN_OFFLINE_EXIT=1` only if you need the old behavior (exit 4 and restart after editing files).
+3. **Handle human input**:
+   - **Workflow runs:** use `ralph workflow actions request` / `respond ... --decision answer` (see [Workflow operator input](#workflow-operator-input)). Status/resume/reset/recover use the exact run ID from start; never `latest`.
+   - **Standalone leaf plans:** the runner follows an **interactive-first flow**: TTY-attached runs prompt inline on `/dev/tty` and continue in the same process (multiline answers may include blank lines; end input with a line containing only `.`). When stdin/stdout are not a TTY (for example under the orchestrator), `.ralph/run-plan.sh` still **pauses in-process**: under **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/`** it writes `pending-human.txt`, `HUMAN-INPUT-REQUIRED.md`, and a placeholder `operator-response.txt`, then polls until you save a real answer (override poll interval with `RALPH_HUMAN_POLL_INTERVAL`). Optional escalation via `RALPH_HUMAN_ACK_TOOL` can run first for bridges (the orchestrator script itself does not expose `--human-ack`). Set `RALPH_HUMAN_OFFLINE_EXIT=1` only if you need the old behavior (exit 4 and restart after editing files).
 
-   Every human exchange (question + answer) is also appended to **`human-replies.md`** in that session directory, giving you a namespace-scoped audit trail to review what was asked, who answered it, and what needs to be replayed before resuming the plan.
+   Every standalone human exchange (question + answer) is also appended to **`human-replies.md`** in that session directory, giving you a namespace-scoped audit trail to review what was asked, who answered it, and what needs to be replayed before resuming the plan. Workflow input decisions live under the run registry `actions/` tree instead.
 4. **Logs and artifacts**: After each run, inspect `.ralph-workspace/logs/<namespace>/plan-runner-*.log` for stdout and error details, and `.ralph-workspace/artifacts/{{ARTIFACT_NS}}/` for generated docs. YAML-format runs use the same normal plan-runner logs. Use `.ralph/cleanup-plan.sh <namespace>` to wipe logs, session files, and artifacts before a fresh run.
 5. **Subagents and teams**: The vendor docs for Cursor, Claude, Codex, OpenCode, and Antigravity explain subagents and multi-agent flows; use those when you split work inside a plan or a stage. For Claude Code **agent teams** specifically (teammates, handoffs, teams vs orchestrator), see [Claude Code agent teams with Ralph](CLAUDE-AGENT-TEAMS.md).
 

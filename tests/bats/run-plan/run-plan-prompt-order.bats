@@ -1,12 +1,8 @@
 #!/usr/bin/env bats
 # shellcheck shell=bash
-# Coverage for the named stable/volatile prompt merge in run-plan-core.sh
-# (ralph_run_plan_merge_prompt + ralph_run_plan_stable_prefix_enabled):
-#   - Claude keeps the stable block separate (passed via --system-prompt).
-#   - With stable-prefix ordering enabled (Ralph/hybrid default), every non-Claude
-#     runtime places the byte-identical stable block first.
-#   - With it disabled (native/no default), OpenCode stays stable-first while
-#     Cursor/Codex/Antigravity keep the legacy stable-last order.
+# Coverage for stable/volatile prompt ordering in run-plan-core.sh:
+#   - Claude keeps the stable block separate (passed via --append-system-prompt).
+#   - Every non-Claude runtime places the byte-identical stable block first.
 
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/../../.." && pwd)"
@@ -26,20 +22,10 @@ apply_merge() {
   RUNTIME="$1"
   PROMPT="$2"
   PROMPT_STATIC="$3"
-  ralph_run_plan_merge_prompt "$RUNTIME"
-}
-
-@test "stable-prefix gate follows rollout defaults" {
-  RALPH_MODE=ralph RALPH_PROMPT_STABLE_PREFIX="" run ralph_run_plan_stable_prefix_enabled
-  [ "$status" -eq 0 ]
-  RALPH_MODE=no RALPH_PROMPT_STABLE_PREFIX="" run ralph_run_plan_stable_prefix_enabled
-  [ "$status" -eq 1 ]
-  RALPH_MODE=no RALPH_PROMPT_STABLE_PREFIX=1 run ralph_run_plan_stable_prefix_enabled
-  [ "$status" -eq 0 ]
-  RALPH_MODE=ralph RALPH_PROMPT_STABLE_PREFIX=0 run ralph_run_plan_stable_prefix_enabled
-  [ "$status" -eq 1 ]
-  RALPH_MODE=ralph RALPH_PROMPT_STABLE_PREFIX=bogus run ralph_run_plan_stable_prefix_enabled
-  [ "$status" -eq 2 ]
+  if [[ "$RUNTIME" == "claude" ]]; then
+    return 0
+  fi
+  PROMPT="$(ralph_run_plan_assemble_prompt_ordered "" "$PROMPT_STATIC" "$PROMPT")"
 }
 
 @test "opencode places static block before the per-TODO text (enabled)" {
@@ -50,11 +36,6 @@ apply_merge() {
   [ "$PROMPT" = "STATIC-BLOCK agent context"$'\n\n'"$todo_prompt" ]
   local prefix="${PROMPT%%\*\*TODO*}"
   [[ "$prefix" == *"STATIC-BLOCK agent context"* ]]
-}
-
-@test "opencode is stable-first even when stable-prefix is disabled" {
-  RALPH_MODE=no RALPH_PROMPT_STABLE_PREFIX=0 apply_merge "opencode" "todo text" "STATIC-BLOCK"
-  [ "$PROMPT" = "STATIC-BLOCK"$'\n\n'"todo text" ]
 }
 
 @test "merge is unchanged when PROMPT_STATIC is empty" {
@@ -77,16 +58,6 @@ apply_merge() {
 @test "antigravity is stable-first when stable-prefix is enabled" {
   RALPH_MODE=ralph apply_merge "antigravity" "todo text" "STATIC-BLOCK"
   [ "$PROMPT" = "STATIC-BLOCK"$'\n\n'"todo text" ]
-}
-
-@test "cursor keeps legacy stable-last order when disabled" {
-  RALPH_MODE=no RALPH_PROMPT_STABLE_PREFIX=0 apply_merge "cursor" "todo text" "STATIC-BLOCK"
-  [ "$PROMPT" = "todo text"$'\n'"STATIC-BLOCK" ]
-}
-
-@test "codex keeps legacy stable-last order when disabled" {
-  RALPH_MODE=no RALPH_PROMPT_STABLE_PREFIX=0 apply_merge "codex" "todo text" "STATIC-BLOCK"
-  [ "$PROMPT" = "todo text"$'\n'"STATIC-BLOCK" ]
 }
 
 @test "claude prompt assembly is unchanged (PROMPT_STATIC not merged into PROMPT)" {
@@ -264,7 +235,7 @@ raise SystemExit(0 if not cs.hierarchical_continuation_enabled() else 1)
   PROMPT="todo text only"
   PROMPT_STATIC="STATIC-BLOCK"
   apply_merge "cursor" "$PROMPT" "$PROMPT_STATIC"
-  [ "$PROMPT" = "todo text only"$'\n'"STATIC-BLOCK" ]
+  [ "$PROMPT" = "STATIC-BLOCK"$'\n\n'"todo text only" ]
 }
 
 @test "progressive-context gate follows rollout defaults" {
@@ -294,6 +265,90 @@ Widget rule body.'
   PROMPT_STATIC="STATIC tier1 metadata"
   apply_merge "cursor" "$PROMPT" "$PROMPT_STATIC"
   [[ "$PROMPT" == "STATIC tier1 metadata"$'\n\n'"$volatile"$'\n\n'"$todo_prompt" ]]
+}
+
+# D4 / F6: Claude ralph/hybrid catalog steers exploration to native Read/Grep/Glob;
+# proxy shell remains primary for shell; proxy read is for plan roots / batch only.
+@test "claude ralph catalog guidance prefers native exploration over proxy read/search" {
+  run ralph_mode_prompt_guidance_ralph_catalog claude
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"Native"* && "$output" == *"Grep"* && "$output" == *"Glob"* ]]
+  [[ "$output" == *"mcp__ralph__ralph_proxy_shell"* ]]
+  [[ "$output" == *"read-only plan roots"* ]]
+  [[ "$output" == *"mcp__ralph__ralph_proxy_batch"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"does NOT satisfy that requirement"* ]]
+  [[ "$output" != *"use these as your primary path for read/search"* ]]
+}
+
+@test "claude hybrid guidance keeps native-first exploration catalog wording" {
+  run ralph_mode_prompt_guidance claude hybrid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"mcp__ralph__ralph_proxy_shell"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+}
+
+# D4 / F6 (other runtimes): same native-first exploration catalog; proxy shell
+# for shell; proxy read reserved for plan roots / batch.
+@test "cursor ralph catalog guidance prefers native exploration over proxy read/search" {
+  run ralph_mode_prompt_guidance_ralph_catalog cursor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
+  [[ "$output" == *"read-only plan roots"* ]]
+  [[ "$output" == *"ralph_proxy_batch"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"Use native \`Read\` only immediately before"* ]]
+}
+
+@test "opencode ralph catalog guidance prefers native exploration over proxy read/search" {
+  run ralph_mode_prompt_guidance_ralph_catalog opencode
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
+  [[ "$output" == *"read-only plan roots"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"Use native \`Read\` only immediately before"* ]]
+}
+
+@test "codex ralph catalog guidance prefers native exploration over proxy read/search" {
+  run ralph_mode_prompt_guidance_ralph_catalog_codex ralph
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
+  [[ "$output" == *"read-only plan roots"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"Prefer Ralph tooling first"* ]]
+  [[ "$output" != *"Use \`ralph_proxy_read\` for large file reads instead of native"* ]]
+}
+
+@test "codex hybrid guidance keeps native-first exploration catalog wording" {
+  run ralph_mode_prompt_guidance_ralph_catalog_codex hybrid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"Prefer Ralph tooling when it is healthy for read/search"* ]]
+}
+
+@test "antigravity ralph catalog guidance prefers native exploration over proxy read/search" {
+  run ralph_mode_prompt_guidance_ralph_catalog antigravity
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
+  [[ "$output" == *"read-only plan roots"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+}
+
+@test "hybrid guidance footer does not re-steer exploration to proxy read/search" {
+  run ralph_mode_prompt_guidance cursor hybrid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"are the primary exploration tools"* ]]
+  [[ "$output" == *"When Ralph tooling is slow, failing, or unsuitable"* ]]
+  [[ "$output" != *"primary path for read"* ]]
+  [[ "$output" != *"Prefer Ralph tooling when it is healthy for read/search"* ]]
 }
 
 # Coverage for ralph_mode_prompt_guidance_ralph_failure_footer: agents must

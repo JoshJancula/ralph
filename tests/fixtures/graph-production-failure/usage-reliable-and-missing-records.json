@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "case": "usage-reliable-and-missing-records",
+  "description": "One attempt has a reliable usage snapshot and a sibling attempt has none; display logic must show the missing case as unavailable rather than zero.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-hhhh0008",
+    "nodeId": "node-fixture-usage",
+    "attempts": [
+      {
+        "attemptId": "node-fixture-usage__run-fixture-hhhh0008__1",
+        "usageReliable": true,
+        "usage": {
+          "totalTokens": 1200
+        }
+      },
+      {
+        "attemptId": "node-fixture-usage__run-fixture-hhhh0008__2",
+        "usageReliable": false,
+        "usage": null
+      }
+    ]
+  }
+}

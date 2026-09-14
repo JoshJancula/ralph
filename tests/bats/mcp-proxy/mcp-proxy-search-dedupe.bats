@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# Duplicate ralph_proxy_grep / ralph_proxy_glob returns the cached body with a
+# one-line prefix (COMPACTION-CACHE-AUDIT d2), never the old
+# "(duplicate ... suppressed ...)" stub.
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
@@ -8,6 +11,9 @@ TOOLS_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
 UPSTREAM_SCRIPT="$REPO_ROOT/bundle/.ralph/mcp-server.sh"
 GREP_FIXTURE="$REPO_ROOT/tests/fixtures/mcp-proxy/grep-many-matches.txt"
 GLOB_FIXTURE_DIR="$REPO_ROOT/tests/fixtures/mcp-proxy/glob-many-files"
+
+SEARCH_DEDUPE_GREP_PREFIX='(repeat of an earlier identical grep in this session; no writes since)'
+SEARCH_DEDUPE_GLOB_PREFIX='(repeat of an earlier identical glob in this session; no writes since)'
 
 load_proxy_search_dedupe_libs() {
   # shellcheck source=/dev/null
@@ -134,8 +140,11 @@ assert_grep_response_not_deduped() {
   printf '%s\n' "$response" | jq -e '
     if (.content[0].text | startswith("{")) then
       ((.content[0].text | fromjson | .deduped) // false) == false
+      and ((.content[0].text | fromjson | .preview // .content[0].text)
+           | test("repeat of an earlier identical grep") | not)
     else
-      (.content[0].text | test("duplicate grep suppressed") | not)
+      (.content[0].text | test("repeat of an earlier identical grep") | not)
+      and (.content[0].text | test("duplicate grep suppressed") | not)
     end
   '
 }
@@ -149,6 +158,7 @@ setup() {
   cp "$GREP_FIXTURE" "$WS/grep-many-matches-alt.txt"
   cp -R "$GLOB_FIXTURE_DIR" "$WS/glob-many-files"
   export RALPH_MCP_WORKSPACE="$WS"
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   export RALPH_PLAN_KEY="plan-search-dedupe"
   unset RALPH_PLAN_WORKSPACE_ROOT
   export RALPH_COMPACTORS_LIB_DIR="$REPO_ROOT/bundle/.ralph/bash-lib"
@@ -194,10 +204,14 @@ teardown() {
     and (.content[0].text | fromjson | .preview | test("grep-fixture-line-001"))
     and (.content[0].text | fromjson | .resultId | test("^[a-f0-9]{16}$"))
   '
-  printf '%s\n' "$(<"$out_dir/second.json")" | jq -e '
+  printf '%s\n' "$(<"$out_dir/second.json")" | jq -e \
+    --arg prefix "$SEARCH_DEDUPE_GREP_PREFIX" '
     (.content[0].text | fromjson | .deduped) == true
-    and (.content[0].text | fromjson | .preview | test("duplicate grep suppressed"))
-    and (.content[0].text | test("grep-fixture-line-006") | not)
+    and (.content[0].text | fromjson | .preview | startswith($prefix))
+    and (.content[0].text | fromjson | .preview | test("grep-fixture-line-001"))
+    and (.content[0].text | fromjson | .preview | test("grep-fixture-line-005"))
+    and (.content[0].text | fromjson | .preview | test("grep-fixture-line-006") | not)
+    and (.content[0].text | test("duplicate grep suppressed") | not)
   '
   [[ "$(<"$out_dir/result-id.txt")" =~ ^[a-f0-9]{16}$ ]]
   printf '%s\n' "$(<"$out_dir/read-back.json")" | jq -e '.content[0].text | test("grep-fixture-line-006")'
@@ -222,10 +236,14 @@ teardown() {
     and (.content[0].text | fromjson | .preview | test("glob-fixture-01.txt"))
     and (.content[0].text | fromjson | .resultId | test("^[a-f0-9]{16}$"))
   '
-  printf '%s\n' "$second" | jq -e '
+  printf '%s\n' "$second" | jq -e \
+    --arg prefix "$SEARCH_DEDUPE_GLOB_PREFIX" '
     .isError == false
     and (.content[0].text | fromjson | .deduped) == true
-    and (.content[0].text | fromjson | .preview | test("duplicate glob suppressed"))
+    and (.content[0].text | fromjson | .preview | startswith($prefix))
+    and (.content[0].text | fromjson | .preview | test("glob-fixture-01.txt"))
+    and (.content[0].text | fromjson | .preview | test("glob-fixture-20.txt") | not)
+    and (.content[0].text | test("duplicate glob suppressed") | not)
   '
   [[ "$second" != *"glob-fixture-20.txt"* ]]
 }
@@ -324,6 +342,7 @@ teardown() {
     and (.content[0].text | fromjson | .preview | test("grep-fixture-line-001"))
   '
   [[ "$second" != *"duplicate grep suppressed"* ]]
+  [[ "$second" != *"repeat of an earlier identical grep"* ]]
 }
 
 grep_dedupe_preview_text() {
@@ -337,7 +356,7 @@ grep_dedupe_preview_text() {
   '
 }
 
-@test "duplicate grep response does not include full match body" {
+@test "duplicate grep response replays truncated body with prefix, not full matches" {
   command -v jq >/dev/null || skip "jq required"
 
   local policy grep_args response first second preview_text
@@ -352,15 +371,23 @@ grep_dedupe_preview_text() {
   [[ "$preview_text" == *"grep-fixture-line-005"* ]]
   [[ "$preview_text" != *"grep-fixture-line-006"* ]]
   preview_text="$(grep_dedupe_preview_text "$second")"
-  printf '%s\n' "$second" | jq -e '
+  printf '%s\n' "$second" | jq -e \
+    --arg prefix "$SEARCH_DEDUPE_GREP_PREFIX" '
     if (.content[0].text | startswith("{")) then
       (.content[0].text | fromjson | .deduped) == true
+      and (.content[0].text | fromjson | .preview | startswith($prefix))
+      and (.content[0].text | fromjson | .preview | test("grep-fixture-line-001"))
+      and (.content[0].text | fromjson | .preview | test("grep-fixture-line-005"))
+      and (.content[0].text | fromjson | .preview | test("grep-fixture-line-006") | not)
     else
-      (.content[0].text | test("duplicate grep suppressed"))
+      (.content[0].text | startswith($prefix))
+      and (.content[0].text | test("grep-fixture-line-001"))
+      and (.content[0].text | test("grep-fixture-line-006") | not)
     end
-    and (.content[0].text | test("grep-fixture-line-001") | not)
-    and (.content[0].text | test("grep-fixture-line-006") | not)
+    and (.content[0].text | test("duplicate grep suppressed") | not)
   '
-  [[ "$preview_text" != *"grep-fixture-line-001"* ]]
+  [[ "$preview_text" == *"$SEARCH_DEDUPE_GREP_PREFIX"* ]]
+  [[ "$preview_text" == *"grep-fixture-line-001"* ]]
+  [[ "$preview_text" == *"grep-fixture-line-005"* ]]
   [[ "$preview_text" != *"grep-fixture-line-006"* ]]
 }

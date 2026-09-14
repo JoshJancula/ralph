@@ -26,10 +26,10 @@ setup() {
 
   run install_ops_build_copy_plan
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$bundle_dir/.agents/agents.md|$target_dir/.agents/agents.md|antigravity-agents-md"* ]]
-  [[ "$output" == *"$bundle_dir/.agents/agents|$target_dir/.agents/agents|antigravity-agents"* ]]
   [[ "$output" == *"$bundle_dir/.agents/rules|$target_dir/.agents/rules|antigravity-rules"* ]]
   [[ "$output" == *"$bundle_dir/.agents/skills|$target_dir/.agents/skills|antigravity-skills"* ]]
+  [[ "$output" != *"antigravity-agents"* ]]
+  [[ "$output" != *"agents.md"* ]]
 
   rm -rf "$bundle_dir" "$target_dir"
   BUNDLE=""
@@ -67,20 +67,20 @@ setup() {
   run env RALPH_USAGE_RISKS_ACKNOWLEDGED=1 \
     bash "$REPO_ROOT/install.sh" -n --silent --no-dashboard --antigravity "$target_dir"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"antigravity-agents-md"* || "$output" == *".agents/agents.md"* ]]
-  [[ "$output" == *"antigravity-agents"* || "$output" == *".agents/agents"* ]]
   [[ "$output" == *"antigravity-rules"* || "$output" == *".agents/rules"* ]]
+  [[ "$output" != *"antigravity-agents-md"* ]]
+  [[ "$output" != *"antigravity-agents"* ]]
   [ ! -d "$target_dir/.agents" ]
   rm -rf "$target_dir"
 }
 
-@test "local --antigravity install copies antigravity agents and rules" {
+@test "local --antigravity install copies rules without agent assets" {
   target_dir="$(mktemp -d)"
   run env RALPH_USAGE_RISKS_ACKNOWLEDGED=1 \
     bash "$REPO_ROOT/install.sh" --silent --no-dashboard --antigravity "$target_dir"
   [ "$status" -eq 0 ]
-  [ -f "$target_dir/.agents/agents.md" ]
-  [ -f "$target_dir/.agents/agents/research/config.json" ]
+  [ ! -f "$target_dir/.agents/agents.md" ]
+  [ ! -d "$target_dir/.agents/agents/research" ]
   [ -f "$target_dir/.agents/rules/no-emoji.md" ]
   [ ! -f "$target_dir/.claude/hooks/compact-bash-output.sh" ]
   rm -rf "$target_dir"

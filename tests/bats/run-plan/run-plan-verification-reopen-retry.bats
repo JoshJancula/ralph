@@ -108,7 +108,7 @@ AGENT
   grep -Fq -- "- [ ] first task with failing verification" "$plan_file"
   ! grep -Fq -- "- [x] first task with failing verification" "$plan_file"
   grep -Fq -- "- [ ] second task should not run" "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification_gate TODO stops after one failed invocation without blind retries" {
@@ -153,7 +153,7 @@ AGENT
   [ "$status" -ne 0 ]
   [ "$(cat "$invocation_count")" = "1" ]
   grep -Fq 'verification: printf done' "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen retry uses compact resume when available" {
@@ -207,7 +207,7 @@ AGENT
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] task with retry that needs fix" "$plan_file"
   [[ "$output" == *"compact"* ]] || [[ "$output" == *"post-verify"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner does not advance to next TODO while reopened TODO still failing verification" {
@@ -258,7 +258,7 @@ AGENT
   [ ! -f "$second_ran" ]
   grep -Fq -- "- [ ] first task with failing verification" "$plan_file"
   grep -Fq -- "- [ ] second task" "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen preserves attempt counter across multiple retries" {
@@ -306,7 +306,7 @@ AGENT
   [ "$status" -ne 0 ]
   [ -f "$counter" ]
   [ "$(cat "$counter")" = "3" ] || [ "$(cat "$counter")" -ge 3 ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "retry prompt contains prior verification-failure context" {
@@ -352,7 +352,7 @@ AGENT
   local prompt_content
   prompt_content="$(cat "$prompts")"
   [[ "$prompt_content" == *"verification"* ]] || [[ "$prompt_content" == *"fail"* ]] || [[ "$prompt_content" == *"failed"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen stops immediately when gutter limit exceeded" {
@@ -393,5 +393,5 @@ AGENT
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"exhausted"* ]] || [[ "$output" == *"gutter"* ]] || [[ "$output" == *"budget"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

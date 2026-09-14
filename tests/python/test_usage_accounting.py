@@ -123,6 +123,22 @@ class TestUsageAccounting(unittest.TestCase):
         self.assertEqual(cache_efficiency_ratio(10, 0), 0.0)
         self.assertEqual(cache_efficiency_ratio(10, 100), 0.1)
 
+    def test_observability_identity_fields_survive_usage_enrichment_without_old_labels(self) -> None:
+        record = {
+            "runtime": "codex",
+            "role": "implementation",
+            "modelSource": "runtime saved/default",
+            "nativeSubagents": "inherit",
+            "delegatedRunId": "delegated-run-001",
+            "input_tokens": 4,
+            "output_tokens": 2,
+        }
+        enrich_record(record)
+        for field in ("runtime", "role", "modelSource", "nativeSubagents", "delegatedRunId"):
+            self.assertIn(field, record)
+        self.assertNotIn("agent", record)
+        self.assertNotIn("brokeredChildren", record)
+
 
 if __name__ == "__main__":
     unittest.main()

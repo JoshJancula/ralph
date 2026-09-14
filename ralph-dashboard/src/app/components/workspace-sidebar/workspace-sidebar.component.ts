@@ -33,7 +33,7 @@ import { NavService } from '../../services/nav.service';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 import { SidebarTreeComponent } from '../sidebar-tree/sidebar-tree.component';
 
-const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'plans', 'artifacts', 'sessions'];
+const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'graph-runs', 'plans', 'artifacts', 'sessions'];
 
 const SECTION_HOST_SEP = '\x1e';
 
@@ -179,6 +179,8 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
       case 'logs':
         return 'terminal-outline';
       case 'orchestration-plans':
+        return 'layers-outline';
+      case 'graph-runs':
         return 'layers-outline';
       case 'plans':
         return 'list-outline';

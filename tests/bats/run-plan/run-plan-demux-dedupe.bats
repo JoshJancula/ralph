@@ -104,18 +104,22 @@ assert all(item.get("target") == "duplicate.telemetry" for item in grep_targets)
 PY
 }
 
-@test "demux sums per-turn assistant usage and ignores result event's last-turn input/output" {
+@test "demux prefers per-request sum over a result event that undercounts" {
   local tmpfile usage_file
   tmpfile="$(mktemp)"
   usage_file="$(mktemp)"
 
-  # Synthetic Claude stream-json modeling a real multi-turn invocation:
-  # - init event
-  # - three assistant turns, each a per-request delta
-  # - final result event whose input/output reflect only the LAST turn while its
-  #   cache_read/cache_creation are cumulative (this mixed semantics is what Claude emits).
-  # The recorded totals must be the SUM of the per-turn deltas, not the result event's
-  # last-turn input/output (otherwise a long TODO collapses to input=10).
+  # Synthetic stream with NO message ids, so every assistant event is treated as its
+  # own API request. The result event here reports last-turn-only input/output with
+  # cumulative cache fields.
+  #
+  # NOTE: captured real Claude streams do NOT behave this way -- the result event is
+  # the exact cross-request sum for all four fields, and per-event output_tokens are
+  # stale partials (see tests/python/test_demux_claude_usage.py, built from a real
+  # capture). This fixture was written from that older assumption, and it is kept as
+  # a guard for the per-field max() in _finalize_claude_usage: whichever source is
+  # populated wins, so a CLI that did undercount in `result` would still be recorded
+  # correctly rather than collapsing to input=10.
   cat > "$tmpfile" <<'STREAM'
 {"type": "init", "session_id": "test-session"}
 {"type": "assistant", "message": {"usage": {"input_tokens": 200, "output_tokens": 80, "cache_creation_input_tokens": 5000, "cache_read_input_tokens": 0}}}
@@ -135,7 +139,7 @@ STREAM
   cache_create="$(python3 -c "import json; print(json.load(open('$usage_file'))['cache_creation_input_tokens'])" 2>/dev/null || echo "0")"
   cache_read="$(python3 -c "import json; print(json.load(open('$usage_file'))['cache_read_input_tokens'])" 2>/dev/null || echo "0")"
 
-  # Sum of per-turn deltas: input=200+15+10=225, output=80+120+60=260,
+  # Per-request sum: input=200+15+10=225, output=80+120+60=260,
   # cache_create=5000+3000+2000=10000, cache_read=0+5000+8000=13000.
   # NOT the result event's last-turn input=10/output=60.
   [ "$input_tokens" -eq 225 ]
@@ -272,4 +276,41 @@ STREAM
   assert_telemetry_usage_json "$usage_file" "$large_blob_marker"
 
   rm -rf "$tmp_dir"
+}
+
+@test "demux attributes repeated content-block events to one API request" {
+  local tmpfile usage_file
+  tmpfile="$(mktemp)"
+  usage_file="$(mktemp)"
+
+  # Claude emits one assistant event per CONTENT BLOCK, each repeating the same
+  # message.id and a copy of that request's usage. Two requests, five events here.
+  # Summing events would report cache_read 3*1000 + 2*4000 = 11000 instead of 5000.
+  cat > "$tmpfile" <<'STREAM'
+{"type": "system", "subtype": "init", "session_id": "test-session"}
+{"type": "assistant", "message": {"id": "msg_A", "usage": {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 700, "cache_read_input_tokens": 1000}}}
+{"type": "assistant", "message": {"id": "msg_A", "usage": {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 700, "cache_read_input_tokens": 1000}}}
+{"type": "assistant", "message": {"id": "msg_A", "usage": {"input_tokens": 10, "output_tokens": 2, "cache_creation_input_tokens": 700, "cache_read_input_tokens": 1000}}}
+{"type": "assistant", "message": {"id": "msg_B", "usage": {"input_tokens": 8, "output_tokens": 1, "cache_creation_input_tokens": 300, "cache_read_input_tokens": 4000}}}
+{"type": "assistant", "message": {"id": "msg_B", "usage": {"input_tokens": 8, "output_tokens": 1, "cache_creation_input_tokens": 300, "cache_read_input_tokens": 4000}}}
+{"type": "result", "subtype": "success", "usage": {"input_tokens": 18, "output_tokens": 450, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 5000}}
+STREAM
+
+  run python3 "$REPO_ROOT/bundle/.ralph/python/run-plan-cli-json-demux.py" claude /dev/null "$usage_file" < "$tmpfile"
+
+  [ "$status" -eq 0 ]
+  [ -f "$usage_file" ]
+
+  local field
+  for field in input_tokens:18 output_tokens:450 cache_creation_input_tokens:1000 \
+               cache_read_input_tokens:5000 tool_turns:2; do
+    local key="${field%%:*}" want="${field##*:}" got
+    got="$(python3 -c "import json; print(json.load(open('$usage_file'))['$key'])")"
+    [ "$got" -eq "$want" ] || {
+      echo "$key: got $got want $want" >&2
+      false
+    }
+  done
+
+  rm -f "$tmpfile" "$usage_file"
 }

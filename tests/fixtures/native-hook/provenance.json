@@ -27,7 +27,24 @@
     "bash.json": {
       "tool": "Bash",
       "observedTextPath": ".tool_response.stdout (and .tool_response.stderr)",
-      "notes": "DISCREPANCY FROM ASSUMPTION: this CLI version merges stdout and stderr into a single tool_response.stdout string; tool_response.stderr was observed as an always-empty string even when the command wrote to fd 2 only. Do not assume stderr is populated independently; compaction logic must treat stdout as the combined stream and treat stderr as possibly-empty even when the underlying command produced stderr output."
+      "notes": "DISCREPANCY FROM ASSUMPTION: this CLI version merges stdout and stderr into a single tool_response.stdout string; tool_response.stderr was observed as an always-empty string even when the command wrote to fd 2 only. Do not assume stderr is populated independently; compaction logic must treat stdout as the combined stream and treat stderr as possibly-empty even when the underlying command produced stderr output. Top-level duration_ms, tool_use_id, and session_id were present on capture (2.1.207) and reconfirmed on 2.1.260 (2026-09-04)."
+    },
+    "bash-background.json": {
+      "tool": "Bash",
+      "observedTextPath": ".tool_response.stdout (empty when backgrounded; identity via .tool_response.backgroundTaskId)",
+      "cliVersion": "2.1.260 (Claude Code)",
+      "observationDate": "2026-09-04",
+      "notes": "Captured after a PreToolUse hook injected hookSpecificOutput.updatedInput with run_in_background:true alongside the preserved command (compound sleep, not a bare long leading sleep). PROVEN: the CLI honors the injected flag. PostToolUse tool_input retains run_in_background:true; tool_response carries backgroundTaskId with empty stdout/stderr; duration_ms reflects launch time (~3.7s) rather than sleep wall clock; the model-visible result is a background shell id. Capture method matches this file's top-level captureMethod."
+    },
+    "mcp-third-party.json": {
+      "tool": "mcp__other_server__some_tool",
+      "observedTextPath": ".tool_output.content[0].text",
+      "notes": "Synthetic Cursor/Antigravity MCP PostToolUse payload for a third-party server. The hook must exit 0 and emit no output, leaving the result untouched."
+    },
+    "mcp-ralph-proxy.json": {
+      "tool": "mcp__ralph__ralph_proxy_shell",
+      "observedTextPath": ".tool_output.content[0].text",
+      "notes": "Synthetic Cursor/Antigravity MCP PostToolUse payload for a Ralph proxy tool. With RALPH_PROXY_SHELL_COMPACT=1 the hook must emit updated_mcp_tool_output and compact the oversized shell text."
     }
   }
 }

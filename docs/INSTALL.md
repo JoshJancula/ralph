@@ -9,6 +9,12 @@ Start with the global install unless your team needs Ralph's files checked into 
 
 Ralph plan execution requires Python 3. The process guardian uses only the Python standard library; no Python packages are installed.
 
+### Roles and runtime-native agents
+
+Ralph installs six bundled, instruction-only roles: `research`, `architect`, `implementation`, `code-review`, `qa`, and `security`. Roles are Ralph guidance selected for a run; they are not runtime agents and do not create native agent definitions in Claude, Cursor, Codex, OpenCode, or Antigravity. Ralph installs no native runtime agents.
+
+The runtime supplies the actual agent session. Claude Code agent teams and runtime-native subagents remain Claude features controlled by Claude's own configuration and lifecycle. They are distinct from Ralph roles and from Ralph delegated runs: a role supplies instructions, a native team or subagent is owned by the runtime, and a delegated run is supervised by Ralph with its own Ralph execution boundary.
+
 ## Global install (recommended)
 
 ```bash
@@ -22,7 +28,7 @@ This does four things:
 - Copies Ralph's scripts, docs, and dashboard to `~/.ralph/` (override with `RALPH_HOME`)
 - Puts a `ralph` command at `~/.local/bin/ralph`
 - Creates `~/.config/ralph/` for settings (workspace registry, saved models) and `~/.local/state/ralph/` for session state
-- Creates `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, and `~/.agents/` if they do not exist yet, so you can keep shared agents, rules, and skills there. Existing directories are left alone (pass `--force-global-runtime` to overwrite them with Ralph's defaults)
+- Creates `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, and `~/.agents/` if they do not exist yet, so you can keep your runtime's native configuration, rules, and skills there. Ralph does not create native runtime agents. Existing directories are left alone (pass `--force-global-runtime` to overwrite them with Ralph's defaults)
 
 Global install never writes files into the project you ran it from. `--global` and a project directory argument cannot be combined.
 
@@ -50,8 +56,10 @@ ralph run --plan path/to/pipeline.plan.md                      # run a multi-sta
 ralph models add claude claude-sonnet-4-6                      # save a model id
 ralph dashboard                                                # start the dashboard UI
 ralph workspaces list                                          # list registered projects
-ralph config killswitch init                                   # add per-project killswitch config
-ralph config killswitch                                        # show active killswitch source and paths
+ralph safety status                                            # show effective killswitch source and paths
+ralph safety init --project                                    # add per-project killswitch config
+ralph plugin list                                              # packaged plugin availability for all five runtimes
+ralph plugin install --runtime cursor                          # host-install a packaged plugin (preview + confirm)
 ralph process list --workspace .                               # inspect managed runtime/stage processes
 ralph process stop --all --workspace .                         # stop active Ralph runs safely
 ralph setup --runtime claude --runtime-dir ~/.claude --hooks   # durable Claude compaction hooks in your user runtime
@@ -60,6 +68,22 @@ ralph install ...                                              # re-run the inst
 ```
 
 Each command dispatches to the matching script under `$RALPH_HOME` (for example, `ralph run-plan` runs `$RALPH_HOME/bundle/.ralph/run-plan.sh`).
+
+### Installer help
+
+`./install.sh --help` and `ralph install --help` share the same structured help (Usage, Local / Global install, Update / removal, Workflow / plugin follow-up, Options, Examples). Color is used only when stdout is a TTY; redirected help and `NO_COLOR` / `RALPH_INSTALL_NO_COLOR` stay plain text.
+
+### Workflows and plugin packages after install
+
+| Asset | Where install puts it | Ownership |
+|-------|------------------------|-----------|
+| Bundled workflows | Local: `TARGET/.ralph/workflows/`; global: `$RALPH_HOME/bundle/.ralph/workflows/` | Installer-owned (updated on upgrade) |
+| Global user workflows | `$RALPH_HOME/workflows/` | User data; never recorded, overwritten, migrated, or uninstalled |
+| Project user workflows | `<state-root>/workflows/` | User data; same rule |
+| Packaged plugins | `$RALPH_HOME/plugins/ralph-orchestrator/<runtime>/` | Installer-owned copies; install never host-installs into Claude/Codex/Cursor/OpenCode/Antigravity |
+| Plugin journals | `$RALPH_HOME/plugin-installs/<runtime>.json` (user scope); `<state-root>/plugin-installs/opencode.json` (OpenCode project) | Written only by `ralph plugin`, never by `install.sh` |
+
+After install, use `ralph workflow list` / `ralph workflow start` for workflows, and `ralph plugin` for host plugin lifecycle. Safety config: [SECURITY.md](SECURITY.md#kill-switch-ralph-safety). Host plugin details: [plugins/ralph-orchestrator/README.md](../plugins/ralph-orchestrator/README.md).
 
 ### Runtime setup (`ralph setup`)
 
@@ -123,7 +147,7 @@ ralph models remove claude claude-sonnet-4-6
 
 Antigravity does not use the saved-model store. Ralph lists available models via `agy models` and invokes `agy --model "<exact model string from agy models>"`, preserving the exact display string returned by `agy models`. Set `ANTIGRAVITY_PLAN_MODEL` for non-interactive runs.
 
-Saved models live in `~/.config/ralph/models.json` (override the directory with `RALPH_CONFIG_HOME`). The first saved model per runtime is the default when a plan run has no `--model` flag, env override, or agent-config model. You can also set `CLAUDE_PLAN_MODEL`, `CODEX_PLAN_MODEL`, or `ANTIGRAVITY_PLAN_MODEL` directly. Full resolution order: [ENVIRONMENT.md](ENVIRONMENT.md#models).
+Saved models live in `~/.config/ralph/models.json` (override the directory with `RALPH_CONFIG_HOME`). On attended `ralph run --plan` for Claude or Codex, Ralph shows every saved model and asks you to pick one (plus a custom-entry option). Index 0 is only used as a non-interactive fallback when `--model` / plan-header model is unset. Full resolution order: [ENVIRONMENT.md](ENVIRONMENT.md#models).
 
 ### Where things live
 
@@ -133,6 +157,9 @@ Saved models live in `~/.config/ralph/models.json` (override the directory with 
 | The `ralph` command | `~/.local/bin/ralph` | -- |
 | Settings (workspace registry, models) | `~/.config/ralph/` | `XDG_CONFIG_HOME`, `RALPH_CONFIG_HOME` |
 | Global session state | `~/.local/state/ralph/` | `XDG_STATE_HOME` |
+| Global user workflows | `~/.ralph/workflows/` | under `RALPH_HOME` |
+| Packaged plugins | `~/.ralph/plugins/ralph-orchestrator/<runtime>/` | under `RALPH_HOME` |
+| User-scope plugin journals | `~/.ralph/plugin-installs/<runtime>.json` | under `RALPH_HOME` |
 | Shared runtime configs (optional) | `~/.cursor/`, `~/.claude/`, `~/.codex/`, `~/.opencode/`, `~/.agents/` | `RALPH_GLOBAL_RUNTIME_HOME` |
 
 Plan logs and artifacts always stay in each project's own `.ralph-workspace/` directory unless you move them with `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`. When a project has no local `.ralph/`, session state defaults to `~/.local/state/ralph/sessions/` instead (an explicit `RALPH_PLAN_SESSION_HOME` always wins).
@@ -144,6 +171,8 @@ For each runtime (Cursor, Claude, Codex, OpenCode, Antigravity), Ralph looks for
 1. **Project-local:** `<workspace>/.claude/` (and so on) -- always takes precedence
 2. **User-level:** `~/.claude/` (or under `RALPH_GLOBAL_RUNTIME_HOME`)
 3. **Bundled defaults:** `$RALPH_HOME/bundle/.claude/`
+
+Runtime-native files remain under `<workspace>/.claude/`, `~/.claude/`, and the corresponding runtime directories. An install or upgrade does not remove unrelated native files. Stage guidance for reusable workflows is inline `instructions:` text—not a separate public role resource under `.ralph/roles/`.
 
 Set `RALPH_DISABLE_GLOBAL_FALLBACK=1` to use only the project-local tier (useful in strict or sandboxed environments). The global `ralph` command always runs framework scripts from `$RALPH_HOME/bundle/.ralph/`, even if the workspace still has a leftover `.ralph/` directory from an older local install.
 
@@ -167,7 +196,7 @@ The script registers the project in the workspace registry and, with confirmatio
 
 ## In-repo install (alternative)
 
-Use this when Ralph should live inside the repository: committed, reviewable `.ralph/` and runtime directories that every teammate gets with `git clone`. Run `install.sh` from a Ralph checkout against your project root.
+Use this when Ralph should live inside the repository: committed, reviewable `.ralph/` files and optional runtime configuration that every teammate gets with `git clone`. Run `install.sh` from a Ralph checkout against your project root. The install includes Ralph's bundled workflows under `.ralph/workflows/`, but it does not create native runtime agents.
 
 ### One-time copy (simplest)
 
@@ -190,11 +219,11 @@ git submodule update --init
 ./vendor/ralph/install.sh
 
 git add .ralph \
-  .cursor/ralph .cursor/rules .cursor/skills .cursor/agents \
-  .claude/ralph .claude/rules .claude/skills .claude/agents \
-  .codex/ralph .codex/rules .codex/skills .codex/agents \
-  .opencode/ralph .opencode/rules .opencode/skills .opencode/agents \
-  .agents/agents.md .agents/ralph .agents/rules .agents/skills .agents/agents
+  .cursor/ralph .cursor/rules .cursor/skills \
+  .claude/ralph .claude/rules .claude/skills \
+  .codex/ralph .codex/rules .codex/skills \
+  .opencode/ralph .opencode/rules .opencode/skills \
+  .agents/agents.md .agents/ralph .agents/rules .agents/skills
 git commit -m "Add Ralph agent workflows"
 ```
 
@@ -217,12 +246,12 @@ After a successful install, the installer removes `vendor/ralph` when it is not 
 
 ## Installer options
 
-These flags work in both modes: `install.sh --global` updates `$RALPH_HOME`, and `install.sh /path/to/project` copies into a project. With no flags you get the full stack: shared `.ralph/`, all five runtimes, and the dashboard.
+These flags work in both modes: `install.sh --global` updates `$RALPH_HOME`, and `install.sh /path/to/project` copies into a project. With no flags you get the full stack: shared `.ralph/` (including bundled workflows), runtime rules/skills, all five runtimes, and the dashboard. No native runtime agent profiles are installed.
 
 ```text
 ./install.sh                      # full install (default, same as --all)
 ./install.sh --global             # install to $RALPH_HOME instead of a project
-./install.sh --cursor             # Cursor pieces only (rules, skills, agents)
+./install.sh --cursor             # Cursor pieces only (rules and skills)
 ./install.sh --codex --claude     # Codex and Claude only
 ./install.sh --opencode           # OpenCode only
 ./install.sh --antigravity        # Antigravity only
@@ -239,7 +268,7 @@ Combine `--cursor`, `--claude`, `--codex`, `--opencode`, `--antigravity`, and `-
 
 | Command | What it removes |
 |---------|-----------------|
-| `--uninstall` | Files that ship in the Ralph package (your own files next to them stay). Combine with stack flags, for example `--uninstall --shared`. |
+| `--uninstall` | Files that ship in the Ralph package (your own files next to them stay), including only the six recognized Ralph-generated legacy profiles when applicable. Combine with stack flags, for example `--uninstall --shared`. |
 | `--cleanup` | The vendored Ralph directory under the project, when one still exists. |
 | `--purge` | Both: full uninstall for all stacks plus vendor removal. |
 
@@ -250,6 +279,8 @@ Combine `--cursor`, `--claude`, `--codex`, `--opencode`, `--antigravity`, and `-
 ```
 
 Git bookkeeping for submodules (`git submodule deinit`, `git rm`) or subtree history is still on you; the installer only removes files on disk.
+
+Upgrades and cleanup preserve unrelated native runtime files. Only the six Ralph-generated profiles (`research`, `architect`, `implementation`, `code-review`, `qa`, and `security`) are eligible for removal; a native Claude agent, Claude team configuration, or any other runtime-native file is not.
 
 To remove a **global** install, delete `$RALPH_HOME` and the `~/.local/bin/ralph` shim. Use `migrate-to-global.sh` (above) when you only want to drop a project's local copies while keeping the project registered.
 
@@ -281,9 +312,26 @@ ralph dashboard
 cd .ralph/ralph-dashboard && npm install && npm run build && PORT=8124 npm start
 ```
 
+## Host plugins (`ralph plugin`)
+
+Installing Ralph copies generated packages to `$RALPH_HOME/plugins/ralph-orchestrator/<runtime>/` but does **not** register them with a host. Host install is a separate lifecycle:
+
+```bash
+ralph plugin list
+ralph plugin status --runtime claude
+ralph plugin install --runtime claude --dry-run
+ralph plugin install --runtime claude          # TTY confirm; non-TTY needs --yes
+ralph plugin install --runtime opencode --workspace /path/to/project
+ralph plugin remove --runtime cursor --yes
+```
+
+Supported default scopes: Claude, Codex, Cursor, and Antigravity use `user`; OpenCode uses `project`. Any other scope exits 2. Preview is mandatory; `--dry-run` never mutates; states are `absent|current|drifted|unverifiable`. See [plugins/ralph-orchestrator/README.md](../plugins/ralph-orchestrator/README.md).
+
 ## See also
 
 - [Documentation index](README.md)
+- [Security](SECURITY.md) -- `ralph safety` killswitch CLI and fail-closed loading
+- [Workflows](WORKFLOWS.md) -- including global workflows under `$RALPH_HOME/workflows/`
 - [Agent workflow](AGENT-WORKFLOW.md) -- how the plan loop works
 - [Tooling](TOOLING.md) -- optional Ralph mode, compaction, native adapters
 - [MCP](MCP.md) -- optional MCP server configuration after install

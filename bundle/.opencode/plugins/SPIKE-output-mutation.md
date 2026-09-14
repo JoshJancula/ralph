@@ -58,7 +58,7 @@ Ralph stages the documented local plugin into the workspace. The plugin code imp
 
 **However, on OpenCode 1.14.35 tested 2026-06-04, these hooks have not been proven to fire on headless `opencode run` invocations, and output mutation has not been proven to reach the model.**
 
-Ralph records `native_hooks_reason=plugin_local_load_mutation_unproven` in the overlay summary. **MCP-proxy compaction** (`RALPH_NATIVE_RESULT_COMPACT=1`, `RALPH_PROXY_SHELL_COMPACT=1`, `--ralph-mode hybrid`) is the authoritative token-reduction path for OpenCode plan runs unless `.ralph-workspace/artifacts/PLAN13/opencode-hook-revalidation.md` records `headless_mutation_reaches_model: yes`, in which case plugin-hook mutation becomes authoritative. In `hybrid`, native OpenCode tools and Ralph MCP tools are both available.
+Ralph records `native_hooks_reason=plugin_local_load_mutation_unproven` in the overlay summary. **MCP-proxy shell compaction** (`RALPH_PROXY_SHELL_COMPACT=1`, `--ralph-mode hybrid`) is the authoritative token-reduction path for noisy OpenCode command output unless `.ralph-workspace/artifacts/PLAN13/opencode-hook-revalidation.md` records `headless_mutation_reaches_model: yes`, in which case plugin-hook mutation becomes authoritative. Native exploration output stays direct unless `RALPH_NATIVE_RESULT_COMPACT=1` explicitly opts into legacy windowing. In `hybrid`, native OpenCode tools and Ralph MCP tools are both available.
 
 To verify for your OpenCode build, run the opt-in real smoke test:
 

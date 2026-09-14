@@ -1,0 +1,45 @@
+{
+  "hooks": {
+    "afterShellExecution": [
+      {
+        "command": ".cursor/hooks/after-shell-telemetry.sh"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": ".cursor/hooks/post-tool-shell-telemetry.sh",
+        "matcher": "Shell"
+      },
+      {
+        "command": ".cursor/hooks/post-tool-native-result-compact.sh",
+        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
+      },
+      {
+        "command": ".cursor/hooks/post-tool-mcp-compact.sh",
+        "matcher": "MCP:*"
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": ".cursor/hooks/pre-tool-shell-policy.sh",
+        "matcher": "Shell"
+      },
+      {
+        "command": ".cursor/hooks/pre-tool-proxy-read-handoff.sh",
+        "matcher": "MCP:ralph_proxy_read"
+      },
+      {
+        "command": ".cursor/hooks/pre-tool-exploration-policy.sh",
+        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop-continuation.sh",
+        "loop_limit": 5,
+        "timeout": 5400
+      }
+    ]
+  },
+  "version": 1
+}

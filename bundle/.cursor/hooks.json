@@ -33,6 +33,13 @@
       {
         "command": ".cursor/hooks/after-shell-telemetry.sh"
       }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop-continuation.sh",
+        "timeout": 5400,
+        "loop_limit": 5
+      }
     ]
   }
 }

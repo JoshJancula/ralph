@@ -212,3 +212,52 @@ class RalphUsageRecordOpencodeCacheKeyInjectedTests(unittest.TestCase):
             )
             invocation = doc["invocations"][0]
             self.assertIs(invocation["opencode_cache_key_injected"], False)
+
+
+def test_read_waste_telemetry_persists_for_any_runtime(tmp_path: Path):
+    """The demux computes read-waste counters and they feed the per-invocation
+    optimization hint, but they were previously merged only for opencode -- and
+    even then only the cache keys. Without persistence the numbers vanish with
+    the run and no cross-invocation cost analysis is possible."""
+    merge_file = tmp_path / "demux-usage.json"
+    merge_file.write_text(
+        json.dumps(
+            {
+                "tool_calls_total": 3,
+                "tool_calls_by_tool": {"Read": 3},
+                "adjacent_duplicate_tool_calls": 2,
+                "repeated_read_targets": 1,
+                "repeated_read_extra_calls": 2,
+                "plan_file_read_calls": 1,
+                "tool_call_targets": [
+                    {"tool": "Read", "family": "read", "target": "a.py"},
+                    {"tool": "Read", "family": "read", "target": "a.py"},
+                ],
+            }
+        )
+    )
+
+    workspace_root = tmp_path / "ws"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    usage_file = tmp_path / "usage.json"
+    env = os.environ.copy()
+    env["RALPH_PLAN_WORKSPACE_ROOT"] = str(workspace_root)
+    env["PYTHONPATH"] = str(PYTHONPATH_DIR)
+    cmd = [
+        sys.executable, str(SCRIPT_PATH), str(usage_file),
+        "1", "test-model", "claude", "5", "100", "10", "20", "0", "0", "0.0",
+        "", "", "plan", "", "fresh", "", "", "0", "", "", "0", "0", "0", "0",
+        # argv: ... rate_limit_status(29), tool_turns(30), merge_path(31),
+        # overlay_summary_path(32), overlay_helper(33)
+        "", "0", "", "0", "3", str(merge_file), "", "",
+    ]
+    subprocess.run(cmd, check=True, env=env)
+    with open(usage_file, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    record = data["invocations"][-1] if "invocations" in data else data
+
+    assert record["adjacent_duplicate_tool_calls"] == 2
+    assert record["repeated_read_targets"] == 1
+    assert record["repeated_read_extra_calls"] == 2
+    assert record["plan_file_read_calls"] == 1
+    assert len(record["tool_call_targets"]) == 2

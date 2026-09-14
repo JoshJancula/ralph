@@ -1,0 +1,23 @@
+{
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "/redacted/transcript.jsonl",
+  "cwd": "/redacted/project",
+  "prompt_id": "00000000-0000-0000-0000-000000000001",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "printf start\\n; sleep 12; printf done\\n",
+    "run_in_background": true
+  },
+  "tool_response": {
+    "stdout": "",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false,
+    "backgroundTaskId": "sanitized_bg_task_0001"
+  },
+  "tool_use_id": "toolu_sanitized_0002",
+  "duration_ms": 3752
+}

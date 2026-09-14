@@ -84,16 +84,34 @@ EOF
   chmod +x "$BIN_DIR/claude"
 }
 
+write_claude_stub_mcp_capture() {
+  local record="$1"
+  local mcp_out="$2"
+  cat <<EOF >"$BIN_DIR/claude"
+#!/usr/bin/env bash
+prev=""
+for arg in "\$@"; do
+  if [[ "\$prev" == "--mcp-config" && -f "\$arg" ]]; then
+    cp "\$arg" "$mcp_out"
+  fi
+  prev="\$arg"
+done
+printf '%s\n' "\$@" >>"$record"
+EOF
+  chmod +x "$BIN_DIR/claude"
+}
+
 @test "claude minimal mode preserves user, project, and local setting sources" {
   local -a args=()
 
   run_plan_invoke_claude_apply_minimal_flags args
 
-  [ "${args[4]}" = "--setting-sources" ]
-  [ "${args[5]}" = "user,project,local" ]
+  [ "${args[0]}" = "--setting-sources" ]
+  [ "${args[1]}" = "user,project,local" ]
 }
 
-@test "claude no mode uses merged ambient MCP config instead of empty lockdown" {
+@test "claude no mode preserves native discovery with ambient MCP present" {
+  # Leave native ambient configuration and its authentication state with Claude.
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-no-ambient.args"
@@ -120,16 +138,20 @@ EOF
   [ "$status" -eq 0 ]
   local captured
   captured="$(cat "$record")"
-  [[ "$captured" == *"--strict-mcp-config"* ]]
-  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
   [[ "$captured" == *"user,project,local"* ]]
-  grep -q 'MCP_CONFIG:' "$record"
-  grep -q '"ambient"' "$record"
-  grep -q 'ambient-cmd' "$record"
   [[ "$captured" != *'{"mcpServers":{}}'* ]]
+  ! grep -q '"ambient"' "$record"
+  ! grep -q 'ambient-cmd' "$record"
 }
 
-@test "claude ralph mode merges ambient and ralph MCP servers" {
+@test "claude ralph mode layers ralph-only MCP config without rebuilding ambient servers" {
+  # Contract change: a Ralph profile no longer rebuilds a merged
+  # ambient+ralph catalog. It passes --mcp-config with ONLY the ralph server
+  # and omits --strict-mcp-config, so native discovery (left on) is what
+  # would surface the ambient "ambient" server in a real claude CLI; the
+  # fake adapter here only proves the composed argv, not native discovery.
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-ralph.args"
@@ -164,12 +186,15 @@ EOF
   ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE" "$TEST_TMPDIR" "$TEST_TMPDIR" "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-claude.sh"
 
   [ "$status" -eq 0 ]
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--strict-mcp-config"* ]]
   grep -q '"ralph"' "$record"
-  grep -q '"ambient"' "$record"
-  [[ "$(cat "$record")" == *"mcp__ralph__ralph_proxy_read"* ]]
+  ! grep -q '"ambient"' "$record"
+  [[ "$captured" == *"mcp__ralph__ralph_proxy_read"* ]]
 }
 
-@test "claude hybrid mode keeps ambient servers and ralph proxy tools" {
+@test "claude hybrid mode layers ralph-only MCP config without rebuilding ambient servers" {
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-hybrid.args"
@@ -203,64 +228,148 @@ EOF
   ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE" "$ISOLATED_HOME" "$TEST_TMPDIR" "$TEST_TMPDIR" "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-claude.sh"
 
   [ "$status" -eq 0 ]
-  grep -q '"shared"' "$record"
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--strict-mcp-config"* ]]
   grep -q '"ralph"' "$record"
-  [[ "$(cat "$record")" == *"mcp__ralph__ralph_proxy_batch"* ]]
+  ! grep -q '"shared"' "$record"
+  [[ "$captured" == *"mcp__ralph__ralph_proxy_batch"* ]]
 }
 
-@test "claude agent portable MCP overrides ambient server collision" {
+# Profile-declared MCP entries were removed: MCP composition is native
+# ambient configuration plus Ralph's protected server. See
+# tests/bats/runtime-config/runtime-config-mcp.bats for the replacement
+# coverage, including the rejection of the removed agent-entries env.
+
+@test "claude ralph profile unset override layers exactly one ralph MCP server" {
   [ -x "$(command -v jq)" ] || skip "jq required"
 
-  local record="$TEST_TMPDIR/claude-collision.args"
-  write_claude_stub "$record"
+  local record="$TEST_TMPDIR/claude-ralph-unset.args"
+  local mcp_out="$TEST_TMPDIR/claude-ralph-unset.mcp.json"
+  write_claude_stub_mcp_capture "$record" "$mcp_out"
 
-  printf '%s\n' '{"mcpServers":{"tools":{"command":"ambient-cmd"}}}' >"$WORKSPACE/.mcp.json"
-  export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='[{"name":"tools","transport":"stdio","command":"agent-cmd"}]'
+  export PROMPT="claude-ralph-unset-prompt"
+  export RALPH_MODE=ralph
+  export CLAUDE_PLAN_ALLOWED_TOOLS="Bash,Read,Edit"
 
-  run bash -c '
-    set -euo pipefail
-    export PATH="$5/bin:$PATH"
-    source "$1"
-    source "$2"
-    source "$6"
-    export RALPH_MODE=no
-    export WORKSPACE="$3"
-    export RALPH_PROJECT_ROOT="$3"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'[{"name":"tools","transport":"stdio","command":"agent-cmd"}]'"'"'
-    ralph_runtime_config_mcp_resolve claude "$3" "test-agent" "$3"
-    export PROMPT=claude-collision-prompt
-    export OUTPUT_LOG="$4/output.log"
-    export EXIT_CODE_FILE="$4/exit-code"
-    ralph_run_plan_invoke_claude
-  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE" "$TEST_TMPDIR" "$TEST_TMPDIR" "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-claude.sh"
-
+  run ralph_run_plan_invoke_claude
   [ "$status" -eq 0 ]
-  grep -q 'agent-cmd' "$record"
-  ! grep -q 'ambient-cmd' "$record"
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" == *"--mcp-config"* ]]
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [ -f "$mcp_out" ]
+  [ "$(jq -r '.mcpServers | keys | length' "$mcp_out")" -eq 1 ]
+  [ "$(jq -r '.mcpServers | keys[0]' "$mcp_out")" = "ralph" ]
 }
 
-@test "claude missing ambient MCP reference fails before invoke" {
-  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
+@test "claude raw profile unset override preserves native MCP discovery" {
+  local record="$TEST_TMPDIR/claude-raw-unset.args"
+  local stdin_cap="$TEST_TMPDIR/claude-raw-unset.stdin"
+  write_claude_stub "$record" "$stdin_cap"
 
-  run bash -c '
-    source "$1"
-    source "$2"
-    export RALPH_MODE=no
-    export WORKSPACE="$3"
-    export RALPH_PROJECT_ROOT="$3"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'["missing-server"]'"'"'
-    ralph_runtime_config_mcp_resolve claude "$3" "test-agent" "$3"
-  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE"
+  export PROMPT="claude-raw-unset-prompt"
+  export RALPH_MODE=no
 
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"missing ambient MCP server"* ]]
-  [[ "$output" == *"missing-server"* ]]
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+}
+
+@test "claude ralph profile explicit lockdown override forces strict empty catalog" {
+  local record="$TEST_TMPDIR/claude-ralph-explicit-lock.args"
+  local stdin_cap="$TEST_TMPDIR/claude-ralph-explicit-lock.stdin"
+  write_claude_stub "$record" "$stdin_cap"
+
+  export PROMPT="claude-ralph-explicit-lock-prompt"
+  export RALPH_MODE=ralph
+  export CLAUDE_PLAN_ALLOWED_TOOLS="Bash,Read,Edit"
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" == *"--strict-mcp-config"* ]]
+  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+  ! grep -q 'MCP_CONFIG:' "$record"
+}
+
+@test "claude raw profile explicit lockdown override forces strict empty catalog" {
+  local record="$TEST_TMPDIR/claude-raw-explicit-lock.args"
+  local stdin_cap="$TEST_TMPDIR/claude-raw-explicit-lock.stdin"
+  write_claude_stub "$record" "$stdin_cap"
+
+  export PROMPT="claude-raw-explicit-lock-prompt"
+  export RALPH_MODE=no
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" == *"--strict-mcp-config"* ]]
+  [[ "$captured" == *'{"mcpServers":{}}'* ]]
+}
+
+@test "claude ralph profile explicit permit override layers ralph-only config" {
+  [ -x "$(command -v jq)" ] || skip "jq required"
+
+  local record="$TEST_TMPDIR/claude-ralph-explicit-permit.args"
+  local mcp_out="$TEST_TMPDIR/claude-ralph-explicit-permit.mcp.json"
+  write_claude_stub_mcp_capture "$record" "$mcp_out"
+
+  export PROMPT="claude-ralph-explicit-permit-prompt"
+  export RALPH_MODE=ralph
+  export CLAUDE_PLAN_ALLOWED_TOOLS="Bash,Read,Edit"
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" == *"--mcp-config"* ]]
+  [ -f "$mcp_out" ]
+  [ "$(jq -r '.mcpServers | keys | length' "$mcp_out")" -eq 1 ]
+  [ "$(jq -r '.mcpServers | keys[0]' "$mcp_out")" = "ralph" ]
+}
+
+@test "claude raw profile explicit permit override leaves native discovery alone" {
+  local record="$TEST_TMPDIR/claude-raw-explicit-permit.args"
+  local stdin_cap="$TEST_TMPDIR/claude-raw-explicit-permit.stdin"
+  write_claude_stub "$record" "$stdin_cap"
+
+  export PROMPT="claude-raw-explicit-permit-prompt"
+  export RALPH_MODE=no
+  export CLAUDE_PLAN_MINIMAL_DISABLE_MCP=0
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+
+  local captured
+  captured="$(cat "$record")"
+  [[ "$captured" != *"--strict-mcp-config"* ]]
+  [[ "$captured" != *"--mcp-config"* ]]
+  ! grep -q 'MCP_CONFIG:' "$record"
 }
 
 @test "claude invoke cleans up owned temp MCP config but not runtime resolve artifact" {
   [ -x "$(command -v jq)" ] || skip "jq required"
 
   local record="$TEST_TMPDIR/claude-cleanup.args"
+  local ambient="$WORKSPACE/.mcp.json"
+  local ambient_before
+  printf '%s\n' '{"mcpServers":{"ambient":{"command":"printf"}}}' >"$ambient"
+  ambient_before="$(shasum -a 256 "$ambient" | awk '{print $1}')"
   write_claude_stub "$record"
 
   PROMPT="claude-cleanup-prompt"
@@ -292,6 +401,7 @@ EOF
   ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" "$WORKSPACE" "$TEST_TMPDIR" "$TEST_TMPDIR" "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-claude.sh"
 
   [ "$status" -eq 0 ]
+  [ "$(shasum -a 256 "$ambient" | awk '{print $1}')" = "$ambient_before" ]
 }
 
 @test "claude bare mode omits setting sources and MCP overlay flags" {
@@ -389,7 +499,6 @@ EOF
   export RALPH_MODE=ralph
   export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
   export PROMPT_STATIC="STABLE-PREFIX block"
-  export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT="abc123"
   export RALPH_PLAN_KEY="warm-none"
   export RALPH_PLAN_WORKSPACE_ROOT="$WORKSPACE/.ralph-workspace"
 
@@ -442,8 +551,6 @@ EOF
     export RALPH_PLAN_INVOCATION_USAGE_FILE="$7"
     export RALPH_CLAUDE_SPECULATIVE_CACHE_WARM=1
     export PROMPT_STATIC="STABLE-PREFIX for warm"
-    export RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT=fingerprint-warm
-    export RALPH_PROMPT_STABLE_PREFIX_BYTES=22
     export SELECTED_MODEL=test-model
     export ITERATION=3
 
@@ -453,7 +560,7 @@ EOF
 
     grep -q -- "--cache-control" "$6"
     grep -q -- "--max-output-tokens" "$6"
-    grep -q -- "--system-prompt" "$6"
+    grep -q -- "--append-system-prompt" "$6"
     grep -q "STABLE-PREFIX for warm" "$6"
 
     python3 - <<PY
@@ -466,7 +573,6 @@ assert rec["invocation_kind"] == "speculative_cache_warm"
 assert rec["session_strategy"] == "speculative_cache_warm"
 assert rec["output_tokens"] == 1
 assert rec["cache_creation_input_tokens"] == 900
-assert rec["stable_prefix_fingerprint"] == "fingerprint-warm"
 assert rec["todo_line"] == 42
 PY
   ' _ "$TEST_TMPDIR" "$WARM_LIB" "$TEARDOWN_LIB" "$core_lib" "$funcs" "$record" "$usage_file"
@@ -491,4 +597,112 @@ PY
 
   [ "${RALPH_CLAUDE_SPECULATIVE_CACHE_WARM_STARTED:-0}" = "0" ]
   [ ! -s "$record" ]
+}
+
+@test "claude session continuation tier probe selects hook matching evaluate" {
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  command -v setsid >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || skip "no isolation primitive"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-tier-probe.sh"
+
+  export RALPH_BG_JOBS=1
+  export RALPH_BG_TIER=auto
+  export RALPH_AGENT_WORKSPACE="$WORKSPACE"
+  export RALPH_PROJECT_ROOT="$WORKSPACE"
+  mkdir -p "$WORKSPACE/.claude"
+
+  local probe expected
+  probe="$(ralph_bg_tier_probe_evaluate claude)"
+  expected="$(jq -r '.tier' <<<"$probe")"
+  [ "$expected" = "hook" ]
+  [[ "$(jq -r '.reason' <<<"$probe")" == *"claude-stop-hook"* ]]
+
+  ralph_bg_tier_probe_apply claude >/dev/null
+  [ "${RALPH_BG_TIER_SELECTED:-}" = "$expected" ]
+  [[ "${RALPH_BG_TIER_REASON:-}" == *"claude-stop-hook"* ]]
+}
+
+@test "claude tier1 continuation holds session and emits no resume argv" {
+  local record="$TEST_TMPDIR/claude-tier1-held.args"
+  write_claude_stub "$record"
+  export SESSION_ID_FILE="$TEST_TMPDIR/session-id.claude.txt"
+  printf '%s\n' "held-claude-session" >"$SESSION_ID_FILE"
+  export RALPH_BG_TIER_SELECTED=hook
+  export RALPH_USAGE_SESSION_CONTINUITY=held
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=0
+  export CLAUDE_PLAN_BARE=1
+  unset RALPH_MODE
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export PROMPT="claude-tier1-held"
+
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  [ -s "$record" ]
+  ! grep -Fxq -- "--resume" "$record"
+  ! grep -Fxq -- "--session-id" "$record"
+  ! grep -Fxq -- "held-claude-session" "$record"
+}
+
+@test "claude tier2 continuation resumes exact session id while fresh todo-start omits resume" {
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_run_plan_log() { :; }
+
+  export RALPH_SESSION_DIR="$TEST_TMPDIR/session"
+  mkdir -p "$RALPH_SESSION_DIR"
+  export RUNTIME=claude
+  export RALPH_PROCESS_RUN_ID=run-claude-tier2
+  export RALPH_CURRENT_TODO_ORDINAL=1
+  export SESSION_ID_FILE="$RALPH_SESSION_DIR/session-id.claude.txt"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=0
+  export CLAUDE_PLAN_BARE=1
+  export RALPH_BG_TIER_SELECTED=invocation
+  unset RALPH_MODE
+
+  export RALPH_CURRENT_TODO_LINE=17
+  export RALPH_CURRENT_TODO_ID=claude-tier2-start-todo
+  export RALPH_CURRENT_TODO_HASH=hash-claude-tier2-start
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+
+  local start_record="$TEST_TMPDIR/claude-tier2-start.args"
+  write_claude_stub "$start_record"
+  export PROMPT="claude-tier2-start"
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  ! grep -Fxq -- "--resume" "$start_record"
+
+  export RALPH_CURRENT_TODO_LINE=18
+  export RALPH_CURRENT_TODO_ID=claude-tier2-cont-todo
+  export RALPH_CURRENT_TODO_HASH=hash-claude-tier2-cont
+  ralph_session_todo_create "exact-claude-session" "exact" >/dev/null
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-continue" ]
+  [ "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" = "exact-claude-session" ]
+
+  local cont_record="$TEST_TMPDIR/claude-tier2-cont.args"
+  write_claude_stub "$cont_record"
+  export PROMPT="claude-tier2-continue"
+  run ralph_run_plan_invoke_claude
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--resume" "$cont_record"
+  grep -Fxq -- "exact-claude-session" "$cont_record"
+
+  export RALPH_CURRENT_TODO_ID=claude-tier2-rework
+  export RALPH_CURRENT_TODO_HASH=hash-claude-tier2-rework
+  export RALPH_CURRENT_TODO_LINE=19
+  export RALPH_PLAN_CLI_RESUME=0
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
 }

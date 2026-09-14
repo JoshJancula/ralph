@@ -39,7 +39,7 @@ JSON
   [[ "$output" != *"super-secret-value-12345"* ]]
   
   unset TEST_SECRET_TOKEN
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "no secret leakage in overlay summary: secrets redacted" {
@@ -87,7 +87,7 @@ JSON
   grep -q "REDACTED\|redacted\|\*\*\*" "$summary_file" || true
   
   unset TEST_SECRET
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "no secret leakage in temp config file: resolved values isolated" {
@@ -123,7 +123,7 @@ JSON
   [ "$status" -eq 0 ]
   
   unset TEST_API_KEY
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "summary includes sanitized overlay fields without secrets" {
@@ -167,7 +167,7 @@ JSON
   run jq -e ".mcp_override_decisions | length >= 0" "$summary_file"
   [ "$status" -eq 0 ]
   
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "log files do not contain resolved credential values" {
@@ -217,7 +217,7 @@ JSON
   done
   
   unset TEST_PASSWORD
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "redaction applies to headers as well as env vars" {
@@ -248,10 +248,11 @@ CONFIG
   AGENT_CONFIG_MCP_PY="$REPO_ROOT/bundle/.ralph/python/agent-config-mcp.py"
   [ -f "$AGENT_CONFIG_MCP_PY" ] || skip "agent-config-mcp.py missing"
   
+  # Profile mcp_servers (and profile secret redaction) were removed.
   run python3 "$AGENT_CONFIG_MCP_PY" --redact-config "$cfg"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"***REDACTED***"* ]]
-  [[ "$output" != *"\${API_TOKEN}"* ]]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mcp_servers"* ]]
+  [[ "$output" == *"ralph migrate"* ]]
   
   rm -rf "$agents_root"
 }

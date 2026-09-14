@@ -4,7 +4,7 @@
 
 These pages assume you have **installed Ralph into a project** using **`install.sh`** (see **[INSTALL.md](INSTALL.md)** for submodule, subtree, flags, and removal, or the quick start in the main **README**). Unless we say otherwise, paths are from **your project root**: the directory that contains **`.ralph/`**, **`.cursor/`**, and the rest.
 
-Ralph keeps runtime state (logs, artifacts, sessions) under a **state root** that contains **`.ralph-workspace/`** (default: `<project-root>/.ralph-workspace`, overridable via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`). The **agent workspace** (`--agent-workspace` / `RALPH_AGENT_WORKSPACE`) is the sandboxed work tree where assistants read and write project files; it defaults to the directory that invoked `run-plan.sh`. References to `.ralph-workspace` point at the state root, not the project or agent workspace. See [AGENTS.md](../AGENTS.md#three-root-model).
+Ralph keeps runtime state (logs, artifacts, sessions) under a **state root** that contains **`.ralph-workspace/`** (default: `<project-root>/.ralph-workspace`, overridable via `--workspace-root` or `RALPH_PLAN_WORKSPACE_ROOT`). The **agent workspace** (`--agent-workspace` / `RALPH_AGENT_WORKSPACE`) is the sandboxed work tree where assistants read and write project files; it defaults to the directory that invoked `run-plan.sh`. References to `.ralph-workspace` point at the state root, not the project or agent workspace. See [ENVIRONMENT.md](ENVIRONMENT.md#core-plan-runner-and-workspace).
 
 The installer copies this documentation into **`.ralph/docs/`** in that project. Read it from either place; the content is the same.
 
@@ -15,27 +15,38 @@ Pick what matches what you are doing. You can read them in any order.
 | Guide | What it is for |
 |-------|----------------|
 | [INSTALL.md](INSTALL.md) | Installing Ralph: global install (recommended), in-repo install, `install.sh` flags, uninstall |
-| [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | How `ralph create plan` works across `classic` and `yaml`, how human input behaves (terminal vs offline files), orchestration stages, `loopControl`, cleanup, and copy-paste prompts |
+| [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) | Plan loop, human input, prompts, and execution ownership |
 | [worker-ralph-example.md](worker-ralph-example.md) | One plan, one runtime, end to end: where logs and artifacts go |
-| [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Multi-stage pipelines: stage plans, pipeline plan format, running the orchestrator, checking artifacts |
-| [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs the orchestrator |
+| [orchestrated-ralph-example.md](orchestrated-ralph-example.md) | Sequential pipeline examples (classic orchestration as Sequential internals) |
+| [WORKFLOWS.md](WORKFLOWS.md) | Core operating model, Sequential vs Dependency, status/watch terminal viewer, seven bundled SDLCs, planner/`planInput`, authoring |
+| [CLAUDE-AGENT-TEAMS.md](CLAUDE-AGENT-TEAMS.md) | Claude Code **agent teams** next to Ralph: when teams help vs a single plan vs a workflow |
 | [MCP.md](MCP.md) | Ralph bash MCP server (`jq`), host wiring, and **third-party MCP** (e.g. Playwright for QA) per runtime |
 | [TOOLING.md](TOOLING.md) | Optional Ralph mode (`--ralph-mode` / `RALPH_MODE`): MCP proxy tools, shell output compaction, native adapters per runtime, overlay cleanup |
-| [ENVIRONMENT.md](ENVIRONMENT.md) | Full environment variable reference, session/resume controls, feature gates, models |
+| [ENVIRONMENT.md](ENVIRONMENT.md) | Full environment variable reference, session/resume controls, workflow terminal UI, feature gates, models |
 | [SECURITY.md](SECURITY.md) | Trust and scope: what Ralph sandboxes, what it does not, what it changes on disk, `.cursorignore`, hooks, Codex caveats, killswitch configuration |
 | [BENCHMARKS.md](BENCHMARKS.md) | Token and compaction benchmark report across Ralph optimization paths (run `ralph benchmark`) |
 
 ## Quick reference
 
 - **Open tasks:** `- [ ]` (space inside the brackets). **Done:** `- [x]`. **Not a task:** `- []`.
-- **Plan entry point:** `ralph create plan` scaffolds a single plan. `--format classic` creates the zero-dependency markdown checklist; `--format yaml` creates the flat YAML-frontmatter TODO queue. For a multi-stage pipeline, use `ralph create orc`. Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) are still accepted as aliases for `yaml`.
-- **Run any plan:** `ralph run --plan <path>` auto-detects the format. Classic checklists and flat yaml plans run via `run-plan.sh`; orchestration plans (yaml frontmatter with a `pipeline:` block) run via `orchestrator.sh`.
-- **Saved models:** `ralph models add|list|remove <claude|codex> [id]` (or `.ralph/models.sh`); store at `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json`. See [ENVIRONMENT.md](ENVIRONMENT.md#models).
-- **Orchestration plans:** `ralph create orc` launches the interactive wizard and outputs a yaml `.plan.md` with a `pipeline:` block. Each stage carries inline content or delegates to a separate plan via `planFile:`; both run through `run-plan.sh`.
+- **Create commands (only two):** `ralph create plan` scaffolds a leaf plan (`--format classic` or `yaml`). `ralph create workflow` scaffolds a reusable workflow (`--mode sequential` or `--mode dependency`). Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) remain aliases for `yaml`.
+- **Run a leaf plan:** `ralph run --plan <path>` runs classic or YAML checklists through `run-plan.sh`. Workflow-shaped inputs are refused with the workflow-start replacement.
+- **Start a workflow:** Task-based `ralph workflow start feature-delivery --task "..."` or supplied-plan `ralph workflow start plan-delivery --plan <path>`. Inspect with `ralph workflow inspect`, list with `ralph workflow list`. See [WORKFLOWS.md](WORKFLOWS.md).
+- **Models:** `ralph models list <claude|codex|cursor|opencode|antigravity>` lists models (saved store for Claude/Codex; native CLI discovery for Cursor/OpenCode/Antigravity). `ralph models add|remove <claude|codex> [id]` manages the saved store at `${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json`. See [ENVIRONMENT.md](ENVIRONMENT.md#models).
+- **Sequential workflows:** `ralph create workflow --mode sequential` uses classic orchestration as the Sequential implementation (ordered stages / parallel waves with artifact handoffs).
+
+## Runtime vocabulary
+
+- A **runtime agent** is the agent/session supplied by the selected provider runtime. It executes the prompt, uses native tools, and owns task changes in the assigned agent workspace.
+- A **workflow stage** is an attributable step in a reusable SDLC. Stage guidance is inline `instructions:` on the workflow definition.
+- A **runtime-native subagent** is a child assistant launched through the provider runtime's own subagent feature. The runtime controls it; the parent runtime agent remains responsible for the Ralph TODO and its declared artifacts.
+- A **delegated run** is a Ralph-supervised child execution requested by a runtime agent. The child owns only explicitly assigned result artifacts or changes, while the parent owns the initiating TODO, final verification, and completion decision.
+
+The word **agent** remains intentional for runtime agents, vendor-native terms, `--agent-workspace`, and related CLI surfaces. **Subagent** remains the runtime-native child term.
 
 ## CLI session resume
 
-Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude prebuilt agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
+Out-of-process restarts and operator-driven re-invocations can pick up the most recent assistant session by continuing the same CLI context. When enabled, `.ralph/run-plan.sh` records the current `session-id` in **`.ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt`** (for example `session-id.opencode.txt`; the plan key defaults to the plan file name) and replays a compact context block (TODO + plan path + human replies only) the next time the same runtime runs under that namespace. For non-Claude runtime agents, the block is compact by default and can also be requested with `RALPH_COMPACT_CONTEXT=1` or `--compact`.
 
 **Enable CLI session resume (pick one):**
 
@@ -104,6 +115,18 @@ Per-run summary: `.ralph-workspace/runtime-config/<plan-key>/summary.json` (aggr
 Plan-aggregate telemetry (discover report): `.ralph-workspace/logs/<plan-key>/discover-report.json` (includes compaction events, missed savings, low-value filters, and optimization opportunities).
 
 These are local run artifacts, not uploaded. Dashboard visualization is optional; metrics are human-readable JSON. More on telemetry: [TOOLING.md#telemetry](TOOLING.md#telemetry).
+
+Print a detailed usage report for the current workspace, or scope it to one
+workflow's stage attempts:
+
+```bash
+ralph usage
+ralph usage --run run-20260827T183012Z-feature-delivery-a1b2c3
+```
+
+Plan runners print their per-plan summary when they exit. Workflow lifecycle
+commands print the run aggregate when they return to the terminal; a detached,
+still-running workflow is explicitly marked as a partial report.
 
 ## Benchmark report
 

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "case": "duplicate-run-node-attempt-collision",
+  "description": "Two independent run IDs produce the same node ID and attempt number, which must not collide in storage or ledger lookups.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "nodeId": "node-fixture-shared",
+    "runs": [
+      {
+        "runId": "run-fixture-aaaa0001",
+        "attemptId": "node-fixture-shared__run-fixture-aaaa0001__1",
+        "attemptNumber": 1
+      },
+      {
+        "runId": "run-fixture-bbbb0002",
+        "attemptId": "node-fixture-shared__run-fixture-bbbb0002__1",
+        "attemptNumber": 1
+      }
+    ]
+  }
+}

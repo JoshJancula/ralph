@@ -7,33 +7,49 @@
 #
 # Blocked patterns: .env, .env.local, .env.development, .env.production,
 # .env.staging, .env.test, .env.*.local, and any other .env* variant.
+#
+# Fast path (no set/source/jq): allow when the payload cannot contain an
+# .env* basename. Otherwise one jq call extracts path/file_path/filename
+# and checks the basename.
+
+INPUT=
+IFS= read -r -d '' INPUT || true
+
+# Cheap reject: payloads with no ".env" substring cannot name an .env* file.
+case "$INPUT" in
+  *".env"*) ;;
+  *) exit 0 ;;
+esac
 
 set -euo pipefail
 
-INPUT=$(cat)
-
-# Extract the file path from common tool input shapes.
-# Handles: {"path": "..."}, {"file_path": "..."}, {"filename": "..."}
-FILE_PATH=$(echo "$INPUT" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-if [[ -z "$FILE_PATH" ]]; then
-  FILE_PATH=$(echo "$INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-fi
-if [[ -z "$FILE_PATH" ]]; then
-  FILE_PATH=$(echo "$INPUT" | sed -n 's/.*"filename"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-fi
-
-if [[ -z "$FILE_PATH" ]]; then
-  # No file path found in input — allow the tool call through
+if ! command -v jq >/dev/null 2>&1; then
+  # Fail open without jq: cannot reliably parse tool input.
   exit 0
 fi
 
-# Normalise to basename for pattern matching
-BASENAME=$(basename "$FILE_PATH")
+# Single jq: path candidate + whether basename starts with .env.
+# Handles top-level and tool_input shapes: path / file_path / filename.
+_RALPH_BLOCK_ENV_TSV="$(
+  jq -r '
+    (
+      .tool_input.file_path // .tool_input.path // .tool_input.filename //
+      .file_path // .path // .filename // ""
+    ) as $p
+    | ($p | split("/") | last) as $base
+    | [
+        $p,
+        (if ($p | length) > 0 and ($base | startswith(".env")) then "1" else "0" end)
+      ]
+    | @tsv
+  ' <<<"$INPUT" 2>/dev/null
+)" || exit 0
 
-# Block any file whose name starts with .env
-if [[ "$BASENAME" == .env* ]]; then
-  echo "BLOCKED: Agent attempted to read '$FILE_PATH'. Reading .env files is not permitted." >&2
-  exit 1
+IFS=$'\t' read -r FILE_PATH _ralph_block_env_match <<<"$_RALPH_BLOCK_ENV_TSV" || exit 0
+
+if [[ "${_ralph_block_env_match:-0}" != "1" ]]; then
+  exit 0
 fi
 
-exit 0
+echo "BLOCKED: Agent attempted to read '$FILE_PATH'. Reading .env files is not permitted." >&2
+exit 1

@@ -176,7 +176,7 @@ teardown() {
   printf '%s\n' "$tools_json" | jq -e 'map(.name) | index("ralph_proxy_search") != null'
 }
 
-@test "ralph_proxy_search returns envelope compatible with result follow-up tools" {
+@test "ralph_proxy_search returns direct ranked source results" {
   command -v jq >/dev/null || skip "jq required"
   local policy response
   policy="$(jq -nc '{
@@ -193,14 +193,11 @@ teardown() {
     }
   }')"
   response="$(invoke_proxy_search "$policy" '{"query":"uniqueZebraHandler"}' 0)"
-  payload="$(printf '%s\n' "$response" | jq -r '.content[0].text | fromjson')"
   printf '%s\n' "$response" | jq -e '.isError == false'
-  printf '%s\n' "$payload" | jq -e '.truncated == true'
-  printf '%s\n' "$payload" | jq -e '.preview | test("uniqueZebraHandler")'
-  printf '%s\n' "$payload" | jq -e '.resultId | test("^[a-f0-9]{16}$")'
-  printf '%s\n' "$payload" | jq -e '.breakpoints | map(select(.kind == "matchCluster")) | length >= 1'
-  printf '%s\n' "$payload" | jq -e '.nextActions | map(.tool) | index("ralph_proxy_result_search") != null'
-  printf '%s\n' "$payload" | jq -e '.nextActions | map(.tool) | index("ralph_proxy_result_read") != null'
+  printf '%s\n' "$response" | jq -e '
+    (.content[0].text | test("uniqueZebraHandler"))
+    and ((.content[0].text | startswith("{")) | not)
+  '
 }
 
 @test "ralph_proxy_search rejects calls when searchEnabled is false" {

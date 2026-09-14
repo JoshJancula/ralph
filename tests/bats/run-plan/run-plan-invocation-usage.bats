@@ -1067,19 +1067,23 @@ PY
 }
 
 @test "fresh prompt Rules block in source file contains escaped backticks" {
-  # Locate the fresh Rules verification-ownership line by content (robust to line
-  # shifts). Escaped backticks here prevent command substitution when the
-  # double-quoted PROMPT string is assembled.
-  local start_line next_line
-  start_line="$(grep -nF 'do not rerun those commands through agent-side \`ralph_proxy_shell_start\`' "$CORE_FILE" | head -1 | cut -d: -f1)"
-  [ -n "$start_line" ]
-  next_line=$(( start_line + 1 ))
+  # Locate the fresh Rules cost-model / verification-ownership lines by content
+  # (robust to line shifts). Escaped backticks here prevent command substitution
+  # when the double-quoted PROMPT string is assembled.
+  local cost_line verify_line wait_line
+  cost_line="$(grep -nF 'Cost model (cheapest first): prefer strict runner-owned \`verify:\' "$CORE_FILE" | head -1 | cut -d: -f1)"
+  verify_line="$(grep -nF 'do not rerun those commands through agent-side shell helpers.' "$CORE_FILE" | head -1 | cut -d: -f1)"
+  wait_line="$(grep -nF 'launch it with \`ralph_proxy_shell_start\`, block on completion with \`ralph_proxy_shell_wait\` (pass \`waitSeconds\` near its 600 cap' "$CORE_FILE" | head -1 | cut -d: -f1)"
+  [ -n "$cost_line" ]
+  [ -n "$verify_line" ]
+  [ -n "$wait_line" ]
 
-  sed -n "${start_line}p" "$CORE_FILE" | grep -c 'verify:' | grep -qv '^0$'
-  sed -n "${start_line}p" "$CORE_FILE" | grep -qF '\`verify:\'
-  sed -n "${start_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_'
-  sed -n "${next_line}p" "$CORE_FILE" | grep -qF '\`verification:\'
-  sed -n "${next_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_'
+  sed -n "${cost_line}p" "$CORE_FILE" | grep -qF '\`verify:\'
+  sed -n "$((cost_line + 1))p" "$CORE_FILE" | grep -qF 'Agent-authored polling loops are forbidden'
+  sed -n "${verify_line}p" "$CORE_FILE" | grep -qF '\`verify:\'
+  sed -n "${wait_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_start\'
+  sed -n "${wait_line}p" "$CORE_FILE" | grep -qF '\`ralph_proxy_shell_wait\'
+  sed -n "${wait_line}p" "$CORE_FILE" | grep -qF '\`verification:\'
 }
 
 @test "fresh completion rules block executes without command substitution errors" {
@@ -1129,6 +1133,136 @@ assert record["continuation_summary_entry_count"] == 2
 assert record["continuation_summary_truncation_count"] == 1
 PY
   ' _ "$core_lib" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history records tier reason continuity and wait telemetry from env" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
+
+  local tmpdir core_lib funcs usage_file
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+
+  run bash -c '
+    set -euo pipefail
+    sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
+    SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$1")")")"
+    source "$2"
+    export RALPH_USAGE_BG_TIER=hook
+    export RALPH_USAGE_BG_TIER_REASON=claude-stop-hook-proven
+    export RALPH_USAGE_CONTINUATION_REASON=bg-job
+    export RALPH_USAGE_LOGICAL_ATTEMPT=attempt-abc123
+    export RALPH_USAGE_SESSION_CONTINUITY=held
+    export RALPH_USAGE_DEGRADED_FALLBACK=
+    export RALPH_USAGE_WAIT_DURATION_SECONDS=42
+    export RALPH_USAGE_TERMINAL_STATUS=passed
+    _ralph_append_invocation_usage_history "$3" 1 "m1" "claude" 5 10 20 0 1 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:05Z" "plan-1" "" "fresh" "12" "2" "0"
+    python3 - <<PY
+import json
+with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+record = doc["invocations"][0]
+assert record["bg_tier"] == "hook"
+assert record["bg_tier_reason"] == "claude-stop-hook-proven"
+assert record["continuation_reason"] == "bg-job"
+assert record["logical_attempt"] == "attempt-abc123"
+assert record["session_continuity"] == "held"
+assert "degraded_fallback" not in record
+assert record["wait_duration_seconds"] == 42
+assert record["terminal_status"] == "passed"
+# Never persist command secrets or unbounded output in the usage record.
+blob = json.dumps(record)
+assert "PASSWORD=" not in blob
+assert "SECRET=" not in blob
+assert "stdout" not in blob
+PY
+  ' _ "$core_lib" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history records resumed tier and degraded fallback reason" {
+  [ -x "$(command -v python3)" ] || skip "python3 required for JSON write/update"
+
+  local tmpdir core_lib funcs usage_file
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+
+  run bash -c '
+    set -euo pipefail
+    sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
+    SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$1")")")"
+    source "$2"
+    export RALPH_BG_TIER_SELECTED=invocation
+    export RALPH_BG_TIER_REASON=no-isolation
+    export RALPH_USAGE_CONTINUATION_REASON=bg-job
+    export RALPH_USAGE_SESSION_CONTINUITY=resumed
+    export RALPH_USAGE_DEGRADED_FALLBACK=session-capture-degraded
+    export RALPH_USAGE_WAIT_DURATION_SECONDS=7
+    export RALPH_USAGE_TERMINAL_STATUS=failed
+    _ralph_append_invocation_usage_history "$3" 2 "m1" "cursor" 8 1 2 0 0 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:08Z" "plan-1" "" "fresh" "12" "2" "0"
+    python3 - <<PY
+import json
+with open("'"$usage_file"'", "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+record = doc["invocations"][0]
+assert record["bg_tier"] == "invocation"
+assert record["bg_tier_reason"] == "no-isolation"
+assert record["session_continuity"] == "resumed"
+assert record["degraded_fallback"] == "session-capture-degraded"
+assert record["terminal_status"] == "failed"
+assert record["wait_duration_seconds"] == 7
+PY
+  ' _ "$core_lib" "$funcs" "$usage_file"
+
+  [ "$status" -eq 0 ]
+
+  rm -rf "$tmpdir"
+}
+
+@test "invocation usage history fallback records continuation tier fields without python3" {
+  local tmpdir core_lib funcs usage_file tmpbin
+  tmpdir="$(mktemp -d)"
+  core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  funcs="$tmpdir/funcs.sh"
+  usage_file="$tmpdir/invocation-usage.json"
+  tmpbin="$tmpdir/bin"
+  mkdir -p "$tmpbin"
+  ln -s "$(command -v mkdir)" "$tmpbin/mkdir"
+  ln -s "$(command -v dirname)" "$tmpbin/dirname"
+  ln -s "$(command -v cat)" "$tmpbin/cat"
+  ln -s "$(command -v grep)" "$tmpbin/grep"
+  sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$core_lib" >"$funcs"
+
+  run bash -c '
+    set -euo pipefail
+    PATH="$1"
+    source "$2"
+    export RALPH_USAGE_BG_TIER=hook
+    export RALPH_USAGE_BG_TIER_REASON=forced-tier
+    export RALPH_USAGE_CONTINUATION_REASON=todo-continue
+    export RALPH_USAGE_LOGICAL_ATTEMPT=la-1
+    export RALPH_USAGE_SESSION_CONTINUITY=held
+    export RALPH_USAGE_WAIT_DURATION_SECONDS=3
+    export RALPH_USAGE_TERMINAL_STATUS=passed
+    _ralph_append_invocation_usage_history "$3" 1 "m1" "claude" 3 0 0 0 0 0 0
+    grep -q "\"bg_tier\":\"hook\"" "$3"
+    grep -q "\"bg_tier_reason\":\"forced-tier\"" "$3"
+    grep -q "\"continuation_reason\":\"todo-continue\"" "$3"
+    grep -q "\"session_continuity\":\"held\"" "$3"
+    grep -q "\"wait_duration_seconds\":3" "$3"
+    grep -q "\"terminal_status\":\"passed\"" "$3"
+    ! grep -qi "PASSWORD=" "$3"
+  ' _ "$tmpbin" "$funcs" "$usage_file"
 
   [ "$status" -eq 0 ]
 

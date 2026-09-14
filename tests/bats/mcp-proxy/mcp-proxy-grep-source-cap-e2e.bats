@@ -14,6 +14,7 @@ UPSTREAM_SCRIPT="$REPO_ROOT/bundle/.ralph/mcp-server.sh"
 setup() {
   WS="$(mktemp -d)"
   export RALPH_MCP_WORKSPACE="$WS"
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   RALPH_RESULT_WINDOWING_LOG="$WS/windowing.jsonl"
   export RALPH_RESULT_WINDOWING_LOG
   _no_rg_stub="$WS/no-rg-path"

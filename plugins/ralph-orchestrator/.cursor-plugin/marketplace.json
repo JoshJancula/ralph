@@ -1,0 +1,17 @@
+{
+  "name": "ralph-plugins",
+  "owner": {
+    "name": "Ralph maintainers"
+  },
+  "metadata": {
+    "description": "Repository-hosted Ralph workflow plugins",
+    "version": "0.1.0-beta.1"
+  },
+  "plugins": [
+    {
+      "name": "ralph-orchestrator",
+      "source": "./cursor",
+      "description": "Plan, orchestrate, inspect, and safely run Ralph workflows from Cursor."
+    }
+  ]
+}

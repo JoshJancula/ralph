@@ -157,6 +157,21 @@ STUB
     || { echo "expected mcp__ralph__ralph_complete_todo (fallback), got: $tool"; return 1; }
 }
 
+@test "graph-node Claude allowlist includes broker delegation tools" {
+  local tools
+  tools="$(
+    env RALPH_MCP_SCOPE=graph-node RALPH_MCP_TOOL_NAMESPACE=mcp__ralph__ RALPH_MODE=hybrid \
+    bash -c '
+      source "$1"
+      ralph_run_plan_invoke_claude_allowed_tools_list "Bash,Read" 0 0
+    ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
+  )"
+  # The broker tools are namespaced ralph_delegated_run_* on the delegated-run surface.
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_start$'
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_wait$'
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_delegated_run_cancel$'
+}
+
 # ---- Preflight probe tool surface --------------------------------------------
 
 @test "live preflight probe tool uses detected namespace (mcp__ralph__)" {

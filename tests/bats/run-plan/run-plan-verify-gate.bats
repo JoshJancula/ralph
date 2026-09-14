@@ -105,7 +105,7 @@ AGENT
   grep -Fq -- "- [ ] task with a hanging verification command" "$plan_file"
   ! grep -Fq -- "- [x] task with a hanging verification command" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate isolates stdin so a command reading stdin gets EOF instead of blocking" {
@@ -142,7 +142,7 @@ AGENT
   [[ "$output" == *"Running verification checks now"* ]]
   grep -Fq -- "- [x] task whose verification reads stdin" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate accepts agent VERIFICATION_RESULT: PASS without runner re-run by default" {
@@ -177,7 +177,7 @@ AGENT
   [[ "$output" != *"Running verification checks now"* ]]
   grep -Fq -- "- [x] task with a flaky verification command" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate skips direct verification when agent reports PASS" {
@@ -220,7 +220,7 @@ AGENT
   [ ! -f "$marker_file" ]
   grep -Fq -- "- [x] task with direct verification command" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate accepts VERIFICATION STATUS: PASS without runner re-run" {
@@ -255,7 +255,7 @@ AGENT
   [[ "$output" != *"Running verification checks now"* ]]
   grep -Fq -- "- [x] task with a flaky verification command" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate accepts structured TODO footer without AGENT_INVOCATION_COMPLETE" {
@@ -288,7 +288,7 @@ AGENT
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] task with structured completion footer" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate reopens immediately on agent VERIFICATION_RESULT: FAIL without runner re-run" {
@@ -323,7 +323,7 @@ AGENT
   grep -Fq -- "- [ ] task that must not self-certify" "$plan_file"
   ! grep -Fq -- "- [x] task that must not self-certify" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification gate reopens on structured TODO_VERIFICATION: FAIL" {
@@ -357,7 +357,7 @@ AGENT
   grep -Fq -- "- [ ] task with structured verification failure" "$plan_file"
   ! grep -Fq -- "- [x] task with structured verification failure" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "invalid strict verify command does not execute and requests agent verification instead" {
@@ -401,5 +401,5 @@ EOF
   grep -Fq -- "- [ ] task with an invalid strict verify" "$plan_file"
   grep -Fq -- "could not be used automatically" "$cursor_record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

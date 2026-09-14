@@ -10,7 +10,7 @@
   "stages": [
     {
       "id": "research",
-      "agent": "research",
+      "role": "research",
       "runtime": "cursor",
       "plan": ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-01-research.plan.md",
       "sessionResume": false,
@@ -32,7 +32,7 @@
     },
     {
       "id": "architect",
-      "agent": "architect",
+      "role": "architect",
       "runtime": "cursor",
       "plan": ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-02-architect.plan.md",
       "sessionResume": false,
@@ -69,7 +69,7 @@
     },
     {
       "id": "implementation",
-      "agent": "implementation",
+      "role": "implementation",
       "runtime": "cursor",
       "plan": ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-03-implementation.plan.md",
       "sessionResume": false,
@@ -106,7 +106,7 @@
     },
     {
       "id": "code-review",
-      "agent": "code-review",
+      "role": "code-review",
       "runtime": "cursor",
       "plan": ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-04-code-review.plan.md",
       "sessionResume": false,
@@ -132,7 +132,7 @@
     },
     {
       "id": "qa",
-      "agent": "qa",
+      "role": "qa",
       "runtime": "cursor",
       "plan": ".ralph-workspace/orchestration-plans/{{ARTIFACT_NS}}/{{ARTIFACT_NS}}-05-qa.plan.md",
       "sessionResume": false,

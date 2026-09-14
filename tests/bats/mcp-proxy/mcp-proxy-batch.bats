@@ -326,12 +326,20 @@ teardown() {
   '
 }
 
-@test "ralph_proxy_batch times out and reports partial failure on long-running operations" {
+@test "ralph_proxy_batch names each completed operation in its report" {
   command -v jq >/dev/null || skip "jq required"
   printf 'first-file\n' >"$WS/first.txt"
   printf 'second-file\n' >"$WS/second.txt"
   printf 'third-file\n' >"$WS/third.txt"
 
+  # This asserted the per-operation "ok" naming out of a *partially* timed-out
+  # batch, which cannot be made deterministic: operations share one countdown,
+  # so guaranteeing "at least one finished" and "the batch still timed out"
+  # needs the host to sit inside a fixed speed window. Idle it completed all
+  # three and under suite load it completed none, failing at both ends. The
+  # naming is what this test uniquely covers, and it does not need a timeout to
+  # observe; the timeout contract itself is covered by the two PARTIAL_FAILURE
+  # tests below, which assert only load-independent facts.
   local policy args_json response text
   policy="$(batch_policy_json 0)"
   args_json="$(jq -nc '{
@@ -341,12 +349,11 @@ teardown() {
       {tool: "ralph_proxy_read", arguments: {path: "third.txt"}}
     ]
   }')"
-  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=1 invoke_proxy_batch "$policy" "$args_json")"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=600 invoke_proxy_batch "$policy" "$args_json")"
   text="$(batch_result_text "$response")"
 
-  printf '%s\n' "$response" | jq -e '.isError == true'
   [[ "$text" == *"ralph_proxy_read: ok"* ]]
-  [[ "$text" == *"PARTIAL_FAILURE: batch timeout"* ]]
+  [[ "$text" != *"PARTIAL_FAILURE"* ]]
   [[ "$text" != *"(completed -"* ]]
 }
 

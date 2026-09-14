@@ -12,6 +12,11 @@
 .agents
 !bundle/.agents/
 !bundle/.agents/**
+# Shipped plugin packages carry their own .agents payload (the Codex and
+# Antigravity marketplace manifests). The unanchored rule above is meant for
+# the repo-root runtime dir, not for package content that must be committed.
+!plugins/**/.agents/
+!plugins/**/.agents/**
 /.opencode
 # Repo-owned runtime roots (project-specific Ralph dev config; not install output)
 

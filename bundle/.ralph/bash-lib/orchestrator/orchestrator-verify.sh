@@ -6,15 +6,86 @@ fi
 RALPH_ORCHESTRATOR_VERIFY_LOADED=1
 
 # Public interface:
+#   orch_stage_collect_expected_artifacts -- stage-only required output paths into EXPECTED_ARTIFACT_PATHS.
+#   orch_stage_write_contract -- publish the agent-facing artifact contract for a stage.
 #   artifact_remediation_text -- prints remediation steps for missing artifacts.
 #   verify_step_artifacts -- asserts EXPECTED_ARTIFACT_PATHS exist and are non-empty after a stage.
+
+# Collect required output paths exclusively from the stage JSON (artifacts +
+# outputArtifacts with required=true). Template tokens are expanded via
+# artifact_paths_append_unique. Roles and profile output_artifacts are never
+# consulted.
+orch_stage_collect_expected_artifacts() {
+  local stage_json="$1"
+  local artifacts_array artifact_path
+
+  EXPECTED_ARTIFACT_PATHS=()
+  artifacts_array="$(echo "$stage_json" | jq '.artifacts // []' 2>/dev/null)" || artifacts_array="[]"
+  while IFS= read -r artifact_path; do
+    [[ -z "$artifact_path" ]] && continue
+    artifact_paths_append_unique "$artifact_path"
+  done < <(echo "$artifacts_array" | jq -r '.[] | select(.required == true) | .path' 2>/dev/null)
+  while IFS= read -r artifact_path; do
+    [[ -z "$artifact_path" ]] && continue
+    artifact_paths_append_unique "$artifact_path"
+  done < <(echo "$stage_json" | jq -r '.outputArtifacts[]? | select(.required == true) | .path' 2>/dev/null)
+}
+
+# orch_stage_write_contract <workspace> <stage_json> <stage_id>
+#
+# Publishes the stage's artifact contract as data for the agent to query over
+# MCP, next to the per-stage runtime config. Paths are emitted already expanded,
+# so no {{ARTIFACT_NS}} token ever reaches an agent-facing surface -- which is
+# what lets stage instructions stop restating artifact paths in prose.
+#
+# Exports RALPH_STAGE_CONTRACT on success. Non-fatal: a stage with no declared
+# artifacts, or a failed generation, simply leaves the variable unset and the
+# MCP artifact tools then report that this stage declares no contract.
+orch_stage_write_contract() {
+  local workspace="$1"
+  local stage_json="$2"
+  local stage_id="$3"
+
+  unset RALPH_STAGE_CONTRACT
+
+  local schema_py
+  schema_py="$(orch_resolve_artifact_schema_py 2>/dev/null)" || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  local artifact_ns="${RALPH_ARTIFACT_NS:-${ORCH_ARTIFACT_NS:-}}"
+  local plan_key="${RALPH_PLAN_KEY:-$artifact_ns}"
+
+  local state_root
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  else
+    state_root="${workspace%/}/.ralph-workspace"
+  fi
+
+  local contract_dir="${state_root}/runtime-config/${plan_key}-${stage_id}"
+  local contract_path="${contract_dir}/stage-contract.json"
+
+  if ! python3 "$schema_py" stage-contract \
+    --stage-json "$stage_json" \
+    --stage-id "$stage_id" \
+    --artifact-ns "$artifact_ns" \
+    --plan-key "$plan_key" \
+    --workspace "$workspace" \
+    --state-root "$state_root" \
+    --out "$contract_path"; then
+    ralph_warn "stage contract generation failed for stage=$stage_id (artifact tools will report no contract)"
+    return 0
+  fi
+
+  export RALPH_STAGE_CONTRACT="$contract_path"
+  return 0
+}
 
 artifact_remediation_text() {
   echo "  Remediation:"
   echo "    1. Open the step plan and ensure the agent finished every TODO (agent should write declared outputs)."
   echo "    2. Create or fill the missing path under the repo root (see .ralph-workspace/artifacts/ for handoff files)."
-  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage"
-  echo "       or adjust output_artifacts in the agent config."
+  echo "    3. To require different files for this step, edit artifacts or outputArtifacts in the JSON stage."
   echo "    4. Re-run from repo root: $0 --orchestration \"$ORCH_FILE\" \"$WORKSPACE\""
 }
 
@@ -26,6 +97,8 @@ verify_step_artifacts() {
     for ap in "${EXPECTED_ARTIFACT_PATHS[@]}"; do
       if [[ "$ap" == /* ]]; then
         abs="$ap"
+      elif [[ "$ap" == .ralph-workspace/* && -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+        abs="${RALPH_PLAN_WORKSPACE_ROOT%/}/${ap#.ralph-workspace/}"
       else
         abs="$WORKSPACE/$ap"
       fi

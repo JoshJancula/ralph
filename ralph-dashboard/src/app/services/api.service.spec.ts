@@ -420,4 +420,44 @@ describe('ApiService', () => {
       await expect(responsePromise).rejects.toMatchObject({ status: 404 });
     });
   });
+
+  describe('fetchGraphRunDetail()', () => {
+    it('returns runtime identity and delegated-run records without legacy child fields', async () => {
+      const payload = {
+        namespace: 'graph',
+        runId: 'run-1',
+        run: {},
+        graph: {},
+        nodes: [{
+          nodeId: 'source',
+          status: 'succeeded',
+          runtime: 'codex',
+          role: 'research',
+          modelSource: 'runtime saved/default',
+          attempts: [{ attemptId: 'attempt-1', outcome: 'succeeded', runtime: 'codex', role: 'research', modelSource: 'runtime saved/default' }],
+          delegatedRuns: [{
+            delegatedRunId: 'delegated-run-001',
+            runtime: 'claude',
+            role: 'code-review',
+            workspaceMode: 'snapshot',
+            status: 'succeeded',
+            verification: 'passed',
+            usage: { input_tokens: 4 },
+          }],
+        }],
+        usage: { parent: {}, delegatedRuns: { input_tokens: 4 }, total: { input_tokens: 4 } },
+      };
+
+      const responsePromise = firstValueFrom(service.fetchGraphRunDetail('graph', 'run-1'));
+      const req = httpMock.expectOne('/api/graph-runs/graph/run-1');
+      expect(req.request.method).toBe('GET');
+      req.flush(payload);
+
+      const detail = await responsePromise;
+      expect(detail.nodes[0].delegatedRuns?.[0].delegatedRunId).toBe('delegated-run-001');
+      expect(detail.nodes[0].delegatedRuns?.[0]).not.toHaveProperty('delegationId');
+      expect(detail.nodes[0]).not.toHaveProperty('brokeredChildren');
+      expect(detail.usage?.delegatedRuns).toEqual({ input_tokens: 4 });
+    });
+  });
 });

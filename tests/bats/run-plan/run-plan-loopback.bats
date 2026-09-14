@@ -466,7 +466,7 @@ EOF
   [[ "$output" == *"loopback reopened 2 TODO(s)"* ]] || echo "FAIL: output missing reopened message: $output"
   [[ "$output" == *"progress is now 1/3"* ]] || echo "FAIL: progress message wrong: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -573,7 +573,7 @@ EOF
   [[ "$output" == *"loopback reopened 2 TODO(s)"* ]] || echo "FAIL: output missing reopened message: $output"
   [[ "$output" == *"loopback max iterations reached for stage=review target=research iterations=1 max=1"* ]] || echo "FAIL: max iterations message missing: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -711,7 +711,7 @@ EOF
 
   [[ "$output" == *"loopback max iterations reached for stage=review target=research iterations=1 max=1"* ]] || echo "FAIL: resume run missing max iterations message: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -797,7 +797,7 @@ EOF
 
   [[ "$output" == *"approved"* || "$output" == *"loopback"* ]] || echo "FAIL: output missing approved/loopback: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -882,7 +882,7 @@ EOF
 
   [[ "$output" == *"loop-check artifact missing for stage 'review' at path 'artifacts/test-missing/review-status.md'"* ]] || echo "FAIL: output missing error message: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -974,6 +974,6 @@ EOF
 
   [[ "$output" == *"loop-check artifact invalid for stage 'review' at path 'artifacts/test-invalid/review-status.md' (status: invalid)"* ]] || echo "FAIL: output missing error: $output"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }

@@ -55,7 +55,9 @@ source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
   run env HOME="$temp_home" bash "$REPO_ROOT/install.sh" --silent --no-dashboard "$project_dir"
   [ "$status" -eq 0 ]
   [ -d "$project_dir/.ralph" ]
-  [ -f "$project_dir/.claude/agents/architect/architect.md" ]
+  # The bundled role tree was removed; install must not recreate it.
+  [ ! -d "$project_dir/.ralph/roles" ]
+  [ ! -d "$project_dir/.claude/agents/architect" ]
 
   project_shim_before="$(cat "$project_dir/.ralph/run-plan.sh" 2>/dev/null || echo "")"
 

@@ -67,6 +67,7 @@ path_without_python3() {
   export RALPH_COMPACT_STDOUT="$stdout"
   export RALPH_COMPACT_STDERR=""
   export RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=200
+  export RALPH_COMPACT_GENERIC_FALLBACK=1
   result="$(ralph_compact_shell_output "custom-build-tool --verbose" 1)"
 
   printf '%s\n' "$result" | jq -e '
@@ -87,6 +88,7 @@ path_without_python3() {
   export RALPH_COMPACT_STDOUT="$stdout"
   export RALPH_COMPACT_STDERR=""
   export RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=200
+  export RALPH_COMPACT_GENERIC_FALLBACK=1
   result="$(ralph_compact_shell_output "custom-build-tool --verbose" 1)"
   compacted_text="$(printf '%s' "$result" | jq -r '.stdout')"
 
@@ -114,6 +116,7 @@ path_without_python3() {
       RALPH_COMPACT_STDOUT="$stdout" \
       RALPH_COMPACT_STDERR="" \
       RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=200 \
+      RALPH_COMPACT_GENERIC_FALLBACK=1 \
       "${BASH:-/bin/bash}" -c '
         # shellcheck source=/dev/null
         source "$1"
@@ -129,6 +132,27 @@ path_without_python3() {
   ' --arg original "$stdout"
 
   rm -rf "$(dirname "$fake_bin")"
+}
+
+@test "generic_large fallback: oversized unknown output stays raw by default" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+
+  load_compactors
+  local stdout result
+  stdout="$(build_large_generic_stdout)"
+  export RALPH_COMPACT_STDOUT="$stdout"
+  export RALPH_COMPACT_STDERR=""
+  export RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=200
+  unset RALPH_COMPACT_GENERIC_FALLBACK
+  result="$(ralph_compact_shell_output "custom-build-tool --verbose" 0)"
+
+  printf '%s\n' "$result" | jq -e '
+    .status == "not compacted"
+    and .compacted == false
+    and .family == null
+    and (.stdout | startswith("detail chunk padding"))
+  '
 }
 
 @test "failure_aware: non-zero exit compacts below generic threshold with error preserved" {

@@ -7,13 +7,13 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
+      instructions: Research the task and write findings to the produced artifact.
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: codex
-      agent: code-review
+      instructions: Review the implementation against the handoff and return a verdict.
       requires:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true

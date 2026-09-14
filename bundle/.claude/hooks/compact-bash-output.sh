@@ -11,19 +11,87 @@
 # storage path, compaction_skipped). See bundle/.ralph/bash-lib/hook-telemetry.sh.
 #
 # Gate: RALPH_BASH_COMPACT=1 (default on in native/hybrid when Ralph sets it; RALPH_BASH_COMPACT=0 opts out).
+# Fast path: before sourcing any library, env-check the gate and run one jq extraction of
+# output size + duration_ms. Exit 0 with no output when the gate is off, or when combined
+# stdout/stderr is under 512 bytes AND duration_ms is below the auto-background promote
+# threshold (command_profiles.LONG_RUNNING_THRESHOLD_MS). Slow commands still fall through
+# so duration recording can run even for tiny output.
 # Fail-open: never blocks the agent.
+# Killswitch enforcement runs pre-execution in the paired PreToolUse hook
+# (rewrite-bash-command.sh); this PostToolUse hook only compacts output
+# after the command has already run, so it does not evaluate killswitch.
 
 set -uo pipefail
 
-ralph_bash_compact_main() {
-  ralph_native_hook_truthy "${RALPH_BASH_COMPACT:-}" || ralph_native_hook_fail_open
+# Keep in sync with bundle/.ralph/python/command_profiles.py LONG_RUNNING_THRESHOLD_MS.
+_RALPH_BASH_COMPACT_PROMOTE_MS=60000
+_RALPH_BASH_COMPACT_FAST_MAX_BYTES=512
 
-  if ! command -v jq >/dev/null 2>&1; then
-    ralph_native_hook_debug_log "missing_jq" "claude:bash_hook" "Bash" "jq not found on PATH"
+# --- Fast path (no library sources) ------------------------------------------
+case "${RALPH_BASH_COMPACT:-}" in
+  1 | true | yes | on) ;;
+  *) exit 0 ;;
+esac
+
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+RALPH_BASH_COMPACT_INPUT="$(cat)" || exit 0
+
+# Single jq extraction of gate-relevant fields. tool_response must be an object
+# to be eligible for the tiny/fast skip (malformed payloads fall through so the
+# slow path can emit debug telemetry).
+_RALPH_BASH_COMPACT_GATE_TSV="$(
+  jq -r '
+    [
+      (.hook_event_name // ""),
+      (.tool_name // ""),
+      (if (.tool_response | type) == "object" then "1" else "0" end),
+      (
+        if (.tool_response | type) == "object" then
+          ((.tool_response.stdout // "") | length)
+          + ((.tool_response.stderr // "") | length)
+        else
+          0
+        end
+      ),
+      (
+        if ((.duration_ms | type) == "number") and (.duration_ms >= 0) then
+          (.duration_ms | floor | tostring)
+        else
+          ""
+        end
+      )
+    ] | @tsv
+  ' <<<"$RALPH_BASH_COMPACT_INPUT" 2>/dev/null
+)" || exit 0
+
+IFS=$'\t' read -r _ralph_bash_gate_event _ralph_bash_gate_tool \
+  _ralph_bash_gate_ok_response _ralph_bash_gate_out_bytes _ralph_bash_gate_duration_ms \
+  <<<"$_RALPH_BASH_COMPACT_GATE_TSV" || exit 0
+
+if [[ "$_ralph_bash_gate_event" != "PostToolUse" || "$_ralph_bash_gate_tool" != "Bash" ]]; then
+  exit 0
+fi
+
+if [[ "$_ralph_bash_gate_ok_response" == "1" \
+  && "${_ralph_bash_gate_out_bytes:-0}" -lt "$_RALPH_BASH_COMPACT_FAST_MAX_BYTES" ]]; then
+  if [[ -z "${_ralph_bash_gate_duration_ms}" \
+    || "${_ralph_bash_gate_duration_ms}" -lt "$_RALPH_BASH_COMPACT_PROMOTE_MS" ]]; then
+    exit 0
+  fi
+fi
+
+# --- Slow path: source libraries and compact / record ------------------------
+ralph_bash_compact_main() {
+  # Gate, jq presence, and stdin capture already handled on the fast path.
+  # RALPH_BASH_COMPACT_INPUT is set in the caller scope.
+
+  if ! jq -e '.tool_response | type == "object"' <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
+    ralph_native_hook_debug_log "malformed_input" "claude:bash_hook" "Bash" "tool_response is missing or not an object"
     ralph_native_hook_fail_open
   fi
-
-  RALPH_BASH_COMPACT_INPUT="$(cat)" || ralph_native_hook_fail_open
 
   local event tool_name command stdout stderr interrupted is_image
   event="$(jq -r '.hook_event_name // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
@@ -32,16 +100,22 @@ ralph_bash_compact_main() {
     ralph_native_hook_fail_open
   fi
 
-  if ! jq -e '.tool_response | type == "object"' <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
-    ralph_native_hook_debug_log "malformed_input" "claude:bash_hook" "Bash" "tool_response is missing or not an object"
-    ralph_native_hook_fail_open
-  fi
-
   command="$(jq -r '.tool_input.command // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
   stdout="$(jq -r '.tool_response.stdout // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
   stderr="$(jq -r '.tool_response.stderr // ""' <<<"$RALPH_BASH_COMPACT_INPUT")"
   interrupted="$(jq -r '.tool_response.interrupted // false' <<<"$RALPH_BASH_COMPACT_INPUT")"
   is_image="$(jq -r '.tool_response.isImage // false' <<<"$RALPH_BASH_COMPACT_INPUT")"
+
+  # Duration learning inputs (observation only; never gate compaction).
+  local duration_ms="" duration_raw backgrounded="false" fingerprint=""
+  duration_raw="$(jq -r '.duration_ms // empty' <<<"$RALPH_BASH_COMPACT_INPUT")"
+  if [[ "$duration_raw" =~ ^[0-9]+$ ]]; then
+    duration_ms="$duration_raw"
+  fi
+  if jq -e '(.tool_input.run_in_background == true) or ((.tool_response.backgroundTaskId // "") != "")' \
+    <<<"$RALPH_BASH_COMPACT_INPUT" >/dev/null 2>&1; then
+    backgrounded="true"
+  fi
 
   local project_dir compactors_lib
   if ! project_dir="$(ralph_native_hook_project_dir CLAUDE_PROJECT_DIR RALPH_BASH_COMPACT_INPUT)"; then
@@ -55,6 +129,12 @@ ralph_bash_compact_main() {
   fi
   # shellcheck source=/dev/null
   source "$compactors_lib"
+
+  # Pure observation: fingerprint + optional store write. Fail-open; never alters
+  # compaction result, updatedToolOutput, or exit status.
+  fingerprint="$(ralph_native_hook_command_fingerprint "$project_dir" "$command" 2>/dev/null || true)"
+  ralph_native_hook_maybe_record_duration \
+    "$project_dir" "$command" "$fingerprint" "$duration_ms" "$backgrounded" || true
 
   # shellcheck disable=SC2034 # consumed dynamically by compactors.sh
   RALPH_COMPACT_STDOUT="$stdout"
@@ -100,7 +180,9 @@ ralph_bash_compact_main() {
       "$plan_key_fallback" \
       "$plan_key_fallback_reason" \
       "$skip_delivered_bytes" \
-      "$skip_delivered_tokens"
+      "$skip_delivered_tokens" \
+      "$duration_ms" \
+      "$fingerprint"
     ralph_native_hook_fail_open
   fi
 
@@ -144,7 +226,9 @@ ralph_bash_compact_main() {
     "$plan_key_fallback" \
     "$plan_key_fallback_reason" \
     "$delivered_bytes" \
-    "$delivered_tokens"
+    "$delivered_tokens" \
+    "$duration_ms" \
+    "$fingerprint"
 
   ralph_native_hook_emit_claude_post_tool_updated_output \
     "$compact_stdout" \

@@ -221,3 +221,54 @@ EOF
 
   rm -rf "$tmpdir"
 }
+
+@test "ralph_session rotation deferred at persisted wait boundary" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  run bash -c '
+    set -euo pipefail
+    ralph_run_plan_log(){ :; }
+    source "$1"
+    RALPH_SESSION_DIR="$2"
+    SESSION_ID_FILE="$2/session-id.claude.txt"
+    PENDING_HUMAN="$2/pending-human.txt"
+    PENDING_ABS="$PENDING_HUMAN"
+    mkdir -p "$RALPH_SESSION_DIR"
+    printf "%s\n" "rotate-me" > "$SESSION_ID_FILE"
+    printf "%s\n" "pause" > "$PENDING_HUMAN"
+    printf "%s\n" "1" > "$RALPH_SESSION_DIR/session-turn-count.txt"
+    export RALPH_SESSION_DIR SESSION_ID_FILE PENDING_HUMAN PENDING_ABS
+    ralph_session_maybe_rotate 1
+    [[ -f "$SESSION_ID_FILE" ]]
+    cat "$SESSION_ID_FILE"
+  ' _ "$RUN_PLAN_SESSION_FILE" "$tmpdir"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "rotate-me" ]
+  rm -rf "$tmpdir"
+}
+
+@test "ralph_session_reset_resume_error_detected matches stale invalid session continuation errors" {
+  [ -f "$RUN_PLAN_SESSION_FILE" ] || skip "run-plan session helper missing"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  # shellcheck disable=SC1090
+  source "$RUN_PLAN_SESSION_FILE"
+
+  printf '%s\n' 'Error: session not found for resume id abc-123' >"$tmpdir/stale.log"
+  run ralph_session_reset_resume_error_detected cursor "$tmpdir/stale.log"
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' 'Error: unknown session / invalid session token' >"$tmpdir/invalid.log"
+  run ralph_session_reset_resume_error_detected claude "$tmpdir/invalid.log"
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' 'invocation completed normally with no session faults' >"$tmpdir/clean.log"
+  run ralph_session_reset_resume_error_detected codex "$tmpdir/clean.log"
+  [ "$status" -ne 0 ]
+
+  rm -rf "$tmpdir"
+}

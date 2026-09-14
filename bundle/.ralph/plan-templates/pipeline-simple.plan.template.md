@@ -1,7 +1,7 @@
 ---
 name: PLAN_TITLE_HERE
 overview: PLAN_OVERVIEW_HERE
-execution: standard
+mode: standard
 instructions: Execute one TODO at a time. After each, run the verification steps this project expects (build, test, lint, or equivalents as documented in README or below); keep fixing failures until they pass, and report the result with `TODO_VERIFICATION: PASS` or `TODO_VERIFICATION: FAIL: <reason>` as appropriate. When the TODO is done, set `status: completed` rather than marking `[x]`. For additional context see the original plan at PATH_TO_PLAN (if exists)
 
 todos:

@@ -25,7 +25,14 @@ setup() {
   local out_no_v2 out_empty_v2
   out_no_v2="$(ralph_hook_telemetry_windowing_record_json ws plankey Read 5000 1000 1250 250 1 abc1234567890123)"
   out_empty_v2="$(ralph_hook_telemetry_windowing_record_json ws plankey Read 5000 1000 1250 250 1 abc1234567890123 "" "" "" "")"
-  [ "$out_no_v2" = "$out_empty_v2" ]
+  # The record stamps wall-clock time, so two builds can straddle a second
+  # boundary. The contract under test is that empty v2 args change nothing
+  # else, so compare with the timestamp normalized out.
+  [ "$(jq -c 'del(.timestamp)' <<<"$out_no_v2")" = "$(jq -c 'del(.timestamp)' <<<"$out_empty_v2")" ]
+  # Both still carry a timestamp, and neither gains a v2 key.
+  [ "$(jq -r 'has("timestamp")' <<<"$out_no_v2")" = "true" ]
+  [ "$(jq -r 'has("timestamp")' <<<"$out_empty_v2")" = "true" ]
+  [ "$(jq -r 'has("measurementVersion")' <<<"$out_empty_v2")" = "false" ]
 }
 
 @test "complete-source v2 record includes all supplied fields as non-negative integers" {
