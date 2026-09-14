@@ -72,6 +72,7 @@ invoke_grep_pair_to_files() {
   [[ "$second_preview" == "$SEARCH_DEDUPE_GREP_PREFIX"$'\n'* ]]
   [[ "$second_preview" == *"stopped early"* ]]
   [[ "$second_preview" != *"duplicate grep suppressed"* ]]
+  [ "$(jq -r '.returnedBytes' <<<"$second_env")" -le 65536 ]
   run jq -e '.sourceComplete == false' <<<"$second_env"
   [ "$status" -eq 0 ]
   run jq -e '.sourceCapped == true' <<<"$second_env"

@@ -2405,7 +2405,7 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
   local entry_json="${4:-}"
   local result_id storage_text metadata_json truncated preview tool_label prefix
   local delivery footer original_bytes returned_bytes envelope_json plan_key
-  local breakpoints_json next_actions_json read_window byte_cap
+  local breakpoints_json next_actions_json read_window byte_cap token_cap
   local source_capped_cached="0" needs_envelope=0
 
   result_id="$(jq -r '.resultId // empty' <<< "$entry_json")"
@@ -2418,7 +2418,6 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
   # first answer had one) so a repeat is never more or less complete than the
   # original delivery.
   prefix="(repeat of an earlier identical ${tool_label} in this session; no writes since)"
-  delivery="$storage_text"
   case "$tool_name" in
     ralph_proxy_grep|ralph_proxy_search)
       footer="$(ralph_mcp_proxy_grep_truncation_footer_line "$metadata_json" 2>/dev/null || true)"
@@ -2430,12 +2429,11 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
       footer=""
       ;;
   esac
+  delivery=""
   if [[ -n "$footer" ]]; then
-    if [[ -n "$delivery" && "${delivery: -1}" != $'\n' ]]; then
-      delivery+=$'\n'
-    fi
     delivery+="${footer}"$'\n'
   fi
+  delivery+="$storage_text"
   preview="${prefix}"$'\n'"${delivery}"
 
   if [[ -n "$metadata_json" ]] && jq -e '.sourceCapped == true' <<<"$metadata_json" >/dev/null 2>&1; then
@@ -2467,8 +2465,15 @@ ralph_mcp_proxy_search_dedupe_emit_cached() {
   fi
 
   original_bytes=${#storage_text}
-  returned_bytes=${#preview}
   byte_cap="$(ralph_mcp_proxy_result_byte_cap_for_tool "$tool_name")"
+  token_cap="$(ralph_mcp_proxy_result_token_cap_for_tool "$tool_name")"
+  # Cached bodies can exceed Linux's per-argument exec limit. Apply the same
+  # response cap as a fresh result before passing preview to jq; keeping the
+  # footer directly after the repeat prefix preserves truncation/source-cap
+  # correctness even when the cached body is cut.
+  ralph_mcp_proxy_result_apply_preview_caps "$preview" "$byte_cap" "$token_cap"
+  preview="$RALPH_MCP_PROXY_RESULT_CAP_PREVIEW"
+  returned_bytes="$RALPH_MCP_PROXY_RESULT_CAP_RETURNED_BYTES"
   read_window=4096
   if [[ "$byte_cap" =~ ^[0-9]+$ ]] && [[ "$byte_cap" -gt 0 ]]; then
     read_window="$byte_cap"
