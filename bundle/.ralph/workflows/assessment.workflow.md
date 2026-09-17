@@ -14,6 +14,7 @@ pipeline:
           timeout: 120
   stages:
     - id: inspect
+      sessionStrategy: resume
       instructions: |
         Establish the shared baseline for assessing {{TASK}} read-only. Identify
         exactly what is under assessment: the changeset, branch, or subsystem, its
@@ -31,6 +32,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/assessment-baseline.md
           required: true
     - id: assess-correctness
+      sessionStrategy: fresh
       instructions: |
         Assess {{TASK}} for correctness only, read-only, using
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/assessment-baseline.md as the
@@ -57,6 +59,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
     - id: assess-security
+      sessionStrategy: fresh
       instructions: |
         Assess {{TASK}} for security only, read-only, using
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/assessment-baseline.md as the
@@ -85,6 +88,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
     - id: assess-performance
+      sessionStrategy: fresh
       instructions: |
         Assess {{TASK}} for performance and resource behavior only, read-only, using
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/assessment-baseline.md as the
@@ -113,6 +117,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
     - id: assess-compatibility
+      sessionStrategy: fresh
       instructions: |
         Assess {{TASK}} for compatibility and operability only, read-only, using
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/assessment-baseline.md as the
@@ -141,6 +146,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
     - id: synthesize
+      sessionStrategy: resume
       instructions: |
         Synthesize the four independent assessments of {{TASK}} into one operator
         report and one machine-readable verdict. Read all four findings files and

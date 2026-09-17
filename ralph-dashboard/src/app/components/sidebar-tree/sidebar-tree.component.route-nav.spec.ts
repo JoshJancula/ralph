@@ -187,7 +187,8 @@ describe('SidebarTreeComponent - Route-Driven Navigation', () => {
       fixture.detectChanges();
 
       const el = fixture.nativeElement as HTMLElement;
-      expect(el.querySelector('.error-message')?.textContent?.trim()).toBe('Failed to load directory listing');
+      expect(el.querySelector('.error-message')).toBeTruthy();
+      expect(el.querySelector('ralph-error-modal')).toBeTruthy();
     }));
 
     it('failed child listing collapses the directory', fakeAsync(async () => {

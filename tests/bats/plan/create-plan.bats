@@ -95,7 +95,40 @@ created_plan_path() {
 @test "create-plan leaf --format yaml prints the per-todo fresh-session tip" {
   run bash "$create_plan_script" --format yaml --name tip-demo --workspace "$TEST_WORKSPACE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"per-todo routing applies under fresh session management"* ]]
+  [[ "$output" == *"Every TODO can override runtime, model, sessionStrategy, or contextBudget"* ]]
+  [[ "$output" == *"Use --guided to configure defaults now"* ]]
+}
+
+@test "create-plan yaml accepts plan runtime model and session strategy defaults" {
+  run bash "$create_plan_script" --format yaml --name configured-demo --workspace "$TEST_WORKSPACE" \
+    --runtime codex --model gpt-5 --session-strategy compact
+  [ "$status" -eq 0 ]
+
+  plan_file="$(created_plan_path configured-demo)"
+  grep -Fxq 'runtime: codex' "$plan_file"
+  grep -Fxq 'model: "gpt-5"' "$plan_file"
+  grep -Fxq 'sessionStrategy: compact' "$plan_file"
+}
+
+@test "create-plan guided yaml collects runtime model and session strategy defaults" {
+  run bash -c "printf 'claude\\nsonnet\\nresume\\n' | bash '$create_plan_script' --format yaml --guided --name guided-demo --workspace '$TEST_WORKSPACE'"
+  [ "$status" -eq 0 ]
+
+  plan_file="$(created_plan_path guided-demo)"
+  grep -Fxq 'runtime: claude' "$plan_file"
+  grep -Fxq 'model: "sonnet"' "$plan_file"
+  grep -Fxq 'sessionStrategy: resume' "$plan_file"
+  [[ "$output" == *"Guided defaults were added"* ]]
+}
+
+@test "create-plan rejects leaf routing defaults on classic plans and model without runtime" {
+  run bash "$create_plan_script" --format classic --session-strategy resume --workspace "$TEST_WORKSPACE"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only valid with --format yaml"* ]]
+
+  run bash "$create_plan_script" --format yaml --model gpt-5 --workspace "$TEST_WORKSPACE"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--model requires --runtime"* ]]
 }
 
 @test "create-plan leaf --execution simple is accepted as backward-compat alias for standard" {

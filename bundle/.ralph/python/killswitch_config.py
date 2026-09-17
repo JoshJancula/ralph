@@ -377,7 +377,11 @@ def normalize_config(data: Any, *, source: str = "") -> dict[str, Any]:
         if hit is None:
             _fail(_pointer("$", key), "missing required key", source=source)
         path, raw = hit
-        out[key] = _validate_string_list(raw, path, source)
+        items = _validate_string_list(raw, path, source)
+        if key == "allowed_patterns":
+            for index, pattern in enumerate(items):
+                _validate_regex(pattern, _pointer(path, index), source)
+        out[key] = items
 
     denied_hit = _resolve_scalar_or_list(data, "denied_argument_patterns", source)
     if denied_hit is None:

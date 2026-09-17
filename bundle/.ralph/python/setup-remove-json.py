@@ -122,6 +122,15 @@ def _is_ralph_command(command: object, reserved: set[str]) -> bool:
         return False
     if command in reserved:
         return True
+    # Durable setup shell-quotes absolute paths, including paths with spaces
+    # and apostrophes. Parse one executable without evaluating shell syntax.
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    if len(words) == 1 and os.path.isabs(words[0]):
+        return os.path.basename(words[0]) in reserved
     base = os.path.basename(command)
     return base in reserved
 

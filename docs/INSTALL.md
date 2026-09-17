@@ -133,6 +133,13 @@ ralph setup --runtime opencode --all --dry-run
 ralph setup --runtime antigravity --all
 ```
 
+Claude hook setup registers shell-quoted absolute paths to the selected runtime
+directory. Re-run setup after upgrading Ralph to repair older `.claude/hooks/...`
+entries. The global `ralph` executable still defaults setup to the current
+project's `.claude`; use `--runtime-dir ~/.claude` for user-wide hooks. Repair
+project settings too if they contain older hook entries, since Claude can load
+them alongside user-wide hooks.
+
 MCP and hook file paths differ by runtime; see [MCP.md](MCP.md#durable-mcp-setup-ralph-setup---mcp) and [TOOLING.md](TOOLING.md#durable-hooks-and-mcp-ralph-setup).
 
 ### Saved models

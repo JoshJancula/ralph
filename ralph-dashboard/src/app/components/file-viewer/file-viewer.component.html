@@ -7,23 +7,6 @@
       <ion-button *ngIf="isMarkdown()" fill="clear" size="small" (click)="toggleView()">
         {{ isRendered() ? 'View Raw' : 'View Pretty' }}
       </ion-button>
-      <div class="toolbar-metrics" *ngIf="planMetrics() as metrics">
-        <span class="metric-elapsed">Elapsed: {{ formatSeconds(metrics.elapsed_seconds) }}</span>
-        @if (metrics.model_breakdown?.length) {
-          @for (entry of metrics.model_breakdown; track $index; let last = $last) {
-            <span class="metric-model-chip">
-              {{ entry.runtime }} {{ formatCompactTokens(totalTokensForEntry(entry)) }}
-            </span>
-            @if (!last) {
-              <span class="metric-separator">·</span>
-            }
-          }
-        } @else {
-          <span class="metric-model-chip">
-            {{ formatCompactTokens(totalTokensForEntry(metrics)) }}
-          </span>
-        }
-      </div>
     </div>
     <div class="toolbar-right" *ngIf="runSnippet">
       <span class="snippet-label">Run: </span>
@@ -35,8 +18,27 @@
     <ion-spinner name="crescent"></ion-spinner>
   </div>
 
-  <div class="error-message" *ngIf="!loading() && error() as err">
-    <span>{{ err }}</span>
+  <div class="error-panel" *ngIf="!loading() && error() as err">
+    <ralph-error-modal
+      class="is-embedded"
+      [error]="err"
+      [embedded]="true"
+      [showHeader]="false"
+    />
+    <div class="error-actions" *ngIf="err.suggestedActions && err.suggestedActions.length > 0">
+      <ion-button fill="solid" (click)="performErrorAction('RETRY')" *ngIf="err.suggestedActions.includes('RETRY')">
+        Retry
+      </ion-button>
+      <ion-button fill="solid" (click)="performErrorAction('REFRESH_INDEX')" *ngIf="err.suggestedActions.includes('REFRESH_INDEX')">
+        Refresh Index
+      </ion-button>
+      <ion-button fill="solid" (click)="performErrorAction('RETURN_TO_PLANS')" *ngIf="err.suggestedActions.includes('RETURN_TO_PLANS')">
+        Return to Plans
+      </ion-button>
+      <ion-button fill="solid" (click)="performErrorAction('SELECT_PROJECT')" *ngIf="err.suggestedActions.includes('SELECT_PROJECT')">
+        Select Project
+      </ion-button>
+    </div>
   </div>
 
   <div class="file-content" *ngIf="!loading() && !error()">

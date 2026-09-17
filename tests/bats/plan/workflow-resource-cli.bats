@@ -46,6 +46,19 @@ ralph_wf() {
     RALPH_HOME="$WRC_HOME" bash "$WRC_SHIM" workflow "$@")
 }
 
+@test "list --tsv --all-scopes returns one row per scope without winner de-duplication" {
+  write_wf "$WRC_HOME/bundle/.ralph/workflows/shared.workflow.md" "bundled shared"
+  write_wf "$WRC_HOME/workflows/shared.workflow.md" "global shared"
+  write_wf "$WRC_WORKSPACE/.ralph-workspace/workflows/shared.workflow.md" "project shared"
+
+  run ralph_wf list --tsv --all-scopes
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c $'^shared\t')" -eq 3 ]
+  [ "$(printf '%s\n' "$output" | grep $'^shared\tproject\t')" = $'shared\tproject\tproject shared' ]
+  [ "$(printf '%s\n' "$output" | grep $'^shared\tglobal\t')" = $'shared\tglobal\tglobal shared' ]
+  [ "$(printf '%s\n' "$output" | grep $'^shared\tbundled\t')" = $'shared\tbundled\tbundled shared' ]
+}
+
 @test "list --tsv is sorted id kind overview with winning scope" {
   write_wf "$WRC_HOME/bundle/.ralph/workflows/zeta.workflow.md" "bundled zeta"
   write_wf "$WRC_HOME/workflows/alpha.workflow.md" "global alpha"

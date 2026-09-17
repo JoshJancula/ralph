@@ -142,12 +142,36 @@ describe('NavService - Route-Driven Navigation', () => {
         router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
       );
 
-      service.navigate('docs', 'My Folder', 'file%20name.md');
+      service.navigate('docs', null, 'nested/file name.md');
       await navEnd;
 
       expect(service.activeRoot()).toBe('docs');
-      expect(service.activePath()).toBe('My Folder');
-      expect(service.activeFile()).toBe('file%20name.md');
+      expect(service.activePath()).toBeNull();
+      expect(service.activeFile()).toBe('nested/file name.md');
+      expect(router.url).toContain('/docs/file/nested/file%20name.md');
+    });
+
+    it('uses path segments for docs file navigation', async () => {
+      const navEnd = firstValueFrom(
+        router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
+      );
+
+      service.navigate('docs', null, 'HOW_RALPH_FITS_TOGETHER.md', null, '/ralph/dashboard');
+      await navEnd;
+
+      expect(service.activeRoot()).toBe('docs');
+      expect(service.activeFile()).toBe('HOW_RALPH_FITS_TOGETHER.md');
+      expect(service.activeProjectRoot()).toBe('/ralph/dashboard');
+      expect(router.url).toContain('/docs/file/HOW_RALPH_FITS_TOGETHER.md');
+      expect(router.parseUrl(router.url).queryParams['file']).toBeUndefined();
+    });
+
+    it('parses nested docs file paths from URL segments', async () => {
+      await router.navigateByUrl('/docs/file/nested/DEEP.md?projectRoot=/ralph');
+
+      expect(service.activeRoot()).toBe('docs');
+      expect(service.activeFile()).toBe('nested/DEEP.md');
+      expect(service.activeProjectRoot()).toBe('/ralph');
     });
   });
 

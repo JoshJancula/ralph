@@ -18,6 +18,10 @@ plan_format="classic"
 plan_execution=""
 plan_preset=""
 interactive="false"
+manual="false"
+plan_runtime=""
+plan_model=""
+plan_session_strategy=""
 plan_overview=""
 parallel_options_set="false"
 stage_flags_set="false"
@@ -47,9 +51,65 @@ Options:
                            (standard, structured, pipeline, and cursor are
                             accepted as silent aliases for yaml.)
   --workspace <path>       Workspace directory (default: current directory).
+  --runtime <runtime>      YAML plan default runtime (cursor|claude|codex|opencode|antigravity).
+  --model <model>          YAML plan default model (requires --runtime).
+  --session-strategy <s>   YAML plan default session strategy
+                           (fresh|resume|reset|compact).
+  --guided, --interactive  Prompt for YAML plan runtime, model, and session strategy.
+  --manual                 Create the editable YAML template without prompts (default).
 
 For multi-stage Sequential or Dependency workflows, use: ralph create workflow
 USAGE
+}
+
+create_plan_validate_runtime() {
+  case "$1" in
+    cursor|claude|codex|opencode|antigravity) ;;
+    *) ralph_die "invalid --runtime: $1 (must be cursor, claude, codex, opencode, or antigravity)" ;;
+  esac
+}
+
+create_plan_validate_session_strategy() {
+  case "$1" in
+    fresh|resume|reset|compact) ;;
+    *) ralph_die "invalid --session-strategy: $1 (must be fresh, resume, reset, or compact)" ;;
+  esac
+}
+
+create_plan_prompt_routing() {
+  local value
+  printf '%s' 'Default runtime (blank = choose when running): ' >&2
+  IFS= read -r value || true
+  plan_runtime="$value"
+  if [[ -n "$plan_runtime" ]]; then
+    create_plan_validate_runtime "$plan_runtime"
+    printf '%s' 'Default model (blank = runtime default): ' >&2
+    IFS= read -r value || true
+    plan_model="$value"
+  fi
+  printf '%s' 'Session strategy [fresh|resume|reset|compact] (default fresh): ' >&2
+  IFS= read -r value || true
+  plan_session_strategy="${value:-fresh}"
+  create_plan_validate_session_strategy "$plan_session_strategy"
+}
+
+create_plan_apply_yaml_routing() {
+  local source="$1"
+  awk -v runtime="$plan_runtime" -v model="$plan_model" -v strategy="$plan_session_strategy" '
+    function yaml_quote(value) {
+      gsub(/\\/, "\\\\", value)
+      gsub(/"/, "\\\"", value)
+      return "\"" value "\""
+    }
+    {
+      print
+      if ($0 ~ /^mode:/) {
+        if (runtime != "") print "runtime: " runtime
+        if (model != "") print "model: " yaml_quote(model)
+        if (strategy != "") print "sessionStrategy: " strategy
+      }
+    }
+  ' "$source"
 }
 
 create_plan_render_simple_template() {
@@ -103,6 +163,29 @@ while [[ $# -gt 0 ]]; do
     --interactive)
       interactive="true"
       shift
+      ;;
+    --guided)
+      interactive="true"
+      shift
+      ;;
+    --manual)
+      manual="true"
+      shift
+      ;;
+    --runtime)
+      [[ $# -ge 2 ]] || ralph_die "missing value for --runtime"
+      plan_runtime="$2"
+      shift 2
+      ;;
+    --model)
+      [[ $# -ge 2 ]] || ralph_die "missing value for --model"
+      plan_model="$2"
+      shift 2
+      ;;
+    --session-strategy)
+      [[ $# -ge 2 ]] || ralph_die "missing value for --session-strategy"
+      plan_session_strategy="$2"
+      shift 2
       ;;
     --workspace)
       [[ $# -ge 2 ]] || ralph_die "missing value for --workspace"
@@ -161,6 +244,31 @@ if [[ "$plan_format" == "classic" ]]; then
   if [[ "$interactive" == "true" ]]; then
     ralph_die "--interactive is only valid with --format yaml"
   fi
+  if [[ -n "$plan_runtime$plan_model$plan_session_strategy" ]]; then
+    ralph_die "--runtime, --model, and --session-strategy are only valid with --format yaml"
+  fi
+fi
+
+if [[ "$interactive" == "true" && "$manual" == "true" ]]; then
+  ralph_die "--guided/--interactive and --manual cannot be used together"
+fi
+
+if [[ "$interactive" == "true" && -n "$plan_runtime$plan_model$plan_session_strategy" ]]; then
+  ralph_die "--guided/--interactive cannot be combined with --runtime, --model, or --session-strategy"
+fi
+
+if [[ "$interactive" == "true" ]]; then
+  create_plan_prompt_routing
+fi
+
+if [[ -n "$plan_runtime" ]]; then
+  create_plan_validate_runtime "$plan_runtime"
+fi
+if [[ -n "$plan_model" && -z "$plan_runtime" ]]; then
+  ralph_die "--model requires --runtime"
+fi
+if [[ -n "$plan_session_strategy" ]]; then
+  create_plan_validate_session_strategy "$plan_session_strategy"
 fi
 
 if [[ "$plan_format" == "pipeline" && -z "$plan_execution" ]]; then
@@ -201,7 +309,8 @@ case "$plan_format" in
   pipeline)
     plan_template="$templates_dir/pipeline-simple.plan.template.md"
     [[ -f "$plan_template" ]] || ralph_die "plan template not found at $plan_template"
-    create_plan_render_simple_template "$plan_template" "$plan_name" "$plan_overview" > "$tmp_dest"
+    create_plan_render_simple_template "$plan_template" "$plan_name" "$plan_overview" \
+      | create_plan_apply_yaml_routing /dev/stdin > "$tmp_dest"
     ;;
   *)
     ralph_die "unsupported plan format: $plan_format"
@@ -219,5 +328,10 @@ fi
 
 printf 'Created plan: %s\n' "$display_dest"
 if [[ "$plan_format" == "pipeline" ]]; then
-  printf 'Tip: add per-todo runtime:/model: overrides to any TODO; per-todo routing applies under fresh session management.\n'
+  printf 'Tip: YAML plans support plan defaults for runtime, model, and sessionStrategy. Every TODO can override runtime, model, sessionStrategy, or contextBudget; runtime switches require fresh sessions.\n'
+  if [[ "$interactive" == "true" ]]; then
+    printf 'Guided defaults were added. Edit the generated YAML to configure individual TODO overrides.\n'
+  else
+    printf 'Use --guided to configure defaults now, or edit the generated YAML manually.\n'
+  fi
 fi

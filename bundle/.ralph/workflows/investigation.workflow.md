@@ -6,6 +6,7 @@ mode: dependency
 pipeline:
   stages:
     - id: investigate
+      sessionStrategy: resume
       instructions: |
         Investigate {{TASK}} read-only. Search the repository and current behavior,
         record the sources you read and the observations you actually reproduced,
@@ -20,6 +21,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md
           required: true
     - id: recommend-plan
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}} and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md, write the

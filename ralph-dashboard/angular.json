@@ -49,6 +49,8 @@
               "roughjs",
               "d3-sankey",
               "dayjs",
+              "fastdom",
+              "fastdom/extensions/fastdom-promised.js",
               "katex",
               "ts-dedent",
               "vscode-languageserver-protocol",
@@ -60,12 +62,12 @@
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "800kB",
+                  "maximumWarning": "1.2MB",
                   "maximumError": "1.5MB"
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "8kB",
+                  "maximumWarning": "12kB",
                   "maximumError": "16kB"
                 }
               ],

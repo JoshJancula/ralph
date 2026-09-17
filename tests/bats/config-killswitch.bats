@@ -664,6 +664,52 @@ EOF
   [[ "$output" == *"unreadable"* ]]
 }
 
+@test "normalizer command contract: validate accepts valid allowed_patterns regex" {
+  cat >"$WS/ok-allowed-patterns.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "tool_denylist": [],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": ["^echo\\s"],
+  "denied_argument_patterns": [],
+  "custom_rules": []
+}
+EOF
+  run python3 "$KILLSWITCH_CONFIG_PY" validate "$WS/ok-allowed-patterns.json"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "normalizer command contract: validate rejects malformed allowed_patterns regex with source and JSON path on stderr" {
+  cat >"$WS/bad-allowed-patterns.json" <<'EOF'
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": false,
+  "banned_tools": [],
+  "tool_denylist": [],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": ["("],
+  "denied_argument_patterns": [],
+  "custom_rules": []
+}
+EOF
+  run python3 "$KILLSWITCH_CONFIG_PY" validate "$WS/bad-allowed-patterns.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"$WS/bad-allowed-patterns.json"* ]]
+  [[ "$output" == *"$.allowed_patterns"* ]]
+  [[ "$output" == *"invalid regex"* ]]
+}
+
 @test "fail closed: invalid configured source returns nonzero before runtime/MCP sentinels" {
   write_workspace_killswitch <<'EOF'
 {

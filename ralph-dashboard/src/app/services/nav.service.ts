@@ -12,12 +12,14 @@ export class NavService {
   private readonly activeFileSignal = signal<string | null>(null);
   private readonly activeWorkspaceRootSignal = signal<string | null>(null);
   private readonly activeProjectRootSignal = signal<string | null>(null);
+  private readonly activeSectionSignal = signal<'home' | 'runs' | 'plans' | 'workflows' | 'tasks' | 'schedules' | 'docs' | 'insights' | 'safety' | 'browse'>('home');
 
   readonly activeRoot = this.activeRootSignal.asReadonly();
   readonly activePath = this.activePathSignal.asReadonly();
   readonly activeFile = this.activeFileSignal.asReadonly();
   readonly activeWorkspaceRoot = this.activeWorkspaceRootSignal.asReadonly();
   readonly activeProjectRoot = this.activeProjectRootSignal.asReadonly();
+  readonly activeSection = this.activeSectionSignal.asReadonly();
   readonly mode = computed<'hub' | 'file'>(() => (this.activeFile() ? 'file' : 'hub'));
 
   constructor() {
@@ -79,11 +81,13 @@ export class NavService {
     const queryFile = this.normalizePath(urlTree.queryParams['file']);
     if (queryPath !== null || queryFile !== null) {
       this.setState(root || 'plans', queryPath, queryFile, queryWorkspaceRoot, queryProjectRoot);
+      this.updateSection(root || 'plans');
       return;
     }
 
     if (!root) {
       this.setState('plans', null, null, null, queryProjectRoot);
+      this.updateSection('home');
       return;
     }
 
@@ -101,14 +105,20 @@ export class NavService {
         continue;
       }
       if (marker === 'file' && index + 1 < segments.length) {
-        file = this.decodeSegment(segments[index + 1]);
-        index += 2;
+        const fileParts: string[] = [];
+        index += 1;
+        while (index < segments.length) {
+          fileParts.push(this.decodeSegment(segments[index]));
+          index += 1;
+        }
+        file = fileParts.join('/');
         continue;
       }
       index += 1;
     }
 
     this.setState(root, dirPath, file, queryWorkspaceRoot, queryProjectRoot);
+    this.updateSection(root);
   }
 
   private buildUrl(
@@ -120,13 +130,7 @@ export class NavService {
   ): string {
     const queryParams: Record<string, string> = {};
     const normalizedPath = this.normalizePath(dirPath);
-    if (normalizedPath) {
-      queryParams['path'] = normalizedPath;
-    }
     const normalizedFile = this.normalizePath(file);
-    if (normalizedFile) {
-      queryParams['file'] = normalizedFile;
-    }
     const normalizedWs = this.normalizeWorkspaceRoot(workspaceRoot);
     if (normalizedWs) {
       queryParams['workspaceRoot'] = normalizedWs;
@@ -134,6 +138,19 @@ export class NavService {
     const normalizedProject = this.normalizeProjectRoot(projectRoot);
     if (normalizedProject) {
       queryParams['projectRoot'] = normalizedProject;
+    }
+
+    if (root === 'docs' && normalizedFile) {
+      const fileSegments = normalizedFile.split('/').filter((part) => part.length > 0);
+      const tree = this.router.createUrlTree(['/', root, 'file', ...fileSegments], { queryParams });
+      return this.router.serializeUrl(tree);
+    }
+
+    if (normalizedPath) {
+      queryParams['path'] = normalizedPath;
+    }
+    if (normalizedFile) {
+      queryParams['file'] = normalizedFile;
     }
 
     const tree = this.router.createUrlTree([`/${root}`], { queryParams });
@@ -152,6 +169,53 @@ export class NavService {
     this.activeFileSignal.set(file);
     this.activeWorkspaceRootSignal.set(workspaceRoot);
     this.activeProjectRootSignal.set(projectRoot);
+  }
+
+  private updateSection(root: string | null): void {
+    if (!root) {
+      this.activeSectionSignal.set('home');
+      return;
+    }
+
+    switch (root) {
+      case 'home':
+        this.activeSectionSignal.set('home');
+        break;
+      case 'runs':
+        this.activeSectionSignal.set('runs');
+        break;
+      case 'plans':
+        this.activeSectionSignal.set('plans');
+        break;
+      case 'workflows':
+        this.activeSectionSignal.set('workflows');
+        break;
+      case 'tasks':
+        this.activeSectionSignal.set('tasks');
+        break;
+      case 'schedules':
+        this.activeSectionSignal.set('schedules');
+        break;
+      case 'docs':
+        this.activeSectionSignal.set('docs');
+        break;
+      case 'safety':
+        this.activeSectionSignal.set('safety');
+        break;
+      case 'logs':
+      case 'artifacts':
+      case 'sessions':
+      case 'orchestration-plans':
+      case 'graph-runs':
+        this.activeSectionSignal.set('browse');
+        break;
+      case 'insights':
+      case 'usage':
+        this.activeSectionSignal.set('insights');
+        break;
+      default:
+        this.activeSectionSignal.set('home');
+    }
   }
 
   private normalizeWorkspaceRoot(value: unknown): string | null {

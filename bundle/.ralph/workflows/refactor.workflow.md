@@ -14,6 +14,7 @@ pipeline:
           timeout: 120
   stages:
     - id: characterize
+      sessionStrategy: resume
       instructions: |
         Characterize the current behavior of the code targeted by {{TASK}} as a
         read-only study. Capture observable behavior, invariants, dependencies,
@@ -29,6 +30,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/characterization.md
           required: true
     - id: plan-implementation
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}} and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/characterization.md, plan the
@@ -52,9 +54,10 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: implement
+      sessionStrategy: compact
       instructions: |
         Execute the entire generated refactor plan for {{TASK}} TODO by TODO in a
-        fresh session on the candidate snapshot. Read
+        compacted session continuity on the candidate snapshot. Read
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/characterization.md and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/refactor-plan.json. Preserve
         every characterized invariant and compatibility promise. Do not skip or
@@ -79,6 +82,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      sessionStrategy: fresh
       instructions: |
         Review the candidate snapshot for {{TASK}} without mutation. Inspect the
         supervisor changeset evidence, the characterization, the latest
@@ -117,6 +121,7 @@ pipeline:
       dependsOn:
         - review-approved
     - id: plan-qa
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}}, .ralph-workspace/artifacts/{{ARTIFACT_NS}}/characterization.md,
         and the latest .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md,
@@ -143,6 +148,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      sessionStrategy: fresh
       instructions: |
         Execute the entire generated QA plan for {{TASK}} TODO by TODO on the
         integrated tree. Read

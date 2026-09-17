@@ -1,0 +1,135 @@
+<div class="error-wrapper" [class.is-embedded]="embedded">
+  @if (showHeader) {
+    <ion-header class="error-header">
+      <ion-toolbar>
+        <ion-title>Error</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="cancel()" fill="clear" aria-label="Close error dialog">Close</ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+  }
+
+  <div class="error-content">
+    <div class="error-details text-center">
+      @if (errorContext) {
+        <ion-note class="error-message" color="danger">
+          <ion-text color="danger">{{ errorContext }}</ion-text>
+        </ion-note>
+      }
+      <ion-note class="error-message" color="danger">
+        <span>{{ errorMessage }}</span>
+      </ion-note>
+    </div>
+
+    <ion-button
+      class="details-toggle"
+      [color]="showExtraDetails ? 'danger' : 'medium'"
+      (click)="showExtraDetails = !showExtraDetails"
+      fill="clear"
+    >
+      {{ showExtraDetails ? 'Hide Details' : 'View Details' }}
+    </ion-button>
+
+    @if (showExtraDetails) {
+      <div class="error-details">
+        @if (statusCode || requestId || path || timestamp || traceId || cfRay) {
+          @if (!showRawJson) {
+            <ion-grid class="error-meta-grid">
+              @if (statusCode) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">Status Code</ion-col>
+                  <ion-col size="8" class="value-col">{{ statusCode }}</ion-col>
+                </ion-row>
+              }
+              @if (path) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">Request Path</ion-col>
+                  <ion-col size="8" class="value-col">{{ path }}</ion-col>
+                </ion-row>
+              }
+              @if (timestamp) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">Time</ion-col>
+                  <ion-col size="8" class="value-col">{{ timestamp | date: 'medium' }}</ion-col>
+                </ion-row>
+              }
+              @if (requestId) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">Request ID</ion-col>
+                  <ion-col size="8" class="value-col">{{ requestId }}</ion-col>
+                </ion-row>
+              }
+              @if (traceId) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">Trace ID</ion-col>
+                  <ion-col size="8" class="value-col">{{ traceId }}</ion-col>
+                </ion-row>
+              }
+              @if (cfRay) {
+                <ion-row>
+                  <ion-col size="4" class="label-col">CF-Ray</ion-col>
+                  <ion-col size="8" class="value-col">{{ cfRay }}</ion-col>
+                </ion-row>
+              }
+            </ion-grid>
+          }
+        }
+
+        @if (!showRawJson) {
+          <ion-grid class="error-meta-grid">
+            <ion-row>
+              <ion-col size="12">
+                <ion-note color="medium" class="section-label">Device Information</ion-note>
+              </ion-col>
+            </ion-row>
+            <ion-row>
+              <ion-col size="4" class="label-col">Platform</ion-col>
+              <ion-col size="8" class="value-col">{{ deviceInfo.platform }}</ion-col>
+            </ion-row>
+            <ion-row>
+              <ion-col size="4" class="label-col">Device Type</ion-col>
+              <ion-col size="8" class="value-col">{{ deviceInfo.deviceType }}</ion-col>
+            </ion-row>
+            @if (deviceInfo.osVersion) {
+              <ion-row>
+                <ion-col size="4" class="label-col">OS Version</ion-col>
+                <ion-col size="8" class="value-col">{{ deviceInfo.osVersion }}</ion-col>
+              </ion-row>
+            }
+            @if (deviceInfo.browser) {
+              <ion-row>
+                <ion-col size="4" class="label-col">Browser</ion-col>
+                <ion-col size="8" class="value-col">{{ deviceInfo.browser }}</ion-col>
+              </ion-row>
+            }
+            <ion-row>
+              <ion-col size="4" class="label-col">Display</ion-col>
+              <ion-col size="8" class="value-col">{{ deviceInfo.displayInfo }}</ion-col>
+            </ion-row>
+            <ion-row>
+              <ion-col size="4" class="label-col">Locale</ion-col>
+              <ion-col size="8" class="value-col">{{ deviceInfo.localeInfo }}</ion-col>
+            </ion-row>
+            <ion-row>
+              <ion-col size="4" class="label-col">User Agent</ion-col>
+              <ion-col size="8" class="value-col ua">{{ userAgent }}</ion-col>
+            </ion-row>
+          </ion-grid>
+        }
+
+        @if (showRawJson) {
+          <pre class="error-raw-json">{{ errorsObject | json }}</pre>
+        }
+
+        <ion-button expand="block" size="small" color="medium" fill="clear" (click)="showRawJson = !showRawJson">
+          {{ showRawJson ? 'View Pretty' : 'View JSON' }}
+        </ion-button>
+
+        <ion-button color="dark" fill="clear" (click)="copyToClipboard()">
+          {{ copyStatus || 'Copy Error To Clipboard' }}
+        </ion-button>
+      </div>
+    }
+  </div>
+</div>

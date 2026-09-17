@@ -1,18 +1,20 @@
 <ion-app>
+  <a class="skip-link" href="#main-content" (click)="skipToContent($event)">Skip to main content</a>
   <ion-header [translucent]="false" class="app-header">
     <ion-toolbar>
       <ion-buttons slot="start">
         <ion-menu-button menu="workspace-menu"></ion-menu-button>
       </ion-buttons>
       <ion-title class="app-title">{{ headerTitle() }}</ion-title>
-      <app-workspace-switcher></app-workspace-switcher>
+      <app-workspace-switcher slot="end"></app-workspace-switcher>
       <ion-buttons slot="end">
         <ion-button
-          (click)="openUsage()"
+          class="toolbar-insights"
+          (click)="navigateToInsights()"
           fill="clear"
-          aria-label="Usage metrics"
-          [class.usage-route-active]="isUsageRoute()"
-          title="Usage: tokens and tool calls"
+          aria-label="Insights"
+          [class.active-section]="nav.activeSection() === 'insights'"
+          title="Insights: tokens and tool calls"
         >
           <ion-icon slot="icon-only" name="stats-chart-outline"></ion-icon>
         </ion-button>
@@ -33,12 +35,13 @@
       </ion-content>
     </ion-menu>
 
-    <div class="ion-page main-shell" id="main-content">
-      <ion-content class="main-content" [forceOverscroll]="false" [scrollY]="false">
+    <div class="ion-page main-shell" id="main-content" tabindex="-1">
+      <ion-content class="main-content" [forceOverscroll]="false">
         <div class="content-wrapper">
           <router-outlet></router-outlet>
         </div>
       </ion-content>
     </div>
   </ion-split-pane>
+  <ralph-assistant-dock></ralph-assistant-dock>
 </ion-app>

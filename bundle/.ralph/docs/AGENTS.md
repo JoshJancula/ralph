@@ -9,7 +9,7 @@ Ralph is a framework for organizing AI coding assistant workflows. It supports t
 - **Leaf plans:** One TODO loop with durable verification. Create with `ralph create plan` (`--format classic` or `--format yaml`). Run with `ralph run --plan <path>` or `.ralph/run-plan.sh --plan <path>`. Older format tokens (`standard`, `structured`, `pipeline`, `cursor`) remain silent aliases for `yaml`.
 - **Workflows:** Reusable SDLC shapes (`kind: workflow`, `mode: sequential|dependency`) that coordinate a series of attributable plan runs plus supervisor control. Create with `ralph create workflow`; start with `ralph workflow start`. Task-based starts use `--task`; supplied-plan starts use `--plan`. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 - **Runtime agents:** The selected runtime supplies the actual agent session. Runtime-native subagents, teams, rules, skills, hooks, plugins, MCP, permissions, and memory remain owned by that runtime. Stage guidance is inline `instructions:` on the workflow—not a separate public role resource.
-- **Dashboard:** Optional Node UI for monitoring plan execution and artifact generation.
+- **Dashboard:** Optional Node UI for monitoring plan execution, artifact generation, and a workflows studio (project/global/bundled resolution, customize, routing persistence). See [docs/WORKFLOWS.md](docs/WORKFLOWS.md) and `ralph-dashboard/README.md`.
 
 Ralph is installed into projects via `./install.sh`. See Reference map → [docs/INSTALL.md](docs/INSTALL.md).
 
@@ -217,7 +217,7 @@ Open these only when the task requires detail beyond this file.
 | [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Env vars, session/resume flags, `RALPH_BG_*` background-job vars (opt-in), runtime `*_PLAN_*` chains, orchestrator knobs, and named tooling profiles |
 | [docs/TOOLING.md](docs/TOOLING.md) | Ralph mode (`--ralph-mode`, `RALPH_MODE`), prompt layering, named tooling profiles, MCP proxy tools, Stop hook continuation contract, shell compaction policy, native adapters, overlay journals, and cleanup |
 | [docs/MCP.md](docs/MCP.md) | Standalone Ralph MCP server, host wiring, third-party MCP for plan agents (background continuation adds no MCP tools) |
-| [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Plan loop operator flow, human input, durable TODO continuations, handoffs, workflow operator-input protocol |
+| [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Leaf-plan loop, human input, session strategies, durable TODO continuations, outputs |
 | [docs/INSTALL.md](docs/INSTALL.md) | Global and in-repo install, `install.sh` flags, workspace registry, uninstall |
 | [bundle/.ralph/docs/DELEGATION.md](bundle/.ralph/docs/DELEGATION.md) | Native subagents vs delegated runs, completion evidence, and threat controls |
 | [bundle/.ralph/docs/AGENTS.md](bundle/.ralph/docs/AGENTS.md) | Installable copy of this agent contract |

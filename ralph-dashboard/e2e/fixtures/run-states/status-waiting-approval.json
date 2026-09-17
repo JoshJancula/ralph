@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "runId": "run-waiting-approval",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "state": "waiting",
+    "createdAt": "2026-09-14T10:00:00Z",
+    "updatedAt": "2026-09-14T10:05:00Z"
+  },
+  "stages": [
+    {
+      "id": "investigate",
+      "state": "completed",
+      "stageKind": "agent",
+      "attempt": 1,
+      "createdAt": "2026-09-14T10:00:00Z",
+      "updatedAt": "2026-09-14T10:01:00Z"
+    },
+    {
+      "id": "human-gate",
+      "state": "waiting",
+      "stageKind": "approval",
+      "attempt": 1,
+      "requestId": "req-approve-1",
+      "requestState": "outstanding",
+      "createdAt": "2026-09-14T10:02:00Z",
+      "updatedAt": "2026-09-14T10:02:00Z"
+    }
+  ],
+  "diagnosis": {
+    "state": "waiting",
+    "reasonCode": "human-approval",
+    "summary": "Approve the generated plan before implementation resumes",
+    "stageId": "human-gate",
+    "requestKind": "approval",
+    "requestId": "req-approve-1",
+    "evidence": [],
+    "retryable": false,
+    "nextAction": {
+      "label": "answer the outstanding request",
+      "argv": ["ralph", "workflow", "actions", "list", "run-waiting-approval"]
+    }
+  },
+  "nextAction": {
+    "label": "answer the outstanding request",
+    "argv": ["ralph", "workflow", "actions", "list", "run-waiting-approval"]
+  }
+}

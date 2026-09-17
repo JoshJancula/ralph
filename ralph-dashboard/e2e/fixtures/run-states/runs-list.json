@@ -1,0 +1,46 @@
+[
+  {
+    "runId": "run-waiting-approval",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "entryKind": "workflow",
+    "state": "waiting",
+    "createdAt": "2026-09-14T10:00:00Z",
+    "task": "Add widget rollout guardrail",
+    "sourceKind": "task",
+    "graphRunLink": { "namespace": "run-waiting-approval", "runId": "run-waiting-approval" }
+  },
+  {
+    "runId": "run-failed-verification",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "entryKind": "workflow",
+    "state": "failed",
+    "createdAt": "2026-09-13T08:00:00Z",
+    "task": "Harden widget error handling",
+    "sourceKind": "task",
+    "graphRunLink": { "namespace": "run-failed-verification", "runId": "run-failed-verification" }
+  },
+  {
+    "runId": "run-rework",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "entryKind": "workflow",
+    "state": "running",
+    "createdAt": "2026-09-12T08:00:00Z",
+    "task": "Refactor widget cache layer",
+    "sourceKind": "task",
+    "graphRunLink": { "namespace": "run-rework", "runId": "run-rework" }
+  },
+  {
+    "runId": "run-completed",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "entryKind": "workflow",
+    "state": "completed",
+    "createdAt": "2026-09-08T08:00:00Z",
+    "task": "Ship widget v1",
+    "sourceKind": "task",
+    "graphRunLink": { "namespace": "run-completed", "runId": "run-completed" }
+  }
+]

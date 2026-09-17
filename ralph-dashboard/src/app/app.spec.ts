@@ -41,7 +41,7 @@ describe('AppComponent (root)', () => {
     const fixture = TestBed.createComponent(AppComponent);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('ion-title')?.textContent).toContain('Workspace Explorer');
+    expect(compiled.querySelector('ion-title')?.textContent).toContain('Home');
   });
 
   it('should read theme preference from localStorage on init', () => {
@@ -73,11 +73,11 @@ describe('AppComponent (root)', () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it('should navigate to usage when openUsage is called', () => {
+  it('should navigate to insights when navigateToInsights is called', () => {
     const fixture = TestBed.createComponent(AppComponent);
     const nav = TestBed.inject(NavService);
     const spy = vi.spyOn(nav, 'navigate');
-    fixture.componentInstance.openUsage();
-    expect(spy).toHaveBeenCalledWith('usage');
+    fixture.componentInstance.navigateToInsights();
+    expect(spy).toHaveBeenCalledWith('insights');
   });
 });

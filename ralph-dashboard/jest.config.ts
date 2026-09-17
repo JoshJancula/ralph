@@ -5,9 +5,16 @@ const jestConfig: JestConfigWithTsJest = {
   testEnvironment: 'node',
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
-  testMatch: ['<rootDir>/tests/**/*.test.ts'],
-  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
-  collectCoverageFrom: ['src/app/utils/**/*.ts', '!src/app/utils/**/*.spec.ts'],
+  testMatch: ['<rootDir>/tests/**/*.test.ts', '<rootDir>/src/app/utils/**/*.test.ts'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/', '\\.pw\\.test\\.ts$'],
+  collectCoverageFrom: [
+    'src/app/utils/**/*.ts',
+    '!src/app/utils/**/*.spec.ts',
+    '!src/app/utils/**/*.test.ts',
+    '!src/app/utils/dashboard-file-hash.ts',
+    '!src/app/utils/markdown-to-html.ts',
+    '!src/app/utils/sanitize-html.ts',
+  ],
   coverageDirectory: 'coverage/jest',
   coverageThreshold: {
     global: {

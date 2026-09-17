@@ -4,6 +4,7 @@ import { Component, inject } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { RouterTestingModule } from '@angular/router/testing';
+import { MenuController } from '@ionic/angular/standalone';
 import { AppComponent } from './app.component';
 import { NavService } from './services/nav.service';
 
@@ -123,6 +124,10 @@ function flushOutstandingHttp(httpMock: HttpTestingController): void {
     }
     for (const req of httpMock.match((r) => requestPath(r.url) === '/api/workspaces')) {
       req.flush([]);
+      flushed = true;
+    }
+    for (const req of httpMock.match((r) => requestPath(r.url) === '/api/capabilities')) {
+      req.flush({ workflowWrites: false, workflowRuns: false, assistant: false });
       flushed = true;
     }
     if (!flushed) {
@@ -311,5 +316,81 @@ describe('AppComponent', () => {
 
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('ion-menu-button')).toBeTruthy();
+  });
+
+  it('closes the workspace menu after route navigation', async () => {
+    const menuController = TestBed.inject(MenuController);
+    const closeSpy = vi.spyOn(menuController, 'close').mockResolvedValue(true);
+
+    const fixture = TestBed.createComponent(AppComponent);
+    await renderDashboard(fixture, httpMock);
+    closeSpy.mockClear();
+
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/home');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(closeSpy).toHaveBeenCalledWith(AppComponent.WORKSPACE_MENU_ID);
+  });
+
+  it('header title shows Home when on home section', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    await renderDashboard(fixture, httpMock);
+
+    nav['activeSectionSignal'].set('home');
+    fixture.detectChanges();
+
+    const title = fixture.nativeElement.querySelector('ion-title');
+    expect(title?.textContent).toContain('Home');
+  });
+
+  it('header title shows Plans when on plans section', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    await renderDashboard(fixture, httpMock);
+
+    nav['activeSectionSignal'].set('plans');
+    fixture.detectChanges();
+
+    const title = fixture.nativeElement.querySelector('ion-title');
+    expect(title?.textContent).toContain('Plans');
+  });
+
+  it('header title shows Runs when on runs section', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    await renderDashboard(fixture, httpMock);
+
+    nav['activeSectionSignal'].set('runs');
+    fixture.detectChanges();
+
+    const title = fixture.nativeElement.querySelector('ion-title');
+    expect(title?.textContent).toContain('Runs');
+  });
+
+  it('header title shows Insights when on insights section', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    await renderDashboard(fixture, httpMock);
+
+    nav['activeSectionSignal'].set('insights');
+    fixture.detectChanges();
+
+    const title = fixture.nativeElement.querySelector('ion-title');
+    expect(title?.textContent).toContain('Insights');
+  });
+
+  it('header title shows Workspace Explorer when in browse section', async () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const nav = TestBed.inject(NavService);
+    await renderDashboard(fixture, httpMock);
+
+    nav['activeSectionSignal'].set('browse');
+    fixture.detectChanges();
+
+    const title = fixture.nativeElement.querySelector('ion-title');
+    expect(title?.textContent).toContain('Workspace Explorer');
   });
 });

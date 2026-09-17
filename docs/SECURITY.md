@@ -87,6 +87,12 @@ ralph safety edit --global
 
 `status --json` is `{schemaVersion:1,enabled,dryRun,source,path,precedence,environmentOverrides,counts,warnings}`. `check --json` is `{schemaVersion:1,outcome,source,matchedRule,precedence,dryRun}`. `init` / `edit` target a stated path, preview, and require `--yes` when stdin is not a TTY. Reads and cancelled previews never create files.
 
+### Dashboard (project rule lists)
+
+The Ralph dashboard Safety page (`/safety`) edits **project-scope** killswitch rule lists only (`<state-root>/killswitch.json`). It can create that file from the shipped bundle defaults, update banned/allowed lists, custom rules, and denied argument patterns, and classify command text against the effective config without executing it.
+
+`enabled` and `dry_run` stay read-only in the UI. Change them with `ralph safety edit --project` (or `--global`) in a terminal. Safety writes from the dashboard require a loopback-bound server (`HOST` / bind address on `127.0.0.1` or `::1`); non-loopback binds keep the page readable but hide save controls.
+
 ### Configuration reference
 
 ```json

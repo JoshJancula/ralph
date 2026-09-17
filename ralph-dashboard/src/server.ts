@@ -9,6 +9,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerDashboardApi } from './server/dashboard-api';
+import { registerWorkflowApi } from './server/workflow-api';
+import { registerSafetyApi } from './server/safety-api';
+import { registerTaskScheduleApi, startDashboardScheduler } from './server/task-schedule-api';
 
 function resolveBrowserDistFolder(): string {
   const envDir = process.env['RALPH_DASHBOARD_BROWSER_DIST']?.trim();
@@ -36,6 +39,10 @@ type SendFileError = { message?: string; code?: string; status?: number; statusC
 
 export const app = express();
 registerDashboardApi(app);
+registerWorkflowApi(app);
+registerSafetyApi(app);
+registerTaskScheduleApi(app);
+startDashboardScheduler(app);
 
 // Serve `/` before express.static: otherwise serve-static treats `/` as the browser root
 // directory; with `redirect: false` it responds 404 for directory access and the CSR shell

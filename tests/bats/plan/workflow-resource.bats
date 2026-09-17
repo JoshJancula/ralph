@@ -188,6 +188,45 @@ write_wf() {
   [[ "$output" == $'delta\tbundled\t'* ]]
 }
 
+@test "list_all emits every scope for the same id with stable id then scope order" {
+  write_wf "$WR_BUNDLE/.ralph/workflows/shared.workflow.md" "bundled"
+  write_wf "$WR_HOME/workflows/shared.workflow.md" "global"
+  write_wf "$WR_STATE/workflows/shared.workflow.md" "project"
+
+  run workflow_resource_list_all
+  [ "$status" -eq 0 ]
+  [[ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" == "3" ]]
+  [[ "${lines[0]}" == $'shared\tproject\t'"$(workflow_resource_project_dir)/shared.workflow.md" ]]
+  [[ "${lines[1]}" == $'shared\tglobal\t'"$(workflow_resource_global_dir)/shared.workflow.md" ]]
+  [[ "${lines[2]}" == $'shared\tbundled\t'"$(workflow_resource_bundled_dir)/shared.workflow.md" ]]
+}
+
+@test "list_all includes global-only and bundled-only ids" {
+  write_wf "$WR_HOME/workflows/global-only.workflow.md" "global only"
+  write_wf "$WR_BUNDLE/.ralph/workflows/bundled-only.workflow.md" "bundled only"
+
+  run workflow_resource_list_all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'global-only\tglobal\t'* ]]
+  [[ "$output" == *$'bundled-only\tbundled\t'* ]]
+  [[ "$output" != *$'global-only\tbundled\t'* ]]
+}
+
+@test "list_all still lists global when RALPH_DISABLE_GLOBAL_FALLBACK is set" {
+  write_wf "$WR_HOME/workflows/hidden-global.workflow.md" "global"
+  write_wf "$WR_BUNDLE/.ralph/workflows/hidden-global.workflow.md" "bundled"
+
+  RALPH_DISABLE_GLOBAL_FALLBACK=1
+  run workflow_resource_list_winning
+  [ "$status" -eq 0 ]
+  [[ "$output" == $'hidden-global\tbundled\t'* ]]
+
+  run workflow_resource_list_all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'hidden-global\tglobal\t'* ]]
+  [[ "$output" == *$'hidden-global\tbundled\t'* ]]
+}
+
 @test "list_winning de-duplicates by physical path across symlink scopes" {
   write_wf "$WR_HOME/workflows/shared-phys.workflow.md" "canonical"
   ln -s "$WR_HOME/workflows/shared-phys.workflow.md" \

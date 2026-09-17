@@ -74,9 +74,11 @@
       "query": "three root model project state agent workspace",
       "relevant_paths": [
         "AGENTS.md",
-        "docs/AGENT-WORKFLOW.md"
+        "docs/ENVIRONMENT.md",
+        "docs/README.md",
+        "docs/TOOLING.md"
       ],
-      "rationale": "Architecture doc explaining project root, state root, and agent workspace separation."
+      "rationale": "Agent contract and environment reference explaining project root, state root, and agent workspace separation."
     },
     {
       "id": "concept-session-resume",
@@ -91,12 +93,12 @@
     {
       "id": "concept-evaluator-feedback-loop",
       "category": "conceptual",
-      "query": "changes-required feedback loopback verbatim",
+      "query": "workflow review findings feedback rework loop",
       "relevant_paths": [
-        "bundle/.ralph/bash-lib/run-plan/run-plan-loopback.sh",
-        "docs/AGENT-WORKFLOW.md"
+        "docs/WORKFLOWS.md",
+        "bundle/.ralph/python/evaluator_contract.py"
       ],
-      "rationale": "Loopback path and docs describing evaluator feedback injection."
+      "rationale": "Loopback path and canonical workflow guide describing evaluator findings and rework."
     },
     {
       "id": "shell-load-policy",
@@ -233,12 +235,12 @@
     {
       "id": "doc-agent-workflow-handoff",
       "category": "documentation",
-      "query": "orchestration handoff artifact produces requires",
+      "query": "workflow stage artifact handoff produces requires",
       "relevant_paths": [
-        "docs/AGENT-WORKFLOW.md",
+        "docs/WORKFLOWS.md",
         "AGENTS.md"
       ],
-      "rationale": "Workflow doc describing stage artifact handoffs."
+      "rationale": "Canonical workflow and agent-contract documentation for stage artifact handoffs."
     },
     {
       "id": "doc-retrieval-cluster",

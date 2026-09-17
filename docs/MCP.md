@@ -297,7 +297,7 @@ The `stdio` flag tells Cursor to speak the MCP protocol over the server's standa
 
 Ralph's bash MCP server (`mcp-server.sh`) exposes **plan and orchestration** tools to an external MCP client. It does **not** provide a browser, Playwright, or other product-specific integrations. When `.ralph/run-plan.sh` runs the **qa** agent (or any agent) via Cursor, Claude Code, Codex, OpenCode, or Antigravity, only the **tools that runtime has configured** are available. To let QA open a browser, call external APIs through MCP, or use other skills, add those MCP servers to **that** runtime's configuration and approve tool use according to your policy.
 
-Ralph preserves each runtime's native MCP configuration chain. Third-party MCP servers must be configured in the runtime that executes the plan; see [AGENTS.md](AGENTS.md) for the native configuration preservation table.
+Ralph preserves each runtime's native MCP configuration chain. Third-party MCP servers must be configured in the runtime that executes the plan; see [AGENTS.md](../AGENTS.md) for the native configuration preservation table.
 
 Official references:
 

@@ -45,8 +45,8 @@ runtime_overlay_claude_hooks_detected_in_file() {
   if ! command -v python3 &>/dev/null; then
     return 1
   fi
-  python3 - "$settings_file" <<'PY'
-import json, sys
+  python3 - "$settings_file" "${2:-0}" <<'PY'
+import json, os, shlex, sys
 
 path = sys.argv[1]
 try:
@@ -69,6 +69,17 @@ def group_commands(event, matcher):
     return out
 
 def has_cmd(commands, needle):
+    if sys.argv[2] == "1":
+        for cmd in commands:
+            try:
+                words = shlex.split(cmd)
+            except ValueError:
+                continue
+            if (len(words) == 1 and os.path.isabs(words[0])
+                    and os.path.basename(words[0]) == needle
+                    and os.path.isfile(words[0]) and os.access(words[0], os.X_OK)):
+                return True
+        return False
     return any(needle in cmd or cmd.endswith(needle) for cmd in commands)
 
 pre = hooks.get("PreToolUse") or []
@@ -113,7 +124,7 @@ runtime_overlay_claude_find_installed_hooks() {
   local candidate
   while IFS= read -r candidate; do
     [[ -z "$candidate" ]] && continue
-    if runtime_overlay_claude_hooks_detected_in_file "$candidate"; then
+    if runtime_overlay_claude_hooks_detected_in_file "$candidate" 1; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -133,66 +144,10 @@ runtime_overlay_claude_merge_settings_file() {
   local include_stop="${3:-0}"
   local hook_timeout
   hook_timeout="$(runtime_overlay_claude_hook_timeout)"
-  python3 - "$target" "$template" "$include_stop" "$hook_timeout" <<'PY'
-import json, os, sys
-
-target, template, include_stop_raw, hook_timeout_raw = sys.argv[1:]
-include_stop = include_stop_raw == "1"
-hook_timeout = int(hook_timeout_raw) if hook_timeout_raw.isdigit() else 5400
-
-def load_json(path):
-    if not os.path.isfile(path):
-        return {}
-    with open(path) as fh:
-        return json.load(fh)
-
-data = load_json(target)
-with open(template) as fh:
-    template_data = json.load(fh)
-
-template_hooks = template_data.get("hooks") or {}
-hooks = data.setdefault("hooks", {})
-
-for event, groups in template_hooks.items():
-    if event == "Stop" and not include_stop:
-        continue
-    hooks.setdefault(event, [])
-    for tpl_group in groups:
-        matcher = tpl_group.get("matcher")
-        tpl_entries = tpl_group.get("hooks") or []
-        existing = None
-        for group in hooks[event]:
-            if group.get("matcher") == matcher:
-                existing = group
-                break
-        if existing is None:
-            merged_group = json.loads(json.dumps(tpl_group))
-            if event == "Stop":
-                for entry in merged_group.get("hooks") or []:
-                    entry["timeout"] = hook_timeout
-            hooks[event].append(merged_group)
-            continue
-        existing.setdefault("hooks", [])
-        existing_cmds = {
-            (entry.get("command") or "")
-            for entry in existing["hooks"]
-        }
-        for entry in tpl_entries:
-            cmd = entry.get("command") or ""
-            merged_entry = json.loads(json.dumps(entry))
-            if event == "Stop":
-                merged_entry["timeout"] = hook_timeout
-            if cmd in existing_cmds:
-                continue
-            if any(cmd.endswith(os.path.basename(c)) for c in existing_cmds if c):
-                continue
-            existing["hooks"].append(merged_entry)
-
-os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-with open(target, "w") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
+  local lib_dir
+  lib_dir="$(_runtime_overlay_claude_lib_dir)"
+  python3 "$lib_dir/../../python/runtime-overlay-claude-merge-settings.py" \
+    "$target" "$template" "$(dirname "$template")/hooks" "$include_stop" "$hook_timeout"
 }
 
 runtime_overlay_claude_export_stop_hook_env() {

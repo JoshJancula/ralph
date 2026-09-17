@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import { type Dirent, existsSync, readFileSync, promises as fs, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   clearDashboardRootsCache,
   clearWorkspaceRootsCache,
@@ -14,13 +16,36 @@ import {
   isHiddenEntryName,
   parentListingPath,
   resolveRalphInstallRoot,
+  resolveDashboardDocumentationRoot,
   resolveUnderRoot,
   type DashboardRoots,
   type RootConfig,
 } from '../paths';
+import { resolveDashboardRootsForWorkspaceRoot } from './dashboard-workspace-resolve';
+import { registerAssistantApi } from './assistant/routes';
+import { computeCapabilities, writeGuard } from './write-guard';
+import { listManagedProcessRuns, runPlanDetached, stopManagedProcessRun, type ManagedProcessRun } from './ralph-cli';
+import { withServerTiming } from './server-timing';
+import {
+  buildInsightsSummary,
+  buildMetricsBreakdown,
+  buildMetricsDetail,
+  toInsightsRunItem,
+  type InsightsRunItem,
+  type MetricsFilterQuery,
+} from './metrics-insights';
+
+export { resolveDashboardRootsForWorkspaceRoot } from './dashboard-workspace-resolve';
 
 const FILE_CHUNK_BYTES = 256 * 1024;
+const execFileAsync = promisify(execFile);
 const SUMMARY_FILE_NAMES = new Set(['plan-usage-summary.json', 'orchestration-usage-summary.json']);
+interface DirectPlanRun { id: string; pid: number; planPath: string; projectRoot: string; workspaceRoot: string; logPath: string; startedAt: string; }
+interface PlanActiveRun { id: string; ownerPid: number | null; ownerAlive: boolean; liveProcesses: number; startedAt: string | null; }
+const directPlanRuns = new Map<string, DirectPlanRun>();
+
+function directPlanRunKey(projectRoot: string, planPath: string): string { return `${resolve(projectRoot)}:${planPath}`; }
+function processAlive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } }
 
 // The Python savings report reuses a simple "4 bytes per token" estimate; mirror it here so both endpoints agree.
 const SAVINGS_BYTES_PER_TOKEN_ESTIMATE = 4;
@@ -2367,6 +2392,41 @@ function jsonError(res: Response, status: number, message: string): void {
   res.status(status).json({ error: message });
 }
 
+interface StructuredErrorResponse {
+  code: 'NOT_FOUND' | 'FORBIDDEN' | 'STALE_RESOURCE' | 'INVALID_REQUEST' | 'UNKNOWN';
+  message: string;
+  requestedPath?: string;
+  resolvedPath?: string;
+  title: string;
+  explanation: string;
+  recoverable: boolean;
+  suggestedActions: string[];
+}
+
+function structuredError(
+  res: Response,
+  status: number,
+  code: StructuredErrorResponse['code'],
+  requestedPath: string,
+  title: string,
+  explanation: string,
+  recoverable: boolean,
+  suggestedActions: string[],
+  resolvedPath?: string
+): void {
+  const error: StructuredErrorResponse = {
+    code,
+    message: `${title}: ${explanation}`,
+    requestedPath,
+    resolvedPath,
+    title,
+    explanation,
+    recoverable,
+    suggestedActions,
+  };
+  res.status(status).json(error);
+}
+
 function getRootsMap(): Record<string, RootConfig> {
   return getAllowedRoots(findDashboardRoots());
 }
@@ -3290,32 +3350,23 @@ export async function handleMetricsDiscoverRequest(req: Request, res: Response):
   }
 }
 
-export async function handleMetricsSummaryRequest(_req: Request, res: Response): Promise<void> {
-  const logsRoots = await findWorkspaceLogsRootsAsync();
-  if (logsRoots.length === 0) {
-    res.json({
-      overall: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        max_turn_total_tokens: 0,
-        cache_hit_ratio: 0,
-        elapsed_seconds: 0,
-        count: 0,
-        tool_calls_total: 0,
-      },
-      plans: [],
-      orchestrations: [],
-      projects: [],
-    });
-    return;
-  }
-
-  const summaryPaths = await collectSummaryPathsFromLogs(logsRoots);
-  const plans: MetricsSummaryItem[] = [];
-  const orchestrations: MetricsSummaryItem[] = [];
-  const overall = {
+export async function loadMetricsCatalog(workspaceRootQuery = ''): Promise<{
+  overall: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    max_turn_total_tokens: number;
+    cache_hit_ratio: number;
+    elapsed_seconds: number;
+    count: number;
+    tool_calls_total: number;
+  };
+  plans: MetricsSummaryItem[];
+  orchestrations: MetricsSummaryItem[];
+  projects: ReturnType<typeof buildProjectsRollup>;
+}> {
+  const emptyOverall = {
     input_tokens: 0,
     output_tokens: 0,
     cache_creation_input_tokens: 0,
@@ -3326,6 +3377,22 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
     count: 0,
     tool_calls_total: 0,
   };
+
+  const logsRoots = await findWorkspaceLogsRootsAsync();
+  const scopedLogsRoots = filterAggregateRootsByWorkspace(logsRoots, workspaceRootQuery);
+  if (scopedLogsRoots.length === 0) {
+    return {
+      overall: emptyOverall,
+      plans: [],
+      orchestrations: [],
+      projects: [],
+    };
+  }
+
+  const summaryPaths = await collectSummaryPathsFromLogs(scopedLogsRoots);
+  const plans: MetricsSummaryItem[] = [];
+  const orchestrations: MetricsSummaryItem[] = [];
+  const overall = { ...emptyOverall };
 
   for (const summaryPath of summaryPaths) {
     try {
@@ -3363,7 +3430,6 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
   plans.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
   orchestrations.sort((a, b) => (a.started_at ?? a.path).localeCompare(b.started_at ?? b.path));
 
-  // Compute overall cache_hit_ratio from accumulated token totals.
   const overallCanonical = canonicalUsageFromRecord({
     input_tokens: overall.input_tokens,
     cache_creation_input_tokens: overall.cache_creation_input_tokens,
@@ -3373,12 +3439,85 @@ export async function handleMetricsSummaryRequest(_req: Request, res: Response):
 
   const projects = buildProjectsRollup(plans, orchestrations);
 
-  res.json({
+  return {
     overall,
     plans,
     orchestrations,
     projects,
+  };
+}
+
+function catalogToInsightsRuns(catalog: Awaited<ReturnType<typeof loadMetricsCatalog>>): InsightsRunItem[] {
+  return [
+    ...catalog.plans.map((item) => toInsightsRunItem(item, 'plan')),
+    ...catalog.orchestrations.map((item) => toInsightsRunItem(item, 'orchestration')),
+  ];
+}
+
+function parseMetricsFilterQuery(req: Request): MetricsFilterQuery {
+  const queryString = (key: string): string | undefined => {
+    const value = req.query[key];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const kindRaw = queryString('kind');
+  const kind =
+    kindRaw === 'plan' || kindRaw === 'orchestration' || kindRaw === 'all' ? kindRaw : 'all';
+  const sortDirRaw = queryString('sortDir');
+  const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+  const offsetRaw = queryString('offset');
+  const limitRaw = queryString('limit');
+  return {
+    workspaceRoot: queryString('workspaceRoot'),
+    kind,
+    runtime: queryString('runtime'),
+    model: queryString('model'),
+    dateFrom: queryString('dateFrom'),
+    dateTo: queryString('dateTo'),
+    offset: offsetRaw !== undefined ? Number(offsetRaw) : undefined,
+    limit: limitRaw !== undefined ? Number(limitRaw) : undefined,
+    sortBy: queryString('sortBy'),
+    sortDir,
+  };
+}
+
+export async function handleMetricsSummaryRequest(req: Request, res: Response): Promise<void> {
+  const workspaceRootQuery =
+    typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
+  const catalog = await loadMetricsCatalog(workspaceRootQuery);
+  res.json(catalog);
+}
+
+export async function handleMetricsInsightsSummaryRequest(req: Request, res: Response): Promise<void> {
+  const filters = parseMetricsFilterQuery(req);
+  const summary = await withServerTiming(res, 'insights-summary', 'Build insights summary', async () => {
+    const catalog = await loadMetricsCatalog(filters.workspaceRoot ?? '');
+    const items = catalogToInsightsRuns(catalog);
+    return buildInsightsSummary(items, filters);
   });
+  res.json(summary);
+}
+
+export async function handleMetricsBreakdownRequest(req: Request, res: Response): Promise<void> {
+  const filters = parseMetricsFilterQuery(req);
+  const breakdown = await withServerTiming(res, 'metrics-breakdown', 'Build metrics breakdown', async () => {
+    const catalog = await loadMetricsCatalog(filters.workspaceRoot ?? '');
+    const items = catalogToInsightsRuns(catalog);
+    return buildMetricsBreakdown(items, filters);
+  });
+  res.json(breakdown);
+}
+
+export async function handleMetricsDetailRequest(req: Request, res: Response): Promise<void> {
+  const planKey = typeof req.params['planKey'] === 'string' ? req.params['planKey'] : '';
+  if (!planKey.trim()) {
+    res.status(400).json({ error: 'planKey is required' });
+    return;
+  }
+  const workspaceRootQuery =
+    typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
+  const catalog = await loadMetricsCatalog(workspaceRootQuery);
+  const items = catalogToInsightsRuns(catalog);
+  res.json(buildMetricsDetail(items, planKey, workspaceRootQuery || undefined));
 }
 
 function emptySavingsReport(): SavingsReport {
@@ -3531,6 +3670,9 @@ export async function handleListRequest(req: Request, res: Response): Promise<vo
   if (pathParam.includes('..')) {
     return jsonError(res, 400, 'invalid path');
   }
+  if (rootKey === 'docs' && isExcludedDocumentationPath(pathParam)) {
+    return jsonError(res, 404, 'not found');
+  }
 
   const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
 
@@ -3621,10 +3763,18 @@ export async function handleListRequest(req: Request, res: Response): Promise<vo
     return jsonError(res, 500, 'read failed');
   }
   const diskEntryNames = dirents.map((d) => d.name);
-  const visibleNames =
+  let visibleNames =
     rootKey === 'plans'
       ? filterEntryNamesForPlansListing(absDir, normPlansListPath, diskEntryNames)
       : filterVisibleEntryNames(diskEntryNames);
+  if (rootKey === 'docs') {
+    visibleNames = visibleNames.filter((name) => !isExcludedDocumentationPath(`${pathParam}/${name}`));
+    visibleNames = await filterGitIgnoredDocumentationEntries(
+      dashboardRoots.projectRoot,
+      absDir,
+      visibleNames,
+    );
+  }
   visibleNames.sort((a, b) => a.localeCompare(b));
 
   const relPrefix = pathParam ? (pathParam.endsWith('/') ? pathParam : `${pathParam}/`) : '';
@@ -3670,21 +3820,88 @@ export async function handleListRequest(req: Request, res: Response): Promise<vo
   });
 }
 
+/** Never publish internal cookbook-review notes, even while the directory remains in the repository. */
+function isExcludedDocumentationPath(pathParam: string): boolean {
+  return pathParam.split('/').filter(Boolean).includes('cookbook-review');
+}
+
+/** Hide Git-ignored working notes from Docs. */
+async function filterGitIgnoredDocumentationEntries(
+  projectRoot: string,
+  directory: string,
+  names: string[],
+): Promise<string[]> {
+  const visible = await Promise.all(names.map(async (name) => {
+    const relativePath = relative(projectRoot, join(directory, name));
+    if (!relativePath || relativePath.startsWith('..')) {
+      return name;
+    }
+    try {
+      await execFileAsync('git', ['-C', projectRoot, 'check-ignore', '--no-index', '--quiet', '--', relativePath]);
+      return null;
+    } catch {
+      // Exit 1 means the path is not ignored; a missing Git binary should not
+      // make documentation unavailable.
+      return name;
+    }
+  }));
+  return visible.filter((name): name is string => name !== null);
+}
+
 export async function handleFileRequest(req: Request, res: Response): Promise<void> {
   const rootKey = req.query['root'] as string | undefined;
   const filePath = (req.query['path'] as string | undefined) ?? '';
   const offsetRaw = (req.query['offset'] as string | undefined) ?? '0';
   const offset = Number.parseInt(offsetRaw, 10);
   if (!rootKey || Number.isNaN(offset) || offset < 0) {
-    return jsonError(res, 400, 'bad request');
+    return structuredError(
+      res,
+      400,
+      'INVALID_REQUEST',
+      filePath,
+      'Invalid Request',
+      'The request is missing required parameters or has invalid values.',
+      false,
+      ['RETURN_TO_PLANS']
+    );
   }
 
   if (!DASHBOARD_EXPLORER_ROOT_KEYS.has(rootKey)) {
-    return jsonError(res, 400, 'unknown root');
+    return structuredError(
+      res,
+      400,
+      'INVALID_REQUEST',
+      filePath,
+      'Invalid Root',
+      `The specified root "${rootKey}" is not valid.`,
+      false,
+      ['RETURN_TO_PLANS']
+    );
   }
 
   if (filePath.includes('..')) {
-    return jsonError(res, 400, 'invalid path');
+    return structuredError(
+      res,
+      403,
+      'FORBIDDEN',
+      filePath,
+      'Access Denied',
+      'Path traversal is not allowed.',
+      false,
+      ['SELECT_PROJECT', 'RETURN_TO_PLANS']
+    );
+  }
+  if (rootKey === 'docs' && isExcludedDocumentationPath(filePath)) {
+    return structuredError(
+      res,
+      404,
+      'NOT_FOUND',
+      filePath,
+      'File Not Found',
+      `The file "${filePath}" was not found.`,
+      true,
+      ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+    );
   }
 
   let absFile: string | null = null;
@@ -3695,17 +3912,44 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
       ? await findWorkspaceLogsRootsAsync()
       : await findWorkspaceArtifactsRootsAsync();
     if (aggregatedRoots.length === 0) {
-      return jsonError(res, 404, 'file not found');
+      return structuredError(
+        res,
+        404,
+        'NOT_FOUND',
+        filePath,
+        `No ${rootKey} Found`,
+        `There are no ${rootKey} available in the current workspace.`,
+        true,
+        ['REFRESH_INDEX', 'SELECT_PROJECT']
+      );
     }
     const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'] : '';
     if (aggregatedRoots.length > 1 && !workspaceRootQuery.trim()) {
-      return jsonError(res, 400, 'workspaceRoot query parameter is required when multiple workspaces are aggregated');
+      return structuredError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        filePath,
+        'Ambiguous Request',
+        'Multiple workspaces found. Please specify which workspace to access.',
+        false,
+        ['SELECT_PROJECT']
+      );
     }
     const scopedRoots = filterAggregateRootsByWorkspace(aggregatedRoots, workspaceRootQuery);
     let searchRoots: string[];
     if (workspaceRootQuery.trim()) {
       if (scopedRoots.length === 0) {
-        return jsonError(res, 404, 'file not found');
+        return structuredError(
+          res,
+          404,
+          'NOT_FOUND',
+          filePath,
+          'Workspace Not Found',
+          'The specified workspace does not contain any logs or artifacts.',
+          true,
+          ['SELECT_PROJECT', 'REFRESH_INDEX']
+        );
       }
       searchRoots = scopedRoots;
     } else {
@@ -3713,13 +3957,31 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
     }
     const candidate = await findFileInAggregatedRoots(searchRoots, filePath);
     if (!candidate) {
-      return jsonError(res, 404, 'file not found');
+      return structuredError(
+        res,
+        404,
+        'NOT_FOUND',
+        filePath,
+        'File Not Found',
+        `The file "${filePath}" was not found in the available ${rootKey}.`,
+        true,
+        ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+      );
     }
     absFile = candidate;
     try {
       stat = await fs.stat(absFile);
     } catch {
-      return jsonError(res, 404, 'file not found');
+      return structuredError(
+        res,
+        404,
+        'NOT_FOUND',
+        filePath,
+        'File Not Found',
+        `The file "${filePath}" could not be accessed. It may have been deleted.`,
+        true,
+        ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+      );
     }
   } else {
     const projectRootQuery =
@@ -3727,12 +3989,30 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
     const allowlist = await getMergedWorkspaceAllowlist();
     const dashboardRoots = resolveDashboardRootsForRequest(projectRootQuery, allowlist);
     if (dashboardRoots === null) {
-      return jsonError(res, 400, 'invalid projectRoot');
+      return structuredError(
+        res,
+        403,
+        'FORBIDDEN',
+        filePath,
+        'Invalid Project',
+        'The specified project root is not valid or you do not have permission to access it.',
+        false,
+        ['SELECT_PROJECT']
+      );
     }
     const roots = getAllowedRoots(dashboardRoots);
     const config = roots[rootKey];
     if (!config) {
-      return jsonError(res, 400, 'unknown root');
+      return structuredError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        filePath,
+        'Invalid Root',
+        `The root type "${rootKey}" is not available in this project.`,
+        false,
+        ['RETURN_TO_PLANS']
+      );
     }
     try {
       absFile = resolveUnderRoot(config, filePath);
@@ -3749,23 +4029,68 @@ export async function handleFileRequest(req: Request, res: Response): Promise<vo
           try {
             stat = await fs.stat(absFile);
           } catch {
-            return jsonError(res, 404, 'file not found');
+            return structuredError(
+              res,
+              404,
+              'NOT_FOUND',
+              filePath,
+              'File Not Found',
+              `The plan "${filePath}" exists but could not be accessed.`,
+              true,
+              ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+            );
           }
         } else {
-          return jsonError(res, 404, 'file not found');
+          return structuredError(
+            res,
+            404,
+            'NOT_FOUND',
+            filePath,
+            'Plan Not Found',
+            `No plan named "${filePath}" was found. It may have been deleted or renamed.`,
+            true,
+            ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+          );
         }
       } else {
-        return jsonError(res, 404, 'file not found');
+        return structuredError(
+          res,
+          404,
+          'NOT_FOUND',
+          filePath,
+          'File Not Found',
+          `The file "${filePath}" was not found.`,
+          true,
+          ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+        );
       }
     }
   }
 
   if (!absFile) {
-    return jsonError(res, 404, 'file not found');
+    return structuredError(
+      res,
+      404,
+      'NOT_FOUND',
+      filePath,
+      'File Not Found',
+      'The requested file could not be located.',
+      true,
+      ['REFRESH_INDEX', 'RETURN_TO_PLANS']
+    );
   }
 
   if (!stat.isFile()) {
-    return jsonError(res, 400, 'not a file');
+    return structuredError(
+      res,
+      400,
+      'INVALID_REQUEST',
+      filePath,
+      'Not a File',
+      'The path points to a directory, not a file.',
+      false,
+      ['RETURN_TO_PLANS']
+    );
   }
 
   const size = Number(stat.size);
@@ -3949,7 +4274,11 @@ async function computeMergedWorkspaceAllowlistBody(): Promise<MergedWorkspaceEnt
   }
 
   const frameworkRoot = resolveRalphInstallRoot();
-  if (frameworkRoot && existsSync(join(frameworkRoot, 'bundle', '.ralph'))) {
+  // A normal global install stores framework docs directly under `.ralph/docs`.
+  // The repository layout has `bundle/.ralph/docs`; both resolve through the
+  // root mapping, so advertise the synthetic docs workspace whenever its docs
+  // directory actually exists rather than tying it to the source-tree layout.
+  if (frameworkRoot && existsSync(getAllowedRoots({ projectRoot: frameworkRoot, workspaceRoot: frameworkRoot })['docs'].basePath)) {
     const defaultWorkspace = join(frameworkRoot, '.ralph-workspace');
     const workspaceRoot =
       existsSync(defaultWorkspace) && statSync(defaultWorkspace).isDirectory()
@@ -3979,7 +4308,11 @@ async function computeMergedWorkspaceAllowlistBody(): Promise<MergedWorkspaceEnt
 
   return Array.from(byProject.values())
     .filter((entry) => entry.exists)
-    .sort((a, b) => a.projectRoot.localeCompare(b.projectRoot));
+    .sort((a, b) => {
+      if (a.label === 'Ralph docs') return -1;
+      if (b.label === 'Ralph docs') return 1;
+      return a.projectRoot.localeCompare(b.projectRoot);
+    });
 }
 
 export async function getMergedWorkspaceAllowlist(): Promise<MergedWorkspaceEntry[]> {
@@ -3995,6 +4328,15 @@ export async function getMergedWorkspaceAllowlist(): Promise<MergedWorkspaceEntr
   const data = await mergedWorkspaceAllowlistInflight;
   mergedWorkspaceAllowlistCache = { expiresAt: Date.now() + mergedWorkspaceAllowlistTtlMs(), data };
   return data;
+}
+
+export async function resolveWorkflowWorkspaceContext(req: Request): Promise<DashboardRoots | null> {
+  const query = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const allowlist = await getMergedWorkspaceAllowlist();
+  if (!query) {
+    return findDashboardRoots();
+  }
+  return resolveDashboardRootsForWorkspaceRoot(query, allowlist);
 }
 
 export function resolveDashboardRootsForRequest(
@@ -4036,6 +4378,11 @@ export function resolveDashboardRootsForRequest(
             : installRoot,
       };
     }
+  }
+
+  const dashboardDocsRoot = resolveDashboardDocumentationRoot();
+  if (dashboardDocsRoot && resolve(dashboardDocsRoot) === target) {
+    return { projectRoot: dashboardDocsRoot, workspaceRoot: dashboardDocsRoot };
   }
 
   return null;
@@ -4544,6 +4891,638 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
   });
 }
 
+async function handleResourceListRequest(req: Request, res: Response): Promise<void> {
+  const resourceId = req.query['resourceId'] as string | undefined;
+  if (!resourceId) {
+    return jsonError(res, 400, 'missing resourceId');
+  }
+
+  try {
+    const { ResourceIdentityCodec } = await import('../shared/resource-identity');
+    const identity = ResourceIdentityCodec.decode(resourceId);
+    return handleListRequest(
+      {
+        query: {
+          root: identity.root,
+          path: identity.path,
+          projectRoot: identity.projectRoot,
+        },
+      } as unknown as Request,
+      res
+    );
+  } catch (error) {
+    return jsonError(res, 400, 'invalid resourceId');
+  }
+}
+
+async function handleResourceFileRequest(req: Request, res: Response): Promise<void> {
+  const resourceId = req.query['resourceId'] as string | undefined;
+  const offsetRaw = (req.query['offset'] as string | undefined) ?? '0';
+  if (!resourceId) {
+    return structuredError(
+      res,
+      400,
+      'INVALID_REQUEST',
+      '',
+      'Invalid Request',
+      'Missing required parameter: resourceId',
+      false,
+      ['RETURN_TO_PLANS']
+    );
+  }
+
+  try {
+    const { ResourceIdentityCodec } = await import('../shared/resource-identity');
+    const identity = ResourceIdentityCodec.decode(resourceId);
+    return handleFileRequest(
+      {
+        query: {
+          root: identity.root,
+          path: identity.path,
+          projectRoot: identity.projectRoot,
+          offset: offsetRaw,
+        },
+      } as unknown as Request,
+      res
+    );
+  } catch (error) {
+    return structuredError(
+      res,
+      400,
+      'INVALID_REQUEST',
+      '',
+      'Invalid Resource Identifier',
+      'The provided resource identifier is invalid or corrupted.',
+      false,
+      ['RETURN_TO_PLANS', 'SELECT_PROJECT']
+    );
+  }
+}
+
+interface PlanTodo {
+  id: string;
+  content: string;
+  verification: string;
+  status: 'pending' | 'completed';
+}
+
+interface PlanMetadata {
+  name?: string;
+  overview?: string;
+  isProject?: boolean;
+  todos: PlanTodo[];
+}
+
+interface PlanInventoryItem {
+  id: string;
+  name: string;
+  path: string;
+  projectRoot: string;
+  type: 'leaf' | 'generated-control' | 'supplied' | 'workflow-derived';
+  planName?: string;
+  overview?: string;
+  isProject: boolean;
+  checkboxProgress: { completed: number; total: number };
+  currentTodo?: { id: string; content: string };
+  lastActivityMs: number;
+  hasLatestRun: boolean;
+  activeRunId?: string;
+  activeRun?: PlanActiveRun;
+}
+
+interface PlanInventoryResponse {
+  items: PlanInventoryItem[];
+  pageInfo: {
+    cursor?: string;
+    hasMore: boolean;
+    total: number;
+  };
+  appliedFilters: Record<string, unknown>;
+  counts: {
+    total: number;
+    filtered: number;
+  };
+  activityDiscoveryError?: string;
+}
+
+const CLASSIC_TODO_LINE = /^\s*-\s+\[\s*[\sx]\s*\]\s/i;
+const CLASSIC_TODO_DONE = /^\s*-\s+\[x\]\s/i;
+const CLASSIC_TODO_STRIP = /^\s*-\s+\[\s*[\sx]\s*\]\s*/i;
+
+/** Mirrors PlanParserService's classic-format detection (`- [ ]` / `- [x]`, space before `]` required). */
+function parseClassicPlanTodos(content: string): PlanTodo[] {
+  const todos: PlanTodo[] = [];
+  const lines = content.split('\n');
+  let index = 0;
+
+  for (const line of lines) {
+    if (!CLASSIC_TODO_LINE.test(line)) {
+      continue;
+    }
+    index += 1;
+    todos.push({
+      id: `todo-${index}`,
+      content: line.replace(CLASSIC_TODO_STRIP, '').trim(),
+      verification: '',
+      status: CLASSIC_TODO_DONE.test(line) ? 'completed' : 'pending',
+    });
+  }
+
+  return todos;
+}
+
+function parsePlanMetadata(content: string): PlanMetadata {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) {
+    return { todos: parseClassicPlanTodos(content) };
+  }
+
+  const frontmatter = frontmatterMatch[1];
+  const metadata: PlanMetadata = { todos: [] };
+
+  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+  if (nameMatch) {
+    metadata.name = nameMatch[1].trim();
+  }
+
+  const overviewMatch = frontmatter.match(/^overview:\s*(.+)$/m);
+  if (overviewMatch) {
+    metadata.overview = overviewMatch[1].trim();
+  }
+
+  const isProjectMatch = frontmatter.match(/^isProject:\s*(.+)$/m);
+  if (isProjectMatch) {
+    metadata.isProject = isProjectMatch[1].trim().toLowerCase() === 'true';
+  }
+
+  const lines = frontmatter.split('\n');
+  let inTodos = false;
+  let currentTodo: Partial<PlanTodo> | null = null;
+
+  // A YAML block-scalar indicator (`|`, `|-`, `>`, etc.) on a `content:`/`verification:` line
+  // means the value is the following more-indented lines, not the literal indicator text.
+  const isBlockScalarIndicator = (value: string): boolean => /^[|>][+-]?\d*$/.test(value.trim());
+
+  const readBlockScalar = (startIndex: number): { value: string; nextIndex: number } => {
+    const parts: string[] = [];
+    let i = startIndex;
+    while (i < lines.length) {
+      const candidate = lines[i];
+      if (candidate.trim().length === 0) {
+        i++;
+        continue;
+      }
+      if (!candidate.match(/^\s{6,}\S/)) {
+        break;
+      }
+      parts.push(candidate.trim());
+      i++;
+    }
+    return { value: parts.join(' '), nextIndex: i };
+  };
+
+  let lineIndex = 0;
+  while (lineIndex < lines.length) {
+    const line = lines[lineIndex];
+
+    if (line.match(/^todos:/)) {
+      inTodos = true;
+      lineIndex++;
+      continue;
+    }
+
+    if (!inTodos) {
+      lineIndex++;
+      continue;
+    }
+
+    if (line.match(/^\s{2}-\s+id:/)) {
+      if (currentTodo && currentTodo.id && currentTodo.content && currentTodo.verification && currentTodo.status) {
+        metadata.todos.push(currentTodo as PlanTodo);
+      }
+      const idMatch = line.match(/id:\s*(.+)$/);
+      currentTodo = { id: idMatch ? idMatch[1].trim() : '', status: 'pending' };
+      lineIndex++;
+      continue;
+    }
+
+    if (line.match(/^\s{4}content:/) && currentTodo) {
+      const contentMatch = line.match(/content:\s*(.*)$/);
+      const raw = contentMatch ? contentMatch[1].trim() : '';
+      if (raw && !isBlockScalarIndicator(raw)) {
+        currentTodo.content = raw;
+        lineIndex++;
+      } else {
+        const { value, nextIndex } = readBlockScalar(lineIndex + 1);
+        currentTodo.content = value;
+        lineIndex = nextIndex;
+      }
+      continue;
+    }
+
+    if (line.match(/^\s{4}verification:/) && currentTodo) {
+      const verificationMatch = line.match(/verification:\s*(.*)$/);
+      const raw = verificationMatch ? verificationMatch[1].trim() : '';
+      if (raw && !isBlockScalarIndicator(raw)) {
+        currentTodo.verification = raw;
+        lineIndex++;
+      } else {
+        const { value, nextIndex } = readBlockScalar(lineIndex + 1);
+        currentTodo.verification = value;
+        lineIndex = nextIndex;
+      }
+      continue;
+    }
+
+    if (line.match(/^\s{4}status:/) && currentTodo) {
+      const statusMatch = line.match(/status:\s*(.+)$/);
+      if (statusMatch) {
+        const statusValue = statusMatch[1].trim();
+        currentTodo.status = (statusValue === 'completed' ? 'completed' : 'pending') as 'pending' | 'completed';
+      }
+    }
+
+    lineIndex++;
+  }
+
+  if (currentTodo && currentTodo.id && currentTodo.content && currentTodo.verification && currentTodo.status) {
+    metadata.todos.push(currentTodo as PlanTodo);
+  }
+
+  return metadata;
+}
+
+const PLAN_INDEX_MAX_RECURSION_DEPTH = 8;
+const PLAN_INDEX_SKIP_DIR_NAMES = new Set(['node_modules', '.git']);
+
+function isPlanFileName(name: string): boolean {
+  return /^plan.*\.md$/.test(name) || /\.plan\.md$/.test(name);
+}
+
+/** Recursively collects plan files under `dir` (bounded depth, skipping dot-dirs and node_modules/.git). */
+async function collectPlanFilesRecursive(
+  dir: string,
+  depth: number,
+  out: Array<{ fullPath: string; stat: import('node:fs').Stats }>
+): Promise<void> {
+  if (depth > PLAN_INDEX_MAX_RECURSION_DEPTH) {
+    return;
+  }
+
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith('.') || PLAN_INDEX_SKIP_DIR_NAMES.has(entry.name)) {
+        continue;
+      }
+      await collectPlanFilesRecursive(join(dir, entry.name), depth + 1, out);
+      continue;
+    }
+
+    if (!entry.isFile() || !isPlanFileName(entry.name)) {
+      continue;
+    }
+
+    const fullPath = join(dir, entry.name);
+    try {
+      const stat = await fs.stat(fullPath);
+      out.push({ fullPath, stat });
+    } catch {
+    }
+  }
+}
+
+async function findAllPlans(projectRoot: string, workspaceRoot: string): Promise<Map<string, { path: string; absolutePath: string; stat: import('node:fs').Stats }>> {
+  const plans = new Map<string, { path: string; absolutePath: string; stat: import('node:fs').Stats }>();
+
+  // The project root itself is scanned shallowly only: it may be an arbitrary,
+  // large repository tree, and only plan files an operator dropped directly at
+  // its top level are in scope there. The Ralph-managed plans directories are
+  // scanned recursively since operators organize plans into subfolders.
+  const shallowDirs = [projectRoot];
+  const recursiveDirs = [join(workspaceRoot, 'plans'), join(projectRoot, 'plans')];
+
+  for (const dir of shallowDirs) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !isPlanFileName(entry.name)) {
+          continue;
+        }
+        const fullPath = join(dir, entry.name);
+        try {
+          const stat = await fs.stat(fullPath);
+          const relPath = entry.name;
+          const id = relPath.replace(/\//g, ':').replace(/\.md$/, '');
+          if (!plans.has(id)) {
+            plans.set(id, { path: relPath, absolutePath: fullPath, stat });
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+
+  for (const dir of recursiveDirs) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+    const found: Array<{ fullPath: string; stat: import('node:fs').Stats }> = [];
+    await collectPlanFilesRecursive(dir, 0, found);
+    for (const { fullPath, stat } of found) {
+      const relPath = relative(projectRoot, fullPath);
+      const id = relPath.replace(/\\/g, '/').replace(/\//g, ':').replace(/\.md$/, '');
+      if (!plans.has(id)) {
+        plans.set(id, { path: relPath, absolutePath: fullPath, stat });
+      }
+    }
+  }
+
+  return plans;
+}
+
+async function buildPlanInventoryIndex(
+  projectRoot: string,
+  workspaceRoot: string,
+  managedRuns: readonly ManagedProcessRun[] = [],
+): Promise<PlanInventoryItem[]> {
+  const planFiles = await findAllPlans(projectRoot, workspaceRoot);
+  const items: PlanInventoryItem[] = [];
+
+  for (const [id, { path: relPath, absolutePath, stat }] of planFiles) {
+    try {
+      const fullPath = absolutePath;
+
+      const content = await fs.readFile(fullPath, 'utf-8');
+      const metadata = parsePlanMetadata(content);
+
+      const completedTodos = metadata.todos.filter((t) => t.status === 'completed').length;
+      const totalTodos = metadata.todos.length;
+      const currentTodo = metadata.todos.find((t) => t.status === 'pending');
+
+      const logsDir = join(workspaceRoot, 'logs', id);
+      let hasLatestRun = false;
+      try {
+        hasLatestRun = existsSync(logsDir);
+      } catch {
+      }
+
+      const canonicalPlanPath = resolve(fullPath);
+      // Process records are authoritative. The dashboard map only bridges the
+      // short interval between spawning a plan and its registry initialization.
+      const registryRun = managedRuns.find((run) => run.kind === 'plan' && resolve(run.planPath) === canonicalPlanPath);
+      const fallbackRun = registryRun ? undefined : directPlanRuns.get(directPlanRunKey(projectRoot, relPath));
+      const activeRun: PlanActiveRun | undefined = registryRun
+        ? {
+            id: registryRun.id,
+            ownerPid: registryRun.ownerPid,
+            ownerAlive: registryRun.ownerAlive,
+            liveProcesses: registryRun.liveProcesses,
+            startedAt: registryRun.startedAt,
+          }
+        : fallbackRun && processAlive(fallbackRun.pid)
+          ? { id: fallbackRun.id, ownerPid: fallbackRun.pid, ownerAlive: true, liveProcesses: 1, startedAt: fallbackRun.startedAt }
+          : undefined;
+
+      items.push({
+        id,
+        name: metadata.name || basename(fullPath).replace(/\.md$/, ''),
+        path: relPath,
+        projectRoot,
+        type: 'leaf',
+        planName: metadata.name,
+        overview: metadata.overview,
+        isProject: metadata.isProject ?? false,
+        checkboxProgress: { completed: completedTodos, total: totalTodos },
+        currentTodo: currentTodo ? { id: currentTodo.id, content: currentTodo.content } : undefined,
+        lastActivityMs: stat.mtimeMs,
+        hasLatestRun,
+        activeRunId: activeRun?.id,
+        activeRun,
+      });
+    } catch {
+    }
+  }
+
+  return items;
+}
+
+async function directPlanRunRoots(req: Request): Promise<DashboardRoots | null> {
+  const allowlist = await getMergedWorkspaceAllowlist();
+  const requested = typeof req.body?.projectRoot === 'string'
+    ? req.body.projectRoot
+    : typeof req.query['projectRoot'] === 'string' ? req.query['projectRoot'] : undefined;
+  return resolveDashboardRootsForRequest(requested, allowlist);
+}
+
+async function resolveDirectPlan(req: Request): Promise<{ roots: DashboardRoots; relativePath: string; absolutePath: string } | null> {
+  const roots = await directPlanRunRoots(req);
+  const requested = typeof req.body?.path === 'string'
+    ? req.body.path
+    : typeof req.query['path'] === 'string' ? req.query['path'] : '';
+  if (!roots || !requested) return null;
+  const plans = await findAllPlans(roots.projectRoot, roots.workspaceRoot);
+  const match = [...plans.values()].find((plan) => plan.path === requested);
+  return match ? { roots, relativePath: match.path, absolutePath: resolve(match.absolutePath) } : null;
+}
+
+async function startDirectPlanRun(req: Request, res: Response): Promise<void> {
+  const plan = await resolveDirectPlan(req);
+  if (!plan) { res.status(404).json({ error: 'Leaf plan not found in the selected workspace' }); return; }
+  const key = directPlanRunKey(plan.roots.projectRoot, plan.relativePath);
+  const current = directPlanRuns.get(key);
+  if (current && processAlive(current.pid)) { res.status(409).json({ error: 'This leaf plan is already running', run: current }); return; }
+  const id = `leaf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const logPath = join(plan.roots.workspaceRoot, 'logs', 'dashboard-leaf-runs', `${id}.log`);
+  await fs.mkdir(dirname(logPath), { recursive: true });
+  const handle = runPlanDetached(plan.absolutePath, logPath, { projectRoot: plan.roots.projectRoot, workspaceRoot: plan.roots.workspaceRoot });
+  const run: DirectPlanRun = { id, pid: handle.pid, planPath: plan.relativePath, projectRoot: plan.roots.projectRoot, workspaceRoot: plan.roots.workspaceRoot, logPath, startedAt: new Date().toISOString() };
+  directPlanRuns.set(key, run);
+  res.status(202).json({ run });
+}
+
+async function stopDirectPlanRun(req: Request, res: Response): Promise<void> {
+  const plan = await resolveDirectPlan(req);
+  if (!plan) { res.status(404).json({ error: 'Leaf plan not found in the selected workspace' }); return; }
+  let managedRuns: readonly ManagedProcessRun[];
+  try {
+    managedRuns = await listManagedProcessRuns({ projectRoot: plan.roots.projectRoot, workspaceRoot: plan.roots.workspaceRoot });
+  } catch {
+    managedRuns = [];
+  }
+  const registryRun = managedRuns.find((run) => run.kind === 'plan' && resolve(run.planPath) === resolve(plan.absolutePath));
+  if (registryRun) {
+    try {
+      await stopManagedProcessRun(registryRun.id, { projectRoot: plan.roots.projectRoot, workspaceRoot: plan.roots.workspaceRoot });
+      directPlanRuns.delete(directPlanRunKey(plan.roots.projectRoot, plan.relativePath));
+      res.json({ ok: true });
+    } catch {
+      res.status(409).json({ error: 'This leaf plan is not running' });
+    }
+    return;
+  }
+  const key = directPlanRunKey(plan.roots.projectRoot, plan.relativePath);
+  const run = directPlanRuns.get(key);
+  if (!run || !processAlive(run.pid)) { directPlanRuns.delete(key); res.status(409).json({ error: 'This leaf plan is not running' }); return; }
+  try { process.kill(-run.pid, 'SIGTERM'); } catch { process.kill(run.pid, 'SIGTERM'); }
+  directPlanRuns.delete(key);
+  res.json({ ok: true });
+}
+
+/** Single-plan activity lookup avoids requiring the detail view to page the inventory. */
+async function getDirectPlanRun(req: Request, res: Response): Promise<void> {
+  const plan = await resolveDirectPlan(req);
+  if (!plan) { res.status(404).json({ error: 'Leaf plan not found in the selected workspace' }); return; }
+  try {
+    const runs = await listManagedProcessRuns({ projectRoot: plan.roots.projectRoot, workspaceRoot: plan.roots.workspaceRoot });
+    const run = runs.find((candidate) => candidate.kind === 'plan' && resolve(candidate.planPath) === resolve(plan.absolutePath));
+    if (run) {
+      res.json({ activeRun: { id: run.id, ownerPid: run.ownerPid, ownerAlive: run.ownerAlive, liveProcesses: run.liveProcesses, startedAt: run.startedAt } });
+      return;
+    }
+  } catch (error) {
+    res.json({ activeRun: null, activityDiscoveryError: 'Unable to refresh Ralph process activity.' });
+    return;
+  }
+  const fallback = directPlanRuns.get(directPlanRunKey(plan.roots.projectRoot, plan.relativePath));
+  res.json({ activeRun: fallback && processAlive(fallback.pid) ? { id: fallback.id, ownerPid: fallback.pid, ownerAlive: true, liveProcesses: 1, startedAt: fallback.startedAt } : null });
+}
+
+export async function handlePlansIndexRequest(req: Request, res: Response): Promise<void> {
+  try {
+    const projectRoot = process.env['RALPH_DASHBOARD_PROJECT_ROOT'] || findWorkspaceProjectRoot();
+    const workspaceRoot = process.env['RALPH_DASHBOARD_WORKSPACE_ROOT'] || join(projectRoot, '.ralph-workspace');
+
+    if (!projectRoot) {
+      res.status(400).json({ error: 'No project root found' });
+      return;
+    }
+
+    const pageSize = Math.min(Math.max(parseInt(req.query['pageSize'] as string) || 20, 1), 100);
+    const cursor = (req.query['cursor'] as string) || '';
+
+    const status = (req.query['status'] as string) || '';
+    const type = (req.query['type'] as string) || '';
+    const search = (req.query['search'] as string) || '';
+    const requestedProjectRoot =
+      typeof req.query['projectRoot'] === 'string' ? resolve(req.query['projectRoot']) : null;
+    const allProjects = req.query['allProjects'] === 'true';
+
+    const response = await withServerTiming(res, 'plans-index', 'Build plan inventory index', async () => {
+      const knownWorkspaces = await getMergedWorkspaceAllowlist();
+      const fallbackTarget = { projectRoot: resolve(projectRoot), workspaceRoot: resolve(workspaceRoot) };
+      const targets = allProjects
+        ? knownWorkspaces
+        : requestedProjectRoot
+          ? knownWorkspaces.filter((entry) => resolve(entry.projectRoot) === requestedProjectRoot)
+          : [];
+      const indexTargets = targets.length > 0 ? targets : [fallbackTarget];
+      const indexed = await Promise.all(indexTargets.map(async (target) => {
+        try {
+          const runs = await listManagedProcessRuns({ projectRoot: target.projectRoot, workspaceRoot: target.workspaceRoot });
+          return { items: await buildPlanInventoryIndex(target.projectRoot, target.workspaceRoot, runs) };
+        } catch {
+          // Inventory is still useful if the CLI is temporarily unavailable.
+          return { items: await buildPlanInventoryIndex(target.projectRoot, target.workspaceRoot), activityDiscoveryError: 'Unable to refresh Ralph process activity.' };
+        }
+      }));
+      const items = indexed.flatMap((entry) => entry.items);
+      const activityDiscoveryError = indexed.find((entry) => entry.activityDiscoveryError)?.activityDiscoveryError;
+
+      // Plan ids are project-relative. Preserve the concise id where unique, but
+      // disambiguate same-named plans in the all-projects inventory.
+      const idCounts = new Map<string, number>();
+      for (const item of items) {
+        idCounts.set(item.id, (idCounts.get(item.id) ?? 0) + 1);
+      }
+      for (const item of items) {
+        if ((idCounts.get(item.id) ?? 0) > 1) {
+          item.id = `${item.projectRoot}::${item.id}`;
+        }
+      }
+
+      let filtered = items;
+
+      if (status) {
+        if (status === 'active') {
+          filtered = filtered.filter((item) => Boolean(item.activeRun) || (item.checkboxProgress.total > 0 && item.checkboxProgress.completed < item.checkboxProgress.total));
+        } else if (status === 'completed') {
+          filtered = filtered.filter((item) => item.checkboxProgress.total === 0 || item.checkboxProgress.completed === item.checkboxProgress.total);
+        } else if (status === 'waiting') {
+          filtered = filtered.filter((item) => item.hasLatestRun);
+        }
+      }
+
+      if (type) {
+        filtered = filtered.filter((item) => item.type === type);
+      }
+
+      if (search) {
+        const searchLower = search.toLowerCase();
+        filtered = filtered.filter(
+          (item) =>
+            item.name.toLowerCase().includes(searchLower) ||
+            item.planName?.toLowerCase().includes(searchLower) ||
+            item.overview?.toLowerCase().includes(searchLower)
+        );
+      }
+
+      filtered.sort((a, b) => {
+        const aActive = a.activeRun || (a.checkboxProgress.total > 0 && a.checkboxProgress.completed < a.checkboxProgress.total) ? 0 : 1;
+        const bActive = b.activeRun || (b.checkboxProgress.total > 0 && b.checkboxProgress.completed < b.checkboxProgress.total) ? 0 : 1;
+
+        if (aActive !== bActive) {
+          return aActive - bActive;
+        }
+
+        return b.lastActivityMs - a.lastActivityMs;
+      });
+
+      const cursorIndex = cursor ? filtered.findIndex((item) => item.id === cursor) : -1;
+      const startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+      const paginatedItems = filtered.slice(startIndex, startIndex + pageSize);
+      const nextCursor = startIndex + pageSize < filtered.length ? paginatedItems[paginatedItems.length - 1]?.id : undefined;
+
+      const body: PlanInventoryResponse = {
+        items: paginatedItems,
+        pageInfo: {
+          cursor: nextCursor,
+          hasMore: startIndex + pageSize < filtered.length,
+          total: items.length,
+        },
+        appliedFilters: {
+          ...(status && { status }),
+          ...(type && { type }),
+          ...(search && { search }),
+          ...(requestedProjectRoot && { projectRoot: requestedProjectRoot }),
+          ...(allProjects && { allProjects: true }),
+        },
+        counts: {
+          total: items.length,
+          filtered: filtered.length,
+        },
+        ...(activityDiscoveryError && { activityDiscoveryError }),
+      };
+      return body;
+    });
+
+    res.json(response);
+  } catch (error) {
+    console.error('Error handling plans index request:', error);
+    res.status(500).json({ error: 'Failed to retrieve plan inventory' });
+  }
+}
+
 export function registerDashboardApi(app: Express): void {
   app.get('/api/workspace', (_req: Request, res: Response) => {
     const root = findWorkspaceProjectRoot();
@@ -4552,6 +5531,10 @@ export function registerDashboardApi(app: Express): void {
 
   app.get('/api/ralph-framework-root', (_req: Request, res: Response) => {
     res.json({ projectRoot: resolveRalphInstallRoot() });
+  });
+
+  app.get('/api/dashboard-docs-root', (_req: Request, res: Response) => {
+    res.json({ projectRoot: resolveDashboardDocumentationRoot() });
   });
 
   app.get('/api/roots', (_req: Request, res: Response) => {
@@ -4566,11 +5549,26 @@ export function registerDashboardApi(app: Express): void {
 
   app.get('/api/list', handleListRequest);
   app.get('/api/file', handleFileRequest);
+  app.get('/api/resource/list', handleResourceListRequest);
+  app.get('/api/resource/file', handleResourceFileRequest);
   app.get('/api/template', handleTemplateRequest);
   app.get('/api/metrics/summary', handleMetricsSummaryRequest);
+  app.get('/api/metrics/insights-summary', handleMetricsInsightsSummaryRequest);
+  app.get('/api/metrics/breakdown', handleMetricsBreakdownRequest);
+  app.get('/api/metrics/detail/:planKey', handleMetricsDetailRequest);
   app.get('/api/benchmarks', handleSavingsRequest);
   app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);
   app.get('/api/workspaces', handleWorkspacesRequest);
   app.get('/api/graph-runs', handleGraphRunsRequest);
   app.get('/api/graph-runs/:namespace/:runId', handleGraphRunDetailRequest);
+  app.get('/api/plans/index', handlePlansIndexRequest);
+  app.get('/api/plans/run', (req, res) => void getDirectPlanRun(req, res));
+  app.post('/api/plans/run', writeGuard, (req, res) => void startDirectPlanRun(req, res));
+  app.post('/api/plans/stop', writeGuard, (req, res) => void stopDirectPlanRun(req, res));
+
+  app.get('/api/capabilities', (_req: Request, res: Response) => {
+    res.json(computeCapabilities());
+  });
+
+  registerAssistantApi(app);
 }

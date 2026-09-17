@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "runId": "run-completed",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "state": "completed",
+    "createdAt": "2026-09-08T08:00:00Z",
+    "updatedAt": "2026-09-08T10:00:00Z"
+  },
+  "stages": [
+    {
+      "id": "investigate",
+      "state": "completed",
+      "stageKind": "agent",
+      "attempt": 1,
+      "createdAt": "2026-09-08T08:00:00Z",
+      "updatedAt": "2026-09-08T08:20:00Z"
+    },
+    {
+      "id": "qa-gate",
+      "state": "completed",
+      "stageKind": "gate",
+      "attempt": 1,
+      "createdAt": "2026-09-08T09:50:00Z",
+      "updatedAt": "2026-09-08T10:00:00Z"
+    }
+  ],
+  "diagnosis": {
+    "state": "completed",
+    "reasonCode": "success",
+    "summary": "Run completed successfully",
+    "evidence": [],
+    "retryable": false,
+    "nextAction": null
+  },
+  "nextAction": null
+}

@@ -15,6 +15,7 @@ pipeline:
           timeout: 120
   stages:
     - id: investigate
+      sessionStrategy: resume
       instructions: |
         Investigate {{TASK}} as a bounded requirements and repository study.
         Clarify acceptance criteria and non-goals without inventing unanswered
@@ -30,6 +31,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/feature-investigation.md
           required: true
     - id: plan-implementation
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}} and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/feature-investigation.md,
@@ -54,9 +56,10 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: implement
+      sessionStrategy: compact
       instructions: |
         Execute the entire generated implementation plan for {{TASK}} TODO by TODO
-        in a fresh session on the candidate snapshot. Read
+        with compacted session continuity on the candidate snapshot. Read
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/feature-investigation.md and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/feature-delivery-plan.json. Do
         not skip or replace plan TODOs with a summary. After every plan TODO and its
@@ -80,6 +83,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      sessionStrategy: fresh
       instructions: |
         Review the candidate snapshot for {{TASK}} without mutation. Inspect the
         supervisor changeset evidence, the feature investigation, the latest
@@ -116,6 +120,7 @@ pipeline:
       dependsOn:
         - review-approved
     - id: plan-qa
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}}, .ralph-workspace/artifacts/{{ARTIFACT_NS}}/feature-investigation.md,
         and the latest .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md,
@@ -142,6 +147,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      sessionStrategy: fresh
       instructions: |
         Execute the entire generated QA plan for {{TASK}} TODO by TODO on the
         integrated tree. Read

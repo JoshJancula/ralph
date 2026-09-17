@@ -361,7 +361,7 @@ Runtime processes are separately protected by the detached process guardian. Eac
 
 ### Claude
 
-Ralph reads `<workspace>/.claude/settings.json`. If the Ralph hook entries are already installed (`block-env-reads.sh`, `rewrite-bash-command.sh`, `compact-bash-output.sh`), it leaves the file alone; otherwise it merges the hook groups in and restores the file on exit.
+Ralph reads `<workspace>/.claude/settings.json`. It reuses installed Ralph hooks only when their commands name executable absolute paths. Otherwise it merges the hook groups using absolute framework hook paths, repairing exact legacy relative commands. Durable `ralph setup --hooks` instead anchors commands to the selected runtime directory, including user-global installations.
 
 Requirements: run `./install.sh` (or `--claude`) so `.claude/hooks/` exists; `python3` to merge settings; `jq` for compaction telemetry. Do not set `CLAUDE_PLAN_BARE=1` -- bare mode skips hooks entirely.
 

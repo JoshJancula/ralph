@@ -49,6 +49,8 @@
               "roughjs",
               "d3-sankey",
               "dayjs",
+              "fastdom",
+              "fastdom/extensions/fastdom-promised.js",
               "katex",
               "ts-dedent",
               "vscode-languageserver-protocol",

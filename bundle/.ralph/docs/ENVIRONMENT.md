@@ -185,7 +185,7 @@ process-local identity keys (not capability-gated):
 A pipeline may declare either run-level `ralphMode` or a `tooling` block, not
 both. Omitting `tooling` preserves prior behavior (no per-stage profile
 overlay). Full operator guidance: [TOOLING.md](TOOLING.md#named-tooling-profiles)
-and [GRAPH.md](GRAPH.md#tooling-profiles).
+and [WORKFLOWS.md](WORKFLOWS.md#runtime-and-model-routing).
 
 ### Context budget vs tooling profile
 

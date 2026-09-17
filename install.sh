@@ -474,6 +474,16 @@ case "$cmd" in
       echo "Updating dashboard dependencies (npm ci)..."
       npm ci
     elif [[ ! -d "node_modules" ]]; then
+      # Without a lockfile npm re-resolves the whole tree from the registry, so an
+      # unrelated upstream release can break a fresh install. Fail loudly rather
+      # than silently producing an unpinned, unreproducible node_modules.
+      if [[ ! -f "package-lock.json" ]]; then
+        echo "Error: package-lock.json missing in $dashboard_dir" >&2
+        echo "  Installing now would resolve dependencies unpinned, which is not reproducible." >&2
+        echo "  Reinstall Ralph to restore the shipped lockfile, or regenerate it with:" >&2
+        echo "    (cd $dashboard_dir && npm install --package-lock-only)" >&2
+        exit 1
+      fi
       if [[ $ask_confirm -eq 1 ]]; then
         echo "Dependencies not found. Install node_modules? (y/N)"
         read -r confirm

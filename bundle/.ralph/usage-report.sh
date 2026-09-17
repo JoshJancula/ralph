@@ -246,13 +246,18 @@ if [[ ${#logs_dirs[@]} -eq 0 ]]; then
   if [[ "$full" -eq 0 ]]; then
     _local_logs_dir="$(find_local_logs_dir "$workspace" 2>/dev/null)" || true
   fi
-  if [[ -n "$_local_logs_dir" ]]; then
+  if [[ -n "$_local_logs_dir" && -d "$_local_logs_dir" ]]; then
     add_logs_dir "$_local_logs_dir"
   else
     collect_registry_logs_dirs
     collect_home_logs_dirs
     if [[ ${#logs_dirs[@]} -eq 0 ]]; then
-      add_logs_dir "${workspace}/.ralph-workspace/logs"
+      # Preserve a concrete fallback even before Ralph has created its state
+      # directory.  add_logs_dir intentionally filters nonexistent paths, but
+      # the summary renderer accepts one and reports a useful empty aggregate.
+      # Without this direct append, `ralph usage` invokes it with no
+      # --logs-dir arguments and argparse fails before rendering anything.
+      logs_dirs+=("${workspace}/.ralph-workspace/logs")
     fi
   fi
 fi

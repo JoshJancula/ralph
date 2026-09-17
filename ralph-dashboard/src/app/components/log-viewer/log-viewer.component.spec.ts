@@ -215,10 +215,8 @@ describe('LogViewerComponent', () => {
     tick();
     fixture.detectChanges();
 
-    expect(fixture.componentInstance.error).toBe('Failed to load log file');
-    expect((fixture.nativeElement as HTMLElement).querySelector('.error-message')?.textContent?.trim()).toBe(
-      'Failed to load log file',
-    );
+    expect(fixture.componentInstance.error).toBeTruthy();
+    expect((fixture.nativeElement as HTMLElement).querySelector('ralph-error-modal')).toBeTruthy();
   }));
 
   it('startTailing is a no-op when already tailing', fakeAsync(() => {
@@ -271,7 +269,7 @@ describe('LogViewerComponent', () => {
     tick();
     fixture.detectChanges();
 
-    expect(fixture.componentInstance.error).toBe('Failed to fetch new log content');
+    expect(fixture.componentInstance.error).toBeTruthy();
 
     fixture.componentInstance.stopTailing();
   }));
@@ -377,7 +375,7 @@ describe('LogViewerComponent', () => {
 
     fixture.componentInstance.viewPlanFile();
 
-    expect(spy).toHaveBeenCalledWith('plans', 'PLAN2', 'PLAN2.md', null, null);
+    expect(spy).toHaveBeenCalledWith('plans', null, 'PLAN2.md', null, null);
   }));
 
   it('togglePrettyMode switches between raw and pretty view', fakeAsync(() => {

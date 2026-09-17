@@ -353,3 +353,61 @@ workflow_resource_list_winning() {
   # Sort by id (field 1).
   printf '%s\n' "${rows[@]}" | LC_ALL=C sort -t $'\t' -k1,1
 }
+
+# Rank for stable sort: project < global < bundled.
+_workflow_resource_scope_sort_key() {
+  case "${1:-}" in
+    project) printf '0\n' ;;
+    global) printf '1\n' ;;
+    bundled) printf '2\n' ;;
+    *) printf '9\n' ;;
+  esac
+}
+
+# Every definition in every scope (no winner de-duplication by id).
+# Format: <id>\t<kind>\t<absolute-path>
+# Sorted by id, then scope precedence (project, global, bundled).
+# Global scope is always scanned (RALPH_DISABLE_GLOBAL_FALLBACK affects
+# implicit resolve and list_winning only).
+workflow_resource_list_all() {
+  local kind dir file base id path physical
+  local -a kinds=(project global bundled)
+  local -a rows=()
+  local row sort_key
+
+  _workflow_resource_require_init || return 1
+
+  for kind in "${kinds[@]}"; do
+    case "$kind" in
+      project) dir="$(workflow_resource_project_dir)" ;;
+      global) dir="$(workflow_resource_global_dir)" ;;
+      bundled) dir="$(workflow_resource_bundled_dir)" ;;
+    esac
+    [[ -d "$dir" ]] || continue
+
+    while IFS= read -r -d '' file; do
+      base="$(basename -- "$file")"
+      [[ "$base" == *.workflow.md ]] || continue
+      id="${base%.workflow.md}"
+      workflow_resource_id_valid "$id" || continue
+
+      path="$(workflow_resource_candidate_path "$id" "$kind")" || path="$file"
+      if ! _workflow_resource_file_exists "$path"; then
+        path="$file"
+        if [[ "$path" != /* ]]; then
+          path="$dir/$base"
+        fi
+      fi
+
+      sort_key="$(_workflow_resource_scope_sort_key "$kind")"
+      rows+=("$sort_key"$'\t'"$id"$'\t'"$kind"$'\t'"$path")
+    done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -name '*.workflow.md' -print0 2>/dev/null \
+      | sort -z)
+  done
+
+  if [[ ${#rows[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  printf '%s\n' "${rows[@]}" | LC_ALL=C sort -t $'\t' -k2,2 -k1,1n | cut -f2-
+}

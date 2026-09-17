@@ -12,12 +12,13 @@ source "$script_dir/bash-lib/workflow/workflow-usage.sh"
 
 workflow_cli_usage() {
   cat >&2 <<'USAGE'
-Usage: workflow-cli.sh <list|show|path|edit|inspect|start|runs|status|watch|logs|handoff|resume|reset|recover|cancel|actions|list-plans> [args]
+Usage: workflow-cli.sh <list|show|path|edit|inspect|routing|start|runs|status|watch|logs|handoff|resume|reset|recover|cancel|actions|list-plans> [args]
 
-  list              Print winning workflows as a table (optional --tsv for <id><TAB><scope><TAB><overview>)
+  list              Print winning workflows as a table (optional --tsv, --all-scopes)
   show <id>         Print the workflow file byte-exact (optional --project|--global|--bundled)
   path <id>         Print one absolute path (optional --project|--global|--bundled)
-  edit <id>         Edit project workflow (optional --project|--global); seeds a missing target from the winner
+  edit <id>         Edit project or global workflow; seeds a missing target from the winner
+  routing set <id>  Persist defaults/stage runtime+model on project or global (--sha256; see --help)
   inspect <id>      Read-only report of what a run would do (see: inspect --help)
   start             Start a workflow by id or --file (see: start --help)
   runs              List workflow runs (default 20 newest; see: runs --help)
@@ -42,6 +43,10 @@ remains an automatic Dependency supervisor responsibility (no publish verb).
   edit options:
     --project                      Write the state-root project workflow (default for this command)
     --global                       Write $RALPH_HOME/workflows/<id>.workflow.md
+
+  list --all-scopes lists every on-disk definition (project, global, bundled),
+  not only the effective winner. Scoped show/path/edit/routing never fall through.
+  Deleting a project or global override reveals the next source in the chain.
 USAGE
 }
 
@@ -147,28 +152,39 @@ workflow_cli_mode_field() {
 
 workflow_cli_list_usage() {
   cat >&2 <<'USAGE'
-Usage: ralph workflow list [--tsv]
+Usage: ralph workflow list [--tsv] [--all-scopes]
 
   Prints every winning workflow (project shadows global shadows bundled) as
   a table: ID, SCOPE, MODE, OVERVIEW.
 
-  --tsv   Machine-readable output instead: <id><TAB><scope><TAB><overview>
+  --tsv          Machine-readable output instead: <id><TAB><scope><TAB><overview>
+  --all-scopes   List every definition in project, global, and bundled scopes
+                 (not only winners). Implies --tsv when the table format is
+                 not used; may emit multiple rows per id.
 USAGE
 }
 
 workflow_cli_cmd_list() {
-  local format=table
+  local format=table all_scopes=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --tsv) format=tsv; shift ;;
+      --all-scopes) all_scopes=1; shift ;;
       -h|--help) workflow_cli_list_usage; exit 0 ;;
       *) echo "Error: unknown option for ralph workflow list: $1" >&2; exit 2 ;;
     esac
   done
+  if [[ "$all_scopes" -eq 1 && "$format" == table ]]; then
+    format=tsv
+  fi
   workflow_cli_init_roots || exit 1
 
   local id kind path text mode
   local -a rows_id=() rows_scope=() rows_mode=() rows_overview=()
+  local list_fn=workflow_resource_list_winning
+  if [[ "$all_scopes" -eq 1 ]]; then
+    list_fn=workflow_resource_list_all
+  fi
   while IFS=$'\t' read -r id kind path; do
     [[ -n "$id" ]] || continue
     text="$(workflow_cli_overview_field "$path")"
@@ -178,7 +194,7 @@ workflow_cli_cmd_list() {
     fi
     mode="$(workflow_cli_mode_field "$path")"
     rows_id+=("$id"); rows_scope+=("$kind"); rows_mode+=("$mode"); rows_overview+=("$text")
-  done < <(workflow_resource_list_winning)
+  done < <($list_fn)
 
   [[ "$format" == "tsv" ]] && return 0
 
@@ -226,7 +242,7 @@ workflow_cli_cmd_list() {
   printf '\n%sExamples%s\n' "$bold" "$reset"
   printf '  ralph workflow inspect <id>                     Preview waves, plan handoffs, and approval gates (read-only)\n'
   printf '  ralph workflow start <id> --task "<text>"       Start a task-driven run\n'
-  printf '  ralph workflow start <id> --plan <leaf-plan>    Start from an already-refined leaf plan\n'
+  printf '  ralph workflow start <id> --plan <leaf-plan>    Start from an already-refined leaf plan (or a cursor generated plan)\n'
 }
 
 # Parse show/path argv: one id, optional single scope, optional --verbose.
@@ -1597,6 +1613,66 @@ workflow_cli_start_prompt_pair() {
   printf '%s\t%s\n' "$rt" "$model"
 }
 
+# Resolve an explicit writable persist target (project or global). When the
+# effective source is bundled or not writable, prompt for project vs global.
+# Prints: <scope>\t<absolute-path>. Returns 1 when save should be skipped.
+workflow_cli_start_choose_persist_target() {
+  local wf_path="$1" scope="$2" wf_id="$3"
+  local target_scope="" target_path="" choice=""
+
+  if [[ "$scope" == "file" ]]; then
+    if [[ -w "$wf_path" ]]; then
+      printf '%s\t%s\n' "file" "$wf_path"
+      return 0
+    fi
+    echo "Not saved: $wf_path is not writable." >&2
+    return 1
+  fi
+
+  if [[ "$scope" == "project" && -w "$wf_path" ]]; then
+    printf '%s\t%s\n' "project" "$wf_path"
+    return 0
+  fi
+  if [[ "$scope" == "global" && -w "$wf_path" ]]; then
+    printf '%s\t%s\n' "global" "$wf_path"
+    return 0
+  fi
+
+  if ! workflow_cli_start_is_attended; then
+    echo "Not saved: $scope-scoped workflow sources are not writable here." >&2
+    return 1
+  fi
+
+  # shellcheck source=bash-lib/workflow/workflow-routing.sh
+  source "$script_dir/bash-lib/workflow/workflow-routing.sh"
+  if ! _workflow_routing_ensure_interactive; then
+    echo "Not saved: cannot choose a writable workflow target interactively." >&2
+    return 1
+  fi
+
+  local project_label="Save to this project ($wf_id)"
+  local global_label="Save globally for all projects ($wf_id)"
+  echo "" >&2
+  choice="$(
+    RALPH_SKIP_FZF_HINT="${RALPH_SKIP_FZF_HINT:-1}" \
+      ralph_menu_select --prompt "Where should this routing be saved?" --default 1 -- \
+      "$project_label" "$global_label"
+  )" || choice=""
+
+  case "$choice" in
+    "$project_label") target_scope="project" ;;
+    "$global_label") target_scope="global" ;;
+    *)
+      echo "Not saved: no writable target was selected." >&2
+      return 1
+      ;;
+  esac
+
+  target_path="$(workflow_resource_candidate_path "$wf_id" "$target_scope")" || return 1
+  printf '%s\t%s\n' "$target_scope" "$target_path"
+  return 0
+}
+
 # Offer to write the resolved routing back into the workflow source.
 # Never fatal: a decline, an unwritable source, or a validation failure leaves
 # the run going ahead with the in-memory selections.
@@ -1604,7 +1680,9 @@ workflow_cli_start_offer_persist() {
   local wf_path="$1" scope="$2"
   shift 2
   local -a persist_args=("$@")
-  local reply="" tmp_out backup
+  local reply="" wf_id target_line target_scope target_path
+  local -a mutate_ops=()
+  local new_sha=""
 
   if ! workflow_cli_start_is_attended; then
     return 0
@@ -1618,56 +1696,36 @@ workflow_cli_start_offer_persist() {
     *) return 0 ;;
   esac
 
-  # Bundled sources are installer-owned and global ones are shared across
-  # projects; only a project copy (or an explicit --file path) is ours to edit.
-  if [[ "$scope" != "project" && "$scope" != "file" ]]; then
-    local wf_id
-    wf_id="$(basename -- "$wf_path")"
-    wf_id="${wf_id%.workflow.md}"
-    echo "Not saved: $scope-scoped workflow sources are not writable." >&2
-    echo "Run 'ralph workflow edit $wf_id --project' to create a project copy first." >&2
-    return 0
-  fi
-  if [[ ! -w "$wf_path" ]]; then
-    echo "Not saved: $wf_path is not writable." >&2
+  wf_id="$(basename -- "$wf_path")"
+  wf_id="${wf_id%.workflow.md}"
+
+  if [[ "${persist_args[0]:-}" == "defaults" ]]; then
+    mutate_ops+=("defaults:${persist_args[1]:-}:${persist_args[2]:-}")
+  elif [[ "${persist_args[0]:-}" == "stages" ]]; then
+    local spec
+    for spec in "${persist_args[@]:1}"; do
+      [[ -n "$spec" ]] || continue
+      mutate_ops+=("stage:$spec")
+    done
+  else
+    echo "Not saved: internal routing persist args are invalid." >&2
     return 0
   fi
 
-  tmp_out="$(mktemp "${TMPDIR:-/tmp}/ralph-workflow-routing.XXXXXX")" || return 0
-  if ! python3 "$script_dir/python/workflow-routing-persist.py" \
-    "$wf_path" "$tmp_out" "${persist_args[@]}" >&2; then
-    rm -f "$tmp_out"
+  if ! target_line="$(workflow_cli_start_choose_persist_target "$wf_path" "$scope" "$wf_id")"; then
+    return 0
+  fi
+  target_scope="${target_line%%$'\t'*}"
+  target_path="${target_line#*$'\t'}"
+
+  # shellcheck source=bash-lib/workflow/workflow-routing-mutate.sh
+  source "$script_dir/bash-lib/workflow/workflow-routing-mutate.sh"
+  if ! new_sha="$(workflow_routing_mutate_apply "$target_path" "$target_scope" "-" "$wf_path" \
+    "${mutate_ops[@]}")"; then
     echo "Not saved: could not write the routing into the workflow source." >&2
     return 0
   fi
-  # Never publish a source the validator would reject on the next run.
-  if ! plan_workflow_validate "$tmp_out" >/dev/null 2>&1; then
-    rm -f "$tmp_out"
-    echo "Not saved: the updated workflow source failed validation; left unchanged." >&2
-    return 0
-  fi
-
-  # Copy over the original rather than renaming, so the file keeps its inode,
-  # permissions, and any symlink pointing at it. That truncates first, so keep a
-  # backup to restore from if the copy does not complete.
-  backup="$(mktemp "${TMPDIR:-/tmp}/ralph-workflow-routing-backup.XXXXXX")" || {
-    rm -f "$tmp_out"
-    return 0
-  }
-  if ! cat "$wf_path" >"$backup"; then
-    rm -f "$tmp_out" "$backup"
-    echo "Not saved: could not back up $wf_path." >&2
-    return 0
-  fi
-  if ! cat "$tmp_out" >"$wf_path"; then
-    cat "$backup" >"$wf_path" 2>/dev/null || \
-      echo "Warning: $wf_path may be incomplete; a copy is at $backup" >&2
-    rm -f "$tmp_out"
-    echo "Not saved: could not update $wf_path." >&2
-    return 0
-  fi
-  rm -f "$tmp_out" "$backup"
-  echo "Saved routing into $wf_path" >&2
+  echo "Saved routing into $target_path (sha256=$new_sha)" >&2
   return 0
 }
 
@@ -3940,11 +3998,229 @@ workflow_cli_cmd_actions() {
   esac
 }
 
+workflow_cli_routing_set_usage() {
+  cat >&2 <<'USAGE'
+Usage: ralph workflow routing set <id> --project|--global --sha256 <hex> [options]
+
+  --sha256 <hex>              Required sha256 of the loaded workflow bytes (optimistic concurrency)
+  --default-runtime <runtime>   Set defaults.runtime
+  --default-model <model>       Set defaults.model (requires defaults.runtime in file or --default-runtime)
+  --clear-defaults              Remove the entire defaults: block
+  --clear-default-model         Remove defaults.model only
+  --clear-default-runtime       Remove defaults.runtime and defaults.model
+  --stage <id>=<runtime>[,<model>]
+                              Set stage runtime/model (repeatable)
+  --clear-stage <id>          Clear stage runtime and model (repeatable)
+  --clear-stage-model <id>    Clear stage model only (repeatable)
+
+Refuses bundled sources and supervisor stage routing. Validates the complete
+workflow before atomic publication. Prints the new sha256 on stdout.
+USAGE
+}
+
+workflow_cli_parse_routing_set() {
+  WORKFLOW_CLI_ID=""
+  WORKFLOW_CLI_SCOPE=""
+  WORKFLOW_CLI_ROUTING_SHA=""
+  WORKFLOW_CLI_ROUTING_OPS=()
+
+  local arg key value spec
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --project|--global)
+        if [[ -n "$WORKFLOW_CLI_SCOPE" ]]; then
+          echo "Error: use only one of --project, --global" >&2
+          exit 2
+        fi
+        WORKFLOW_CLI_SCOPE="${arg#--}"
+        shift
+        ;;
+      --bundled)
+        echo "Error: bundled workflows are immutable" >&2
+        exit 2
+        ;;
+      --sha256)
+        [[ $# -ge 2 ]] || { echo "Error: --sha256 requires a value" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_SHA="$2"
+        shift 2
+        ;;
+      --default-runtime)
+        [[ $# -ge 2 ]] || { echo "Error: --default-runtime requires a value" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_OPS+=("defaults:$2:")
+        shift 2
+        ;;
+      --default-model)
+        [[ $# -ge 2 ]] || { echo "Error: --default-model requires a value" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_OPS+=("defaults-model:$2")
+        shift 2
+        ;;
+      --clear-defaults)
+        WORKFLOW_CLI_ROUTING_OPS+=("clear-defaults")
+        shift
+        ;;
+      --clear-default-model)
+        WORKFLOW_CLI_ROUTING_OPS+=("clear-default-model")
+        shift
+        ;;
+      --clear-default-runtime)
+        WORKFLOW_CLI_ROUTING_OPS+=("clear-default-runtime")
+        shift
+        ;;
+      --stage)
+        [[ $# -ge 2 ]] || { echo "Error: --stage requires <id>=<runtime>[,<model>]" >&2; exit 2; }
+        spec="$2"
+        WORKFLOW_CLI_ROUTING_OPS+=("stage:$spec")
+        shift 2
+        ;;
+      --clear-stage)
+        [[ $# -ge 2 ]] || { echo "Error: --clear-stage requires a stage id" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_OPS+=("clear-stage:$2")
+        shift 2
+        ;;
+      --clear-stage-model)
+        [[ $# -ge 2 ]] || { echo "Error: --clear-stage-model requires a stage id" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_OPS+=("clear-stage-model:$2")
+        shift 2
+        ;;
+      --stage-model)
+        [[ $# -ge 2 ]] || { echo "Error: --stage-model requires <id>=<model>" >&2; exit 2; }
+        WORKFLOW_CLI_ROUTING_OPS+=("stage-model:$2")
+        shift 2
+        ;;
+      -h|--help)
+        workflow_cli_routing_set_usage
+        exit 0
+        ;;
+      --*)
+        echo "Error: unknown option for ralph workflow routing set: $arg" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -n "$WORKFLOW_CLI_ID" ]]; then
+          echo "Error: ralph workflow routing set accepts exactly one workflow id" >&2
+          exit 2
+        fi
+        WORKFLOW_CLI_ID="$arg"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$WORKFLOW_CLI_ID" ]]; then
+    echo "Error: ralph workflow routing set requires a workflow id" >&2
+    exit 2
+  fi
+  if ! workflow_resource_id_valid "$WORKFLOW_CLI_ID"; then
+    echo "Error: invalid workflow id: $WORKFLOW_CLI_ID" >&2
+    exit 2
+  fi
+  if [[ -z "$WORKFLOW_CLI_SCOPE" ]]; then
+    echo "Error: ralph workflow routing set requires --project or --global" >&2
+    exit 2
+  fi
+  if [[ -z "$WORKFLOW_CLI_ROUTING_SHA" ]]; then
+    echo "Error: ralph workflow routing set requires --sha256" >&2
+    exit 2
+  fi
+  if [[ ${#WORKFLOW_CLI_ROUTING_OPS[@]} -eq 0 ]]; then
+    echo "Error: at least one routing mutation flag is required" >&2
+    exit 2
+  fi
+}
+
+workflow_cli_cmd_routing() {
+  local sub="${1:-}"
+  case "$sub" in
+    set)
+      shift
+      workflow_cli_parse_routing_set "$@"
+      workflow_cli_init_roots || exit 1
+      # shellcheck source=bash-lib/plan-todo.sh
+      source "$script_dir/bash-lib/plan-todo.sh"
+      # shellcheck source=bash-lib/workflow/workflow-routing-mutate.sh
+      source "$script_dir/bash-lib/workflow/workflow-routing-mutate.sh"
+
+      local id="$WORKFLOW_CLI_ID" scope="$WORKFLOW_CLI_SCOPE"
+      local target_path seed_path resolved new_sha
+      local -a final_ops=()
+      local op rt model existing_rt default_rt="" default_model="" have_default_rt=0 have_default_model=0
+
+      if ! resolved="$(workflow_resource_resolve "$id" "$scope")"; then
+        echo "Error: workflow not found in $scope: $id" >&2
+        exit 1
+      fi
+      target_path="${resolved#*$'\t'}"
+      if [[ ! -f "$target_path" ]]; then
+        echo "Error: workflow not found in $scope: $id" >&2
+        exit 1
+      fi
+      seed_path="$target_path"
+
+      for op in "${WORKFLOW_CLI_ROUTING_OPS[@]}"; do
+        case "$op" in
+          defaults:*)
+            default_rt="${op#defaults:}"
+            default_rt="${default_rt%%:*}"
+            have_default_rt=1
+            ;;
+          defaults-model:*)
+            default_model="${op#defaults-model:}"
+            have_default_model=1
+            ;;
+        esac
+      done
+
+      if [[ "$have_default_rt" == "1" || "$have_default_model" == "1" ]]; then
+        existing_rt="$(_workflow_routing_mutate_read_default_runtime "$seed_path" "$scope")"
+        rt="$default_rt"
+        [[ -n "$rt" ]] || rt="$existing_rt"
+        if [[ "$have_default_model" == "1" && -z "$rt" ]]; then
+          echo "Error: --default-model requires defaults.runtime in the file or --default-runtime" >&2
+          exit 1
+        fi
+        if [[ "$have_default_rt" == "1" || "$have_default_model" == "1" ]]; then
+          final_ops+=("defaults:${rt}:${default_model}")
+        fi
+      fi
+
+      for op in "${WORKFLOW_CLI_ROUTING_OPS[@]}"; do
+        case "$op" in
+          defaults:*|defaults-model:*) ;;
+          stage:*|stage-model:*|clear-*)
+            final_ops+=("$op")
+            ;;
+          *)
+            echo "Error: internal routing op parse failure" >&2
+            exit 2
+            ;;
+        esac
+      done
+
+      if ! new_sha="$(workflow_routing_mutate_apply "$target_path" "$scope" \
+        "$WORKFLOW_CLI_ROUTING_SHA" "$seed_path" "${final_ops[@]}")"; then
+        exit 1
+      fi
+      printf '%s\n' "$new_sha"
+      ;;
+    -h|--help|"")
+      workflow_cli_routing_set_usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown workflow routing subcommand: $sub" >&2
+      workflow_cli_routing_set_usage
+      exit 2
+      ;;
+  esac
+}
+
 case "${1:-}" in
   list) shift; workflow_cli_cmd_list "$@";;
   show) shift; workflow_cli_cmd_show "$@";;
   path) shift; workflow_cli_cmd_path "$@";;
   edit) shift; workflow_cli_cmd_edit "$@";;
+  routing) shift; workflow_cli_cmd_routing "$@";;
   inspect) shift; workflow_cli_cmd_inspect "$@";;
   start) shift; workflow_cli_cmd_start "$@";;
   runs) shift; workflow_cli_cmd_runs "$@";;

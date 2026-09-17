@@ -2,11 +2,13 @@ import {
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
-  OnInit,
+  effect,
   inject,
+  input,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { IonSpinner } from '@ionic/angular/standalone';
+import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import {
   ApiService,
   DelegatedRunRecord,
@@ -15,6 +17,7 @@ import {
   GraphRunDetail,
   GraphRunSummary,
 } from '../../services/api.service';
+import { ErrorModalComponent } from '../error-modal/error-modal.component';
 
 interface GraphNodeRow {
   nodeId: string;
@@ -167,16 +170,18 @@ function buildMermaid(detail: GraphRunDetail): string {
 @Component({
   selector: 'ralph-graph-hub',
   standalone: true,
-  imports: [CommonModule, IonSpinner],
+  imports: [CommonModule, IonSpinner, ErrorModalComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="graph-hub">
       <div class="header">
-        <h2>Graph Runs</h2>
+        <h1 class="page-title">Graph Runs</h1>
       </div>
 
       @if (error) {
-        <div class="error">{{ error }}</div>
+        <div class="error" role="alert">
+          <ralph-error-modal class="is-embedded" [error]="error" [embedded]="true" [showHeader]="false" />
+        </div>
       } @else if (loading) {
         <div class="loading">
           <ion-spinner name="crescent"></ion-spinner>
@@ -224,7 +229,9 @@ function buildMermaid(detail: GraphRunDetail): string {
             <span>Loading run detail...</span>
           </div>
         } @else if (detailError) {
-          <div class="error">{{ detailError }}</div>
+          <div class="error" role="alert">
+            <ralph-error-modal class="is-embedded" [error]="detailError" [embedded]="true" [showHeader]="false" />
+          </div>
         } @else if (detail) {
           <div class="detail-panel">
             <h3 class="detail-title">
@@ -243,7 +250,7 @@ function buildMermaid(detail: GraphRunDetail): string {
               </div>
             }
 
-            <div class="node-table-wrap">
+            <div class="node-table-wrap scroll-contain">
               <table class="node-table" aria-label="Node status table">
                 <thead>
                   <tr>
@@ -361,8 +368,17 @@ function buildMermaid(detail: GraphRunDetail): string {
             </div>
 
             <div class="dag-section">
-              <h4>DAG (mermaid)</h4>
-              <pre class="dag-pre"><code>{{ mermaidText }}</code></pre>
+              <div class="dag-header">
+                <h4>DAG</h4>
+                <span class="muted">Rendered workflow graph</span>
+              </div>
+              @if (mermaidSvg) {
+                <div class="dag-diagram" [innerHTML]="mermaidSvg"></div>
+              }
+              <details class="dag-source">
+                <summary>Mermaid source</summary>
+                <pre class="dag-pre"><code>{{ mermaidText }}</code></pre>
+              </details>
             </div>
           </div>
         }
@@ -379,9 +395,12 @@ function buildMermaid(detail: GraphRunDetail): string {
       flex: 1;
       min-height: 0;
       padding: 2rem;
+      overflow-x: hidden;
       overflow-y: auto;
+      width: 100%;
+      box-sizing: border-box;
     }
-    .header h2 {
+    .header h1 {
       margin: 0 0 1.5rem;
       font-size: 1.75rem;
       font-weight: 600;
@@ -401,14 +420,6 @@ function buildMermaid(detail: GraphRunDetail): string {
       padding: 3rem 2rem;
       color: var(--text-muted);
     }
-    .empty-state {
-      padding: 3rem 2rem;
-      text-align: center;
-      color: var(--text-muted);
-      background: var(--surface);
-      border-radius: 8px;
-      border: 1px solid var(--border);
-    }
     .run-list {
       display: flex;
       flex-direction: column;
@@ -425,9 +436,9 @@ function buildMermaid(detail: GraphRunDetail): string {
     .run-card:hover {
       background: var(--surface-hover);
     }
-    .run-card.selected {
-      border-color: var(--accent);
-      background: var(--surface-hover);
+    .run-card:focus-visible {
+      outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--accent));
+      outline-offset: 2px;
     }
     .run-card-header {
       display: flex;
@@ -487,7 +498,9 @@ function buildMermaid(detail: GraphRunDetail): string {
       flex-wrap: wrap;
     }
     .node-table-wrap {
+      max-width: 100%;
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
       margin-bottom: 1.5rem;
     }
     .node-table {
@@ -513,13 +526,48 @@ function buildMermaid(detail: GraphRunDetail): string {
     .cell-mono {
       font-family: var(--monospace-font);
     }
-    .dag-section h4 {
-      margin: 0 0 0.5rem;
+    .dag-section {
+      min-width: 0;
+    }
+    .dag-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .dag-header h4 {
+      margin: 0;
       font-size: 0.85rem;
       font-weight: 600;
       color: var(--text-muted);
       text-transform: uppercase;
       letter-spacing: 0.04em;
+    }
+    .dag-diagram {
+      min-height: 12rem;
+      overflow: auto;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    .dag-diagram svg {
+      display: block;
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
+      height: auto;
+      max-height: 30rem;
+      margin: 0 auto;
+    }
+    .dag-source {
+      margin-top: 0.5rem;
+    }
+    .dag-source summary {
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.78rem;
     }
     .dag-pre {
       background: var(--surface-hover);
@@ -577,38 +625,53 @@ function buildMermaid(detail: GraphRunDetail): string {
     }
   `,
 })
-export class GraphHubComponent implements OnInit {
+export class GraphHubComponent {
+  readonly paneActive = input(false);
+
   runs: GraphRunSummary[] = [];
   loading = false;
-  error = '';
+  hasLoadedOnce = false;
+  error: unknown = null;
 
   detail: GraphRunDetail | null = null;
   nodeRows: GraphNodeRow[] = [];
   mermaidText = '';
   detailLoading = false;
-  detailError = '';
+  detailError: unknown = null;
 
   private selectedRunKey = '';
   private readonly api = inject(ApiService);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly sanitizer = inject(DomSanitizer);
+  private mermaidImportPromise: Promise<MermaidClient | null> | null = null;
+  mermaidSvg: SafeHtml | null = null;
 
-  ngOnInit(): void {
-    this.fetchRuns();
+  constructor() {
+    effect(() => {
+      if (!this.paneActive()) {
+        return;
+      }
+      this.fetchRuns();
+    });
   }
 
   fetchRuns(): void {
-    this.loading = true;
-    this.error = '';
+    if (!this.hasLoadedOnce) {
+      this.loading = true;
+    }
+    this.error = null;
     this.cdr.markForCheck();
 
     this.api.fetchGraphRuns().subscribe({
       next: (resp) => {
         this.runs = resp.runs;
+        this.hasLoadedOnce = true;
         this.loading = false;
         this.cdr.markForCheck();
       },
-      error: (err: { error?: { error?: string }; status?: number }) => {
-        this.error = err.error?.error ?? 'Failed to load graph runs';
+      error: (err: unknown) => {
+        this.error = err;
+        this.hasLoadedOnce = true;
         this.loading = false;
         this.cdr.markForCheck();
       },
@@ -622,7 +685,7 @@ export class GraphHubComponent implements OnInit {
     }
     this.selectedRunKey = key;
     this.detail = null;
-    this.detailError = '';
+    this.detailError = null;
     this.detailLoading = true;
     this.cdr.markForCheck();
 
@@ -631,11 +694,13 @@ export class GraphHubComponent implements OnInit {
         this.detail = detail;
         this.nodeRows = this.buildNodeRows(detail);
         this.mermaidText = buildMermaid(detail);
+        this.mermaidSvg = null;
         this.detailLoading = false;
         this.cdr.markForCheck();
+        void this.renderMermaid();
       },
-      error: (err: { error?: { error?: string } }) => {
-        this.detailError = err.error?.error ?? 'Failed to load run detail';
+      error: (err: unknown) => {
+        this.detailError = err;
         this.detailLoading = false;
         this.cdr.markForCheck();
       },
@@ -644,6 +709,41 @@ export class GraphHubComponent implements OnInit {
 
   isSelected(run: GraphRunSummary): boolean {
     return this.selectedRunKey === `${run.namespace}/${run.runId}`;
+  }
+
+  private async renderMermaid(): Promise<void> {
+    const source = this.mermaidText.trim();
+    if (!source) {
+      return;
+    }
+    const client = await this.loadMermaidClient();
+    if (!client) {
+      return;
+    }
+    client.initialize({
+      startOnLoad: false,
+      theme: typeof document !== 'undefined' && document.body.classList.contains('theme-light') ? 'default' : 'dark',
+      securityLevel: 'strict',
+      fontFamily: 'inherit',
+    });
+    try {
+      const result = await client.render(`graph-${Math.random().toString(36).slice(2, 10)}`, source);
+      const svg = typeof result === 'string' ? result : result.svg;
+      this.mermaidSvg = this.sanitizer.bypassSecurityTrustHtml(svg);
+      this.cdr.markForCheck();
+    } catch {
+      this.mermaidSvg = null;
+      this.cdr.markForCheck();
+    }
+  }
+
+  private async loadMermaidClient(): Promise<MermaidClient | null> {
+    if (!this.mermaidImportPromise) {
+      this.mermaidImportPromise = import('mermaid')
+        .then((mod) => (mod.default ?? mod) as MermaidClient)
+        .catch(() => null);
+    }
+    return this.mermaidImportPromise;
   }
 
   runStatus(): string {
@@ -777,4 +877,9 @@ export class GraphHubComponent implements OnInit {
       ? String((stage as Record<string, unknown>)['role'])
       : undefined;
   }
+}
+
+interface MermaidClient {
+  initialize(options: Record<string, unknown>): void;
+  render(id: string, source: string): Promise<string | { svg: string }>;
 }

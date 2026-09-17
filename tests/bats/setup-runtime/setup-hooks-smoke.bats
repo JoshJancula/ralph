@@ -38,8 +38,56 @@ teardown() {
   [ -x "$runtime_dir/hooks/block-env-reads.sh" ]
   [ -x "$runtime_dir/hooks/native-result-compact.sh" ]
   jq -e '.env.CUSTOM_FLAG == "keep-me"' "$runtime_dir/settings.json"
-  jq -e '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[] | select(.command == ".claude/hooks/compact-bash-output.sh")' "$runtime_dir/settings.json"
-  jq -e '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[] | select(.command == ".claude/hooks/native-result-compact.sh")' "$runtime_dir/settings.json"
+  jq -e --arg cmd "$runtime_dir/hooks/compact-bash-output.sh" '.hooks.PostToolUse[] | select(.matcher == "Bash") | .hooks[] | select(.command == $cmd)' "$runtime_dir/settings.json"
+  jq -e --arg cmd "$runtime_dir/hooks/native-result-compact.sh" '.hooks.PostToolUse[] | select(.matcher == "Read|Grep|Glob") | .hooks[] | select(.command == $cmd)' "$runtime_dir/settings.json"
+}
+
+@test "Claude setup repairs legacy paths and runs from unrelated directories with shell-safe quoting" {
+  command -v python3 >/dev/null || skip "python3 required"
+  source "$SETUP_HELPERS_SH"
+  source "$SETUP_HOOKS_SH"
+  local runtime_dir="$TEST_TEMP_DIR/user's home \$(false)/.claude"
+  mkdir -p "$runtime_dir" "$TEST_TEMP_DIR/project/package"
+  cp "$REPO_ROOT/bundle/.claude/settings.json" "$runtime_dir/settings.json"
+  setup_hooks_claude "$runtime_dir"
+  cp "$runtime_dir/settings.json" "$TEST_TEMP_DIR/first.json"
+  setup_hooks_claude "$runtime_dir"
+  cmp "$runtime_dir/settings.json" "$TEST_TEMP_DIR/first.json"
+  run python3 - "$runtime_dir/settings.json" "$TEST_TEMP_DIR/project/package" <<'PY'
+import json, os, shlex, subprocess, sys
+settings = json.load(open(sys.argv[1]))
+for groups in settings['hooks'].values():
+    for group in groups:
+        for hook in group['hooks']:
+            command = hook['command']
+            executable, = shlex.split(command)
+            assert os.path.isabs(executable) and os.access(executable, os.X_OK)
+            result = subprocess.run(command, shell=True, cwd=sys.argv[2], input='{}',
+                                    text=True, capture_output=True)
+            assert result.returncode == 0, (command, result.stderr)
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "Claude hook removal recognizes quoted absolute paths" {
+  command -v python3 >/dev/null || skip "python3 required"
+  source "$SETUP_HELPERS_SH"
+  source "$SETUP_HOOKS_SH"
+  local runtime_dir="$TEST_TEMP_DIR/user's home/.claude"
+  setup_hooks_claude "$runtime_dir"
+  # Exercise the removal classifier without writing runtime configuration.
+  run python3 - "$REPO_ROOT/bundle/.ralph/python" "$runtime_dir/settings.json" <<'PY'
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location('remove', pathlib.Path(sys.argv[1]) / 'setup-remove-json.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+data = json.load(open(sys.argv[2]))
+reserved = {'block-env-reads.sh', 'rewrite-bash-command.sh', 'compact-bash-output.sh',
+            'native-result-compact.sh', 'stop-continuation.sh'}
+assert module._remove_hooks(data, reserved)
+assert all(not group.get('hooks') for groups in data.get('hooks', {}).values() for group in groups), data
+PY
+  [ "$status" -eq 0 ]
 }
 
 @test "setup_hooks_cursor copies hook scripts and preserves existing hooks.json" {

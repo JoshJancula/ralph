@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "runId": "run-rework",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "state": "running",
+    "createdAt": "2026-09-12T08:00:00Z",
+    "updatedAt": "2026-09-12T09:10:00Z"
+  },
+  "stages": [
+    {
+      "id": "review",
+      "state": "completed",
+      "stageKind": "agent",
+      "attempt": 1,
+      "reasonCode": "request-changes",
+      "summary": "Reviewer requested changes to the cache invalidation path",
+      "createdAt": "2026-09-12T08:30:00Z",
+      "updatedAt": "2026-09-12T08:45:00Z"
+    },
+    {
+      "id": "implement",
+      "state": "running",
+      "stageKind": "agent",
+      "attempt": 2,
+      "reworkRound": 1,
+      "sourcePlanPath": ".ralph-workspace/plans/team-a/PLAN-widget.plan.md",
+      "controlPlanPath": ".ralph-workspace/logs/run-rework/implement/control.plan.md",
+      "createdAt": "2026-09-12T08:46:00Z",
+      "updatedAt": "2026-09-12T09:10:00Z"
+    }
+  ],
+  "diagnosis": {
+    "state": "running",
+    "reasonCode": "rework-in-progress",
+    "summary": "Implementation stage is on rework round 1 of 2 following a review request-changes verdict",
+    "stageId": "implement",
+    "evidence": [],
+    "retryable": false,
+    "nextAction": null
+  },
+  "nextAction": null
+}

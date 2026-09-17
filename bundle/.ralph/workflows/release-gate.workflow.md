@@ -12,6 +12,7 @@ pipeline:
           timeout: 120
   stages:
     - id: inspect-candidate
+      sessionStrategy: resume
       instructions: |
         Inspect the release candidate for {{TASK}} read-only. Identify the release
         scope and acceptance criteria, the changed surfaces, versioning and
@@ -26,6 +27,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/candidate.md
           required: true
     - id: plan-verification
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}} and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/candidate.md, plan the release
@@ -51,6 +53,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: verify
+      sessionStrategy: fresh
       instructions: |
         Execute the entire generated verification plan for {{TASK}} TODO by TODO
         in a fresh session. Read
@@ -74,6 +77,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/verification-handoff.md
           required: true
     - id: security
+      sessionStrategy: fresh
       instructions: |
         Assess the security of the release candidate for {{TASK}} read-only and
         independently of any verification conclusion. Read
@@ -95,6 +99,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/security.md
           required: true
     - id: release-decision
+      sessionStrategy: resume
       instructions: |
         Decide the release for {{TASK}} from
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/candidate.md,

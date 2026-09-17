@@ -65,7 +65,7 @@
     "allowed_patterns": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Command regex allowlist exceptions. Alias: allowedPatterns."
+      "description": "Command regex allowlist exceptions. Alias: allowedPatterns. Each entry must be a compilable regex; invalid patterns are rejected."
     },
     "denied_argument_patterns": {
       "type": "array",

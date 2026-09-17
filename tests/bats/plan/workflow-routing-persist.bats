@@ -134,3 +134,24 @@ persist() { python3 "$PERSIST" "$WRP_WF" "$WRP_TMP/out.md" "$@"; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"unknown mode"* ]]
 }
+
+@test "clear-defaults removes the defaults block" {
+  persist defaults claude sonnet
+  cp "$WRP_TMP/out.md" "$WRP_WF"
+  run persist clear-defaults
+  [ "$status" -eq 0 ]
+  run grep -qE '^defaults:' "$WRP_TMP/out.md"
+  [ "$status" -ne 0 ]
+  run plan_workflow_validate "$WRP_TMP/out.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "clear-stages removes stage routing keys only" {
+  persist stages "first=claude,haiku"
+  cp "$WRP_TMP/out.md" "$WRP_WF"
+  run python3 "$PERSIST" "$WRP_WF" "$WRP_TMP/out2.md" clear-stages first
+  [ "$status" -eq 0 ]
+  run grep -qE '^      runtime:' "$WRP_TMP/out2.md"
+  [ "$status" -ne 0 ]
+  grep -qx '        Investigate {{TASK}}.' "$WRP_TMP/out2.md"
+}

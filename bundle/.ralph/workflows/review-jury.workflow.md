@@ -14,6 +14,7 @@ pipeline:
           timeout: 120
   stages:
     - id: prepare-review
+      sessionStrategy: resume
       instructions: |
         Prepare a neutral review packet for {{TASK}} read-only. Identify exactly
         what is under review: the changeset, branch, or subsystem, the diff or file
@@ -96,6 +97,7 @@ pipeline:
       dependsOn:
         - jury
     - id: report
+      sessionStrategy: resume
       instructions: |
         Write the operator-facing review report for {{TASK}} from the three juror
         verdicts and the recorded jury decision under

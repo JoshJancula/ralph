@@ -1,0 +1,167 @@
+<div class="plan-detail">
+  <div class="plan-header" *ngIf="parsedPlan() as plan">
+    <div class="plan-title-section">
+      <h1 class="plan-title">{{ plan.metadata.name || 'Untitled Plan' }}</h1>
+      <div class="plan-meta">
+        <span class="plan-type" [attr.data-type]="plan.format">
+          {{ plan.format === 'yaml' ? 'YAML' : 'Classic' }}
+        </span>
+        <span class="plan-progress">
+          {{ plan.completedCount }}/{{ plan.totalCount }} complete
+        </span>
+        @if (activeRunId()) {
+          <span class="plan-live-run" data-testid="live-ralph-run">Live Ralph run {{ activeRunId() }} · {{ activeRunProcessCount() ?? 0 }} process{{ activeRunProcessCount() === 1 ? '' : 'es' }}</span>
+        }
+      </div>
+      <p class="plan-context">
+        Leaf plan · run directly, or use it as the durable unit a workflow coordinates.
+      </p>
+    </div>
+    @if (activityDiscoveryError()) {
+      <p class="activity-discovery-error" role="status">{{ activityDiscoveryError() }}</p>
+    }
+    <div class="plan-actions">
+      @if (activeRunId()) {
+        <button type="button" class="run-history-action danger" data-testid="stop-leaf-plan" (click)="stopPlan()">Stop plan</button>
+      } @else {
+        <button type="button" class="run-history-action" data-testid="run-leaf-plan" (click)="runPlan()">Run plan</button>
+      }
+      <button type="button" class="run-history-action" (click)="viewLogs()">View logs</button>
+    </div>
+  </div>
+
+  <div class="loading-indicator" *ngIf="loading()" role="status" aria-live="polite">
+    <h1 class="visually-hidden">Loading plan</h1>
+    <ion-spinner name="crescent"></ion-spinner>
+    <div class="loading-copy">
+      <strong>Loading plan</strong>
+      <span>Reading the plan and its TODO progress…</span>
+    </div>
+  </div>
+
+  <div class="error-panel" *ngIf="!loading() && error() as err">
+    <ralph-error-modal
+      class="is-embedded"
+      [error]="err"
+      [embedded]="true"
+      [showHeader]="false"
+    />
+    <div class="error-actions">
+      <ion-button fill="solid" (click)="performErrorAction('RETRY')" *ngIf="err.suggestedActions.includes('RETRY')">
+        Retry
+      </ion-button>
+      <ion-button fill="solid" (click)="performErrorAction('RETURN_TO_PLANS')" *ngIf="err.suggestedActions.includes('RETURN_TO_PLANS')">
+        Return to Plans
+      </ion-button>
+    </div>
+  </div>
+
+  <div class="plan-content" *ngIf="!loading() && !error() && parsedPlan() as plan">
+    <div class="view-modes">
+      <div class="view-tabs" role="tablist" aria-label="Plan view">
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="viewMode() === 'rendered'"
+          [class.active]="viewMode() === 'rendered'"
+          (click)="toggleViewMode('rendered')"
+        >
+          Preview
+        </button>
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="viewMode() === 'source'"
+          [class.active]="viewMode() === 'source'"
+          (click)="toggleViewMode('source')"
+        >
+          Source
+        </button>
+        @if (showDiffMode()) {
+          <button
+            type="button"
+            role="tab"
+            [attr.aria-selected]="viewMode() === 'diff'"
+            [class.active]="viewMode() === 'diff'"
+            (click)="toggleViewMode('diff')"
+          >
+            Diff
+          </button>
+        }
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="todo-outline" *ngIf="plan.todos.length > 0">
+        <h2 class="outline-title">TODOs</h2>
+        <div class="todo-list">
+          <div
+            *ngFor="let todo of plan.todos; let i = index"
+            class="todo-item"
+            [class.completed]="todo.completed"
+            [class.selected]="selectedTodoIndex() === i"
+            (click)="selectTodo(i)"
+          >
+            <input
+              type="checkbox"
+              [checked]="todo.completed"
+              [attr.aria-label]="todo.type === 'classic' ? todo.content : todo.id"
+              disabled
+            />
+            <span class="todo-text">
+              {{ todo.type === 'classic' ? todo.content : (todo.id || 'Untitled') }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="content-viewer">
+        <div *ngIf="viewMode() === 'rendered'" class="rendered-view">
+          <div class="markdown-content" [innerHTML]="primarySafeHtml()" (click)="handleContentClick($event)"></div>
+        </div>
+
+        <div *ngIf="viewMode() === 'source'" class="source-view">
+          <div class="source-header">
+            <span class="source-label">Source (immutable)</span>
+          </div>
+          <pre class="source-code">{{ primaryContent() }}</pre>
+        </div>
+
+        <div *ngIf="viewMode() === 'diff' && showDiffMode()" class="diff-view">
+          <div class="diff-header">
+            <div class="diff-side">
+              <span class="diff-label">Original (immutable)</span>
+            </div>
+            <div class="diff-side">
+              <span class="diff-label" *ngIf="isMutableControlCopy()">Modified (mutable control copy)</span>
+              <span class="diff-label" *ngIf="!isMutableControlCopy()">Modified</span>
+            </div>
+          </div>
+          <div class="diff-content" [innerHTML]="diffHtml()"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="todo-details" *ngIf="selectedTodo() as todo">
+      <div class="todo-details-header">
+        <h3>
+          {{ todo.type === 'classic' ? todo.content : (todo.id || 'Untitled') }}
+        </h3>
+        <span class="todo-status" [class.completed]="todo.completed">
+          {{ todo.completed ? 'Complete' : 'Pending' }}
+        </span>
+      </div>
+
+      <div class="todo-details-body" *ngIf="todo.type === 'yaml'">
+        <div class="detail-section" *ngIf="todo.verification">
+          <h4>Verification</h4>
+          <pre>{{ todo.verification }}</pre>
+        </div>
+      </div>
+
+      <div class="todo-details-body" *ngIf="todo.type === 'classic'">
+        <pre>{{ todo.fullBlock }}</pre>
+      </div>
+    </div>
+  </div>
+</div>

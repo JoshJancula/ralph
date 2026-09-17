@@ -221,6 +221,40 @@ export function resolveRalphInstallRoot(): string | null {
   return null;
 }
 
+/**
+ * Finds the dashboard package so its own operator documentation can
+ * appear alongside the framework documentation in the Docs hub.
+ */
+export function resolveDashboardDocumentationRoot(): string | null {
+  const candidates = new Set<string>([process.cwd(), join(process.cwd(), 'ralph-dashboard')]);
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    candidates.add(dir);
+    candidates.add(join(dir, 'ralph-dashboard'));
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+
+  for (const candidate of candidates) {
+    const docs = join(candidate, 'docs');
+    if (
+      existsSync(docs) &&
+      statSync(docs).isDirectory() &&
+      existsSync(join(docs, 'START_HERE.md'))
+    ) {
+      try {
+        return realpathSync(candidate);
+      } catch {
+        return resolve(candidate);
+      }
+    }
+  }
+  return null;
+}
+
 function ralphDocsFromBundledInstall(): string | null {
   const home = process.env['RALPH_HOME']?.trim();
   if (!home) {

@@ -518,6 +518,54 @@ EOF
   done
 }
 
+@test "bundled workflows declare session strategy for every ordinary stage" {
+  local wf
+  for wf in "$BUNDLED_WORKFLOWS"/*.workflow.md; do
+    run plan_workflow_validate "$wf"
+    [ "$status" -eq 0 ]
+
+    run python3 - "$wf" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+body = re.search(r"(?ms)^pipeline:\n(.*?)(?=^todos:\n|\Z)", text).group(1)
+stages = []
+current = None
+for line in body.splitlines():
+    match = re.match(r"^    - id:\s*(\S+)\s*$", line)
+    if match:
+        if current:
+            stages.append(current)
+        current = {"id": match.group(1)}
+        continue
+    if current:
+        match = re.match(r"^      (type|sessionStrategy):\s*(\S+)\s*$", line)
+        if match:
+            current[match.group(1)] = match.group(2)
+if current:
+    stages.append(current)
+
+supervisors = {"approval", "consensus", "gate", "integrate", "join"}
+ordinary = [stage for stage in stages if stage.get("type", "agent") not in supervisors]
+missing = [stage["id"] for stage in ordinary if "sessionStrategy" not in stage]
+if missing:
+    raise SystemExit(f"ordinary stages missing sessionStrategy: {', '.join(missing)}")
+invalid = [stage["id"] for stage in ordinary
+           if stage["sessionStrategy"] not in {"fresh", "resume", "compact", "reset"}]
+if invalid:
+    raise SystemExit(f"ordinary stages have invalid sessionStrategy: {', '.join(invalid)}")
+PY
+    [ "$status" -eq 0 ]
+  done
+
+  for wf in feature-delivery bug-fix refactor human-verified-delivery plan-delivery; do
+    grep -A2 '^    - id: implement$' "$BUNDLED_WORKFLOWS/$wf.workflow.md" | \
+      grep -qx '      sessionStrategy: compact'
+  done
+}
+
 @test "voter routing keeps explicit consensus voter runtimes and models" {
   # Bundled SDLC workflows have no consensus voters today. Conversion policy still
   # requires voter runtime/model pins to remain when consensus is authored.

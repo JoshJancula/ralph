@@ -1,7 +1,7 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ApiService, FileChunk, MetricsSummary } from '../../services/api.service';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { NavService } from '../../services/nav.service';
@@ -21,23 +21,6 @@ describe('FileViewerComponent', () => {
     await TestBed.configureTestingModule({
       imports: [FileViewerComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
     }).compileComponents();
-    const api = TestBed.inject(ApiService);
-    const emptySummary: MetricsSummary = {
-      overall: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        max_turn_total_tokens: 0,
-        cache_hit_ratio: 0,
-        elapsed_seconds: 0,
-        count: 0,
-      },
-      plans: [],
-      orchestrations: [],
-      projects: [],
-    };
-    vi.spyOn(api, 'fetchMetricsSummary').mockReturnValue(of(emptySummary));
     httpMock = TestBed.inject(HttpTestingController);
   });
 
@@ -290,12 +273,79 @@ describe('FileViewerComponent', () => {
     const wsReq = expectWorkspaceRequest();
     wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/missing.md');
-    req.flush('fail', { status: 500, statusText: 'Internal Server Error' });
+    req.flush(
+      {
+        code: 'NOT_FOUND',
+        message: 'File not found',
+        title: 'Plan Not Found',
+        explanation: 'The plan was not found.',
+        recoverable: true,
+        suggestedActions: ['REFRESH_INDEX', 'RETURN_TO_PLANS'],
+      },
+      { status: 404, statusText: 'Not Found' }
+    );
     await fixture.whenStable();
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.error-message')?.textContent?.trim()).toBe('Failed to load file');
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+    expect(fixture.componentInstance.error()?.title).toBe('Plan Not Found');
+    expect(errorPanel?.textContent).toContain('File not found');
+    expect(errorPanel?.textContent).toContain('The plan was not found.');
+  });
+
+  it('displays structured error with recovery actions', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/missing.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    const req = expectFileRequest('plans', 'PLAN2/missing.md');
+    req.flush(
+      {
+        code: 'NOT_FOUND',
+        message: 'File not found',
+        requestedPath: 'PLAN2/missing.md',
+        title: 'File Not Found',
+        explanation: 'The file could not be found.',
+        recoverable: true,
+        suggestedActions: ['REFRESH_INDEX', 'RETURN_TO_PLANS'],
+      },
+      { status: 404, statusText: 'Not Found' }
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+
+    const buttons = errorPanel?.querySelectorAll('ion-button');
+    expect(buttons?.length).toBeGreaterThan(0);
+    const buttonTexts = Array.from(buttons || []).map(b => b.textContent?.trim()).join(',');
+    expect(buttonTexts).toContain('Refresh Index');
+  });
+
+  it('handles non-structured error responses gracefully', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/missing.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    const req = expectFileRequest('plans', 'PLAN2/missing.md');
+    req.error(new ProgressEvent('error'));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+    expect(fixture.componentInstance.error()).toBeTruthy();
   });
 
   it('toggle button switches between rendered and source for .md files', async () => {

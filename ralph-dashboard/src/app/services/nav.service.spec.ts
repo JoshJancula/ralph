@@ -183,7 +183,8 @@ describe('NavService', () => {
 
     expect(service.activeRoot()).toBe('alpha');
     expect(service.activePath()).toBe('beta');
-    expect(service.activeFile()).toBe('gamma.txt');
+    // Remaining segments after the file marker are joined so nested file paths stay intact.
+    expect(service.activeFile()).toBe('gamma.txt/extra');
     expect(service.activeProjectRoot()).toBeNull();
     expect(service.mode()).toBe('file');
   });

@@ -1,5 +1,6 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { ComponentFixture } from '@angular/core';
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 
@@ -136,6 +137,11 @@ const inProgressRunDetail: GraphRunDetail = {
   graph: completedRunDetail.graph,
 };
 
+function mountGraphHub(fixture: ComponentFixture<GraphHubComponent>): void {
+  fixture.componentRef.setInput('paneActive', true);
+  fixture.detectChanges();
+}
+
 const runsResponse: GraphRunsResponse = {
   runs: [
     {
@@ -174,7 +180,7 @@ describe('GraphHubComponent', () => {
 
   it('renders the run list after loading', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
-    fixture.detectChanges();
+    mountGraphHub(fixture);
 
     const req = httpMock.expectOne('/api/graph-runs');
     req.flush(runsResponse);
@@ -191,7 +197,7 @@ describe('GraphHubComponent', () => {
   it('renders node table and mermaid block for a completed run', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
     const component = fixture.componentInstance;
-    fixture.detectChanges();
+    mountGraphHub(fixture);
 
     // Flush the runs list
     const runsReq = httpMock.expectOne('/api/graph-runs');
@@ -232,7 +238,7 @@ describe('GraphHubComponent', () => {
   it('renders node table and mermaid block for an in-progress run without error', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
     const component = fixture.componentInstance;
-    fixture.detectChanges();
+    mountGraphHub(fixture);
 
     const runsReq = httpMock.expectOne('/api/graph-runs');
     runsReq.flush(runsResponse);
@@ -268,7 +274,7 @@ describe('GraphHubComponent', () => {
   it('renders role identity and delegated-run lifecycle and usage without native child rows', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
     const component = fixture.componentInstance;
-    fixture.detectChanges();
+    mountGraphHub(fixture);
     httpMock.expectOne('/api/graph-runs').flush(runsResponse);
     tick();
 
@@ -321,7 +327,7 @@ describe('GraphHubComponent', () => {
 
   it('shows empty state when no runs exist', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
-    fixture.detectChanges();
+    mountGraphHub(fixture);
 
     const req = httpMock.expectOne('/api/graph-runs');
     req.flush({ runs: [] });
@@ -335,7 +341,7 @@ describe('GraphHubComponent', () => {
 
   it('shows error state when the API fails', fakeAsync(() => {
     const fixture = TestBed.createComponent(GraphHubComponent);
-    fixture.detectChanges();
+    mountGraphHub(fixture);
 
     const req = httpMock.expectOne('/api/graph-runs');
     req.flush({ error: 'Failed to read graph-runs directory' }, { status: 500, statusText: 'Server Error' });

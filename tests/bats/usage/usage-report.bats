@@ -266,6 +266,23 @@ JSON
   [[ "$output" == *"output=0"* ]]
 }
 
+@test "usage-report without discovered logs renders an empty aggregate" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local empty_workspace="$tmpdir/empty-workspace"
+  local empty_home="$tmpdir/empty-home"
+  # Match the common partially initialized state: state root exists, but no
+  # plan has created its logs directory yet.
+  mkdir -p "$empty_workspace/.ralph-workspace" "$empty_home"
+
+  run env HOME="$empty_home" RALPH_WORKSPACES_FILE="$tmpdir/no-registry.json" \
+    bash "$REPORT_SCRIPT" --workspace "$empty_workspace"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$output" == *"Overall totals"* ]]
+  [[ "$output" == *"input=0"* ]]
+  [[ "$output" == *"output=0"* ]]
+}
+
 @test "usage-report with explicit --logs-dir ignores registry and workspace discovery" {
   [ -x "$(command -v python3)" ] || skip "python3 required"
 

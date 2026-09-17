@@ -1,0 +1,125 @@
+@if (shouldShow()) {
+  <div class="workspace-switcher-container">
+    <div class="workspace-switcher">
+      <button
+        #triggerButton
+        class="switcher-button touch-target"
+        [attr.aria-expanded]="isOpen()"
+        [attr.aria-haspopup]="'listbox'"
+        [attr.aria-label]="'Select project, current: ' + displayName()"
+        (click)="toggle()"
+        type="button"
+      >
+        <span class="switcher-label">{{ displayName() }}</span>
+        <ion-icon class="switcher-icon" [name]="isOpen() ? 'chevron-down' : 'chevron-down'"></ion-icon>
+      </button>
+
+      @if (isOpen()) {
+        <div
+          #dropdownPanel
+          class="switcher-dropdown"
+          role="listbox"
+          [attr.aria-activedescendant]="
+            selectedIndex() !== null ? 'project-item-' + selectedIndex() : undefined
+          "
+        >
+          <div class="switcher-search">
+            <ion-icon class="search-icon" name="search"></ion-icon>
+            <input
+              #searchInput
+              type="text"
+              class="search-input"
+              placeholder="Search projects..."
+              [value]="searchQuery()"
+              (input)="onSearchInput($any($event.target).value)"
+              (keydown)="onKeyDown($event)"
+              aria-label="Filter projects"
+            />
+          </div>
+
+          <div class="switcher-list" #listContainer>
+            <div class="all-projects-option">
+              <button
+                id="project-item-0"
+                type="button"
+                class="project-item all-projects"
+                [class.selected]="selectedIndex() === 0"
+                [attr.data-selected]="selectedIndex() === 0"
+                [class.current]="selectorService.selectedWorkspacePath() === null"
+                (click)="selectAllProjects()"
+                (keydown)="onKeyDown($event)"
+                role="option"
+                [attr.aria-selected]="selectedIndex() === 0"
+              >
+                <div class="project-item-content">
+                  <div class="project-item-main">
+                    <span class="project-item-label">All projects</span>
+                    @if (selectorService.selectedWorkspacePath() === null) {
+                      <ion-icon class="current-icon" name="checkmark"></ion-icon>
+                    }
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            @if (filteredProjects().length === 0) {
+              <div class="no-results">No projects found</div>
+            } @else {
+              @for (group of filteredProjects(); track group.label; let groupIdx = $index) {
+                <div class="project-group">
+                  <div class="group-label">{{ group.label }}</div>
+                  @for (
+                    project of group.projects;
+                    track project.projectRoot;
+                    let itemIdx = $index
+                  ) {
+                    <button
+                      [attr.id]="'project-item-' + projectOptionIndex(groupIdx, itemIdx)"
+                      type="button"
+                      class="project-item"
+                      [class.selected]="selectedIndex() === projectOptionIndex(groupIdx, itemIdx)"
+                      [attr.data-selected]="selectedIndex() === projectOptionIndex(groupIdx, itemIdx)"
+                      [class.current]="
+                        project.projectRoot === selectorService.selectedWorkspacePath()
+                      "
+                      (click)="selectProject(project)"
+                      (keydown)="onKeyDown($event)"
+                      role="option"
+                      [attr.aria-selected]="selectedIndex() === projectOptionIndex(groupIdx, itemIdx)"
+                    >
+                      <div class="project-item-content">
+                        <div class="project-item-main">
+                          <span class="project-item-label">{{ project.label }}</span>
+                          @if (project.isDuplicate) {
+                            <span class="project-item-path">{{ project.parentPath }}</span>
+                          }
+                          @if (project.projectRoot === selectorService.selectedWorkspacePath()) {
+                            <ion-icon class="current-icon" name="checkmark"></ion-icon>
+                          }
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        class="pin-button"
+                        [class.pinned]="project.isPinned"
+                        [attr.aria-label]="
+                          project.isPinned
+                            ? 'Unpin ' + project.label
+                            : 'Pin ' + project.label
+                        "
+                        (click)="togglePin(project, $event)"
+                        tabindex="-1"
+                      >
+                        <ion-icon name="pin"></ion-icon>
+                      </button>
+                    </button>
+                  }
+                </div>
+              }
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+}

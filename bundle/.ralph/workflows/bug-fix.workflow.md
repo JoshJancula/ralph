@@ -15,6 +15,7 @@ pipeline:
           timeout: 120
   stages:
     - id: investigate
+      sessionStrategy: resume
       instructions: |
         Investigate the defect described by {{TASK}}. Reproduce the symptom, identify
         the root cause and regression surface, and record observed versus expected
@@ -26,6 +27,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md
           required: true
     - id: plan-implementation
+      sessionStrategy: resume
       instructions: |
         Using the task {{TASK}} and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md, create the
@@ -47,6 +49,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: implement
+      sessionStrategy: compact
       instructions: |
         Execute the generated implementation plan for {{TASK}} on the isolated
         candidate tree. Read
@@ -72,6 +75,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      sessionStrategy: fresh
       instructions: |
         Review the candidate for {{TASK}} without mutation. Inspect the supervisor
         changeset evidence and the implementation handoff together with
@@ -104,6 +108,7 @@ pipeline:
       dependsOn:
         - review-approved
     - id: plan-qa
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}}, the investigation, and the latest implementation handoff,
         create the smallest independent QA plan after successful integration.
@@ -126,6 +131,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      sessionStrategy: fresh
       instructions: |
         Execute the generated QA plan for {{TASK}} on the integrated tree. Read
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md,

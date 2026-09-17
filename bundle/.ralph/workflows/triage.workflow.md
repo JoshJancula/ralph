@@ -8,6 +8,7 @@ pipeline:
   publishMode: manual
   stages:
     - id: classify
+      sessionStrategy: resume
       instructions: |
         Classify {{TASK}} read-only so the run can route to the right depth of
         study. Establish what is actually being asked, what kind of change it
@@ -50,6 +51,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/router-decision.schema.json
     - id: scope-request
+      sessionStrategy: resume
       instructions: |
         Scope {{TASK}} read-only for the shallow route: triage judged this request
         well understood and bounded. Confirm that judgement before relying on it.
@@ -73,6 +75,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/triage-scope-findings.md
           required: true
     - id: deep-investigation
+      sessionStrategy: resume
       instructions: |
         Investigate {{TASK}} read-only for the deep route: triage judged this
         request ambiguous, unbounded, or not yet root-caused. Resolve what can be
@@ -97,6 +100,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/triage-investigation-findings.md
           required: true
     - id: recommend
+      sessionStrategy: resume
       instructions: |
         Turn the triage findings for {{TASK}} into an executable recommendation.
         Read .ralph-workspace/artifacts/{{ARTIFACT_NS}}/triage-classification.md, then

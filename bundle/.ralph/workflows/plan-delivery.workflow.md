@@ -17,9 +17,10 @@ pipeline:
           timeout: 120
   stages:
     - id: implement
+      sessionStrategy: compact
       instructions: |
         Execute the entire supplied plan {{INPUT_PLAN}} for {{TASK}} TODO by TODO
-        in a fresh session on the candidate snapshot. The supplied plan is frozen:
+        with compacted session continuity on the candidate snapshot. The supplied plan is frozen:
         work from the control copy and never edit the source. Do not skip a TODO,
         add a TODO, or replace plan TODOs with a summary. After every plan TODO
         and its verification pass, write the required
@@ -35,6 +36,7 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      sessionStrategy: fresh
       instructions: |
         Review the candidate snapshot for {{TASK}} without mutation. Read the
         supplied plan {{INPUT_PLAN}} for its acceptance intent, then check the
@@ -69,6 +71,7 @@ pipeline:
       dependsOn:
         - review-approved
     - id: plan-qa
+      sessionStrategy: resume
       instructions: |
         Using {{TASK}}, the immutable supplied plan {{INPUT_PLAN}}, and the latest
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md,
@@ -93,6 +96,7 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      sessionStrategy: fresh
       instructions: |
         Execute the entire generated QA plan for {{TASK}} TODO by TODO on the
         integrated tree. Read the supplied plan {{INPUT_PLAN}},

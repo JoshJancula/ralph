@@ -11,7 +11,23 @@ byte (no YAML library -- Ralph core stays dependency free):
       Write or replace ``runtime:``/``model:`` keys on the named stages inside
       ``pipeline.stages``.
 
-Both modes are idempotent: an existing key at the same indent is replaced in
+  clear-defaults
+      Remove the top-level ``defaults:`` block entirely.
+
+  clear-default-model
+      Remove ``model:`` from ``defaults:`` when present.
+
+  clear-default-runtime
+      Remove ``runtime:`` and ``model:`` from ``defaults:``; drop the block when
+      empty.
+
+  clear-stages <stage-id> ...
+      Remove ``runtime:``/``model:`` from the named stages.
+
+  clear-stage-model <stage-id> ...
+      Remove ``model:`` only from the named stages.
+
+Both set modes are idempotent: an existing key at the same indent is replaced in
 place rather than duplicated.
 
 Usage: workflow-routing-persist.py <workflow-path> <out-path> <mode> [args...]
@@ -86,6 +102,61 @@ def set_defaults(fm: "list[str]", runtime: str, model: str) -> "list[str]":
                 anchor = idx + 1
         return out[:anchor] + block + out[anchor:]
     return out[:start] + block + out[block_end(out, start, 0):]
+
+
+def find_defaults_block(fm: "list[str]") -> "tuple[int | None, int]":
+    for idx, line in enumerate(fm):
+        if indent_of(line) == 0 and line.strip() == "defaults:":
+            return idx, block_end(fm, idx, 0)
+    return None, 0
+
+
+def remove_defaults_block(fm: "list[str]") -> "list[str]":
+    start, end = find_defaults_block(fm)
+    if start is None:
+        return list(fm)
+    return fm[:start] + fm[end:]
+
+
+def remove_defaults_keys(fm: "list[str]", keys: "set[str]") -> "list[str]":
+    start, end = find_defaults_block(fm)
+    if start is None:
+        return list(fm)
+    key_indent = 2
+    kept = [fm[start]]
+    idx = start + 1
+    while idx < end:
+        line = fm[idx]
+        head = line.strip().split(":", 1)[0]
+        if indent_of(line) == key_indent and head in keys:
+            idx = block_end(fm, idx, key_indent)
+            continue
+        kept.append(line)
+        idx += 1
+    # Drop the block when only the header remains.
+    if len(kept) == 1:
+        return fm[:start] + fm[end:]
+    return fm[:start] + kept + fm[end:]
+
+
+def clear_stage_routing_keys(
+    fm: "list[str]", stage_id: str, keys: "set[str]"
+) -> "list[str]":
+    entries = find_stage_entries(fm)
+    if stage_id not in entries:
+        die("stage %r not found in pipeline.stages" % stage_id)
+    start, end, key_indent = entries[stage_id]
+    kept = []
+    idx = start
+    while idx < end:
+        line = fm[idx]
+        head = line.strip().split(":", 1)[0]
+        if indent_of(line) == key_indent and head in keys:
+            idx = block_end(fm, idx, key_indent)
+            continue
+        kept.append(line)
+        idx += 1
+    return fm[:start] + kept + fm[end:]
 
 
 def find_stage_entries(fm: "list[str]") -> "dict[str, tuple[int, int, int]]":
@@ -197,8 +268,28 @@ def main() -> None:
             if not stage_id or not runtime:
                 die("stage spec %r must name a stage id and a runtime" % spec)
             fm = set_stage_keys(fm, stage_id, runtime, model)
+    elif mode == "clear-defaults":
+        fm = remove_defaults_block(fm)
+    elif mode == "clear-default-model":
+        fm = remove_defaults_keys(fm, {"model"})
+    elif mode == "clear-default-runtime":
+        fm = remove_defaults_keys(fm, {"runtime", "model"})
+    elif mode == "clear-stages":
+        if not args:
+            die("clear-stages mode requires at least one stage id")
+        for stage_id in args:
+            fm = clear_stage_routing_keys(fm, stage_id, {"runtime", "model"})
+    elif mode == "clear-stage-model":
+        if not args:
+            die("clear-stage-model mode requires at least one stage id")
+        for stage_id in args:
+            fm = clear_stage_routing_keys(fm, stage_id, {"model"})
     else:
-        die("unknown mode %r; expected defaults or stages" % mode)
+        die(
+            "unknown mode %r; expected defaults, stages, clear-defaults, "
+            "clear-default-model, clear-default-runtime, clear-stages, or "
+            "clear-stage-model" % mode
+        )
 
     with open(out_path, "w", encoding="utf-8") as handle:
         handle.write(newline.join(["---"] + fm + rest.split("\n")))

@@ -129,6 +129,28 @@ overlay_stop_hook_advance_terminal_job() {
   [ -z "$output" ]
 }
 
+@test "claude overlay repairs relative hooks and runs from a separate agent workspace" {
+  source "$CLAUDE_OVERLAY"
+  cp "$CLAUDE_TEMPLATE" "$workspace/.claude/settings.json"
+  # Names in JSON do not prove that a hook can launch from the agent workspace.
+  run runtime_overlay_claude_find_installed_hooks
+  [ "$status" -ne 0 ]
+  runtime_overlay_claude_merge_settings_file "$workspace/.claude/settings.json" "$CLAUDE_TEMPLATE" 1
+  runtime_overlay_claude_find_installed_hooks
+  mkdir -p "$workspace/separate-agent/package"
+  run python3 - "$workspace/.claude/settings.json" "$workspace/separate-agent/package" <<'PY'
+import json, subprocess, sys
+data = json.load(open(sys.argv[1]))
+commands = [h['command'] for g in data['hooks']['PreToolUse']
+            if g['matcher'] == 'Read|Edit|MultiEdit|Glob|Grep|LS' for h in g['hooks']]
+assert len(commands) == 1
+result = subprocess.run(commands[0], shell=True, cwd=sys.argv[2], input='{}',
+                        text=True, capture_output=True)
+assert result.returncode == 0, result.stderr
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "claude prepare exports CLAUDE_CODE_STOP_HOOK_BLOCK_CAP from RALPH_BG_MAX_PER_TODO" {
   source "$RUNTIME_OVERLAY_LIB"
   source "$CLAUDE_OVERLAY"
