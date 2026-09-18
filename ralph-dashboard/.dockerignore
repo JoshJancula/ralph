@@ -1,0 +1,5 @@
+# Dashboard build context exclusions for Dockerfile.build.
+# Keep the context small and avoid host Darwin node_modules replacing the Linux install.
+node_modules
+.git
+.ralph-workspace

@@ -142,6 +142,146 @@ describe('FileViewerComponent', () => {
     expect(pre?.textContent).toBe(JSON.stringify(JSON.parse(raw), null, 2));
   });
 
+  it('plan-usage-summary role uses the handwritten summary view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      plan_key: 'PLAN',
+      status: 'succeeded',
+      runtime: 'cursor',
+      model: 'composer',
+      todos_done: 2,
+      todos_total: 4,
+      input_tokens: 11,
+      output_tokens: 7,
+      elapsed_seconds: 9,
+    });
+    fixture.componentInstance.filePath = 'PLAN/plan-usage-summary.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/plan-usage-summary.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-plan-usage-summary"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('Plan usage summary');
+    expect(view.textContent).toContain('cursor');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('discover-report role uses the handwritten discover view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      kind: 'discover',
+      plan_key: 'PLAN',
+      generated_at: '2026-01-01T00:00:00Z',
+      sequence_patterns: [{ pattern_id: 'a' }],
+      aggregate_findings: [],
+    });
+    fixture.componentInstance.filePath = 'PLAN/discover-report.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/discover-report.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-discover-report"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('Discover report');
+    expect(view.textContent).toContain('Sequence patterns');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('run-manifest role uses the handwritten manifest view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      run_id: 'run-1',
+      plan_key: 'PLAN',
+      status: 'succeeded',
+      runtime: 'cursor',
+      model: 'composer',
+      started_at: '2026-01-01T00:00:00Z',
+      ended_at: '2026-01-01T00:01:00Z',
+    });
+    fixture.componentInstance.filePath = 'PLAN/runs/run-1/run-manifest.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runs/run-1/run-manifest.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-run-manifest"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('run-1');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('overlay-summary role uses the handwritten overlay view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      runtime_overlay_mode: 'hybrid',
+      native_hooks_effective: true,
+      mcp_effective: true,
+      compaction_saved_bytes: 80,
+      hook_compactions: 2,
+    });
+    fixture.componentInstance.filePath = 'PLAN/runtime-overlay-summary-1-cursor-1.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runtime-overlay-summary-1-cursor-1.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-overlay-summary"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('hybrid');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('unknown json role falls back to pretty-printed <pre>', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = '{"z":1,"a":2}';
+    fixture.componentInstance.filePath = 'PLAN2/config.json';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('plans', 'PLAN2/config.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[data-testid^="role-view-"]')).toBeNull();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toBe(JSON.stringify(JSON.parse(raw), null, 2));
+  });
+
+  it('formats overlay-timeline.jsonl without throwing', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '{"iteration":1,"runtime":"cursor","compaction_saved_bytes":12,"hook_compactions":1,"bg_tier":"1"}',
+      '{"iteration":2,"runtime":"codex","compaction_saved_bytes":0,"hook_compactions":0}',
+    ].join('\n');
+    fixture.componentInstance.filePath = 'PLAN/runs/run-1/overlay-timeline.jsonl';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runs/run-1/overlay-timeline.jsonl', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toContain('overlay iter 1');
+    expect(pre?.textContent).toContain('saved_bytes=12');
+  });
+
+  it('formats tool-catalog-telemetry.jsonl without throwing', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '{"timestamp":"2026-01-01T00:00:00Z","event":"tool_search_search","toolName":"ralph_proxy_grep","rank":1,"outcome":"hit","queryHash":"abc","toolsListCount":3,"schemaBytes":12,"argumentShape":{}}',
+    ].join('\n');
+    fixture.componentInstance.filePath = 'PLAN/tool-catalog-telemetry.jsonl';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/tool-catalog-telemetry.jsonl', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toContain('tool search search');
+    expect(pre?.textContent).toContain('tool=ralph_proxy_grep');
+    expect(pre?.textContent).toContain('outcome=hit');
+  });
+
   it('.ndjson file: structured stream events are rendered as readable lines', async () => {
     const fixture = TestBed.createComponent(FileViewerComponent);
     const raw = [

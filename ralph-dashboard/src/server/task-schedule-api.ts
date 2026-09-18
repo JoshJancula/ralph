@@ -12,12 +12,12 @@
  *   workflow. Tasks with no workflow (or `auto`) get a triage routing pass first
  *   and return to ready with the recommended workflow for a later pass. */
 import { randomUUID } from 'node:crypto';
-import { existsSync, promises as fs } from 'node:fs';
+import { existsSync, promises as fs, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { findDashboardRoots, type DashboardRoots } from '../paths';
-import { getMergedWorkspaceAllowlist } from './dashboard-api';
+import { enumerateRegisteredWorkspaces, getMergedWorkspaceAllowlist } from './dashboard-api';
 import { resolveDashboardRootsForWorkspaceRoot } from './dashboard-workspace-resolve';
 import {
   inspectWorkflow,
@@ -30,6 +30,7 @@ import {
   type RunOptions,
 } from './ralph-cli';
 import { writeGuard } from './write-guard';
+import { cachedWorkflowRead, workflowReadFingerprint } from './workflow-read-cache';
 
 type TaskStatus = string;
 type Scope = 'project' | 'global';
@@ -154,6 +155,60 @@ const middleware: RequestHandler = async (req, res, next) => { const requested =
 function scope(body: Record<string, unknown>): Scope { return body['scope'] === 'global' ? 'global' : 'project'; }
 export async function allTasks(roots: DashboardRoots): Promise<Task[]> { return [...(await readStore(roots, 'project')).tasks, ...(await readStore(roots, 'global')).tasks]; }
 async function isRegisteredWorkspace(workspaceRoot: string): Promise<boolean> { return (await getMergedWorkspaceAllowlist()).some((entry) => sameRoot(entry.workspaceRoot, workspaceRoot)); }
+
+const RUNS_CACHE_TTL_MS = 5_000;
+
+function runStoreFingerprint(roots: DashboardRoots): string {
+  const paths = [projectStoreFile(roots.workspaceRoot), globalStoreFile()];
+  return [workflowReadFingerprint(roots.workspaceRoot), ...paths.map((path) => {
+    try {
+      const stats = statSync(path);
+      return `${path}:${stats.mtimeMs}:${stats.size}`;
+    } catch {
+      return `${path}:missing`;
+    }
+  })].join('|');
+}
+
+export async function handleRunsRequest(req: Request, res: Response): Promise<void> {
+  const requested = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const enumerated = await enumerateRegisteredWorkspaces(requested || undefined);
+  const workspaces = enumerated.workspaces;
+  const runs = (await Promise.all(workspaces.map(async (workspace) => {
+    const roots: DashboardRoots = { projectRoot: workspace.projectRoot, workspaceRoot: workspace.workspaceRoot };
+    return cachedWorkflowRead(`runs|${roots.workspaceRoot}`, runStoreFingerprint(roots), async () => {
+      await refreshAttempts(roots);
+      const workflows = await listWorkflowRuns({}, options(roots)).catch(() => []);
+      const workflowRuns = (Array.isArray(workflows) ? workflows : []).map((run) => ({
+        ...(run as Record<string, unknown>),
+        executionKind: 'workflow' as const,
+        workspaceRoot: roots.workspaceRoot,
+        projectRoot: roots.projectRoot,
+      }));
+      const leafRuns = (await allTasks(roots)).flatMap((task) => task.attempts
+        .filter((attempt) => attempt.executionKind === 'leaf-plan')
+        .map((attempt) => ({
+          runId: attempt.id,
+          workflowId: '',
+          mode: 'leaf',
+          entryKind: 'leaf-plan',
+          executionKind: 'leaf-plan' as const,
+          state: attempt.status === 'completed' ? 'succeeded' : attempt.status,
+          createdAt: attempt.startedAt,
+          task: task.title,
+          sourceKind: task.leafPlan?.title || 'leaf plan',
+          graphRunLink: null,
+          workspaceRoot: roots.workspaceRoot,
+          projectRoot: roots.projectRoot,
+        })));
+      return [...workflowRuns, ...leafRuns];
+    }, { ttlMs: RUNS_CACHE_TTL_MS });
+  }))).flat();
+  const createdAt = (run: unknown): string =>
+    typeof run === 'object' && run !== null ? String((run as Record<string, unknown>)['createdAt'] ?? '') : '';
+  runs.sort((a, b) => createdAt(b).localeCompare(createdAt(a)));
+  res.json({ runs, workspaceRoot: requested || null, skipped: enumerated.skipped });
+}
 
 // ---------------------------------------------------------------------------
 // Brief and result-file contract
@@ -432,9 +487,9 @@ export async function pollAttempt(attempt: TaskAttempt, fallback: DashboardRoots
     const run = (await runStatus(runId, options(attemptRoots(attempt, fallback)))) as Record<string, unknown>;
     status = attemptStatusForRunState(String(run['state'] ?? run['status'] ?? ''));
   } catch (error: unknown) {
-    if (runId && isWorkflowRunLookupMiss(error)) {
+    const dead = attempt.pid ? !processAlive(attempt.pid) : Date.now() - Date.parse(attempt.startedAt) > LAUNCH_STALE_MS;
+    if (isWorkflowRunLookupMiss(error)) {
       const bound = attempt.runId === runId;
-      const dead = attempt.pid ? !processAlive(attempt.pid) : Date.now() - Date.parse(attempt.startedAt) > LAUNCH_STALE_MS;
       if (bound || dead) {
         return {
           runId,
@@ -442,6 +497,13 @@ export async function pollAttempt(attempt: TaskAttempt, fallback: DashboardRoots
           error: `Workflow run ${runId} was not found; clearing stale attempt.`,
         };
       }
+    }
+    // A status probe can fail for reasons other than a missing run (for
+    // example, a timeout or unavailable CLI). Do not leave a stale process
+    // claim running forever when its owning PID is already dead.
+    if (dead) {
+      const detail = error instanceof RalphCliError ? error.stderr || error.message : String(error);
+      return { runId, status: 'failed', error: `Unable to reconcile workflow run ${runId}: ${detail}` };
     }
     /* run may not be materialized yet */
   }
@@ -522,7 +584,17 @@ async function refreshStoreFile(path: string, fallback: DashboardRoots): Promise
 }
 
 async function refreshAttempts(roots: DashboardRoots): Promise<void> {
-  await refreshStoreFile(storePath(roots, 'project'), roots);
+  // A request can be scoped to any one workspace, but attempts are durable
+  // dashboard records. Reconcile every live allowlisted project store so a
+  // dead launcher in another registered workspace cannot remain "running".
+  const registered = await enumerateRegisteredWorkspaces();
+  const workspaces: DashboardRoots[] = [{ projectRoot: roots.projectRoot, workspaceRoot: roots.workspaceRoot }];
+  for (const entry of registered.workspaces) {
+    if (!workspaces.some((item) => sameRoot(item.workspaceRoot, entry.workspaceRoot))) {
+      workspaces.push({ projectRoot: entry.projectRoot, workspaceRoot: entry.workspaceRoot });
+    }
+  }
+  for (const workspace of workspaces) await refreshStoreFile(storePath(workspace, 'project'), workspace);
   await refreshStoreFile(storePath(roots, 'global'), roots);
 }
 
@@ -714,12 +786,7 @@ function scheduleShapeError(schedule: Pick<Schedule, 'worker' | 'workflowId'>): 
 }
 
 export function registerTaskScheduleApi(app: Express): void {
-  app.get('/api/runs', middleware, async (req, res) => {
-    const roots = context(req); await refreshAttempts(roots);
-    const workflows = await listWorkflowRuns({}, options(roots)).catch(() => []);
-    const leafRuns = (await allTasks(roots)).flatMap((task) => task.attempts.filter((attempt) => attempt.executionKind === 'leaf-plan').map((attempt) => ({ runId: attempt.id, workflowId: '', mode: 'leaf', entryKind: 'leaf-plan', executionKind: 'leaf-plan', state: attempt.status === 'completed' ? 'succeeded' : attempt.status, createdAt: attempt.startedAt, task: task.title, sourceKind: task.leafPlan?.title || 'leaf plan', graphRunLink: null })));
-    res.json([...(workflows as readonly Record<string, unknown>[]).map((run) => ({ ...run, executionKind: 'workflow' })), ...leafRuns]);
-  });
+  app.get('/api/runs', middleware, handleRunsRequest);
   app.get('/api/dashboard-templates', (_req, res) =>
     res.json(
       TEMPLATES.map(([id, category, purpose, outputs]) => ({

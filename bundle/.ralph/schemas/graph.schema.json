@@ -232,6 +232,15 @@
                 "type": "string",
                 "enum": ["raw", "ralph-read-heavy", "ralph-compact", "ralph-aggressive"]
               },
+              "execImage": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?(:[A-Za-z0-9._-]+)?(@sha256:[a-fA-F0-9]{64})?$|^[A-Za-z0-9._-]+:[0-9]{1,5}/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[a-fA-F0-9]{64})?$"
+              },
+              "execWorkspaceWrite": {
+                "type": "string",
+                "enum": ["readonly", "writable"]
+              },
               "type": {
                 "type": "string",
                 "pattern": "^.+$"

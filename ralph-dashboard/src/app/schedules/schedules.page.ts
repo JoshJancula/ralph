@@ -88,12 +88,10 @@ const emptyDraft = (): Draft => ({
       />
 
       @if (!showLoadingSkeleton() && !error()) {
-        <section class="schedule-section" aria-label="Schedules list">
-          <div class="section-head">
-            <h2 class="section-title">Active & Configured Schedules</h2>
-            <span class="schedule-count">{{ schedules().length }} configured</span>
-          </div>
-
+        <section
+          class="schedule-section"
+          [attr.aria-label]="schedules().length ? schedules().length + ' schedules' : 'Schedules'"
+        >
           @if (!schedules().length) {
             <div class="empty-state" data-testid="schedules-empty">
               <p class="empty-title">No schedules yet</p>
@@ -422,26 +420,6 @@ const emptyDraft = (): Draft => ({
       flex-direction: column;
       gap: var(--space-4);
       margin-top: var(--space-2);
-    }
-
-    .section-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-3);
-    }
-
-    .section-title {
-      margin: 0;
-      font-size: var(--font-size-md);
-      font-weight: 600;
-      color: var(--text-primary);
-    }
-
-    .schedule-count {
-      font-size: var(--font-size-xs);
-      color: var(--text-muted);
-      font-weight: 500;
     }
 
     .schedules-grid {

@@ -5,15 +5,26 @@ if [[ -n "${RALPH_MCP_PROXY_LOGGING_LOADED:-}" ]]; then
 fi
 RALPH_MCP_PROXY_LOGGING_LOADED=1
 
+# Resolve the plan state root. RALPH_PLAN_WORKSPACE_ROOT is already the state
+# root; the legacy RALPH_MCP_WORKSPACE is a project root.
+ralph_mcp_proxy_state_root() {
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    printf '%s\n' "${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  elif [[ -n "${RALPH_MCP_WORKSPACE:-}" ]]; then
+    printf '%s/.ralph-workspace\n' "${RALPH_MCP_WORKSPACE%/}"
+  else
+    return 1
+  fi
+}
+
 # Derive the per-plan MCP log file path from RALPH_PLAN_KEY and workspace env
-# vars. Returns a non-empty path when both RALPH_PLAN_KEY and a workspace root
-# are set; returns nothing when either is absent.
+# vars. Returns nothing when RALPH_PLAN_KEY or a state root is absent.
 ralph_mcp_proxy_plan_log_path() {
   local plan_key="${RALPH_PLAN_KEY:-}"
   [[ -n "$plan_key" ]] || return 0
-  local workspace_root="${RALPH_PLAN_WORKSPACE_ROOT:-${RALPH_MCP_WORKSPACE:-}}"
-  [[ -n "$workspace_root" ]] || return 0
-  printf '%s/.ralph-workspace/logs/%s/mcp.log\n' "${workspace_root%/}" "$plan_key"
+  local state_root
+  state_root="$(ralph_mcp_proxy_state_root)" || return 0
+  printf '%s/logs/%s/mcp.log\n' "$state_root" "$plan_key"
 }
 
 ralph_mcp_proxy_log_line() {
@@ -27,8 +38,7 @@ ralph_mcp_proxy_log_line() {
   # Resolve log file inline to avoid a subshell per call.
   local _log_file="${RALPH_MCP_PROXY_LOG_FILE:-}"
   if [[ -z "$_log_file" && -n "${RALPH_PLAN_KEY:-}" ]]; then
-    local _ws_root="${RALPH_PLAN_WORKSPACE_ROOT:-${RALPH_MCP_WORKSPACE:-}}"
-    [[ -n "$_ws_root" ]] && _log_file="${_ws_root%/}/.ralph-workspace/logs/${RALPH_PLAN_KEY}/mcp.log"
+    _log_file="$(ralph_mcp_proxy_plan_log_path)" || true
   fi
   if [[ -n "$_log_file" ]]; then
     mkdir -p "$(dirname "$_log_file")" 2>/dev/null || true
@@ -61,8 +71,7 @@ ralph_mcp_proxy_log_tool_call_jsonl() {
 
   local _log_file="${RALPH_MCP_PROXY_LOG_FILE:-}"
   if [[ -z "$_log_file" && -n "${RALPH_PLAN_KEY:-}" ]]; then
-    local _ws_root="${RALPH_PLAN_WORKSPACE_ROOT:-${RALPH_MCP_WORKSPACE:-}}"
-    [[ -n "$_ws_root" ]] && _log_file="${_ws_root%/}/.ralph-workspace/logs/${RALPH_PLAN_KEY}/mcp.log"
+    _log_file="$(ralph_mcp_proxy_plan_log_path)" || true
   fi
   [[ -n "$_log_file" ]] || return 0
 

@@ -168,6 +168,7 @@ record = {
     "iteration": iteration,
     "model": model,
     "runtime": runtime,
+    "run_id": os.environ.get("RALPH_PROCESS_RUN_ID", "").strip(),
     "session_strategy": session_strategy or "fresh",
     "elapsed_seconds": elapsed_seconds,
     "input_tokens": input_tokens,

@@ -23,6 +23,7 @@ Task or specification ->  ralph workflow start <id> --task|--plan ...
 | Page | What it contains |
 | --- | --- |
 | [Environment](ENVIRONMENT.md) | Flags, environment variables, model selection, session controls, and the three-root model |
+| [Workspace](WORKSPACE.md) | `.ralph-workspace/` layout, run kinds, manifests, retention, and `ralph state` |
 | [Tooling](TOOLING.md) | Ralph modes, MCP proxy tools, compaction, hooks, and runtime adapters |
 | [MCP](MCP.md) | MCP server setup, host wiring, and third-party MCP behavior |
 | [Hooks](HOOKS.md) | Installed hook inventory and channel behavior |
@@ -48,8 +49,9 @@ ralph workflow actions list <run-id>
 ```
 
 Open tasks use `- [ ]`; completed tasks use `- [x]`. Ralph ignores `- []`.
-Logs and outputs live under `.ralph-workspace/logs/` and
-`.ralph-workspace/artifacts/`.
+Logs and outputs live under `.ralph-workspace/` as described in
+[Workspace](WORKSPACE.md). Plan logs are under `.ralph-workspace/logs/`;
+generated files under `.ralph-workspace/artifacts/`.
 
 ## Three directories, three jobs
 

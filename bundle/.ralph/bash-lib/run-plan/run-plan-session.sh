@@ -260,6 +260,47 @@ ralph_session_generate_uuid() {
   return 1
 }
 
+ralph_session_prior_run_resume_summary() {
+  local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
+  local plan_key="${RALPH_PLAN_KEY:-}"
+  local dir exact=0 total=0 f capture rec_hash plan_path hashes=""
+  [[ -n "$state_root" && -n "$plan_key" ]] || return 1
+  dir="${state_root%/}/sessions/${plan_key}/todo-sessions"
+  [[ -d "$dir" ]] || return 1
+  plan_path="${PLAN_PATH:-}"
+  if [[ -n "$plan_path" && -f "$plan_path" ]]; then
+    local line body
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in
+        *'- [ ] '*|*'- [x] '*|*'- [X] '*)
+          body="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*- \[[xX[:space:]]\] //')"
+          if command -v python3 >/dev/null 2>&1; then
+            hashes+=" $(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$body")"
+          else
+            hashes+=" $(printf '%s' "$body" | shasum -a 256 2>/dev/null | awk '{print $1}')"
+          fi
+          total=$((total + 1))
+          ;;
+      esac
+    done <"$plan_path"
+  fi
+  for f in "$dir"/*.json; do
+    [[ -f "$f" ]] || continue
+    capture="$(jq -r '.capture // empty' "$f" 2>/dev/null)"
+    [[ "$capture" == "exact" ]] || continue
+    rec_hash="$(jq -r '.identity.todoHash // empty' "$f" 2>/dev/null)"
+    if [[ -n "$hashes" && -n "$rec_hash" && " $hashes " != *" $rec_hash "* ]]; then
+      continue
+    fi
+    exact=$((exact + 1))
+  done
+  [[ "$exact" -gt 0 ]] || return 1
+  if [[ "$total" -eq 0 ]]; then
+    total="$exact"
+  fi
+  printf '%s of %s TODOs have exact sessions\n' "$exact" "$total"
+}
+
 # Prompt the user interactively about session behavior across TODOs.
 # Args: none
 # Returns: 0 after updating RALPH_PLAN_SESSION_STRATEGY / RALPH_PLAN_CLI_RESUME, non-zero on unexpected errors
@@ -282,6 +323,10 @@ ralph_session_prompt_cli_resume() {
     *) _cr_runtime_label="this agent" ;;
   esac
 
+  local _resume_run_summary=""
+  _resume_run_summary="$(ralph_session_prior_run_resume_summary 2>/dev/null || true)"
+  _resume_run_summary="${_resume_run_summary//$'\n'/}"
+
   echo "" >&2
   echo -e "${C_C}${C_BOLD}Session Strategy${C_RST}" >&2
   echo -e "${C_BOLD}How should ${_cr_runtime_label} handle sessions between TODOs?${C_RST}" >&2
@@ -290,6 +335,9 @@ ralph_session_prompt_cli_resume() {
   echo -e "  ${C_G}2${C_RST}  ${C_BOLD}resume${C_RST} ${C_DIM}continue exact prior session context${C_RST}" >&2
   echo -e "  ${C_G}3${C_RST}  ${C_BOLD}reset${C_RST}  ${C_DIM}reuse session id with reset command + reset-oriented TODO prompts${C_RST}" >&2
   echo -e "  ${C_G}4${C_RST}  ${C_BOLD}compact${C_RST} ${C_DIM}reuse session id with a compact command prefix before each TODO${C_RST}" >&2
+  if [[ -n "$_resume_run_summary" ]]; then
+    echo -e "  ${C_G}5${C_RST}  ${C_BOLD}resume previous run${C_RST} ${C_DIM}(${_resume_run_summary})${C_RST}" >&2
+  fi
   echo "" >&2
   echo -e "${C_DIM}Session ids are stored at:${C_RST}" >&2
   echo -e "${C_DIM}  ${SESSION_ID_FILE}${C_RST}" >&2
@@ -297,12 +345,21 @@ ralph_session_prompt_cli_resume() {
   echo "" >&2
   local _cr_choice _cr_strategy
   if declare -F ralph_menu_select >/dev/null 2>&1; then
-    _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset" "compact")"
+    if [[ -n "$_resume_run_summary" ]]; then
+      _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset" "compact" "resume previous run")"
+    else
+      _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset" "compact")"
+    fi
   else
     _cr_choice="$(ralph_prompt_text "Session strategy (fresh/resume/reset/compact)" "fresh")"
   fi
   case "$_cr_choice" in
     resume|reset|compact) _cr_strategy="$_cr_choice" ;;
+    "resume previous run")
+      _cr_strategy="fresh"
+      RALPH_PLAN_RESUME_RUN="last"
+      export RALPH_PLAN_RESUME_RUN
+      ;;
     *) _cr_strategy="fresh" ;;
   esac
 
@@ -607,6 +664,14 @@ ralph_session_todo_manifest_malformed_reason() {
   printf '%s\n' ""
 }
 
+ralph_session_todo_allow_foreign_run_id() {
+  local record_run="${1:-}"
+  local resume_run="${RALPH_PLAN_RESUME_RUN_RESOLVED:-}"
+  [[ "${RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID:-0}" == "1" ]] || return 1
+  [[ -n "$resume_run" && -n "$record_run" && "$record_run" == "$resume_run" ]] || return 1
+  return 0
+}
+
 ralph_session_todo_identity_mismatch_reason() {
   local record="${1:-}"
   local current_identity current_runtime record_runtime
@@ -628,8 +693,12 @@ ralph_session_todo_identity_mismatch_reason() {
   current_run="$(jq -r '.runId // empty' <<<"$current_identity")"
   record_run="$(jq -r '.identity.runId // empty' <<<"$record")"
   if [[ -n "$current_run" && -n "$record_run" && "$current_run" != "$record_run" ]]; then
-    printf '%s\n' "foreign-run-id"
-    return 0
+    if ralph_session_todo_allow_foreign_run_id "$record_run"; then
+      :
+    else
+      printf '%s\n' "foreign-run-id"
+      return 0
+    fi
   fi
 
   current_hash="$(jq -r '.todoHash // empty' <<<"$current_identity")"
@@ -921,8 +990,147 @@ ralph_session_todo_export_paths() {
   export RALPH_TODO_SESSION_MANIFEST_PATH
 }
 
+ralph_session_resume_run_sanitize() {
+  local raw="${1:-}"
+  [[ -n "$raw" ]] || return 1
+  [[ "$raw" != *"/"* && "$raw" != *".."* ]] || return 1
+  printf '%s\n' "$raw"
+}
+
+ralph_session_resume_run_index_path() {
+  local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
+  local plan_key="${RALPH_PLAN_KEY:-}"
+  [[ -n "$state_root" && -n "$plan_key" ]] || return 1
+  printf '%s/logs/%s/runs/index.jsonl\n' "${state_root%/}" "$plan_key"
+}
+
+ralph_session_resolve_resume_run() {
+  local requested="${RALPH_PLAN_RESUME_RUN:-}"
+  local resolved="" current_run candidate index_path run_id status status
+
+  unset RALPH_PLAN_RESUME_RUN_RESOLVED
+  RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID=0
+  export RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID
+
+  [[ -n "$requested" ]] || return 0
+  current_run="$(ralph_session_todo_run_id)"
+
+  if [[ "$requested" == "last" ]]; then
+    index_path="$(ralph_session_resume_run_index_path 2>/dev/null)" || true
+    if [[ -n "$index_path" && -f "$index_path" ]]; then
+      while IFS= read -r candidate; do
+        run_id="$(jq -r '.run_id // empty' <<<"$candidate" 2>/dev/null)" || continue
+        status="$(jq -r '.status // empty' <<<"$candidate" 2>/dev/null)"
+        [[ -n "$run_id" ]] || continue
+        [[ "$run_id" != "$current_run" ]] || continue
+        case "$status" in
+          running|incomplete|unknown|'') continue ;;
+        esac
+        resolved="$run_id"
+      done < "$index_path"
+    fi
+    if [[ -z "$resolved" ]]; then
+      local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}" plan_key="${RALPH_PLAN_KEY:-}" runs_dir manifest status
+      if [[ -n "$state_root" && -n "$plan_key" ]]; then
+        runs_dir="${state_root%/}/logs/${plan_key}/runs"
+        if [[ -d "$runs_dir" ]]; then
+          while IFS= read -r run_id; do
+            [[ "$run_id" != "$current_run" ]] || continue
+            manifest="$runs_dir/$run_id/run-manifest.json"
+            [[ -f "$manifest" ]] || continue
+            status="$(jq -r '.status // empty' "$manifest" 2>/dev/null)"
+            case "$status" in
+              running|incomplete|unknown|'') continue ;;
+            esac
+            resolved="$run_id"
+            break
+          done < <(ls -1t "$runs_dir" 2>/dev/null)
+        fi
+      fi
+    fi
+    if [[ -z "$resolved" ]]; then
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "resume-run last: no prior plan run found; starting fresh TODO sessions"
+      fi
+      return 0
+    fi
+  else
+    resolved="$(ralph_session_resume_run_sanitize "$requested")" || {
+      printf '%s\n' "Error: invalid --resume-run value" >&2
+      return 1
+    }
+  fi
+
+  RALPH_PLAN_RESUME_RUN_RESOLVED="$resolved"
+  RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID=1
+  export RALPH_PLAN_RESUME_RUN_RESOLVED
+  export RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID
+  return 0
+}
+
+ralph_session_todo_record_resumed_from() {
+  local record="${1:-}"
+  local source_run="${2:-}"
+  local current_run session_id capture now_iso updated manifest_key
+
+  [[ -n "$record" && -n "$source_run" ]] || return 1
+  current_run="$(ralph_session_todo_run_id)"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u)"
+  updated="$(jq -c \
+    --arg from "$source_run" \
+    --arg run_id "$current_run" \
+    --arg updated_at "$now_iso" \
+    '.resumed_from_run_id = $from
+     | .updated_at = $updated_at
+     | .identity.runId = (if $run_id == "" then .identity.runId else $run_id end)' <<<"$record")" || return 1
+  manifest_key="$(jq -r '.manifest_key' <<<"$updated")"
+  ralph_session_todo_write_manifest_raw "$manifest_key" "$updated" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$updated"
+}
+
+ralph_session_todo_current_is_complete() {
+  local plan="${PLAN_PATH:-}" line="${RALPH_CURRENT_TODO_LINE:-}" text
+  [[ -n "$plan" && -n "$line" && -f "$plan" ]] || return 1
+  text="$(sed -n "${line}p" "$plan" 2>/dev/null)" || return 1
+  case "$text" in
+    *"- [x]"*|*"- [X]"*) return 0 ;;
+  esac
+  return 1
+}
+
+ralph_session_todo_adopt_resume_run_manifest() {
+  local resolved="${RALPH_PLAN_RESUME_RUN_RESOLVED:-}"
+  local manifest_key record state capture record_run
+
+  [[ -n "$resolved" ]] || return 0
+  if ralph_session_todo_current_is_complete; then
+    return 0
+  fi
+  manifest_key="$(ralph_session_todo_manifest_key 2>/dev/null)" || return 0
+  record="$(ralph_session_todo_read_raw "$manifest_key" 2>/dev/null)" || return 0
+  record_run="$(jq -r '.identity.runId // empty' <<<"$record")"
+  [[ "$record_run" == "$resolved" ]] || return 0
+  capture="$(jq -r '.capture // empty' <<<"$record")"
+  if [[ "$capture" != "$RALPH_TODO_SESSION_CAPTURE_EXACT" ]]; then
+    return 0
+  fi
+  state="$(jq -r '.state' <<<"$record")"
+  case "$state" in
+    "$RALPH_TODO_SESSION_STATE_TERMINAL"|"$RALPH_TODO_SESSION_STATE_RETIRED")
+      ralph_session_todo_reactivate_for_repair "$record" >/dev/null 2>&1 || return 0
+      record="$(ralph_session_todo_read_raw "$manifest_key" 2>/dev/null)" || return 0
+      ;;
+    "$RALPH_TODO_SESSION_STATE_ACTIVE")
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  ralph_session_todo_record_resumed_from "$record" "$resolved" >/dev/null 2>&1 || true
+}
+
 ralph_session_todo_reconcile_stale_manifest() {
-  local manifest_key manifest_path record state
+  local manifest_key manifest_path record state reason record_run
   manifest_key="$(ralph_session_todo_manifest_key 2>/dev/null)" || return 0
   manifest_path="$(ralph_session_todo_manifest_path "$manifest_key" 2>/dev/null)" || return 0
   [[ -f "$manifest_path" ]] || return 0
@@ -932,6 +1140,14 @@ ralph_session_todo_reconcile_stale_manifest() {
   record="$(ralph_session_todo_read_raw "$manifest_key" 2>/dev/null)" || return 0
   state="$(jq -r '.state' <<<"$record")"
   [[ "$state" == "$RALPH_TODO_SESSION_STATE_RETIRED" ]] && return 0
+  reason="$(ralph_session_todo_identity_mismatch_reason "$record")"
+  record_run="$(jq -r '.identity.runId // empty' <<<"$record")"
+  if [[ "$reason" == "foreign-run-id" ]] && ralph_session_todo_allow_foreign_run_id "$record_run"; then
+    return 0
+  fi
+  if [[ "$reason" == "foreign-run-id" && -n "${RALPH_PLAN_RESUME_RUN_RESOLVED:-}" && "$record_run" == "${RALPH_PLAN_RESUME_RUN_RESOLVED}" ]]; then
+    return 0
+  fi
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u)"
   record="$(jq -c \
     --arg state "$RALPH_TODO_SESSION_STATE_RETIRED" \
@@ -1023,8 +1239,10 @@ ralph_session_todo_update_capture() {
 }
 
 ralph_session_todo_prepare_invocation() {
-  local reason record session_id manifest_key manifest_path
+  local reason record session_id manifest_key capture
 
+  ralph_session_resolve_resume_run
+  ralph_session_todo_adopt_resume_run_manifest
   ralph_session_todo_reconcile_stale_manifest
   ralph_session_apply_resume_strategy
 
@@ -1052,6 +1270,17 @@ ralph_session_todo_prepare_invocation() {
       if declare -F ralph_run_plan_log >/dev/null 2>&1; then
         ralph_run_plan_log "todo session $reason: no manifest for this TODO; falling back to $RALPH_TODO_INVOCATION_REASON_START (no session to resume)"
       fi
+      RALPH_PLAN_INVOCATION_REASON="$RALPH_TODO_INVOCATION_REASON_START"
+      export RALPH_PLAN_INVOCATION_REASON
+      ralph_session_derive_cli_resume
+      return 0
+    fi
+    capture="$(jq -r '.capture // empty' <<<"$record")"
+    if [[ "$capture" != "$RALPH_TODO_SESSION_CAPTURE_EXACT" ]]; then
+      if declare -F ralph_run_plan_log >/dev/null 2>&1; then
+        ralph_run_plan_log "todo session $reason: capture is ${capture:-unknown}, not exact; starting a fresh TODO session"
+      fi
+      unset RALPH_RUN_PLAN_RESUME_SESSION_ID
       RALPH_PLAN_INVOCATION_REASON="$RALPH_TODO_INVOCATION_REASON_START"
       export RALPH_PLAN_INVOCATION_REASON
       ralph_session_derive_cli_resume

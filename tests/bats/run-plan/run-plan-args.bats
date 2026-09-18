@@ -778,6 +778,47 @@ setup() {
   rm -f "$plan_file"
 }
 
+@test "run-plan --resume-run last parses into RALPH_PLAN_RESUME_RUN" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  run bash -c '
+    set -euo pipefail
+    WORKSPACE="$(pwd)"
+    export WORKSPACE
+    PREBUILT_AGENT=""
+    PLAN_MODEL_CLI=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=1
+    SKIP_MCP_PREFLIGHT_FLAG=1
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RESUME_RUN_FLAG=""
+    SESSION_STRATEGY_FLAG=""
+    RUNTIME="cursor"
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    CLAUDE_TOOLS_FROM_AGENT=""
+    unset RALPH_PLAN_SESSION_STRATEGY RALPH_PLAN_CLI_RESUME RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    plan="$1"
+    ralph_root="$2"
+    source "$ralph_root/bash-lib/run-plan/run-plan-session.sh"
+    source "$ralph_root/bash-lib/run-plan/run-plan-args.sh"
+    ralph_run_plan_parse_args --runtime cursor --plan "$plan" --resume-run last --non-interactive
+    printf "%s %s" "${RALPH_PLAN_RESUME_RUN:-}" "${RALPH_PLAN_SESSION_STRATEGY:-}"
+  ' _ "$plan_file" "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "last fresh" ]
+
+  rm -f "$plan_file"
+}
+
 @test "ralph_apply_shell_compact_defaults enables compaction for hybrid mode" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 

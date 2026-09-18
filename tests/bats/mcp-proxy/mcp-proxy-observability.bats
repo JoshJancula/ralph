@@ -23,7 +23,7 @@ teardown() {
 }
 
 plan_log_path() {
-  printf '%s/.ralph-workspace/logs/%s/mcp.log\n' "$TEST_TMPDIR" "$RALPH_PLAN_KEY"
+  printf '%s/logs/%s/mcp.log\n' "$TEST_TMPDIR" "$RALPH_PLAN_KEY"
 }
 
 invoke_tool_with_plan_log() {
@@ -96,7 +96,7 @@ invoke_tool_with_plan_log() {
   command -v jq >/dev/null || skip "jq required"
 
   local expected_log
-  expected_log="${TEST_TMPDIR}/.ralph-workspace/logs/${RALPH_PLAN_KEY}/mcp.log"
+  expected_log="${TEST_TMPDIR}/logs/${RALPH_PLAN_KEY}/mcp.log"
 
   invoke_tool_with_plan_log ralph_proxy_shell "$(jq -nc --arg command 'ls' '{command:$command}')"
 
@@ -117,7 +117,7 @@ invoke_tool_with_plan_log() {
     ' _ "$LOGGING_LIB"
   )"
 
-  [[ "$result" == "/tmp/ws/.ralph-workspace/logs/my-plan/mcp.log" ]] \
+  [[ "$result" == "/tmp/ws/logs/my-plan/mcp.log" ]] \
     || { printf 'unexpected plan log path: %s\n' "$result" >&3; false; }
 }
 

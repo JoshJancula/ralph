@@ -1159,10 +1159,11 @@ graph_state_init_run() {
   }
 
   if ! ralph_atomic_write_json "$run_file" \
-    '{schemaVersion: $sv, ralphVersion: $rv, runId: $rid, planPath: $pp, graphSha: $gs, startedAt: $sa, status: "running", maxParallel: $mp, supervisorPid: $spid, ownerHostname: (if $oh == "" then null else $oh end), ownerProcessStartId: (if $op == "" then null else $op end), heartbeatAt: $hb, tooling: $tooling, registryRunPath: (if $rrp == "" then null else $rrp end)}' \
+    '{schemaVersion: $sv, kind:"graph", namespace:$namespace, ralphVersion: $rv, runId: $rid, planPath: $pp, graphSha: $gs, startedAt: $sa, status: "running", maxParallel: $mp, supervisorPid: $spid, ownerHostname: (if $oh == "" then null else $oh end), ownerProcessStartId: (if $op == "" then null else $op end), heartbeatAt: $hb, tooling: $tooling, registryRunPath: (if $rrp == "" then null else $rrp end)}' \
     --argjson sv "$GRAPH_STATE_RUN_SCHEMA_VERSION" \
     --arg rv "$ralph_version" \
     --arg rid "$run_id" \
+    --arg namespace "$namespace" \
     --arg pp "$plan_path" \
     --arg gs "$graph_sha" \
     --arg sa "$started_at" \
@@ -1208,6 +1209,79 @@ graph_state_run_status_is_terminal() {
     succeeded|failed|cancelled|awaiting-ack|interrupted|awaiting-operator) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# graph_state_supervisor_pid_is_alive <pid>
+#
+# Use the same liveness primitive as the durable process supervisor and the
+# dashboard's managed-process listing.  Keeping this here avoids treating an
+# unreadable process table as proof that a graph owner has exited.
+graph_state_supervisor_pid_is_alive() {
+  local pid="$1" supervisor_python
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 2
+  supervisor_python="$GRAPH_STATE_SCRIPT_DIR/../../python/ralph_process_supervisor.py"
+  [[ -f "$supervisor_python" ]] || return 2
+
+  python3 - "$supervisor_python" "$pid" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("ralph_process_supervisor", sys.argv[1])
+if spec is None or spec.loader is None:
+    raise SystemExit(2)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+raise SystemExit(0 if module.pid_alive(int(sys.argv[2])) else 1)
+PY
+}
+
+# graph_state_reconcile_run_owner_file <run-json>
+#
+# A graph scheduler can die before it records its terminal outcome.  Reconcile
+# that stale, non-terminal ledger only after two consecutive negative checks;
+# macOS process discovery may momentarily report no match while fork churn is
+# in progress.  The atomic write makes the failure observable as one publish.
+graph_state_reconcile_run_owner_file() {
+  local run_file="$1" base_json status supervisor_pid failed_at first_rc second_rc
+  [[ -f "$run_file" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  base_json="$(jq -c . "$run_file" 2>/dev/null)" || return 1
+  status="$(jq -r '.status // empty' <<<"$base_json")" || return 1
+  graph_state_run_status_is_terminal "$status" && return 0
+
+  supervisor_pid="$(jq -r '.supervisorPid // empty' <<<"$base_json")"
+  [[ "$supervisor_pid" =~ ^[1-9][0-9]*$ ]] || return 0
+
+  if graph_state_supervisor_pid_is_alive "$supervisor_pid"; then
+    first_rc=0
+  else
+    first_rc=$?
+  fi
+  [[ "$first_rc" -eq 1 ]] || return 0
+  if graph_state_supervisor_pid_is_alive "$supervisor_pid"; then
+    second_rc=0
+  else
+    second_rc=$?
+  fi
+  [[ "$second_rc" -eq 1 ]] || return 0
+
+  failed_at="$(graph_state_now_iso)"
+  ralph_atomic_write_json "$run_file" \
+    '($base | fromjson)
+     | .status = "failed"
+     | .failureReason = "owner-lost"
+     | .failedAt = $failed_at' \
+    --arg base "$base_json" \
+    --arg failed_at "$failed_at"
+}
+
+# graph_state_reconcile_run_owner <workspace> <namespace> <run-id>
+graph_state_reconcile_run_owner() {
+  local workspace="$1" namespace="$2" run_id="$3" run_file
+  run_file="$(graph_state_run_file "$workspace" "$namespace" "$run_id")" || return 1
+  graph_state_reconcile_run_owner_file "$run_file"
 }
 
 # graph_state_rebind_run_owner <workspace> <namespace> <run_id> [supervisor_pid]

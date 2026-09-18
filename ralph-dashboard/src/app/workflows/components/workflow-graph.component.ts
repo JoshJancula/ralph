@@ -33,10 +33,9 @@ import type { WorkflowDisplayGraph, WorkflowDisplayGraphError, WorkflowDisplayGr
             @if (g.maxReworkIterations != null) { <span>rework x{{ g.maxReworkIterations }}</span> }
             <span>{{ g.nodes.length }} stages · {{ g.edges.length }} connections</span>
           </div>
-          <span class="hint">Select a stage below to inspect its inputs, outputs, and instructions.</span>
         </div>
 
-        <div class="diagram" data-testid="workflow-mermaid-graph" [class.pending]="!mermaidSvg()">
+        <div class="diagram hub-nested-panel" data-testid="workflow-mermaid-graph" [class.pending]="!mermaidSvg()">
           @if (mermaidSvg(); as svg) {
             <div class="svg" [innerHTML]="svg"></div>
           } @else {
@@ -69,21 +68,16 @@ import type { WorkflowDisplayGraph, WorkflowDisplayGraphError, WorkflowDisplayGr
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      justify-content: space-between;
-      gap: var(--space-2) var(--space-4);
+      gap: var(--space-2);
     }
     .meta {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--space-3);
+      gap: var(--space-2) var(--space-3);
       font-size: var(--font-size-xs);
     }
     .muted {
       color: var(--text-muted);
-    }
-    .hint {
-      color: var(--text-muted);
-      font-size: var(--font-size-xs);
     }
     .diagram {
       display: grid;
@@ -93,10 +87,8 @@ import type { WorkflowDisplayGraph, WorkflowDisplayGraphError, WorkflowDisplayGr
       min-width: 0;
       max-width: 100%;
       overflow: auto;
-      padding: var(--space-4);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      background: var(--surface);
+      padding: var(--space-3);
+      margin: 0;
     }
     .diagram.pending {
       min-height: 12rem;
@@ -128,21 +120,22 @@ import type { WorkflowDisplayGraph, WorkflowDisplayGraphError, WorkflowDisplayGr
       gap: 0.35rem;
       min-height: var(--control-height);
       padding: 0.35rem 0.65rem;
-      border: 1px solid var(--border);
+      border: 1.5px solid var(--control-border);
       border-radius: var(--radius-md);
-      background: var(--surface-elevated, var(--surface));
+      background: var(--control-bg);
       color: var(--text-primary);
       cursor: pointer;
       text-align: left;
-      transition: border-color 0.15s ease, background 0.15s ease;
+      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
     }
     .node:hover {
-      border-color: var(--accent);
+      border-color: var(--ion-color-step-300, #6e7681);
+      background: var(--control-bg-hover);
     }
     .node.selected {
       border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
-      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+      background: var(--control-bg-hover);
     }
     .node.derived {
       border-style: dashed;

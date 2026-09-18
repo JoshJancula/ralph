@@ -385,6 +385,7 @@ EOF
     export PATH="$2:$PATH"
     export RALPH_MODE=hybrid
     export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_ALLOW_NESTED_RUNS=1
     export RALPH_PLAN_SESSION_HOME="$5"
     export CURSOR_PLAN_MAX_ITER=1
     export STUB_PLAN_PATH="$4"
@@ -393,6 +394,15 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] Implement the helper validation guardrails" "$plan_file"
+
+  local summary_file invocation_file
+  summary_file="$(find "$workspace/.ralph-workspace/logs" -name plan-usage-summary.json -print -quit)"
+  invocation_file="$(find "$workspace/.ralph-workspace/logs" -name invocation-usage.json -print -quit)"
+  [ -n "$summary_file" ]
+  [ -n "$invocation_file" ]
+  jq -e '.schema_version == 2 and .run_id != ""' "$summary_file"
+  jq -e '[.invocations[].run_id] | all(. != null)' "$invocation_file"
+  jq . "$summary_file" >/dev/null
 
   ralph_test_rm_workspace "$workspace"
 }

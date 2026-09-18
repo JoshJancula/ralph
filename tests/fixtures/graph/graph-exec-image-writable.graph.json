@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "ralphVersion": "1.0.0",
+  "name": "exec-image-writable",
+  "namespace": "exec-image-writable",
+  "maxParallel": 1,
+  "failurePolicy": "drain",
+  "nodes": [
+    {
+      "id": "verify",
+      "type": "stage",
+      "dependsOn": [],
+      "derivedFrom": "stage",
+      "stage": {
+        "execImage": "ghcr.io/example/verify:1.2.3",
+        "execWorkspaceWrite": "writable"
+      }
+    }
+  ],
+  "edges": []
+}

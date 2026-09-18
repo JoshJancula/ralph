@@ -12,9 +12,12 @@ import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import {
   ApiService,
   DelegatedRunRecord,
+  GraphDiffChange,
+  GraphDiffNodeResult,
   GraphNodeAttempt,
   GraphNodeState,
   GraphRunDetail,
+  GraphRunDiffResponse,
   GraphRunSummary,
 } from '../../services/api.service';
 import { ErrorModalComponent } from '../error-modal/error-modal.component';
@@ -367,6 +370,121 @@ function buildMermaid(detail: GraphRunDetail): string {
               </table>
             </div>
 
+            <div class="changeset-diff-section">
+              <div class="dag-header">
+                <h4>Changeset Diff</h4>
+                <span class="muted">Node file changes from stored manifests</span>
+              </div>
+
+              @if (diffLoading) {
+                <div class="detail-loading">
+                  <ion-spinner name="crescent"></ion-spinner>
+                  <span>Loading changeset diff...</span>
+                </div>
+              } @else if (diffError) {
+                <div class="error" role="alert">
+                  <ralph-error-modal class="is-embedded" [error]="diffError" [embedded]="true" [showHeader]="false" />
+                </div>
+              } @else if (diff) {
+                @if (diff.truncated) {
+                  <div class="diff-banner truncated" role="status">
+                    Diff truncated — per-file or aggregate size limits were hit. Partial unified text may end with
+                    <code>...[truncated]</code>.
+                  </div>
+                }
+
+                <div class="diff-panels">
+                  <div class="diff-panel diff-node-panel" role="listbox" aria-label="Graph nodes">
+                    <div class="diff-panel-label">Nodes</div>
+                    @for (node of diff.nodes; track node.nodeId) {
+                      <button
+                        type="button"
+                        class="diff-list-item"
+                        role="option"
+                        [class.selected]="selectedDiffNodeId === node.nodeId"
+                        [attr.aria-selected]="selectedDiffNodeId === node.nodeId"
+                        (click)="selectDiffNode(node.nodeId)"
+                      >
+                        <span class="diff-list-primary">{{ node.nodeId }}</span>
+                        <span class="diff-list-meta">{{ diffNodeSummary(node) }}</span>
+                      </button>
+                    }
+                  </div>
+
+                  <div class="diff-panel diff-file-panel" role="listbox" aria-label="Changed files">
+                    <div class="diff-panel-label">Changed files</div>
+                    @if (!selectedDiffNode) {
+                      <div class="diff-empty">Select a node</div>
+                    } @else if (!selectedDiffNode.changesetManifest) {
+                      <div class="diff-empty" data-state="no-changeset">No changeset for this node</div>
+                    } @else if (selectedDiffNode.changes.length === 0) {
+                      <div class="diff-empty" data-state="no-changes">No changes</div>
+                    } @else {
+                      @for (change of selectedDiffNode.changes; track change.path + ':' + change.operation) {
+                        <button
+                          type="button"
+                          class="diff-list-item"
+                          role="option"
+                          [class.selected]="selectedDiffPath === change.path"
+                          [attr.aria-selected]="selectedDiffPath === change.path"
+                          (click)="selectDiffFile(change.path)"
+                        >
+                          <span class="diff-list-primary">{{ change.path }}</span>
+                          <span class="diff-list-meta">
+                            {{ change.operation }}
+                            @if (change.binary) {
+                              <span class="diff-chip binary">binary</span>
+                            }
+                            @if (change.unavailable) {
+                              <span class="diff-chip unavailable">unavailable</span>
+                            }
+                          </span>
+                        </button>
+                      }
+                    }
+                  </div>
+
+                  <div class="diff-panel diff-text-panel" aria-label="Unified diff">
+                    <div class="diff-panel-label">Unified diff</div>
+                    @if (!selectedDiffChange) {
+                      <div class="diff-empty">Select a changed file</div>
+                    } @else if (selectedDiffChange.binary) {
+                      <div class="diff-state" data-state="binary" role="status">
+                        Binary file — metadata only; content is not shown.
+                      </div>
+                      <dl class="diff-meta-dl">
+                        <div><dt>path</dt><dd>{{ selectedDiffChange.path }}</dd></div>
+                        <div><dt>operation</dt><dd>{{ selectedDiffChange.operation }}</dd></div>
+                        @if (selectedDiffChange.beforeSha256) {
+                          <div><dt>before</dt><dd class="cell-mono">{{ selectedDiffChange.beforeSha256 | slice:0:16 }}</dd></div>
+                        }
+                        @if (selectedDiffChange.afterSha256) {
+                          <div><dt>after</dt><dd class="cell-mono">{{ selectedDiffChange.afterSha256 | slice:0:16 }}</dd></div>
+                        }
+                      </dl>
+                    } @else if (selectedDiffChange.unavailable) {
+                      <div class="diff-state" data-state="unavailable" role="status">
+                        Content unavailable — before content could not be verified or read. Metadata only.
+                      </div>
+                      <dl class="diff-meta-dl">
+                        <div><dt>path</dt><dd>{{ selectedDiffChange.path }}</dd></div>
+                        <div><dt>operation</dt><dd>{{ selectedDiffChange.operation }}</dd></div>
+                      </dl>
+                    } @else if (!selectedDiffChange.unifiedDiff) {
+                      <div class="diff-state" data-state="no-changes" role="status">
+                        No unified diff text for this entry.
+                      </div>
+                    } @else {
+                      @if (selectedDiffChange.unifiedDiff.includes('...[truncated]')) {
+                        <div class="diff-banner truncated subtle" role="status">This file's unified diff was truncated.</div>
+                      }
+                      <pre class="unified-diff" tabindex="0">{{ selectedDiffChange.unifiedDiff }}</pre>
+                    }
+                  </div>
+                </div>
+              }
+            </div>
+
             <div class="dag-section">
               <div class="dag-header">
                 <h4>DAG</h4>
@@ -623,6 +741,165 @@ function buildMermaid(detail: GraphRunDetail): string {
       text-transform: uppercase;
       font-size: 0.75rem;
     }
+    .changeset-diff-section {
+      margin-bottom: 1.5rem;
+      min-width: 0;
+    }
+    .diff-banner {
+      margin: 0 0 0.75rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+    }
+    .diff-banner.truncated {
+      background: rgba(204, 119, 0, 0.15);
+      border-color: #cc7700;
+      color: var(--text-primary);
+    }
+    .diff-banner.subtle {
+      margin-bottom: 0.5rem;
+      font-size: 0.75rem;
+    }
+    .diff-panels {
+      display: grid;
+      grid-template-columns: minmax(10rem, 1fr) minmax(12rem, 1.2fr) minmax(16rem, 2fr);
+      gap: 0.75rem;
+      min-height: 14rem;
+      align-items: stretch;
+    }
+    @media (max-width: 900px) {
+      .diff-panels {
+        grid-template-columns: 1fr;
+      }
+    }
+    .diff-panel {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      max-height: 22rem;
+      overflow: auto;
+    }
+    .diff-panel-label {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      background: var(--surface-hover);
+      border-bottom: 1px solid var(--border);
+    }
+    .diff-list-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.15rem;
+      width: 100%;
+      text-align: left;
+      padding: 0.45rem 0.65rem;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+      font: inherit;
+    }
+    .diff-list-item:hover {
+      background: var(--surface-hover);
+    }
+    .diff-list-item.selected {
+      background: rgba(85, 153, 238, 0.15);
+      outline: 1px solid var(--accent, #5599ee);
+      outline-offset: -1px;
+    }
+    .diff-list-item:focus-visible {
+      outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--accent));
+      outline-offset: -2px;
+    }
+    .diff-list-primary {
+      font-family: var(--monospace-font);
+      font-size: 0.78rem;
+      word-break: break-all;
+    }
+    .diff-list-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-items: center;
+    }
+    .diff-chip {
+      font-size: 0.65rem;
+      padding: 0.05rem 0.3rem;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .diff-chip.binary {
+      background: rgba(170, 119, 204, 0.25);
+      color: var(--text-primary);
+    }
+    .diff-chip.unavailable {
+      background: rgba(187, 34, 34, 0.2);
+      color: var(--text-primary);
+    }
+    .diff-empty,
+    .diff-state {
+      padding: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .diff-state[data-state='binary'],
+    .diff-state[data-state='unavailable'],
+    .diff-state[data-state='no-changes'] {
+      color: var(--text-primary);
+      background: var(--surface-hover);
+      border-bottom: 1px solid var(--border);
+    }
+    .diff-meta-dl {
+      margin: 0;
+      padding: 0.75rem;
+      font-size: 0.78rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .diff-meta-dl > div {
+      display: grid;
+      grid-template-columns: 5rem 1fr;
+      gap: 0.5rem;
+    }
+    .diff-meta-dl dt {
+      margin: 0;
+      color: var(--text-muted);
+    }
+    .diff-meta-dl dd {
+      margin: 0;
+      word-break: break-all;
+    }
+    .unified-diff {
+      margin: 0;
+      padding: 0.75rem;
+      overflow: auto;
+      flex: 1;
+      font-family: var(--monospace-font);
+      font-size: 0.75rem;
+      line-height: 1.45;
+      white-space: pre;
+      color: var(--text-primary);
+      background: var(--surface-hover);
+    }
+    .muted {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
   `,
 })
 export class GraphHubComponent {
@@ -638,6 +915,12 @@ export class GraphHubComponent {
   mermaidText = '';
   detailLoading = false;
   detailError: unknown = null;
+
+  diff: GraphRunDiffResponse | null = null;
+  diffLoading = false;
+  diffError: unknown = null;
+  selectedDiffNodeId: string | null = null;
+  selectedDiffPath: string | null = null;
 
   private selectedRunKey = '';
   private readonly api = inject(ApiService);
@@ -687,6 +970,11 @@ export class GraphHubComponent {
     this.detail = null;
     this.detailError = null;
     this.detailLoading = true;
+    this.diff = null;
+    this.diffError = null;
+    this.diffLoading = true;
+    this.selectedDiffNodeId = null;
+    this.selectedDiffPath = null;
     this.cdr.markForCheck();
 
     this.api.fetchGraphRunDetail(run.namespace, run.runId).subscribe({
@@ -705,6 +993,65 @@ export class GraphHubComponent {
         this.cdr.markForCheck();
       },
     });
+
+    this.api.fetchGraphRunDiff(run.namespace, run.runId).subscribe({
+      next: (diff) => {
+        this.diff = diff;
+        this.diffLoading = false;
+        this.applyDefaultDiffSelection(diff);
+        this.cdr.markForCheck();
+      },
+      error: (err: unknown) => {
+        this.diffError = err;
+        this.diffLoading = false;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  get selectedDiffNode(): GraphDiffNodeResult | null {
+    if (!this.diff || !this.selectedDiffNodeId) {
+      return null;
+    }
+    return this.diff.nodes.find((n) => n.nodeId === this.selectedDiffNodeId) ?? null;
+  }
+
+  get selectedDiffChange(): GraphDiffChange | null {
+    const node = this.selectedDiffNode;
+    if (!node || !this.selectedDiffPath) {
+      return null;
+    }
+    return node.changes.find((c) => c.path === this.selectedDiffPath) ?? null;
+  }
+
+  selectDiffNode(nodeId: string): void {
+    this.selectedDiffNodeId = nodeId;
+    const node = this.selectedDiffNode;
+    this.selectedDiffPath = node?.changes[0]?.path ?? null;
+    this.cdr.markForCheck();
+  }
+
+  selectDiffFile(path: string): void {
+    this.selectedDiffPath = path;
+    this.cdr.markForCheck();
+  }
+
+  diffNodeSummary(node: GraphDiffNodeResult): string {
+    if (!node.changesetManifest) {
+      return 'no changeset';
+    }
+    if (node.changes.length === 0) {
+      return 'no changes';
+    }
+    const n = node.changes.length;
+    return `${n} file${n === 1 ? '' : 's'}`;
+  }
+
+  private applyDefaultDiffSelection(diff: GraphRunDiffResponse): void {
+    const withChanges = diff.nodes.find((n) => n.changes.length > 0);
+    const fallback = withChanges ?? diff.nodes[0] ?? null;
+    this.selectedDiffNodeId = fallback?.nodeId ?? null;
+    this.selectedDiffPath = fallback?.changes[0]?.path ?? null;
   }
 
   isSelected(run: GraphRunSummary): boolean {

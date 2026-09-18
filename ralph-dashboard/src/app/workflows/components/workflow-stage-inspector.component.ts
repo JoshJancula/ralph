@@ -18,7 +18,7 @@ import type { WorkflowDetail } from '../workflow.types';
   selector: 'ralph-workflow-stage-inspector',
   standalone: true,
   template: `
-    <section class="inspector" data-testid="workflow-stage-inspector">
+    <section class="inspector hub-nested-panel" data-testid="workflow-stage-inspector">
       @if (!view()) {
         <p class="empty muted" data-testid="inspector-empty">Select a stage in the graph to inspect it.</p>
       } @else {
@@ -257,10 +257,6 @@ import type { WorkflowDetail } from '../workflow.types';
       display: flex;
       flex-direction: column;
       gap: var(--space-3);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      background: var(--surface);
-      padding: var(--space-3);
       min-width: 0;
     }
     .empty {
@@ -282,7 +278,8 @@ import type { WorkflowDetail } from '../workflow.types';
     .stage-id {
       margin: 0;
       font-family: var(--monospace-font);
-      font-size: 1rem;
+      font-size: var(--font-size-lg);
+      color: var(--text-primary);
     }
     .badges {
       display: flex;
@@ -326,11 +323,11 @@ import type { WorkflowDetail } from '../workflow.types';
     }
     .pane-tabs {
       display: flex;
-      gap: var(--space-1);
+      gap: 0.15rem;
       padding: 0.15rem;
-      border: 1px solid var(--border);
+      border: 1px solid var(--panel-border);
       border-radius: var(--radius-md);
-      background: var(--surface-muted, var(--surface));
+      background: var(--control-bg);
     }
     .tab {
       padding: 0.3rem 0.7rem;
@@ -342,11 +339,12 @@ import type { WorkflowDetail } from '../workflow.types';
       font-size: var(--font-size-sm);
       font-weight: 600;
       min-height: var(--control-height);
+      transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
     }
     .tab.active {
       color: var(--text-primary);
-      background: var(--surface);
-      border-color: var(--border);
+      background: var(--control-bg-hover);
+      border-color: var(--control-border);
     }
     .facts {
       display: flex;
@@ -378,7 +376,11 @@ import type { WorkflowDetail } from '../workflow.types';
     .artifacts h4,
     .instructions h4 {
       margin: 0.75rem 0 0.35rem;
-      font-size: 0.85rem;
+      font-size: var(--font-size-xs);
+      font-weight: 700;
+      letter-spacing: var(--letter-label);
+      text-transform: uppercase;
+      color: var(--text-muted);
     }
     .artifacts ul,
     .includes {
@@ -412,14 +414,14 @@ import type { WorkflowDetail } from '../workflow.types';
       word-break: break-word;
     }
     .markdown {
-      font-size: 0.85rem;
+      font-size: var(--font-size-sm);
       line-height: 1.45;
       max-height: 16rem;
       overflow: auto;
       padding: 0.5rem 0.6rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface-secondary, var(--surface));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-md);
+      background: var(--code-bg, var(--surface-secondary));
       min-width: 0;
       overflow-wrap: anywhere;
       word-break: break-word;
@@ -449,11 +451,11 @@ import type { WorkflowDetail } from '../workflow.types';
       width: 100%;
       box-sizing: border-box;
       padding: 0.35rem 0.5rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--surface-secondary, transparent);
+      border: 1.5px solid var(--control-border);
+      border-radius: var(--radius-md);
+      background: var(--control-bg);
       color: var(--text-primary);
-      font-size: 0.8rem;
+      font-size: var(--font-size-sm);
     }
     .source-scroll {
       max-height: 18rem;

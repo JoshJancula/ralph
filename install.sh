@@ -18,6 +18,7 @@ usage() {
 
 source "$RALPH_BASH_LIB/install/install-ops.sh"
 source "$RALPH_BASH_LIB/install/install-mcp.sh"
+source "$RALPH_BASH_LIB/dashboard/node-preflight.sh"
 
 install_ops_reset_state
 
@@ -87,6 +88,22 @@ install_global_root_files() {
   install_log_ok "Installed" "$dest"
 }
 
+# Records where this global install's source checkout lives so `ralph update`
+# can offer to reuse it instead of always cloning a fresh copy from GitHub.
+# If SCRIPT_DIR is itself a temp clone (e.g. `ralph update --from-github`),
+# the marker goes stale once that temp dir is removed; update-cli.sh checks
+# the recorded path still exists before offering it, so this is harmless.
+install_global_write_source_marker() {
+  [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]] || return 0
+
+  local marker="$TARGET/.install-source"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    install_log_dry "[dry-run]" "record install source: $marker -> $SCRIPT_DIR"
+    return 0
+  fi
+  printf '%s\n' "$SCRIPT_DIR" > "$marker"
+}
+
 install_global_shim() {
   [[ "${GLOBAL_INSTALL:-0}" -eq 1 ]] || return 0
 
@@ -124,12 +141,14 @@ Commands:
   models       Manage saved Claude/Codex models (see: ralph models --help)
   usage        Show token-usage report (delegates to usage-report.sh)
   benchmark    Build the token/compaction benchmark report (delegates to benchmark-report.sh)
-  dashboard    Start the Ralph dashboard (global). Options: --yes|-y (skip prompts),
+  dashboard    Start the Ralph dashboard (global); aliases: dash, ui. Options: --yes|-y (skip prompts),
                --rebuild (clean dist + npm run build), --update-deps (fresh npm ci).
                Use -- before args for npm start.
   install      Run the global Ralph installer
+  update       Update an existing global install (see: ralph update --help)
   workspaces   Manage the Ralph workspace registry
   setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
+  doctor       Report host/runtime environment readiness (read-only; see: ralph doctor --help)
   safety       Inspect and validate safety/killswitch config (see: ralph safety --help)
   plugin       Host-install packaged runtime plugins (see: ralph plugin --help)
   profiles     Inspect and reset learned command-duration profiles (see: ralph profiles --help)
@@ -432,12 +451,27 @@ case "$cmd" in
   models)
     exec bash "$RALPH_HOME/bundle/.ralph/models.sh" "$@"
     ;;
-  dashboard)
+  dashboard|dash|ui)
+    if [[ "${1:-}" == "status" ]]; then
+      dashboard_status_cli_path="$RALPH_HOME/bundle/.ralph/bash-lib/dashboard/status-cli.sh"
+      if [[ ! -f "$dashboard_status_cli_path" ]]; then
+        echo "Error: dashboard status CLI is not installed yet: $dashboard_status_cli_path" >&2
+        exit 1
+      fi
+      # dashboard, dash, and ui share the same status source and output.
+      # shellcheck source=/dev/null
+      source "$dashboard_status_cli_path"
+      shift
+      dashboard_status_cli "$@"
+      exit $?
+    fi
     dashboard_dir="$RALPH_HOME/ralph-dashboard"
     if [[ ! -d "$dashboard_dir" ]]; then
       echo "Error: Ralph dashboard not found at $dashboard_dir" >&2
       exit 1
     fi
+    source "$RALPH_HOME/bundle/.ralph/bash-lib/dashboard/node-preflight.sh"
+    ralph_dashboard_require_node || exit $?
     cd "$dashboard_dir"
 
     rebuild=0
@@ -528,6 +562,14 @@ case "$cmd" in
   install)
     exec bash "$RALPH_HOME/install.sh" "$@"
     ;;
+  update)
+    update_cli="$RALPH_HOME/bundle/.ralph/bash-lib/install/update-cli.sh"
+    if [[ ! -f "$update_cli" ]]; then
+      echo "Error: update CLI is not installed yet: $update_cli" >&2
+      exit 1
+    fi
+    exec bash "$update_cli" "$@"
+    ;;
   setup)
     setup_script="$RALPH_HOME/bundle/.ralph/setup-runtime.sh"
     if [[ ! -f "$setup_script" ]]; then
@@ -543,6 +585,19 @@ case "$cmd" in
       exit 1
     fi
     exec bash "$workspaces_cli" "$@"
+    ;;
+  state)
+    state_cli="$RALPH_HOME/bundle/.ralph/bash-lib/state-cli.sh"
+    [[ -f "$state_cli" ]] || { echo "Error: state CLI is not installed yet: $state_cli" >&2; exit 1; }
+    exec bash "$state_cli" "$@"
+    ;;
+  doctor)
+    doctor_cli="$RALPH_HOME/bundle/.ralph/bash-lib/preflight/doctor-cli.sh"
+    if [[ ! -f "$doctor_cli" ]]; then
+      echo "Error: doctor CLI is not installed yet: $doctor_cli" >&2
+      exit 1
+    fi
+    exec bash "$doctor_cli" "$@"
     ;;
   safety)
     safety_cli="$RALPH_HOME/bundle/.ralph/bash-lib/config/safety-cli.sh"
@@ -740,55 +795,7 @@ install_global_path_hint() {
 }
 
 install_check_node() {
-  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    return 0
-  fi
-
-  install_log_warn "Node.js is not installed." "The Ralph dashboard requires Node.js and npm."
-
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    install_log_dry "[dry-run]" "would prompt to install Node.js"
-    return 1
-  fi
-
-  if [[ "$SILENT" -eq 1 ]]; then
-    install_log_warn "Skipping dashboard (--silent, Node.js not found)." "Install Node.js to use the dashboard."
-    return 1
-  fi
-
-  if [[ "$ASSUME_YES" -eq 1 ]]; then
-    if command -v brew >/dev/null 2>&1; then
-      install_log_phase "Installing Node.js via Homebrew (--yes)..."
-      brew install node
-      install_log_ok "Node.js installed" "$(node --version 2>/dev/null || true)"
-      return 0
-    else
-      install_log_warn "Homebrew not found; cannot auto-install Node.js (--yes)." "Install manually: https://nodejs.org/en/download"
-      return 1
-    fi
-  fi
-
-  printf 'Install Node.js now? (y/N) '
-  read -r _node_confirm
-  case "$_node_confirm" in
-    y|Y|yes|YES)
-      if command -v brew >/dev/null 2>&1; then
-        install_log_phase "Installing Node.js via Homebrew..."
-        brew install node
-        install_log_ok "Node.js installed" "$(node --version 2>/dev/null || true)"
-        return 0
-      else
-        install_log_warn "Homebrew not found. Install Node.js manually, then re-run the installer:"
-        printf '  https://nodejs.org/en/download\n'
-        printf '  or via nvm: https://github.com/nvm-sh/nvm\n'
-        return 1
-      fi
-      ;;
-    *)
-      install_log_warn "Node.js not installed; skipping dashboard." "Run the installer again after installing Node.js."
-      return 1
-      ;;
-  esac
+  ralph_dashboard_require_node
 }
 
 install_dashboard() {
@@ -819,6 +826,7 @@ export RALPH_INSTALL_SOURCE_ROOT="$SCRIPT_DIR"
 install_log_phase "Copying components"
 install_global_prepare_dirs
 install_global_root_files
+install_global_write_source_marker
 install_global_shim
 install_ops_execute_plan
 install_ops_sync_bundled_workflows

@@ -51,7 +51,17 @@
       </ng-container>
 
       <ng-template #notMarkdown>
-        <div *ngIf="isJson()">
+        <div *ngIf="fileRole() as role" class="role-view" [attr.data-testid]="'role-view-' + role">
+          <p class="role-label">{{ fileRoleLabel() }}</p>
+          <dl>
+            <ng-container *ngFor="let row of roleViewRows()">
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.value }}</dd>
+            </ng-container>
+          </dl>
+        </div>
+
+        <div *ngIf="isJson() && !fileRole()">
           <pre class="json-content">{{ formatJson() }}</pre>
         </div>
 

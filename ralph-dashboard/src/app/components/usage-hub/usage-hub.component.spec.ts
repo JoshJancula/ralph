@@ -272,6 +272,69 @@ const mockSavingsReport: SavingsReport = {
   },
 };
 
+const mockAmbientUsage = {
+  enabled: true,
+  scope: 'machine_local' as const,
+  date_scope: { from: null, to: null, label: 'All available history' },
+  providers: [
+    {
+      id: 'claude_code' as const,
+      label: 'Claude',
+      status: 'available' as const,
+      rate_limits: [
+        {
+          id: 'five_hour',
+          label: '5h',
+          used_percent: 12,
+          resets_at: '2026-09-18T08:00:00.000Z',
+          resets_in_seconds: 3600,
+        },
+        {
+          id: 'seven_day',
+          label: 'Weekly',
+          used_percent: 79,
+          resets_at: '2026-09-20T08:00:00.000Z',
+          resets_in_seconds: 172800,
+        },
+      ],
+      tokens: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        total_tokens: 150,
+        session_count: 1,
+      },
+      model_breakdown: [],
+      updated_at: '2026-09-18T00:00:00.000Z',
+    },
+    {
+      id: 'codex' as const,
+      label: 'Codex',
+      status: 'available' as const,
+      rate_limits: [
+        {
+          id: 'secondary',
+          label: 'Weekly',
+          used_percent: 77,
+          resets_at: '2026-09-22T08:00:00.000Z',
+          resets_in_seconds: 345600,
+        },
+      ],
+      tokens: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        total_tokens: 0,
+        session_count: 0,
+      },
+      model_breakdown: [],
+      updated_at: '2026-09-18T00:00:00.000Z',
+    },
+  ],
+};
+
 function flushPendingSavings(httpMock: HttpTestingController): void {
   for (const req of httpMock.match((r) => r.url.startsWith('/api/benchmarks'))) {
     req.flush(mockSavingsReport);
@@ -967,6 +1030,7 @@ describe('UsageHubComponent', () => {
         { status: 500, statusText: 'Error' },
       );
     }
+    flushPendingSavings(httpMock);
     fixture.detectChanges();
     expect(fixture.componentInstance.savingsError).toBeTruthy();
   });

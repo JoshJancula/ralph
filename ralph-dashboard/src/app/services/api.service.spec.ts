@@ -574,4 +574,34 @@ describe('ApiService', () => {
       expect(detail.usage?.delegatedRuns).toEqual({ input_tokens: 4 });
     });
   });
+
+  describe('fetchGraphRunDiff()', () => {
+    it('GETs the diff route and passes optional nodeId and workspaceRoot', async () => {
+      const payload = {
+        namespace: 'graph',
+        runId: 'run-1',
+        truncated: false,
+        nodes: [{ nodeId: 'source', changesetManifest: null, changes: [] }],
+      };
+
+      const responsePromise = firstValueFrom(
+        service.fetchGraphRunDiff('graph', 'run-1', {
+          workspaceRoot: '/ws',
+          nodeId: 'source',
+        }),
+      );
+      const req = httpMock.expectOne(
+        (r) =>
+          r.url === '/api/graph-runs/graph/run-1/diff'
+          && r.params.get('workspaceRoot') === '/ws'
+          && r.params.get('nodeId') === 'source',
+      );
+      expect(req.request.method).toBe('GET');
+      req.flush(payload);
+
+      const body = await responsePromise;
+      expect(body.nodes[0].nodeId).toBe('source');
+      expect(body.truncated).toBe(false);
+    });
+  });
 });

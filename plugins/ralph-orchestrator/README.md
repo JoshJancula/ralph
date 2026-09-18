@@ -32,6 +32,10 @@ bash ./install.sh --global
 directory (and the installer copies them under `$RALPH_HOME/plugins/...`).
 `bash ./install.sh --global` installs the Ralph CLI and bundle.
 
+The Antigravity package intentionally declares `mcpServers: {}` in its packaged
+metadata, so it does not receive plugin-path dashboard tools; dashboard MCP
+access is configured separately through the project/runtime setup.
+
 ### Host lifecycle (`ralph plugin`)
 
 ```bash

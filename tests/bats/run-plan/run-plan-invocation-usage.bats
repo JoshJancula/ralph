@@ -18,7 +18,7 @@ CORE_FILE="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
     sed -n "/^_ralph_append_invocation_usage_history() {/,/^}$/p" "$1" >"$2"
     SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$1")")")"
     source "$2"
-    _ralph_append_invocation_usage_history "$3" 1 "m1" "cursor" 3 10 20 0 1 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:03Z" "plan-1" "stage-1" "fresh" "12" "2" "1"
+    RALPH_PROCESS_RUN_ID="process-run-1" _ralph_append_invocation_usage_history "$3" 1 "m1" "cursor" 3 10 20 0 1 0 0 "2026-04-17T00:00:00Z" "2026-04-17T00:00:03Z" "plan-1" "stage-1" "fresh" "12" "2" "1"
     _ralph_append_invocation_usage_history "$3" 2 "m2" "claude" 4 11 21 0 2 500 0.75 "2026-04-17T00:00:04Z" "2026-04-17T00:00:09Z" "plan-1" "stage-2"
     python3 - <<PY
 import json
@@ -28,6 +28,7 @@ assert doc["kind"] == "plan_invocation_usage_history"
 assert doc["schema_version"] == 2
 assert len(doc["invocations"]) == 2
 assert doc["invocations"][0]["iteration"] == 1
+assert doc["invocations"][0]["run_id"] == "process-run-1"
 assert doc["invocations"][1]["iteration"] == 2
 assert doc["invocations"][1]["max_turn_total_tokens"] == 500
 assert doc["invocations"][1]["cache_hit_ratio"] == round(2 / 13, 4)
@@ -647,6 +648,10 @@ PLAN_PATH="PLAN9.md"
 RALPH_PLAN_KEY="PLAN9"
 RALPH_ARTIFACT_NS="PLAN9"
 RALPH_STAGE_ID=""
+RALPH_PROCESS_RUN_ID="process-run-9"
+RALPH_WORKFLOW_RUN_ID="workflow-run-9"
+RALPH_GRAPH_RUN_ID="graph-run-9"
+RALPH_GRAPH_NAMESPACE="graph-ns-9"
 RALPH_LOG_DIR="$2"
 SCRIPT_DIR="${REPO_ROOT}/bundle/.ralph"
 mkdir -p "$RALPH_LOG_DIR"
@@ -707,6 +712,11 @@ import sys
 with open(sys.argv[1], "r", encoding="utf-8") as fh:
     summary = json.load(fh)
 
+assert summary["schema_version"] == 2, summary
+assert summary["run_id"] == "process-run-9", summary
+assert summary["workflow_run_id"] == "workflow-run-9", summary
+assert summary["graph_run_id"] == "graph-run-9", summary
+assert summary["graph_namespace"] == "graph-ns-9", summary
 assert summary["invocations"] == 2, summary
 assert summary["elapsed_seconds"] == 10, summary
 assert summary["input_tokens"] == 300, summary

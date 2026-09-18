@@ -46,6 +46,21 @@ npm start
 
 The production server runs `dist/ralph-dashboard/server/server.mjs`.
 
+## State ownership
+
+The CLI is the sole writer for durable Ralph run state beneath the state root
+(`.ralph-workspace/`): `plans`, `graph-runs`, `logs`, `artifacts`,
+`processes`, `sessions`, and `workflows`. The dashboard reads that state but
+does not rewrite it.
+
+The dashboard alone writes its task and schedule records at
+`<workspaceRoot>/dashboard/tasks-schedules.json` and its local endpoint record
+at `$XDG_CONFIG_HOME/ralph/dashboard/` (or `~/.config/ralph/dashboard/`). A
+dashboard `TaskAttempt` is operational metadata that refers to a Ralph run; it
+is never the run's source of truth. Missing task metadata must therefore not
+hide a run that exists on disk, and a task attempt with no live corresponding
+run must be reconciled to a terminal state.
+
 ### Port
 
 Default port is **8123**. Override with the `PORT` environment variable:
@@ -103,13 +118,30 @@ primary sidebar navigation, not a filesystem tree:
   type, status, checkbox progress, current TODO, project, last activity).
   Opening a plan goes to its dedicated detail view with Rendered/Source/Diff
   modes, a TODO outline, and linked artifacts — not the generic file viewer.
+  **View logs** opens run history and grouped, openable evidence (usage,
+  execution output, telemetry) for manifest-backed and legacy plan layouts;
+  the plan file viewer's **View Logs** toolbar shortcut still jumps to the
+  latest log under Browse / Logs.
 - **Workflows** (`/workflows`) — a searchable catalog of workflow
   definitions (purpose, stage count, source precedence, write/gate
   metadata), with a compiled dependency graph, a synchronized stage
   inspector, and a guided creation/editing flow per workflow.
-- **Insights** (`/insights`) — the sole home for usage/telemetry: token and
-  runtime spend, trends, and drill-down tables. Nothing on Home, Plans, Runs,
-  or Workflows requests usage data; it loads only once you open Insights.
+- **Insights** (`/insights`) — usage and telemetry for Ralph runs (token
+  spend, trends, breakdown tables) plus a separate **IDE & CLI activity**
+  section for machine-local Claude Code, Codex, and Antigravity quota (5h /
+  weekly bars, reset timers, transcript token totals in the selected date
+  range). IDE data is read-only from `~/.claude` / `~/.claude.json`,
+  `~/.codex/sessions`, and `agy --print /usage --output-format json`;
+  it is not scoped to the selected Ralph workspace. Set
+  `RALPH_DASHBOARD_AMBIENT_USAGE=0` to hide IDE & CLI collection. Optional
+  `RALPH_DASHBOARD_AMBIENT_USAGE_TTL_MS` controls rescan cache (default
+  60000). Nothing on Home, Plans, Runs, or Workflows requests usage data;
+  it loads only once you open Insights.
+- **Runtimes** (`/runtimes`) — connection status for Claude, Codex,
+  Antigravity, Cursor, and OpenCode (in that order), with plan / provider
+  hints when available. Cursor links to the Cursor billing dashboard;
+  OpenCode detects configured providers (for example `ollama-cloud`) and
+  links to the matching settings page when known.
 
 **Browse** is a secondary, explicit entry (in the workspace sidebar, below
 the primary sections) for arbitrary filesystem exploration by root — Logs,

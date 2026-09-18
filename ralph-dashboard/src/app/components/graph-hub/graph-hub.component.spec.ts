@@ -4,7 +4,7 @@ import { ComponentFixture } from '@angular/core';
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
 
-import type { GraphRunDetail, GraphRunsResponse } from '../../services/api.service';
+import type { GraphRunDetail, GraphRunDiffResponse, GraphRunsResponse } from '../../services/api.service';
 import { GraphHubComponent } from './graph-hub.component';
 
 // Fixture: a completed run with two nodes
@@ -142,6 +142,38 @@ function mountGraphHub(fixture: ComponentFixture<GraphHubComponent>): void {
   fixture.detectChanges();
 }
 
+function emptyDiff(namespace: string, runId: string, nodeIds: string[] = ['source', 'analyze']): GraphRunDiffResponse {
+  return {
+    namespace,
+    runId,
+    truncated: false,
+    nodes: nodeIds.map((nodeId) => ({
+      nodeId,
+      changesetManifest: null,
+      changes: [],
+    })),
+  };
+}
+
+function flushDetailAndDiff(
+  httpMock: HttpTestingController,
+  namespace: string,
+  runId: string,
+  detail: GraphRunDetail,
+  diff: GraphRunDiffResponse = emptyDiff(namespace, runId),
+): void {
+  const base = `/api/graph-runs/${encodeURIComponent(namespace)}/${encodeURIComponent(runId)}`;
+  const pending = httpMock.match((req) => req.url === base || req.url === `${base}/diff`);
+  expect(pending.length).toBe(2);
+  for (const req of pending) {
+    if (req.request.url.endsWith('/diff')) {
+      req.flush(diff);
+    } else {
+      req.flush(detail);
+    }
+  }
+}
+
 const runsResponse: GraphRunsResponse = {
   runs: [
     {
@@ -151,6 +183,8 @@ const runsResponse: GraphRunsResponse = {
       status: 'running',
       startedAt: '2026-01-02T00:00:00Z',
       nodeCount: 2,
+      workspaceRoot: '/proj/.ralph-workspace',
+      projectRoot: '/proj',
     },
     {
       namespace: 'my-graph',
@@ -159,6 +193,8 @@ const runsResponse: GraphRunsResponse = {
       status: 'succeeded',
       startedAt: '2026-01-01T00:00:00Z',
       nodeCount: 2,
+      workspaceRoot: '/proj/.ralph-workspace',
+      projectRoot: '/proj',
     },
   ],
 };
@@ -209,10 +245,12 @@ describe('GraphHubComponent', () => {
     component.selectRun(runsResponse.runs[1]);
     fixture.detectChanges();
 
-    const detailReq = httpMock.expectOne(
-      `/api/graph-runs/${encodeURIComponent('my-graph')}/${encodeURIComponent('run-20260101T000000Z-0-abc123')}`,
+    flushDetailAndDiff(
+      httpMock,
+      'my-graph',
+      'run-20260101T000000Z-0-abc123',
+      completedRunDetail,
     );
-    detailReq.flush(completedRunDetail);
     tick();
     fixture.detectChanges();
 
@@ -233,6 +271,10 @@ describe('GraphHubComponent', () => {
     expect(pre?.textContent).toContain('flowchart TD');
     expect(pre?.textContent).toContain('source');
     expect(pre?.textContent).toContain('analyze');
+
+    // Changeset diff panel mounts even when manifests are absent
+    expect(compiled.querySelector('.changeset-diff-section')).not.toBeNull();
+    expect(compiled.textContent).toContain('No changeset for this node');
   }));
 
   it('renders node table and mermaid block for an in-progress run without error', fakeAsync(() => {
@@ -249,10 +291,12 @@ describe('GraphHubComponent', () => {
     component.selectRun(runsResponse.runs[0]);
     fixture.detectChanges();
 
-    const detailReq = httpMock.expectOne(
-      `/api/graph-runs/${encodeURIComponent('my-graph')}/${encodeURIComponent('run-20260102T000000Z-0-def456')}`,
+    flushDetailAndDiff(
+      httpMock,
+      'my-graph',
+      'run-20260102T000000Z-0-def456',
+      inProgressRunDetail,
     );
-    detailReq.flush(inProgressRunDetail);
     tick();
     fixture.detectChanges();
 
@@ -304,7 +348,12 @@ describe('GraphHubComponent', () => {
 
     component.selectRun(runsResponse.runs[1]);
     fixture.detectChanges();
-    httpMock.expectOne(`/api/graph-runs/${encodeURIComponent('my-graph')}/${encodeURIComponent('run-20260101T000000Z-0-abc123')}`).flush(observed);
+    flushDetailAndDiff(
+      httpMock,
+      'my-graph',
+      'run-20260101T000000Z-0-abc123',
+      observed,
+    );
     tick();
     fixture.detectChanges();
 
@@ -323,6 +372,85 @@ describe('GraphHubComponent', () => {
     expect(compiled.querySelector('.dag-pre')?.textContent).toContain('delegated runs (ledger-owned)');
     expect(compiled.querySelector('.dag-pre')?.textContent).toContain('delegated run');
     expect(compiled.querySelector('.dag-pre')?.textContent).not.toContain('native helper');
+  }));
+
+  it('requests the diff endpoint and presents node list, files, unified text, and explicit states', fakeAsync(() => {
+    const fixture = TestBed.createComponent(GraphHubComponent);
+    const component = fixture.componentInstance;
+    mountGraphHub(fixture);
+    httpMock.expectOne('/api/graph-runs').flush(runsResponse);
+    tick();
+    fixture.detectChanges();
+
+    const diffPayload: GraphRunDiffResponse = {
+      namespace: 'my-graph',
+      runId: 'run-20260101T000000Z-0-abc123',
+      truncated: true,
+      nodes: [
+        {
+          nodeId: 'source',
+          changesetManifest: 'changesets/nodes/source.json',
+          changes: [
+            {
+              path: 'src/a.txt',
+              operation: 'modified',
+              binary: false,
+              unavailable: false,
+              unifiedDiff: '--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1 +1 @@\n-before\n+after\n...[truncated]\n',
+            },
+            {
+              path: 'src/data.bin',
+              operation: 'added',
+              binary: true,
+              unavailable: false,
+              afterSha256: 'abc123binaryhash',
+            },
+            {
+              path: 'src/missing.txt',
+              operation: 'modified',
+              binary: false,
+              unavailable: true,
+              beforeSha256: 'deadbeef',
+            },
+          ],
+        },
+        {
+          nodeId: 'analyze',
+          changesetManifest: 'changesets/nodes/analyze.json',
+          changes: [],
+        },
+      ],
+    };
+
+    component.selectRun(runsResponse.runs[1]);
+    fixture.detectChanges();
+    flushDetailAndDiff(
+      httpMock,
+      'my-graph',
+      'run-20260101T000000Z-0-abc123',
+      completedRunDetail,
+      diffPayload,
+    );
+    tick();
+    fixture.detectChanges();
+
+    const compiled: HTMLElement = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.diff-banner.truncated')).not.toBeNull();
+    expect(compiled.textContent).toContain('src/a.txt');
+    expect(compiled.querySelector('.unified-diff')?.textContent).toContain('+after');
+    expect(compiled.textContent).toContain('This file\'s unified diff was truncated');
+
+    component.selectDiffFile('src/data.bin');
+    fixture.detectChanges();
+    expect(compiled.querySelector('[data-state="binary"]')?.textContent).toContain('Binary file');
+
+    component.selectDiffFile('src/missing.txt');
+    fixture.detectChanges();
+    expect(compiled.querySelector('[data-state="unavailable"]')?.textContent).toContain('Content unavailable');
+
+    component.selectDiffNode('analyze');
+    fixture.detectChanges();
+    expect(compiled.querySelector('[data-state="no-changes"]')?.textContent).toContain('No changes');
   }));
 
   it('shows empty state when no runs exist', fakeAsync(() => {

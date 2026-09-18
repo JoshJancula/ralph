@@ -21,7 +21,7 @@ const RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antigravity']
     @if (open()) {
       <div class="hub-modal-backdrop" (click)="close()" (keydown.escape)="close()">
         <div
-          class="dialog hub-modal-panel hub-modal-panel--compact"
+          class="dialog hub-modal-panel hub-modal-panel--compact start-dialog"
           role="dialog"
           aria-modal="true"
           aria-label="Start workflow"
@@ -29,9 +29,12 @@ const RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antigravity']
           (click)="$event.stopPropagation()"
           (keydown.escape)="close()"
         >
-          <h3 class="dialog-title">Start {{ workflowId() }}</h3>
+          <header class="start-dialog-header">
+            <h3 class="dialog-title">Start {{ workflowId() }}</h3>
+          </header>
+
           @if (!confirming()) {
-            <section class="hub-panel-card start-form-panel">
+            <div class="start-dialog-body" data-testid="start-form-panel">
             @if (targetWorkspaces().length > 0) {
               <label class="field">
                 <span>Target workspace</span>
@@ -95,48 +98,56 @@ const RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antigravity']
                 </label>
               }
             </div>
+            </div>
 
-            <div class="actions">
+            <footer class="hub-modal-footer start-dialog-footer">
               <button type="button" class="btn btn-ghost" data-testid="start-cancel" (click)="close()">Cancel</button>
               <button type="button" class="btn btn-primary" data-testid="start-review" [disabled]="!canReview()" (click)="confirming.set(true)">
                 Review
               </button>
-            </div>
-            </section>
+            </footer>
           } @else {
-            <section class="hub-panel-card start-review-panel">
+            <div class="start-dialog-body start-review-panel" data-testid="start-review-panel">
             @if (targetWorkspaces().length > 0) {
               <p class="hint" data-testid="start-workspace-hint">Run sandbox: {{ resolvedProjectRoot() }}</p>
             }
-            <p class="command-preview hub-nested-panel" data-testid="start-command-preview">{{ resolvedCommand() }}</p>
-            <div class="actions">
+            <p class="command-preview" data-testid="start-command-preview">{{ resolvedCommand() }}</p>
+            </div>
+            <footer class="hub-modal-footer start-dialog-footer">
               <button type="button" class="btn btn-ghost" data-testid="start-back" (click)="confirming.set(false)">Back</button>
               <button type="button" class="btn btn-primary" data-testid="start-confirm" [disabled]="starting()" (click)="confirmStart()">
                 {{ starting() ? 'Starting…' : 'Confirm start' }}
               </button>
-            </div>
-            </section>
+            </footer>
           }
         </div>
       </div>
     }
   `,
   styles: `
-    .dialog {
+    .start-dialog {
+      padding: 0;
+      overflow: hidden;
+      gap: 0;
+    }
+    .start-dialog-header {
+      padding: 1.25rem 1.35rem 0.35rem;
+    }
+    .start-dialog-body {
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
-      z-index: 1000;
+      padding: 0.65rem 1.35rem 1rem;
     }
-    .start-form-panel,
-    .start-review-panel {
-      gap: 0.75rem;
+    .start-dialog-footer {
+      margin: 0;
     }
     .dialog-title {
       margin: 0;
-      font-size: 0.95rem;
+      font-size: var(--font-size-lg);
       font-family: var(--monospace-font);
       color: var(--text-primary);
+      font-weight: 650;
     }
     .field-row {
       display: flex;
@@ -150,33 +161,39 @@ const RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antigravity']
       display: flex;
       flex-direction: column;
       gap: 0.25rem;
-      font-size: 0.82rem;
+      font-size: var(--font-size-sm);
       color: var(--text-muted);
+    }
+    .field > span {
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      letter-spacing: var(--letter-label);
+      text-transform: uppercase;
     }
     .error {
       color: var(--danger);
-      font-size: 0.78rem;
+      font-size: var(--font-size-xs);
       margin: 0;
     }
     .hint {
       color: var(--text-muted);
-      font-size: 0.78rem;
+      font-size: var(--font-size-xs);
       font-family: var(--monospace-font);
-      margin: -0.35rem 0 0;
+      margin: 0;
+      line-height: 1.4;
     }
     .command-preview {
       margin: 0;
+      padding: var(--space-3);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-md);
+      background: var(--code-bg, var(--surface-secondary));
       font-family: var(--monospace-font);
-      font-size: 0.8rem;
+      font-size: var(--font-size-sm);
       white-space: pre-wrap;
       word-break: break-word;
       max-width: 100%;
       overflow-x: auto;
-    }
-    .actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 0.5rem;
     }
   `,
 })

@@ -137,11 +137,9 @@ describe('LogViewerComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const searchbar = (fixture.nativeElement as HTMLElement).querySelector('ion-searchbar') as HTMLElement;
-    searchbar.dispatchEvent(new CustomEvent('ionInput', {
-      detail: { value: 'foo' },
-      bubbles: true,
-    }));
+    const searchInput = (fixture.nativeElement as HTMLElement).querySelector('input.log-search') as HTMLInputElement;
+    searchInput.value = 'foo';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
     fixture.detectChanges();
 
     const pre = (fixture.nativeElement as HTMLElement).querySelector('.log-content');
@@ -149,6 +147,26 @@ describe('LogViewerComponent', () => {
     expect(fixture.componentInstance.filteredLines.length).toBe(2);
     expect(fixture.componentInstance.filteredLines[0]).toContain('<mark>');
     expect(fixture.componentInstance.filteredLines[1]).toBe('bar line');
+  });
+
+  it('strips SGR sequences before search highlighting', async () => {
+    const fixture = TestBed.createComponent(LogViewerComponent);
+    fixture.componentInstance.root = 'logs';
+    fixture.componentInstance.filePath = 'app.ansi.log';
+    fixture.detectChanges();
+
+    const sgr = '\u001b[31mfoo\u001b[0m line';
+    const req = expectFileRequest('logs', 'app.ansi.log', '0');
+    req.flush({ content: `${sgr}\nbar line`, size: sgr.length + 9, offset: 0, nextOffset: sgr.length + 9 });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.content).not.toContain('\u001b');
+    fixture.componentInstance.handleSearchInput('foo');
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.log-content');
+    expect(pre?.innerHTML).not.toContain('\u001b');
+    expect(pre?.innerHTML).toContain('<mark>foo</mark>');
   });
 
   it('clearing the search restores the full log', async () => {

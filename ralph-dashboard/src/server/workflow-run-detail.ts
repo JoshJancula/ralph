@@ -326,16 +326,32 @@ function buildTimeline(
     if (!id) {
       continue;
     }
+    const state = asString(stage['state']) ?? 'queued';
+    if (state === 'skipped') {
+      continue;
+    }
     const createdAt = asString(stage['createdAt']) ?? runCreated ?? new Date(0).toISOString();
     const updatedAt = asString(stage['updatedAt']) ?? createdAt;
-    const state = asString(stage['state']) ?? 'queued';
     const attempt = asNumber(stage['attempt'], 0);
+    const attemptSuffix = attempt > 1 ? ` (attempt ${attempt})` : '';
+    let message = `Stage ${state}${attemptSuffix}`;
+    if (state === 'succeeded' || state === 'completed') {
+      message = `Completed${attemptSuffix}`;
+    } else if (state === 'failed') {
+      message = `Failed${attemptSuffix}`;
+    } else if (state === 'running') {
+      message = `Started${attemptSuffix}`;
+    } else if (state === 'waiting' || state === 'blocked') {
+      message = `Waiting${attemptSuffix}`;
+    } else if (state === 'cancelled') {
+      message = `Cancelled${attemptSuffix}`;
+    }
     events.push({
       id: `${id}:state:${state}:${attempt}:${updatedAt}`,
       timestamp: updatedAt,
       type: state === 'running' || state === 'queued' ? 'stage-start' : 'stage-end',
       stageId: id,
-      message: `Stage ${id} is ${state}${attempt > 1 ? ` (attempt ${attempt})` : ''}`,
+      message,
     });
     const reasonCode = asString(stage['reasonCode']);
     if (reasonCode && reasonCode !== 'none') {

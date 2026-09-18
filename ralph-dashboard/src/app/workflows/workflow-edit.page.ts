@@ -232,101 +232,109 @@ const DEFAULT_RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antig
             }
 
             @for (profile of verificationProfiles(); track $index; let pi = $index) {
-              <div class="profile-card hub-nested-panel" data-testid="edit-verification-profile-card">
-                <div class="profile-header">
-                  <div class="profile-badge-row">
-                    <span class="profile-badge">Profile {{ pi + 1 }}</span>
-                    <strong class="profile-title">{{ profile.name || 'Untitled Profile' }}</strong>
-                  </div>
-                  <button type="button" class="btn btn-danger-ghost btn-sm" (click)="removeVerificationProfile(pi)">
-                    Remove profile
-                  </button>
-                </div>
-
-                <label class="field">
-                  <span>Profile name</span>
-                  <input
-                    class="control"
-                    type="text"
-                    placeholder="e.g. release-verdict"
-                    [ngModel]="profile.name"
-                    [ngModelOptions]="{ standalone: true }"
-                    (ngModelChange)="onProfileName(pi, $event)"
-                  />
-                  <span class="help">Identifier referenced by gate stages (e.g. profile: {{ profile.name || 'release-verdict' }}). Must be unique.</span>
-                </label>
-
-                <div class="steps-container">
-                  <div class="steps-header">
-                    <span class="steps-count">Steps ({{ profile.steps.length }})</span>
-                    <button type="button" class="btn btn-secondary btn-sm" (click)="addVerificationStep(pi)">
-                      + Add step
+              <details class="verification-profile" data-testid="edit-verification-profile-card" [open]="pi === 0">
+                <summary class="verification-profile-summary">
+                  <span class="profile-badge">Profile {{ pi + 1 }}</span>
+                  <strong class="profile-title">{{ profile.name || 'Untitled Profile' }}</strong>
+                  <span class="steps-count steps-count-inline">Steps ({{ profile.steps.length }})</span>
+                </summary>
+                <div class="verification-profile-body">
+                  <div class="profile-toolbar">
+                    <button type="button" class="btn btn-danger-ghost btn-sm" (click)="removeVerificationProfile(pi)">
+                      Remove profile
                     </button>
                   </div>
 
-                  @for (step of profile.steps; track $index; let si = $index) {
-                    <div class="step-card hub-nested-panel">
-                      <div class="step-header">
-                        <span class="step-number">Step {{ si + 1 }}</span>
-                        @if (profile.steps.length > 1) {
-                          <button
-                            type="button"
-                            class="btn btn-danger-ghost btn-xs"
-                            title="Remove step"
-                            (click)="removeVerificationStep(pi, si)"
-                          >
-                            Remove step
-                          </button>
-                        }
-                      </div>
+                  <label class="field">
+                    <span>Profile name</span>
+                    <input
+                      class="control"
+                      type="text"
+                      placeholder="e.g. release-verdict"
+                      [ngModel]="profile.name"
+                      [ngModelOptions]="{ standalone: true }"
+                      (ngModelChange)="onProfileName(pi, $event)"
+                    />
+                    <span class="help">Identifier referenced by gate stages (e.g. profile: {{ profile.name || 'release-verdict' }}). Must be unique.</span>
+                  </label>
 
-                      <div class="step-grid">
-                        <label class="field">
-                          <span>Step name</span>
-                          <input
-                            class="control"
-                            type="text"
-                            placeholder="e.g. release-approved"
-                            [ngModel]="step.name"
-                            [ngModelOptions]="{ standalone: true }"
-                            (ngModelChange)="onStepField(pi, si, 'name', $event)"
-                          />
-                        </label>
-                        <label class="field">
-                          <span>Timeout (seconds)</span>
-                          <div class="input-unit-wrapper">
-                            <input
-                              class="control"
-                              type="number"
-                              min="1"
-                              max="3600"
-                              placeholder="120"
-                              [ngModel]="step.timeout ?? 120"
-                              [ngModelOptions]="{ standalone: true }"
-                              (ngModelChange)="onStepTimeout(pi, si, $event)"
-                            />
-                            <span class="unit-tag">sec</span>
-                          </div>
-                          <span class="help">Wall-clock execution limit in seconds. Default: 120s.</span>
-                        </label>
-                      </div>
-
-                      <label class="field">
-                        <span>Command</span>
-                        <input
-                          class="control code-font"
-                          type="text"
-                          placeholder="e.g. python3 .ralph/python/evaluator_contract.py require-approved --artifact .ralph-workspace/artifacts/{{'{{'}}ARTIFACT_NS{{'}}'}}/release-verdict.json"
-                          [ngModel]="step.command"
-                          [ngModelOptions]="{ standalone: true }"
-                          (ngModelChange)="onStepField(pi, si, 'command', $event)"
-                        />
-                        <span class="help">Workspace shell command. Non-zero exit fails the gate. Tokens {{'{{'}}ARTIFACT_NS{{'}}'}} and {{'{{'}}STAGE_ID{{'}}'}} are resolved at runtime.</span>
-                      </label>
+                  <div class="steps-container">
+                    <div class="steps-header">
+                      <span class="steps-count">Steps ({{ profile.steps.length }})</span>
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="addVerificationStep(pi)">
+                        + Add step
+                      </button>
                     </div>
-                  }
+
+                    @for (step of profile.steps; track $index; let si = $index) {
+                      <details class="verification-step" [open]="profile.steps.length === 1">
+                        <summary class="verification-step-summary">
+                          <span class="step-number">Step {{ si + 1 }}</span>
+                          <span class="step-summary-name">{{ step.name || 'Untitled step' }}</span>
+                        </summary>
+                        <div class="verification-step-body">
+                          @if (profile.steps.length > 1) {
+                            <div class="step-toolbar">
+                              <button
+                                type="button"
+                                class="btn btn-danger-ghost btn-xs"
+                                title="Remove step"
+                                (click)="removeVerificationStep(pi, si)"
+                              >
+                                Remove step
+                              </button>
+                            </div>
+                          }
+
+                          <div class="step-grid">
+                            <label class="field">
+                              <span>Step name</span>
+                              <input
+                                class="control"
+                                type="text"
+                                placeholder="e.g. release-approved"
+                                [ngModel]="step.name"
+                                [ngModelOptions]="{ standalone: true }"
+                                (ngModelChange)="onStepField(pi, si, 'name', $event)"
+                              />
+                            </label>
+                            <label class="field">
+                              <span>Timeout (seconds)</span>
+                              <div class="input-unit-wrapper">
+                                <input
+                                  class="control"
+                                  type="number"
+                                  min="1"
+                                  max="3600"
+                                  placeholder="120"
+                                  [ngModel]="step.timeout ?? 120"
+                                  [ngModelOptions]="{ standalone: true }"
+                                  (ngModelChange)="onStepTimeout(pi, si, $event)"
+                                />
+                                <span class="unit-tag">sec</span>
+                              </div>
+                              <span class="help">Wall-clock execution limit in seconds. Default: 120s.</span>
+                            </label>
+                          </div>
+
+                          <label class="field">
+                            <span>Command</span>
+                            <input
+                              class="control code-font"
+                              type="text"
+                              placeholder="e.g. python3 .ralph/python/evaluator_contract.py require-approved --artifact .ralph-workspace/artifacts/{{'{{'}}ARTIFACT_NS{{'}}'}}/release-verdict.json"
+                              [ngModel]="step.command"
+                              [ngModelOptions]="{ standalone: true }"
+                              (ngModelChange)="onStepField(pi, si, 'command', $event)"
+                            />
+                            <span class="help">Workspace shell command. Non-zero exit fails the gate. Tokens {{'{{'}}ARTIFACT_NS{{'}}'}} and {{'{{'}}STAGE_ID{{'}}'}} are resolved at runtime.</span>
+                          </label>
+                        </div>
+                      </details>
+                    }
+                  </div>
                 </div>
-              </div>
+              </details>
             }
             <div class="profile-actions">
               <button type="button" class="btn btn-secondary" data-testid="edit-add-verification-profile" (click)="addVerificationProfile()">
@@ -494,16 +502,56 @@ const DEFAULT_RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antig
       gap: 0.35rem;
       font-size: 0.8rem;
     }
-    .profile-card {
-      gap: 0.85rem;
-    }
-    .profile-header {
+    .verification-profile {
       display: flex;
+      flex-direction: column;
+      border-top: 1px solid var(--border);
+      padding-top: 0.65rem;
+    }
+    .verification-profile:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .verification-profile-summary {
+      display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding-bottom: 0.75rem;
-      border-bottom: 1px solid var(--border);
+      gap: 0.5rem 0.75rem;
+      cursor: pointer;
+      list-style: none;
+      padding: 0.35rem 0;
+      font-size: 0.95rem;
+    }
+    .verification-profile-summary::-webkit-details-marker {
+      display: none;
+    }
+    .verification-profile-summary::before {
+      content: '';
+      width: 0.45rem;
+      height: 0.45rem;
+      border-right: 2px solid var(--text-muted);
+      border-bottom: 2px solid var(--text-muted);
+      transform: rotate(-45deg);
+      transition: transform 0.15s ease;
+      flex-shrink: 0;
+    }
+    .verification-profile[open] > .verification-profile-summary::before {
+      transform: rotate(45deg);
+    }
+    .steps-count-inline {
+      margin-left: auto;
+      font-size: 0.72rem;
+    }
+    .verification-profile-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding: 0.65rem 0 0.85rem;
+    }
+    .profile-toolbar,
+    .step-toolbar {
+      display: flex;
+      justify-content: flex-end;
     }
     .profile-badge-row {
       display: flex;
@@ -528,7 +576,7 @@ const DEFAULT_RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antig
     .steps-container {
       display: flex;
       flex-direction: column;
-      gap: 0.75rem;
+      gap: 0.5rem;
       margin-top: 0.25rem;
       padding-top: 0.75rem;
       border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
@@ -545,13 +593,46 @@ const DEFAULT_RUNTIME_OPTIONS = ['cursor', 'claude', 'codex', 'opencode', 'antig
       letter-spacing: 0.04em;
       color: var(--text-muted);
     }
-    .step-card {
-      gap: 0.65rem;
+    .verification-step {
+      border-bottom: 1px solid var(--border);
     }
-    .step-header {
+    .verification-step:last-child {
+      border-bottom: 0;
+    }
+    .verification-step-summary {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 0.5rem;
+      cursor: pointer;
+      list-style: none;
+      padding: 0.5rem 0;
+    }
+    .verification-step-summary::-webkit-details-marker {
+      display: none;
+    }
+    .verification-step-summary::before {
+      content: '';
+      width: 0.4rem;
+      height: 0.4rem;
+      border-right: 2px solid var(--text-muted);
+      border-bottom: 2px solid var(--text-muted);
+      transform: rotate(-45deg);
+      transition: transform 0.15s ease;
+      flex-shrink: 0;
+    }
+    .verification-step[open] > .verification-step-summary::before {
+      transform: rotate(45deg);
+    }
+    .step-summary-name {
+      font-size: 0.82rem;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .verification-step-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      padding: 0 0 0.75rem;
     }
     .step-number {
       font-size: 0.75rem;

@@ -11,11 +11,15 @@ setup() {
   mkdir -p "$tmpdir/PLAN1"
   cat <<'JSON' >"$tmpdir/PLAN1/plan-usage-summary.json"
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "plan_usage_summary",
   "plan": "PLAN1.md",
   "plan_key": "PLAN1",
   "artifact_ns": "PLAN1",
+  "run_id": "process-run-1",
+  "workflow_run_id": "workflow-run-1",
+  "graph_run_id": "graph-run-1",
+  "graph_namespace": "graph-ns-1",
   "stage_id": "stage-1",
   "model": "claude-sonnet-4-6",
   "runtime": "claude",

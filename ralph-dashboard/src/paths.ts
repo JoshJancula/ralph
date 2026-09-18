@@ -130,7 +130,7 @@ function determineWorkspaceRoot(projectRoot: string): string {
   }
 
   if (dashboardGlobalMode()) {
-    const registryPaths = readRegistryWorkspacePaths();
+    const registryPaths = readRegistryWorkspacePaths().sort((a, b) => a.localeCompare(b));
     if (registryPaths.length > 0) {
       return registryPaths[0];
     }
@@ -409,6 +409,21 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
       basePath: join(roots.workspaceRoot, 'graph-runs'),
       writable: false,
     },
+    'workflow-runs': {
+      label: 'Workflow Runs',
+      basePath: join(roots.workspaceRoot, 'workflow-runs'),
+      writable: false,
+    },
+    'runtime-config': {
+      label: 'Runtime Config',
+      basePath: join(roots.workspaceRoot, 'runtime-config'),
+      writable: false,
+    },
+    'tool-results': {
+      label: 'Tool Results',
+      basePath: join(roots.workspaceRoot, 'tool-results'),
+      writable: false,
+    },
     docs: {
       label: 'Docs',
       basePath: resolveRalphDocumentationDir(roots.projectRoot),
@@ -488,7 +503,7 @@ function findAncestorsWithEntry(startDir: string, entry: string): string[] {
     dir = parent;
   }
 
-  return paths;
+  return paths.sort((a, b) => a.localeCompare(b));
 }
 
 function collectWorkspaceDirs(base: string, depth: number, collected: Set<string>): void {

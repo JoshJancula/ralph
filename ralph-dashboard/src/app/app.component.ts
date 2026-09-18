@@ -77,6 +77,8 @@ export class AppComponent implements OnInit {
         return 'Schedules';
       case 'insights':
         return 'Insights';
+      case 'runtimes':
+        return 'Runtimes';
       case 'browse':
         return 'Workspace Explorer';
       default:

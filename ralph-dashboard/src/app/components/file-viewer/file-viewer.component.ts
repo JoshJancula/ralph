@@ -11,6 +11,31 @@ import { sanitizeHtmlDocument } from '../../utils/sanitize-html';
 import { ResourceError } from '../../../shared/resource-error';
 import { ErrorModalComponent } from '../error-modal/error-modal.component';
 
+export type AssignedFileRole = 'plan-usage-summary' | 'discover-report' | 'run-manifest' | 'overlay-summary';
+
+const ROLE_LABELS: Record<AssignedFileRole, string> = {
+  'plan-usage-summary': 'Plan usage summary',
+  'discover-report': 'Discover report',
+  'run-manifest': 'Run manifest',
+  'overlay-summary': 'Overlay summary',
+};
+
+function fileBasename(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1] ?? path;
+}
+
+export function assignedFileRole(path: string): AssignedFileRole | null {
+  const name = fileBasename(path);
+  if (name === 'plan-usage-summary.json') return 'plan-usage-summary';
+  if (name === 'discover-report.json') return 'discover-report';
+  if (name === 'run-manifest.json') return 'run-manifest';
+  if (name === 'overlay-summary.json' || name.startsWith('runtime-overlay-summary-') || /^iter-\d+-/.test(name)) {
+    return 'overlay-summary';
+  }
+  return null;
+}
+
 @Component({
   selector: 'app-file-viewer',
   standalone: true,
@@ -186,6 +211,43 @@ export class FileViewerComponent implements OnInit {
     }
   }
 
+  fileRole(): AssignedFileRole | null {
+    if (!this.isJson() || this.isStructuredJsonStream()) {
+      return null;
+    }
+    try {
+      JSON.parse(this.content() || '{}');
+    } catch {
+      return null;
+    }
+    if (!this.content().trim()) {
+      return assignedFileRole(this.filePathSignal());
+    }
+    return assignedFileRole(this.filePathSignal());
+  }
+
+  fileRoleLabel(): string {
+    const role = this.fileRole();
+    return role ? ROLE_LABELS[role] : '';
+  }
+
+  roleViewRows(): Array<{ label: string; value: string }> {
+    const role = this.fileRole();
+    if (!role) {
+      return [];
+    }
+    let parsed: Record<string, unknown> = {};
+    try {
+      const value = JSON.parse(this.content()) as unknown;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        parsed = value as Record<string, unknown>;
+      }
+    } catch {
+      return [];
+    }
+    return this.rowsForRole(role, parsed);
+  }
+
   isPlainText(): boolean {
     return !this.isMarkdown() && !this.isJson();
   }
@@ -318,6 +380,14 @@ export class FileViewerComponent implements OnInit {
   }
 
   private formatStructuredJsonRecord(record: Record<string, unknown>): string {
+    const path = fileBasename(this.filePathSignal());
+    if (path === 'overlay-timeline.jsonl' || ('compaction_saved_bytes' in record && 'iteration' in record)) {
+      return this.formatOverlayTimelineRecord(record);
+    }
+    if (path === 'tool-catalog-telemetry.jsonl' || (record['event'] && (record['toolName'] !== undefined || record['outcome'] !== undefined))) {
+      return this.formatToolCatalogTelemetryRecord(record);
+    }
+
     const type = this.readStringField(record, 'type');
     const subtype = this.readStringField(record, 'subtype');
     const headline = this.formatStreamHeadline(type, subtype);
@@ -328,6 +398,85 @@ export class FileViewerComponent implements OnInit {
     }
 
     return details ? `${headline} (${details})` : headline;
+  }
+
+  private formatOverlayTimelineRecord(record: Record<string, unknown>): string {
+    const iteration = this.formatStreamValue(record['iteration'] ?? '');
+    const runtime = this.readStringField(record, 'runtime') ?? 'unknown';
+    const saved = this.formatStreamValue(record['compaction_saved_bytes'] ?? 0);
+    const hooks = this.formatStreamValue(record['hook_compactions'] ?? 0);
+    const tier = this.readStringField(record, 'bg_tier');
+    const parts = [`overlay iter ${iteration}`, runtime, `saved_bytes=${saved}`, `hook_compactions=${hooks}`];
+    if (tier) {
+      parts.push(`bg_tier=${tier}`);
+    }
+    return parts.join(', ');
+  }
+
+  private formatToolCatalogTelemetryRecord(record: Record<string, unknown>): string {
+    const event = this.readStringField(record, 'event') ?? 'catalog event';
+    const tool = this.readStringField(record, 'toolName');
+    const outcome = this.readStringField(record, 'outcome');
+    const ts = this.readStringField(record, 'timestamp');
+    const parts = [this.humanizeStreamToken(event)];
+    if (tool) parts.push(`tool=${tool}`);
+    if (outcome) parts.push(`outcome=${outcome}`);
+    if (typeof record['rank'] === 'number') parts.push(`rank=${record['rank']}`);
+    if (ts) parts.push(ts);
+    return parts.join(', ');
+  }
+
+  private rowsForRole(role: AssignedFileRole, parsed: Record<string, unknown>): Array<{ label: string; value: string }> {
+    const field = (label: string, key: string): { label: string; value: string } => ({
+      label,
+      value: this.formatStreamValue(parsed[key] ?? '—'),
+    });
+    switch (role) {
+      case 'plan-usage-summary':
+        return [
+          field('Plan key', 'plan_key'),
+          field('Status', 'status'),
+          field('Runtime', 'runtime'),
+          field('Model', 'model'),
+          field('Todos done', 'todos_done'),
+          field('Todos total', 'todos_total'),
+          field('Input tokens', 'input_tokens'),
+          field('Output tokens', 'output_tokens'),
+          field('Elapsed seconds', 'elapsed_seconds'),
+        ];
+      case 'discover-report':
+        return [
+          field('Kind', 'kind'),
+          field('Plan key', 'plan_key'),
+          field('Generated at', 'generated_at'),
+          {
+            label: 'Sequence patterns',
+            value: String(Array.isArray(parsed['sequence_patterns']) ? parsed['sequence_patterns'].length : 0),
+          },
+          {
+            label: 'Aggregate findings',
+            value: String(Array.isArray(parsed['aggregate_findings']) ? parsed['aggregate_findings'].length : 0),
+          },
+        ];
+      case 'run-manifest':
+        return [
+          field('Run id', 'run_id'),
+          field('Plan key', 'plan_key'),
+          field('Status', 'status'),
+          field('Runtime', 'runtime'),
+          field('Model', 'model'),
+          field('Started at', 'started_at'),
+          field('Ended at', 'ended_at'),
+        ];
+      case 'overlay-summary':
+        return [
+          field('Overlay mode', 'runtime_overlay_mode'),
+          field('Native hooks', 'native_hooks_effective'),
+          field('MCP', 'mcp_effective'),
+          field('Compaction saved bytes', 'compaction_saved_bytes'),
+          field('Hook compactions', 'hook_compactions'),
+        ];
+    }
   }
 
   private formatStreamHeadline(type?: string, subtype?: string): string {

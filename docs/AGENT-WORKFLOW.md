@@ -94,7 +94,13 @@ session strategy when later TODOs benefit from continuity:
 ```bash
 ralph run --plan PLAN.md --session-strategy resume
 ralph run --plan PLAN.md --cli-resume
+ralph run --plan PLAN.md --resume-run last
 ```
+
+`--resume-run` is a separate opt-in: it reuses exact per-TODO session ids captured
+in a previous plan run (`last` or an explicit run id). Session strategy stays
+`fresh` unless you also pass `--session-strategy`. Mismatched TODO text, runtime,
+or todo id still refuse.
 
 For a durable default in a YAML leaf plan, set `sessionStrategy` in the plan
 header. A TODO may override it when one item needs isolation:

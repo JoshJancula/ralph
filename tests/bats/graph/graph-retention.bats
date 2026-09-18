@@ -3,6 +3,7 @@
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/cleanup-plan.sh"
+source "$BATS_TEST_DIRNAME/../../../bundle/.ralph/bash-lib/graph/graph-workspace-manager.sh"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,6 +42,26 @@ make_stage_outcome() {
     > "$stage_outcomes_dir/${attempt_id}.json"
 }
 
+# make_prunable_workspace <ns_dir> <run_id> <status> <project_root>
+make_prunable_workspace() {
+  local ns_dir="$1" run_id="$2" status="$3" project_root="$4"
+  local run_dir="$ns_dir/$run_id" node_id="node" node_key path
+  make_run "$ns_dir" "$run_id" "$status"
+  run_dir="$(cd "$run_dir" && pwd -P)"
+  jq --arg project "$project_root" \
+    '. + {roots:{projectRoot:$project},workspaceManager:{schemaVersion:1,retention:"prune"}}' \
+    "$run_dir/run.json" >"$run_dir/run.tmp"
+  mv "$run_dir/run.tmp" "$run_dir/run.json"
+  node_key="$(graph_workspace_node_key "$node_id")"
+  path="$run_dir/workspaces/nodes/$node_key"
+  mkdir -p "$path" "$run_dir/workspaces/metadata"
+  printf 'recoverable after-side\n' >"$path/change.txt"
+  jq -cn --arg owner "$run_id" --arg node "$node_id" --arg path "$path" \
+    '{schemaVersion:1,ownerRunId:$owner,nodeId:$node,mode:"snapshot",workspacePath:$path,
+      isolation:true,status:"ready",includesApplied:true,setupCompleted:0}' \
+    >"$run_dir/workspaces/metadata/$node_key.json"
+}
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -58,6 +79,67 @@ make_stage_outcome() {
   mkdir -p "$ns_dir"
   run cleanup_plan_prune_graph_runs "$workspace" "myns"
   [ "$status" -eq 0 ]
+}
+
+@test "workspace cleanup prunes terminal copies but preserves changesets and latest/running runs" {
+  local workspace project ns_dir node_key terminal_path running_path latest_path
+  workspace="$(mktemp -d)"
+  project="$workspace/project"
+  ns_dir="$workspace/.ralph-workspace/graph-runs/myns"
+  mkdir -p "$project" "$ns_dir"
+  node_key="$(graph_workspace_node_key node)"
+
+  make_prunable_workspace "$ns_dir" "run-terminal" "succeeded" "$project"
+  terminal_path="$ns_dir/run-terminal/workspaces/nodes/$node_key"
+  graph_workspace_cleanup_run "$ns_dir/run-terminal"
+  [ ! -e "$terminal_path" ]
+  [ -f "$ns_dir/run-terminal/workspaces/changesets/$node_key.tar" ]
+
+  make_prunable_workspace "$ns_dir" "run-running" "running" "$project"
+  running_path="$ns_dir/run-running/workspaces/nodes/$node_key"
+  run graph_workspace_cleanup_run "$ns_dir/run-running"
+  [ "$status" -ne 0 ]
+  [ -d "$running_path" ]
+
+  make_prunable_workspace "$ns_dir" "run-latest" "succeeded" "$project"
+  latest_path="$ns_dir/run-latest/workspaces/nodes/$node_key"
+  ln -sfn "run-latest" "$ns_dir/latest"
+  graph_workspace_cleanup_run "$ns_dir/run-latest"
+  [ -d "$latest_path" ]
+}
+
+@test "base retention keeps newest three terminal snapshots and marks old bases pruned" {
+  local workspace ns_dir run base
+  workspace="$(mktemp -d)"
+  ns_dir="$workspace/.ralph-workspace/graph-runs/myns"
+  mkdir -p "$ns_dir"
+
+  for run in run-new run-recent run-third run-old run-running; do
+    if [[ "$run" == "run-running" ]]; then
+      make_run "$ns_dir" "$run" "running"
+    else
+      make_run "$ns_dir" "$run" "succeeded"
+    fi
+    mkdir -p "$ns_dir/$run/base/source"
+    printf '%s\n' "$run" >"$ns_dir/$run/base/source/evidence.txt"
+  done
+  set_mtime_days_ago "$ns_dir/run-recent" 1
+  set_mtime_days_ago "$ns_dir/run-third" 2
+  set_mtime_days_ago "$ns_dir/run-old" 60
+  set_mtime_days_ago "$ns_dir/run-running" 90
+
+  RALPH_GRAPH_RUN_MAX_AGE_DAYS=9999 RALPH_GRAPH_RUN_MAX_COUNT=9999 \
+    RALPH_GRAPH_BASE_MAX_AGE_DAYS=30 \
+    cleanup_plan_prune_graph_runs "$workspace" "myns"
+
+  for run in run-new run-recent run-third; do
+    [ -d "$ns_dir/$run/base/source" ]
+    [ "$(jq -r '.basePruned // false' "$ns_dir/$run/run.json")" = "false" ]
+  done
+  [ ! -e "$ns_dir/run-old/base" ]
+  [ "$(jq -r '.basePruned' "$ns_dir/run-old/run.json")" = "true" ]
+  [ -d "$ns_dir/run-running/base/source" ]
+  [ "$(jq -r '.basePruned // false' "$ns_dir/run-running/run.json")" = "false" ]
 }
 
 @test "prune_graph_runs removes old terminal runs beyond max count" {

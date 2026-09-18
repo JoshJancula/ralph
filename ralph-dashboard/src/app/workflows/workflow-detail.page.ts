@@ -37,6 +37,9 @@ import { RouteLoadStateComponent } from '../components/route-load-state/route-lo
       flex: 1;
       width: 100%;
       min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-4);
       padding-bottom: calc(var(--space-6) + var(--fab-clearance));
     }
     .muted {

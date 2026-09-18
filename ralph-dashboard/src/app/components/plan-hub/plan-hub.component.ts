@@ -52,30 +52,36 @@ interface QueryState {
         </div>
       </div>
 
-      <div class="toolbar hub-toolbar">
-        <input
-          type="text"
-          class="search-input"
-          placeholder="Search plans..."
-          [(ngModel)]="queryState().search"
-          (ngModelChange)="onSearchChange($event)"
-          aria-label="Search plans" />
-        <select [(ngModel)]="queryState().status" (change)="onStatusChange()" class="filter-select" aria-label="Filter by status">
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="waiting">Waiting</option>
-        </select>
-        <select [(ngModel)]="queryState().type" (change)="onTypeChange()" class="filter-select" aria-label="Filter by type">
-          <option value="">All types</option>
-          <option value="leaf">Leaf</option>
-          <option value="generated-control">Generated</option>
-          <option value="supplied">Supplied</option>
-          <option value="workflow-derived">Workflow</option>
-        </select>
-        @if (hasFilters()) {
-          <button type="button" class="btn btn-ghost" (click)="clearFilters()">Clear filters</button>
-        }
+      <div class="toolbar hub-toolbar plans-toolbar">
+        <div class="plans-filter-row">
+          <select [(ngModel)]="queryState().status" (change)="onStatusChange()" class="filter-select" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="waiting">Waiting</option>
+          </select>
+          <select [(ngModel)]="queryState().type" (change)="onTypeChange()" class="filter-select" aria-label="Filter by type">
+            <option value="">All types</option>
+            <option value="leaf">Leaf</option>
+            <option value="generated-control">Generated</option>
+            <option value="supplied">Supplied</option>
+            <option value="workflow-derived">Workflow</option>
+          </select>
+          @if (hasFilters()) {
+            <button type="button" class="btn btn-ghost plans-clear-filters" (click)="clearFilters()">Clear filters</button>
+          }
+        </div>
+        <div class="plans-search-row">
+          <input
+            type="search"
+            class="search-input"
+            data-testid="plans-search"
+            placeholder="Search plans"
+            [(ngModel)]="queryState().search"
+            (ngModelChange)="onSearchChange($event)"
+            aria-label="Search plans"
+          />
+        </div>
       </div>
 
       @if (currentResponse()?.activityDiscoveryError; as activityError) {
@@ -160,9 +166,38 @@ interface QueryState {
     .plan-hub {
       background: transparent;
     }
-    .search-input {
-      flex: 1;
-      min-width: 200px;
+
+    .plans-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-3);
+    }
+
+    .plans-filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
+    }
+
+    .plans-filter-row .filter-select {
+      flex: 1 1 0;
+      min-width: 9rem;
+      width: auto;
+    }
+
+    .plans-clear-filters {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    .plans-search-row {
+      width: 100%;
+    }
+
+    .plans-search-row .search-input {
+      width: 100%;
     }
     .plan-table {
       display: flex;
@@ -224,13 +259,22 @@ interface QueryState {
       font-size: var(--font-size-xs);
       opacity: 0.6;
     }
-    .toolbar {
-      position: sticky;
-      top: 0;
-      background: var(--background);
-      z-index: 10;
-      padding-bottom: var(--space-2);
+    @media (max-width: 720px) {
+      .plans-filter-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .plans-filter-row .filter-select {
+        width: 100%;
+      }
+
+      .plans-clear-filters {
+        margin-left: 0;
+        align-self: flex-start;
+      }
     }
+
     @media (max-width: 1024px) {
       .plan-table-header {
         grid-template-columns: minmax(0, 1.6fr) 7.5rem minmax(6.5rem, 1fr) 7.5rem auto;

@@ -21,6 +21,14 @@ as review, approval, integration, and QA.
 ## Install
 
 Install once for your user account:
+```bash
+  tmpdir=$(mktemp -d)
+  git clone https://github.com/JoshJancula/ralph.git "$tmpdir"
+  "$tmpdir/install.sh" --global
+  rm -rf "$tmpdir"
+```
+
+Or keep the clone
 
 ```bash
 git clone https://github.com/JoshJancula/ralph.git /tmp/ralph

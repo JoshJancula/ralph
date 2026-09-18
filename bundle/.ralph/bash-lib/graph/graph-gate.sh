@@ -23,6 +23,10 @@ if ! declare -F ralph_wait >/dev/null 2>&1; then
   # shellcheck source=../ralph-wait.sh
   source "$GRAPH_GATE_SCRIPT_DIR/../ralph-wait.sh"
 fi
+if ! declare -F ralph_exec_container_register >/dev/null 2>&1; then
+  # shellcheck source=../ralph-process-teardown.sh
+  source "$GRAPH_GATE_SCRIPT_DIR/../ralph-process-teardown.sh"
+fi
 
 if ! declare -F graph_ui_node >/dev/null 2>&1; then
   # shellcheck source=graph-ui.sh
@@ -124,22 +128,65 @@ _graph_gate_watchdog() {
 }
 
 # graph_gate_run_step <step_name> <command> <timeout_secs> <output_file>
-#   [<workspace>]
+#   [<workspace>] [<exec_image>] [<exec_workspace_write>]
 # Runs a single gate step command with the given timeout, writing all output
 # to output_file. Returns 0 on success, 124 on timeout, non-zero on failure.
 # Sets GRAPH_GATE_STEP_TIMED_OUT (1 when timed out, 0 otherwise).
+# When exec_image is set, only this verification command runs in Docker via
+# graph_dispatch_build_verification_argv (Ralph/agents stay on the host).
+# Container identity is registered and torn down on timeout, signal, or return
+# so interrupted gate steps leave no orphan containers.
 graph_gate_run_step() {
   local step_name="$1" cmd="$2" timeout_secs="$3" output_file="$4"
   local workspace="${5:-}"
+  local exec_image="${6:-}"
+  local exec_write="${7:-readonly}"
   GRAPH_GATE_STEP_TIMED_OUT=0
   local ec=0
+  local container_name=""
 
   local timeout_bin
   timeout_bin="$(_graph_gate_timeout_cmd)"
 
   mkdir -p "$(dirname "$output_file")" || return 1
 
-  if [[ -n "$timeout_bin" ]]; then
+  if [[ -n "$exec_image" ]]; then
+    if ! declare -F graph_dispatch_build_verification_argv >/dev/null 2>&1; then
+      # shellcheck source=graph-dispatch.sh
+      source "$GRAPH_GATE_SCRIPT_DIR/graph-dispatch.sh"
+    fi
+    if [[ -z "$workspace" ]]; then
+      echo "Error: graph-gate: execImage verification requires a workspace mount" >&2
+      return 1
+    fi
+    if ! graph_dispatch_build_verification_argv \
+      "$workspace" "$exec_image" "$exec_write" "$cmd"; then
+      return 1
+    fi
+    container_name="${GRAPH_DISPATCH_EXEC_CONTAINER_NAME:-}"
+    if [[ -n "$container_name" ]]; then
+      ralph_exec_container_register "$container_name" || true
+    fi
+    # shellcheck disable=SC2317
+    _graph_gate_run_step_exec_cleanup() {
+      if declare -F graph_dispatch_exec_container_teardown >/dev/null 2>&1; then
+        graph_dispatch_exec_container_teardown "${container_name}"
+      else
+        ralph_exec_container_teardown_one "${container_name}"
+      fi
+    }
+    trap '_graph_gate_run_step_exec_cleanup' EXIT INT TERM HUP
+    if [[ -n "$timeout_bin" ]]; then
+      "$timeout_bin" "$timeout_secs" "${GRAPH_DISPATCH_VERIFICATION_ARGV[@]}" \
+        >>"$output_file" 2>&1 || ec=$?
+    else
+      ec=0
+      _graph_gate_watchdog "$timeout_secs" "$output_file" \
+        "${GRAPH_DISPATCH_VERIFICATION_ARGV[@]}" || ec=$?
+    fi
+    trap - EXIT INT TERM HUP
+    _graph_gate_run_step_exec_cleanup
+  elif [[ -n "$timeout_bin" ]]; then
     # Use the system timeout binary; it exits 124 when the process times out.
     # Append (>>) so the step header written before this call is preserved.
     if [[ -n "$workspace" ]]; then
@@ -299,6 +346,20 @@ graph_gate_run() {
   local step_required_count step_artifact exe step_ec step_outcome step_reruns
   local step_timed_out artifact_path artifact_rel step_entry
   local gate_stage_id_sub="${node_id//:/_}"
+  local stage_json exec_image="" exec_write="readonly"
+
+  # Optional containerized verification (stage.execImage). Absent => host path.
+  # Values were schema-validated before admission; parse here without sourcing
+  # validate-graph-schema.sh (that file enables set -euo on source).
+  stage_json="$(jq -c --arg id "$node_id" \
+    '.nodes[] | select(.id == $id) | .stage // {}' \
+    "$graph_json" 2>/dev/null)"
+  if [[ -n "$stage_json" ]] \
+    && printf '%s' "$stage_json" | jq -e 'has("execImage")' >/dev/null 2>&1; then
+    exec_image="$(printf '%s' "$stage_json" | jq -r '.execImage // empty')"
+    exec_write="$(printf '%s' "$stage_json" | jq -r '.execWorkspaceWrite // "readonly"')"
+    [[ -n "$exec_write" && "$exec_write" != "null" ]] || exec_write="readonly"
+  fi
 
   for ((i = 0; i < steps_count; i++)); do
     step_name="$(printf '%s' "$profile_json" | jq -r ".steps[$i].name // \"step-$i\"")"
@@ -397,7 +458,8 @@ graph_gate_run() {
     } >"$artifact_path" 2>/dev/null || true
 
     graph_gate_run_step \
-      "$step_name" "$step_cmd" "$step_timeout" "$artifact_path" "$workspace" || step_ec=$?
+      "$step_name" "$step_cmd" "$step_timeout" "$artifact_path" \
+      "$workspace" "$exec_image" "$exec_write" || step_ec=$?
     [[ "$GRAPH_GATE_STEP_TIMED_OUT" -eq 1 ]] && step_timed_out=1
 
     # Flaky rerun: retry when the exit code matches flakyRerunPolicy.matchExit
@@ -411,7 +473,8 @@ graph_gate_run() {
           echo "gate-step: node=$node_id step=$step_name rerun=$step_reruns" >>"$artifact_path" 2>/dev/null || true
           step_ec=0
           graph_gate_run_step \
-            "$step_name" "$step_cmd" "$step_timeout" "$artifact_path" "$workspace" || step_ec=$?
+            "$step_name" "$step_cmd" "$step_timeout" "$artifact_path" \
+            "$workspace" "$exec_image" "$exec_write" || step_ec=$?
           [[ "$GRAPH_GATE_STEP_TIMED_OUT" -eq 1 ]] && step_timed_out=1
           [[ "$step_ec" -eq 0 ]] && break
         done

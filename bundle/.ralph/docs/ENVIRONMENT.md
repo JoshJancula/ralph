@@ -77,7 +77,7 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 
 | Variable | Purpose |
 |----------|---------|
-| `RALPH_PLAN_FORMAT` | Force `default` (markdown checkbox) or `cursor` (YAML frontmatter with `todos[]`). Auto-detect when unset. |
+| `RALPH_PLAN_FORMAT` | Force `classic` (markdown checkboxes) or `yaml` (YAML frontmatter with `todos[]`). Auto-detect when unset. Older CLI tokens remain silent aliases. |
 | `RALPH_PLAN_CONSOLIDATE` | `1` runs a one-time pass at plan load that collapses adjacent unchecked todos sharing the same obvious verb and target; off by default. |
 | `RALPH_PLAN_RESUME_HINT` | `0` suppresses the stderr hint to enable `RALPH_PLAN_CLI_RESUME` on long plans. |
 | `RALPH_PLAN_RESUME_HINT_THRESHOLD` | Unchecked todo count that triggers the resume hint when resume is off (default `25`). |
@@ -88,7 +88,8 @@ Plan templates should use one logical, independently verifiable todo per checkbo
 
 | Variable | Purpose |
 |----------|---------|
-| `RALPH_PLAN_SESSION_STRATEGY` | Session behavior **between distinct TODOs**: `fresh` (default strict isolation for the next TODO), `resume` (continue context), `reset` (reuse session id and prefix a runtime reset command when configured), or `compact` (reuse session id and prefix a runtime-specific compact command before each TODO prompt). Interactive TTY runs prompt for session strategy unless already set via flag or env var. Mid-TODO continuations (background job wait, human answer, post-verify repair) are **not** restarted from scratch by `fresh`: the runner resumes that TODO via its exact captured session id (tier 2) or the same live session (tier 1). See [Background jobs and durable TODO continuations](#background-jobs-and-durable-todo-continuations). |
+| `RALPH_PLAN_SESSION_STRATEGY` | Session behavior **between distinct TODOs**: `fresh` (default strict isolation for the next TODO), `resume` (continue context), `reset` (reuse session id and prefix a runtime reset command when configured), or `compact` (reuse session id and prefix a runtime-specific compact command before each TODO prompt). Interactive TTY runs prompt for session strategy unless already set via flag or env var. Mid-TODO continuations (background job wait, human answer, post-verify repair) are **not** restarted from scratch by `fresh`: the runner resumes that TODO via its exact captured session id (tier 2) or the same live session (tier 1). See [Background jobs and durable TODO continuations](#background-jobs-and-durable-todo-continuations). Plan-level resume **across runs** already works: `session-id.<runtime>.txt` under `sessions/<plan-key>/` persists, and `--session-strategy resume` (also reset, compact) reapplies that id. |
+| `RALPH_PLAN_RESUME_RUN` | Opt-in **per-TODO** resume from a previous plan run (`--resume-run <run-id\|last>`). Distinct from `--session-strategy resume`. `last` is the most recent **terminal** run for this plan key. Relaxes only the `foreign-run-id` identity guard for that source run. Still refused: `mismatched-runtime`, `mismatched-todo-hash`, `foreign-todo-id`, `foreign-todo-line`, `foreign-todo-ordinal`, `mismatched-workflow-attempt`. Resume uses `capture: exact` only; `degraded` starts fresh. Default unset; `fresh` remains the session-strategy default. |
 | `RALPH_PLAN_RESET_COMMAND` | Optional global reset command prefix used in reset mode before each TODO prompt (example: `/clear`). When set, overrides runtime-specific reset command defaults. |
 | `RALPH_PLAN_RESET_COMMAND_CLAUDE` / `RALPH_PLAN_RESET_COMMAND_CURSOR` / `RALPH_PLAN_RESET_COMMAND_CODEX` / `RALPH_PLAN_RESET_COMMAND_OPENCODE` / `RALPH_PLAN_RESET_COMMAND_ANTIGRAVITY` | Runtime-specific reset command prefix. Default for Claude is `/clear`; other runtimes default empty. |
 | `RALPH_PLAN_COMPACT_COMMAND` | Optional global compact command prefix used in compact mode before each TODO prompt. When set, overrides runtime-specific compact command defaults. |
@@ -130,6 +131,8 @@ Opt-in helper so a TODO can wait on a long command without spending model turns 
 2. **Tier 2 (invocation)** — fallback when no usable end-of-turn hook exists, isolation is unavailable, or for human answers (which always cross invocations). The runner ends the invocation, waits outside the model, then starts a new invocation for the **same TODO** bound to its exact captured runtime session id. Never uses bare `--last`, `--continue`, or global-most-recent resume.
 
 **Exact-ID safety and degraded fallback (tier 2):** Session manifests under `$RALPH_SESSION_DIR/todo-sessions/` record capture quality `exact` or `degraded`. Exact capture resumes that session id. Degraded capture (no reliable id) starts a fresh invocation that still injects the bounded job or human-answer result once — it does not invent a wrong session via unsafe resume.
+
+**Cross-run per-TODO resume:** `--resume-run` / `RALPH_PLAN_RESUME_RUN` is the opt-in to reuse those exact manifests from a **previous plan run**. Without it, `ralph_session_todo_identity_mismatch_reason` returns `foreign-run-id` and `ralph_session_todo_reconcile_stale_manifest` retires the file. With it, only `foreign-run-id` is skipped for the named (or `last` terminal) run; hash/runtime/todo identity still refuse. This is separate from plan-level `--session-strategy resume`, which only reapplies `session-id.<runtime>.txt`. Discoverability: `ralph state runs` / `ralph state show`, and [WORKSPACE.md](WORKSPACE.md).
 
 **Lifecycle:** Job records live under `$RALPH_SESSION_DIR/bg-jobs/<job-id>/` with state `requested -> launched -> running -> terminal -> consumed`. Terminal status is one of `passed`, `failed`, `timed_out`, `cancelled`, `interrupted`, `unknown`. Continuations are consume-once. A continuation does **not** consume `RALPH_PLAN_TODO_MAX_ITERATIONS`; background work is bounded by `RALPH_BG_MAX_PER_TODO`.
 
@@ -587,6 +590,23 @@ When Ralph MCP proxy tools store truncated results under `.ralph-workspace/tool-
 | `RALPH_MCP_PROXY_RESULT_STORE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total stored result bytes kept per plan key. |
 | `RALPH_MCP_PROXY_RESULT_STORE_MAX_AGE_DAYS` | `7` | Maximum age in days for stored results. Set `0` to disable age-based pruning. |
 | `RALPH_MCP_PROXY_RESULT_STORE_MAX_ENTRIES` | `100` | Maximum number of stored results kept per plan key (secondary cap). |
+
+### State workspace retention
+
+Derived state under `.ralph-workspace/` (see [WORKSPACE.md](WORKSPACE.md)). Non-negative integers; invalid values fall back to defaults. `RALPH_RETENTION_AUTO=0` disables the automatic plan/log/journal/artifact prune.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RALPH_RETENTION_AUTO` | `1` | When `0`, skip `ralph_retention_auto_prune`. |
+| `RALPH_RETENTION_LOG_RUNS_MAX_COUNT` | `10` | Keep at most this many terminal plan-run dirs under `logs/<key>/runs/` (newest first). |
+| `RALPH_RETENTION_LOG_RUNS_MAX_AGE_DAYS` | `30` | Drop terminal plan-run dirs older than this many days. `0` disables age prune. |
+| `RALPH_RETENTION_ARTIFACTS_MAX_AGE_DAYS` | `90` | Drop an artifact namespace directory older than this many days. `0` disables age prune. |
+| `RALPH_RETENTION_ARTIFACTS_MAX_BYTES` | `536870912` (512 MiB) | Drop an artifact namespace directory when it exceeds this size. `0` disables size prune. |
+| `RALPH_RETENTION_JOURNALS_MAX_COUNT` | `20` | Keep at most this many overlay journal dirs under `runtime-config/<key>/journals/`. |
+| `RALPH_RETENTION_JOURNALS_MAX_AGE_DAYS` | `30` | Drop overlay journals older than this many days. `0` disables age prune. |
+| `RALPH_GRAPH_RUN_MAX_COUNT` | `10` | Keep at most this many **terminal** graph runs per namespace. |
+| `RALPH_GRAPH_RUN_MAX_AGE_DAYS` | `30` | Drop terminal graph runs older than this many days. |
+| `RALPH_WORKSPACE_PRUNE_DAYS` | `60` | Age cutoff (days) for `ralph workspace` prune of registered workspace entries. |
 
 ### Shell output compaction runtime matrix (PLAN49 outcome)
 

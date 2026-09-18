@@ -90,6 +90,7 @@ describe('WorkflowRunDetailPageComponent', () => {
   it('shows the originating task text so a finished run can be reviewed', async () => {
     const fixture = await build(fakeFacade(createMockRunStatus('failed')));
     const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('[data-testid="run-detail-user-prompt"]')).not.toBeNull();
     expect(el.querySelector('[data-testid="run-detail-task"]')?.textContent).toContain(
       'fix the model picker defaults',
     );
@@ -210,8 +211,10 @@ describe('WorkflowRunDetailPageComponent', () => {
       const fixture = await build(facade);
       fixture.detectChanges();
       const el: HTMLElement = fixture.nativeElement;
-      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('succeeded');
+      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('Completed');
       expect(el.querySelector('[data-testid="stage-stage-1"]')).not.toBeNull();
+      (el.querySelector('[data-testid="stage-stage-1"] details') as HTMLDetailsElement).open = true;
+      fixture.detectChanges();
       expect(el.querySelector('[data-testid="stage-plan-paths"]')?.textContent).toMatch(/immutable/i);
       expect(el.querySelector('[data-testid="stage-plan-paths"]')?.textContent).toMatch(/mutable/i);
       expect(el.querySelector('[data-testid="stage-todo-progress"]')?.textContent).toContain('2/2');
@@ -237,7 +240,7 @@ describe('WorkflowRunDetailPageComponent', () => {
       const fixture = await build(facade);
       fixture.detectChanges();
       const el: HTMLElement = fixture.nativeElement;
-      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('waiting');
+      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('Waiting');
       expect(el.querySelector('[data-testid="next-action-panel"]')).not.toBeNull();
       expect(el.querySelector('[data-testid="pending-action-req-1"]')).not.toBeNull();
       expect((el.querySelector('[data-testid="respond-req-1-answer"]') as HTMLButtonElement).disabled).toBe(false);
@@ -308,8 +311,10 @@ describe('WorkflowRunDetailPageComponent', () => {
       const fixture = await build(facade);
       fixture.detectChanges();
       const el: HTMLElement = fixture.nativeElement;
-      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('failed');
-      expect(el.querySelector('[data-testid="stage-qa"]')?.textContent).toMatch(/Verification failed|failed/i);
+      expect(el.querySelector('[data-testid="run-state"]')?.textContent).toContain('Failed');
+      expect(el.querySelector('[data-testid="stage-qa"]')?.textContent).toMatch(/Verification failed|Failed/i);
+      (el.querySelector('[data-testid="stage-qa"] details') as HTMLDetailsElement).open = true;
+      fixture.detectChanges();
       expect(el.querySelector('[data-testid="stage-produced-evidence"]')?.textContent).toContain('qa-verdict.json');
     });
 

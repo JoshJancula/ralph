@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "ralphVersion": "1.0.0",
+  "name": "exec-image-host-default",
+  "namespace": "exec-image-host-default",
+  "maxParallel": 1,
+  "failurePolicy": "drain",
+  "nodes": [
+    {
+      "id": "verify",
+      "type": "stage",
+      "dependsOn": [],
+      "derivedFrom": "stage",
+      "stage": {}
+    }
+  ],
+  "edges": []
+}

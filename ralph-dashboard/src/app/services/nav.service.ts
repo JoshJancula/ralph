@@ -12,7 +12,7 @@ export class NavService {
   private readonly activeFileSignal = signal<string | null>(null);
   private readonly activeWorkspaceRootSignal = signal<string | null>(null);
   private readonly activeProjectRootSignal = signal<string | null>(null);
-  private readonly activeSectionSignal = signal<'home' | 'runs' | 'plans' | 'workflows' | 'tasks' | 'schedules' | 'docs' | 'insights' | 'safety' | 'browse'>('home');
+  private readonly activeSectionSignal = signal<'home' | 'runs' | 'plans' | 'workflows' | 'tasks' | 'schedules' | 'docs' | 'insights' | 'runtimes' | 'safety' | 'browse'>('home');
 
   readonly activeRoot = this.activeRootSignal.asReadonly();
   readonly activePath = this.activePathSignal.asReadonly();
@@ -212,6 +212,9 @@ export class NavService {
       case 'insights':
       case 'usage':
         this.activeSectionSignal.set('insights');
+        break;
+      case 'runtimes':
+        this.activeSectionSignal.set('runtimes');
         break;
       default:
         this.activeSectionSignal.set('home');

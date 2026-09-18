@@ -31,37 +31,56 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
   ],
   template: `
     <div class="detail" data-testid="workflow-detail">
-      <header class="page-header">
-        <a class="back-link" routerLink="/workflows" data-testid="detail-back">All workflows</a>
-        <div class="title-bar">
-          <div class="title-row">
-            <h1 class="name page-title" data-testid="workflow-name">{{ workflow().id }}</h1>
-            <span class="scope-badge" [class]="'scope-' + displayScope()" data-testid="workflow-scope">{{ displayScope() }}</span>
-            @if (effectiveScope() && effectiveScope() !== workflow().scope) {
-              <span class="mode-badge" data-testid="workflow-effective-scope">effective: {{ effectiveScope() }}</span>
-            }
-            @if (model()?.mode) {
-              <span class="mode-badge">{{ model()?.mode }}</span>
+      <a class="back-link" routerLink="/workflows" data-testid="detail-back">All workflows</a>
+
+      <header class="detail-head hub-panel-card">
+        <div class="head-main">
+          <div class="head-copy">
+            <p class="eyebrow">Workflow detail</p>
+            <div class="title-bar">
+              <div class="title-row">
+                <h1 class="page-title" data-testid="workflow-name">{{ workflow().id }}</h1>
+                <span class="scope-badge" [class]="'scope-' + displayScope()" data-testid="workflow-scope">{{ displayScope() }}</span>
+                @if (effectiveScope() && effectiveScope() !== workflow().scope) {
+                  <span class="mode-badge" data-testid="workflow-effective-scope">effective: {{ effectiveScope() }}</span>
+                }
+                @if (model()?.mode) {
+                  <span class="mode-badge">{{ model()?.mode }}</span>
+                }
+              </div>
+              <div class="primary-actions">
+                @if (capabilities.capabilities().workflowRuns) {
+                  <button
+                    type="button"
+                    class="btn btn-primary"
+                    data-testid="detail-run-now"
+                    [disabled]="facade.isTriggering(workflow().id)"
+                    (click)="startDialog()?.launch()"
+                  >
+                    {{ facade.isTriggering(workflow().id) ? 'Starting…' : 'Start' }}
+                  </button>
+                }
+              </div>
+            </div>
+            @if (model()?.overview) {
+              <p class="overview page-lede" data-testid="workflow-overview">{{ model()?.overview }}</p>
             }
           </div>
-          <div class="primary-actions">
-            @if (capabilities.capabilities().workflowRuns) {
-              <button
-                type="button"
-                class="btn btn-primary"
-                data-testid="detail-run-now"
-                [disabled]="facade.isTriggering(workflow().id)"
-                (click)="startDialog()?.launch()"
-              >
-                {{ facade.isTriggering(workflow().id) ? 'Starting…' : 'Start' }}
-              </button>
+          <div class="origin-card" data-testid="workflow-origin">
+            <span class="origin-label">Definition origin</span>
+            @if (workflow().origin?.projectRoot; as projectRoot) {
+              <strong>Project override</strong>
+              <code title="{{ projectRoot }}">{{ projectRoot }}</code>
+            } @else if (workflow().scope === 'global') {
+              <strong>Global Ralph definition</strong>
+              @if (workflow().origin?.sourcePath; as sourcePath) { <code title="{{ sourcePath }}">{{ sourcePath }}</code> }
+            } @else {
+              <strong>Bundled framework definition</strong>
+              @if (workflow().origin?.sourcePath; as sourcePath) { <code title="{{ sourcePath }}">{{ sourcePath }}</code> }
             }
           </div>
         </div>
-        @if (model()?.overview) {
-          <p class="overview page-lede" data-testid="workflow-overview">{{ model()?.overview }}</p>
-        }
-        <div class="actions secondary-actions">
+        <div class="detail-actions hub-toolbar">
           @if (workflow().scope === 'bundled') {
             <button type="button" class="btn btn-secondary" data-testid="detail-customize-global" [disabled]="facade.saving()" (click)="customize('global')">
               Customize globally
@@ -107,34 +126,20 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
         <ralph-start-workflow-dialog [workflowId]="workflow().id" />
       }
 
-      <div class="origin-context" data-testid="workflow-origin">
-        <span>Definition origin</span>
-        @if (workflow().origin?.projectRoot; as projectRoot) {
-          <strong>Project override</strong>
-          <code title="{{ projectRoot }}">{{ projectRoot }}</code>
-        } @else if (workflow().scope === 'global') {
-          <strong>Global Ralph definition</strong>
-          @if (workflow().origin?.sourcePath; as sourcePath) { <code title="{{ sourcePath }}">{{ sourcePath }}</code> }
-        } @else {
-          <strong>Bundled framework definition</strong>
-          @if (workflow().origin?.sourcePath; as sourcePath) { <code title="{{ sourcePath }}">{{ sourcePath }}</code> }
-        }
-      </div>
-
       @if (workflow().scope === 'bundled') {
-        <p class="scope-note" data-testid="detail-bundled-precedence">
+        <p class="notice" data-testid="detail-bundled-precedence">
           Project overrides beat global copies, which beat bundled defaults. Customize globally to reuse one definition across projects, or customize for this project for a local override only.
         </p>
       }
 
       @if (workflow().shadowedBy; as shadow) {
-        <p class="scope-note scope-warn" data-testid="detail-shadowed-note">
+        <p class="notice notice-warn" data-testid="detail-shadowed-note">
           This {{ workflow().scope }} layer is hidden at run time. The effective winner is {{ shadow.scope }}.
         </p>
       }
 
       @if (availableLayers().length > 1) {
-        <section class="scope-layers" data-testid="detail-scope-layers" aria-label="Which definition copy to view">
+        <section class="scope-layers hub-panel-card" data-testid="detail-scope-layers" aria-label="Which definition copy to view">
           <div class="scope-layers-copy">
             <h3 class="scope-layers-title">View definition copy</h3>
             <p class="scope-layers-hint">
@@ -160,7 +165,7 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       }
 
       @if (!model()) {
-        <p class="raw-mode-note" data-testid="workflow-raw-mode-note">
+        <p class="notice editor-guide" data-testid="workflow-raw-mode-note">
           This file uses frontmatter keys outside the studio's structured-edit subset
           @if (workflow().unsupportedKeys?.length) {
             ({{ workflow().unsupportedKeys!.join(', ') }})
@@ -170,7 +175,7 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       }
 
       @if (model(); as m) {
-        <section class="defaults surface-card" aria-label="Workflow defaults">
+        <section class="defaults hub-panel-card" aria-label="Workflow defaults">
           <div><span class="label">Runtime / model</span><strong>{{ m.defaultsRuntime || 'inherit' }} / {{ m.defaultsModel || 'inherit' }}</strong></div>
           <div><span class="label">Max parallel</span><strong>{{ m.maxParallel ?? '—' }}</strong></div>
           <div><span class="label">Max rework</span><strong>{{ m.maxReworkIterations ?? '—' }}</strong></div>
@@ -179,8 +184,11 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
           }
         </section>
 
-        <section class="stages" data-testid="workflow-stages">
-          <h3>Stages ({{ m.stages.length }})</h3>
+        <section class="stages hub-panel-card" data-testid="workflow-stages">
+          <div class="section-head">
+            <h3 class="section-legend">Stages ({{ m.stages.length }})</h3>
+            <p class="section-hint">Pick a stage to inspect routing, artifacts, and instructions in the graph panel.</p>
+          </div>
           <ul>
             @for (stage of m.stages; track stage.id) {
               <li>
@@ -205,15 +213,18 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
         </section>
       }
 
-      <section class="graph-inspector" data-testid="workflow-graph-inspector">
-        <div class="graph-head">
-          <h3>Graph</h3>
+      <section class="graph-inspector hub-panel-card" data-testid="workflow-graph-inspector">
+        <div class="graph-head section-head">
+          <div>
+            <h3 class="section-legend">Graph</h3>
+            <p class="section-hint">Compiled topology with stage picker and inspector.</p>
+          </div>
           <button type="button" class="btn btn-ghost" data-testid="toggle-raw" (click)="showRaw.set(!showRaw())">
             {{ showRaw() ? 'Hide full file' : 'Show full file' }}
           </button>
         </div>
         @if (showRaw()) {
-          <pre class="raw" data-testid="workflow-raw">{{ workflow().raw }}</pre>
+          <pre class="raw code-scroll-region" data-testid="workflow-raw">{{ workflow().raw }}</pre>
         }
         <div class="graph-layout">
           <ralph-workflow-graph
@@ -222,10 +233,6 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
             [error]="workflow().graphError ?? null"
           />
           <aside class="stage-details" aria-label="Selected stage details">
-            <div class="stage-details-title">
-              <span>Stage details</span>
-              <span class="muted">Select a stage in the map</span>
-            </div>
             <ralph-workflow-stage-inspector [workflow]="workflow()" />
           </aside>
         </div>
@@ -243,11 +250,48 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       min-width: 0;
       padding-bottom: calc(var(--space-6) + var(--fab-clearance, 4.5rem));
     }
-    .page-header {
+    .detail-head {
       display: flex;
       flex-direction: column;
       gap: var(--space-3);
-      margin-bottom: 0;
+      padding: 0;
+      overflow: hidden;
+      background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--ion-color-step-50, #0d1117) 88%, var(--accent) 12%),
+        var(--ion-color-step-50, #0d1117)
+      );
+    }
+    .head-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-4);
+      padding: 1rem 1.1rem 0;
+    }
+    .head-copy {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      min-width: min(100%, 28rem);
+      flex: 1 1 20rem;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--accent-active);
+      font-size: var(--font-size-xs);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .detail-actions {
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      border-top: 1px solid var(--panel-border);
+      background: color-mix(in srgb, var(--panel-bg) 82%, transparent);
+      box-shadow: none;
     }
     .title-bar {
       display: flex;
@@ -264,9 +308,6 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
     .primary-actions .btn-primary {
       min-width: 6.5rem;
     }
-    .secondary-actions {
-      padding-top: var(--space-1);
-    }
     .title-row {
       display: flex;
       align-items: center;
@@ -274,57 +315,64 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       flex-wrap: wrap;
       min-width: 0;
     }
-    .name {
-      margin: 0;
-      font-family: var(--monospace-font);
-      overflow-wrap: anywhere;
+    .page-title {
+      font-family: var(--ui-font);
     }
-    .origin-context {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: var(--space-2);
-      padding: var(--space-2) var(--space-3);
-      border: 1px solid var(--border);
+    .origin-card {
+      display: grid;
+      gap: 0.2rem;
+      min-width: min(100%, 20rem);
+      flex: 1 1 16rem;
+      padding: 0.7rem 0.8rem;
+      border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--panel-border));
       border-radius: var(--radius-md);
-      background: var(--surface);
-      color: var(--text-muted);
-      font-size: var(--font-size-xs);
+      background: color-mix(in srgb, var(--panel-bg) 90%, var(--accent) 10%);
     }
-    .origin-context strong { color: var(--text-primary); }
-    .origin-context code {
+    .origin-label {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .origin-card strong {
+      color: var(--text-primary);
+      font-size: var(--font-size-sm);
+    }
+    .origin-card code {
       max-width: min(100%, 48rem);
       overflow: hidden;
+      color: var(--text-muted);
       font-family: var(--monospace-font);
-      font-size: 0.72rem;
+      font-size: var(--font-size-xs);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .overview {
-      color: var(--text-muted);
       margin: 0;
-      max-width: 46rem;
     }
-    .scope-note {
+    .notice {
       margin: 0;
+      color: var(--text-muted);
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-lg);
+      padding: 0.8rem 0.9rem;
       font-size: var(--font-size-sm);
-      color: var(--text-muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--space-2) var(--space-3);
+      line-height: var(--line-height-body);
     }
-    .scope-warn {
-      border-color: var(--danger);
+    .notice-warn {
       color: var(--danger);
+      border-color: color-mix(in srgb, var(--danger) 55%, var(--panel-border));
+    }
+    .editor-guide {
+      border-left: 3px solid var(--accent);
+      border-radius: 0 var(--radius-md) var(--radius-md) 0;
+      background: color-mix(in srgb, var(--accent) 7%, var(--panel-bg));
     }
     .scope-layers {
       display: grid;
       gap: var(--space-2);
-      padding: var(--space-3);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--surface);
     }
     .scope-layers-copy {
       display: grid;
@@ -350,18 +398,18 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       width: fit-content;
       max-width: 100%;
       padding: 0.2rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--background) 70%, var(--surface));
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-md);
+      background: var(--control-bg);
     }
     .layer-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: var(--touch-target-min, 44px);
+      min-height: var(--control-height);
       padding: 0.35rem 0.85rem;
       border: 0;
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
@@ -378,15 +426,7 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
     }
     .layer-btn.active {
       background: var(--accent);
-      color: var(--button-text);
-    }
-    .raw-mode-note {
-      font-size: var(--font-size-sm);
-      color: var(--text-muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: var(--space-3);
+      color: var(--text-on-accent);
     }
     .defaults {
       display: grid;
@@ -394,7 +434,6 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       align-items: stretch;
       gap: var(--space-3);
       font-size: var(--font-size-sm);
-      padding: var(--space-3);
     }
     .defaults > div {
       display: grid;
@@ -414,15 +453,10 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
     }
     .label {
       color: var(--text-muted);
-    }
-    .stages h3,
-    .graph-inspector h3 {
-      margin: 0 0 var(--space-2);
-      font-size: var(--font-size-sm);
+      font-size: var(--font-size-xs);
       font-weight: 600;
       letter-spacing: var(--letter-label);
       text-transform: uppercase;
-      color: var(--text-muted);
     }
     .stages ul {
       list-style: none;
@@ -442,20 +476,23 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       gap: var(--space-2);
       width: 100%;
       padding: var(--space-2) var(--space-3);
-      border: 1px solid var(--border);
+      border: 1.5px solid var(--control-border);
       border-radius: var(--radius-md);
-      background: var(--surface);
+      background: var(--control-bg);
       font-size: var(--font-size-sm);
       color: inherit;
       cursor: pointer;
       text-align: left;
+      transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
     }
     .stage-pick:hover {
-      border-color: var(--accent);
+      border-color: var(--ion-color-step-300, #6e7681);
+      background: var(--control-bg-hover);
     }
     .stage-pick.selected {
       border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
+      background: var(--control-bg-hover);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
     }
     .stage-id {
       font-family: var(--monospace-font);
@@ -469,11 +506,15 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
     .stage-deps {
       color: var(--text-muted);
     }
+    .graph-inspector {
+      gap: var(--space-3);
+    }
     .graph-head {
-      display: flex;
-      align-items: center;
+      flex-direction: row;
+      align-items: flex-start;
       justify-content: space-between;
       gap: var(--space-3);
+      margin-bottom: 0;
     }
     .graph-layout {
       display: grid;
@@ -484,30 +525,10 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       max-width: 100%;
     }
     .stage-details {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2);
       min-width: 0;
       max-width: 100%;
       position: sticky;
       top: var(--space-3);
-    }
-    .stage-details-title {
-      display: flex;
-      justify-content: space-between;
-      gap: var(--space-2);
-      align-items: baseline;
-      color: var(--text-muted);
-      font-size: var(--font-size-xs);
-      font-weight: 600;
-      letter-spacing: var(--letter-label);
-      text-transform: uppercase;
-    }
-    .stage-details-title .muted {
-      font-size: 0.7rem;
-      font-weight: 400;
-      letter-spacing: 0;
-      text-transform: none;
     }
     @media (max-width: 1080px) {
       .graph-layout {
@@ -530,6 +551,9 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
     }
     @media (max-width: 560px) {
       .defaults { grid-template-columns: 1fr; }
+      .head-main {
+        padding-inline: var(--content-pad-narrow);
+      }
     }
     .raw {
       max-height: 24rem;
@@ -537,16 +561,12 @@ import type { WorkflowDetail, WorkflowScope, WritableWorkflowScope } from '../wo
       overflow: auto;
       box-sizing: border-box;
       background: var(--code-bg, var(--surface));
-      border: 1px solid var(--border);
+      border: 1px solid var(--panel-border);
       border-radius: var(--radius-md);
       padding: var(--space-3);
-      font-family: var(--monospace-font);
       font-size: var(--font-size-sm);
       white-space: pre;
-      margin-bottom: var(--space-3);
-    }
-    .muted {
-      color: var(--text-muted);
+      margin: 0;
     }
   `,
 })

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "ralphVersion": "1.0.0",
+  "name": "exec-image-invalid-write-only",
+  "namespace": "exec-image-invalid-write-only",
+  "maxParallel": 1,
+  "failurePolicy": "drain",
+  "nodes": [
+    {
+      "id": "verify",
+      "type": "stage",
+      "dependsOn": [],
+      "derivedFrom": "stage",
+      "stage": {
+        "execWorkspaceWrite": "writable"
+      }
+    }
+  ],
+  "edges": []
+}

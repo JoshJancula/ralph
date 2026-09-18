@@ -2051,6 +2051,11 @@ workflow_cli_start_dispatch_engine() {
   else
     graph_compile_plan "$input_path" "$graph_json" 1 >/dev/null || return 1
   fi
+  local stage_keys orchestrator_log
+  stage_keys="$(jq -c --arg ns "$artifact_ns" '[.nodes[] | select(.id != null) | {key:.id,value:("tool-results/" + $ns + "-" + .id)}] | from_entries' "$graph_json" 2>/dev/null || printf '{}')"
+  orchestrator_log="$state_root/logs/orchestrator-${artifact_ns}.orch.log"
+  workflow_state_update "$state_root" "$run_id" '.stageKeys = $stageKeys | .orchestratorLog = $orchestratorLog' \
+    --argjson stageKeys "$stage_keys" --arg orchestratorLog "$orchestrator_log" >/dev/null || return 1
   workflow_dep_start_engine --state-root "$state_root" --run-id "$run_id" \
     --workspace "$workspace" --plan-path "$input_path" --graph-json "$graph_json" \
     --max-parallel "$max_parallel" >/dev/null || return 1

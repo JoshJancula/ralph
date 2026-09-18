@@ -918,6 +918,7 @@ workflow_state_create() {
       taskFile: (if $taskFile == "" then null else $taskFile end),
       inputPath: $inputPath,
       inputPlan: $inputPlan,
+      registryRunPath: $registryRunPath,
       state: $state,
       createdAt: $createdAt,
       updatedAt: $updatedAt,
@@ -935,6 +936,7 @@ workflow_state_create() {
     --arg taskFile "$task_file" \
     --arg inputPath "$input_path" \
     --argjson inputPlan "$input_plan_json" \
+    --arg registryRunPath "$run_dir" \
     --arg state "$state" \
     --arg createdAt "$now" \
     --arg updatedAt "$now" \

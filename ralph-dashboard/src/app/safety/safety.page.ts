@@ -163,7 +163,7 @@ const SAFETY_PROFILES: readonly SafetyProfile[] = [
           </div>
         }
 
-        <section class="profile-panel hub-panel-card" data-testid="safety-profiles">
+        <section class="profile-panel" data-testid="safety-profiles">
           <div>
             <h2 class="section-title">Start with a protection profile</h2>
             <p class="hint">Profiles add rules to your draft; they do not remove your existing rules or save automatically.</p>
@@ -498,11 +498,11 @@ const SAFETY_PROFILES: readonly SafetyProfile[] = [
             }
           </div>
 
-          <details class="advanced-rules hub-nested-panel" data-testid="safety-advanced-rules">
+          <details class="advanced-rules" data-testid="safety-advanced-rules">
             <summary>Advanced: add narrow exceptions</summary>
-            <p class="hint">Exceptions can override a block. Keep them specific and classify an example command before saving.</p>
+            <p class="hint advanced-lede">Exceptions can override a block. Keep them specific and classify an example command before saving.</p>
             @for (field of exceptionFields; track field.key) {
-              <div class="chip-editor hub-nested-panel" [attr.data-testid]="'safety-chips-' + field.testId">
+              <div class="chip-editor chip-editor-flat" [attr.data-testid]="'safety-chips-' + field.testId">
                 <div class="chip-head"><div><h3>{{ field.label }}</h3><p>{{ field.description }}</p></div></div>
                 <ul class="chip-list" [attr.data-testid]="'safety-chip-list-' + field.testId">
                   @for (item of stringLists()[field.key]; track $index) {
@@ -713,10 +713,48 @@ const SAFETY_PROFILES: readonly SafetyProfile[] = [
     .advanced-rules {
       display: flex;
       flex-direction: column;
-      gap: var(--space-3);
-      padding: var(--space-3);
+      gap: var(--space-2);
+      margin-top: var(--space-1);
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--border);
     }
-    .advanced-rules summary { cursor: pointer; font-size: var(--font-size-sm); font-weight: 650; }
+    .advanced-rules summary {
+      cursor: pointer;
+      font-size: var(--font-size-sm);
+      font-weight: 650;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-primary);
+    }
+    .advanced-rules summary::-webkit-details-marker {
+      display: none;
+    }
+    .advanced-rules summary::before {
+      content: '';
+      width: 0.45rem;
+      height: 0.45rem;
+      border-right: 2px solid var(--text-muted);
+      border-bottom: 2px solid var(--text-muted);
+      transform: rotate(-45deg);
+      transition: transform 0.15s ease;
+      flex-shrink: 0;
+    }
+    .advanced-rules[open] summary::before {
+      transform: rotate(45deg);
+    }
+    .advanced-lede {
+      margin-top: var(--space-1);
+    }
+    .chip-editor-flat {
+      padding: var(--space-3) 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .chip-editor-flat:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
     .chip-list {
       list-style: none;
       margin: 0;

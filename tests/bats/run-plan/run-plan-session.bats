@@ -117,7 +117,51 @@ create_shared_layout() {
   [[ "$output" == *"How should Codex handle sessions between TODOs?"* ]]
   [[ "$output" == *"reuse session id with a compact command prefix before each TODO"* ]]
   [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset compact"* ]]
+  [[ "$(cat "$menu_file")" != *"resume previous run"* ]]
   [[ "$output" == *"STATE=compact:1"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume adds resume previous run when exact sessions exist" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.codex.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    export RALPH_PLAN_WORKSPACE_ROOT="$4"
+    export RALPH_PLAN_KEY=picker-plan
+    export PLAN_PATH="$5"
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=codex
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "compact"
+    }
+    ralph_session_prompt_cli_resume
+  ' _ "$session_lib" "$session_file" "$menu_file" "$tmp_dir/state" "$tmp_dir/plan.md"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"resume previous run"* ]]
+  [[ "$output" == *"resume previous run"* ]]
 
   rm -rf "$tmp_dir"
 }
@@ -1195,4 +1239,58 @@ EOF
   run bash "$helper"
   [ "$status" -eq 0 ]
   rm -f "$helper"
+}
+
+@test "ralph_session_resolve_resume_run last uses prior index entry" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local tmp
+  tmp="$(mktemp -d)"
+  export RALPH_PLAN_WORKSPACE_ROOT="$tmp/state"
+  export RALPH_PLAN_KEY="resume-last-plan"
+  export RALPH_PROCESS_RUN_ID="run-current"
+  mkdir -p "$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs"
+  printf '%s\n' '{"run_id":"run-old","path":"logs/resume-last-plan/runs/run-old/run-manifest.json","status":"done"}' \
+    >"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  printf '%s\n' '{"run_id":"run-incomplete","path":"logs/resume-last-plan/runs/run-incomplete/run-manifest.json","status":"incomplete"}' \
+    >>"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  printf '%s\n' '{"run_id":"run-current","path":"logs/resume-last-plan/runs/run-current/run-manifest.json","status":"incomplete"}' \
+    >>"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  export RALPH_PLAN_RESUME_RUN=last
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_session_resolve_resume_run
+  [ "${RALPH_PLAN_RESUME_RUN_RESOLVED:-}" = "run-old" ]
+  [ "${RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID:-}" = "1" ]
+  rm -rf "$tmp"
+}
+
+@test "ralph_session_todo_prepare_invocation degraded capture under resume-run starts fresh" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local tmp
+  tmp="$(mktemp -d)"
+  export RALPH_SESSION_DIR="$tmp/session"
+  export RALPH_PROJECT_ROOT="$tmp/project"
+  export RALPH_PLAN_WORKSPACE_ROOT="$tmp/state"
+  export RALPH_AGENT_WORKSPACE="$tmp/project"
+  export RALPH_PLAN_KEY="resume-degraded-plan"
+  export RUNTIME="cursor"
+  export RALPH_PROCESS_RUN_ID="run-old"
+  export RALPH_CURRENT_TODO_LINE="10"
+  export RALPH_CURRENT_TODO_ORDINAL="1"
+  export RALPH_CURRENT_TODO_ID="resume-degraded-todo"
+  export RALPH_CURRENT_TODO_HASH="hash-degraded"
+  mkdir -p "$RALPH_SESSION_DIR"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_session_todo_create "sess-degraded-last" "degraded" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-new"
+  export RALPH_PLAN_RESUME_RUN="run-old"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_run_plan_log() { :; }
+  ralph_session_apply_resume_strategy() { :; }
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+  rm -rf "$tmp"
 }

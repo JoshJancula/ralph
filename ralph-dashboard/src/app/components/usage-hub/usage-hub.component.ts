@@ -9,8 +9,6 @@ import {
   input,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { IonCard, IonCardContent, IonCardHeader, IonCardSubtitle, IonCardTitle } from '@ionic/angular/standalone';
-
 import {
   ApiService,
   MetricsBreakdownResponse,
@@ -40,11 +38,6 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
   imports: [
     CommonModule,
     RouterLink,
-    IonCard,
-    IonCardContent,
-    IonCardHeader,
-    IonCardSubtitle,
-    IonCardTitle,
     RouteLoadStateComponent,
     ErrorModalComponent,
   ],
@@ -555,88 +548,90 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
                 @if (!detail.item) {
                   <p class="empty">No detail found for this plan key in the selected project.</p>
                 } @else {
-                  <ion-card>
-                    <ion-card-header>
-                      <ion-card-title>{{ detail.item.plan_key }}</ion-card-title>
-                      <ion-card-subtitle>{{ detail.kind }} · {{ detail.item.runtime || '(unspecified)' }}</ion-card-subtitle>
-                    </ion-card-header>
-                    <ion-card-content>
-                      <a
-                        class="detail-plan-link"
-                        [routerLink]="['/plan-detail', detail.item.plan_key]"
-                        [queryParams]="{ projectRoot: detail.item.project_root }"
-                        (click)="closeDetail()"
-                        data-testid="insights-detail-plan-link"
-                      >
-                        Open plan
-                      </a>
-                      <div class="metric-line">
-                        <span>Model</span>
-                        <span [title]="detail.item.model || ''">
-                          {{ friendlyModel(detail.item.model) }}
-                          <span class="exact-hint">{{ detail.item.model || '(unspecified)' }}</span>
-                        </span>
-                      </div>
-                      @if (detailModelRows(detail.item); as modelRows) {
-                        <div class="detail-models" data-testid="insights-detail-models">
-                          <h3 class="detail-models-title">
-                            Models used
-                            <span class="detail-models-meta">{{ modelRows.length }}</span>
-                          </h3>
-                          <div class="usage-table" role="table" aria-label="Models used in this run">
-                            <div class="usage-row usage-header detail-model-columns" role="row">
-                              <span role="columnheader">Model</span>
-                              <span role="columnheader">Runtime</span>
-                              <span role="columnheader">Invocations</span>
-                              <span role="columnheader">Input</span>
-                              <span role="columnheader">Output</span>
-                              <span role="columnheader">Cache read</span>
-                              <span role="columnheader">Total</span>
-                              <span role="columnheader">Tool calls</span>
-                              <span role="columnheader">Elapsed</span>
-                            </div>
-                            @for (row of modelRows; track row.runtime + '-' + row.model_exact) {
-                              <div class="usage-row detail-model-columns" role="row">
-                                <span class="cell-clip" data-label="Model" [title]="row.model_exact">
-                                  {{ row.model_label }}
-                                  <span class="exact-hint">{{ row.model_exact }}</span>
-                                </span>
-                                <span class="mono cell-clip" data-label="Runtime">{{ row.runtime }}</span>
-                                <span data-label="Invocations">{{ formatNumber(row.invocations) }}</span>
-                                <span class="mono" data-label="Input">{{ formatNumber(row.input_tokens) }}</span>
-                                <span class="mono" data-label="Output">{{ formatNumber(row.output_tokens) }}</span>
-                                <span class="mono" data-label="Cache read">{{
-                                  formatNumber(row.cache_read_input_tokens)
-                                }}</span>
-                                <span class="mono" data-label="Total">{{ formatNumber(row.total_tokens) }}</span>
-                                <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
-                                <span data-label="Elapsed">{{ formatSeconds(row.elapsed_seconds) }}</span>
-                              </div>
-                            }
+                  <p class="detail-meta">{{ detail.kind }} · {{ detail.item.runtime || '(unspecified)' }}</p>
+                  <a
+                    class="detail-plan-link"
+                    [routerLink]="['/plan-detail', detail.item.plan_key]"
+                    [queryParams]="{ projectRoot: detail.item.project_root }"
+                    (click)="closeDetail()"
+                    data-testid="insights-detail-plan-link"
+                  >
+                    Open plan
+                  </a>
+                  @if (detailModelRows(detail.item); as modelRows) {
+                    <div class="detail-models" data-testid="insights-detail-models">
+                      <h3 class="detail-models-title">
+                        Models used
+                        <span class="detail-models-meta">{{ modelRows.length }}</span>
+                      </h3>
+                      <div class="usage-table-wrap">
+                        <div class="usage-table detail-models-table" role="table" aria-label="Models used in this run">
+                          <div class="usage-row usage-header detail-model-columns" role="row">
+                            <span role="columnheader">Model</span>
+                            <span role="columnheader">Runtime</span>
+                            <span role="columnheader">Invocations</span>
+                            <span role="columnheader">Input</span>
+                            <span role="columnheader">Output</span>
+                            <span role="columnheader">Cache read</span>
+                            <span role="columnheader">Total</span>
+                            <span role="columnheader">Tool calls</span>
+                            <span role="columnheader">Elapsed</span>
                           </div>
+                          @for (row of modelRows; track row.runtime + '-' + row.model_exact) {
+                            <div class="usage-row detail-model-columns" role="row">
+                              <span class="cell-clip" data-label="Model" [title]="row.model_exact">
+                                {{ row.model_label }}
+                                @if (showExactModelHint(row.model_label, row.model_exact)) {
+                                  <span class="exact-hint">{{ row.model_exact }}</span>
+                                }
+                              </span>
+                              <span class="mono cell-clip" data-label="Runtime">{{ row.runtime }}</span>
+                              <span data-label="Invocations">{{ formatNumber(row.invocations) }}</span>
+                              <span class="mono" data-label="Input">{{ formatNumber(row.input_tokens) }}</span>
+                              <span class="mono" data-label="Output">{{ formatNumber(row.output_tokens) }}</span>
+                              <span class="mono" data-label="Cache read">{{
+                                formatNumber(row.cache_read_input_tokens)
+                              }}</span>
+                              <span class="mono" data-label="Total">{{ formatNumber(row.total_tokens) }}</span>
+                              <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
+                              <span data-label="Elapsed">{{ formatSeconds(row.elapsed_seconds) }}</span>
+                            </div>
+                          }
                         </div>
-                      }
-                      <div class="metric-line">
-                        <span>Tokens</span>
-                        <span>{{
-                          formatNumber(
-                            detail.item.input_tokens +
-                              detail.item.output_tokens +
-                              detail.item.cache_creation_input_tokens +
-                              detail.item.cache_read_input_tokens
-                          )
-                        }}</span>
                       </div>
-                      <div class="metric-line">
-                        <span>Elapsed</span>
-                        <span>{{ formatSeconds(detail.item.elapsed_seconds) }}</span>
-                      </div>
-                      <div class="metric-line">
-                        <span>Started</span>
-                        <span>{{ detail.item.started_at || '--' }}</span>
-                      </div>
-                    </ion-card-content>
-                  </ion-card>
+                    </div>
+                  } @else {
+                    <div class="metric-line">
+                      <span>Model</span>
+                      <span [title]="detail.item.model || ''">
+                        {{ friendlyModel(detail.item.model) }}
+                        @if (showExactModelHint(friendlyModel(detail.item.model), detail.item.model || '')) {
+                          <span class="exact-hint">{{ detail.item.model || '(unspecified)' }}</span>
+                        }
+                      </span>
+                    </div>
+                  }
+                  <div class="detail-summary-metrics">
+                    <div class="metric-line">
+                      <span>Tokens</span>
+                      <span>{{
+                        formatNumber(
+                          detail.item.input_tokens +
+                            detail.item.output_tokens +
+                            detail.item.cache_creation_input_tokens +
+                            detail.item.cache_read_input_tokens
+                        )
+                      }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Elapsed</span>
+                      <span>{{ formatSeconds(detail.item.elapsed_seconds) }}</span>
+                    </div>
+                    <div class="metric-line">
+                      <span>Started</span>
+                      <span>{{ detail.item.started_at || '--' }}</span>
+                    </div>
+                  </div>
                 }
               </section>
             }
@@ -756,8 +751,6 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       gap: 0.75rem;
       flex-wrap: wrap;
       align-items: baseline;
-    }
-    .filters-header {
       margin-bottom: 0;
     }
     .filters-summary-meta {
@@ -779,9 +772,15 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
     }
     .detail-modal {
       position: relative;
-      width: min(100%, 42rem);
-      max-height: min(42rem, calc(100vh - 2rem));
+      width: min(100%, 56rem);
+      max-height: min(48rem, calc(100vh - 2rem));
       isolation: isolate;
+      overflow: auto;
+    }
+    .detail-meta {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.9rem;
     }
     .detail-modal-header {
       display: flex;
@@ -819,15 +818,9 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       padding: 0;
       background: transparent;
     }
-    .detail-modal ion-card {
-      margin: 0;
-      --background: var(--surface);
-      background: var(--surface);
-      box-shadow: none;
-    }
     .detail-plan-link {
       display: inline-flex;
-      margin-bottom: 0.85rem;
+      margin: 0;
       color: var(--accent);
       font-size: 0.9rem;
       font-weight: 600;
@@ -858,7 +851,6 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       color: var(--text-muted);
       font-size: 0.82rem;
     }
-    .answer-headline h3,
     .breakdown-header h2,
     .detail-panel h3,
     .savings-panel-header h2,
@@ -892,9 +884,6 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       font-weight: 650;
       line-height: 1.25;
       letter-spacing: -0.02em;
-    }
-    .trend-sentence[data-direction='up'] {
-      color: var(--text-primary);
     }
     .trend-chart {
       display: grid;
@@ -1170,8 +1159,18 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       color: var(--text-muted);
       font-size: 0.78rem;
     }
+    .detail-models-table {
+      min-width: 52rem;
+    }
     .detail-model-columns {
       grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) repeat(7, minmax(0, 0.8fr));
+    }
+    .detail-summary-metrics {
+      display: grid;
+      gap: 0.15rem;
+      margin-top: 0.35rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
     }
     .cell-clip {
       overflow: hidden;
@@ -1209,6 +1208,9 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       font-size: 0.9rem;
     }
     @media (max-width: 720px) {
+      .detail-models-table {
+        min-width: 0;
+      }
       .usage-table-wrap {
         overflow-x: visible;
       }
@@ -1217,7 +1219,8 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
       }
       .usage-row.runtime-columns,
       .usage-row.model-columns,
-      .usage-row.run-columns {
+      .usage-row.run-columns,
+      .usage-row.detail-model-columns {
         display: grid;
         grid-template-columns: 1fr;
         gap: 0.35rem;
@@ -1345,7 +1348,10 @@ export class UsageHubComponent {
   }
 
   get isRefreshing(): boolean {
-    return !!(this.insights && (this.summaryLoading || this.breakdownLoading || this.savingsLoading));
+    return !!(
+      this.insights &&
+      (this.summaryLoading || this.breakdownLoading || this.savingsLoading)
+    );
   }
 
   refresh(): void {
@@ -1652,6 +1658,16 @@ export class UsageHubComponent {
       return 'GPT-4o';
     }
     return exact.length > 28 ? `${exact.slice(0, 25)}...` : exact;
+  }
+
+  /** Show monospace exact id only when it differs from the friendly label. */
+  showExactModelHint(label: string, exact: string): boolean {
+    const normalizedLabel = (label ?? '').trim();
+    const normalizedExact = (exact ?? '').trim();
+    if (!normalizedExact || normalizedExact === '(unspecified)') {
+      return false;
+    }
+    return normalizedExact !== normalizedLabel;
   }
 
   trendSentence(insights: MetricsInsightsSummary): string {

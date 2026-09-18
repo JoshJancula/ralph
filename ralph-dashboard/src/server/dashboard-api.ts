@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
-import { type Dirent, existsSync, readFileSync, promises as fs, realpathSync, statSync } from 'node:fs';
+import { type Dirent, existsSync, readdirSync, readFileSync, promises as fs, realpathSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -34,8 +35,27 @@ import {
   type InsightsRunItem,
   type MetricsFilterQuery,
 } from './metrics-insights';
+import { collectAmbientUsage } from './ambient-usage';
+import { registerGraphRunDiffRoutes } from './graph-run-diff';
+import { enrichPlanRunDetail } from './plan-run-detail';
+import {
+  buildPlanRunFilesModel,
+  filterSafePlanRunStatePaths,
+  isPathUnderWorkspaceRoot,
+  isSafePlanRunStatePath,
+} from './plan-run-evidence';
+import { enrichGraphRunDetail } from './graph-run-detail';
 
 export { resolveDashboardRootsForWorkspaceRoot } from './dashboard-workspace-resolve';
+export {
+  handleGraphRunDiffRequest,
+  registerGraphRunDiffRoutes,
+  GRAPH_RUN_DIFF_ROUTE,
+  type GraphDiffChange,
+  type GraphDiffNodeResult,
+  type GraphDiffOperation,
+  type GraphRunDiffResponse,
+} from './graph-run-diff';
 
 const FILE_CHUNK_BYTES = 256 * 1024;
 const execFileAsync = promisify(execFile);
@@ -188,6 +208,10 @@ const DASHBOARD_EXPLORER_ROOT_KEYS = new Set([
   'orchestration-plans',
   'docs',
   'plans',
+  'graph-runs',
+  'workflow-runs',
+  'runtime-config',
+  'tool-results',
 ]);
 
 type MetricsSummaryKind = 'plan_usage_summary' | 'orchestration_usage_summary';
@@ -3507,6 +3531,17 @@ export async function handleMetricsBreakdownRequest(req: Request, res: Response)
   res.json(breakdown);
 }
 
+export async function handleAmbientUsageRequest(req: Request, res: Response): Promise<void> {
+  const filters = parseMetricsFilterQuery(req);
+  const payload = await withServerTiming(res, 'ambient-usage', 'Collect IDE and CLI usage', async () =>
+    collectAmbientUsage({
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+    }),
+  );
+  res.json(payload);
+}
+
 export async function handleMetricsDetailRequest(req: Request, res: Response): Promise<void> {
   const planKey = typeof req.params['planKey'] === 'string' ? req.params['planKey'] : '';
   if (!planKey.trim()) {
@@ -4169,6 +4204,15 @@ export interface MergedWorkspaceEntry {
   runtime?: string;
 }
 
+export interface RegisteredWorkspaceEnumeratorResult {
+  workspaces: MergedWorkspaceEntry[];
+  skipped: number;
+}
+
+function isLiveWorkspaceRoot(workspaceRoot: string): boolean {
+  return existsSync(workspaceRoot) && statSync(workspaceRoot).isDirectory();
+}
+
 async function workspaceSectionsAsync(
   projectRoot: string,
   workspaceRoot: string,
@@ -4245,13 +4289,18 @@ async function computeMergedWorkspaceAllowlistBody(): Promise<MergedWorkspaceEnt
     registryOnlyWorkspaces.map(async (workspace) => {
       const projectRoot = resolve(workspace.path);
       const workspaceRoot = join(projectRoot, '.ralph-workspace');
+      const exists = existsSync(workspaceRoot);
+      // Include dead registry entries in the allowlist so that the registered
+      // workspace enumerator can report them as skipped. Previously, they were
+      // filtered out during allowlist construction, which made `skipped` always
+      // zero for callers of enumerateRegisteredWorkspaces().
       return {
         path: projectRoot,
         workspaceRoot,
         projectRoot,
         label: basename(projectRoot),
-        exists: existsSync(workspaceRoot),
-        sections: await workspaceSectionsAsync(projectRoot, workspaceRoot),
+        exists,
+        sections: exists ? await workspaceSectionsAsync(projectRoot, workspaceRoot) : Object.fromEntries(Array.from(DASHBOARD_EXPLORER_ROOT_KEYS).map((key) => [key, false])),
         lastSeen: workspace.lastSeen,
         planKey: workspace.planKey,
         runtime: workspace.runtime,
@@ -4307,7 +4356,6 @@ async function computeMergedWorkspaceAllowlistBody(): Promise<MergedWorkspaceEnt
   }
 
   return Array.from(byProject.values())
-    .filter((entry) => entry.exists)
     .sort((a, b) => {
       if (a.label === 'Ralph docs') return -1;
       if (b.label === 'Ralph docs') return 1;
@@ -4337,6 +4385,47 @@ export async function resolveWorkflowWorkspaceContext(req: Request): Promise<Das
     return findDashboardRoots();
   }
   return resolveDashboardRootsForWorkspaceRoot(query, allowlist);
+}
+
+/**
+ * Read-only view of registered workspaces that are both present in the merged
+ * workspace allowlist and still present on disk. Use this from any dashboard
+ * feature that needs a safe, shared enumeration of known workspaces without
+ * touching the registry file.
+ *
+ * When `workspaceRootQuery` is omitted, only live allowlisted entries are
+ * returned, missing paths are skipped, and `skipped` is surfaced so callers
+ * can suggest `ralph workspaces prune`. When a query is supplied, this behaves
+ * like `resolveDashboardRootsForWorkspaceRoot` and returns either a single
+ * matching workspace or an empty result.
+ */
+export async function enumerateRegisteredWorkspaces(
+  workspaceRootQuery?: string,
+): Promise<RegisteredWorkspaceEnumeratorResult> {
+  const allowlist = await getMergedWorkspaceAllowlist();
+
+  if (workspaceRootQuery !== undefined && workspaceRootQuery.trim() !== '') {
+    const trimmed = workspaceRootQuery.trim();
+    const target = resolve(trimmed);
+    const targetWorkspaceRoot = basename(target) === '.ralph-workspace' ? target : join(target, '.ralph-workspace');
+    const entry = allowlist.find((e) => resolve(e.workspaceRoot) === targetWorkspaceRoot);
+    if (!entry || !isLiveWorkspaceRoot(resolve(entry.workspaceRoot))) {
+      return { workspaces: [], skipped: 0 };
+    }
+    return { workspaces: [entry], skipped: 0 };
+  }
+
+  const liveEntries: MergedWorkspaceEntry[] = [];
+  let skipped = 0;
+  for (const entry of allowlist) {
+    const workspaceRoot = resolve(entry.workspaceRoot);
+    if (isLiveWorkspaceRoot(workspaceRoot)) {
+      liveEntries.push(entry);
+    } else if (entry.lastSeen !== undefined || entry.planKey !== undefined || entry.runtime !== undefined) {
+      skipped++;
+    }
+  }
+  return { workspaces: liveEntries, skipped };
 }
 
 export function resolveDashboardRootsForRequest(
@@ -4400,6 +4489,8 @@ export interface GraphRunSummary {
   status: string;
   startedAt: string | null;
   nodeCount: number;
+  workspaceRoot: string;
+  projectRoot: string;
 }
 
 export interface DelegatedRunRecord {
@@ -4629,6 +4720,421 @@ function addUsage(total: Record<string, number>, value: unknown): void {
   }
 }
 
+const PLAN_RUN_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+function omitTokenFields<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => omitTokenFields(entry)) as T;
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'token') {
+      continue;
+    }
+    out[key] = omitTokenFields(nested);
+  }
+  return out as T;
+}
+
+async function listRelativeFiles(absDir: string, prefix = ''): Promise<string[]> {
+  const out: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(absDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (entry.name === 'processes' || isHiddenEntryName(entry.name)) {
+      continue;
+    }
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const abs = join(absDir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...await listRelativeFiles(abs, rel));
+    } else if (entry.isFile()) {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
+function planTodoHashes(planPath: string): Set<string> {
+  const hashes = new Set<string>();
+  try {
+    const text = readFileSync(planPath, 'utf8');
+    for (const line of text.split('\n')) {
+      const match = line.match(/^\s*- \[[xX ]\] (.*)$/);
+      if (!match) continue;
+      hashes.add(createHash('sha256').update(match[1] ?? '').digest('hex'));
+    }
+  } catch {
+    return hashes;
+  }
+  return hashes;
+}
+
+function countResumableTodos(workspaceRoot: string, planKey: string, runId: string, planPath: string): number {
+  const dir = join(workspaceRoot, 'sessions', planKey, 'todo-sessions');
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir).filter((name) => name.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+  const hashes = planPath ? planTodoHashes(planPath) : new Set<string>();
+  let count = 0;
+  for (const name of entries) {
+    try {
+      const record = JSON.parse(readFileSync(join(dir, name), 'utf8')) as Record<string, unknown>;
+      const identity = (record['identity'] && typeof record['identity'] === 'object')
+        ? record['identity'] as Record<string, unknown>
+        : {};
+      if (identity['runId'] !== runId) continue;
+      if (record['capture'] !== 'exact') continue;
+      const hash = typeof identity['todoHash'] === 'string' ? identity['todoHash'] : '';
+      if (hashes.size > 0 && hash && !hashes.has(hash)) continue;
+      count += 1;
+    } catch {
+      continue;
+    }
+  }
+  return count;
+}
+
+
+interface LocatedPlanRun {
+  runId: string;
+  planKey: string;
+  status: string;
+  startedAt: string;
+  endedAt: string;
+  source: 'manifest' | 'legacy';
+  logDir: string;
+  runDir: string | null;
+  manifest: Record<string, unknown> | null;
+}
+
+function parseManifestRecord(raw: Record<string, unknown>, fallbackPlanKey: string, runDir: string): LocatedPlanRun | null {
+  const runId = typeof raw['run_id'] === 'string' ? raw['run_id'] : '';
+  if (!runId || !PLAN_RUN_ID_RE.test(runId)) {
+    return null;
+  }
+  return {
+    runId,
+    planKey: typeof raw['plan_key'] === 'string' && raw['plan_key'] ? raw['plan_key'] : fallbackPlanKey,
+    status: typeof raw['status'] === 'string' ? raw['status'] : 'unknown',
+    startedAt: typeof raw['started_at'] === 'string' ? raw['started_at'] : '',
+    endedAt: typeof raw['ended_at'] === 'string' ? raw['ended_at'] : '',
+    source: 'manifest',
+    logDir: dirname(runDir),
+    runDir,
+    manifest: raw,
+  };
+}
+
+async function collectPlanRunsFromWorkspace(workspaceRoot: string, planKeyFilter: string): Promise<LocatedPlanRun[]> {
+  const logsRoot = join(workspaceRoot, 'logs');
+  const found: LocatedPlanRun[] = [];
+  let planDirs: Dirent[];
+  try {
+    planDirs = await fs.readdir(logsRoot, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+
+  for (const planEntry of planDirs) {
+    if (!planEntry.isDirectory() || isHiddenEntryName(planEntry.name)) {
+      continue;
+    }
+    const planKey = planEntry.name;
+    if (planKeyFilter && planKey !== planKeyFilter) {
+      continue;
+    }
+    const logDir = join(logsRoot, planKey);
+    const runsDir = join(logDir, 'runs');
+    let runEntries: Dirent[] = [];
+    try {
+      runEntries = await fs.readdir(runsDir, { withFileTypes: true });
+    } catch {
+      runEntries = [];
+    }
+
+    let sawManifest = false;
+    for (const runEntry of runEntries) {
+      if (!runEntry.isDirectory() || isHiddenEntryName(runEntry.name)) {
+        continue;
+      }
+      const runDir = join(runsDir, runEntry.name);
+      const manifestPath = join(runDir, 'run-manifest.json');
+      if (!existsSync(manifestPath)) {
+        continue;
+      }
+      const raw = safeReadJson(manifestPath);
+      const parsed = parseManifestRecord(raw, planKey, runDir);
+      if (!parsed) {
+        continue;
+      }
+      parsed.logDir = logDir;
+      found.push(parsed);
+      sawManifest = true;
+    }
+
+    if (sawManifest) {
+      continue;
+    }
+
+    const summaryPath = join(logDir, 'plan-usage-summary.json');
+    if (!existsSync(summaryPath)) {
+      const legacyProbe: LocatedPlanRun = {
+        runId: `legacy-${planKey}`,
+        planKey,
+        status: 'legacy',
+        startedAt: '',
+        endedAt: '',
+        source: 'legacy',
+        logDir,
+        runDir: null,
+        manifest: null,
+      };
+      const evidencePaths = await collectPlanRunFilePaths(legacyProbe, workspaceRoot);
+      if (evidencePaths.length === 0) {
+        continue;
+      }
+      found.push({
+        runId: `legacy-${planKey}`,
+        planKey,
+        status: 'legacy',
+        startedAt: '',
+        endedAt: '',
+        source: 'legacy',
+        logDir,
+        runDir: null,
+        manifest: null,
+      });
+      continue;
+    }
+    const summary = safeReadJson(summaryPath);
+    const runId =
+      (typeof summary['run_id'] === 'string' && summary['run_id'])
+        ? summary['run_id']
+        : `legacy-${planKey}`;
+    if (!PLAN_RUN_ID_RE.test(runId)) {
+      continue;
+    }
+    found.push({
+      runId,
+      planKey,
+      status: typeof summary['status'] === 'string' ? summary['status'] : 'legacy',
+      startedAt: typeof summary['started_at'] === 'string' ? summary['started_at'] : '',
+      endedAt: typeof summary['ended_at'] === 'string' ? summary['ended_at'] : '',
+      source: 'legacy',
+      logDir,
+      runDir: null,
+      manifest: null,
+    });
+  }
+
+  found.sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
+  return found;
+}
+
+async function locatePlanRun(workspaceRoot: string, runId: string): Promise<LocatedPlanRun | null> {
+  const runs = await collectPlanRunsFromWorkspace(workspaceRoot, '');
+  return runs.find((run) => run.runId === runId) ?? null;
+}
+
+function invocationRecordsFromLogDir(logDir: string): Array<Record<string, unknown>> {
+  const parsed = safeReadJson(join(logDir, 'invocation-usage.json'));
+  const invocations = parsed['invocations'];
+  if (!Array.isArray(invocations)) {
+    return [];
+  }
+  return invocations.filter((entry): entry is Record<string, unknown> => isJsonRecord(entry));
+}
+
+async function collectPlanRunFilePaths(run: LocatedPlanRun, workspaceRoot: string): Promise<string[]> {
+  const files = new Set<string>();
+  const manifestFiles = run.manifest && Array.isArray(run.manifest['files']) ? run.manifest['files'] : [];
+  for (const entry of manifestFiles) {
+    if (isJsonRecord(entry) && typeof entry['path'] === 'string') {
+      const path = entry['path'].replace(/\\/g, '/');
+      if (!isSafePlanRunStatePath(path)) {
+        continue;
+      }
+      const abs = join(workspaceRoot, path);
+      if (!isPathUnderWorkspaceRoot(abs, workspaceRoot)) {
+        continue;
+      }
+      files.add(path);
+    }
+  }
+  if (run.runDir) {
+    for (const rel of await listRelativeFiles(run.runDir)) {
+      files.add(relative(workspaceRoot, join(run.runDir, rel)).replace(/\\/g, '/'));
+    }
+  }
+  for (const rel of await listRelativeFiles(run.logDir)) {
+    if (rel === 'runs' || rel.startsWith('runs/')) {
+      continue;
+    }
+    files.add(relative(workspaceRoot, join(run.logDir, rel)).replace(/\\/g, '/'));
+  }
+  const runtimeConfigDir = join(workspaceRoot, 'runtime-config', run.planKey);
+  for (const rel of await listRelativeFiles(runtimeConfigDir)) {
+    files.add(relative(workspaceRoot, join(runtimeConfigDir, rel)).replace(/\\/g, '/'));
+  }
+  return filterSafePlanRunStatePaths(workspaceRoot, files);
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function planRunCardFields(run: LocatedPlanRun): {
+  runtime: string;
+  model: string;
+  todosDone: number | null;
+  todosTotal: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  elapsedSeconds: number | null;
+} {
+  const summary = safeReadJson(join(run.logDir, 'plan-usage-summary.json'));
+  const manifest = run.manifest ?? {};
+  const runtime =
+    (typeof manifest['runtime'] === 'string' && manifest['runtime'])
+      || (typeof summary['runtime'] === 'string' && summary['runtime'])
+      || '';
+  const model =
+    (typeof manifest['model'] === 'string' && manifest['model'])
+      || (typeof summary['model'] === 'string' && summary['model'])
+      || '';
+  return {
+    runtime,
+    model,
+    todosDone: asFiniteNumber(summary['todos_done']),
+    todosTotal: asFiniteNumber(summary['todos_total']),
+    inputTokens: asFiniteNumber(summary['input_tokens']) ?? 0,
+    outputTokens: asFiniteNumber(summary['output_tokens']) ?? 0,
+    elapsedSeconds: asFiniteNumber(summary['elapsed_seconds']),
+  };
+}
+
+function planRunCatalogRecords(
+  catalog: Awaited<ReturnType<typeof loadMetricsCatalog>>,
+  planKey: string,
+): Array<Record<string, unknown>> {
+  return catalog.plans
+    .filter((item) => !planKey || item.plan_key === planKey)
+    .map((item) => ({
+      run_id: item.plan_key,
+      plan_key: item.plan_key,
+      ended_at: item.ended_at,
+      event: 'plan usage summary',
+      status: 'recorded',
+    }));
+}
+
+function planRunsWorkspaceRoot(workspaceRootQuery: string): string {
+  const { workspaceRoot } = findDashboardRoots();
+  return workspaceRootQuery ? resolve(workspaceRootQuery) : workspaceRoot;
+}
+
+export async function handlePlanRunsListRequest(req: Request, res: Response): Promise<void> {
+  const planKey = typeof req.query['planKey'] === 'string' ? req.query['planKey'].trim() : '';
+  const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const workspaceRoot = planRunsWorkspaceRoot(workspaceRootQuery);
+  const runs = await collectPlanRunsFromWorkspace(workspaceRoot, planKey);
+  res.json({
+    items: runs.map((run) => ({
+      runId: run.runId,
+      planKey: run.planKey,
+      status: run.status,
+      startedAt: run.startedAt,
+      endedAt: run.endedAt,
+      source: run.source,
+      ...planRunCardFields(run),
+    })),
+  });
+}
+
+async function resolvePlanRunOr404(req: Request, res: Response): Promise<LocatedPlanRun | null> {
+  const runId = String(req.params['runId'] ?? '').trim();
+  if (!runId || !PLAN_RUN_ID_RE.test(runId)) {
+    res.status(400).json({ error: 'Invalid runId' });
+    return null;
+  }
+  const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const workspaceRoot = planRunsWorkspaceRoot(workspaceRootQuery);
+  const run = await locatePlanRun(workspaceRoot, runId);
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return null;
+  }
+  return run;
+}
+
+export async function handlePlanRunDetailRequest(req: Request, res: Response): Promise<void> {
+  const run = await resolvePlanRunOr404(req, res);
+  if (!run) {
+    return;
+  }
+  const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const workspaceRoot = planRunsWorkspaceRoot(workspaceRootQuery);
+  const paths = await collectPlanRunFilePaths(run, workspaceRoot);
+  const filesModel = buildPlanRunFilesModel(workspaceRoot, paths);
+  const catalog = await loadMetricsCatalog(workspaceRootQuery);
+  const records = [
+    ...invocationRecordsFromLogDir(run.logDir),
+    ...planRunCatalogRecords(catalog, run.planKey),
+  ].map((record) => {
+    if (record['run_id'] === undefined) {
+      return { ...record, run_id: run.runId };
+    }
+    return record;
+  });
+  const planPath = typeof run.manifest?.['plan_path'] === 'string' ? run.manifest['plan_path'] : '';
+  const resumableTodoCount = countResumableTodos(workspaceRoot, run.planKey, run.runId, planPath);
+  const detail = enrichPlanRunDetail({
+    runId: run.runId,
+    status: run.status,
+    filesModel,
+    records,
+    planKey: run.planKey,
+    planPath,
+    resumableTodoCount,
+  });
+  res.json({
+    ...detail,
+    planKey: run.planKey,
+    status: run.status,
+    source: run.source,
+    usage: planRunCardFields(run),
+  });
+}
+
+export async function handlePlanRunFilesRequest(req: Request, res: Response): Promise<void> {
+  const run = await resolvePlanRunOr404(req, res);
+  if (!run) {
+    return;
+  }
+  const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
+  const workspaceRoot = planRunsWorkspaceRoot(workspaceRootQuery);
+  const paths = await collectPlanRunFilePaths(run, workspaceRoot);
+  res.json(buildPlanRunFilesModel(workspaceRoot, paths));
+}
+
 function readJsonLines(filePath: string): Array<Record<string, unknown>> {
   try {
     return readFileSync(filePath, 'utf8').split('\n').flatMap((line) => {
@@ -4663,71 +5169,108 @@ function resolveGraphRunsRoot(workspaceRootQuery: string): string {
 
 export async function handleGraphRunsRequest(req: Request, res: Response): Promise<void> {
   const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
-  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
 
-  if (!existsSync(graphRunsDir)) {
-    res.json({ runs: [] });
+  // Explicit single-root query: preserve the original exact behavior.
+  if (workspaceRootQuery) {
+    const allowlist = await getMergedWorkspaceAllowlist();
+    const resolved = resolveDashboardRootsForWorkspaceRoot(workspaceRootQuery, allowlist);
+    if (!resolved) {
+      res.json({ runs: [] });
+      return;
+    }
+    const graphRunsDir = join(resolved.workspaceRoot, 'graph-runs');
+    if (!existsSync(graphRunsDir)) {
+      res.json({ runs: [] });
+      return;
+    }
+    const runs = await scanGraphRunsDirectory(graphRunsDir, resolved.workspaceRoot, resolved.projectRoot);
+    sortAndLimitGraphRuns(runs, req);
+    res.json({ runs });
     return;
   }
 
+  // Multi-workspace aggregation: scan every live registered workspace.
+  const { workspaces, skipped } = await enumerateRegisteredWorkspaces();
   const runs: GraphRunSummary[] = [];
+  for (const workspace of workspaces) {
+    const graphRunsDir = join(workspace.workspaceRoot, 'graph-runs');
+    if (!existsSync(graphRunsDir)) {
+      continue;
+    }
+    try {
+      const workspaceRuns = await scanGraphRunsDirectory(graphRunsDir, workspace.workspaceRoot, workspace.projectRoot);
+      runs.push(...workspaceRuns);
+    } catch {
+      // Best-effort per workspace; continue scanning remaining roots.
+    }
+  }
 
-  try {
-    const nsEntries: Dirent[] = await fs.readdir(graphRunsDir, { withFileTypes: true });
-    for (const nsEnt of nsEntries) {
-      if (!nsEnt.isDirectory()) {
-        continue;
-      }
-      const namespace = nsEnt.name;
-      const nsDir = join(graphRunsDir, namespace);
+  sortAndLimitGraphRuns(runs, req);
+  res.json({ runs, skipped });
+}
 
-      let latestRunId: string | null = null;
-      const latestLink = join(nsDir, 'latest');
-      if (existsSync(latestLink)) {
-        try {
-          latestRunId = basename(realpathSync(latestLink));
-        } catch {
-          // symlink may be dangling
-        }
-      }
+async function scanGraphRunsDirectory(
+  graphRunsDir: string,
+  workspaceRoot: string,
+  projectRoot: string,
+): Promise<GraphRunSummary[]> {
+  const runs: GraphRunSummary[] = [];
+  const nsEntries: Dirent[] = await fs.readdir(graphRunsDir, { withFileTypes: true });
+  for (const nsEnt of nsEntries) {
+    if (!nsEnt.isDirectory()) {
+      continue;
+    }
+    const namespace = nsEnt.name;
+    const nsDir = join(graphRunsDir, namespace);
 
-      const runEntries: Dirent[] = await fs.readdir(nsDir, { withFileTypes: true });
-      for (const runEnt of runEntries) {
-        if (runEnt.name === 'latest') {
-          continue;
-        }
-        if (!runEnt.isDirectory()) {
-          continue;
-        }
-        const runId = runEnt.name;
-        const runJson = safeReadJson(join(nsDir, runId, 'run.json'));
-
-        let nodeCount = 0;
-        const nodesDir = join(nsDir, runId, 'nodes');
-        if (existsSync(nodesDir)) {
-          try {
-            const nodeFiles = await fs.readdir(nodesDir);
-            nodeCount = nodeFiles.filter((f) => f.endsWith('.json')).length;
-          } catch {
-            // ignore
-          }
-        }
-
-        runs.push({
-          namespace,
-          runId,
-          isLatest: runId === latestRunId,
-          status: typeof runJson['status'] === 'string' ? runJson['status'] : 'unknown',
-          startedAt: typeof runJson['startedAt'] === 'string' ? runJson['startedAt'] : null,
-          nodeCount,
-        });
+    let latestRunId: string | null = null;
+    const latestLink = join(nsDir, 'latest');
+    if (existsSync(latestLink)) {
+      try {
+        latestRunId = basename(realpathSync(latestLink));
+      } catch {
+        // symlink may be dangling
       }
     }
-  } catch {
-    res.status(500).json({ error: 'Failed to read graph-runs directory' });
-    return;
-  }
 
+    const runEntries: Dirent[] = await fs.readdir(nsDir, { withFileTypes: true });
+    for (const runEnt of runEntries) {
+      if (runEnt.name === 'latest') {
+        continue;
+      }
+      if (!runEnt.isDirectory()) {
+        continue;
+      }
+      const runId = runEnt.name;
+      const runJson = safeReadJson(join(nsDir, runId, 'run.json'));
+
+      let nodeCount = 0;
+      const nodesDir = join(nsDir, runId, 'nodes');
+      if (existsSync(nodesDir)) {
+        try {
+          const nodeFiles = await fs.readdir(nodesDir);
+          nodeCount = nodeFiles.filter((f) => f.endsWith('.json')).length;
+        } catch {
+          // ignore
+        }
+      }
+
+      runs.push({
+        namespace,
+        runId,
+        isLatest: runId === latestRunId,
+        status: typeof runJson['status'] === 'string' ? runJson['status'] : 'unknown',
+        startedAt: typeof runJson['startedAt'] === 'string' ? runJson['startedAt'] : null,
+        nodeCount,
+        workspaceRoot,
+        projectRoot,
+      });
+    }
+  }
+  return runs;
+}
+
+function sortAndLimitGraphRuns(runs: GraphRunSummary[], req: Request): void {
   runs.sort((a, b) => {
     if (a.isLatest !== b.isLatest) {
       return a.isLatest ? -1 : 1;
@@ -4738,7 +5281,11 @@ export async function handleGraphRunsRequest(req: Request, res: Response): Promi
     return 0;
   });
 
-  res.json({ runs });
+  const limitRaw = parseInt(String(req.query['limit'] ?? ''), 10);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 200;
+  if (runs.length > limit) {
+    runs.splice(limit);
+  }
 }
 
 export async function handleGraphRunDetailRequest(req: Request, res: Response): Promise<void> {
@@ -4884,10 +5431,22 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
   const concurrencyReductions = [...new Set(observabilityEvents
     .map(concurrencyReduction)
     .filter((value): value is string => value !== null))];
+  const graphFiles = await listRelativeFiles(runDir);
+  const status = typeof runJson['status'] === 'string' ? runJson['status'] : 'unknown';
+  const enrichment = enrichGraphRunDetail({
+    runId,
+    namespace,
+    status,
+    files: graphFiles,
+    records: observabilityEvents,
+  });
   res.json({
-    namespace, runId, run: runJson, nodes: nodeStates, graph: graphJson,
+    run: omitTokenFields(runJson),
+    nodes: nodeStates,
+    graph: omitTokenFields(graphJson),
     usage: { parent: parentUsage, delegatedRuns: delegatedRunsUsage, total: totalUsage },
     concurrencyReductions,
+    ...enrichment,
   });
 }
 
@@ -5525,8 +6084,8 @@ export async function handlePlansIndexRequest(req: Request, res: Response): Prom
 
 export function registerDashboardApi(app: Express): void {
   app.get('/api/workspace', (_req: Request, res: Response) => {
-    const root = findWorkspaceProjectRoot();
-    res.json({ root });
+    const roots = findDashboardRoots();
+    res.json({ root: roots.projectRoot, projectRoot: roots.projectRoot, workspaceRoot: roots.workspaceRoot });
   });
 
   app.get('/api/ralph-framework-root', (_req: Request, res: Response) => {
@@ -5555,12 +6114,17 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/metrics/summary', handleMetricsSummaryRequest);
   app.get('/api/metrics/insights-summary', handleMetricsInsightsSummaryRequest);
   app.get('/api/metrics/breakdown', handleMetricsBreakdownRequest);
+  app.get('/api/metrics/ambient-usage', handleAmbientUsageRequest);
   app.get('/api/metrics/detail/:planKey', handleMetricsDetailRequest);
   app.get('/api/benchmarks', handleSavingsRequest);
   app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);
+  app.get('/api/plan-runs', (req, res) => void handlePlanRunsListRequest(req, res));
+  app.get('/api/plan-runs/:runId/files', (req, res) => void handlePlanRunFilesRequest(req, res));
+  app.get('/api/plan-runs/:runId', (req, res) => void handlePlanRunDetailRequest(req, res));
   app.get('/api/workspaces', handleWorkspacesRequest);
   app.get('/api/graph-runs', handleGraphRunsRequest);
   app.get('/api/graph-runs/:namespace/:runId', handleGraphRunDetailRequest);
+  registerGraphRunDiffRoutes(app);
   app.get('/api/plans/index', handlePlansIndexRequest);
   app.get('/api/plans/run', (req, res) => void getDirectPlanRun(req, res));
   app.post('/api/plans/run', writeGuard, (req, res) => void startDirectPlanRun(req, res));

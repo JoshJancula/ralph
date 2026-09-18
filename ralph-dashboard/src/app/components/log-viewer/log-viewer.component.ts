@@ -1,12 +1,17 @@
 import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChanges, ElementRef, ViewChild, ChangeDetectorRef, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-import { IonSpinner, IonBadge, IonSearchbar } from '@ionic/angular/standalone';
+import { IonSpinner, IonBadge } from '@ionic/angular/standalone';
 import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { ErrorModalComponent } from '../error-modal/error-modal.component';
 import { Subscription } from 'rxjs';
 import { markdownToHtml } from '../../utils/markdown-to-html';
+
+const SGR_ESCAPE = /\u001b\[[0-9;]*m/g;
+
+export function stripSgrSequences(value: string): string {
+  return value.replace(SGR_ESCAPE, '');
+}
 
 interface LogEntry {
   content: string;
@@ -17,7 +22,7 @@ interface LogEntry {
 @Component({
   selector: 'ralph-log-viewer',
   standalone: true,
-  imports: [CommonModule, FormsModule, IonSpinner, IonBadge, IonSearchbar, ErrorModalComponent],
+  imports: [CommonModule, IonSpinner, IonBadge, ErrorModalComponent],
   templateUrl: './log-viewer.component.html',
   styleUrls: ['./log-viewer.component.scss']
 })
@@ -51,7 +56,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   set content(value: string) {
-    this.contentSignal.set(value);
+    this.contentSignal.set(stripSgrSequences(value));
   }
 
   ngOnInit(): void {

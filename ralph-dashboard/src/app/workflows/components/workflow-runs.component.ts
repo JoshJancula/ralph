@@ -11,7 +11,7 @@ const FAILED_STATES = new Set(['failed', 'stale', 'cancelled']);
   standalone: true,
   imports: [RouterLink],
   template: `
-    <section class="runs" aria-labelledby="workflow-runs-heading">
+    <section class="runs hub-panel-card" aria-labelledby="workflow-runs-heading">
       <div class="head">
         <h3 id="workflow-runs-heading">Runs</h3>
         @if (liveCount() > 0) {
@@ -55,14 +55,15 @@ const FAILED_STATES = new Set(['failed', 'stale', 'cancelled']);
       display: flex;
       align-items: center;
       gap: var(--space-2);
+      margin-bottom: 0.15rem;
     }
     h3 {
       margin: 0;
-      font-size: var(--font-size-sm);
-      font-weight: 600;
+      font-size: var(--font-size-xs);
+      font-weight: 700;
       letter-spacing: var(--letter-label);
       text-transform: uppercase;
-      color: var(--text-muted);
+      color: var(--text-primary);
     }
     .muted {
       color: var(--text-muted);
@@ -70,9 +71,9 @@ const FAILED_STATES = new Set(['failed', 'stale', 'cancelled']);
     }
     .empty-hint {
       padding: var(--space-4);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      background: var(--surface);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-md);
+      background: var(--control-bg);
     }
     .run-list {
       list-style: none;
@@ -83,9 +84,14 @@ const FAILED_STATES = new Set(['failed', 'stale', 'cancelled']);
       gap: var(--space-2);
     }
     .run-row {
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      background: var(--surface);
+      border: 1.5px solid var(--control-border);
+      border-radius: var(--radius-md);
+      background: var(--control-bg);
+      transition: border-color 0.15s ease, background-color 0.15s ease;
+    }
+    .run-row:hover {
+      border-color: var(--ion-color-step-300, #6e7681);
+      background: var(--control-bg-hover);
     }
     .run-link {
       display: flex;

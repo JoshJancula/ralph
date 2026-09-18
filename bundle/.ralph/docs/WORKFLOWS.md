@@ -90,6 +90,26 @@ Author new definitions with `mode: sequential` or `mode: dependency`. Names such
 as graph, orchestration, checkpoint, and `humanAck` remain only in internal or
 legacy compatibility surfaces.
 
+### Optional containerized verification (`execImage`)
+
+Compiled Dependency graph nodes may set optional `execImage` (and
+`execWorkspaceWrite`) so only the node's declared verification command runs in
+Docker. Without `execImage`, verification stays on the host and dispatch stays
+byte-equivalent to current behavior.
+
+Host-to-container workspace mapping:
+
+| Host path | Container path | Notes |
+| --- | --- | --- |
+| Node workspace directory | `/ralph/workspace` | Sole bind mount; `--workdir` is `/ralph/workspace` |
+| (none) | — | Runtime credential dirs (`~/.cursor`, `~/.claude`, `~/.codex`, `~/.opencode`, `~/.agents`) and Ralph/agent trees are never mounted |
+
+`execWorkspaceWrite` defaults to `readonly` (`:ro` mount). `writable` opts into a
+writable mount; containers still run as `$(id -u):$(id -g)` so host ownership is
+preserved. Schema and dispatch details live in
+`bundle/.ralph/schemas/graph.schema.json` and
+`bundle/.ralph/bash-lib/graph/graph-dispatch.sh`.
+
 ## Follow a run
 
 Every start prints an exact run ID. Keep it; public lifecycle commands refuse

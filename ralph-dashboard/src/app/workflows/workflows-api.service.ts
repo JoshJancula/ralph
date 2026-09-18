@@ -10,6 +10,7 @@ import type {
   ModelDescriptor,
   RespondActionCommand,
   RunListItem,
+  RunsInventoryResponse,
   RunStatus,
   RuntimeDescriptor,
   StartWorkflowCommand,
@@ -132,8 +133,8 @@ export class WorkflowsApi {
     );
   }
 
-  listAllRuns(workspaceRoot?: string, options?: { signal?: AbortSignal }): Observable<readonly RunListItem[]> {
-    return this.withAbort(this.http.get<readonly RunListItem[]>('/api/runs', { params: this.paramsWithWorkspace(workspaceRoot) }), options?.signal);
+  listAllRuns(workspaceRoot?: string, options?: { signal?: AbortSignal }): Observable<RunsInventoryResponse | readonly RunListItem[]> {
+    return this.withAbort(this.http.get<RunsInventoryResponse | readonly RunListItem[]>('/api/runs', { params: this.paramsWithWorkspace(workspaceRoot) }), options?.signal);
   }
 
   getRunStatus(runId: string, workspaceRoot?: string): Observable<RunStatus> {

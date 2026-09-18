@@ -238,6 +238,7 @@ Open these only when the task requires detail beyond this file.
 |-----------|-----------|
 | [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | Workflow authoring, Sequential vs Dependency, planner/planFrom/planInput, approvals, status/resume/reset/recover, exit 3 |
 | [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Env vars, session/resume flags, `RALPH_BG_*` background-job vars (opt-in), runtime `*_PLAN_*` chains, orchestrator knobs, and named tooling profiles |
+| [docs/WORKSPACE.md](docs/WORKSPACE.md) | `.ralph-workspace/` layout, three run kinds, run manifests, retention, `ralph state` |
 | [docs/TOOLING.md](docs/TOOLING.md) | Ralph mode (`--ralph-mode`, `RALPH_MODE`), prompt layering, named tooling profiles, MCP proxy tools, Stop hook continuation contract, shell compaction policy, native adapters, overlay journals, and cleanup |
 | [docs/MCP.md](docs/MCP.md) | Standalone Ralph MCP server, host wiring, third-party MCP for plan agents (background continuation adds no MCP tools) |
 | [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Leaf-plan loop, human input, session strategies, durable TODO continuations, outputs |

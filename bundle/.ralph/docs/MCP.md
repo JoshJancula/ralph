@@ -39,6 +39,7 @@ The canonical MCP server implementation described in this doc is the Bash script
 ### tools
 
 - `tools/list` – advertises `ralph_run_plan`, `ralph_plan_status`, `ralph_orchestrator_run`, the five delegated-run tools, and proxy tools such as `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_shell`, and the async shell lifecycle tools when enabled.
+- When a live loopback dashboard endpoint is present at the first `tools/list`, it also advertises the read-only `ralph_dashboard_*` tools for runs, run/node status, artifacts, and plan status. The endpoint is detected once per MCP session; start a new MCP session if the dashboard starts afterward. `listChanged` remains `false`.
 - `tools/call` – dispatches those tool names (orchestration, delegated-run, and bounded `ralph_proxy_*` handlers). Any other tool name yields `tool not found` (`-32601`).
 
 ### Proxy exploration footers

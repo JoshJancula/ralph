@@ -2,13 +2,14 @@
   <header class="toolbar">
     <div class="toolbar-main">
       <div class="search-bar">
-        <ion-searchbar
+        <input
+          type="search"
+          class="search-input log-search"
           [value]="searchQuery"
-          (ionInput)="handleSearchInput($event.detail.value ?? '')"
-          (ionClear)="handleSearchInput('')"
+          (input)="handleSearchInput($any($event.target).value ?? '')"
           placeholder="Search this log..."
-          [debounce]="0"
-        ></ion-searchbar>
+          aria-label="Search this log"
+        />
         <span class="match-count" *ngIf="searchQuery && matchLineIndices.length > 0">
           {{ matchCount }}
         </span>

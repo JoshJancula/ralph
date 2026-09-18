@@ -10,6 +10,7 @@ import { UsageHubComponent } from './components/usage-hub/usage-hub.component';
 import { DocsHubComponent } from './components/docs-hub/docs-hub.component';
 import { PlanLogsComponent } from './components/plan-logs/plan-logs.component';
 import { WorkflowStageLogsPageComponent } from './workflows/workflow-stage-logs.page';
+import { RuntimeStatusComponent } from './components/runtime-status/runtime-status.component';
 import { NavService } from './services/nav.service';
 import { workflowEditCanDeactivate } from './workflows/workflow-edit.guard';
 
@@ -257,12 +258,20 @@ export const routes: Routes = [
     component: PlanLogsComponent,
   },
   {
+    path: 'plan-runs/:runId',
+    component: PlanLogsComponent,
+  },
+  {
     path: 'plan-detail/:file',
     loadComponent: () => import('./components/plan-detail/plan-detail.component').then((m) => m.PlanDetailComponent),
   },
   {
     path: 'insights',
     component: WorkspaceViewComponent,
+  },
+  {
+    path: 'runtimes',
+    component: RuntimeStatusComponent,
   },
   {
     path: 'usage',

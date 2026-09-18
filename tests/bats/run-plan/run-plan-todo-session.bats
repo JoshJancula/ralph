@@ -24,6 +24,9 @@ setup() {
   export RALPH_CURRENT_TODO_ID="add-tier2-todo-session-manifest"
   export RALPH_CURRENT_TODO_HASH="hash-abc123"
   mkdir -p "$RALPH_SESSION_DIR"
+  unset RALPH_PLAN_RESUME_RUN RALPH_PLAN_RESUME_RUN_RESOLVED RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID
+  unset RALPH_PLAN_CLI_RESUME RALPH_RUN_PLAN_RESUME_SESSION_ID RESUME_SESSION_ID_OVERRIDE
+  export RALPH_PLAN_SESSION_STRATEGY="fresh"
   # shellcheck disable=SC1090
   source "$LIB"
 }
@@ -764,4 +767,82 @@ JSON
   [ "$status" -eq 0 ]
   [ "$output" = "Continuing the same CLI session (--resume)." ]
   rm -f "$helper"
+}
+
+@test "todo session foreign run id is accepted under resume-run for exact capture" {
+  todo_session_seed_identity "run-original"
+  ralph_session_todo_create "sess-resume-exact" "exact" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-new"
+  export RALPH_PLAN_RESUME_RUN="run-original"
+  ralph_run_plan_log() { :; }
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-continue" ]
+  [ "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" = "sess-resume-exact" ]
+  run ralph_session_todo_read "$(ralph_session_todo_manifest_key)" 1
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.state' <<<"$output")" = "active" ]
+  [ "$(jq -r '.resumed_from_run_id' <<<"$output")" = "run-original" ]
+}
+
+@test "todo session foreign run id is still refused by default" {
+  todo_session_seed_identity "run-original"
+  ralph_session_todo_create "sess-default-foreign" "exact" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-foreign"
+  unset RALPH_PLAN_RESUME_RUN RALPH_PLAN_RESUME_RUN_RESOLVED RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID
+  run ralph_session_todo_select_manifest
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"foreign-run-id"* ]]
+}
+
+@test "todo session resume-run still refuses mismatched todoHash runtime and todoId" {
+  todo_session_seed_identity "run-original"
+  ralph_session_todo_create "sess-mismatch" "exact" >/dev/null
+  export RALPH_PLAN_RESUME_RUN="run-original"
+  export RALPH_PROCESS_RUN_ID="run-new"
+  ralph_session_resolve_resume_run
+
+  export RALPH_CURRENT_TODO_HASH="hash-different"
+  run ralph_session_todo_select_manifest
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mismatched-todo-hash"* ]]
+  export RALPH_CURRENT_TODO_HASH="hash-abc123"
+
+  export RUNTIME="claude"
+  run ralph_session_todo_select_manifest
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"mismatched-runtime"* ]]
+  export RUNTIME="cursor"
+
+  export RALPH_CURRENT_TODO_ID="other-todo-id"
+  run ralph_session_todo_select_manifest
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not found"* || "$output" == *"foreign-todo-id"* ]]
+}
+
+@test "todo session resume-run does not retire the source run manifest" {
+  todo_session_seed_identity "run-original"
+  ralph_session_todo_create "sess-keep" "exact" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-new"
+  export RALPH_PLAN_RESUME_RUN="run-original"
+  ralph_run_plan_log() { :; }
+  ralph_session_todo_prepare_invocation
+  run jq -r '.state' "$(ralph_session_todo_manifest_path "$(ralph_session_todo_manifest_key)")"
+  [ "$status" -eq 0 ]
+  [ "$output" != "retired" ]
+}
+
+@test "todo session resume-run degraded capture falls back to fresh" {
+  todo_session_seed_identity "run-original"
+  ralph_session_todo_create "sess-degraded" "degraded" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-new"
+  export RALPH_PLAN_RESUME_RUN="run-original"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_run_plan_log() { :; }
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+  run jq -r '.state' "$(ralph_session_todo_manifest_path "$(ralph_session_todo_manifest_key)")"
+  [ "$output" != "retired" ]
 }

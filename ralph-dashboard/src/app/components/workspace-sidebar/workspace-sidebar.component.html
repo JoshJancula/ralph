@@ -110,6 +110,19 @@
     <li>
       <a
         class="nav-button"
+        routerLink="/runtimes"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-runtimes-link"
+        aria-label="Runtimes"
+      >
+        <ion-icon class="nav-icon" name="terminal-outline"></ion-icon>
+        <span class="nav-label">Runtimes</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
         routerLink="/safety"
         routerLinkActive="active"
         [routerLinkActiveOptions]="{ exact: true }"

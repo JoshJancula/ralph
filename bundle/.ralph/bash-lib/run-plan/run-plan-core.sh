@@ -30,6 +30,7 @@ CLI_RESUME_FLAG=0
 NO_CLI_RESUME_FLAG=0
 ALLOW_UNSAFE_RESUME_FLAG=0
 RESUME_SESSION_ID_OVERRIDE=""
+RESUME_RUN_FLAG=""
 SESSION_STRATEGY_FLAG=""
 RUNTIME=""
 RALPH_PLAN_TODO_MAX_ITERATIONS=""
@@ -3177,6 +3178,8 @@ ALLOW_CLEANUP_PROMPT=1
 CLEANUP_SCRIPT="$SCRIPT_DIR/cleanup-plan.sh"
 EXIT_STATUS="incomplete"
 # shellcheck source=bash-lib/run-plan/run-plan-cleanup.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-manifest.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-cleanup.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-cleanup.sh"
 if [[ "${_RALPH_RUNTIME_OVERLAY_ACTIVE:-0}" == "1" ]]; then
   ralph_runtime_overlay_chain_exit_trap ralph_run_plan_exit_trap_handler
@@ -3522,7 +3525,7 @@ PY
   _summary_compaction_measured_not_applied_bytes="$(run_plan_num_or_zero "${_summary_compaction_measured_not_applied_bytes:-0}")"
 
   cat > "$_summary_dir/plan-usage-summary.json" << _SUMMARY_EOF
-{"schema_version":1,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${_summary_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_summary_input_tokens},"output_tokens":${_summary_output_tokens},"cache_creation_input_tokens":${_summary_cache_creation_tokens},"cache_read_input_tokens":${_summary_cache_read_tokens},"cache_read_per_tool_turn":${_summary_cache_read_per_tool_turn},"cache_read_per_tool_call":${_summary_cache_read_per_tool_call},"max_turn_total_tokens":${_summary_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio},"cache_reporting":"${_summary_cache_reporting}","prompt_bytes":${_summary_prompt_bytes},"todo_bytes":${_summary_todo_bytes},"todo_continuation_lines":${_summary_todo_continuation_lines},"direct_verification_count":${_summary_direct_verification_count},"verification_bytes_suppressed":${_summary_verification_bytes_suppressed},"rate_limit_count":${_summary_rate_limit_count},"tool_turns":${_summary_tool_turns},"tool_calls_total":${_summary_tool_calls_total},"compaction_original_bytes":${_summary_compaction_original_bytes},"compaction_compacted_bytes":${_summary_compaction_compacted_bytes},"compaction_saved_bytes":${_summary_compaction_saved_bytes},"compaction_measured_not_applied_bytes":${_summary_compaction_measured_not_applied_bytes}}
+{"schema_version":2,"kind":"plan_usage_summary","plan":"${PLAN_PATH}","plan_key":"${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}","artifact_ns":"${RALPH_ARTIFACT_NS:-${RALPH_PLAN_KEY:-}}","run_id":"${RALPH_PROCESS_RUN_ID:-}","workflow_run_id":"${RALPH_WORKFLOW_RUN_ID:-}","graph_run_id":"${RALPH_GRAPH_RUN_ID:-}","graph_namespace":"${RALPH_GRAPH_NAMESPACE:-}","stage_id":"${RALPH_STAGE_ID:-}","model":"${SELECTED_MODEL:-}","runtime":"${RUNTIME}","session_strategy":"${RALPH_PLAN_SESSION_STRATEGY:-fresh}","invocations":${_summary_invocations},"todos_done":${_done},"todos_total":${_total},"started_at":"${_plan_started_at}","ended_at":"${_ended_at}","elapsed_seconds":${_elapsed},"input_tokens":${_summary_input_tokens},"output_tokens":${_summary_output_tokens},"cache_creation_input_tokens":${_summary_cache_creation_tokens},"cache_read_input_tokens":${_summary_cache_read_tokens},"cache_read_per_tool_turn":${_summary_cache_read_per_tool_turn},"cache_read_per_tool_call":${_summary_cache_read_per_tool_call},"max_turn_total_tokens":${_summary_max_turn_tokens},"cache_hit_ratio":${_summary_cache_hit_ratio},"cache_reporting":"${_summary_cache_reporting}","prompt_bytes":${_summary_prompt_bytes},"todo_bytes":${_summary_todo_bytes},"todo_continuation_lines":${_summary_todo_continuation_lines},"direct_verification_count":${_summary_direct_verification_count},"verification_bytes_suppressed":${_summary_verification_bytes_suppressed},"rate_limit_count":${_summary_rate_limit_count},"tool_turns":${_summary_tool_turns},"tool_calls_total":${_summary_tool_calls_total},"compaction_original_bytes":${_summary_compaction_original_bytes},"compaction_compacted_bytes":${_summary_compaction_compacted_bytes},"compaction_saved_bytes":${_summary_compaction_saved_bytes},"compaction_measured_not_applied_bytes":${_summary_compaction_measured_not_applied_bytes}}
 _SUMMARY_EOF
   if command -v python3 &>/dev/null && [[ -f "$RALPH_LOG_DIR/invocation-usage.json" ]]; then
     PYTHONPATH="$SCRIPT_DIR/python" python3 - "$_summary_dir/plan-usage-summary.json" "$RALPH_LOG_DIR/invocation-usage.json" "${RALPH_PLAN_KEY:-}" \
@@ -3855,13 +3858,27 @@ _ralph_runtime_overlay_summary_snapshot_for_usage() {
   local iter_id="${iteration:-0}"
   local runtime_id="${runtime:-unknown}"
   runtime_id="${runtime_id//[^[:alnum:]-]/_}"
-  local start_ts="${start_time:-}"
-  if [[ -z "$start_ts" ]]; then
-    start_ts="$(date +%s)"
-  fi
-  local dest="$RALPH_LOG_DIR/runtime-overlay-summary-${iter_id}-${runtime_id}-${start_ts}.json"
+  local run_id="${RALPH_PROCESS_RUN_ID:-}"
+  [[ -n "$run_id" ]] || { printf '%s' "$summary_path"; return; }
+  local overlay_dir="$RALPH_LOG_DIR/runs/$run_id/overlay"
+  local dest="$overlay_dir/iter-${iter_id}-${runtime_id}.json"
   mkdir -p "$(dirname "$dest")"
   if cp "$summary_path" "$dest" 2>/dev/null; then
+    local timeline="$RALPH_LOG_DIR/runs/$run_id/overlay-timeline.jsonl"
+    jq -cn --argjson iteration "${iter_id:-0}" --arg runtime "$runtime_id" \
+      --arg bg_tier "${RALPH_USAGE_BG_TIER:-${RALPH_BG_TIER_SELECTED:-}}" \
+      --slurpfile summary "$dest" \
+      '{iteration:$iteration,runtime:$runtime,compaction_saved_bytes:($summary[0].compaction_saved_bytes // 0),hook_compactions:($summary[0].hook_compactions // 0),byte_savings_by_channel:($summary[0].byte_savings_by_channel // {}),bg_tier:($bg_tier|if . == "" then null else . end)}' \
+      >>"$timeline" 2>/dev/null || true
+    local retain="${RALPH_OVERLAY_SNAPSHOT_RETENTION:-10}" count old
+    [[ "$retain" =~ ^[0-9]+$ ]] || retain=10
+    count="$(find "$overlay_dir" -maxdepth 1 -type f -name 'iter-*.json' | wc -l | tr -d ' ')"
+    while [[ "$count" -gt "$retain" ]]; do
+      old="$(find "$overlay_dir" -maxdepth 1 -type f -name 'iter-*.json' -print | sort | head -n 1)"
+      [[ -n "$old" ]] || break
+      rm -f "$old"
+      count=$((count - 1))
+    done
     printf '%s' "$dest"
   else
     printf '%s' "$summary_path"
@@ -4108,7 +4125,7 @@ _ralph_append_invocation_usage_history() {
   fi
 
   cat >"$_path" <<USAGE_EOF
-{"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}${_extra_fields}}]}
+{"schema_version":1,"kind":"plan_invocation_usage_history","invocations":[{"iteration":${_iteration},"model":"${_model}","runtime":"${_runtime}","run_id":"${RALPH_PROCESS_RUN_ID:-}","elapsed_seconds":${_elapsed_seconds},"input_tokens":${_input_tokens},"output_tokens":${_output_tokens},"cache_creation_input_tokens":${_cache_create},"cache_read_input_tokens":${_cache_read},"max_turn_total_tokens":${_max_turn},"cache_hit_ratio":${_cache_hit_ratio}${_extra_fields}}]}
 USAGE_EOF
 }
 

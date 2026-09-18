@@ -3,6 +3,20 @@
 # budget objects. Existing graphs that omit those objects remain valid and
 # parse as fail-fast with no token/cost ceilings.
 #
+# Optional per-node containerized verification (stage.execImage):
+#   - Omitted execImage: verification stays on the host. Dispatch must remain
+#     byte-for-byte equivalent to current host execution (no Docker).
+#   - Present execImage: graph_dispatch_run_verification / gate steps run only
+#     the node's declared verification command inside that image. Agents and
+#     Ralph stay on the host. stage.execWorkspaceWrite defaults to "readonly"
+#     when omitted; "writable" opts into a writable workspace mount.
+#     execWorkspaceWrite without execImage is rejected.
+#   - Host -> container workspace path mapping: only the node's host workspace
+#     is bind-mounted at /ralph/workspace (GRAPH_DISPATCH_EXEC_CONTAINER_WORKSPACE).
+#     --workdir is /ralph/workspace. Runtime credential dirs and Ralph/agent
+#     trees are never mounted. See graph-dispatch.sh for the execution contract.
+#   - Invalid types and unsafe image strings fail closed at validation time.
+#
 # This file is a CLI (`validate-graph-schema.sh <graph-file>`) and may also
 # be sourced for parse helpers used by later scheduler work.
 
@@ -108,6 +122,109 @@ graph_schema_validate_backoff() {
     graph_schema_fail "${label}.backoffSeconds must be an array of 1 or 2 nonnegative numbers"
     return 1
   fi
+  return 0
+}
+
+# graph_schema_exec_image_is_safe <image>
+# Returns 0 when the string is a usable Docker image reference argv element.
+# Rejects empty values, whitespace, leading dashes (flag injection), and
+# shell metacharacters that would be unsafe even as a single argv word.
+graph_schema_exec_image_is_safe() {
+  local img="$1"
+  case "$img" in
+    '' | -* | *[[:space:]]* | *\;* | *\|* | *\&* | *\$* | *\`* | *\(* | *\)* | *\<* | *\>* | *\\*)
+      return 1
+      ;;
+  esac
+  if printf '%s' "$img" | grep -Eq \
+    '^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?(:[A-Za-z0-9._-]+)?(@sha256:[a-fA-F0-9]{64})?$'; then
+    return 0
+  fi
+  if printf '%s' "$img" | grep -Eq \
+    '^[A-Za-z0-9._-]+:[0-9]{1,5}/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[a-fA-F0-9]{64})?$'; then
+    return 0
+  fi
+  return 1
+}
+
+# graph_schema_parse_node_exec <stage-json>
+# Emit the effective containerized-verification policy for one node stage.
+# Missing execImage => {"execImage":null,"execWorkspaceWrite":null} (host path;
+# byte-equivalent to today's dispatch; callers must not invoke Docker).
+# Present execImage with omitted execWorkspaceWrite defaults to "readonly".
+graph_schema_parse_node_exec() {
+  local stage_json="${1:-null}"
+  local image write_policy
+
+  if [[ -z "$stage_json" || "$stage_json" == "null" ]]; then
+    printf '%s\n' '{"execImage":null,"execWorkspaceWrite":null}'
+    return 0
+  fi
+  if [[ "$(printf '%s' "$stage_json" | jq -r 'type')" != "object" ]]; then
+    graph_schema_fail "stage must be an object to parse exec fields"
+    return 1
+  fi
+
+  if ! printf '%s' "$stage_json" | jq -e 'has("execImage")' >/dev/null 2>&1; then
+    if printf '%s' "$stage_json" | jq -e 'has("execWorkspaceWrite")' >/dev/null 2>&1; then
+      graph_schema_fail "execWorkspaceWrite requires execImage"
+      return 1
+    fi
+    printf '%s\n' '{"execImage":null,"execWorkspaceWrite":null}'
+    return 0
+  fi
+
+  if [[ "$(printf '%s' "$stage_json" | jq -r '.execImage | type')" != "string" ]]; then
+    graph_schema_fail "execImage must be a string"
+    return 1
+  fi
+  image="$(printf '%s' "$stage_json" | jq -r '.execImage')"
+  if ! graph_schema_exec_image_is_safe "$image"; then
+    graph_schema_fail "execImage has an invalid or unsafe value"
+    return 1
+  fi
+
+  write_policy="readonly"
+  if printf '%s' "$stage_json" | jq -e 'has("execWorkspaceWrite")' >/dev/null 2>&1; then
+    if [[ "$(printf '%s' "$stage_json" | jq -r '.execWorkspaceWrite | type')" != "string" ]]; then
+      graph_schema_fail "execWorkspaceWrite must be a string"
+      return 1
+    fi
+    write_policy="$(printf '%s' "$stage_json" | jq -r '.execWorkspaceWrite')"
+    case "$write_policy" in
+      readonly | writable) ;;
+      *)
+        graph_schema_fail "execWorkspaceWrite must be readonly or writable"
+        return 1
+        ;;
+    esac
+  fi
+
+  jq -nc --arg image "$image" --arg write "$write_policy" \
+    '{execImage:$image,execWorkspaceWrite:$write}'
+}
+
+# graph_schema_validate_node_exec_fields <graph-file>
+# Reject invalid types and unsafe values for optional stage.execImage /
+# stage.execWorkspaceWrite on every node.
+graph_schema_validate_node_exec_fields() {
+  local graph_file="$1"
+  local node node_id stage_json err
+
+  while IFS= read -r node; do
+    [ -n "$node" ] || continue
+    node_id="$(printf '%s' "$node" | jq -r '.id // empty')"
+    stage_json="$(printf '%s' "$node" | jq -c '.stage // null')"
+    if err="$(graph_schema_parse_node_exec "$stage_json" 2>&1 >/dev/null)"; then
+      continue
+    fi
+    if [[ "$err" == "Graph schema validation failed:"* ]]; then
+      graph_schema_fail "node ${node_id}:${err#Graph schema validation failed:}"
+    else
+      graph_schema_fail "node ${node_id}: invalid execImage / execWorkspaceWrite fields"
+    fi
+    return 1
+  done < <(jq -c '.nodes[]?' "$graph_file")
   return 0
 }
 
@@ -410,6 +527,10 @@ graph_schema_validate_file() {
       fi
     fi
   fi
+
+  # Optional per-node containerized verification. Absent execImage keeps host
+  # verification byte-equivalent to current dispatch (no Docker).
+  graph_schema_validate_node_exec_fields "$graph_file" || return 1
 
   if [[ "$(jq -r '.ralphVersion | type' "$graph_file")" != "string" ]] || [[ -z "$(jq -r '.ralphVersion' "$graph_file")" ]]; then
     graph_schema_fail "ralphVersion must be a non-empty string"

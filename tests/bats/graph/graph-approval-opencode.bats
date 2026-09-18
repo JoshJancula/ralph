@@ -292,6 +292,12 @@ require_python3() {
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
 }
 
+require_loopback_socket() {
+  require_python3
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); s.close()' \
+    || skip "loopback socket binding unavailable"
+}
+
 @test "opencode approval request feature-detects serve from cli help without a model call" {
   local launched="$TEST_TMPDIR/serve-launched"
   write_opencode_serve_help_stub supported "$launched"
@@ -449,7 +455,7 @@ require_python3() {
 }
 
 @test "opencode approval request consumes ordered permission events from a localhost fake server" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local argv_record="$TEST_TMPDIR/serve.args"
   write_events_file "$events_file" \
@@ -474,7 +480,7 @@ require_python3() {
 }
 
 @test "opencode approval request starts serve on an ephemeral loopback port" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local argv_record="$TEST_TMPDIR/serve.args"
   local launched="$TEST_TMPDIR/serve-launched"
@@ -500,7 +506,7 @@ require_python3() {
 }
 
 @test "opencode approval request talks to a localhost fake server only" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local launched="$TEST_TMPDIR/fake-launched"
   write_events_file "$events_file" "$(permission_event_json ses-fake perm-fake edit src/lib.ts)"
@@ -667,7 +673,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response keeps the fake server alive while waiting" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local argv_record="$TEST_TMPDIR/serve.args"
@@ -688,7 +694,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response sends once without converting read to write" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local session session_dir
@@ -709,7 +715,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response sends project and writes a read-only overlay" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local overlay="$TEST_TMPDIR/opencode-permission-override.json"
@@ -732,7 +738,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response handles duplicate resolution" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local session session_dir
@@ -751,7 +757,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response reconnects safely without enabling auto mode" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local argv_record="$TEST_TMPDIR/serve.args"
@@ -774,7 +780,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response closes on completion" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local session session_dir pid
@@ -793,7 +799,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response closes on cancellation" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local session session_dir pid
@@ -811,7 +817,7 @@ start_opencode_wait_session() {
 }
 
 @test "opencode approval response closes on supervisor cleanup" {
-  require_python3
+  require_loopback_socket
   local events_file="$TEST_TMPDIR/events.jsonl"
   local reply_file="$TEST_TMPDIR/replies.jsonl"
   local session session_dir pid

@@ -21,6 +21,10 @@ if ! declare -F ralph_atomic_write_json >/dev/null 2>&1; then
   # shellcheck source=../atomic-json.sh
   source "$GRAPH_WORKSPACE_SCRIPT_DIR/../atomic-json.sh"
 fi
+if ! declare -F graph_state_reconcile_run_owner_file >/dev/null 2>&1; then
+  # shellcheck source=graph-state.sh
+  source "$GRAPH_WORKSPACE_SCRIPT_DIR/graph-state.sh"
+fi
 
 graph_workspace_real_dir() {
   local path="$1"
@@ -119,7 +123,9 @@ graph_workspace_prepare_run() {
     _graph_workspace_validate_config "$config_path" || return 1
     config_json="$(jq -cS . "$config_path")" || return 1
   else
-    config_json='{"retention":"keep","schemaVersion":1,"setupProfiles":{}}'
+    # New graph runs default to reclaiming isolated node copies. Existing run
+    # ledgers retain their frozen workspaceManager block unchanged on resume.
+    config_json='{"retention":"prune","schemaVersion":1,"setupProfiles":{}}'
     config_path=""
   fi
   if jq -e '
@@ -139,7 +145,7 @@ graph_workspace_prepare_run() {
     fi
   done < <(jq -r '.nodes[].stage.setupProfile // empty' "$graph_json")
   config_sha="$(graph_workspace_sha256_text "$config_json")" || return 1
-  retention="$(printf '%s' "$config_json" | jq -r '.retention // "keep"')"
+  retention="$(printf '%s' "$config_json" | jq -r '.retention // "prune"')"
   ralph_atomic_write_json "$run_file" \
     '(($base | fromjson) // {}) + {
       workspaceManager: {
@@ -548,11 +554,20 @@ _graph_workspace_archive_changeset() {
 # Cleanup is opt-in through retention=prune and only runs for terminal runs.
 # Every isolated workspace is archived before its exact owned path is removed.
 graph_workspace_cleanup_run() {
-  local run_dir="$1" run_file status retention run_id project_root metadata_dir list_file
+  local run_dir="$1" run_file status retention run_id project_root metadata_dir list_file namespace_dir latest_dir
   local metadata node_id mode path owner node_key head
   run_dir="$(graph_workspace_real_dir "$run_dir")" || return 1
   run_file="$run_dir/run.json"
   [[ -f "$run_file" ]] || return 1
+  # The latest run remains the operator's immediate inspection target. This
+  # guard is deliberately here, rather than only in retention, so every
+  # finalization caller preserves it.
+  namespace_dir="$(dirname "$run_dir")"
+  if [[ -L "$namespace_dir/latest" ]]; then
+    latest_dir="$(cd "$namespace_dir/latest" 2>/dev/null && pwd -P)" || latest_dir=""
+    [[ "$latest_dir" == "$run_dir" ]] && return 0
+  fi
+  graph_state_reconcile_run_owner_file "$run_file" || true
   status="$(jq -r '.status // empty' "$run_file")"
   retention="$(jq -r '.workspaceManager.retention // "keep"' "$run_file")"
   [[ "$retention" == "prune" ]] || return 0

@@ -4,6 +4,15 @@ set -euo pipefail
 
 workspace=".ralph-workspace"
 checksum_file="$workspace/.fixture-checksums"
+fixture_temp_files=()
+
+cleanup_fixture_temps() {
+  local path
+  for path in "${fixture_temp_files[@]}"; do
+    rm -f "$path"
+  done
+}
+trap cleanup_fixture_temps EXIT
 
 mkdir -p "$workspace/artifacts/dashboard"
 mkdir -p "$workspace/logs"
@@ -365,6 +374,7 @@ generate_fixture() {
   local previous_checksum
   local checksum
   tmpfile=$(mktemp "$workspace/.fixture-temp.XXXXXX")
+  fixture_temp_files+=("$tmpfile")
   "$generator" > "$tmpfile"
   checksum=$(shasum -a 256 "$tmpfile" | cut -d ' ' -f 1)
 
@@ -381,6 +391,7 @@ generate_fixture() {
 }
 
 checksum_tmp=$(mktemp "$workspace/.fixture-checksums.XXXXXX")
+fixture_temp_files+=("$checksum_tmp")
 
 for i in "${!fixtures_paths[@]}"; do
   generate_fixture "${fixtures_paths[$i]}" "${fixtures_generators[$i]}"

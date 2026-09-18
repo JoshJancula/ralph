@@ -22,6 +22,161 @@ GRAPH_DISPATCH_RALPH_ROOT="$(cd "$GRAPH_DISPATCH_SCRIPT_DIR/../.." && pwd)"
 # wrap the child invocation. bash 3.2-safe plain array (no namerefs).
 GRAPH_DISPATCH_ARGV=()
 
+# Populated by graph_dispatch_build_verification_argv for containerized
+# verification only. Agent / Ralph / orchestrator argv never uses this array.
+GRAPH_DISPATCH_VERIFICATION_ARGV=()
+
+# Unique docker --name for the in-flight verification container (empty when
+# not containerizing). Cleared by graph_dispatch_exec_container_teardown.
+GRAPH_DISPATCH_EXEC_CONTAINER_NAME=""
+
+# Documented host -> container workspace mount for opt-in execImage
+# verification. Only the node's workspace is mounted here; Ralph tooling,
+# runtime credential dirs (~/.cursor, ~/.claude, ~/.codex, ~/.opencode,
+# ~/.agents), and agent CLIs stay on the host and are never bind-mounted.
+GRAPH_DISPATCH_EXEC_CONTAINER_WORKSPACE="/ralph/workspace"
+
+if ! declare -F ralph_exec_container_register >/dev/null 2>&1; then
+  # shellcheck source=../ralph-process-teardown.sh
+  source "$GRAPH_DISPATCH_SCRIPT_DIR/../ralph-process-teardown.sh"
+fi
+
+# graph_dispatch_exec_container_workspace
+# Prints the documented in-container path for the node workspace mount.
+graph_dispatch_exec_container_workspace() {
+  printf '%s\n' "${GRAPH_DISPATCH_EXEC_CONTAINER_WORKSPACE:-/ralph/workspace}"
+}
+
+# graph_dispatch_exec_container_mint_name
+# Prints a unique docker --name for one verification attempt.
+graph_dispatch_exec_container_mint_name() {
+  local stamp rand
+  stamp="$(date +%s 2>/dev/null || printf '0')"
+  rand="${RANDOM:-0}"
+  printf 'ralph-gexec-%s-%s-%s\n' "$$" "$stamp" "$rand"
+}
+
+# graph_dispatch_exec_container_teardown [container_name]
+# Idempotent removal of a verification container and its registry entry.
+graph_dispatch_exec_container_teardown() {
+  local name="${1:-${GRAPH_DISPATCH_EXEC_CONTAINER_NAME:-}}"
+  [[ -n "$name" ]] || return 0
+  ralph_exec_container_teardown_one "$name"
+  if [[ "$name" == "${GRAPH_DISPATCH_EXEC_CONTAINER_NAME:-}" ]]; then
+    GRAPH_DISPATCH_EXEC_CONTAINER_NAME=""
+  fi
+}
+
+# graph_dispatch_docker_unavailable_message <exec_image>
+# Actionable stderr text when Docker is required but missing from PATH.
+# Uses only shell builtins so it still works when PATH is empty or minimal.
+graph_dispatch_docker_unavailable_message() {
+  local image="${1:-}"
+  printf '%s\n' \
+    "Error: Docker is required for containerized graph verification (execImage=${image})." \
+    "" \
+    "Install Docker Desktop (or another Docker Engine), ensure \`docker\` is on PATH," \
+    "then re-run. To keep verification on the host, remove stage.execImage from the" \
+    "graph node."
+}
+
+# graph_dispatch_build_verification_argv <host_workspace> <exec_image>
+#   <exec_workspace_write> <command>
+#
+# Fills GRAPH_DISPATCH_VERIFICATION_ARGV with a docker run that executes only
+# the declared verification command. Mounts solely <host_workspace> at
+# GRAPH_DISPATCH_EXEC_CONTAINER_WORKSPACE (readonly unless write policy is
+# writable), runs as $(id -u):$(id -g), and sets --workdir to that mount.
+# Assigns a unique --name into GRAPH_DISPATCH_EXEC_CONTAINER_NAME so timeout,
+# signal, and process-group teardown can docker rm -f without orphans.
+# Returns 1 with an actionable message when docker is unavailable.
+graph_dispatch_build_verification_argv() {
+  local host_workspace="$1"
+  local exec_image="$2"
+  local write_policy="${3:-readonly}"
+  local command="$4"
+  local container_ws mount_spec uid_gid docker_bin container_name
+
+  GRAPH_DISPATCH_VERIFICATION_ARGV=()
+  GRAPH_DISPATCH_EXEC_CONTAINER_NAME=""
+
+  if [[ -z "$host_workspace" || -z "$exec_image" || -z "$command" ]]; then
+    echo "Error: graph_dispatch_build_verification_argv requires host_workspace, exec_image, and command" >&2
+    return 1
+  fi
+  case "$write_policy" in
+    readonly | writable) ;;
+    *)
+      echo "Error: execWorkspaceWrite must be readonly or writable (got: $write_policy)" >&2
+      return 1
+      ;;
+  esac
+
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [[ -z "$docker_bin" ]]; then
+    graph_dispatch_docker_unavailable_message "$exec_image" >&2
+    return 1
+  fi
+
+  container_ws="$(graph_dispatch_exec_container_workspace)"
+  uid_gid="$(id -u):$(id -g)"
+  if [[ "$write_policy" == "writable" ]]; then
+    mount_spec="${host_workspace}:${container_ws}"
+  else
+    mount_spec="${host_workspace}:${container_ws}:ro"
+  fi
+
+  container_name="$(graph_dispatch_exec_container_mint_name)"
+  GRAPH_DISPATCH_EXEC_CONTAINER_NAME="$container_name"
+
+  # --entrypoint sh avoids inheriting image ENTRYPOINTs (e.g. redis/python)
+  # and stays portable across alpine/debian verify images. --rm cleans up on
+  # normal exit; --name + registry/traps cover interrupt and PGID teardown.
+  GRAPH_DISPATCH_VERIFICATION_ARGV=(
+    "$docker_bin" run --rm
+    --name "$container_name"
+    --user "$uid_gid"
+    --workdir "$container_ws"
+    -v "$mount_spec"
+    --entrypoint sh
+    "$exec_image"
+    -c "$command"
+  )
+  return 0
+}
+
+# graph_dispatch_run_verification <host_workspace> <exec_image>
+#   <exec_workspace_write> <command>
+#
+# Builds and executes the containerized verification argv. Propagates the
+# command's exit status from `docker run` unchanged. Registers container
+# identity and tears it down on EXIT/INT/TERM/HUP so interrupted runs leave
+# no orphan containers.
+graph_dispatch_run_verification() {
+  local host_workspace="$1"
+  local exec_image="$2"
+  local write_policy="${3:-readonly}"
+  local command="$4"
+  local rc=0
+  local container_name=""
+
+  graph_dispatch_build_verification_argv \
+    "$host_workspace" "$exec_image" "$write_policy" "$command" || return $?
+  container_name="${GRAPH_DISPATCH_EXEC_CONTAINER_NAME:-}"
+  if [[ -n "$container_name" ]]; then
+    ralph_exec_container_register "$container_name" || true
+  fi
+  # shellcheck disable=SC2317
+  _graph_dispatch_run_verification_cleanup() {
+    graph_dispatch_exec_container_teardown "${container_name}"
+  }
+  trap '_graph_dispatch_run_verification_cleanup' EXIT INT TERM HUP
+  "${GRAPH_DISPATCH_VERIFICATION_ARGV[@]}" || rc=$?
+  trap - EXIT INT TERM HUP
+  _graph_dispatch_run_verification_cleanup
+  return "$rc"
+}
+
 # graph_dispatch_mint_attempt_id <node_id> <run_id> <attempt_number>
 # Attempt ids are composed of the node id, run id, and attempt number so that
 # retries never share a StageOutcomeReport path.
@@ -303,6 +458,9 @@ graph_dispatch_materialize_orch() {
 #   <workspace> [state_root]
 #
 # Fills GRAPH_DISPATCH_ARGV with the single-stage orchestrator invocation.
+# This is always a host-side Ralph/agent dispatch: stage.execImage never
+# wraps orchestrator.sh or runtime CLIs. Containerized verification uses
+# graph_dispatch_build_verification_argv / graph_dispatch_run_verification.
 #
 # G12: before dispatch, this function sets and passes absolute values for
 # RALPH_PROJECT_ROOT, RALPH_PLAN_WORKSPACE_ROOT, RALPH_AGENT_WORKSPACE, and
@@ -931,8 +1089,10 @@ _graph_dispatch_inject_rework_feedback() {
 # graph_dispatch_run_node <graph_json_path> <node_id> <run_id> <attempt_number> <workspace>
 #
 # Materializes the flat orch (idempotent), mints an attempt id, and invokes
-# orchestrator.sh as a fresh process. Prints the attempt id on stdout. The
-# StageOutcomeReport lands at graph_dispatch_report_path for that attempt.
+# orchestrator.sh as a fresh host process. Prints the attempt id on stdout.
+# The StageOutcomeReport lands at graph_dispatch_report_path for that attempt.
+# Never containerizes Ralph or agents; execImage applies only to declared
+# verification commands via graph_dispatch_run_verification.
 graph_dispatch_run_node() {
   local graph_json_path="$1"
   local node_id="$2"

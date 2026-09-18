@@ -459,6 +459,9 @@ ralph_build_permission_resume_command() {
   if [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]; then
     parts+="--allow-unsafe-resume "
   fi
+  if [[ -n "${RALPH_PLAN_RESUME_RUN:-}" ]]; then
+    parts+="--resume-run $(printf %q "$RALPH_PLAN_RESUME_RUN") "
+  fi
   if [[ -n "${CLAUDE_PLAN_PERMISSION_MODE:-}" ]]; then
     parts+="CLAUDE_PLAN_PERMISSION_MODE=$(printf %q "$CLAUDE_PLAN_PERMISSION_MODE") "
   fi

@@ -283,6 +283,17 @@ export interface RunListItem {
   readonly sourceKind?: string;
   readonly graphRunLink: { readonly namespace: string; readonly runId: string } | null;
   readonly executionKind?: 'workflow' | 'leaf-plan';
+  /** Workspace that produced this row when the dashboard aggregates projects. */
+  readonly workspaceRoot?: string;
+  readonly projectRoot?: string;
+}
+
+export interface RunsInventoryResponse {
+  readonly runs: readonly RunListItem[];
+  /** Requested workspace root, or null when the response merges workspaces. */
+  readonly workspaceRoot: string | null;
+  /** Registered workspace entries omitted because their state root is missing. */
+  readonly skipped: number;
 }
 
 export interface RunStatus {

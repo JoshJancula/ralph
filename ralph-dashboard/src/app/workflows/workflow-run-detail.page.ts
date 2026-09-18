@@ -1,4 +1,4 @@
-import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -34,15 +34,29 @@ function basename(path: string | null | undefined): string | null {
         Back
       </a>
 
-      <div class="run-header page-header">
-        <h1 class="page-title" data-testid="run-detail-title">Run {{ runId() }}</h1>
-        @if (runState(); as state) {
-          <span class="status-badge state-badge" [class]="'state-' + state" data-testid="run-state">{{ state }}</span>
-        }
+      <div class="run-header hub-panel-card">
+        <div class="run-header-main">
+          <p class="eyebrow">Workflow run</p>
+          <div class="run-title-row">
+            <h1 class="page-title" data-testid="run-detail-title">{{ runId() }}</h1>
+            @if (runState(); as state) {
+              <span class="status-badge state-badge" [class]="'state-' + state" data-testid="run-state">{{ stageStatusLabel(state) }}</span>
+            }
+          </div>
+          @if (workflowId(); as wfId) {
+            <a class="run-workflow-link" [routerLink]="['/workflows', wfId]">{{ wfId }}</a>
+          }
+        </div>
       </div>
 
       @if (task(); as taskText) {
-        <p class="run-task" data-testid="run-detail-task">{{ taskText }}</p>
+        <section class="user-prompt hub-panel-card" data-testid="run-detail-user-prompt">
+          <div class="section-head">
+            <h2 class="section-legend">User prompt</h2>
+            <p class="section-hint">Task or instructions supplied when this run was started (from --task or a supplied plan).</p>
+          </div>
+          <div class="prompt-body" data-testid="run-detail-task">{{ taskText }}</div>
+        </section>
       }
 
       @if (!capabilities.capabilities().workflowRuns) {
@@ -209,18 +223,45 @@ function basename(path: string | null | undefined): string | null {
         </div>
 
         @if (stages().length > 0) {
-          <section class="stages-section" data-testid="stages-section">
-            <h3>Stage map</h3>
-            <div class="stages-grid">
-              @for (stage of stages(); track stage.id) {
-                <div class="stage-card hub-panel-card" [class]="'stage-status-' + stage.state" [attr.data-testid]="'stage-' + stage.id">
-                  <div class="stage-header">
-                    <span class="stage-id">{{ stage.id }}</span>
-                    <span class="stage-status">{{ stage.state }}</span>
+          <section class="stages-section hub-panel-card" data-testid="stages-section">
+            <div class="stage-map-head">
+              <div class="section-head">
+                <h3 class="section-legend">Stage map</h3>
+                <p class="section-hint">Stages that ran or are active. Skipped rework clones are hidden by default.</p>
+              </div>
+              @if (skippedStageCount() > 0) {
+                <button
+                  type="button"
+                  class="btn btn-ghost"
+                  data-testid="toggle-skipped-stages"
+                  (click)="showSkippedStages.set(!showSkippedStages())"
+                >
+                  {{ showSkippedStages() ? 'Hide' : 'Show' }} {{ skippedStageCount() }} skipped
+                </button>
+              }
+            </div>
+            <div class="stage-lane" role="list">
+              @for (stage of displayStages(); track stage.id) {
+                <article
+                  class="stage-chip hub-choice-card"
+                  role="listitem"
+                  [class.selected]="selectedStageId() === stage.id"
+                  [ngClass]="'stage-status-' + stage.state"
+                  [attr.data-testid]="'stage-' + stage.id"
+                  (click)="selectedStageId.set(stage.id)"
+                >
+                  <div class="chip-head">
+                    <span class="status-badge chip-state" [class]="'state-' + stage.state">{{ stageStatusLabel(stage.state) }}</span>
+                    @if (stage.reworkRound > 1) {
+                      <span class="chip-rework">R{{ stage.reworkRound }}</span>
+                    }
                   </div>
-                  <p class="stage-kind">{{ stage.stageKind }}</p>
+                  <h4 class="chip-title">{{ stage.id }}</h4>
+                  <p class="chip-meta">
+                    {{ stage.stageKind }}
+                  </p>
                   @if (stage.attempt > 0) {
-                    <p class="stage-attempt" data-testid="stage-attempt">
+                    <p class="chip-meta" data-testid="stage-attempt">
                       Attempt {{ stage.attempt }}
                       @if (stage.reworkRound > 1) {
                         <span> (rework round {{ stage.reworkRound }})</span>
@@ -228,81 +269,99 @@ function basename(path: string | null | undefined): string | null {
                     </p>
                   }
                   @if (stage.todoProgress; as todos) {
-                    <p class="stage-todos" data-testid="stage-todo-progress">
+                    <p class="chip-meta" data-testid="stage-todo-progress">
                       TODOs {{ todos.completed }}/{{ todos.total }}
                       @if (todos.currentTodoId) {
-                        <span> — current {{ todos.currentTodoId }}</span>
-                      }
-                    </p>
-                  }
-                  @if (stage.sourcePlanPath || stage.controlPlanPath) {
-                    <div class="plan-paths" data-testid="stage-plan-paths">
-                      @if (stage.sourcePlanPath) {
-                        <p class="plan-path immutable">
-                          <span class="path-label">Source (immutable)</span>
-                          {{ planBasename(stage.sourcePlanPath) }}
-                        </p>
-                      }
-                      @if (stage.controlPlanPath) {
-                        <p class="plan-path control">
-                          <span class="path-label">Control (mutable)</span>
-                          {{ planBasename(stage.controlPlanPath) }}
-                        </p>
-                      }
-                    </div>
-                  }
-                  @if (stage.requiredEvidence.length > 0) {
-                    <p class="stage-evidence" data-testid="stage-required-evidence">
-                      Required: {{ stage.requiredEvidence.join(', ') }}
-                    </p>
-                  }
-                  @if (stage.producedEvidence.length > 0) {
-                    <p class="stage-evidence" data-testid="stage-produced-evidence">
-                      Evidence: {{ stage.producedEvidence.join(', ') }}
-                    </p>
-                  }
-                  @if (stage.actionRequestId) {
-                    <p class="stage-request" data-testid="stage-action-request">
-                      Request {{ stage.actionRequestId }}
-                      @if (stage.requestState) {
-                        <span> ({{ stage.requestState }})</span>
+                        <span> · {{ todos.currentTodoId }}</span>
                       }
                     </p>
                   }
                   @if (stage.summary) {
-                    <p class="stage-summary">{{ stage.summary }}</p>
+                    <p class="chip-summary stage-summary">{{ stage.summary }}</p>
                   }
                   @if (stage.nextPermittedAction) {
-                    <p class="stage-next" data-testid="stage-next-action">{{ stage.nextPermittedAction }}</p>
+                    <p class="chip-next" data-testid="stage-next-action">{{ stage.nextPermittedAction }}</p>
                   }
                   @if (stage.attempt > 0) {
-                    <div class="stage-log" data-testid="stage-log-scope">
-                      <span>Logs: {{ stage.logScope || 'stage attempt ' + stage.attempt }}</span>
-                      <a class="btn btn-ghost" [routerLink]="['/workflows/runs', runId(), 'stages', stage.id, 'logs']" [queryParams]="{ attempt: stage.attempt || 1 }">View logs</a>
-                    </div>
+                    <a
+                      class="chip-link"
+                      [routerLink]="['/workflows/runs', runId(), 'stages', stage.id, 'logs']"
+                      [queryParams]="{ attempt: stage.attempt || 1 }"
+                      data-testid="stage-log-scope"
+                      (click)="$event.stopPropagation()"
+                    >
+                      View logs
+                    </a>
                   }
-                </div>
+                  @if (hasStageDetails(stage)) {
+                    <details class="stage-more" (click)="$event.stopPropagation()">
+                      <summary>Paths and evidence</summary>
+                      @if (stage.sourcePlanPath || stage.controlPlanPath) {
+                        <div class="plan-paths" data-testid="stage-plan-paths">
+                          @if (stage.sourcePlanPath) {
+                            <p class="plan-path immutable">
+                              <span class="path-label">Source (immutable)</span>
+                              {{ planBasename(stage.sourcePlanPath) }}
+                            </p>
+                          }
+                          @if (stage.controlPlanPath) {
+                            <p class="plan-path control">
+                              <span class="path-label">Control (mutable)</span>
+                              {{ planBasename(stage.controlPlanPath) }}
+                            </p>
+                          }
+                        </div>
+                      }
+                      @if (stage.requiredEvidence.length > 0) {
+                        <p class="stage-evidence" data-testid="stage-required-evidence">
+                          Required: {{ evidenceSummary(stage.requiredEvidence) }}
+                        </p>
+                      }
+                      @if (stage.producedEvidence.length > 0) {
+                        <p class="stage-evidence" data-testid="stage-produced-evidence">
+                          Evidence: {{ evidenceSummary(stage.producedEvidence) }}
+                        </p>
+                      }
+                      @if (stage.actionRequestId) {
+                        <p class="stage-request" data-testid="stage-action-request">
+                          Request {{ stage.actionRequestId }}
+                          @if (stage.requestState) {
+                            <span> ({{ stage.requestState }})</span>
+                          }
+                        </p>
+                      }
+                    </details>
+                  }
+                </article>
               }
             </div>
           </section>
         }
 
         @if (timeline().length > 0) {
-          <section class="timeline-section" data-testid="timeline-section">
-            <h3>Timeline</h3>
-            <div class="timeline">
-              @for (event of timeline(); track event.id) {
-                <div class="timeline-event" [class]="'event-type-' + event.type" [attr.data-testid]="'event-' + event.type">
-                  <div class="event-time">{{ formatTime(event.timestamp) }}</div>
-                  <div class="event-content">
-                    <p class="event-message">{{ event.message }}</p>
-                    @if (event.stageId) {
-                      <p class="event-stage">Stage: {{ event.stageId }}</p>
-                    }
-                  </div>
-                </div>
-              }
+          <section class="timeline-section hub-panel-card" data-testid="timeline-section">
+            <div class="section-head">
+              <h3 class="section-legend">Timeline</h3>
+              <p class="section-hint">Supervisor-recorded milestones in chronological order.</p>
             </div>
+            <ol class="timeline">
+              @for (event of timeline(); track event.id; let i = $index) {
+                <li class="timeline-item" [class]="'event-type-' + event.type" [attr.data-testid]="'event-' + event.type">
+                  <span class="timeline-marker" aria-hidden="true"></span>
+                  <div class="timeline-body">
+                    <div class="timeline-meta">
+                      @if (showTimelineTime(event, i)) {
+                        <time class="event-time">{{ formatTime(event.timestamp) }}</time>
+                      }
+                      @if (event.stageId) {
+                        <span class="event-stage-id">{{ event.stageId }}</span>
+                      }
+                    </div>
+                    <p class="event-message">{{ event.message }}</p>
+                  </div>
+                </li>
+              }
+            </ol>
           </section>
         }
       }
@@ -318,79 +377,108 @@ function basename(path: string | null | undefined): string | null {
       display: flex;
       flex-direction: column;
       gap: var(--space-4);
-      max-width: 60rem;
+      width: min(100%, 72rem);
       flex: 1;
       min-height: 0;
       overflow-x: hidden;
       overflow-y: auto;
-      padding-bottom: var(--space-6);
+      padding-bottom: calc(var(--space-6) + var(--fab-clearance));
     }
     .run-header {
-      display: flex;
-      align-items: baseline;
-      gap: var(--space-3);
-      flex-wrap: wrap;
-      margin-bottom: 0;
+      padding: 1rem 1.1rem;
+      background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--ion-color-step-50, #0d1117) 88%, var(--accent) 12%),
+        var(--ion-color-step-50, #0d1117)
+      );
     }
-    h1 {
-      margin: 0;
-      color: var(--text-primary);
-      font-family: var(--monospace-font);
-      font-size: var(--font-size-xl);
-      overflow-wrap: anywhere;
-    }
-    h3 {
-      margin: 0 0 0.5rem 0;
-      font-size: 0.95rem;
-      color: var(--text-primary);
-    }
-    .state-badge {
-      padding: 0.2rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      background: var(--surface);
-      color: var(--text-muted);
-    }
-    .state-badge.state-running {
-      background: var(--info-bg, #dbeafe);
-      color: var(--info, #0284c7);
-    }
-    .state-badge.state-waiting,
-    .state-badge.state-blocked {
-      background: var(--warning-bg, #fef3c7);
-      color: var(--warning, #d97706);
-    }
-    .state-badge.state-failed {
-      background: var(--danger-bg, #fee2e2);
-      color: var(--danger, #dc2626);
-    }
-    .state-badge.state-completed,
-    .state-badge.state-succeeded {
-      background: var(--success-bg, #dcfce7);
-      color: var(--success, #16a34a);
-    }
-    .next-action-panel {
-      border: 2px solid var(--accent);
-      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-      border-radius: var(--radius-lg);
-      padding: var(--space-4);
+    .run-header-main {
       display: flex;
       flex-direction: column;
       gap: var(--space-2);
+      min-width: 0;
     }
-    .next-action-panel.next-reset {
-      border-color: var(--warning, #d97706);
-      background: var(--warning-bg, #fffbeb);
+    .eyebrow {
+      margin: 0;
+      color: var(--accent-active);
+      font-size: var(--font-size-xs);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
+    .run-title-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+    }
+    .page-title {
+      margin: 0;
+      font-family: var(--monospace-font);
+      font-size: clamp(1.1rem, 2.4vw, var(--font-size-xl));
+      overflow-wrap: anywhere;
+    }
+    .run-workflow-link {
+      color: var(--text-link);
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .run-workflow-link:hover {
+      text-decoration: underline;
+    }
+    .user-prompt .prompt-body {
+      margin: 0;
+      padding: var(--space-3);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-md);
+      background: var(--code-bg, var(--surface-secondary));
+      color: var(--text-primary);
+      font-size: var(--font-size-sm);
+      line-height: var(--line-height-body);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    h3 {
+      margin: 0;
+    }
+    .state-badge {
+      text-transform: uppercase;
+    }
+    .state-badge.state-running {
+      color: var(--info);
+      border-color: color-mix(in srgb, var(--info) 45%, var(--panel-border));
+      background: color-mix(in srgb, var(--info) 12%, transparent);
+    }
+    .state-badge.state-waiting,
+    .state-badge.state-blocked {
+      color: var(--warning);
+      border-color: color-mix(in srgb, var(--warning) 45%, var(--panel-border));
+      background: color-mix(in srgb, var(--warning) 12%, transparent);
+    }
+    .state-badge.state-failed {
+      color: var(--danger);
+      border-color: color-mix(in srgb, var(--danger) 45%, var(--panel-border));
+      background: color-mix(in srgb, var(--danger) 12%, transparent);
+    }
+    .state-badge.state-completed,
+    .state-badge.state-succeeded {
+      color: var(--success-text, var(--success));
+      border-color: color-mix(in srgb, var(--success) 45%, var(--panel-border));
+      background: var(--success-bg);
+    }
+    .next-action-panel {
+      border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--panel-border));
+      background: color-mix(in srgb, var(--accent) 8%, var(--panel-bg));
+    }
+    .next-action-panel.next-reset,
     .next-action-panel.next-respond {
-      border-color: var(--warning, #d97706);
-      background: var(--warning-bg, #fffbeb);
+      border-color: color-mix(in srgb, var(--warning) 55%, var(--panel-border));
+      background: color-mix(in srgb, var(--warning) 10%, var(--panel-bg));
     }
     .next-action-panel.disabled {
-      border-color: var(--border);
-      background: var(--surface);
+      border-color: var(--panel-border);
+      background: var(--panel-bg);
     }
     .next-action-panel h3 {
       margin: 0;
@@ -401,7 +489,7 @@ function basename(path: string | null | undefined): string | null {
     }
     .next-action-panel.next-reset h3,
     .next-action-panel.next-respond h3 {
-      color: var(--warning, #d97706);
+      color: var(--warning);
     }
     .action-label {
       margin: 0;
@@ -411,27 +499,28 @@ function basename(path: string | null | undefined): string | null {
     .action-text,
     .hint {
       margin: 0;
-      color: var(--text-primary);
-      font-size: 0.9rem;
+      color: var(--text-secondary);
+      font-size: var(--font-size-sm);
     }
     .disabled-reason,
     .control-hint {
       margin: 0;
       color: var(--text-muted);
-      font-size: 0.8rem;
+      font-size: var(--font-size-xs);
     }
     .next-action-controls {
       display: flex;
-      gap: 0.5rem;
+      gap: var(--space-2);
       flex-wrap: wrap;
-      margin-top: 0.25rem;
+      margin-top: var(--space-1);
     }
     .notice {
+      margin: 0;
       color: var(--text-muted);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.6rem 0.75rem;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius-lg);
+      padding: 0.8rem 0.9rem;
     }
     .actions {
       display: flex;
@@ -439,182 +528,213 @@ function basename(path: string | null | undefined): string | null {
       gap: var(--space-2);
       flex-wrap: wrap;
     }
-    .secondary-actions {
-      padding-top: var(--space-1);
-    }
     .confirm-row {
       display: flex;
       align-items: center;
       gap: 0.4rem;
-      font-size: 0.85rem;
+      font-size: var(--font-size-sm);
       color: var(--text-muted);
     }
-    .stages-section,
-    .timeline-section,
     .pending-actions {
-      border-top: 1px solid var(--border);
-      padding-top: 1rem;
+      padding-top: 0;
+      border-top: 0;
     }
-    .stages-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 0.75rem;
-    }
-    .stage-card {
-      padding: 0.75rem;
+    .stage-map-head {
       display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-    .stage-status-queued,
-    .stage-status-pending {
-      border-left: 4px solid var(--text-muted);
-    }
-    .stage-status-running {
-      border-left: 4px solid var(--info, #0284c7);
-      background: var(--info-bg, #dbeafe);
-    }
-    .stage-status-waiting,
-    .stage-status-blocked {
-      border-left: 4px solid var(--warning, #d97706);
-      background: var(--warning-bg, #fffbeb);
-    }
-    .stage-status-succeeded,
-    .stage-status-completed {
-      border-left: 4px solid var(--success, #16a34a);
-      background: var(--success-bg, #dcfce7);
-    }
-    .stage-status-failed {
-      border-left: 4px solid var(--danger, #dc2626);
-      background: var(--danger-bg, #fee2e2);
-    }
-    .stage-header {
-      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
       justify-content: space-between;
+      gap: var(--space-3);
+      margin-bottom: var(--space-2);
+    }
+    .stage-lane {
+      display: flex;
+      gap: var(--space-3);
+      overflow-x: auto;
+      padding-bottom: var(--space-1);
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
+    }
+    .stage-chip {
+      flex: 0 0 min(15rem, 78vw);
+      scroll-snap-align: start;
+      align-items: stretch;
+      gap: 0.35rem;
+      padding: 0.85rem 0.95rem;
+      cursor: pointer;
+    }
+    .stage-chip.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    .stage-chip.stage-status-failed.selected {
+      border-color: var(--danger);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+    }
+    .chip-head {
+      display: flex;
       align-items: center;
-      gap: 0.5rem;
+      justify-content: space-between;
+      gap: var(--space-2);
     }
-    .stage-id {
+    .chip-state {
+      font-size: 0.65rem;
+    }
+    .chip-rework {
+      font-size: var(--font-size-xs);
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .chip-title {
+      margin: 0.15rem 0 0;
       font-family: var(--monospace-font);
-      font-size: 0.8rem;
+      font-size: var(--font-size-md);
+      font-weight: 650;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+    .chip-meta,
+    .chip-summary,
+    .chip-next {
+      margin: 0;
+      font-size: var(--font-size-xs);
+      color: var(--text-muted);
+      line-height: 1.35;
+    }
+    .chip-next {
+      color: var(--text-secondary);
       font-weight: 600;
     }
-    .stage-status {
-      font-size: 0.7rem;
-      text-transform: uppercase;
+    .chip-link {
+      margin-top: 0.25rem;
+      color: var(--text-link);
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .chip-link:hover {
+      text-decoration: underline;
+    }
+    .stage-more {
+      margin-top: 0.35rem;
+      font-size: var(--font-size-xs);
+      color: var(--text-muted);
+    }
+    .stage-more summary {
+      cursor: pointer;
+      color: var(--text-link);
       font-weight: 600;
     }
-    .stage-kind,
-    .stage-attempt,
-    .stage-todos,
     .stage-evidence,
     .stage-request,
-    .stage-summary,
-    .stage-next,
-    .stage-log,
     .plan-path {
-      margin: 0;
-      font-size: 0.75rem;
+      margin: 0.35rem 0 0;
+      font-size: var(--font-size-xs);
       color: var(--text-muted);
-    }
-    .stage-next {
-      color: var(--text-primary);
-      font-weight: 600;
     }
     .path-label {
       display: block;
       font-weight: 600;
-      color: var(--text-primary);
-    }
-    .plan-path.immutable .path-label {
-      color: var(--info, #0284c7);
-    }
-    .plan-path.control .path-label {
-      color: var(--warning, #d97706);
+      color: var(--text-secondary);
     }
     .timeline {
+      list-style: none;
+      margin: 0;
+      padding: 0;
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0;
       position: relative;
-      padding-left: 1.5rem;
+      padding-left: 1.35rem;
     }
     .timeline::before {
       content: '';
       position: absolute;
-      left: 0.45rem;
-      top: 0;
-      bottom: 0;
-      width: 1px;
-      background: var(--border);
+      left: 0.42rem;
+      top: 0.35rem;
+      bottom: 0.35rem;
+      width: 2px;
+      background: var(--panel-border);
+      border-radius: 1px;
     }
-    .timeline-event {
-      display: flex;
-      gap: 1rem;
+    .timeline-item {
       position: relative;
-      flex-wrap: wrap;
+      display: flex;
+      gap: var(--space-3);
+      padding: 0.55rem 0;
     }
-    .timeline-event::before {
-      content: '';
+    .timeline-item + .timeline-item {
+      border-top: 1px solid color-mix(in srgb, var(--panel-border) 65%, transparent);
+    }
+    .timeline-marker {
       position: absolute;
-      left: -1rem;
-      top: 0.25rem;
-      width: 0.7rem;
-      height: 0.7rem;
+      left: -1.35rem;
+      top: 0.85rem;
+      width: 0.55rem;
+      height: 0.55rem;
       border-radius: 50%;
-      background: var(--border);
-      border: 2px solid var(--page-bg, white);
+      background: var(--panel-border);
+      box-shadow: 0 0 0 2px var(--panel-bg);
     }
-    .timeline-event.event-type-stage-start::before,
-    .timeline-event.event-type-run-created::before {
-      background: var(--info, #0284c7);
+    .timeline-item.event-type-run-created .timeline-marker,
+    .timeline-item.event-type-stage-start .timeline-marker {
+      background: var(--info);
     }
-    .timeline-event.event-type-stage-end::before {
-      background: var(--success, #16a34a);
+    .timeline-item.event-type-stage-end .timeline-marker {
+      background: var(--success);
     }
-    .timeline-event.event-type-action-request::before {
-      background: var(--warning, #d97706);
+    .timeline-item.event-type-action-request .timeline-marker,
+    .timeline-item.event-type-rework .timeline-marker {
+      background: var(--warning);
     }
-    .timeline-event.event-type-action-response::before {
-      background: var(--success, #16a34a);
+    .timeline-item.event-type-action-response .timeline-marker {
+      background: var(--success);
     }
-    .timeline-event.event-type-verification::before {
-      background: var(--danger, #dc2626);
+    .timeline-item.event-type-verification .timeline-marker {
+      background: var(--danger);
     }
-    .timeline-event.event-type-rework::before {
-      background: var(--warning, #d97706);
-    }
-    .event-time {
-      font-family: var(--monospace-font);
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      min-width: 7rem;
-    }
-    .event-content {
+    .timeline-body {
       flex: 1;
       min-width: 0;
     }
+    .timeline-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.35rem 0.65rem;
+      margin-bottom: 0.15rem;
+    }
+    .event-time {
+      font-family: var(--monospace-font);
+      font-size: var(--font-size-xs);
+      color: var(--text-muted);
+    }
+    .event-stage-id {
+      font-family: var(--monospace-font);
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
     .event-message {
       margin: 0;
-      font-size: 0.85rem;
+      font-size: var(--font-size-sm);
       color: var(--text-primary);
-    }
-    .event-stage {
-      margin: 0.2rem 0 0 0;
-      font-size: 0.75rem;
-      color: var(--text-muted);
+      line-height: 1.4;
     }
     .pending-actions h3 {
       margin: 0 0 0.4rem;
-      font-size: 0.9rem;
+      font-size: var(--font-size-xs);
+      font-weight: 700;
+      letter-spacing: var(--letter-label);
+      text-transform: uppercase;
     }
     .muted {
       color: var(--text-muted);
     }
     .action-card {
-      border: 1px solid var(--border);
+      border: 1px solid var(--panel-border);
       border-radius: var(--radius-lg);
-      background: var(--surface);
+      background: var(--panel-bg);
       padding: var(--space-3);
       display: flex;
       flex-direction: column;
@@ -622,20 +742,16 @@ function basename(path: string | null | undefined): string | null {
       margin-bottom: var(--space-2);
     }
     .action-card.action-primary {
-      border-width: 2px;
       border-color: var(--accent);
       box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
     }
-    .action-card.action-disabled {
-      opacity: 0.85;
-    }
     .question {
       margin: 0;
-      font-size: 0.85rem;
+      font-size: var(--font-size-sm);
     }
     .action-meta {
       margin: 0;
-      font-size: 0.75rem;
+      font-size: var(--font-size-xs);
       color: var(--text-muted);
     }
     .action-status {
@@ -645,8 +761,8 @@ function basename(path: string | null | undefined): string | null {
     }
     .persisted-decision {
       margin: 0;
-      font-size: 0.8rem;
-      color: var(--success, #16a34a);
+      font-size: var(--font-size-sm);
+      color: var(--success-text, var(--success));
     }
     .respond-row {
       display: flex;
@@ -665,8 +781,17 @@ export class WorkflowRunDetailPageComponent implements OnInit {
   readonly confirmingCancel = signal(false);
   readonly pendingDecisions = signal<ReadonlyMap<string, ActionDecision>>(new Map());
   readonly messages: Record<string, string> = {};
+  readonly showSkippedStages = signal(false);
+  readonly selectedStageId = signal<string | null>(null);
 
   private currentRunId = '';
+
+  readonly skippedStageCount = computed(() => this.stages().filter((stage) => stage.state === 'skipped').length);
+
+  readonly displayStages = computed(() => {
+    const all = this.stages();
+    return this.showSkippedStages() ? all : all.filter((stage) => stage.state !== 'skipped');
+  });
 
   readonly stages = computed((): readonly StageMapEntry[] => {
     const status = this.facade.runStatus();
@@ -772,8 +897,55 @@ export class WorkflowRunDetailPageComponent implements OnInit {
     return basename(path) ?? path ?? '';
   }
 
-  decisionsFor(action: RunActionDetail): readonly string[] {
-    return action.choices.length > 0 ? action.choices : this.decisions;
+  evidenceSummary(paths: readonly string[]): string {
+    return paths.map((path) => this.shortEvidence(path)).join(', ');
+  }
+
+  shortEvidence(path: string): string {
+    return basename(path) ?? path;
+  }
+
+  hasStageDetails(stage: StageMapEntry): boolean {
+    return (
+      !!stage.sourcePlanPath
+      || !!stage.controlPlanPath
+      || stage.requiredEvidence.length > 0
+      || stage.producedEvidence.length > 0
+      || !!stage.actionRequestId
+    );
+  }
+
+  stageStatusLabel(state: string): string {
+    switch (state) {
+      case 'succeeded':
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      case 'running':
+        return 'Running';
+      case 'waiting':
+        return 'Waiting';
+      case 'blocked':
+        return 'Blocked';
+      case 'skipped':
+        return 'Skipped';
+      case 'cancelled':
+        return 'Cancelled';
+      case 'queued':
+      case 'pending':
+        return 'Pending';
+      default:
+        return state;
+    }
+  }
+
+  showTimelineTime(event: RunTimelineEvent, index: number): boolean {
+    if (index === 0) {
+      return true;
+    }
+    const prev = this.timeline()[index - 1];
+    return !prev || prev.timestamp !== event.timestamp;
   }
 
   formatTime(timestamp: string): string {
@@ -783,6 +955,28 @@ export class WorkflowRunDetailPageComponent implements OnInit {
     } catch {
       return timestamp;
     }
+  }
+
+  decisionsFor(action: RunActionDetail): readonly string[] {
+    return action.choices.length > 0 ? action.choices : this.decisions;
+  }
+
+  constructor() {
+    effect(() => {
+      const stages = this.displayStages();
+      const current = this.selectedStageId();
+      if (stages.length === 0) {
+        return;
+      }
+      if (current && stages.some((stage) => stage.id === current)) {
+        return;
+      }
+      const pick =
+        stages.find((stage) => stage.state === 'failed')
+        ?? stages.find((stage) => stage.state === 'running' || stage.state === 'waiting')
+        ?? stages[stages.length - 1];
+      this.selectedStageId.set(pick?.id ?? stages[0]!.id);
+    });
   }
 
   ngOnInit(): void {

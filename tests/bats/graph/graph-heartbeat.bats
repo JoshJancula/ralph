@@ -435,3 +435,33 @@ set_run_json_null() {
   [ "$before" = "$after" ]
   printf '%s\n' "$output" | jq -e '.ownerHealth == "unknown"' >/dev/null
 }
+
+@test "owner reconciliation fails only a non-terminal run with two dead-owner checks" {
+  local dead_file live_file terminal_file before
+  dead_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "$RUN_ID")"
+  live_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "run-live-owner")"
+  terminal_file="$(graph_state_run_file "$WORKSPACE" "$NAMESPACE" "run-terminal-owner")"
+
+  # 999999999 is outside the PID range on supported macOS and Linux hosts.
+  jq '.supervisorPid = 999999999' "$dead_file" >"$dead_file.tmp"
+  mv "$dead_file.tmp" "$dead_file"
+  graph_state_reconcile_run_owner_file "$dead_file"
+  [ "$(jq -r '.status' "$dead_file")" = "failed" ]
+  [ "$(jq -r '.failureReason' "$dead_file")" = "owner-lost" ]
+  [ -n "$(jq -r '.failedAt' "$dead_file")" ]
+
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "run-live-owner" "$PLAN_FILE" "$GRAPH_JSON" 2
+  jq --argjson pid "$BASHPID" '.supervisorPid = $pid' "$live_file" >"$live_file.tmp"
+  mv "$live_file.tmp" "$live_file"
+  graph_state_reconcile_run_owner_file "$live_file"
+  [ "$(jq -r '.status' "$live_file")" = "running" ]
+
+  graph_state_init_run "$WORKSPACE" "$NAMESPACE" "run-terminal-owner" "$PLAN_FILE" "$GRAPH_JSON" 2
+  graph_state_set_run_status "$WORKSPACE" "$NAMESPACE" "run-terminal-owner" "succeeded"
+  jq '.supervisorPid = 999999999' "$terminal_file" >"$terminal_file.tmp"
+  mv "$terminal_file.tmp" "$terminal_file"
+  before="$(shasum "$terminal_file" | awk '{print $1}')"
+  graph_state_reconcile_run_owner_file "$terminal_file"
+  [ "$before" = "$(shasum "$terminal_file" | awk '{print $1}')" ]
+  [ "$(jq -r '.status' "$terminal_file")" = "succeeded" ]
+}

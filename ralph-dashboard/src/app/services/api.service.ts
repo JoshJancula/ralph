@@ -327,6 +327,57 @@ export interface MetricsQueryFilters {
   sortDir?: 'asc' | 'desc';
 }
 
+export type AmbientProviderId = 'claude_code' | 'codex' | 'antigravity';
+
+export type AmbientProviderStatus = 'available' | 'not_installed' | 'no_data' | 'error';
+
+export interface AmbientRateLimitWindow {
+  id: string;
+  label: string;
+  used_percent: number;
+  resets_at: string | null;
+  resets_in_seconds: number | null;
+}
+
+export interface AmbientProviderReport {
+  id: AmbientProviderId;
+  label: string;
+  status: AmbientProviderStatus;
+  message?: string;
+  truncated?: boolean;
+  quota_fetched_at?: string | null;
+  rate_limits: AmbientRateLimitWindow[];
+  tokens: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    total_tokens: number;
+    session_count: number;
+  };
+  model_breakdown: Array<{
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    total_tokens: number;
+    sessions: number;
+  }>;
+  updated_at: string;
+}
+
+export interface AmbientUsageResponse {
+  enabled: boolean;
+  scope: 'machine_local';
+  date_scope: {
+    from: string | null;
+    to: string | null;
+    label: string;
+  };
+  providers: AmbientProviderReport[];
+}
+
 /** Optional AbortSignal for request cancellation on route/filter changes. */
 export interface ApiRequestOptions {
   signal?: AbortSignal;
@@ -369,6 +420,8 @@ export interface GraphRunSummary {
   status: string;
   startedAt: string | null;
   nodeCount: number;
+  workspaceRoot: string;
+  projectRoot: string;
 }
 
 export interface PlanInventoryItem {
@@ -529,6 +582,33 @@ export interface GraphRunsResponse {
   runs: GraphRunSummary[];
 }
 
+export type GraphDiffOperation = 'added' | 'modified' | 'deleted' | 'renamed';
+
+/** One file-level change from GET /api/graph-runs/:ns/:runId/diff. */
+export interface GraphDiffChange {
+  path: string;
+  operation: GraphDiffOperation;
+  fromPath?: string;
+  binary: boolean;
+  unavailable: boolean;
+  unifiedDiff?: string;
+  beforeSha256?: string;
+  afterSha256?: string;
+}
+
+export interface GraphDiffNodeResult {
+  nodeId: string;
+  changesetManifest: string | null;
+  changes: GraphDiffChange[];
+}
+
+export interface GraphRunDiffResponse {
+  namespace: string;
+  runId: string;
+  nodes: GraphDiffNodeResult[];
+  truncated: boolean;
+}
+
 export type SavingsPathName =
   | 'pre_tool_rewrite'
   | 'hook_compaction'
@@ -621,6 +701,88 @@ export interface SavingsReport {
   readback_summary?: ReadbackSummary;
 }
 
+export interface PlanRunListItem {
+  runId: string;
+  planKey: string;
+  status: string;
+  startedAt: string;
+  endedAt: string;
+  source: 'manifest' | 'legacy';
+  runtime: string;
+  model: string;
+  todosDone: number | null;
+  todosTotal: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  elapsedSeconds: number | null;
+}
+
+export interface PlanRunFileSummary {
+  path: string;
+  label: string;
+}
+
+export interface PlanRunOpenTarget {
+  root: string;
+  path: string;
+}
+
+export interface PlanRunEvidenceEntry {
+  id: string;
+  path: string;
+  label: string;
+  category: string;
+  kind: string;
+  format: string;
+  sizeBytes: number | null;
+  mtimeMs: number | null;
+  target: PlanRunOpenTarget;
+}
+
+export interface PlanRunFilesPayload {
+  evidence: PlanRunEvidenceEntry[];
+  summary: PlanRunFileSummary[];
+  raw: string[];
+}
+
+export interface PlanRunOperatorNext {
+  label: string;
+  description: string;
+  enabled: boolean;
+  disabledReason?: string;
+}
+
+export interface PlanRunTimelineEvent {
+  at: string;
+  prose: string;
+}
+
+export interface PlanRunResume {
+  resumableTodoCount: number;
+  command: string;
+}
+
+export interface PlanRunDetail {
+  runId: string;
+  planKey: string;
+  status: string;
+  source: 'manifest' | 'legacy';
+  files: PlanRunFilesPayload;
+  timeline: PlanRunTimelineEvent[];
+  operatorNext: PlanRunOperatorNext;
+  discoverReport: string | null;
+  resume: PlanRunResume;
+  usage: {
+    runtime: string;
+    model: string;
+    todosDone: number | null;
+    todosTotal: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    elapsedSeconds: number | null;
+  };
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -648,6 +810,25 @@ export class ApiService {
 
   stopLeafPlan(path: string, projectRoot?: string): Observable<{ ok: true }> {
     return this.http.post<{ ok: true }>('/api/plans/stop', { path, projectRoot });
+  }
+
+  fetchPlanRuns(planKey: string, workspaceRoot?: string): Observable<{ items: PlanRunListItem[] }> {
+    const params: Record<string, string> = {};
+    if (planKey) {
+      params['planKey'] = planKey;
+    }
+    if (workspaceRoot) {
+      params['workspaceRoot'] = workspaceRoot;
+    }
+    return this.http.get<{ items: PlanRunListItem[] }>('/api/plan-runs', { params });
+  }
+
+  fetchPlanRunDetail(runId: string, workspaceRoot?: string): Observable<PlanRunDetail> {
+    const params: Record<string, string> = {};
+    if (workspaceRoot) {
+      params['workspaceRoot'] = workspaceRoot;
+    }
+    return this.http.get<PlanRunDetail>(`/api/plan-runs/${encodeURIComponent(runId)}`, { params });
   }
 
   fetchLeafPlanRun(path: string, projectRoot?: string): Observable<{ activeRun: PlanActiveRun | null; activityDiscoveryError?: string }> {
@@ -725,6 +906,23 @@ export class ApiService {
       this.http.get<MetricsBreakdownResponse>('/api/metrics/breakdown', {
         params: this.buildMetricsParams(filters),
       }),
+      options?.signal,
+    );
+  }
+
+  fetchAmbientUsage(
+    filters?: Pick<MetricsQueryFilters, 'dateFrom' | 'dateTo'>,
+    options?: ApiRequestOptions,
+  ): Observable<AmbientUsageResponse> {
+    const params: Record<string, string> = {};
+    if (filters?.dateFrom) {
+      params['dateFrom'] = filters.dateFrom;
+    }
+    if (filters?.dateTo) {
+      params['dateTo'] = filters.dateTo;
+    }
+    return this.withAbort(
+      this.http.get<AmbientUsageResponse>('/api/metrics/ambient-usage', { params }),
       options?.signal,
     );
   }
@@ -846,6 +1044,24 @@ export class ApiService {
     }
     return this.http.get<GraphRunDetail>(
       `/api/graph-runs/${encodeURIComponent(namespace)}/${encodeURIComponent(runId)}`,
+      { params },
+    );
+  }
+
+  fetchGraphRunDiff(
+    namespace: string,
+    runId: string,
+    options?: { workspaceRoot?: string; nodeId?: string },
+  ): Observable<GraphRunDiffResponse> {
+    const params: Record<string, string> = {};
+    if (options?.workspaceRoot) {
+      params['workspaceRoot'] = options.workspaceRoot;
+    }
+    if (options?.nodeId) {
+      params['nodeId'] = options.nodeId;
+    }
+    return this.http.get<GraphRunDiffResponse>(
+      `/api/graph-runs/${encodeURIComponent(namespace)}/${encodeURIComponent(runId)}/diff`,
       { params },
     );
   }

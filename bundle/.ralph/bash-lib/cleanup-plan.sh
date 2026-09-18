@@ -21,6 +21,10 @@ if ! declare -F graph_logs_resolve >/dev/null 2>&1; then
   # shellcheck source=graph/graph-logs.sh
   source "$_CLEANUP_PLAN_LIB_DIR/graph/graph-logs.sh"
 fi
+if ! declare -F graph_state_reconcile_run_owner_file >/dev/null 2>&1; then
+  # shellcheck source=graph/graph-state.sh
+  source "$_CLEANUP_PLAN_LIB_DIR/graph/graph-state.sh"
+fi
 
 cleanup_plan_usage() {
   local script_path="${1:-.ralph/cleanup-plan.sh}"
@@ -240,6 +244,44 @@ cleanup_plan_prune_stage_outcomes_for_run() {
   fi
 }
 
+# cleanup_plan_prune_graph_bases <workspace_root> <namespace>
+#
+# Base snapshots serve the dashboard diff before-side, so retain them longer
+# than whole graph runs and always retain the newest three terminal ledgers.
+# Older snapshots degrade gracefully once run.json records basePruned.
+cleanup_plan_prune_graph_bases() {
+  local workspace_root="$1" namespace="$2"
+  local max_age_days="${RALPH_GRAPH_BASE_MAX_AGE_DAYS:-90}"
+  local ns_dir cutoff_epoch entry run_id run_json run_mtime
+  local terminal_seen=0 base_dir base_json
+
+  ns_dir="$(cleanup_plan_graph_runs_namespace_dir "$workspace_root" "$namespace")"
+  [[ -d "$ns_dir" ]] || return 0
+  cutoff_epoch="$(cleanup_plan_epoch_days_ago "$max_age_days")"
+  [[ "$cutoff_epoch" -gt 0 ]] || return 0
+
+  while IFS= read -r entry; do
+    [[ "$entry" == "latest" ]] && continue
+    [[ -d "$ns_dir/$entry" ]] || continue
+    run_id="$entry"
+    run_json="$ns_dir/$run_id/run.json"
+    cleanup_plan_graph_run_is_terminal "$run_json" || continue
+    terminal_seen=$((terminal_seen + 1))
+    [[ "$terminal_seen" -gt 3 ]] || continue
+    run_mtime="$(cleanup_plan_file_mtime "$ns_dir/$run_id")"
+    [[ "$run_mtime" -lt "$cutoff_epoch" ]] || continue
+    base_dir="$ns_dir/$run_id/base"
+    [[ -d "$base_dir" && ! -L "$base_dir" ]] || continue
+
+    rm -rf "$base_dir" || return 1
+    base_json="$(jq -c . "$run_json" 2>/dev/null)" || return 1
+    ralph_atomic_write_json "$run_json" \
+      '($base | fromjson) | .basePruned = true' \
+      --arg base "$base_json" || return 1
+    echo "Pruned graph base snapshot: $run_id (namespace: $namespace)"
+  done < <(ls -t1 "$ns_dir" 2>/dev/null || true)
+}
+
 # cleanup_plan_prune_graph_runs <workspace_root> <namespace>
 # Prunes terminal graph runs by age and by run count for the given namespace.
 #
@@ -284,6 +326,8 @@ cleanup_plan_prune_graph_runs() {
     return 0
   fi
 
+  cleanup_plan_prune_graph_bases "$workspace_root" "$namespace"
+
   # Compute cutoff epoch for age-based pruning.
   local cutoff_epoch
   cutoff_epoch="$(cleanup_plan_epoch_days_ago "$max_age_days")"
@@ -292,6 +336,10 @@ cleanup_plan_prune_graph_runs() {
 
   for run_id in "${run_ids[@]}"; do
     run_json="$ns_dir/$run_id/run.json"
+
+    # Reconcile dead scheduler ownership before applying terminal-only
+    # retention. A stale "running" ledger would otherwise be immortal.
+    graph_state_reconcile_run_owner_file "$run_json" || true
 
     # Never prune the run pointed at by the latest symlink.
     if [[ -n "$latest_run_id" && "$run_id" == "$latest_run_id" ]]; then

@@ -6,6 +6,7 @@ import { AssistantService, AssistantValidationError, type AssistantApprovedActio
 import { RalphAssistantCompletion } from './completion';
 import { createAssistantToolExecutor } from './tool-executor';
 import { ASSISTANT_TOOLS, isMutatingTool } from './tools';
+import { listRuntimeStatuses } from '../runtime-status';
 
 const completion = new RalphAssistantCompletion();
 
@@ -28,6 +29,10 @@ function handleTools(_req: Request, res: Response): void {
 
 async function handleRuntimes(_req: Request, res: Response): Promise<void> {
   res.json(await completion.listRuntimes());
+}
+
+async function handleRuntimeStatuses(_req: Request, res: Response): Promise<void> {
+  res.json(await listRuntimeStatuses());
 }
 
 async function handleRuntimeModels(req: Request, res: Response): Promise<void> {
@@ -115,6 +120,7 @@ async function handleChat(req: Request, res: Response): Promise<void> {
 export function registerAssistantApi(app: Express): void {
   app.get('/api/assistant/tools', handleTools);
   app.get('/api/assistant/runtimes', handleRuntimes);
+  app.get('/api/runtime-status', handleRuntimeStatuses);
   app.get('/api/assistant/runtimes/:runtime/models', handleRuntimeModels);
   app.post('/api/assistant/chat', writeGuard, handleChat);
 }

@@ -315,6 +315,8 @@ _print_run_plan_help_body() {
   ralph_help_section 'Session'
   ralph_help_option '--session-strategy' '<fresh|resume|reset|compact>' \
     'Session behavior between TODOs. fresh: default strict isolation. resume: keep the same conversation. reset: reuse session id with reset-oriented prompts. compact: reuse session id with a compact command prefix (Codex=/compact, Cursor=/compress).'
+  ralph_help_option '--resume-run' '<run-id|last>' \
+    'Opt-in: reuse exact per-TODO session ids from a previous plan run. last uses the most recent terminal run for this plan. Does not change the default fresh strategy. Foreign-run identity still refuses mismatched todoHash, runtime, or todoId.'
   ralph_help_option '--cli-resume, --no-cli-resume' '' 'Enable or disable CLI resume prompts.'
   ralph_help_option '--allow-unsafe-resume' '' 'Allow bare CLI resume without a session id.'
   ralph_help_option '--resume' '<id>' 'Force a CLI session id for this run.'
@@ -521,6 +523,13 @@ ralph_run_plan_parse_args() {
           ralph_die "Error: --session-strategy must be one of fresh, resume, reset, or compact."
         fi
         SESSION_STRATEGY_FLAG="$2"
+        shift 2
+        ;;
+      --resume-run)
+        if [[ -z "${2:-}" ]]; then
+          ralph_die "Error: --resume-run requires a run id or last."
+        fi
+        RESUME_RUN_FLAG="$2"
         shift 2
         ;;
       --agent)
@@ -820,6 +829,13 @@ ralph_run_plan_parse_args() {
     RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=0
   fi
   export RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED
+
+  if [[ -n "${RESUME_RUN_FLAG:-}" ]]; then
+    RALPH_PLAN_RESUME_RUN="$RESUME_RUN_FLAG"
+  fi
+  if [[ -n "${RALPH_PLAN_RESUME_RUN:-}" ]]; then
+    export RALPH_PLAN_RESUME_RUN
+  fi
 
   RALPH_PLAN_ALLOW_UNSAFE_RESUME="${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}"
   if [[ "$ALLOW_UNSAFE_RESUME_FLAG" == "1" ]]; then

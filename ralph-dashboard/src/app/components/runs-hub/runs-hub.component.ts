@@ -90,6 +90,17 @@ const RUNS_PAGE_SIZE = 25;
         </div>
       </div>
 
+      @if (skippedWorkspaces() > 0) {
+        <p class="runs-aggregation-warning" data-testid="runs-skipped-workspaces" role="status">
+          {{ skippedWorkspaces() }} registered workspace{{ skippedWorkspaces() === 1 ? '' : 's' }} skipped because the workspace state is unavailable.
+        </p>
+      }
+      @if (originatingWorkspace()) {
+        <p class="runs-originating-workspace" data-testid="runs-originating-workspace" role="status">
+          Workspace: <span>{{ originatingWorkspace() }}</span>
+        </p>
+      }
+
       <ralph-route-load-state
         [loading]="showLoadingSkeleton()"
         [errorDetail]="error()"
@@ -180,6 +191,8 @@ const RUNS_PAGE_SIZE = 25;
                     <dd>{{ run.workflowId || '-' }}</dd>
                     <dt>Task</dt>
                     <dd>{{ run.task || '-' }}</dd>
+                    <dt>Workspace</dt>
+                    <dd>{{ run.workspaceRoot || '-' }}</dd>
                     <dt>Source</dt>
                     <dd>{{ run.sourceKind || '-' }}</dd>
                     <dt>Elapsed</dt>
@@ -461,6 +474,8 @@ export class RunsHubComponent implements OnDestroy {
   readonly showLoadingSkeleton = computed(() => shouldShowRouteSkeleton(this.loading(), this.hasLoadedOnce()));
   readonly error = signal<unknown>(null);
   readonly runs = signal<readonly RunListItem[]>([]);
+  readonly originatingWorkspace = signal<string | null>(null);
+  readonly skippedWorkspaces = signal(0);
   readonly pageSize = signal(RUNS_PAGE_SIZE);
   readonly expandedRows = signal<ReadonlySet<string>>(new Set());
 
@@ -534,11 +549,19 @@ export class RunsHubComponent implements OnDestroy {
     }
 
     this.api.listAllRuns(undefined, { signal: handle.signal }).pipe(takeUntil(this.destroy$)).subscribe({
-      next: (runs) => {
+      next: (response) => {
         if (!this.requestLifecycle.isCurrent(handle)) {
           return;
         }
-        this.runs.set(runs);
+        if ('runs' in response) {
+          this.runs.set(response.runs);
+          this.originatingWorkspace.set(response.workspaceRoot);
+          this.skippedWorkspaces.set(response.skipped);
+        } else {
+          this.runs.set(response);
+          this.originatingWorkspace.set(null);
+          this.skippedWorkspaces.set(0);
+        }
         this.hasLoadedOnce.set(true);
         this.loading.set(false);
         markInventoryUsable('runs');

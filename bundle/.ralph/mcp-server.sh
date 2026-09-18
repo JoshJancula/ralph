@@ -290,6 +290,73 @@ WORKSPACE_ROOT=""
 WORKSPACE_ROOT_PREFIX=""
 ALLOWLIST_ROOTS=()
 
+# Dashboard discovery is deliberately fail-closed and cached for the lifetime
+# of this MCP session. The dashboard tool catalog is added by a later layer;
+# this state gives that catalog one stable, non-fatal availability decision.
+RALPH_MCP_DASHBOARD_ENDPOINT_CHECKED=0
+RALPH_MCP_DASHBOARD_ENDPOINT_AVAILABLE=0
+
+dashboard_mcp_detection_disabled() {
+  local value="${RALPH_MCP_DASHBOARD_DETECTION_DISABLED:-${RALPH_MCP_DASHBOARD_DISABLED:-0}}"
+  value="$(tr '[:upper:]' '[:lower:]' <<<"$value" | tr -d '\r\n')"
+  case "$value" in
+    1|true|yes|on) return 0 ;;
+  esac
+  return 1
+}
+
+dashboard_mcp_endpoint_path() {
+  local config_home="${XDG_CONFIG_HOME:-}"
+  [[ -n "$config_home" ]] || config_home="${HOME:-}/.config"
+  printf '%s\n' "${config_home%/}/ralph/dashboard/endpoint.json"
+}
+
+dashboard_mcp_endpoint_available() {
+  local endpoint_path raw host port pid probe_host
+
+  dashboard_mcp_detection_disabled && return 1
+  endpoint_path="$(dashboard_mcp_endpoint_path)"
+  [[ -f "$endpoint_path" ]] || return 1
+  raw="$(cat "$endpoint_path" 2>/dev/null)" || return 1
+
+  # Extract and validate all endpoint fields with the server's jq dependency.
+  if ! IFS=$'\t' read -r host port pid < <(
+    jq -er '[.host, .port, .pid] | select(length == 3) | @tsv' <<<"$raw" 2>/dev/null
+  ); then
+    return 1
+  fi
+  [[ "$host" == "127.0.0.1" || "$host" == "localhost" || "$host" == "::1" || "$host" == "[::1]" ]] || return 1
+  [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+  [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+
+  # Do not advertise a dashboard whose recorded process is alive but whose
+  # listening socket is gone. Python is optional; absence fails closed.
+  probe_host="$host"
+  [[ "$probe_host" == "[::1]" ]] && probe_host="::1"
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$probe_host" "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+host, port = sys.argv[1], int(sys.argv[2])
+with socket.create_connection((host, port), timeout=0.25):
+    pass
+PY
+}
+
+ensure_dashboard_mcp_endpoint_detection() {
+  if [[ "$RALPH_MCP_DASHBOARD_ENDPOINT_CHECKED" == "1" ]]; then
+    [[ "$RALPH_MCP_DASHBOARD_ENDPOINT_AVAILABLE" == "1" ]]
+    return
+  fi
+  RALPH_MCP_DASHBOARD_ENDPOINT_CHECKED=1
+  if dashboard_mcp_endpoint_available; then
+    RALPH_MCP_DASHBOARD_ENDPOINT_AVAILABLE=1
+  fi
+  [[ "$RALPH_MCP_DASHBOARD_ENDPOINT_AVAILABLE" == "1" ]]
+}
+
 _BASE_TOOL_LIST_JSON=$(
   cat <<'EOF'
 {
@@ -492,11 +559,76 @@ _BASE_TOOL_LIST_JSON=$(
 EOF
 )
 
+_DASHBOARD_TOOL_LIST_JSON=$(
+  cat <<'EOF'
+[
+  {
+    "name": "ralph_dashboard_list_runs",
+    "description": "Read-only: list dashboard-visible Ralph runs.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "type": "string", "description": "Workspace root path." }
+      }
+    }
+  },
+  {
+    "name": "ralph_dashboard_run_status",
+    "description": "Read-only: inspect a Ralph run and its node status through the dashboard.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "type": "string", "description": "Workspace root path." },
+        "namespace": { "type": "string", "description": "Graph-run namespace." },
+        "run_id": { "type": "string", "description": "Run identifier." }
+      },
+      "required": ["namespace", "run_id"]
+    }
+  },
+  {
+    "name": "ralph_dashboard_read_artifact",
+    "description": "Read-only: read a dashboard workspace artifact.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "type": "string", "description": "Workspace root path." },
+        "path": { "type": "string", "description": "Artifact path relative to the workspace." }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "ralph_dashboard_plan_status",
+    "description": "Read-only: report dashboard plan status and TODO progress.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "type": "string", "description": "Workspace root path." },
+        "plan_path": { "type": "string", "description": "Plan file path." }
+      },
+      "required": ["plan_path"]
+    }
+  }
+]
+EOF
+)
+
 TOOL_LIST_RESULT=""
 
 get_tool_list_result() {
   if [[ -z "$TOOL_LIST_RESULT" ]]; then
-    local mode proxy_json result_tools_json tools_array
+    # Detection is intentionally non-fatal and happens once, before the first
+    # tools/list response. A dashboard started later needs a new MCP session.
+    ensure_dashboard_mcp_endpoint_detection || true
+    local mode proxy_json result_tools_json dashboard_tools_json tools_array
+    dashboard_tools_json='[]'
+    if [[ "$RALPH_MCP_DASHBOARD_ENDPOINT_AVAILABLE" == "1" ]]; then
+      dashboard_tools_json="$_DASHBOARD_TOOL_LIST_JSON"
+    fi
     mode="$(tr '[:upper:]' '[:lower:]' <<<"${RALPH_MODE:-no}" | tr -d '\r\n')"
     case "$mode" in
       ralph|hybrid)
@@ -521,7 +653,8 @@ get_tool_list_result() {
         --argjson proxy "$proxy_json" \
         --argjson result "$result_tools_json" \
         --argjson delegation "$delegation_tools_json" \
-        '.tools += $proxy | .tools += $result | .tools += $delegation | .tools |= sort_by(.name)' \
+        --argjson dashboard "$dashboard_tools_json" \
+        '.tools += $proxy | .tools += $result | .tools += $delegation | .tools += $dashboard | .tools |= sort_by(.name)' \
         <<< "$_BASE_TOOL_LIST_JSON"
     )
     if ralph_mcp_proxy_compact_tool_catalog_active; then
@@ -532,7 +665,7 @@ get_tool_list_result() {
           .tools |= map(
             . as $tool
             | ($tool.name // "") as $n
-            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run" or $n == "ralph_graph_run" or $n == "ralph_graph_status" or $n == "ralph_delegated_run_start" or $n == "ralph_delegated_run_status" or $n == "ralph_delegated_run_wait" or $n == "ralph_delegated_run_result" or $n == "ralph_delegated_run_cancel") then .
+            | if ($n == "ralph_run_plan" or $n == "ralph_plan_status" or $n == "ralph_orchestrator_run" or $n == "ralph_graph_run" or $n == "ralph_graph_status" or $n == "ralph_delegated_run_start" or $n == "ralph_delegated_run_status" or $n == "ralph_delegated_run_wait" or $n == "ralph_delegated_run_result" or $n == "ralph_delegated_run_cancel" or ($n | startswith("ralph_dashboard_"))) then .
               elif ($core | index($n)) != null then .
               else empty
               end
@@ -1781,6 +1914,121 @@ handle_graph_status() {
   send_result "$id_present" "$id_raw" "$result_json"
 }
 
+dashboard_mcp_unavailable() {
+  local id_present="$1" id_raw="$2" reason="${3:-dashboard unavailable}"
+  local result_json
+  result_json="$(jq -n --arg reason "$reason" '{content:[{type:"text",text:("Dashboard unavailable: " + $reason)}],structuredContent:{read_only:true,available:false,error:"dashboard_unavailable",reason:$reason},isError:false}')"
+  send_result "$id_present" "$id_raw" "$result_json"
+}
+
+dashboard_mcp_invalid_arguments() {
+  send_error "$1" "$2" "-32602" "$3"
+}
+
+dashboard_mcp_args_only() {
+  local args_json="$1" allowed_json="$2"
+  jq -e --argjson allowed "$allowed_json" 'type == "object" and (keys | all(. as $key | $allowed | index($key) != null))' <<<"$args_json" >/dev/null 2>&1
+}
+
+dashboard_mcp_workspace() {
+  local args_json="$1" workspace_arg workspace_path
+  workspace_arg="$(jq -r '.workspace // empty' <<<"$args_json")"
+  [[ -n "$workspace_arg" ]] || workspace_arg="$WORKSPACE_ROOT"
+  contains_shell_metacharacters "$workspace_arg" && return 1
+  workspace_path="$(resolve_workspace "$workspace_arg")" || return 1
+  [[ -n "$workspace_path" ]] || return 1
+  printf '%s\n' "$workspace_path"
+}
+
+dashboard_mcp_endpoint_url() {
+  local endpoint_path raw host port
+  endpoint_path="$(dashboard_mcp_endpoint_path)"
+  raw="$(cat "$endpoint_path" 2>/dev/null)" || return 1
+  if ! IFS=$'\t' read -r host port < <(jq -er '[.host, .port] | select(length == 2) | @tsv' <<<"$raw" 2>/dev/null); then
+    return 1
+  fi
+  [[ "$host" == "127.0.0.1" || "$host" == "localhost" || "$host" == "::1" || "$host" == "[::1]" ]] || return 1
+  [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
+  [[ "$host" == "[::1]" ]] && host="::1"
+  if [[ "$host" == *:* ]]; then
+    printf 'http://[%s]:%s\n' "$host" "$port"
+  else
+    printf 'http://%s:%s\n' "$host" "$port"
+  fi
+}
+
+dashboard_mcp_get() {
+  local base_url="$1" endpoint="$2" workspace_path="$3" output_path status
+  output_path="$(mktemp "${TMPDIR:-/tmp}/ralph-dashboard-response.XXXXXX")" || return 1
+  if ! status="$(curl -sS --max-time 5 --get -o "$output_path" -w '%{http_code}' \
+    --data-urlencode "workspaceRoot=$workspace_path" "$base_url$endpoint" 2>/dev/null)"; then
+    rm -f "$output_path"
+    return 1
+  fi
+  if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+    rm -f "$output_path"
+    return 2
+  fi
+  DASHBOARD_MCP_RESPONSE_BODY="$(cat "$output_path")"
+  rm -f "$output_path"
+  jq -e 'type == "object" or type == "array"' <<<"$DASHBOARD_MCP_RESPONSE_BODY" >/dev/null 2>&1 || return 2
+  return 0
+}
+
+dashboard_mcp_result() {
+  local id_present="$1" id_raw="$2" summary="$3" body="$4"
+  local structured
+  structured="$(jq -c --arg summary "$summary" 'if type == "object" then . + {read_only:true,available:true,summary:$summary} else {read_only:true,available:true,summary:$summary,data:.} end' <<<"$body")"
+  send_result "$id_present" "$id_raw" "$(jq -n --arg summary "$summary" --argjson structured "$structured" '{content:[{type:"text",text:$summary}],structuredContent:$structured,isError:false}')"
+}
+
+handle_dashboard_list_runs() {
+  local args_json="$1" id_present="$2" id_raw="$3" workspace_path base_url
+  dashboard_mcp_args_only "$args_json" '["workspace"]' || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "only workspace is accepted"; return; }
+  workspace_path="$(dashboard_mcp_workspace "$args_json")" || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "workspace is invalid or not allowed"; return; }
+  base_url="$(dashboard_mcp_endpoint_url)" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_get "$base_url" '/api/runs' "$workspace_path" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_result "$id_present" "$id_raw" "Listed dashboard runs (read-only)." "$DASHBOARD_MCP_RESPONSE_BODY"
+}
+
+handle_dashboard_run_status() {
+  local args_json="$1" id_present="$2" id_raw="$3" workspace_path base_url namespace run_id
+  dashboard_mcp_args_only "$args_json" '["workspace","namespace","run_id"]' || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "only workspace, namespace, and run_id are accepted"; return; }
+  namespace="$(jq -r '.namespace // empty' <<<"$args_json")"; run_id="$(jq -r '.run_id // empty' <<<"$args_json")"
+  [[ "$namespace" =~ ^[A-Za-z0-9._-]+$ && "$run_id" =~ ^[A-Za-z0-9._-]+$ ]] || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "namespace and run_id must contain only letters, numbers, dots, underscores, or hyphens"; return; }
+  workspace_path="$(dashboard_mcp_workspace "$args_json")" || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "workspace is invalid or not allowed"; return; }
+  base_url="$(dashboard_mcp_endpoint_url)" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_get "$base_url" "/api/graph-runs/$namespace/$run_id" "$workspace_path" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_result "$id_present" "$id_raw" "Read dashboard run and node status (read-only)." "$DASHBOARD_MCP_RESPONSE_BODY"
+}
+
+handle_dashboard_read_artifact() {
+  local args_json="$1" id_present="$2" id_raw="$3" workspace_path base_url artifact_path
+  dashboard_mcp_args_only "$args_json" '["workspace","path"]' || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "only workspace and path are accepted"; return; }
+  artifact_path="$(jq -r '.path // empty' <<<"$args_json")"
+  [[ -n "$artifact_path" && "$artifact_path" != /* && "$artifact_path" != *..* ]] || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "path must be a non-empty relative artifact path without traversal"; return; }
+  workspace_path="$(dashboard_mcp_workspace "$args_json")" || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "workspace is invalid or not allowed"; return; }
+  base_url="$(dashboard_mcp_endpoint_url)" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  # The path is sent separately so it is URL-encoded by curl rather than being
+  # interpolated into the endpoint URL.
+  local encoded_path
+  encoded_path="$(jq -nr --arg path "$artifact_path" '$path | @uri')"
+  dashboard_mcp_get "$base_url" "/api/file?root=artifacts&path=$encoded_path" "$workspace_path" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_result "$id_present" "$id_raw" "Read dashboard artifact (read-only)." "$DASHBOARD_MCP_RESPONSE_BODY"
+}
+
+handle_dashboard_plan_status() {
+  local args_json="$1" id_present="$2" id_raw="$3" workspace_path base_url plan_path
+  dashboard_mcp_args_only "$args_json" '["workspace","plan_path"]' || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "only workspace and plan_path are accepted"; return; }
+  plan_path="$(jq -r '.plan_path // empty' <<<"$args_json")"
+  [[ -n "$plan_path" && "$plan_path" != /* && "$plan_path" != *..* ]] || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "plan_path must be a non-empty relative path without traversal"; return; }
+  workspace_path="$(dashboard_mcp_workspace "$args_json")" || { dashboard_mcp_invalid_arguments "$id_present" "$id_raw" "workspace is invalid or not allowed"; return; }
+  base_url="$(dashboard_mcp_endpoint_url)" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  dashboard_mcp_get "$base_url" '/api/plans/index' "$workspace_path" || { dashboard_mcp_unavailable "$id_present" "$id_raw"; return; }
+  local inventory="$DASHBOARD_MCP_RESPONSE_BODY"
+  dashboard_mcp_result "$id_present" "$id_raw" "Read dashboard plan status (read-only)." "$(jq --arg plan "$plan_path" '{plan_path:$plan,match:(.items // [] | map(select(.path == $plan or .id == $plan or .name == $plan)) | .[0]),inventory:.}' <<<"$inventory")"
+}
+
 handle_list_tools() {
   local id_present="$1"
   local id_raw="$2"
@@ -1981,6 +2229,18 @@ handle_call_tool() {
     ralph_delegated_run_cancel)
       handle_delegated_run_cancel "$args_json" "$id_present" "$id_raw"
       ;;
+    ralph_dashboard_list_runs)
+      handle_dashboard_list_runs "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_dashboard_run_status)
+      handle_dashboard_run_status "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_dashboard_read_artifact)
+      handle_dashboard_read_artifact "$args_json" "$id_present" "$id_raw"
+      ;;
+    ralph_dashboard_plan_status)
+      handle_dashboard_plan_status "$args_json" "$id_present" "$id_raw"
+      ;;
     ralph_artifact_contract)
       handle_artifact_contract "$args_json" "$id_present" "$id_raw"
       ;;
@@ -2140,8 +2400,10 @@ main() {
   # RALPH_MCP_PROXY_LOG_FILE is not already configured. This enables plan-scoped
   # observability without requiring the caller to set the path explicitly.
   if [[ -n "${RALPH_PLAN_KEY:-}" && -z "${RALPH_MCP_PROXY_LOG_FILE:-}" ]]; then
-    local auto_log_dir
-    auto_log_dir="${plan_workspace_root}/.ralph-workspace/logs/${RALPH_PLAN_KEY}"
+    local auto_log_dir state_root
+    state_root="$(ralph_mcp_proxy_state_root)" || state_root=""
+    auto_log_dir="${state_root:+${state_root}/logs/${RALPH_PLAN_KEY}}"
+    [[ -n "$auto_log_dir" ]] || return 1
     mkdir -p "$auto_log_dir" 2>/dev/null || true
     export RALPH_MCP_PROXY_LOG_FILE="${auto_log_dir}/mcp.log"
   fi
@@ -2202,4 +2464,6 @@ main() {
   done
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -37,6 +37,7 @@
 #     resume: continue same CLI session context between TODOs.
 #     reset: reuse session ids and prefix a runtime reset command before each reset TODO (Claude defaults to `/clear`).
 #     compact: reuse session ids and prefix a compact command before each TODO (Codex=/compact, Cursor=/compress).
+#   Cross-run TODO sessions: RALPH_PLAN_RESUME_RUN or --resume-run <run-id|last> (opt-in; fresh remains default).
 #   CLI session resume compatibility: RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
 #     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt and, when that file exists, passes --resume <id> (or runtime
 #     equivalent) with a compact prompt (TODO + plan path + human-replies only). Interactive TTY runs ask unless
