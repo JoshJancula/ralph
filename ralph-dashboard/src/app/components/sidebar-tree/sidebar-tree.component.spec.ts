@@ -327,7 +327,8 @@ describe('SidebarTreeComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.error-message')?.textContent?.trim()).toBe('Failed to load directory listing');
+    expect(el.querySelector('.error-message')).toBeTruthy();
+    expect(el.querySelector('ralph-error-modal')).toBeTruthy();
   }));
 
   it('autoOpen opens first file when no active file', fakeAsync(async () => {

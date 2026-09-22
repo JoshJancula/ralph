@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-seq-input","workflowId":"bug-fix","mode":"sequential","entryKind":"task","task":"Fix the timeout","taskProvenance":"explicit","sourcePath":"/fixtures/bug-fix.workflow.md","sourceKind":"project","state":"waiting","inputPath":"/fixtures/input.orch.json","inputPlan":null,"createdAt":"2026-08-27T08:00:00Z","updatedAt":"2026-08-27T08:01:00Z"},
+  "stages": [{"id":"implement","state":"waiting","stageKind":"executable","attempt":1,"completedTodos":0,"totalTodos":0,"artifacts":[],"blocker":{"kind":"input","requestId":"input-fixture-001"},"createdAt":"2026-08-27T08:00:00Z","updatedAt":"2026-08-27T08:01:00Z"}],
+  "diagnosis": {"state":"waiting","reasonCode":"operator-input","summary":"the run is waiting for the operator to answer an input request","stageId":"implement","requestKind":"input","requestId":"input-fixture-001","evidence":["stage implement is waiting"],"retryable":false,"nextAction":{"label":"answer the outstanding request","argv":["ralph","workflow","actions","list","fixture-seq-input"]}},
+  "nextAction": {"label":"answer the outstanding request","argv":["ralph","workflow","actions","list","fixture-seq-input"]}
+}

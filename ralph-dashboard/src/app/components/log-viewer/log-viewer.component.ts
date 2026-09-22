@@ -1,11 +1,17 @@
 import { Component, Input, OnInit, OnChanges, OnDestroy, SimpleChanges, ElementRef, ViewChild, ChangeDetectorRef, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-import { IonSpinner, IonBadge, IonSearchbar } from '@ionic/angular/standalone';
+import { IonSpinner, IonBadge } from '@ionic/angular/standalone';
 import { ApiService } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { ErrorModalComponent } from '../error-modal/error-modal.component';
 import { Subscription } from 'rxjs';
 import { markdownToHtml } from '../../utils/markdown-to-html';
+
+const SGR_ESCAPE = /\u001b\[[0-9;]*m/g;
+
+export function stripSgrSequences(value: string): string {
+  return value.replace(SGR_ESCAPE, '');
+}
 
 interface LogEntry {
   content: string;
@@ -16,7 +22,7 @@ interface LogEntry {
 @Component({
   selector: 'ralph-log-viewer',
   standalone: true,
-  imports: [CommonModule, FormsModule, IonSpinner, IonBadge, IonSearchbar],
+  imports: [CommonModule, IonSpinner, IonBadge, ErrorModalComponent],
   templateUrl: './log-viewer.component.html',
   styleUrls: ['./log-viewer.component.scss']
 })
@@ -35,7 +41,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   nextOffset: number = 0;
   isTailing: boolean = false;
   isLoading: boolean = false;
-  error: string | null = null;
+  error: unknown = null;
   private tailInterval: number | null = null;
   private subscription: Subscription = new Subscription();
   private readonly nav = inject(NavService);
@@ -50,7 +56,7 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   set content(value: string) {
-    this.contentSignal.set(value);
+    this.contentSignal.set(stripSgrSequences(value));
   }
 
   ngOnInit(): void {
@@ -96,8 +102,8 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
           this.isLoading = false;
           this.cdr.markForCheck();
         },
-        error: () => {
-          this.error = 'Failed to load log file';
+        error: (err) => {
+          this.error = err;
           this.isLoading = false;
           this.cdr.markForCheck();
         }
@@ -161,8 +167,8 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
           }
           this.cdr.markForCheck();
         },
-        error: () => {
-          this.error = 'Failed to fetch new log content';
+        error: (err) => {
+          this.error = err;
           this.cdr.markForCheck();
         }
       })
@@ -339,7 +345,10 @@ export class LogViewerComponent implements OnInit, OnChanges, OnDestroy {
     if (!dir) return;
     this.nav.navigate(
       'plans',
-      dir,
+      // Log folders are an execution detail, not a directory in the Plans tree.
+      // Navigating only to the file lets the API resolve the durable plan source
+      // without trying to open a non-existent `PLAN_KEY` folder first.
+      null,
       `${dir}.md`,
       this.nav.activeWorkspaceRoot(),
       this.nav.activeProjectRoot(),

@@ -3,8 +3,24 @@
 # via Ralph envelope/store (same bash path as ralph_proxy_*), without proxy policy guards.
 #
 # Used by Claude, Cursor, and Codex runtime hook scripts. Fail-open: never blocks.
+#
+# Fast path: exit before sourcing libraries when neither
+# RALPH_NATIVE_RESULT_COMPACT nor RALPH_CURSOR_NATIVE_RESULT_HOOK_COMPACT is truthy.
 
 set -uo pipefail
+
+# Keep in sync with ralph_native_hook_result_compact_enabled (and thin wrappers).
+case "${RALPH_NATIVE_RESULT_COMPACT:-}" in
+  0 | false | no | off) exit 0 ;;
+  1 | true | yes | on) ;;
+  *)
+    case "${RALPH_CURSOR_NATIVE_RESULT_HOOK_COMPACT:-}" in
+      0 | false | no | off) exit 0 ;;
+      1 | true | yes | on) ;;
+      *) exit 0 ;;
+    esac
+    ;;
+esac
 
 ralph_post_tool_native_result_compact_source_libs() {
   local hook_dir bootstrap result_lib

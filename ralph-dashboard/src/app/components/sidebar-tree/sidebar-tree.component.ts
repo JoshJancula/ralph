@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, Input, inject, signal, OnInit } from '@angular/core';
 import { ApiService, ListingEntry } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
+import { ErrorModalComponent } from '../error-modal/error-modal.component';
 
 interface TreeNode {
   name: string;
@@ -27,7 +28,7 @@ function formatSize(bytes: number): string {
 @Component({
   selector: 'app-sidebar-tree',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, ErrorModalComponent],
   templateUrl: './sidebar-tree.component.html',
   styleUrls: ['./sidebar-tree.component.scss'],
 })
@@ -59,7 +60,7 @@ export class SidebarTreeComponent implements OnInit {
   rootNodes = signal<TreeNode[]>([]);
   flatNodes = signal<TreeNode[]>([]);
   loading = signal(false);
-  error = signal<string | null>(null);
+  error = signal<unknown>(null);
 
   treeData(): TreeNode[] {
     return this.flatNodes();
@@ -85,8 +86,8 @@ export class SidebarTreeComponent implements OnInit {
           this.openFirstFile(nodes);
         }
       },
-      error: () => {
-        this.error.set('Failed to load directory listing');
+      error: (err) => {
+        this.error.set(err);
         this.loading.set(false);
       },
     });

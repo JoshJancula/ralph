@@ -1,0 +1,410 @@
+{
+  "width": 80,
+  "height": 24,
+  "plain": [
+    "+- Operator decision ----------------------------------------------------------+",
+    "| Request approval-fixture-001  Stage approve-plan                             |",
+    "| Choose a public decision:                                                    |",
+    "| > approve                                                                    |",
+    "|   request-changes                                                            |",
+    "|   cancel                                                                     |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "|                                                                              |",
+    "+------------------------------------------------------------------------------+",
+    "j/k choice  Enter confirm  Esc cancel"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "+-",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Operator decision ",
+        "role": "heading",
+        "width": 19
+      },
+      {
+        "col": 21,
+        "text": "----------------------------------------------------------+",
+        "role": "muted",
+        "width": 59
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Request ",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 10,
+        "text": "approval-fixture-001",
+        "role": "heading",
+        "width": 20
+      },
+      {
+        "col": 30,
+        "text": "  Stage ",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 38,
+        "text": "approve-plan                             ",
+        "role": "default",
+        "width": 41
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": " Choose a public decision:                                                    ",
+        "role": "default",
+        "width": 78
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "> approve",
+        "role": "focus",
+        "width": 9
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "   request-changes                                                            ",
+        "role": "default",
+        "width": 78
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 1,
+        "text": "   cancel                                                                     ",
+        "role": "default",
+        "width": 78
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 79,
+        "text": "|",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "+------------------------------------------------------------------------------+",
+        "role": "muted",
+        "width": 80
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "j/k choice  Enter confirm  Esc cancel                                           ",
+        "role": "muted",
+        "width": 80
+      }
+    ]
+  ]
+}

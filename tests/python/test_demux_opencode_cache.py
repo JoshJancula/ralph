@@ -42,6 +42,18 @@ def _fresh_acc() -> dict:
 
 
 class TestOpencodeCacheExtraction(unittest.TestCase):
+    def test_records_first_request_prefix_tokens(self) -> None:
+        acc = _fresh_acc()
+        DEMUX.extract_usage(
+            {
+                "type": "step_finish",
+                "part": {"tokens": {"input": 18224, "output": 180, "cache": {"read": 5000, "write": 200}}},
+            },
+            "opencode",
+            acc,
+        )
+        self.assertEqual(acc["first_request_input_tokens"], 23424)
+
     def test_native_cache_read_used_directly(self) -> None:
         acc = _fresh_acc()
         event = {

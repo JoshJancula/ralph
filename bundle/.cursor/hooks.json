@@ -5,14 +5,6 @@
       {
         "command": ".cursor/hooks/pre-tool-shell-policy.sh",
         "matcher": "Shell"
-      },
-      {
-        "command": ".cursor/hooks/pre-tool-proxy-read-handoff.sh",
-        "matcher": "MCP:ralph_proxy_read"
-      },
-      {
-        "command": ".cursor/hooks/pre-tool-exploration-policy.sh",
-        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
       }
     ],
     "postToolUse": [
@@ -32,6 +24,13 @@
     "afterShellExecution": [
       {
         "command": ".cursor/hooks/after-shell-telemetry.sh"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/stop-continuation.sh",
+        "timeout": 5400,
+        "loop_limit": 5
       }
     ]
   }

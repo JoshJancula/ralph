@@ -1,5 +1,167 @@
 <div class="workspace-sidebar">
-  @if (useProjectLayout()) {
+  <ul class="primary-nav" role="navigation" aria-label="Primary navigation">
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/home"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-home-link"
+        aria-label="Home"
+      >
+        <ion-icon class="nav-icon" name="home-outline"></ion-icon>
+        <span class="nav-label">Home</span>
+      </a>
+    </li>
+    <li class="nav-group">
+      <a class="nav-button" routerLink="/tasks" routerLinkActive="active" data-testid="sidebar-tasks-link" aria-label="Tasks">
+        <ion-icon class="nav-icon" name="list-outline"></ion-icon><span class="nav-label">Tasks</span>
+      </a>
+      @if (nav.activeSection() === 'tasks') {
+        <ul class="nav-subroutes" aria-label="Task views">
+          <li>
+            <a class="nav-subroute" routerLink="/tasks/active-board" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+              Active board
+            </a>
+          </li>
+          <li>
+            <a class="nav-subroute" routerLink="/tasks/backlog" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+              Backlog
+            </a>
+          </li>
+          <li>
+            <a class="nav-subroute" routerLink="/tasks/history" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+              History
+            </a>
+          </li>
+        </ul>
+      }
+    </li>
+    <li>
+      <a class="nav-button" routerLink="/schedules" routerLinkActive="active" data-testid="sidebar-schedules-link" aria-label="Schedules">
+        <ion-icon class="nav-icon" name="time-outline"></ion-icon><span class="nav-label">Schedules</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/runs"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-runs-link"
+        aria-label="Runs"
+      >
+        <ion-icon class="nav-icon" name="play-circle-outline"></ion-icon>
+        <span class="nav-label">Runs</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/plans"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-plans-link"
+        aria-label="Plans"
+      >
+        <ion-icon class="nav-icon" name="list-outline"></ion-icon>
+        <span class="nav-label">Plans</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/workflows"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-workflows-link"
+        aria-label="Workflows"
+      >
+        <ion-icon class="nav-icon" name="layers-outline"></ion-icon>
+        <span class="nav-label">Workflows</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/docs"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-docs-link"
+        aria-label="Docs"
+      >
+        <ion-icon class="nav-icon" name="book-outline"></ion-icon>
+        <span class="nav-label">Docs</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/insights"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-insights-link"
+        aria-label="Insights"
+      >
+        <ion-icon class="nav-icon" name="stats-chart-outline"></ion-icon>
+        <span class="nav-label">Insights</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/runtimes"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-runtimes-link"
+        aria-label="Runtimes"
+      >
+        <ion-icon class="nav-icon" name="terminal-outline"></ion-icon>
+        <span class="nav-label">Runtimes</span>
+      </a>
+    </li>
+    <li>
+      <a
+        class="nav-button"
+        routerLink="/safety"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        data-testid="sidebar-safety-link"
+        aria-label="Safety"
+      >
+        <ion-icon class="nav-icon" name="shield-outline"></ion-icon>
+        <span class="nav-label">Safety</span>
+      </a>
+    </li>
+    @if (workspaceExplorerEnabled) {
+      <li class="nav-divider"></li>
+      <li>
+        <button
+          type="button"
+          class="nav-button browse-button"
+          [class.active]="nav.activeSection() === 'browse'"
+          (click)="toggleBrowseSection()"
+          data-testid="sidebar-browse-link"
+          aria-label="Browse workspace"
+        >
+          <ion-icon class="nav-icon" name="folder-open-outline"></ion-icon>
+          <span class="nav-label">Browse</span>
+        </button>
+      </li>
+    }
+  </ul>
+  @if (showBrowseSection()) {
+    <div class="explorer-heading">
+      <span>Explorer</span>
+      <span class="explorer-caption">Project files</span>
+    </div>
+    @if (workspacesLoading()) {
+      <ul class="root-list skeleton-list" role="list" aria-hidden="true" data-testid="sidebar-loading-skeleton">
+        @for (i of [0, 1, 2, 3, 4]; track i) {
+          <li class="skeleton-row"></li>
+        }
+      </ul>
+    } @else if (useProjectLayout()) {
     <ul class="root-list project-list" role="list">
       @for (ws of sortedWorkspaces(); track ws.projectRoot; let pi = $index) {
         <li class="project-block">
@@ -140,5 +302,6 @@
         </li>
       }
     </ul>
+    }
   }
 </div>

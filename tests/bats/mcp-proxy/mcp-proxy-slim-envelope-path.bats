@@ -22,6 +22,7 @@ UPSTREAM_SCRIPT="$REPO_ROOT/bundle/.ralph/mcp-server.sh"
 setup() {
   WS="$(mktemp -d)"
   export RALPH_MCP_WORKSPACE="$WS"
+  export RALPH_MCP_EXPLORATION_RESULT_COMPACT=1
   RALPH_RESULT_WINDOWING_LOG="$WS/windowing.jsonl"
   export RALPH_RESULT_WINDOWING_LOG
 }
@@ -62,10 +63,26 @@ seed_corpus() {
     > "$WS/corpus/big.txt"
 }
 
+# Drives the envelope builder exactly as the native Read/Grep hook does: the
+# hook compacts native exploration output and labels it ralph_proxy_grep, which
+# is what makes it eligible for the slim envelope. The bounded MCP grep tool no
+# longer exists; this key is now produced only by the hook path.
 run_grep() {
-  local args
-  args="$(jq -nc '{pattern:"NEEDLE", path:"corpus"}')"
-  call_tool "$(policy_json)" "ralph_proxy_grep" "$args" "$WS/out.json"
+  local storage preview
+  storage="$(cat "$WS/corpus/big.txt")"
+  preview="$(head -n 20 "$WS/corpus/big.txt")"
+  env \
+    RALPH_MCP_PROXY_POLICY_INLINE="$(policy_json)" \
+    RALPH_RESULT_WINDOWING_LOG="$RALPH_RESULT_WINDOWING_LOG" \
+    bash -c '
+      source "$1"
+      source "$2"
+      source "$3"
+      ralph_mcp_proxy_load_policy "$4" "$5" || exit 1
+      ralph_mcp_proxy_owned_tool_maybe_envelope_text_result \
+        "$6" "ralph_proxy_grep" "$7" 1 "$8" "[]" "" "" "" "" 0 >"$9"
+    ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$REPO_ROOT" "$UPSTREAM_SCRIPT" \
+      "$WS" "$storage" "$preview" "$WS/out.json"
 }
 
 payload() {
@@ -138,24 +155,9 @@ payload() {
   [[ "$stored_text" == *"NEEDLE"* ]]
 }
 
-@test "source-capped grep keeps its honesty signal in the slim envelope" {
-  seed_corpus
-  run run_grep
-  [ "$status" -eq 0 ]
-
-  local capped
-  capped="$(jq -r 'select(.event=="envelope") | .sourceCapped' "$RALPH_RESULT_WINDOWING_LOG" | tail -n 1)"
-
-  # When the source was capped, the agent must still be told so on the cheap
-  # path; silently delivering a partial result is the one thing it may not do.
-  if [ "$capped" = "true" ]; then
-    payload | jq -e '.sourceCapped == true'
-  fi
-}
-
-@test "slim envelope is an allowlist: search, repomap and shell are never slimmed" {
+@test "slim envelope is an allowlist: shell and glob are never slimmed" {
   local tool
-  for tool in ralph_proxy_search ralph_proxy_repomap ralph_proxy_shell ralph_proxy_glob; do
+  for tool in ralph_proxy_shell ralph_proxy_glob; do
     run bash -c 'source "$1"; ralph_mcp_proxy_result_tool_supports_slim_envelope "$2"' _ "$RESULT_LIB" "$tool"
     [ "$status" -ne 0 ]
   done

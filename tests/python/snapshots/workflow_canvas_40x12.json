@@ -1,0 +1,14 @@
+[
+  "┌─ Semantic workflow canvas ───────────┐",
+  "│ Workflow UI · é · 界                 │",
+  "│ [###########-------------------] 3/8 │",
+  "│                                      │",
+  "│   queued    research                 │",
+  "│ > running   implement semantic canv… │",
+  "│   waiting   operator approval        │",
+  "│   succeeded schema contract          │",
+  "│                                      │",
+  "│ STAGE        CURRENT TODO   STATE    │",
+  "│                                      │",
+  "└──────────────────────────────────────┘"
+]

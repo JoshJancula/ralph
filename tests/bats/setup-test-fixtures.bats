@@ -19,5 +19,5 @@ source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
   [[ "$(cat .ralph-workspace/artifacts/dashboard/code-review.md)" == *"Code Review Output"* ]]
 
   popd >/dev/null
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

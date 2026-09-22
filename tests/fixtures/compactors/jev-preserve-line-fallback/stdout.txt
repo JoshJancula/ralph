@@ -1,0 +1,161 @@
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=0
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=1
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=2
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=3
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=4
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=5
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=6
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=7
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=8
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=9
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=10
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=11
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=12
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=13
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=14
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=15
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=16
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=17
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=18
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=19
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=20
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=21
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=22
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=23
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=24
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=25
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=26
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=27
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=28
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx head=29
+ERROR: preserve signal 0 at src/f.rs:0
+ERROR: preserve signal 1 at src/f.rs:1
+ERROR: preserve signal 2 at src/f.rs:2
+ERROR: preserve signal 3 at src/f.rs:3
+ERROR: preserve signal 4 at src/f.rs:4
+ERROR: preserve signal 5 at src/f.rs:5
+ERROR: preserve signal 6 at src/f.rs:6
+ERROR: preserve signal 7 at src/f.rs:7
+ERROR: preserve signal 8 at src/f.rs:8
+ERROR: preserve signal 9 at src/f.rs:9
+ERROR: preserve signal 10 at src/f.rs:10
+ERROR: preserve signal 11 at src/f.rs:11
+ERROR: preserve signal 12 at src/f.rs:12
+ERROR: preserve signal 13 at src/f.rs:13
+ERROR: preserve signal 14 at src/f.rs:14
+ERROR: preserve signal 15 at src/f.rs:15
+ERROR: preserve signal 16 at src/f.rs:16
+ERROR: preserve signal 17 at src/f.rs:17
+ERROR: preserve signal 18 at src/f.rs:18
+ERROR: preserve signal 19 at src/f.rs:19
+ERROR: preserve signal 20 at src/f.rs:20
+ERROR: preserve signal 21 at src/f.rs:21
+ERROR: preserve signal 22 at src/f.rs:22
+ERROR: preserve signal 23 at src/f.rs:23
+ERROR: preserve signal 24 at src/f.rs:24
+ERROR: preserve signal 25 at src/f.rs:25
+ERROR: preserve signal 26 at src/f.rs:26
+ERROR: preserve signal 27 at src/f.rs:27
+ERROR: preserve signal 28 at src/f.rs:28
+ERROR: preserve signal 29 at src/f.rs:29
+ERROR: preserve signal 30 at src/f.rs:30
+ERROR: preserve signal 31 at src/f.rs:31
+ERROR: preserve signal 32 at src/f.rs:32
+ERROR: preserve signal 33 at src/f.rs:33
+ERROR: preserve signal 34 at src/f.rs:34
+ERROR: preserve signal 35 at src/f.rs:35
+ERROR: preserve signal 36 at src/f.rs:36
+ERROR: preserve signal 37 at src/f.rs:37
+ERROR: preserve signal 38 at src/f.rs:38
+ERROR: preserve signal 39 at src/f.rs:39
+ERROR: preserve signal 40 at src/f.rs:40
+ERROR: preserve signal 41 at src/f.rs:41
+ERROR: preserve signal 42 at src/f.rs:42
+ERROR: preserve signal 43 at src/f.rs:43
+ERROR: preserve signal 44 at src/f.rs:44
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=0
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=1
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=2
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=3
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=4
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=5
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=6
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=7
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=8
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=9
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=10
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=11
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=12
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=13
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=14
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=15
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=16
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=17
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=18
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=19
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=20
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=21
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=22
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=23
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=24
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=25
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=26
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=27
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=28
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=29
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=30
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=31
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=32
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=33
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=34
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=35
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=36
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=37
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=38
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=39
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=40
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=41
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=42
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=43
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=44
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=45
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=46
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=47
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=48
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=49
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=50
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=51
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=52
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=53
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=54
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=55
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=56
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=57
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=58
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=59
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=60
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=61
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=62
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=63
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=64
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=65
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=66
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=67
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=68
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=69
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=70
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=71
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=72
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=73
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=74
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=75
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=76
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=77
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=78
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx mid=79
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail=0
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail=1
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail=2
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail=3
+detail chunk padding xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail=4
+SUMMARY: build failed with many errors

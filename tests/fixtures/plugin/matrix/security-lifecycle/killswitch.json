@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "enabled": true,
+  "dry_run": true,
+  "banned_tools": [],
+  "toolDenylist": ["Bash", "Shell", "bash", "command_execution"],
+  "allowed_tools": [],
+  "banned_paths": [],
+  "allowed_paths": [],
+  "allowed_commands": [],
+  "allowed_patterns": [],
+  "deniedArgumentPatterns": [],
+  "custom_rules": []
+}

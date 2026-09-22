@@ -1,5 +1,13 @@
 #!/usr/bin/env bats
 
+# These specs invoke installed provider CLIs. They are excluded from the normal
+# Bats suite and still require an explicit opt-in when run directly.
+setup() {
+  if [[ "${RALPH_RUN_REAL_RUNTIME_SMOKES:-0}" != "1" ]]; then
+    skip "set RALPH_RUN_REAL_RUNTIME_SMOKES=1 to run real runtime smoke tests"
+  fi
+}
+
 trim() {
   local value="$*"
   # Trim leading whitespace.

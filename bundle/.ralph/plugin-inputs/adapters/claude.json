@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "runtime": "claude",
+  "outputDirectory": "plugins/ralph-orchestrator/claude",
+  "contract": null,
+  "capabilities": {
+    "nativeAgents": true,
+    "nativeHooks": true,
+    "mcp": true,
+    "rules": false,
+    "skills": true,
+    "workflows": true
+  },
+  "copies": [
+    {
+      "source": "bundle/.claude/hooks/block-env-reads.sh",
+      "destination": "hooks/block-env-reads.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.claude/hooks/rewrite-bash-command.sh",
+      "destination": "hooks/rewrite-bash-command.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.claude/hooks/compact-bash-output.sh",
+      "destination": "hooks/compact-bash-output.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.claude/hooks/native-result-compact.sh",
+      "destination": "hooks/native-result-compact.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.claude/hooks/compact-native-result-output.sh",
+      "destination": "hooks/compact-native-result-output.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.claude/mcp.example.json",
+      "destination": ".mcp.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.claude/skills/repo-context/SKILL.md",
+      "destination": "skills/repo-context/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
+      "destination": "shared/ralph-plugin-bootstrap.sh",
+      "mode": "0755"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-exec.sh",
+      "destination": "shared/ralph-plugin-exec.sh",
+      "mode": "0755"
+    }
+  ],
+  "templates": [
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/claude/marketplace.json",
+      "destination": ".claude-plugin/marketplace.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/claude/plugin.json",
+      "destination": ".claude-plugin/plugin.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/claude/hooks.json",
+      "destination": "hooks/hooks.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/templates/claude/host-manifest.json",
+      "destination": "host-manifest.json",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "skills/ralph-doctor/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "skills/ralph-plan/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "skills/ralph-run/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "skills/ralph-status/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "skills/ralph-workflow/SKILL.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-doctor.md",
+      "destination": "workflows/ralph-doctor.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-plan.md",
+      "destination": "workflows/ralph-plan.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-run.md",
+      "destination": "workflows/ralph-run.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-status.md",
+      "destination": "workflows/ralph-status.md",
+      "mode": "0644"
+    },
+    {
+      "source": "bundle/.ralph/plugin-inputs/workflows/ralph-workflow.md",
+      "destination": "workflows/ralph-workflow.md",
+      "mode": "0644"
+    }
+  ]
+}

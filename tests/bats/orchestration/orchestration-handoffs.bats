@@ -119,7 +119,6 @@ create_orchestration_json() {
     {
       "id": "stage-a",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/stage-a.md",
       "outputArtifacts": [
         {
@@ -136,7 +135,6 @@ create_orchestration_json() {
     {
       "id": "stage-b",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/stage-b.md",
       "outputArtifacts": [
         {
@@ -149,7 +147,6 @@ create_orchestration_json() {
     {
       "id": "stage-c",
       "runtime": "cursor",
-      "agent": "code-review",
       "plan": "plans/stage-c.md"
     }
   ]
@@ -168,7 +165,6 @@ create_orchestration_json_with_iterations() {
     {
       "id": "stage-a",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/stage-a.md",
       "outputArtifacts": [
         {
@@ -181,7 +177,6 @@ create_orchestration_json_with_iterations() {
     {
       "id": "stage-b",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/stage-b.md",
       "loopControl": {
         "loopBackTo": "stage-a",
@@ -225,7 +220,6 @@ EOF
     {
       "id": "src",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/src.md",
       "outputArtifacts": [
         {
@@ -238,7 +232,6 @@ EOF
     {
       "id": "dst",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/dst.md"
     }
   ]
@@ -261,7 +254,6 @@ EOF
     {
       "id": "src",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/src.md",
       "outputArtifacts": [
         {
@@ -274,7 +266,6 @@ EOF
     {
       "id": "dst",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/dst.md"
     }
   ]
@@ -297,7 +288,6 @@ EOF
     {
       "id": "source-stage",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/src.md",
       "outputArtifacts": [
         {
@@ -310,7 +300,6 @@ EOF
     {
       "id": "dst",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/dst.md"
     }
   ]
@@ -546,7 +535,6 @@ EOF
     {
       "id": "stage-a",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/stage-a.md",
       "outputArtifacts": [
         {
@@ -559,7 +547,6 @@ EOF
     {
       "id": "stage-b",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/stage-b.md"
     }
   ]
@@ -602,7 +589,6 @@ EOF
     {
       "id": "stage-a",
       "runtime": "cursor",
-      "agent": "architect",
       "plan": "plans/stage-a.md",
       "outputArtifacts": [
         {
@@ -615,7 +601,6 @@ EOF
     {
       "id": "stage-b",
       "runtime": "cursor",
-      "agent": "implementation",
       "plan": "plans/stage-b.md"
     }
   ]
@@ -815,7 +800,7 @@ EOF
   cp "$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json" "$WORKSPACE/schemas/"
   local artifact_rel=".ralph-workspace/artifacts/test-ns/review.json"
   mkdir -p "$WORKSPACE/$(dirname "$artifact_rel")"
-  printf '{"status":"approved"}' > "$WORKSPACE/$artifact_rel"
+  printf '{"status":"maybe"}' > "$WORKSPACE/$artifact_rel"
   local stage_json
   stage_json="$(cat <<'EOF'
 {"id":"review","artifacts":[{"path":".ralph-workspace/artifacts/test-ns/review.json","schema":"schemas/evaluator-verdict.schema.json"}]}
@@ -963,7 +948,7 @@ EOF
   [[ "$content" == *"Add regression test"* ]]
 }
 
-@test "ralph_evaluator_inject_feedback_into_plan replaces a prior feedback block" {
+@test "ralph_evaluator_inject_feedback_into_plan accumulates findings across rounds" {
   export RALPH_DIR="$REPO_ROOT/.ralph"
   export RALPH_MODE=ralph
   local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
@@ -980,7 +965,174 @@ EOF
   local content
   content="$(cat "$WORKSPACE/PLAN.md")"
   [[ "$content" == *"Second round item"* ]]
-  [[ "$content" != *"First round item"* ]]
-  # Exactly one feedback block remains.
+  # The first round's finding was never dispositioned, so it is still open and
+  # must stay in the brief. Dropping it here is how a defect survived rework.
+  [[ "$content" == *"First round item"* ]]
+  # Still exactly one block: it is re-rendered from the ledger, not appended to.
   [ "$(grep -c 'RALPH_EVALUATOR_FEEDBACK: START' "$WORKSPACE/PLAN.md")" -eq 1 ]
+  [ "$(jq '[.findings[] | select(.disposition == "open")] | length' "$WORKSPACE/defect-ledger.json")" -eq 2 ]
+}
+
+@test "ralph_evaluator_inject_feedback_into_plan ages a finding the reviewer keeps raising" {
+  export RALPH_DIR="$REPO_ROOT/.ralph"
+  export RALPH_MODE=ralph
+  local schema="$REPO_ROOT/bundle/.ralph/schemas/evaluator-verdict.schema.json"
+  cat > "$WORKSPACE/PLAN.md" <<'EOF'
+# Plan
+
+- [ ] Original task
+EOF
+  printf '%s' '{"status":"changes-required","feedback":["Recurring item"]}' > "$WORKSPACE/review.json"
+  ralph_evaluator_inject_feedback_into_plan "$WORKSPACE/PLAN.md" "$WORKSPACE/review.json" "code-review" "1" "artifacts/review.json" "$schema"
+  run ralph_evaluator_inject_feedback_into_plan "$WORKSPACE/PLAN.md" "$WORKSPACE/review.json" "code-review" "2" "artifacts/review.json" "$schema"
+  [ "$status" -eq 0 ]
+  grep -q "OPEN FOR 2 ROUNDS" "$WORKSPACE/PLAN.md"
+}
+
+@test "workflow stage instructions prompt block does not mutate plan files" {
+  # Contrasts with handoff/evaluator injection: stage instructions are
+  # prompt-only (RALPH_WORKFLOW_STAGE_INSTRUCTIONS) and must not rewrite plans.
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local plan_file="$WORKSPACE/stage-plan.md"
+  cat >"$plan_file" <<'EOF'
+# Plan
+
+- [ ] Original task only
+EOF
+  local before after block
+  before="$(cat "$plan_file")"
+  export RALPH_WORKFLOW_STAGE_INSTRUCTIONS="PROMPT_ONLY_STAGE_GUIDANCE"
+  block="$(ralph_workflow_stage_instructions_prompt_block)"
+  [[ "$block" == *"<!-- WORKFLOW_STAGE_INSTRUCTIONS: START -->"* ]]
+  [[ "$block" == *"PROMPT_ONLY_STAGE_GUIDANCE"* ]]
+  after="$(cat "$plan_file")"
+  [ "$before" = "$after" ]
+  ! grep -q "WORKFLOW_STAGE_INSTRUCTIONS" "$plan_file"
+  unset RALPH_WORKFLOW_STAGE_INSTRUCTIONS
+}
+
+# --- OPERATOR_INPUT prompt / standalone / exit 3 stub hooks ---
+
+@test "OPERATOR_INPUT protocol prompt block injects after stage instructions without mutating plan" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local plan_file="$WORKSPACE/oi-plan.md"
+  cat >"$plan_file" <<'PLAN'
+# Plan
+
+- [ ] Unchecked TODO stays open
+PLAN
+  local before after wsi oi
+  before="$(cat "$plan_file")"
+  export RALPH_WORKFLOW_STAGE_INSTRUCTIONS="STAGE_GUIDANCE_ONLY"
+  wsi="$(ralph_workflow_stage_instructions_prompt_block)"
+  oi="$(ralph_workflow_operator_input_protocol_prompt_block)"
+  [[ "$wsi" == *"<!-- WORKFLOW_STAGE_INSTRUCTIONS: START -->"* ]]
+  [[ "$oi" == *"<!-- OPERATOR_INPUT: START -->"* ]]
+  [[ "$oi" == *"ralph workflow actions request --question"* ]]
+  ! printf '%s' "$oi" | grep -qiE '\bnonce\b'
+  after="$(cat "$plan_file")"
+  [ "$before" = "$after" ]
+  ! grep -q "OPERATOR_INPUT" "$plan_file"
+  unset RALPH_WORKFLOW_STAGE_INSTRUCTIONS
+}
+
+@test "answer injection fresh invocation response block is prompt-only" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  local plan_file="$WORKSPACE/oi-response-plan.md" resp="$WORKSPACE/oi-response.md"
+  cat >"$plan_file" <<'PLAN'
+# Plan
+
+- [ ] Unchecked TODO stays open
+PLAN
+  cat >"$resp" <<'RESP'
+<!-- OPERATOR_INPUT_RESPONSE: START -->
+requestId: inp-demo
+question: Which API?
+answer:
+```
+https://example.test
+```
+<!-- OPERATOR_INPUT_RESPONSE: END -->
+RESP
+  export RALPH_WORKFLOW_OPERATOR_INPUT_RESPONSE_FILE="$resp"
+  local block before after
+  before="$(cat "$plan_file")"
+  block="$(ralph_workflow_operator_input_response_prompt_block)"
+  [[ "$block" == *"OPERATOR_INPUT_RESPONSE: START"* ]]
+  [[ "$block" == *"requestId: inp-demo"* ]]
+  [[ "$block" == *"https://example.test"* ]]
+  after="$(cat "$plan_file")"
+  [ "$before" = "$after" ]
+  unset RALPH_WORKFLOW_OPERATOR_INPUT_RESPONSE_FILE
+}
+
+@test "standalone unchanged pending-human guidance when workflow identity absent" {
+  # Standalone plans retain pending-human guidance and cannot create workflow requests.
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh"
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-actions.sh"
+  unset RALPH_WORKFLOW_REGISTRY_RUN RALPH_WORKFLOW_RUN_ID RALPH_WORKFLOW_STAGE_ID RALPH_WORKFLOW_STAGE_ATTEMPT
+  unset RALPH_WORKFLOW_ACTION_NONCE RALPH_WORKFLOW_ACTION_CAPABILITY
+  ! ralph_workflow_active_for_operator_input
+  run workflow_action_stage_request_create     --registry-run "$WORKSPACE" --run-id "" --stage-id implement     --attempt-id implement-1 --nonce aabbccddeeff00112233445566778899     --question "standalone must refuse"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"standalone"* || "$output" == *"incomplete"* || "$output" == *"requires"* ]]
+  # Protocol helper still renders, but standalone runners keep pending-human paths.
+  local oi
+  oi="$(ralph_workflow_operator_input_protocol_prompt_block)"
+  [[ "$oi" == *"OPERATOR_INPUT: START"* ]]
+  [[ "$oi" == *"Standalone plans cannot create workflow requests"* ]]
+}
+
+@test "request pauses unchecked TODO exit 3 via stubbed runner gate" {
+  # Stubbed gate: source workflow-actions + a minimal harness that refuses
+  # completion and returns exit 3 without invoking a runtime.
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-actions.sh"
+  local run_dir="$WORKSPACE/registry-run" plan="$WORKSPACE/control.md" nonce="aabbccddeeff00112233445566778899"
+  mkdir -p "$run_dir"
+  cat >"$plan" <<'PLAN'
+# Control
+
+- [ ] Unchecked TODO stays open
+PLAN
+  export WORKFLOW_ACTION_NOW="2026-08-26T12:00:00Z"
+  export GRAPH_OPERATOR_NONCE="$nonce"
+  workflow_action_capability_write "$run_dir" "run-001" "implement" "implement-1" "$nonce" >/dev/null
+  workflow_action_stage_request_create \
+    --registry-run "$run_dir" --run-id run-001 --stage-id implement \
+    --attempt-id implement-1 --nonce "$nonce" \
+    --question "Need a product decision" >/dev/null
+  # Simulate runner refuse path: reopen if checked, revoke capability, exit 3.
+  if grep -q '\- \[x\]' "$plan"; then
+    sed -i.bak 's/- \[x\]/- [ ]/' "$plan"
+  fi
+  grep -q '\- \[ \] Unchecked TODO stays open' "$plan"
+  workflow_action_revoke_attempt_capability "$run_dir" run-001 implement implement-1
+  run bash -c 'exit 3'
+  [ "$status" -eq 3 ]
+}
+
+@test "completion refused stub returns exit 3 when attempt blocks success" {
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-actions.sh"
+  local run_dir="$WORKSPACE/registry-run2" nonce="aabbccddeeff00112233445566778899"
+  mkdir -p "$run_dir"
+  export WORKFLOW_ACTION_NOW="2026-08-26T12:00:00Z"
+  export GRAPH_OPERATOR_NONCE="$nonce"
+  workflow_action_capability_write "$run_dir" "run-001" "implement" "implement-1" "$nonce" >/dev/null
+  workflow_action_stage_request_create \
+    --registry-run "$run_dir" --run-id run-001 --stage-id implement \
+    --attempt-id implement-1 --nonce "$nonce" \
+    --question "Blocked decision" >/dev/null
+  if workflow_action_attempt_blocks_success "$run_dir" run-001 implement implement-1; then
+    run bash -c 'exit 3'
+    [ "$status" -eq 3 ]
+  else
+    false
+  fi
 }

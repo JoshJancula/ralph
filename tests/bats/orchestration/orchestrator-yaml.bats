@@ -26,13 +26,11 @@ pipeline:
   stages:
     - id: research
       runtime: cursor
-      agent: research
       produces:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
     - id: review
       runtime: codex
-      agent: code-review
       requires:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/research.md
           required: true
@@ -82,7 +80,7 @@ EOF
 
 @test "orchestrator still accepts a legacy .orch.json directly" {
   cat > "$WS/legacy.orch.json" <<'EOF'
-{"name":"Legacy","namespace":"legacy","stages":[{"id":"only","runtime":"cursor","agent":"research","plan":".ralph-workspace/plans/only.plan.md"}]}
+{"name":"Legacy","namespace":"legacy","stages":[{"id":"only","runtime":"cursor","role":"research","plan":".ralph-workspace/plans/only.plan.md"}]}
 EOF
   run env ORCHESTRATOR_DRY_RUN=1 ORCHESTRATOR_NO_COLOR=1 bash "$orchestrator" --orchestration "$WS/legacy.orch.json" "$WS"
   [ "$status" -eq 0 ]

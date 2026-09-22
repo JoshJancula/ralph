@@ -5,10 +5,15 @@ import {
 } from '@angular/ssr/node';
 import express, { type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { registerDashboardApi } from './server/dashboard-api';
+import { registerWorkflowApi } from './server/workflow-api';
+import { registerSafetyApi } from './server/safety-api';
+import { registerTaskScheduleApi, startDashboardScheduler } from './server/task-schedule-api';
 
 function resolveBrowserDistFolder(): string {
   const envDir = process.env['RALPH_DASHBOARD_BROWSER_DIST']?.trim();
@@ -36,6 +41,10 @@ type SendFileError = { message?: string; code?: string; status?: number; statusC
 
 export const app = express();
 registerDashboardApi(app);
+registerWorkflowApi(app);
+registerSafetyApi(app);
+registerTaskScheduleApi(app);
+startDashboardScheduler(app);
 
 // Serve `/` before express.static: otherwise serve-static treats `/` as the browser root
 // directory; with `redirect: false` it responds 404 for directory access and the CSR shell
@@ -77,9 +86,66 @@ export function startDashboardServer(
   port = Number(process.env['PORT'] ?? 8123),
   host = process.env['HOST'] ?? '127.0.0.1',
 ) {
+  const configHome = process.env['XDG_CONFIG_HOME']?.trim() || join(homedir(), '.config');
+  const endpointPath = join(configHome, 'ralph', 'dashboard', 'endpoint.json');
+  const startedAt = new Date().toISOString();
+  let endpointWrite = Promise.resolve();
+  let shuttingDown = false;
+
+  const removeEndpoint = async () => {
+    try {
+      const current = JSON.parse(await readFile(endpointPath, 'utf8')) as { pid?: number; startedAt?: string };
+      if (current.pid !== process.pid || current.startedAt !== startedAt) {
+        return;
+      }
+      await unlink(endpointPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        console.error(`Dashboard endpoint record could not be removed: ${(error as Error).message}`);
+      }
+    }
+  };
+
   const server = app.listen(port, host, () => {
-    console.log(`Node Express server listening on http://${host}:${port}`);
+    const address = server.address();
+    const boundHost = address && typeof address === 'object' ? address.address : host;
+    const boundPort = address && typeof address === 'object' ? address.port : port;
+    endpointWrite = mkdir(dirname(endpointPath), { recursive: true })
+      .then(() => writeFile(endpointPath, JSON.stringify({
+        host: boundHost,
+        port: boundPort,
+        pid: process.pid,
+        startedAt,
+      }, null, 2) + '\n'))
+      .catch((error: Error) => {
+        console.error(`Dashboard endpoint record could not be written: ${error.message}`);
+      });
+
+    console.log(`Node Express server listening on http://${boundHost}:${boundPort}`);
     console.log(`Dashboard CSR bundle directory: ${browserDistFolder}`);
+  });
+
+  server.once('close', () => {
+    void endpointWrite.then(removeEndpoint);
+  });
+
+  const shutdown = () => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    server.close(() => {
+      void endpointWrite.then(removeEndpoint).finally(() => {
+        process.exitCode = 0;
+      });
+    });
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  server.once('close', () => {
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
   });
 
   server.on('error', (error: NodeJS.ErrnoException) => {

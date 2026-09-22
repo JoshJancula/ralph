@@ -13,7 +13,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 # Args: channel mode [mode_source]
-#   channel: bash_compact | native_result_compact | proxy_shell_compact | bash_rewrite
+#   channel: bash_compact | native_result_compact | proxy_shell_compact | bash_rewrite | auto_background | jev_compact
 #   mode: resolved RALPH_MODE value (no|native|ralph|hybrid); defaults to $RALPH_MODE or "no"
 #   mode_source: how RALPH_MODE itself was resolved -- "explicit" (flag/env) or
 #     "workspace_preference" (.ralph-workspace/preferences.json ralph_mode_default).
@@ -31,6 +31,10 @@ ralph_compaction_gate_provenance() {
     native_result_compact) env_var="RALPH_NATIVE_RESULT_COMPACT" ;;
     proxy_shell_compact) env_var="RALPH_PROXY_SHELL_COMPACT" ;;
     bash_rewrite) env_var="RALPH_BASH_REWRITE" ;;
+    # Shares RALPH_BASH_REWRITE: auto-background rides the PreToolUse rewrite hook.
+    auto_background) env_var="RALPH_BASH_REWRITE" ;;
+    # Opt-in only: no RALPH_MODE enables Jev, so source is never mode_default.
+    jev_compact) env_var="RALPH_JEV_COMPACT" ;;
     *) return 1 ;;
   esac
 
@@ -46,7 +50,7 @@ ralph_compaction_gate_provenance() {
 
   local mode_gate="off"
   case "$channel" in
-    bash_compact | native_result_compact)
+    bash_compact | auto_background)
       case "$mode" in
         native | hybrid) mode_gate="on" ;;
       esac
@@ -56,10 +60,11 @@ ralph_compaction_gate_provenance() {
         ralph | hybrid) mode_gate="on" ;;
       esac
       ;;
-    bash_rewrite)
+    bash_rewrite | jev_compact)
       # bash_rewrite has no Ralph-mode default of its own; it is set
       # unconditionally by runtime-capability logic (e.g. the Cursor overlay
       # for native shell wrapper activation), never by RALPH_MODE alone.
+      # jev_compact is explicit-env only; no RALPH_MODE turns it on.
       mode_gate="off"
       ;;
   esac
@@ -76,12 +81,12 @@ ralph_compaction_gate_provenance() {
   printf '{"channel":"%s","gate":"off","source":"unset_default_off"}\n' "$channel"
 }
 
-# Convenience: prints provenance for all four channels as a JSON array.
+# Convenience: prints provenance for all channels as a JSON array.
 ralph_compaction_gate_provenance_all() {
   local mode="${1:-${RALPH_MODE:-no}}" mode_source="${2:-explicit}"
   local channel
   local -a records=()
-  for channel in bash_compact native_result_compact proxy_shell_compact bash_rewrite; do
+  for channel in bash_compact native_result_compact proxy_shell_compact bash_rewrite auto_background; do
     records+=("$(ralph_compaction_gate_provenance "$channel" "$mode" "$mode_source")")
   done
   printf '%s\n' "${records[@]}" | jq -sc .

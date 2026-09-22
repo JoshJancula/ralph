@@ -1,12 +1,12 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
-import { signal } from '@angular/core';
+import { ComponentFixture } from '@angular/core';
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { RouterTestingModule } from '@angular/router/testing';
+import { Router } from '@angular/router';
 import { PlanHubComponent } from './plan-hub.component';
-import type { WorkspaceRegistry } from '../../services/api.service';
+import { PlanInventoryResponse } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
-import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 
 const testRoutes = [
   { path: '', redirectTo: 'plans', pathMatch: 'full' },
@@ -18,173 +18,99 @@ function requestPath(url: string): string {
   return q === -1 ? url : url.slice(0, q);
 }
 
-function flushMetricsSummary(httpMock: HttpTestingController, body?: unknown): void {
-  const req = httpMock.expectOne('/api/metrics/summary');
-  req.flush(body !== undefined ? body : defaultMetricsSummary);
+const mockPlanResponse: PlanInventoryResponse = {
+  items: [
+    {
+      id: 'plan-1',
+      name: 'PLAN1',
+      path: 'plans/PLAN1.md',
+      projectRoot: '/mock/proj',
+      type: 'leaf',
+      planName: 'My First Plan',
+      overview: 'A test plan',
+      isProject: false,
+      checkboxProgress: { completed: 5, total: 10 },
+      currentTodo: { id: 'todo-1', content: 'Fix something' },
+      lastActivityMs: Date.now() - 1000,
+      hasLatestRun: true,
+    },
+    {
+      id: 'plan-2',
+      name: 'PLAN2',
+      path: 'plans/PLAN2.md',
+      projectRoot: '/mock/proj',
+      type: 'generated-control',
+      planName: undefined,
+      overview: undefined,
+      isProject: false,
+      checkboxProgress: { completed: 0, total: 0 },
+      currentTodo: undefined,
+      lastActivityMs: Date.now() - 5000,
+      hasLatestRun: false,
+    },
+  ],
+  pageInfo: {
+    hasMore: false,
+    total: 2,
+  },
+  appliedFilters: {},
+  counts: {
+    total: 2,
+    filtered: 2,
+  },
+};
+
+const emptyPlanResponse: PlanInventoryResponse = {
+  items: [],
+  pageInfo: {
+    hasMore: false,
+    total: 0,
+  },
+  appliedFilters: { search: 'nonexistent' },
+  counts: {
+    total: 2,
+    filtered: 0,
+  },
+};
+
+function mountPlanHub(fixture: ComponentFixture<PlanHubComponent>): void {
+  fixture.componentRef.setInput('paneActive', true);
+  fixture.detectChanges();
 }
 
-const mockWorkspaceRoot = '/mock/proj/.ralph-workspace';
-const mockProjectRoot = '/mock/proj';
+function flushPlanIndex(
+  httpMock: HttpTestingController,
+  body: unknown,
+  options?: { status?: number; statusText?: string },
+): void {
+  const pending = httpMock.match((r) => requestPath(r.url) === '/api/plans/index');
+  const active = pending.filter((r) => !r.cancelled);
+  expect(active.length).toBeGreaterThan(0);
+  const req = active[active.length - 1];
+  if (options?.status) {
+    req.flush(body, { status: options.status, statusText: options.statusText ?? 'Error' });
+  } else {
+    req.flush(body);
+  }
+}
 
-const defaultMetricsSummary = {
-  overall: {
-    input_tokens: 1234,
-    output_tokens: 5678,
-    cache_creation_input_tokens: 90,
-    cache_read_input_tokens: 12,
-    max_turn_total_tokens: 0,
-    cache_hit_ratio: 0,
-    elapsed_seconds: 45.6,
-    count: 2,
-  },
-  plans: [
-    {
-      path: `${mockWorkspaceRoot}/logs/plan-1/plan-usage-summary.json`,
-      plan_key: 'plan-1',
-      artifact_ns: 'plan-1',
-      workspace_root: mockWorkspaceRoot,
-      project_root: mockProjectRoot,
-      elapsed_seconds: 5,
-      input_tokens: 10,
-      output_tokens: 20,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 1,
-      max_turn_total_tokens: 0,
-      cache_hit_ratio: 0,
-    },
-  ],
-  orchestrations: [
-    {
-      path: `${mockWorkspaceRoot}/logs/orch-1/orchestration-usage-summary.json`,
-      plan_key: 'orch-1',
-      artifact_ns: 'orch-1',
-      workspace_root: mockWorkspaceRoot,
-      project_root: mockProjectRoot,
-      stage_id: 'build',
-      elapsed_seconds: 8.5,
-      input_tokens: 30,
-      output_tokens: 40,
-      cache_creation_input_tokens: 2,
-      cache_read_input_tokens: 3,
-      max_turn_total_tokens: 0,
-      cache_hit_ratio: 0,
-    },
-  ],
-  projects: [
-    {
-      workspace_root: mockWorkspaceRoot,
-      project_root: mockProjectRoot,
-      label: 'proj',
-      overall: {
-        input_tokens: 1234,
-        output_tokens: 5678,
-        cache_creation_input_tokens: 90,
-        cache_read_input_tokens: 12,
-        max_turn_total_tokens: 0,
-        cache_hit_ratio: 0,
-        elapsed_seconds: 45.6,
-        count: 2,
-      },
-      plans: [
-        {
-          path: `${mockWorkspaceRoot}/logs/plan-1/plan-usage-summary.json`,
-          plan_key: 'plan-1',
-          artifact_ns: 'plan-1',
-          workspace_root: mockWorkspaceRoot,
-          project_root: mockProjectRoot,
-          elapsed_seconds: 5,
-          input_tokens: 10,
-          output_tokens: 20,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 1,
-          max_turn_total_tokens: 0,
-          cache_hit_ratio: 0,
-        },
-      ],
-      orchestrations: [
-        {
-          path: `${mockWorkspaceRoot}/logs/orch-1/orchestration-usage-summary.json`,
-          plan_key: 'orch-1',
-          artifact_ns: 'orch-1',
-          workspace_root: mockWorkspaceRoot,
-          project_root: mockProjectRoot,
-          stage_id: 'build',
-          elapsed_seconds: 8.5,
-          input_tokens: 30,
-          output_tokens: 40,
-          cache_creation_input_tokens: 2,
-          cache_read_input_tokens: 3,
-          max_turn_total_tokens: 0,
-          cache_hit_ratio: 0,
-        },
-      ],
-    },
-  ],
-};
-
-const metricsWithNewFields = {
-  overall: {
-    input_tokens: 100,
-    output_tokens: 20,
-    cache_creation_input_tokens: 10,
-    cache_read_input_tokens: 40,
-    max_turn_total_tokens: 55000,
-    cache_hit_ratio: 0.267,
-    elapsed_seconds: 12,
-    count: 1,
-  },
-  plans: [
-    {
-      path: `${mockWorkspaceRoot}/logs/plan-x/plan-usage-summary.json`,
-      plan_key: 'plan-x',
-      artifact_ns: 'plan-x',
-      workspace_root: mockWorkspaceRoot,
-      project_root: mockProjectRoot,
-      elapsed_seconds: 12,
-      input_tokens: 100,
-      output_tokens: 20,
-      cache_creation_input_tokens: 10,
-      cache_read_input_tokens: 40,
-      max_turn_total_tokens: 55000,
-      cache_hit_ratio: 0.267,
-    },
-  ],
-  orchestrations: [],
-  projects: [
-    {
-      workspace_root: mockWorkspaceRoot,
-      project_root: mockProjectRoot,
-      label: 'proj',
-      overall: {
-        input_tokens: 100,
-        output_tokens: 20,
-        cache_creation_input_tokens: 10,
-        cache_read_input_tokens: 40,
-        max_turn_total_tokens: 55000,
-        cache_hit_ratio: 0.267,
-        elapsed_seconds: 12,
-        count: 1,
-      },
-      plans: [
-        {
-          path: `${mockWorkspaceRoot}/logs/plan-x/plan-usage-summary.json`,
-          plan_key: 'plan-x',
-          artifact_ns: 'plan-x',
-          workspace_root: mockWorkspaceRoot,
-          project_root: mockProjectRoot,
-          elapsed_seconds: 12,
-          input_tokens: 100,
-          output_tokens: 20,
-          cache_creation_input_tokens: 10,
-          cache_read_input_tokens: 40,
-          max_turn_total_tokens: 55000,
-          cache_hit_ratio: 0.267,
-        },
-      ],
-      orchestrations: [],
-    },
-  ],
-};
+function flushAllPlanIndex(
+  httpMock: HttpTestingController,
+  body: unknown,
+  options?: { status?: number; statusText?: string },
+): void {
+  const pending = httpMock.match((r) => requestPath(r.url) === '/api/plans/index');
+  for (const req of pending) {
+    if (req.cancelled) {
+      continue;
+    }
+    if (options?.status) {
+      req.flush(body, { status: options.status, statusText: options.statusText ?? 'Error' });
+    } else {
+      req.flush(body);
+    }
+  }
+}
 
 describe('PlanHubComponent', () => {
   let httpMock: HttpTestingController;
@@ -198,669 +124,351 @@ describe('PlanHubComponent', () => {
   });
 
   afterEach(() => {
+    httpMock.match(() => true).forEach((req) => {
+      // Superseded requeries are cancelled by AbortSignal-based request cancellation.
+      if (!req.cancelled) {
+        req.flush(emptyPlanResponse);
+      }
+    });
     httpMock.verify();
   });
 
-  it('fetchPlans sorts directories by mtime', () => {
+  it('fetches and displays plans from index API', () => {
     const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
     fixture.detectChanges();
 
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [
-        { name: 'PLAN1', path: 'PLAN1/', type: 'dir', size: 0, mtime: 100 },
-        { name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 200 },
-        { name: 'readme.md', path: 'readme.md', type: 'file', size: 1, mtime: 50 },
-      ],
-    });
-    flushMetricsSummary(httpMock);
-
-    const { items, loading } = fixture.componentInstance;
-    expect(loading).toBe(false);
-    expect(items.map((i) => i.name)).toEqual(['PLAN2', 'PLAN1']);
+    const items = fixture.componentInstance.visibleItems();
+    expect(items.length).toBe(2);
+    expect(items[0].name).toBe('PLAN1');
+    expect(items[1].name).toBe('PLAN2');
   });
 
-  it('fetchPlans leaves empty list when no directories', () => {
+  it('displays loading state initially', fakeAsync(() => {
     const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    expect(fixture.componentInstance.loading()).toBe(true);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
     fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [],
-    });
-    flushMetricsSummary(httpMock);
-
-    expect(fixture.componentInstance.items.length).toBe(0);
-    expect(fixture.componentInstance.loading).toBe(false);
-  });
-
-  it('fetchPlans records error when listing fails', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({ error: 'server' }, { status: 500, statusText: 'Error' });
-    flushMetricsSummary(httpMock);
-
-    expect(fixture.componentInstance.error.length).toBeGreaterThan(0);
-    expect(fixture.componentInstance.loading).toBe(false);
-  });
-
-  it('openPlan delegates to NavService.navigate', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const item = fixture.componentInstance.items[0];
-    fixture.componentInstance.openPlan(item);
-    expect(spy).toHaveBeenCalledWith('plans', '', 'PLAN2.md', null, null);
-  });
-
-  it('openUsage delegates to NavService.navigate', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({ root: 'plans', path: '', parent: null, entries: [] });
-    flushMetricsSummary(httpMock);
-
-    fixture.componentInstance.openUsage();
-    expect(spy).toHaveBeenCalledWith('usage');
-  });
-
-  it('viewLogs delegates to NavService.navigate with logs root', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    // Flush the async API call that viewLogs makes
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [],
-    });
     tick();
 
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
+    expect(fixture.componentInstance.loading()).toBe(false);
   }));
 
-  it('viewLogs navigates directly when log file is found', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [
-        { name: 'output.log', path: 'PLAN2/output.log', type: 'file', size: 100, mtime: 1000 },
-      ],
-    });
-    tick();
-
-    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/output.log', null);
-  }));
-
-  it('viewLogs looks in subdirectories when no logs at root', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [
-        { name: 'run-001', path: 'PLAN2/run-001/', type: 'dir', size: 0, mtime: 2000 },
-      ],
-    });
-    tick();
-
-    // Should fetch subdirectory
-    const subdirReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2/run-001');
-    subdirReq.flush({
-      root: 'logs',
-      path: 'PLAN2/run-001',
-      parent: 'PLAN2',
-      entries: [
-        { name: 'output.log', path: 'PLAN2/run-001/output.log', type: 'file', size: 100, mtime: 1000 },
-      ],
-    });
-    tick();
-
-    expect(spy).toHaveBeenCalledWith('logs', '', 'PLAN2/run-001/output.log', null);
-  }));
-
-  it('viewLogs navigates to directory when subdirectory has no logs', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [
-        { name: 'run-001', path: 'PLAN2/run-001/', type: 'dir', size: 0, mtime: 2000 },
-      ],
-    });
-    tick();
-
-    // Subdirectory has no logs
-    const subdirReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2/run-001');
-    subdirReq.flush({
-      root: 'logs',
-      path: 'PLAN2/run-001',
-      parent: 'PLAN2',
-      entries: [],
-    });
-    tick();
-
-    expect(spy).toHaveBeenCalledWith('logs', null, null, null);
-  }));
-
-  it('viewLogs handles error when subdirectory fetch fails', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [
-        { name: 'run-001', path: 'PLAN2/run-001/', type: 'dir', size: 0, mtime: 2000 },
-      ],
-    });
-    tick();
-
-    // Subdirectory fetch fails
-    const subdirReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2/run-001');
-    subdirReq.flush('error', { status: 500, statusText: 'Error' });
-    tick();
-
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
-  }));
-
-  it('viewLogs navigates to directory when listing has no log files or subdirs', fakeAsync(() => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
-
-    fixture.detectChanges();
-
-    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    req.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planCards[0];
-    fixture.componentInstance.viewLogs(row);
-
-    tick();
-    const viewLogsReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs' && r.params.get('path') === 'PLAN2');
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'PLAN2',
-      parent: null,
-      entries: [
-        { name: 'readme.md', path: 'PLAN2/readme.md', type: 'file', size: 100, mtime: 1000 },
-      ],
-    });
-    tick();
-
-    // No log files and no subdirectories, so should navigate to dir
-    expect(spy).toHaveBeenCalledWith('logs', 'PLAN2', null, null);
-  }));
-
-  it('renders metrics summary and fallback states', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-
-    flushMetricsSummary(httpMock);
-    expect(fixture.componentInstance.metricsSummary).toMatchObject(defaultMetricsSummary);
-  });
-
-  it('renders per-folder elapsed and tokens on plan cards', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [
-        { name: 'plan-1', path: 'plan-1/', type: 'dir', size: 0, mtime: 2 },
-        { name: 'orch-1', path: 'orch-1/', type: 'dir', size: 0, mtime: 1 },
-      ],
-    });
-    flushMetricsSummary(httpMock);
-    fixture.detectChanges();
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    const comp = fixture.componentInstance;
-    expect(comp.formatSeconds(5)).toBe('5s');
-    expect(comp.formatSeconds(8.5)).toBe('8.5s');
-    expect(text).toContain('31');
-    expect(text).toContain('75');
-  });
-
-  it('renders cache_hit_ratio and max_turn_total_tokens columns in the plan metrics table', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'plan-x', path: 'plan-x/', type: 'dir', size: 0, mtime: 1 }],
-    });
-
-    flushMetricsSummary(httpMock, metricsWithNewFields);
-    fixture.detectChanges();
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    // cache_hit_ratio 0.267 -> "26.7%"
-    expect(text).toContain('26.7%');
-    // max_turn_total_tokens 55000 formatted with Intl.NumberFormat
-    expect(text).toContain('55');
-  });
-
-  it('formatPercent returns "--" for zero and non-finite values', () => {
+  it('displays error when plan index fails', fakeAsync(() => {
     const fixture = TestBed.createComponent(PlanHubComponent);
     const comp = fixture.componentInstance;
-    expect(comp.formatPercent(0)).toBe('--');
-    expect(comp.formatPercent(NaN)).toBe('--');
-    expect(comp.formatPercent(0.5)).toBe('50.0%');
-  });
-
-  it('formatPeakTurn returns "--" for zero values', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-    // Flush HTTP requests triggered by ngOnInit before making assertions.
-    httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs').flush({ root: 'plans', path: '', parent: null, entries: [] });
-    httpMock.expectOne('/api/metrics/summary').flush(defaultMetricsSummary);
-
-    const comp = fixture.componentInstance;
-    expect(comp.formatPeakTurn(0)).toBe('--');
-    expect(comp.formatPeakTurn(55000)).toContain('55');
-  });
-
-  it('shows a metrics fallback message when metrics fail', () => {
-    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+    tick();
+    flushPlanIndex(httpMock, mockPlanResponse);
+    tick();
     fixture.detectChanges();
 
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [{ name: 'PLAN2', path: 'PLAN2/', type: 'dir', size: 0, mtime: 1 }],
-    });
-
-    const metricsReq = httpMock.expectOne('/api/metrics/summary');
-    metricsReq.flush({ error: 'metrics unavailable' }, { status: 500, statusText: 'Error' });
-
-    expect(fixture.componentInstance.metricsError).toContain('metrics unavailable');
-    expect(fixture.componentInstance.items.map((item) => item.name)).toEqual(['PLAN2']);
-  });
-});
-
-describe('PlanHubComponent multi-project grouping', () => {
-  let httpMock: HttpTestingController;
-
-  beforeEach(async () => {
-    const projA = '/mock/proj-a';
-    const projB = '/mock/proj-b';
-    const wsRootA = `${projA}/.ralph-workspace`;
-    const wsRootB = `${projB}/.ralph-workspace`;
-    const registry: WorkspaceRegistry[] = [
-      { path: projA, workspaceRoot: wsRootA, projectRoot: projA, label: 'proj-a', exists: true },
-      { path: projB, workspaceRoot: wsRootB, projectRoot: projB, label: 'proj-b', exists: true },
-    ];
-    TestBed.resetTestingModule();
-    await TestBed.configureTestingModule({
-      imports: [PlanHubComponent, HttpClientTestingModule, RouterTestingModule.withRoutes(testRoutes)],
-      providers: [
-        {
-          provide: WorkspaceSelectorService,
-          useValue: {
-            workspaces: signal(registry),
-            selectedWorkspacePath: signal<string | null>(null),
-          },
-        },
-      ],
-    }).compileComponents();
-    httpMock = TestBed.inject(HttpTestingController);
-  });
-
-  afterEach(() => {
-    httpMock.verify();
-  });
-
-  it('groups rows by workspaceRoot and scopes folder metrics per project when plan_key collides', () => {
-    const projA = '/mock/proj-a';
-    const projB = '/mock/proj-b';
-    const wsRootA = `${projA}/.ralph-workspace`;
-    const wsRootB = `${projB}/.ralph-workspace`;
-
-    const fixture = TestBed.createComponent(PlanHubComponent);
-    fixture.detectChanges();
-
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [
-        { name: 'feature', path: 'feature/', type: 'dir', size: 200, mtime: 2, workspaceRoot: wsRootA },
-        { name: 'feature', path: 'feature/', type: 'dir', size: 100, mtime: 1, workspaceRoot: wsRootB },
-      ],
-    });
-
-    const metricsPayload = {
-      overall: {
-        input_tokens: 300,
-        output_tokens: 10,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        max_turn_total_tokens: 0,
-        cache_hit_ratio: 0,
-        elapsed_seconds: 7,
-        count: 2,
+    comp.fetchPlans();
+    flushPlanIndex(
+      httpMock,
+      {
+        code: 'INTERNAL',
+        message: 'Failed to load plans',
+        title: 'Plans unavailable',
+        explanation: 'The plan index could not be loaded.',
+        recoverable: true,
+        suggestedActions: ['RETRY'],
       },
-      plans: [
-        {
-          path: `${wsRootA}/logs/feature/plan-usage-summary.json`,
-          plan_key: 'feature',
-          artifact_ns: 'feature',
-          workspace_root: wsRootA,
-          project_root: projA,
-          elapsed_seconds: 3,
-          input_tokens: 100,
-          output_tokens: 5,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          max_turn_total_tokens: 0,
-          cache_hit_ratio: 0,
-        },
-        {
-          path: `${wsRootB}/logs/feature/plan-usage-summary.json`,
-          plan_key: 'feature',
-          artifact_ns: 'feature',
-          workspace_root: wsRootB,
-          project_root: projB,
-          elapsed_seconds: 4,
-          input_tokens: 200,
-          output_tokens: 5,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          max_turn_total_tokens: 0,
-          cache_hit_ratio: 0,
-        },
-      ],
-      orchestrations: [],
-      projects: [
-        {
-          workspace_root: wsRootA,
-          project_root: projA,
-          label: 'proj-a',
-          overall: {
-            input_tokens: 100,
-            output_tokens: 5,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            max_turn_total_tokens: 0,
-            cache_hit_ratio: 0,
-            elapsed_seconds: 3,
-            count: 1,
-          },
-          plans: [
-            {
-              path: `${wsRootA}/logs/feature/plan-usage-summary.json`,
-              plan_key: 'feature',
-              artifact_ns: 'feature',
-              workspace_root: wsRootA,
-              project_root: projA,
-              elapsed_seconds: 3,
-              input_tokens: 100,
-              output_tokens: 5,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-              max_turn_total_tokens: 0,
-              cache_hit_ratio: 0,
-            },
-          ],
-          orchestrations: [],
-        },
-        {
-          workspace_root: wsRootB,
-          project_root: projB,
-          label: 'proj-b',
-          overall: {
-            input_tokens: 200,
-            output_tokens: 5,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            max_turn_total_tokens: 0,
-            cache_hit_ratio: 0,
-            elapsed_seconds: 4,
-            count: 1,
-          },
-          plans: [
-            {
-              path: `${wsRootB}/logs/feature/plan-usage-summary.json`,
-              plan_key: 'feature',
-              artifact_ns: 'feature',
-              workspace_root: wsRootB,
-              project_root: projB,
-              elapsed_seconds: 4,
-              input_tokens: 200,
-              output_tokens: 5,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-              max_turn_total_tokens: 0,
-              cache_hit_ratio: 0,
-            },
-          ],
-          orchestrations: [],
-        },
-      ],
+      { status: 500, statusText: 'Error' },
+    );
+    tick();
+    fixture.detectChanges();
+
+    expect(comp.error()).toBeTruthy();
+  }));
+
+  it('displays empty state when no plans found', () => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, emptyPlanResponse);
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('No plans found');
+  });
+
+  it('clears search and filters from the empty-filter path', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    comp.queryState.set({ ...comp.queryState(), search: 'nope', status: 'active', type: 'leaf' });
+    expect(comp.hasFilters()).toBe(true);
+    comp.clearFilters();
+    tick();
+    fixture.detectChanges();
+
+    expect(comp.queryState().search).toBe('');
+    expect(comp.queryState().status).toBe('');
+    expect(comp.queryState().type).toBe('');
+    flushAllPlanIndex(httpMock, mockPlanResponse);
+  }));
+
+  it('debounces search input', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    fixture.componentInstance.onSearchChange('test');
+    tick(100);
+    fixture.detectChanges();
+
+    fixture.componentInstance.onSearchChange('test search');
+    tick(100);
+    fixture.detectChanges();
+
+    fixture.componentInstance.onSearchChange('test search query');
+    tick(300);
+    tick();
+    fixture.detectChanges();
+
+    const searchReq = httpMock.expectOne((r) => {
+      const url = requestPath(r.url);
+      return url === '/api/plans/index' && r.params.get('search') === 'test search query';
+    });
+    searchReq.flush(mockPlanResponse);
+  }));
+
+  it('filters by status when status filter changes', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    const currentQuery = comp.queryState();
+    comp.queryState.set({ ...currentQuery, status: 'active' });
+    comp.onStatusChange();
+    tick();
+    fixture.detectChanges();
+
+    const searchReq = httpMock.expectOne((r) => {
+      const url = requestPath(r.url);
+      return url === '/api/plans/index' && r.params.get('status') === 'active';
+    });
+    searchReq.flush(mockPlanResponse);
+  }));
+
+  it('filters by type when type filter changes', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    const currentQuery = comp.queryState();
+    comp.queryState.set({ ...currentQuery, type: 'leaf' });
+    comp.onTypeChange();
+    tick();
+    fixture.detectChanges();
+
+    const searchReq = httpMock.expectOne((r) => {
+      const url = requestPath(r.url);
+      return url === '/api/plans/index' && r.params.get('type') === 'leaf';
+    });
+    searchReq.flush(mockPlanResponse);
+  }));
+
+  it('changes sort field and order when column header clicked', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    comp.setSortField('name');
+    fixture.detectChanges();
+
+    expect(comp.queryState().sort).toBe('name');
+    expect(comp.queryState().sortOrder).toBe('asc');
+
+    comp.setSortField('name');
+    fixture.detectChanges();
+
+    expect(comp.queryState().sortOrder).toBe('desc');
+  }));
+
+  it('loads the next page when Next is selected', fakeAsync(() => {
+    const manyItemsResponse: PlanInventoryResponse = {
+      ...mockPlanResponse,
+      pageInfo: {
+        cursor: 'plan-2',
+        hasMore: true,
+        total: 50,
+      },
     };
 
-    flushMetricsSummary(httpMock, metricsPayload);
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, manyItemsResponse);
     fixture.detectChanges();
 
     const comp = fixture.componentInstance;
-    expect(comp.planSections.length).toBe(2);
-    const rowA = comp.planSections.find((s) => s.workspaceRoot === wsRootA)?.rows[0];
-    const rowB = comp.planSections.find((s) => s.workspaceRoot === wsRootB)?.rows[0];
-    expect(rowA?.folderMetrics?.input_tokens).toBe(100);
-    expect(rowB?.folderMetrics?.input_tokens).toBe(200);
-    expect(comp.planSections.map((s) => s.label)).toEqual(expect.arrayContaining(['proj-a', 'proj-b']));
+    expect(comp.pageInfo().hasMore).toBe(true);
+
+    comp.nextPage();
+    fixture.detectChanges();
+
+    const nextReq = httpMock.expectOne((r) => {
+      const url = requestPath(r.url);
+      return url === '/api/plans/index' && r.params.get('cursor') === 'plan-2';
+    });
+    nextReq.flush(manyItemsResponse);
+  }));
+
+  it('navigates to the dedicated plan-detail route (not the generic file viewer) when row is clicked', () => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    const router = TestBed.inject(Router);
+    const spy = vi.spyOn(router, 'navigate');
+
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    const item = comp.visibleItems()[0];
+    comp.onOpenPlan(item);
+
+    expect(spy).toHaveBeenCalledWith(['/plan-detail', item.path], {
+      queryParams: { projectRoot: item.projectRoot },
+    });
   });
 
-  it('openPlan passes projectRoot derived from row workspaceRoot in global mode', () => {
-    const projA = '/mock/proj-a';
-    const wsRootA = `${projA}/.ralph-workspace`;
+  it('renders plan list with correct columns', () => {
     const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
+    mountPlanHub(fixture);
 
+    flushPlanIndex(httpMock, mockPlanResponse);
     fixture.detectChanges();
 
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [
-        { name: 'feature', path: 'feature/', type: 'dir', size: 1, mtime: 1, workspaceRoot: wsRootA },
-      ],
-    });
-    flushMetricsSummary(httpMock);
-
-    const row = fixture.componentInstance.planSections[0]?.rows[0];
-    expect(row).toBeDefined();
-    fixture.componentInstance.openPlan(row!);
-    expect(spy).toHaveBeenCalledWith('plans', '', 'feature.md', null, projA);
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('PLAN1');
+    expect(text).toContain('PLAN2');
   });
 
-  it('viewLogs passes workspaceRoot from row when metrics are not loaded yet', fakeAsync(() => {
-    const projB = '/mock/proj-b';
-    const wsRootB = `${projB}/.ralph-workspace`;
+  it('shows page controls when more results are available', () => {
+    const manyItemsResponse: PlanInventoryResponse = {
+      ...mockPlanResponse,
+      pageInfo: {
+        cursor: 'plan-2',
+        hasMore: true,
+        total: 50,
+      },
+    };
+
     const fixture = TestBed.createComponent(PlanHubComponent);
-    const nav = TestBed.inject(NavService);
-    const spy = vi.spyOn(nav, 'navigate');
+    mountPlanHub(fixture);
 
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/plans/index');
+    req.flush(manyItemsResponse);
     fixture.detectChanges();
 
-    const listReq = httpMock.expectOne((r) => requestPath(r.url) === '/api/list' && r.params.get('root') === 'logs');
-    listReq.flush({
-      root: 'plans',
-      path: '',
-      parent: null,
-      entries: [
-        { name: 'feature', path: 'feature/', type: 'dir', size: 1, mtime: 1, workspaceRoot: wsRootB },
-      ],
-    });
-    flushMetricsSummary(httpMock);
+    const text = fixture.nativeElement.textContent;
+    expect(text).toContain('Previous');
+    expect(text).toContain('Next');
+    expect(text).toContain('Page 1');
+  });
+
+  it('hides pagination button when hasMore is false', () => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
     fixture.detectChanges();
 
-    const row = { ...fixture.componentInstance.items[0], folderMetrics: null };
-    fixture.componentInstance.viewLogs(row);
+    const text = fixture.nativeElement.textContent;
+    expect(text).not.toContain('Previous');
+  });
+
+  it('clears cursor when filters change', fakeAsync(() => {
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    const req = httpMock.expectOne((r) => requestPath(r.url) === '/api/plans/index');
+    req.flush({ ...mockPlanResponse, pageInfo: { cursor: 'plan-2', hasMore: true, total: 50 } });
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    comp.nextPage();
     tick();
+    expect(comp.queryState().cursor).toBe('plan-2');
+    flushPlanIndex(httpMock, mockPlanResponse);
+    tick();
+    fixture.detectChanges();
 
-    const viewLogsReq = httpMock.expectOne(
-      (r) =>
-        requestPath(r.url) === '/api/list' &&
-        r.params.get('root') === 'logs' &&
-        r.params.get('path') === 'feature' &&
-        r.params.get('workspaceRoot') === wsRootB,
+    comp.onStatusChange();
+    tick();
+    fixture.detectChanges();
+
+    expect(comp.queryState().cursor).toBeUndefined();
+    flushPlanIndex(httpMock, mockPlanResponse);
+  }));
+
+  it('retains search in URL query parameters', fakeAsync(() => {
+    const router = TestBed.inject(Router);
+    const spy = vi.spyOn(router, 'navigate');
+
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    comp.onSearchChange('test');
+    tick(300);
+    fixture.detectChanges();
+
+    expect(spy).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ search: 'test' }),
+      })
     );
-    viewLogsReq.flush({
-      root: 'logs',
-      path: 'feature',
-      parent: null,
-      entries: [{ name: 'run.log', path: 'feature/run.log', type: 'file', size: 1, mtime: 1 }],
-    });
-    tick();
+  }));
 
-    expect(spy).toHaveBeenCalledWith('logs', '', 'feature/run.log', wsRootB);
+  it('retains status filter in URL query parameters', fakeAsync(() => {
+    const router = TestBed.inject(Router);
+    const spy = vi.spyOn(router, 'navigate');
+
+    const fixture = TestBed.createComponent(PlanHubComponent);
+    mountPlanHub(fixture);
+
+    flushPlanIndex(httpMock, mockPlanResponse);
+    fixture.detectChanges();
+
+    const comp = fixture.componentInstance;
+    const currentQuery = comp.queryState();
+    comp.queryState.set({ ...currentQuery, status: 'active' });
+    comp.onStatusChange();
+    fixture.detectChanges();
+
+    expect(spy).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ status: 'active' }),
+      })
+    );
   }));
 });

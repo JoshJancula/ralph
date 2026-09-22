@@ -202,7 +202,7 @@ setup() {
   output="$(install_ops_resolve_target "$workspace")"
   [ "$?" -eq 0 ]
   [ "$output" = "$workspace" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "global target resolves to RALPH_HOME and creates it outside dry-run" {
@@ -215,7 +215,7 @@ setup() {
   [ "$?" -eq 0 ]
   [ "$output" = "$RALPH_HOME" ]
   [ -d "$RALPH_HOME" ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   unset RALPH_HOME
 }
 
@@ -291,7 +291,8 @@ setup() {
   target_dir="$(mktemp -d)"
   home_dir="$(mktemp -d)"
   mkdir -p "$bundle_dir/.ralph"
-  mkdir -p "$bundle_dir/.cursor/agents" "$bundle_dir/.claude/agents" "$bundle_dir/.codex/agents" "$bundle_dir/.opencode/agents"
+  mkdir -p "$bundle_dir/.cursor/rules" "$bundle_dir/.claude/rules" "$bundle_dir/.codex/rules" "$bundle_dir/.opencode/rules"
+  mkdir -p "$bundle_dir/.cursor/agents" "$bundle_dir/.claude/agents"
 
   BUNDLE="$bundle_dir"
   TARGET="$target_dir"
@@ -307,10 +308,12 @@ setup() {
   run install_ops_build_copy_plan
   [ "$status" -eq 0 ]
   [[ "$output" == *"$bundle_dir|$target_dir/bundle|global-bundle"* ]]
-  [[ "$output" == *"$bundle_dir/.cursor/agents|$home_dir/.cursor/agents|global-cursor-agents"* ]]
-  [[ "$output" == *"$bundle_dir/.claude/agents|$home_dir/.claude/agents|global-claude-agents"* ]]
-  [[ "$output" == *"$bundle_dir/.codex/agents|$home_dir/.codex/agents|global-codex-agents"* ]]
-  [[ "$output" == *"$bundle_dir/.opencode/agents|$home_dir/.opencode/agents|global-opencode-agents"* ]]
+  [[ "$output" == *"$bundle_dir/.cursor/rules|$home_dir/.cursor/rules|global-cursor-rules"* ]]
+  [[ "$output" == *"$bundle_dir/.claude/rules|$home_dir/.claude/rules|global-claude-rules"* ]]
+  [[ "$output" == *"$bundle_dir/.codex/rules|$home_dir/.codex/rules|global-codex-rules"* ]]
+  [[ "$output" == *"$bundle_dir/.opencode/rules|$home_dir/.opencode/rules|global-opencode-rules"* ]]
+  # Ralph no longer installs native agent trees
+  [[ "$output" != *"agents"* ]]
   [[ "$output" != *"$target_dir/.cursor"* ]]
   [[ "$output" != *"$target_dir/.claude"* ]]
 
@@ -323,7 +326,7 @@ setup() {
   bundle_dir="$(mktemp -d)"
   target_dir="$(mktemp -d)"
   home_dir="$(mktemp -d)"
-  mkdir -p "$bundle_dir/.cursor/agents" "$home_dir/.cursor"
+  mkdir -p "$bundle_dir/.cursor/rules" "$home_dir/.cursor"
 
   BUNDLE="$bundle_dir"
   TARGET="$target_dir"
@@ -335,12 +338,14 @@ setup() {
 
   run install_ops_build_copy_plan
   [ "$status" -eq 0 ]
+  [[ "$output" != *"global-cursor-rules"* ]]
   [[ "$output" != *"global-cursor-agents"* ]]
 
   FORCE_GLOBAL_RUNTIME=1
   run install_ops_build_copy_plan
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$bundle_dir/.cursor/agents|$home_dir/.cursor/agents|global-cursor-agents"* ]]
+  [[ "$output" == *"$bundle_dir/.cursor/rules|$home_dir/.cursor/rules|global-cursor-rules"* ]]
+  [[ "$output" != *"global-cursor-agents"* ]]
 
   rm -rf "$bundle_dir" "$target_dir" "$home_dir"
   BUNDLE=""
@@ -441,4 +446,108 @@ setup() {
   [[ "$output" == *"agents/rules/skills"* ]] || [[ "$output" == *"are safe"* ]]
 
   rm -rf "$target_dir"
+}
+
+@test "copy plan omits agent assets; shared path includes roles" {
+  bundle_dir="$(mktemp -d)"
+  target_dir="$(mktemp -d)"
+  mkdir -p "$bundle_dir/.ralph/roles" "$bundle_dir/.cursor/rules" "$bundle_dir/.cursor/agents/research"
+  mkdir -p "$bundle_dir/.agents/agents" "$bundle_dir/.agents/rules"
+  printf '%s\n' "# Agents" >"$bundle_dir/.agents/agents.md"
+  printf '%s\n' '---' >"$bundle_dir/.ralph/roles/research.md"
+  printf '%s\n' 'description: "Research role"' >>"$bundle_dir/.ralph/roles/research.md"
+  printf '%s\n' '---' >>"$bundle_dir/.ralph/roles/research.md"
+  printf '%s\n' 'Guidance' >>"$bundle_dir/.ralph/roles/research.md"
+
+  BUNDLE="$bundle_dir"
+  TARGET="$target_dir"
+  INSTALL_SHARED=1
+  INSTALL_CURSOR=1
+  INSTALL_ANTIGRAVITY=1
+
+  run install_ops_build_copy_plan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$bundle_dir/.ralph|$target_dir/.ralph|shared"* ]]
+  [[ "$output" == *"$bundle_dir/.cursor/rules|$target_dir/.cursor/rules|cursor-rules"* ]]
+  [[ "$output" == *"$bundle_dir/.agents/rules|$target_dir/.agents/rules|antigravity-rules"* ]]
+  [[ "$output" != *"cursor-agents"* ]]
+  [[ "$output" != *"antigravity-agents"* ]]
+  [[ "$output" != *"agents.md"* ]]
+  [[ "$output" != *"$bundle_dir/.cursor/agents"* ]]
+  [[ "$output" != *"$bundle_dir/.agents/agents|"* ]]
+
+  rm -rf "$bundle_dir" "$target_dir"
+  BUNDLE=""
+  TARGET=""
+}
+
+
+@test "upgrade removes recognized six-ID Ralph agent assets and preserve native agents" {
+  target_dir="$(mktemp -d)"
+  local research_dir custom_dir agents_md
+  research_dir="$target_dir/.cursor/agents/research"
+  custom_dir="$target_dir/.cursor/agents/my-native-agent"
+  agents_md="$target_dir/.agents/agents.md"
+
+  mkdir -p "$research_dir" "$custom_dir" "$target_dir/.agents"
+  cat >"$research_dir/research.md" <<'EOF'
+---
+name: research
+---
+<!-- GENERATED from bundle/.ralph/agents/research.md by scripts/sync-runtime-assets.sh - edit the canonical file -->
+body
+EOF
+  cat >"$research_dir/config.json" <<'EOF'
+{
+  "_generated": "GENERATED from bundle/.ralph/agents/research.md by scripts/sync-runtime-assets.sh - edit the canonical file",
+  "name": "research"
+}
+EOF
+  printf '%s\n' 'native-agent-keep' >"$custom_dir/custom.md"
+
+  # Unmarked six-ID directory must be preserved (not recognized as Ralph output).
+  mkdir -p "$target_dir/.cursor/agents/qa"
+  printf '%s\n' 'user-owned-qa' >"$target_dir/.cursor/agents/qa/qa.md"
+
+  cat >"$agents_md" <<'EOF'
+# Ralph Antigravity Agent Registry
+<!-- GENERATED from bundle/.ralph/agents by scripts/sync-runtime-assets.sh - edit the canonical file -->
+
+## @research
+Retired Ralph profile.
+
+## @my-custom
+Keep this native section.
+EOF
+
+  TARGET="$target_dir"
+  INSTALL_CURSOR=1
+  INSTALL_ANTIGRAVITY=1
+  INSTALL_SHARED=0
+  DRY_RUN=0
+  SILENT=1
+
+  run install_ops_remove_stale_ralph_agent_profiles "$target_dir"
+  [ "$status" -eq 0 ]
+
+  [ ! -d "$research_dir" ]
+  [ -f "$custom_dir/custom.md" ]
+  [[ "$(cat "$custom_dir/custom.md")" == "native-agent-keep" ]]
+  [ -f "$target_dir/.cursor/agents/qa/qa.md" ]
+  [[ "$(cat "$target_dir/.cursor/agents/qa/qa.md")" == "user-owned-qa" ]]
+  [ -f "$agents_md" ]
+  [[ "$(cat "$agents_md")" != *"## @research"* ]]
+  [[ "$(cat "$agents_md")" == *"## @my-custom"* ]]
+
+  rm -rf "$target_dir"
+  TARGET=""
+}
+
+
+@test "help documents that native agent assets are not installed" {
+  run bash "$REPO_ROOT/install.sh" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"does not install native agents"* ]]
+  # The bundled role tree was removed; help must not advertise a roles path.
+  [[ "$output" != *"roles"* ]]
 }

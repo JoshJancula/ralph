@@ -2,6 +2,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { Dirent, existsSync, readFileSync, readdirSync, realpathSync, statSync, promises as fsPromises } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { stateSharedPath } from './server/state-paths';
 
 export interface RootConfig {
   label: string;
@@ -47,7 +48,11 @@ const WORKSPACE_CONTENT_ENTRIES = ['logs', 'artifacts', 'sessions', 'orchestrati
 const HOME_WORKSPACE_SEARCH_DEPTH = 5;
 
 function isPopulatedWorkspace(workspaceDir: string): boolean {
-  return WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry));
+  if (WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry))) {
+    return true;
+  }
+  // Layout 2 keeps sessions under internal/sessions/.
+  return hasEntry(join(workspaceDir, 'internal'), 'sessions');
 }
 
 function walkUpForEntry(startDir: string, entry: string): string | null {
@@ -130,7 +135,7 @@ function determineWorkspaceRoot(projectRoot: string): string {
   }
 
   if (dashboardGlobalMode()) {
-    const registryPaths = readRegistryWorkspacePaths();
+    const registryPaths = readRegistryWorkspacePaths().sort((a, b) => a.localeCompare(b));
     if (registryPaths.length > 0) {
       return registryPaths[0];
     }
@@ -216,6 +221,40 @@ export function resolveRalphInstallRoot(): string | null {
       }
     } catch {
       continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds the dashboard package so its own operator documentation can
+ * appear alongside the framework documentation in the Docs hub.
+ */
+export function resolveDashboardDocumentationRoot(): string | null {
+  const candidates = new Set<string>([process.cwd(), join(process.cwd(), 'ralph-dashboard')]);
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    candidates.add(dir);
+    candidates.add(join(dir, 'ralph-dashboard'));
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+
+  for (const candidate of candidates) {
+    const docs = join(candidate, 'docs');
+    if (
+      existsSync(docs) &&
+      statSync(docs).isDirectory() &&
+      existsSync(join(docs, 'START_HERE.md'))
+    ) {
+      try {
+        return realpathSync(candidate);
+      } catch {
+        return resolve(candidate);
+      }
     }
   }
   return null;
@@ -362,12 +401,32 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
     },
     sessions: {
       label: 'Sessions',
-      basePath: join(roots.workspaceRoot, 'sessions'),
+      basePath: stateSharedPath(roots.workspaceRoot, 'sessions'),
       writable: false,
     },
     'orchestration-plans': {
       label: 'Orchestration Plans',
       basePath: join(roots.workspaceRoot, 'orchestration-plans'),
+      writable: false,
+    },
+    'graph-runs': {
+      label: 'Graph Runs',
+      basePath: join(roots.workspaceRoot, 'graph-runs'),
+      writable: false,
+    },
+    'workflow-runs': {
+      label: 'Workflow Runs',
+      basePath: join(roots.workspaceRoot, 'workflow-runs'),
+      writable: false,
+    },
+    'runtime-config': {
+      label: 'Runtime Config',
+      basePath: stateSharedPath(roots.workspaceRoot, 'runtime-config'),
+      writable: false,
+    },
+    'tool-results': {
+      label: 'Tool Results',
+      basePath: stateSharedPath(roots.workspaceRoot, 'tool-results'),
       writable: false,
     },
     docs: {
@@ -449,7 +508,7 @@ function findAncestorsWithEntry(startDir: string, entry: string): string[] {
     dir = parent;
   }
 
-  return paths;
+  return paths.sort((a, b) => a.localeCompare(b));
 }
 
 function collectWorkspaceDirs(base: string, depth: number, collected: Set<string>): void {

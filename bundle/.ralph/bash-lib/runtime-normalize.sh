@@ -17,6 +17,18 @@ RALPH_RUNTIME_NORMALIZE_LOADED=1
 
 ralph_normalize_runtime_name() {
   local runtime="${1:-}"
+  # Fast path: already-canonical names need no subprocess round-trip. This helper is
+  # called thousands of times per sync, and the tr pipeline below forks three times.
+  case "$runtime" in
+    cursor|claude|codex|opencode|antigravity)
+      printf '%s' "$runtime"
+      return 0
+      ;;
+    agy)
+      printf '%s' "antigravity"
+      return 0
+      ;;
+  esac
   runtime="$(printf '%s' "$runtime" | tr '[:upper:]' '[:lower:]' | tr -d '\r\n')"
   case "$runtime" in
     agy)
@@ -43,12 +55,14 @@ ralph_runtime_is_supported() {
 }
 
 ralph_runtime_config_dirname() {
-  case "$(ralph_normalize_runtime_name "${1:-}")" in
+  local runtime
+  runtime="$(ralph_normalize_runtime_name "${1:-}")"
+  case "$runtime" in
     antigravity)
       printf '%s' ".agents"
       ;;
     *)
-      printf '%s' ".$(ralph_normalize_runtime_name "${1:-}")"
+      printf '%s' ".$runtime"
       ;;
   esac
 }

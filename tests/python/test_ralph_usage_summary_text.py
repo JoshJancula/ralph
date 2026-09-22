@@ -104,3 +104,41 @@ class TestAggregateByRuntimeModelUnsupportedFlag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCacheWriteCostShare(unittest.TestCase):
+    """Cache writes bill at ~1.25x and reads at ~0.1x, so the write premium is a
+    large share of cost while being a small share of tokens. A high share means
+    writes were never amortized (break-even is roughly two reads per write)."""
+
+    def test_price_weighting_not_token_counts(self) -> None:
+        # 100 writes at the 1h rate (200) vs 200 reads (20): a third of the
+        # tokens, 91% of cost.
+        self.assertEqual(usage_summary.cache_write_cost_share(200, 100, 0, 100), 91)
+
+    def test_five_minute_ttl_is_cheaper_than_one_hour(self) -> None:
+        five = usage_summary.cache_write_cost_share(200, 100, 100, 0)
+        hour = usage_summary.cache_write_cost_share(200, 100, 0, 100)
+        self.assertEqual(five, 86)
+        self.assertLess(five, hour)
+
+    def test_unreported_split_assumes_the_expensive_ttl(self) -> None:
+        # Measured Claude Code runs write entirely at the 1h TTL; defaulting to
+        # the cheaper rate would understate cost on the main runtime.
+        self.assertEqual(
+            usage_summary.cache_write_cost_share(200, 100),
+            usage_summary.cache_write_cost_share(200, 100, 0, 100),
+        )
+
+    def test_amortized_writes_are_a_small_share(self) -> None:
+        self.assertEqual(usage_summary.cache_write_cost_share(200000, 1000, 0, 1000), 9)
+
+    def test_no_cache_activity_is_zero_not_a_crash(self) -> None:
+        self.assertEqual(usage_summary.cache_write_cost_share(0, 0), 0)
+
+    def test_negative_and_garbage_inputs_are_clamped(self) -> None:
+        self.assertEqual(usage_summary.cache_write_cost_share(-5, -5), 0)
+        self.assertEqual(usage_summary.cache_write_cost_share(None, "x"), 0)
+
+    def test_token_renders_percent_and_is_greppable(self) -> None:
+        self.assertIn("write_cost=86%", usage_summary.color_write_cost_token(86))

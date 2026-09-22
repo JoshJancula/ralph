@@ -1,14 +1,14 @@
 # Ralph Savings Report
 
-Across 1 plan run, Ralph's tool-output optimizations netted **291,504 bytes** (~38,791 tokens) after stored-result readbacks.
+Across 1 plan run, Ralph's tool-output optimizations netted **6,490 bytes** (~2,287 tokens) after stored-result readbacks.
 
-Of the tool output Ralph inspected, it trimmed 19.2% before the AI read it (net of stored-result readbacks).
+Of the tool output Ralph inspected, it trimmed 19.8% before the AI read it (net of stored-result readbacks).
 
 Bytes are measured from actual output differences; token figures are estimated (some or all from a bytes/4-equivalent fallback where actual-text token data was unavailable -- see Data quality below). These are tool-output counterfactuals, not a discount off the billed session tokens below. All Ralph token figures are estimates, never provider-measured billed tokens.
 
 > **Generated file -- do not hand-edit.** Regenerate via `ralph benchmark --write-doc`.
 
-Ralph recorded 240 optimization events across 3,681 tool calls; optimization events are not unique-call coverage.
+Ralph recorded 24 optimization events across 1,599 tool calls; optimization events are not unique-call coverage.
 
 ## Session usage
 
@@ -16,14 +16,14 @@ Actual billed token usage from the session:
 
 | Metric | Count |
 | --- | --- |
-| Input tokens | 7,219,796 |
-| Output tokens | 1,484,644 |
-| Cache creation input tokens | 4,480,982 |
-| Cache read input tokens | 233,370,621 |
-| Prompt bytes | 1,153,352 |
-| Tool calls total | 3,681 |
+| Input tokens | 2,118,868 |
+| Output tokens | 653,096 |
+| Cache creation input tokens | 911,797 |
+| Cache read input tokens | 75,123,455 |
+| Prompt bytes | 195,188 |
+| Tool calls total | 1,599 |
 
-Context reuse: **233,370,621** cache-read tokens (hit ratio **95.2%**). Cache reuse is not counted as savings above.
+Context reuse: **75,123,455** cache-read tokens (hit ratio **96.1%**). Cache reuse is not counted as savings above.
 
 ## Tool output: with vs without Ralph
 
@@ -31,14 +31,14 @@ Estimated tool-output bytes/tokens that would have reached the model with vs wit
 
 | Metric | Bytes | Tokens |
 | --- | --- | --- |
-| Hypothetical without Ralph | 1,520,108 | 499,267 |
-| Actual with Ralph | 1,228,604 | 460,476 |
-| Net savings | 291,504 | 38,791 |
-| Net savings rate | 19.2% | - |
+| Hypothetical without Ralph | 32,768 | 12,102 |
+| Actual with Ralph | 26,278 | 9,815 |
+| Net savings | 6,490 | 2,287 |
+| Net savings rate | 19.8% | - |
 
 ## Unverified historical estimate
 
-A further **563,868 bytes** (~233,854 tokens) across 86 event(s) were recorded by legacy telemetry that predates the inline-candidate baseline. **These are excluded from the savings figures above and should not be quoted.**
+A further **10,063 bytes** (~4,966 tokens) across 20 event(s) were recorded by legacy telemetry that predates the inline-candidate baseline. **These are excluded from the savings figures above and should not be quoted.**
 
 Legacy records measure savings against the full stored source rather than against what would actually have been inlined. Tool-level limits (grep's `head_limit`, read's `maxReadBytes`, the result byte caps) would have trimmed most of that source before the model ever saw it, so crediting all of it as "saved" systematically overstates the benefit. The true baseline is not recoverable from these records -- which is why the v2 measurement exists. The number is shown to make the gap visible, not to be added to the headline.
 
@@ -46,35 +46,23 @@ Legacy records measure savings against the full stored source rather than agains
 
 | Runtime | Channel | Status | Reasons |
 | --- | --- | --- | --- |
-| codex | bash_compact | enabled | runtime_cannot_mutate_output |
-| codex | bash_rewrite | disabled | gate_disabled |
-| codex | native_result_compact | enabled | runtime_cannot_mutate_output |
-| codex | proxy_shell_compact | enabled | proven_channel:explicit_env |
+| claude | auto_background | enabled | proven_channel:mode_default |
+| claude | bash_compact | enabled | proven_channel:explicit_env |
+| claude | bash_rewrite | disabled | gate_disabled |
+| claude | native_result_compact | disabled | gate_disabled |
+| claude | proxy_shell_compact | enabled | proven_channel:explicit_env |
+| cursor | auto_background | enabled | channel_unsupported_on_runtime |
 | cursor | bash_compact | enabled | runtime_cannot_mutate_output |
 | cursor | bash_rewrite | disabled | gate_disabled |
-| cursor | native_result_compact | enabled | runtime_cannot_mutate_output |
+| cursor | native_result_compact | disabled | gate_disabled |
 | cursor | proxy_shell_compact | enabled | proven_channel:explicit_env |
 
 ## Result windowing by source tool
 
 | Tool | Events | Inline candidate bytes | Delivered bytes | Net consumed bytes | Net saved bytes | Source-capped | Quality |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| bash | 86 | 857,688 | 233,958 | 293,820 | 563,868 | 0 | legacy |
-| ralph_proxy_glob | 4 | 36,961 | 41,665 | 41,665 | -4,704 | 0 | v2 |
-| ralph_proxy_grep | 70 | 667,354 | 676,043 | 676,043 | -8,689 | 1 | v2 |
-| ralph_proxy_read | 30 | 294,176 | 298,275 | 322,031 | -27,855 | 0 | v2 |
-
-## Source-capped search operations
-
-**1** source search(es) stopped early after hitting a source cap; **258,997** bytes were captured/stored across them.
-
-| Cap reason | Count |
-| --- | --- |
-| byte_cap | 1 |
-
-Configured byte-cap limit(s) observed: 262,144.
-
-Uncaptured/avoided source bytes beyond these caps are unknown -- collection stopped early -- and are not added to any token/context savings figure above.
+| bash | 20 | 13,840 | 3,777 | 3,777 | 10,063 | 0 | legacy |
+| ralph_proxy_shell | 4 | 32,768 | 26,278 | 26,278 | 6,490 | 0 | v2 |
 
 ## Data quality
 
@@ -88,10 +76,7 @@ Exact channel attribution shows where tool-output savings came from. Gross readb
 
 | Channel | Attribution | Saved bytes | Saved tokens | Gross readback | Net consumed |
 | --- | --- | --- | --- | --- | --- |
-| Native shell hook compaction | exact | 550,916 | 226,452 | 59,862 | 293,820 |
-| Proxy shell compaction | exact | 444,337 | 111,085 | - | - |
-| Proxy read windowing | exact | 28,944 | 8,107 | 23,756 | 322,031 |
-| Proxy search windowing | exact | 78,735 | 28,520 | - | 676,043 |
+| Native shell hook compaction | exact | 8,257 | 4,077 | - | 3,777 |
 
 ### Legacy / unknown attribution
 
@@ -99,32 +84,32 @@ Historical runs without channel metadata are grouped here. Treat these totals as
 
 | Channel | Attribution | Saved bytes | Saved tokens | Gross readback | Net consumed |
 | --- | --- | --- | --- | --- | --- |
-| Stored result readback | legacy (unknown) | - | - | - | 41,665 |
+| Stored result readback | legacy (unknown) | 5,290 | 1,697 | - | 26,278 |
 
 ## Per run
 
 | Run | Date | Gross trim % | Net savings % | Without Ralph bytes | With Ralph bytes |
 | --- | --- | --- | --- | --- | --- |
-| PLAN2.plan | 2026-07-13T17:40:36Z to 2026-07-14T23:14:59Z | 36.0% | 19.2% | 1,520,108 | 1,228,604 |
+| PLAN18.plan | 2026-09-14T19:21:48Z to 2026-09-14T22:38:06Z | 35.5% | 19.8% | 32,768 | 26,278 |
 
 ## Stored result follow-ups
 
 Result windowing sends a compact preview; follow-up reads add bytes back. Effective windowing savings rate is the decision-grade net signal after capping readbacks at the original envelope size.
 
-- Envelopes: **190**; readbacks: **19** (compacted **4**, raw **15**). Full preview re-reads: **6**.
-- Gross follow-up reads: **121,613 bytes** (~45,168 tokens); net consumed: **1,333,559 bytes** (~526,798 tokens).
-- Effective windowing savings rate: **28.2%** of original envelope bytes (net of capped readbacks).
-- Raw readback share: **79.0%** of follow-up reads; diagnostic gross negation rate: **6.6%** of envelope original bytes.
+- Envelopes: **24**; readbacks: **0** (compacted **0**, raw **0**). Full preview re-reads: **0**.
+- Gross follow-up reads: **0 bytes** (~0 tokens); net consumed: **30,055 bytes** (~11,354 tokens).
+- Effective windowing savings rate: **35.5%** of original envelope bytes (net of capped readbacks).
 
 ## Improvement opportunities
 
-Guidance sourced from the most recent eligible run: `PLAN2.plan` at 2026-07-14T23:14:59Z.
+Guidance sourced from the most recent eligible run: `PLAN18.plan` at 2026-09-14T22:38:06Z.
 
 Usage pattern opportunities:
 - `native_read_after_grep`: Native read immediately after grep in tool_calls_sequence
 - `repeated_native_read_like`: Consecutive native read/search tool calls in tool_calls_sequence
 
-Stored result usage: 6 full stored-result reread(s); 15 raw result_read follow-up(s); treat inline preview as sufficient, use result_search or compacted byte ranges before view=raw; avoid full preview re-reads
+Native read findings:
+- `heavy_native_read_vs_proxy`: 92.0% of read-like calls were native reads.
 
 ## How to read this
 
@@ -136,4 +121,4 @@ Stored result usage: 6 full stored-result reread(s); 15 raw result_read follow-u
 - **Why savings are low** prints root causes only when the net savings rate is near 0%: inactive paths, readback-negated windowing, or compaction measured but not applied.
 - This report does not measure end-to-end wall-clock speedup.
 
-Date range: 2026-07-13T17:40:36Z to 2026-07-14T23:14:59Z.
+Date range: 2026-09-14T19:21:48Z to 2026-09-14T22:38:06Z.

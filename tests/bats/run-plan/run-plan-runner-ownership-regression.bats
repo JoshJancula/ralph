@@ -134,7 +134,7 @@ AGENT
   [ "$(grep -c '^    status: completed$' "$plan_file")" -eq 1 ]
   [[ "$output" == *"Verification passed"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner-owned verify: command fails and reopens TODO" {
@@ -185,7 +185,7 @@ AGENT
   ! grep -Fq 'status: completed' "$plan_file"
   [[ "$output" == *"Post-verification failed"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner-owned verify: timeout kills hanging command and reopens TODO" {
@@ -223,7 +223,7 @@ AGENT
 
   [[ "$output" == *"timed out"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner-owned verify: invalid prose command is not executed as shell" {
@@ -258,7 +258,7 @@ EOF
   [[ "$output" != *"syntax error"* ]]
   [[ "$output" != *"exit=2"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 # ---------- 2. Compact artifact retrieval (tested in Python unit tests) ----------
@@ -266,6 +266,78 @@ EOF
 # and telemetry tests covering compact artifact paths.
 
 # ---------- 3. Absence of agent-driven polling loops ----------
+
+@test "cost model prompt guidance forbids polling and prefers verify then blocking call" {
+  run bash -c '
+    set -euo pipefail
+    export RALPH_RUN_PLAN_LIBRARY_ONLY=1
+    # shellcheck disable=SC1090
+    source "$1"
+    ralph_mode_prompt_guidance_cost_model
+  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verify:"* ]]
+  [[ "$output" == *"one blocking call"* ]]
+  [[ "$output" == *"Agent-authored polling loops are forbidden"* ]]
+  [[ "$output" == *"while grep -c"* ]]
+  [[ "$output" == *"waitSeconds"* ]]
+  [[ "$output" == *"600"* ]]
+  [[ "$output" == *"manual human-monitoring fallback"* ]]
+}
+
+@test "background prompt guidance is emitted only when RALPH_BG_JOBS=1" {
+  run bash -c '
+    set -euo pipefail
+    export RALPH_RUN_PLAN_LIBRARY_ONLY=1
+    # shellcheck disable=SC1090
+    source "$1"
+    RALPH_BG_JOBS=0 ralph_mode_prompt_guidance_background
+    printf '%s\n' '---'
+    RALPH_BG_JOBS=1 ralph_mode_prompt_guidance_background
+  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  [ "$status" -eq 0 ]
+  local off_block on_block
+  off_block="${output%%---*}"
+  on_block="${output#*---}"
+  [[ -z "${off_block//[$'\n' ]/}" ]]
+  [[ "$on_block" == *"Background jobs"* ]]
+  [[ "$on_block" == *"ralph-bg.sh"* ]]
+  [[ "$on_block" == *"do not redo the TODO from scratch"* ]]
+  [[ "$on_block" != *"PASSWORD="* ]]
+}
+
+@test "default fresh prompt forbids poll loops and steers waitSeconds near 600" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local workspace plan_file bin_dir session_home cursor_record prompt_content
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  cursor_record="$workspace/cursor.args"
+  mkdir -p "$bin_dir" "$session_home"
+  setup_stub_run_plan_support "$workspace"
+
+  plan_file="$workspace/PLAN.md"
+  cat > "$plan_file" <<'EOF'
+# Prompt cost-model regression
+- [ ] finish without agent polling
+EOF
+
+  setup_prompt_capture_stub "$bin_dir" "$cursor_record"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home"
+
+  # Prompt capture is the contract under test. Overlay teardown can be SIGTERM'd
+  # when bats runs inside a live plan guardian; still require a captured prompt.
+  [ -s "$cursor_record" ]
+  prompt_content="$(cat "$cursor_record")"
+  [[ "$prompt_content" == *"polling loops are forbidden"* ]] || [[ "$prompt_content" == *"Agent-authored polling"* ]]
+  [[ "$prompt_content" == *"waitSeconds"* ]]
+  [[ "$prompt_content" == *"600"* ]]
+  [[ "$prompt_content" == *"Cost model"* ]] || [[ "$prompt_content" == *"verify:"* ]]
+
+  ralph_test_rm_workspace "$workspace"
+}
 
 @test "default runner-owned prompt steers toward runner-owned verification" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
@@ -295,7 +367,7 @@ EOF
   [[ "$prompt_content" == *"runner"* ]]
   [[ "$prompt_content" == *"shell_wait"* ]] || [[ "$prompt_content" == *"Verification"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "default runner-owned prompt does not instruct agent to edit the plan" {
@@ -325,7 +397,7 @@ EOF
   ! grep -Fq "change \`- [ ]\` to \`- [x]\` on that line" "$cursor_record"
   ! grep -Fq "mark the checkbox" "$cursor_record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "prompt with verification metadata includes completion helper request and verification verdict" {
@@ -363,7 +435,7 @@ EOF
   grep -Fq "TODO_VERIFICATION: FAIL:" "$cursor_record"
   grep -Fq "TODO_VERIFICATION: SKIPPED" "$cursor_record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification failure reopens TODO and signals failure" {
@@ -413,7 +485,54 @@ AGENT
   ! grep -Fq 'status: completed' "$plan_file"
   [[ "$output" == *"Post-verification failed"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
+}
+
+@test "post-verification failure artifact honors an external state root" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
+
+  local workspace plan_file bin_dir session_home state_root
+  workspace="$(mktemp -d)"
+  bin_dir="$workspace/bin"
+  session_home="$workspace/.sessions"
+  state_root="$workspace-external-state"
+  mkdir -p "$bin_dir" "$session_home" "$state_root"
+  setup_stub_run_plan_support "$workspace"
+
+  cat >"$workspace/verify.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+printf 'FAIL: external state root regression\n'
+exit 1
+SCRIPT
+  chmod +x "$workspace/verify.sh"
+  plan_file="$workspace/VERIFY-EXTERNAL-ROOT.plan.md"
+  cat >"$plan_file" <<'PLAN'
+---
+todos:
+  - id: verify-external-root
+    content: Exercise the external verification artifact root
+    verify: bash verify.sh
+    status: pending
+---
+PLAN
+  cat >"$bin_dir/cursor-agent" <<'AGENT'
+#!/usr/bin/env bash
+printf '%s\n' "AGENT_INVOCATION_COMPLETE"
+exit 0
+AGENT
+  chmod +x "$bin_dir/cursor-agent"
+
+  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
+    RALPH_PLAN_WORKSPACE_ROOT="$state_root" \
+    RALPH_PLAN_KEY=verify-external-root \
+    CURSOR_PLAN_MAX_ITER=2 \
+    CURSOR_PLAN_GUTTER_ITER=1
+
+  [ "$status" -ne 0 ]
+  [ "$(find "$state_root/artifacts/verify-external-root/verification" -type f | wc -l | tr -d ' ')" -ge 1 ]
+  [ ! -e "$workspace/.ralph-workspace/artifacts/verify-external-root/verification" ]
+  rm -rf "$workspace" "$state_root"
 }
 
 @test "agent TODO_VERIFICATION: FAIL reopens the TODO without running verify command" {
@@ -454,7 +573,7 @@ AGENT
   ! grep -Fq 'status: completed' "$plan_file"
   [[ "$output" != *"Running verification checks now"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "agent TODO_VERIFICATION: PASS marks TODO complete without running verify command" {
@@ -500,7 +619,7 @@ AGENT
   [ "$status" -eq 0 ]
   [ "$(grep -c '^    status: completed$' "$plan_file")" -eq 1 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "structured completion footer with VERIFICATION STATUS: PASS is accepted" {
@@ -538,7 +657,7 @@ AGENT
   [ "$status" -eq 0 ]
   [ "$(grep -c '^    status: completed$' "$plan_file")" -eq 1 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner stdin isolation prevents verification command from blocking" {
@@ -573,5 +692,5 @@ AGENT
   [[ "$output" == *"Running verification checks now"* ]]
   grep -Fq -- "- [x] task whose verification reads stdin" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

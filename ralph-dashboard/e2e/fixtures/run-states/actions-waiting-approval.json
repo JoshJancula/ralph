@@ -1,0 +1,11 @@
+[
+  {
+    "requestId": "req-approve-1",
+    "kind": "approval",
+    "stageId": "human-gate",
+    "question": "Approve the generated implementation plan for widget rollout?",
+    "status": "outstanding",
+    "choices": ["approve", "request-changes", "cancel"],
+    "createdAt": "2026-09-14T10:02:00Z"
+  }
+]

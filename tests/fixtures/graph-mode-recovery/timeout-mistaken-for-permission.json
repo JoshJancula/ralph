@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "category": "timeout-mistaken-for-permission",
+  "summary": "Operator requests generated for implement-cli-bootstrap and unify-killswitch-core in the two newest runs are classified operator-permission with choices allow-once/allow-run/allow-always/deny, but the stated reason is 'stage terminated before completion', which describes a stage timeout, not an operator permission decision the operator can meaningfully grant or deny.",
+  "affectedAttempts": [
+    "implement-cli-bootstrap__run-20260814T162017Z-0-L23fPN__1",
+    "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__1",
+    "implement-cli-bootstrap__run-20260815T021145Z-0-udoZs5__2",
+    "unify-killswitch-core__run-20260815T021145Z-0-udoZs5__1"
+  ],
+  "requestRecord": {
+    "classification": "operator-permission",
+    "action": "permission",
+    "resource": "permission",
+    "effect": "write",
+    "reason": "stage terminated before completion",
+    "choices": ["allow-once", "allow-run", "allow-always", "deny"]
+  },
+  "sourceFiles": [
+    "operator/requests/op-implement-cli-bootstrap-1.json",
+    "operator/requests/op-implement-cli-bootstrap-2.json",
+    "operator/requests/op-unify-killswitch-core-1.json"
+  ],
+  "operatorImpact": "An operator sees a permission prompt with allow/deny choices for an event that is actually a stage timeout or unexpected process exit. Granting allow-once does not address the underlying timeout, so the same request reappears (see repeated-allow-once-request.json), and denying does not correctly label the failure as a timeout for retry/backoff handling."
+}

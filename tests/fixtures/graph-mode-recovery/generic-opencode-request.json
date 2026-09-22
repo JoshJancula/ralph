@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "category": "generic-opencode-request",
+  "summary": "The opencode runtime's permission prompt for implement-cli-bootstrap names only a raw capability and glob (external_directory ~/.local/bin/*), with no reference to the node, the plan step, or the write scope it collides with, and is auto-rejected without giving the operator a chance to answer before the node fails.",
+  "affectedAttempts": [
+    "implement-cli-bootstrap__run-20260812T020611Z-0-Bnsvuc__1"
+  ],
+  "rawPromptLine": "permission requested: external_directory (<REDACTED_HOME>/.local/bin/*); auto-rejecting",
+  "sourceLog": ".ralph-workspace/logs/ralph-plugin-beta-graph/nodes/implement-cli-bootstrap/plan-runner-ralph-plugin-beta-graph-18-implement-cli-bootstrap.plan-output.log",
+  "missingContext": [
+    "nodeId",
+    "attemptId",
+    "declared writeScopes for comparison",
+    "which tool call triggered the request",
+    "why it was auto-rejected instead of surfaced to the operator queue"
+  ],
+  "operatorImpact": "The message is generic enough to apply to any opencode run touching any directory outside the workspace; it gives no actionable next step (for example, widen the write scope, or confirm the path is intentional) and is auto-rejected rather than routed to operator/requests/, so the operator never even gets a chance to decide."
+}

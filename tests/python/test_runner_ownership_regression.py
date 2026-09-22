@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -419,6 +420,63 @@ class TestNoAgentDrivenPollingLoops(unittest.TestCase):
 
     def test_completion_sentinel_in_prose_does_not_match(self) -> None:
         self.assertFalse(text_has_completion_sentinel("Docs mention AGENT_INVOCATION_COMPLETE in passing."))
+
+
+
+class TestProcessOwnershipPredicates(unittest.TestCase):
+    """Process-supervisor ownership never trusts PID alone."""
+
+    def test_pid_matches_requires_identity(self) -> None:
+        import ralph_process_supervisor as supervisor
+
+        identity = "proc-start:current"
+        pid = os.getpid()
+        # Some locked-down macOS runners prohibit process-table inspection.
+        # Exercise the ownership predicate with controlled liveness/identity
+        # evidence instead of treating that host restriction as a product bug.
+        with (
+            mock.patch.object(supervisor, "pid_identity", return_value=identity),
+            mock.patch.object(supervisor, "pid_alive", return_value=True),
+        ):
+            self.assertTrue(supervisor.pid_matches(pid, identity))
+            self.assertFalse(supervisor.pid_matches(pid, ""))
+            self.assertFalse(supervisor.pid_matches(pid, "wrong-start-id"))
+            self.assertFalse(supervisor.pid_matches(0, identity))
+            self.assertFalse(supervisor.pid_matches(-1, identity))
+
+    def test_pid_matches_rejects_reused_pid_with_foreign_identity(self) -> None:
+        import ralph_process_supervisor as supervisor
+
+        # Live PID with a fabricated prior start id must not match.
+        with (
+            mock.patch.object(supervisor, "pid_identity", return_value="proc-start:current"),
+            mock.patch.object(supervisor, "pid_alive", return_value=True),
+        ):
+            self.assertFalse(supervisor.pid_matches(os.getpid(), "proc-start:not-this-process"))
+
+    def test_ownership_proof_serialization_never_claims_pid_alone(self) -> None:
+        import ralph_process_supervisor as supervisor
+
+        pid = os.getpid()
+        identity = "proc-start:current"
+        with (
+            mock.patch.object(supervisor, "pid_identity", return_value=identity),
+            mock.patch.object(supervisor, "pid_alive", return_value=True),
+        ):
+            empty = supervisor.ownership_proof(pid, "")
+            self.assertEqual(empty["pid"], pid)
+            self.assertIsNone(empty["identity"])
+            self.assertFalse(empty["matches"])
+            self.assertTrue(empty["alive"])
+
+            good = supervisor.ownership_proof(pid, identity)
+        self.assertTrue(good["matches"])
+        self.assertEqual(good["identity"], good["current_identity"])
+        # Stable JSON shape for adapters / audit.
+        encoded = json.dumps(good, sort_keys=True)
+        decoded = json.loads(encoded)
+        self.assertEqual(decoded["matches"], True)
+        self.assertEqual(decoded["pid"], pid)
 
 
 if __name__ == "__main__":

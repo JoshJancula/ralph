@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "category": "exact-scope-mismatch",
+  "summary": "The opencode implement-cli-bootstrap node declared writeScopes limited to bundle/.ralph/bash-lib/plugin-bootstrap/** and tests/bats/plugin/bootstrap/**, but the agent attempted to install a real CLI wrapper into an unscoped path outside the workspace, tripping an external_directory permission check that the operator-facing log never explains in scope terms.",
+  "affectedAttempts": [
+    "implement-cli-bootstrap__run-20260812T020611Z-0-Bnsvuc__1"
+  ],
+  "declaredWriteScopes": [
+    "bundle/.ralph/bash-lib/plugin-bootstrap/**",
+    "tests/bats/plugin/bootstrap/**"
+  ],
+  "requestedPath": "<REDACTED_HOME>/.local/bin/*",
+  "rawLogLine": "permission requested: external_directory (<REDACTED_HOME>/.local/bin/*); auto-rejecting",
+  "sourceLog": ".ralph-workspace/logs/ralph-plugin-beta-graph/nodes/implement-cli-bootstrap/plan-runner-ralph-plugin-beta-graph-18-implement-cli-bootstrap.plan-output.log",
+  "operatorImpact": "The rejection message names a raw filesystem glob (external_directory ~/.local/bin/*) instead of stating that the target path falls outside the node's two declared writeScopes. An operator cannot tell from the message alone whether this is a legitimate scope violation or an unrelated permission denial, and the node was still recorded with a generic reason=outcome=failed rather than a scope-mismatch classification."
+}

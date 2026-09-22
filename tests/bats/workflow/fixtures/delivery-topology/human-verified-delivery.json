@@ -1,0 +1,67 @@
+{
+  "publishMode": "on-verified",
+  "stages": [
+    {
+      "id": "approve-plan",
+      "dependsOn": [
+        "plan-implementation"
+      ]
+    },
+    {
+      "id": "approve-result",
+      "dependsOn": [
+        "qa-gate",
+        "integrate",
+        "review-approved"
+      ]
+    },
+    {
+      "id": "implement",
+      "dependsOn": [
+        "approve-plan",
+        "plan-implementation"
+      ]
+    },
+    {
+      "id": "integrate",
+      "dependsOn": [
+        "review-approved",
+        "review"
+      ]
+    },
+    {
+      "id": "investigate",
+      "dependsOn": []
+    },
+    {
+      "id": "plan-implementation",
+      "dependsOn": [
+        "investigate"
+      ]
+    },
+    {
+      "id": "plan-qa",
+      "dependsOn": [
+        "integrate"
+      ]
+    },
+    {
+      "id": "qa",
+      "dependsOn": [
+        "plan-qa"
+      ]
+    },
+    {
+      "id": "qa-gate",
+      "dependsOn": [
+        "qa"
+      ]
+    },
+    {
+      "id": "review",
+      "dependsOn": [
+        "implement"
+      ]
+    }
+  ]
+}

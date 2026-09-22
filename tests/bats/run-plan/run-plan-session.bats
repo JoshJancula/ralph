@@ -55,6 +55,7 @@ setup() {
   sed -n '/^ralph_try_consume_human_response()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   sed -n '/^ralph_operator_response_file_owned_by_current_user()/,/^}/p' "$run_plan_core_lib" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
   printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh" >> "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE"
 }
 
 teardown() {
@@ -114,11 +115,351 @@ create_shared_layout() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"How should Codex handle sessions between TODOs?"* ]]
-  [[ "$output" == *"reuse session id with a compact command prefix before each TODO"* ]]
+  [[ "$output" == *"reuse session id and run a standalone compact turn before each TODO"* ]]
   [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset compact"* ]]
+  [[ "$(cat "$menu_file")" != *"resume previous run"* ]]
   [[ "$output" == *"STATE=compact:1"* ]]
 
   rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume adds resume previous run when exact sessions exist" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.codex.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+  mkdir -p "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' \
+    >"$tmp_dir/state/logs/picker-plan/runs/run-old/run-manifest.json"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    export RALPH_PLAN_WORKSPACE_ROOT="$4"
+    export RALPH_PLAN_KEY=picker-plan
+    export PLAN_PATH="$5"
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=codex
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "compact"
+    }
+    ralph_session_prompt_cli_resume
+  ' _ "$session_lib" "$session_file" "$menu_file" "$tmp_dir/state" "$tmp_dir/plan.md"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"resume previous run"* ]]
+  [[ "$output" == *"resume previous run"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "prior run resume summary requires a matching recorded runtime" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib
+  tmp_dir="$(mktemp -d)"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions" "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+
+  _prior_summary() {
+    local runtime_field="$1"
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      export RALPH_PLAN_WORKSPACE_ROOT="$2"
+      export RALPH_PLAN_KEY=picker-plan
+      export PLAN_PATH="$3"
+      RUNTIME=codex
+      if [[ -n "$4" ]]; then
+        printf "%s\n" "$4" >"$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      else
+        rm -f "$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      fi
+      if ralph_session_prior_run_resume_summary; then
+        printf "SHOWN\n"
+      else
+        printf "HIDDEN\n"
+      fi
+    ' _ "$session_lib" "$tmp_dir/state" "$tmp_dir/plan.md" "$runtime_field"
+  }
+
+  _prior_summary '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SHOWN"* ]]
+  [[ "$output" == *"exact sessions"* ]]
+
+  _prior_summary '{"status":"complete","runtime":"claude","model":"other","ralph_mode":"no"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HIDDEN"* ]]
+  [[ "$output" != *"exact sessions"* ]]
+
+  _prior_summary '{"status":"complete","model":"legacy"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HIDDEN"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "resume previous run restores prior model and mode unless overridden" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib
+  tmp_dir="$(mktemp -d)"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions" "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+
+  _resume_prev() {
+    local manifest_json="$1" preset_mode="$2" preset_model="$3"
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+      export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+      export RALPH_PLAN_WORKSPACE_ROOT="$2"
+      export RALPH_PLAN_KEY=picker-plan
+      export PLAN_PATH="$3"
+      NON_INTERACTIVE_FLAG=0
+      RUNTIME=codex
+      SESSION_ID_FILE="$2/session-id.codex.txt"
+      C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+      printf "%s\n" "$4" >"$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      if [[ -n "$5" ]]; then RALPH_MODE="$5"; export RALPH_MODE; else unset RALPH_MODE; fi
+      if [[ -n "$6" ]]; then PLAN_MODEL_CLI="$6"; _plan_model_from_cli="$6"; export PLAN_MODEL_CLI; else unset PLAN_MODEL_CLI; _plan_model_from_cli=""; fi
+      ralph_menu_select() { printf "%s" "resume previous run"; }
+      ralph_run_plan_log() { printf "LOG %s\n" "$*"; }
+      ralph_session_prompt_cli_resume
+      printf "MODE=%s\n" "${RALPH_MODE-unset}"
+      printf "MODEL=%s\n" "${PLAN_MODEL_CLI-unset}"
+      printf "RESUME=%s\n" "${RALPH_PLAN_RESUME_RUN-unset}"
+    ' _ "$session_lib" "$tmp_dir/state" "$tmp_dir/plan.md" "$manifest_json" "$preset_mode" "$preset_model"
+  }
+
+  _resume_prev '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=hybrid"* ]]
+  [[ "$output" == *"MODEL=prior-model"* ]]
+  [[ "$output" == *"RESUME=last"* ]]
+  [[ "$output" == *"restored RALPH_MODE=hybrid"* ]]
+  [[ "$output" == *"restored model=prior-model"* ]]
+
+  _resume_prev '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' "no" "explicit-model"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=no"* ]]
+  [[ "$output" == *"MODEL=explicit-model"* ]]
+  [[ "$output" != *"restored RALPH_MODE"* ]]
+  [[ "$output" != *"restored model"* ]]
+
+  _resume_prev '{"status":"complete","runtime":"codex"}' "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=unset"* ]]
+  [[ "$output" == *"MODEL=unset"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume omits compact option for cursor" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.cursor.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=cursor
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "fresh"
+    }
+    ralph_session_prompt_cli_resume
+  ' _ "$session_lib" "$session_file" "$menu_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset"* ]]
+  [[ "$(cat "$menu_file")" != *"compact"* ]]
+  [[ "$output" != *"reuse session id and run a standalone compact turn before each TODO"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume exposes compact option for claude" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.claude.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=claude
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "compact"
+    }
+    ralph_session_prompt_cli_resume
+    printf "STATE=%s:%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}" "${RALPH_PLAN_CLI_RESUME:-unset}"
+  ' _ "$session_lib" "$session_file" "$menu_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset compact"* ]]
+  [[ "$output" == *"How should Claude Code handle sessions between TODOs?"* ]]
+  [[ "$output" == *"STATE=compact:1"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "explicit non-interactive compact is rejected for runtimes that cannot compact" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local session_lib err_lib runtime
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  err_lib="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
+
+  for runtime in cursor opencode antigravity; do
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      source "$2"
+      RUNTIME="$3"
+      RALPH_PLAN_SESSION_STRATEGY=compact
+      SESSION_STRATEGY_FLAG=compact
+      ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+    ' _ "$err_lib" "$session_lib" "$runtime"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$runtime"* ]]
+    [[ "$output" == *"does not support the compact session strategy"* ]]
+  done
+
+  for runtime in claude codex; do
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      source "$2"
+      RUNTIME="$3"
+      RALPH_PLAN_SESSION_STRATEGY=compact
+      SESSION_STRATEGY_FLAG=compact
+      ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+      printf "allowed\n"
+    ' _ "$err_lib" "$session_lib" "$runtime"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"allowed"* ]]
+  done
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=compact
+    SESSION_STRATEGY_FLAG=""
+    RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=1
+    ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+  ' _ "$err_lib" "$session_lib"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cursor"* ]]
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=compact
+    SESSION_STRATEGY_FLAG=""
+    RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=0
+    ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+    printf "not-explicit\n"
+  ' _ "$err_lib" "$session_lib"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not-explicit"* ]]
+}
+
+@test "per-TODO compact sessionStrategy on cursor falls back to fresh" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  cat >"$plan_file" <<'EOF'
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: alpha
+      runtime: cursor
+todos:
+  - id: first
+    stage: alpha
+    runtime: cursor
+    sessionStrategy: compact
+    status: open
+    content: Compact override on cursor
+---
+EOF
+
+  run bash -c '
+    set -euo pipefail
+    source "$1/bundle/.ralph/bash-lib/plan-todo.sh"
+    source "$1/bundle/.ralph/bash-lib/run-plan/run-plan-routing.sh"
+    ralph_run_plan_routing_resolve_current_context() { :; }
+    ralph_run_plan_routing_set_session_context() { :; }
+    ralph_run_plan_log() { printf "%s\n" "$*"; }
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=fresh
+    ralph_run_plan_routing_capture_baseline
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 1 first first
+    printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+  ' _ "$REPO_ROOT" "$plan_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rejected compact sessionStrategy for runtime cursor"* ]]
+  [[ "$output" == *"STRATEGY=fresh"* ]]
+
+  rm -f "$plan_file"
 }
 
 @test "ralph_write_human_action_file renders the template with pending question and history" {
@@ -241,8 +582,10 @@ create_shared_layout() {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
 
-  local tmp_dir pending human_context operator_response human_request log_file
+  local tmp_dir pending human_context operator_response human_request log_file session_dir
   tmp_dir="$(mktemp -d)"
+  session_dir="$tmp_dir/session"
+  mkdir -p "$session_dir/continuations"
   pending="$tmp_dir/pending-human.txt"
   printf 'how should we proceed?\n' >"$pending"
   human_request="$tmp_dir/human-request.json"
@@ -283,6 +626,13 @@ EOF
     set -euo pipefail
     printf() { builtin printf -- "$@"; }
     source "$1"
+    export RALPH_SESSION_DIR="$7"
+    export RALPH_PLAN_KEY="guidance-test"
+    export RUNTIME="cursor"
+    export RALPH_CURRENT_TODO_LINE="12"
+    export RALPH_CURRENT_TODO_ORDINAL="1"
+    export RALPH_CURRENT_TODO_ID="guidance-test-todo"
+    export RALPH_CURRENT_TODO_HASH="hash-guidance"
     HUMAN_CONTEXT="$2"
     PENDING_HUMAN="$3"
     HUMAN_REQUEST_FILE="$4"
@@ -294,7 +644,8 @@ EOF
     ralph_try_consume_human_response
     printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
     printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
-  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$log_file"
+    printf "CONT=%s\n" "$(ls -1 "$RALPH_SESSION_DIR/continuations"/human-answer-*.json 2>/dev/null | wc -l | tr -d " ")"
+  ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$log_file" "$session_dir"
 
   [ "$status" -eq 0 ]
   run_output="$output"
@@ -304,8 +655,8 @@ EOF
   content="$(<"$human_context")"
   [[ "$content" == *"how should we proceed?"* ]]
   [[ "$content" == *"yes, please continue"* ]]
-  [[ "$run_output" == *"RESUME=1"* ]]
-  [[ "$run_output" == *"STRATEGY=resume"* ]]
+  [[ "$run_output" == *"CONT=1"* ]]
+  [[ "$run_output" != *"STRATEGY=resume"* ]]
   grep -q "Applied guidance answer from operator-response.txt; continuing plan run" "$log_file"
 
   rm -rf "$tmp_dir"
@@ -319,7 +670,7 @@ EOF
   local session_dir
   tmp_dir="$(mktemp -d)"
   session_dir="$tmp_dir/session"
-  mkdir -p "$session_dir"
+  mkdir -p "$session_dir/continuations"
   pending="$tmp_dir/pending-human.txt"
   printf 'permission required\n' >"$pending"
   human_request="$tmp_dir/human-request.json"
@@ -360,11 +711,17 @@ EOF
   run bash -c '
     set -euo pipefail
     source "$1"
+    export RALPH_SESSION_DIR="$6"
+    export RALPH_PLAN_KEY="permission-test"
+    export RUNTIME="opencode"
+    export RALPH_CURRENT_TODO_LINE="14"
+    export RALPH_CURRENT_TODO_ORDINAL="1"
+    export RALPH_CURRENT_TODO_ID="permission-test-todo"
+    export RALPH_CURRENT_TODO_HASH="hash-permission"
     HUMAN_CONTEXT="$2"
     PENDING_HUMAN="$3"
     HUMAN_REQUEST_FILE="$4"
     OPERATOR_RESPONSE_FILE="$5"
-    RALPH_SESSION_DIR="$6"
     LOG_FILE="$7"
     C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
     log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
@@ -372,6 +729,7 @@ EOF
     ralph_try_consume_human_response
     printf "RESUME=%s\n" "${RALPH_PLAN_CLI_RESUME:-unset}"
     printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+    printf "CONT=%s\n" "$(ls -1 "$RALPH_SESSION_DIR/continuations"/human-answer-*.json 2>/dev/null | wc -l | tr -d " ")"
     printf "OVERLAY=%s\n" "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-unset}"
   ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$session_dir" "$log_file"
 
@@ -379,8 +737,8 @@ EOF
   [ ! -f "$pending" ]
   [ ! -f "$operator_response" ]
   [ -f "$human_request" ]
-  [[ "$output" == *"RESUME=1"* ]]
-  [[ "$output" == *"STRATEGY=resume"* ]]
+  [[ "$output" == *"CONT=1"* ]]
+  [[ "$output" != *"STRATEGY=resume"* ]]
   [ -f "$session_dir/permission-remediation.json" ]
   jq -e '.kind == "permission"' "$session_dir/permission-remediation.json"
   jq -e '.blocked_path == "/tmp/*"' "$session_dir/permission-remediation.json"
@@ -463,7 +821,70 @@ EOF
   rm -rf "$tmp_dir"
 }
 
-@test "ralph_try_consume_human_response deny leaves the request open and does not apply overlays" {
+@test "ralph_apply_permission_operator_response keeps allow when no blocked path was extracted" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir workspace session_dir response_json
+  tmp_dir="$(mktemp -d)"
+  workspace="$tmp_dir/workspace"
+  mkdir -p "$workspace"
+  response_json="$tmp_dir/operator-response.json"
+  cat <<EOF >"$response_json"
+{
+  "placeholder": false,
+  "kind": "permission",
+  "decision": "allow",
+  "runtime": "opencode",
+  "classification": "external_directory",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "terminal bridge response",
+  "answer": ""
+}
+EOF
+  session_dir="$workspace/.ralph-workspace/sessions/proxy-allow-nopath"
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    export SCRIPT_DIR="'"$REPO_ROOT"'/bundle/.ralph"
+    export WORKSPACE="$3"
+    export RALPH_PLAN_KEY="proxy-allow-nopath"
+    export RUNTIME="opencode"
+    export RALPH_PLAN_WORKSPACE_ROOT="$3/.ralph-workspace"
+    ralph_session_init "$3" "plan.log"
+    result_file="$(mktemp)"
+    ralph_apply_permission_operator_response \
+      "$RALPH_SESSION_DIR" \
+      "opencode" \
+      "external_directory" \
+      "" \
+      "" \
+      "" \
+      "$(cat "$5")" >"$result_file"
+    decision="$(cat "$result_file")"
+    rm -f "$result_file"
+    printf "decision=%s\n" "$decision"
+    printf "degraded=%s\n" "${RALPH_PERMISSION_APPLY_DEGRADED:-none}"
+  ' _ \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" \
+    "$workspace" \
+    "$session_dir" \
+    "$response_json"
+
+  [ "$status" -eq 0 ]
+  # An operator approval must never be reported back as a denial just because
+  # the denial excerpt carried no concrete path to allowlist.
+  [[ "$output" == *"decision=allow"* ]]
+  [[ "$output" == *"degraded="*"no-blocked-path"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_try_consume_human_response deny clears the request and does not apply overlays" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   [ -n "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" ] || skip "human consume helper unavailable"
 
@@ -524,8 +945,11 @@ EOF
   ' _ "$RUN_PLAN_HUMAN_CONSUME_FUNCS_FILE" "$human_context" "$pending" "$human_request" "$operator_response" "$tmp_dir/session" "$log_file"
 
   [ "$status" -eq 0 ]
-  [ -f "$pending" ]
-  [ -f "$operator_response" ]
+  # A deny stops the current run only. The request and the consumed answer must
+  # be cleared, otherwise every later run re-consumes the stale deny and exits
+  # immediately without ever prompting the operator again.
+  [ ! -f "$pending" ]
+  [ ! -f "$operator_response" ]
   [ -f "$human_request" ]
   [[ "$output" == *"DECISION=deny"* ]]
   [[ "$output" == *"RESUME=unset"* || "$output" == *"RESUME=0"* ]]
@@ -624,6 +1048,97 @@ EOF
   [ -f "$human_request" ]
   jq -e '.kind == "guidance"' "$human_request"
   jq -e '.placeholder == true and .kind == "guidance"' "$operator_response"
+
+  rm -f "$helper"
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_human_input_write_offline_instructions answers a guidance pause from the terminal bridge" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local helper tmp_dir human_input pending operator_response human_action
+  local plan_file log_file output_log session_dir human_request
+
+  helper="$(mktemp)"
+  local run_plan_core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  cat <<'EOF' > "$helper"
+C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_RST="" C_DIM=""
+log(){ :; }
+ralph_run_plan_log(){ log "$@"; }
+ralph_restart_command_hint(){ printf "%s" "restart hint"; }
+ralph_write_human_action_file(){ :; }
+ralph_write_operator_response_template() {
+  cat >"$2" <<'TEMPLATE_EOF'
+{
+  "placeholder": true,
+  "kind": "guidance",
+  "decision": "answer",
+  "runtime": "",
+  "classification": "",
+  "blocked_command_or_tool": "",
+  "blocked_path": "",
+  "blocked_tool": "",
+  "reason": "",
+  "answer": ""
+}
+TEMPLATE_EOF
+}
+ralph_path_to_file_uri() {
+  printf 'file://%s' "$1"
+}
+ralph_try_consume_human_response() {
+  RALPH_TEST_CONSUME_CALLED=1
+  return 0
+}
+EOF
+  sed -n '/^ralph_human_input_write_offline_instructions()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  sed -n '/^ralph_json_field()/,/^}/p' "$run_plan_core_lib" >> "$helper"
+  printf 'source %q\n' "$REPO_ROOT/bundle/.ralph/bash-lib/permission-classify.sh" >> "$helper"
+
+  tmp_dir="$(mktemp -d)"
+  human_input="$tmp_dir/HUMAN-INPUT-REQUIRED.md"
+  pending="$tmp_dir/pending-human.txt"
+  operator_response="$tmp_dir/operator-response.txt"
+  human_action="$tmp_dir/HUMAN-ACTION.md"
+  plan_file="$tmp_dir/PLAN.md"
+  log_file="$tmp_dir/log.txt"
+  output_log="$tmp_dir/output.log"
+  session_dir="$tmp_dir/session"
+  mkdir -p "$session_dir"
+  human_request="$session_dir/human-request.json"
+  printf 'plan instructions\n' >"$plan_file"
+  printf 'agent question\n' >"$pending"
+
+  # RALPH_GUIDANCE_RESPONSE_ANSWER is the same style of pre-approval hook
+  # RALPH_PERMISSION_RESPONSE_DECISION provides for permission pauses: it lets
+  # this be exercised deterministically without a live pty, and lets an
+  # operator (or a script) answer a guidance pause without a real terminal.
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    export SCRIPT_DIR="'"$REPO_ROOT"'/bundle/.ralph"
+    HUMAN_INPUT_MD="$2"
+    PENDING_HUMAN="$3"
+    OPERATOR_RESPONSE_FILE="$4"
+    HUMAN_ACTION_FILE="$5"
+    HUMAN_REQUEST_FILE="$6"
+    RALPH_SESSION_DIR="$7"
+    PLAN_PATH="$8"
+    LOG_FILE="$9"
+    OUTPUT_LOG="${10}"
+    HUMAN_PROMPT_NO_OPEN_FLAG=1
+    RALPH_GUIDANCE_RESPONSE_ANSWER="the operator types this answer"
+    C_R="" C_G="" C_Y="" C_B="" C_C="" C_BOLD="" C_DIM="" C_RST=""
+    log(){ printf "%s\n" "$*" >>"$LOG_FILE"; }
+    ralph_run_plan_log(){ log "$@"; }
+    ralph_human_input_write_offline_instructions
+    printf "CONSUMED=%s\n" "${RALPH_TEST_CONSUME_CALLED:-0}"
+  ' _ "$helper" "$human_input" "$pending" "$operator_response" "$human_action" "$human_request" "$session_dir" "$plan_file" "$log_file" "$output_log"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CONSUMED=1"* ]]
+  jq -e '.placeholder == false and .kind == "guidance" and .answer == "the operator types this answer"' "$operator_response"
+  [ ! -f "$human_input" ]
 
   rm -f "$helper"
   rm -rf "$tmp_dir"
@@ -790,6 +1305,53 @@ EOF
   ' _ "$helper" "$plan_file" "$log_file"
 
   [ "$status" -eq 0 ]
+
+  rm -f "$helper"
+  rm -rf "$tmp_dir"
+}
+
+@test "operator-denial exit path does not crash when _ralph_write_plan_usage_summary is not yet defined" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  # run-plan-core.sh is sourced top-to-bottom: the deny branch runs long
+  # before the file reaches the _ralph_write_plan_usage_summary function
+  # definition further down, so this block must guard the call the same way
+  # its sibling branch a few lines above already does, or every operator
+  # denial crashes with "command not found" instead of exiting cleanly.
+  local run_plan_core_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-core.sh"
+  local helper tmp_dir plan_file
+  helper="$(mktemp)"
+  tmp_dir="$(mktemp -d)"
+  plan_file="$tmp_dir/PLAN.md"
+  printf '%s\n' '- [x] done' '- [ ] pending' >"$plan_file"
+
+  cat <<'EOF' > "$helper"
+C_R=""; C_BOLD=""; C_RST=""; C_DIM=""
+ralph_try_consume_human_response() {
+  RALPH_PERMISSION_RESPONSE_DECISION="deny"
+  export RALPH_PERMISSION_RESPONSE_DECISION
+  return 0
+}
+count_todos() { printf '1 2\n'; }
+ralph_runtime_overlay_cleanup_if_needed() { :; }
+# Deliberately do NOT define _ralph_write_plan_usage_summary, reproducing
+# the forward-reference gap this test guards against.
+EOF
+  sed -n '/^RALPH_PERMISSION_RESPONSE_DECISION=""$/,/^ralph_sync_human_action_file_state$/p' "$run_plan_core_lib" \
+    | sed '$d' >> "$helper"
+
+  # The extracted block is top-level script code that runs immediately on
+  # `source` (this file is sourced, not invoked as a function), so PLAN_PATH
+  # must already be set before sourcing -- not after.
+  run bash -c '
+    set -euo pipefail
+    PLAN_PATH="$2"
+    source "$1"
+  ' _ "$helper" "$plan_file"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Permission request was denied by the operator"* ]]
+  [[ "$output" != *"command not found"* ]]
 
   rm -f "$helper"
   rm -rf "$tmp_dir"
@@ -973,4 +1535,58 @@ EOF
   run bash "$helper"
   [ "$status" -eq 0 ]
   rm -f "$helper"
+}
+
+@test "ralph_session_resolve_resume_run last uses prior index entry" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local tmp
+  tmp="$(mktemp -d)"
+  export RALPH_PLAN_WORKSPACE_ROOT="$tmp/state"
+  export RALPH_PLAN_KEY="resume-last-plan"
+  export RALPH_PROCESS_RUN_ID="run-current"
+  mkdir -p "$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs"
+  printf '%s\n' '{"run_id":"run-old","path":"logs/resume-last-plan/runs/run-old/run-manifest.json","status":"done"}' \
+    >"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  printf '%s\n' '{"run_id":"run-incomplete","path":"logs/resume-last-plan/runs/run-incomplete/run-manifest.json","status":"incomplete"}' \
+    >>"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  printf '%s\n' '{"run_id":"run-current","path":"logs/resume-last-plan/runs/run-current/run-manifest.json","status":"incomplete"}' \
+    >>"$RALPH_PLAN_WORKSPACE_ROOT/logs/$RALPH_PLAN_KEY/runs/index.jsonl"
+  export RALPH_PLAN_RESUME_RUN=last
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_session_resolve_resume_run
+  [ "${RALPH_PLAN_RESUME_RUN_RESOLVED:-}" = "run-old" ]
+  [ "${RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID:-}" = "1" ]
+  rm -rf "$tmp"
+}
+
+@test "ralph_session_todo_prepare_invocation degraded capture under resume-run starts fresh" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local tmp
+  tmp="$(mktemp -d)"
+  export RALPH_SESSION_DIR="$tmp/session"
+  export RALPH_PROJECT_ROOT="$tmp/project"
+  export RALPH_PLAN_WORKSPACE_ROOT="$tmp/state"
+  export RALPH_AGENT_WORKSPACE="$tmp/project"
+  export RALPH_PLAN_KEY="resume-degraded-plan"
+  export RUNTIME="cursor"
+  export RALPH_PROCESS_RUN_ID="run-old"
+  export RALPH_CURRENT_TODO_LINE="10"
+  export RALPH_CURRENT_TODO_ORDINAL="1"
+  export RALPH_CURRENT_TODO_ID="resume-degraded-todo"
+  export RALPH_CURRENT_TODO_HASH="hash-degraded"
+  mkdir -p "$RALPH_SESSION_DIR"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_session_todo_create "sess-degraded-last" "degraded" >/dev/null
+  export RALPH_PROCESS_RUN_ID="run-new"
+  export RALPH_PLAN_RESUME_RUN="run-old"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_run_plan_log() { :; }
+  ralph_session_apply_resume_strategy() { :; }
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+  rm -rf "$tmp"
 }

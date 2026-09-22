@@ -275,6 +275,94 @@ describe('ApiService', () => {
     });
   });
 
+  describe('fetchMetricsInsightsSummary() / fetchMetricsBreakdown() / fetchMetricsDetail()', () => {
+    it('requests summary and breakdown on separate endpoints with filter params', async () => {
+      const summaryPromise = firstValueFrom(
+        service.fetchMetricsInsightsSummary({
+          workspaceRoot: '/ws',
+          runtime: 'codex',
+          dateFrom: '2026-04-01',
+        }),
+      );
+      const breakdownPromise = firstValueFrom(
+        service.fetchMetricsBreakdown({
+          workspaceRoot: '/ws',
+          runtime: 'codex',
+          offset: 0,
+          limit: 25,
+          sortBy: 'total_tokens',
+          sortDir: 'desc',
+        }),
+      );
+
+      const summaryReq = httpMock.expectOne(
+        (r) =>
+          r.url === '/api/metrics/insights-summary' &&
+          r.params.get('workspaceRoot') === '/ws' &&
+          r.params.get('runtime') === 'codex' &&
+          r.params.get('dateFrom') === '2026-04-01',
+      );
+      const breakdownReq = httpMock.expectOne(
+        (r) =>
+          r.url === '/api/metrics/breakdown' &&
+          r.params.get('workspaceRoot') === '/ws' &&
+          r.params.get('limit') === '25',
+      );
+      expect(summaryReq.request.url).not.toEqual(breakdownReq.request.url);
+
+      summaryReq.flush({
+        date_scope: { from: '2026-04-01', to: null, label: 'From 2026-04-01', run_count: 1 },
+        units: { tokens: 'tokens', elapsed: 'seconds', tool_calls: 'calls' },
+        headline: {
+          total_tokens: 10,
+          input_tokens: 5,
+          output_tokens: 5,
+          cache_read_input_tokens: 0,
+          cache_hit_ratio: 0,
+          elapsed_seconds: 1,
+          tool_calls_total: 0,
+          run_count: 1,
+        },
+        trend: {
+          direction: 'flat',
+          recent_tokens: 5,
+          prior_tokens: 5,
+          delta_tokens: 0,
+          delta_percent: 0,
+          recent_run_count: 1,
+          prior_run_count: 0,
+        },
+        drivers: [],
+        anomalies: [],
+        drilldowns: [],
+        filter_options: { runtimes: [], models: [] },
+      });
+      breakdownReq.flush({
+        date_scope: { from: null, to: null, label: 'All available runs' },
+        units: { tokens: 'tokens', elapsed: 'seconds', tool_calls: 'calls' },
+        filtered_run_count: 0,
+        total_run_count: 0,
+        runtime_rows: [],
+        model_rows: [],
+        run_rows: [],
+        page: { offset: 0, limit: 25, total: 0 },
+        sort: { by: 'total_tokens', dir: 'desc' },
+      });
+
+      await Promise.all([summaryPromise, breakdownPromise]);
+    });
+
+    it('requests detail by plan key', async () => {
+      const detailPromise = firstValueFrom(service.fetchMetricsDetail('plan-1', '/ws'));
+      const req = httpMock.expectOne(
+        (r) =>
+          r.url === '/api/metrics/detail/plan-1' && r.params.get('workspaceRoot') === '/ws',
+      );
+      req.flush({ plan_key: 'plan-1', kind: 'plan', item: null, related: [] });
+      await detailPromise;
+    });
+  });
+
   describe('fetchSavings()', () => {
     const mockSavings: SavingsReport = {
       schema_version: 2,
@@ -418,6 +506,102 @@ describe('ApiService', () => {
       req.flush('Not found', { status: 404, statusText: 'Not Found' });
 
       await expect(responsePromise).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe('request cancellation', () => {
+    it('passes AbortSignal to fetchPlanIndex and errors when aborted', async () => {
+      const controller = new AbortController();
+      const responsePromise = firstValueFrom(service.fetchPlanIndex({ pageSize: 20 }, { signal: controller.signal }));
+      const req = httpMock.expectOne((r) => r.urlWithParams.startsWith('/api/plans/index'));
+      expect(req.request.method).toBe('GET');
+      controller.abort();
+      // Aborting cancels the underlying HTTP call (via takeUntil), so the request is marked
+      // cancelled rather than erroring, and the resulting observable completes with no value.
+      expect(req.cancelled).toBe(true);
+      await expect(responsePromise).rejects.toBeTruthy();
+    });
+
+    it('passes AbortSignal to insights summary', () => {
+      const controller = new AbortController();
+      const subscription = service
+        .fetchMetricsInsightsSummary({ workspaceRoot: '/ws' }, { signal: controller.signal })
+        .subscribe({ error: () => undefined });
+      const req = httpMock.expectOne((r) => r.urlWithParams.startsWith('/api/metrics/insights-summary'));
+      expect(req.request.method).toBe('GET');
+      controller.abort();
+      expect(req.cancelled).toBe(true);
+      subscription.unsubscribe();
+    });
+  });
+
+  describe('fetchGraphRunDetail()', () => {
+    it('returns runtime identity and delegated-run records without legacy child fields', async () => {
+      const payload = {
+        namespace: 'graph',
+        runId: 'run-1',
+        run: {},
+        graph: {},
+        nodes: [{
+          nodeId: 'source',
+          status: 'succeeded',
+          runtime: 'codex',
+          role: 'research',
+          modelSource: 'runtime saved/default',
+          attempts: [{ attemptId: 'attempt-1', outcome: 'succeeded', runtime: 'codex', role: 'research', modelSource: 'runtime saved/default' }],
+          delegatedRuns: [{
+            delegatedRunId: 'delegated-run-001',
+            runtime: 'claude',
+            role: 'code-review',
+            workspaceMode: 'snapshot',
+            status: 'succeeded',
+            verification: 'passed',
+            usage: { input_tokens: 4 },
+          }],
+        }],
+        usage: { parent: {}, delegatedRuns: { input_tokens: 4 }, total: { input_tokens: 4 } },
+      };
+
+      const responsePromise = firstValueFrom(service.fetchGraphRunDetail('graph', 'run-1'));
+      const req = httpMock.expectOne('/api/graph-runs/graph/run-1');
+      expect(req.request.method).toBe('GET');
+      req.flush(payload);
+
+      const detail = await responsePromise;
+      expect(detail.nodes[0].delegatedRuns?.[0].delegatedRunId).toBe('delegated-run-001');
+      expect(detail.nodes[0].delegatedRuns?.[0]).not.toHaveProperty('delegationId');
+      expect(detail.nodes[0]).not.toHaveProperty('brokeredChildren');
+      expect(detail.usage?.delegatedRuns).toEqual({ input_tokens: 4 });
+    });
+  });
+
+  describe('fetchGraphRunDiff()', () => {
+    it('GETs the diff route and passes optional nodeId and workspaceRoot', async () => {
+      const payload = {
+        namespace: 'graph',
+        runId: 'run-1',
+        truncated: false,
+        nodes: [{ nodeId: 'source', changesetManifest: null, changes: [] }],
+      };
+
+      const responsePromise = firstValueFrom(
+        service.fetchGraphRunDiff('graph', 'run-1', {
+          workspaceRoot: '/ws',
+          nodeId: 'source',
+        }),
+      );
+      const req = httpMock.expectOne(
+        (r) =>
+          r.url === '/api/graph-runs/graph/run-1/diff'
+          && r.params.get('workspaceRoot') === '/ws'
+          && r.params.get('nodeId') === 'source',
+      );
+      expect(req.request.method).toBe('GET');
+      req.flush(payload);
+
+      const body = await responsePromise;
+      expect(body.nodes[0].nodeId).toBe('source');
+      expect(body.truncated).toBe(false);
     });
   });
 });

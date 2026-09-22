@@ -1,0 +1,20 @@
+{
+  "interface": {
+    "displayName": "Ralph plugins"
+  },
+  "name": "ralph-plugins",
+  "plugins": [
+    {
+      "category": "Productivity",
+      "name": "ralph-orchestrator",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./",
+        "source": "local"
+      }
+    }
+  ]
+}

@@ -102,4 +102,32 @@ Command-output logs: redirect large shell output to ${RALPH_ARTIFACT_DIR}/<name>
   fi
   printf '%s' "
 Use namespace-aware artifact paths when writing handoff files."
+  ralph_required_artifact_paths_prompt_block
+}
+
+# G12: when the orchestrator declared this stage's required output
+# artifacts, RALPH_REQUIRED_ARTIFACT_PATHS_JSON carries their already
+# -resolved absolute destinations (via orch_resolve_artifact_path -- the
+# one shared resolver, never re-derived here). Name each exact path in the
+# prompt and state plainly that these are supervisor outputs the run
+# records as evidence, not source edits inside the agent's own workspace.
+# Silently does nothing when the variable is absent, empty, or not a
+# non-empty JSON array (never invents a destination).
+ralph_required_artifact_paths_prompt_block() {
+  local raw="${RALPH_REQUIRED_ARTIFACT_PATHS_JSON:-}"
+  [[ -n "$raw" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  printf '%s' "$raw" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1 || return 0
+
+  printf '%s' "
+
+Required output artifacts (write each exact absolute path below). These are
+supervisor-owned outputs recorded as this run's evidence, not source edits
+inside your own workspace:"
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    printf '%s' "
+  - $path"
+  done < <(printf '%s' "$raw" | jq -r '.[]' 2>/dev/null)
 }

@@ -1,23 +1,46 @@
 :host {
   display: block;
-  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
   --app-header-height: calc(56px + env(safe-area-inset-top, 0px));
+  --fab-clearance: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 40;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 0.4rem;
+  outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--accent));
+  outline-offset: 3px;
 }
 
 ion-app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
 }
 
 ion-split-pane {
   margin-top: var(--app-header-height);
   flex: 1;
   min-height: 0;
-  height: calc(100% - var(--app-header-height));
-  --side-width: 280px;
-  --side-max-width: 320px;
-  --side-min-width: 280px;
+  height: calc(100dvh - var(--app-header-height));
+  --side-width: 264px;
+  --side-max-width: 288px;
+  --side-min-width: 248px;
 }
 
 .app-header {
@@ -27,18 +50,50 @@ ion-split-pane {
   left: 0;
   right: 0;
   z-index: 20;
+  overflow: visible;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  box-shadow: var(--shadow-header);
+
+  // Ionic defaults contain:content on toolbars, which makes position:fixed
+  // descendants use the toolbar as containing block and clips overflow.
+  ion-toolbar {
+    overflow: visible;
+    contain: none;
+  }
 }
 
 .app-title {
   text-align: left;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  padding-inline: 0.5rem;
 }
 
-ion-button.usage-route-active {
+ion-toolbar {
+  --min-height: 56px;
+  --padding-start: 0.75rem;
+  --padding-end: 0.65rem;
+}
+
+app-workspace-switcher {
+  width: min(32vw, 24rem);
+  min-width: 13rem;
+  margin-inline-end: 0.35rem;
+}
+
+ion-buttons[slot="end"] {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+ion-button.active-section {
   --color: var(--accent);
   position: relative;
 }
 
-ion-button.usage-route-active::part(native) {
+ion-button.active-section::part(native) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 8px;
 }
@@ -57,19 +112,21 @@ ion-menu::part(container) {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  background: var(--background);
 }
 
-.menu-header {
-  display: none;
+.main-shell:focus,
+.main-shell:focus-visible {
+  outline: none;
 }
 
 ion-content {
-  --background: var(--surface);
+  --background: var(--background);
 }
 
 .main-content {
   --background: transparent;
-  --overflow: hidden;
+  --overflow: auto;
   --padding-start: 0;
   --padding-end: 0;
   --padding-top: 0;
@@ -81,37 +138,103 @@ ion-content {
 .content-wrapper {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  padding: var(--space-3) var(--space-5) calc(var(--space-6) + var(--fab-clearance));
+  max-width: 100%;
+  overflow: visible hidden;
+}
+
+/* Routed components are inserted as siblings after router-outlet. Keep the
+ * outlet out of the flex column so it does not steal half the viewport. */
+.content-wrapper > router-outlet {
+  display: contents;
+}
+
+/* Make every routed page a real flex child so min-height and bottom clearance apply. */
+.content-wrapper > :not(router-outlet) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: 100%;
+}
+
+/* Log viewer only: bounded column so the toolbar stays put and the log body scrolls.
+ * Do not include app-file-viewer (docs, plans, artifacts) — those use normal page flow. */
+ion-content.main-content:has(ralph-log-viewer) {
+  --overflow: hidden;
+}
+
+ion-content.main-content:has(ralph-log-viewer)::part(scroll) {
+  display: flex;
+  flex-direction: column;
   height: 100%;
-  min-height: 0;
-  padding: 0.75rem 1rem 1.25rem;
 }
 
-.content-wrapper > app-file-viewer,
-.content-wrapper > ralph-log-viewer,
-.content-wrapper > ralph-plan-hub {
-  display: flex;
-  flex: 1;
+ion-content.main-content:has(ralph-log-viewer) .content-wrapper {
+  flex: 1 1 auto;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
+  overflow: hidden;
+  padding: var(--space-2) var(--space-4) calc(var(--space-2) + var(--fab-clearance, 4.5rem));
+  box-sizing: border-box;
 }
 
-.empty-state {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
+.content-wrapper > app-workspace-view:has(> ralph-log-viewer) {
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  text-align: center;
-  padding: 2rem;
-  background: var(--surface);
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  height: 100%;
+  width: 100%;
 }
 
-// Hide the menu header on desktop when split pane is showing
-@media (min-width: 992px) {
-  .menu-header {
-    display: flex;
+.content-wrapper > app-workspace-view:has(> ralph-log-viewer) > ralph-log-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.content-wrapper > app-workspace-view:has(> app-file-viewer) {
+  width: 100%;
+  align-self: stretch;
+}
+
+ion-menu-button,
+ion-button {
+  min-width: var(--touch-target-min, 44px);
+  min-height: var(--touch-target-min, 44px);
+}
+
+@media (max-width: 991px) {
+  .toolbar-insights {
+    display: none;
+  }
+
+  app-workspace-switcher {
+    width: min(36vw, 18rem);
+    min-width: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .content-wrapper {
+    padding: var(--space-2) 0.65rem calc(var(--space-6) + var(--fab-clearance));
+  }
+
+  .app-title {
+    display: none;
+  }
+
+  app-workspace-switcher {
+    width: min(42vw, 12rem);
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  ion-toolbar {
+    --padding-start: 0.35rem;
+    --padding-end: 0.25rem;
   }
 }

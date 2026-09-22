@@ -1,0 +1,98 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-bash-telemetry.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-bash-telemetry.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "command_execution"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "read_file"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "grep"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Glob"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Read"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/post-tool-native-result-compact.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Grep"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/pre-tool-bash-policy.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": ".codex/hooks/pre-tool-bash-policy.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "command_execution"
+      }
+    ]
+  }
+}

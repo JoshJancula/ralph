@@ -6,13 +6,21 @@ workspace_root = sys.argv[1]
 plan_filter_arg = sys.argv[2]
 threshold_seconds = int(sys.argv[3]) if sys.argv[3].isdigit() else 3600
 plan_filter = None if not plan_filter_arg else plan_filter_arg
-runtime_config_root = os.path.join(workspace_root, ".ralph-workspace", "runtime-config")
-if not os.path.isdir(runtime_config_root):
+state_root = os.path.join(workspace_root, ".ralph-workspace")
+runtime_config_roots = []
+for candidate in (
+    os.path.join(state_root, "internal", "runtime-config"),
+    os.path.join(state_root, "runtime-config"),
+):
+    if os.path.isdir(candidate) and candidate not in runtime_config_roots:
+        runtime_config_roots.append(candidate)
+if not runtime_config_roots:
     sys.exit(0)
 now = int(time.time())
 messages = []
 had_errors = False
-for plan_dir in sorted(os.listdir(runtime_config_root)):
+for runtime_config_root in runtime_config_roots:
+  for plan_dir in sorted(os.listdir(runtime_config_root)):
     plan_path = os.path.join(runtime_config_root, plan_dir)
     if not os.path.isdir(plan_path):
         continue

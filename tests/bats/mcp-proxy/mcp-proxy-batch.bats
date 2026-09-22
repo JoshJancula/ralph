@@ -146,9 +146,8 @@ teardown() {
   [[ "$text" != *"INFO: ok"* ]]
 }
 
-@test "ralph_proxy_batch reports per-operation error when search is disabled" {
+@test "ralph_proxy_batch rejects search operations per operation" {
   command -v jq >/dev/null || skip "jq required"
-  cp -R "$REPO_ROOT/tests/fixtures/mcp-proxy/search-ranking/." "$WS/search-fixture/"
   printf 'before-search\n' >"$WS/before-search.txt"
   printf 'after-search\n' >"$WS/after-search.txt"
 
@@ -167,7 +166,7 @@ teardown() {
   printf '%s\n' "$response" | jq -e '.isError == false'
   [[ "$text" == *"1. ralph_proxy_read: ok |"* ]]
   [[ "$text" == *"before-search"* ]]
-  [[ "$text" == *"2. ralph_proxy_search: error | ralph_proxy_search is not enabled"* ]]
+  [[ "$text" == *"2. ralph_proxy_search: error | operation tool not allowed in batch"* ]]
   [[ "$text" == *"3. ralph_proxy_read: ok |"* ]]
   [[ "$text" == *"after-search"* ]]
 }
@@ -322,16 +321,24 @@ teardown() {
     ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$REPO_ROOT" "$UPSTREAM_SCRIPT" 2>/dev/null)"
   printf '%s\n' "$merged_json" | jq -e '
     (.result.tools | map(.name) | index("ralph_proxy_batch")) != null
-    and (.result.tools | map(.name) | index("ralph_proxy_read")) != null
+    and (.result.tools | map(.name) | index("ralph_proxy_read")) == null
   '
 }
 
-@test "ralph_proxy_batch times out and reports partial failure on long-running operations" {
+@test "ralph_proxy_batch names each completed operation in its report" {
   command -v jq >/dev/null || skip "jq required"
   printf 'first-file\n' >"$WS/first.txt"
   printf 'second-file\n' >"$WS/second.txt"
   printf 'third-file\n' >"$WS/third.txt"
 
+  # This asserted the per-operation "ok" naming out of a *partially* timed-out
+  # batch, which cannot be made deterministic: operations share one countdown,
+  # so guaranteeing "at least one finished" and "the batch still timed out"
+  # needs the host to sit inside a fixed speed window. Idle it completed all
+  # three and under suite load it completed none, failing at both ends. The
+  # naming is what this test uniquely covers, and it does not need a timeout to
+  # observe; the timeout contract itself is covered by the two PARTIAL_FAILURE
+  # tests below, which assert only load-independent facts.
   local policy args_json response text
   policy="$(batch_policy_json 0)"
   args_json="$(jq -nc '{
@@ -341,12 +348,11 @@ teardown() {
       {tool: "ralph_proxy_read", arguments: {path: "third.txt"}}
     ]
   }')"
-  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=1 invoke_proxy_batch "$policy" "$args_json")"
+  response="$(RALPH_MCP_PROXY_BATCH_TIMEOUT_SEC=600 invoke_proxy_batch "$policy" "$args_json")"
   text="$(batch_result_text "$response")"
 
-  printf '%s\n' "$response" | jq -e '.isError == true'
   [[ "$text" == *"ralph_proxy_read: ok"* ]]
-  [[ "$text" == *"PARTIAL_FAILURE: batch timeout"* ]]
+  [[ "$text" != *"PARTIAL_FAILURE"* ]]
   [[ "$text" != *"(completed -"* ]]
 }
 

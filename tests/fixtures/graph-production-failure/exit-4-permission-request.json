@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "case": "exit-4-permission-request",
+  "description": "An attempt exits with code 4, the reserved permission-request exit code, and carries a pending decision that the supervisor must surface, not treat as a plain failure.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "runId": "run-fixture-ffff0006",
+    "nodeId": "node-fixture-permission",
+    "attemptId": "node-fixture-permission__run-fixture-ffff0006__1",
+    "exitCode": 4,
+    "permissionRequest": {
+      "tool": "Bash",
+      "rule": "Bash(rm:*)",
+      "decision": "pending"
+    }
+  }
+}

@@ -9,6 +9,7 @@
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
 WRAPPER_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/native-hook/native-shell-wrapper.sh"
+PROXY_TOOLS_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
 
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
@@ -24,7 +25,7 @@ teardown() {
 
   run bash -c '
     source "$1"
-    my_pgid="$(ps -o pgid= -p $$ | tr -d " ")"
+    my_pgid="$(ralph_native_shell_process_pgid $$)"
     ralph_native_shell_launch_process_group "$2" "sleep 2" bash /dev/null /dev/null
     child_pgid="$RALPH_NATIVE_SHELL_LAUNCH_PGID"
     isolated="$RALPH_NATIVE_SHELL_LAUNCH_ISOLATED"
@@ -61,7 +62,7 @@ teardown() {
 @test "terminate_spawned_job refuses to group-kill the caller's own pgid" {
   run bash -c '
     source "$1"
-    my_pgid="$(ps -o pgid= -p $$ | tr -d " ")"
+    my_pgid="$(ralph_native_shell_process_pgid $$)"
     sleep 30 &
     job_pid=$!
     # Deliberately pass our own pgid with isolated=true, simulating the race.
@@ -71,4 +72,51 @@ teardown() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == SURVIVED* ]]
+}
+
+# The MCP proxy shipped its own copy of the group kill without the self-pgid
+# guard above. Reached from the owned-shell timeout and from
+# ralph_proxy_shell_cancel, it ran inside the MCP server, so a job record whose
+# pgid had collapsed onto the server's own group made the server SIGTERM
+# itself: the stdio transport died and the client reported "Connection closed"
+# for every mcp__ralph__* call for the rest of the session.
+@test "proxy shell_job_kill_managed refuses to group-kill the caller's own pgid" {
+  run bash -c '
+    export RALPH_MCP_WORKSPACE="$2" RALPH_PROJECT_ROOT="$2"
+    source "$1" >/dev/null 2>&1
+    my_pgid="$(ralph_native_shell_process_pgid $$)"
+    sleep 30 &
+    job_pid=$!
+    # Deliberately pass our own pgid with isolated=true, simulating a job record
+    # whose recorded group collapsed onto the group of the MCP server.
+    escalated="$(ralph_mcp_proxy_shell_job_kill_managed "$job_pid" "$my_pgid" true)"
+    kill -TERM "$job_pid" 2>/dev/null || true
+    echo "SURVIVED escalated=$escalated"
+  ' _ "$PROXY_TOOLS_LIB" "$TEST_TMPDIR"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == SURVIVED* ]]
+}
+
+@test "proxy shell_job_kill_managed still terminates a genuinely isolated job" {
+  command -v setsid >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || \
+    skip "no setsid or python3 for isolated launch"
+
+  run bash -c '
+    export RALPH_MCP_WORKSPACE="$2" RALPH_PROJECT_ROOT="$2"
+    source "$1" >/dev/null 2>&1
+    ralph_native_shell_launch_process_group "$2" "sleep 30" bash /dev/null /dev/null
+    pid="$RALPH_NATIVE_SHELL_LAUNCH_PID"
+    ralph_mcp_proxy_shell_job_kill_managed "$pid" \
+      "$RALPH_NATIVE_SHELL_LAUNCH_PGID" "$RALPH_NATIVE_SHELL_LAUNCH_ISOLATED" >/dev/null
+    deadline=$(( $(date +%s) + 5 ))
+    while kill -0 "$pid" 2>/dev/null; do
+      [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL: job survived the kill"; exit 1; }
+      sleep 0.05
+    done
+    echo "KILLED"
+  ' _ "$PROXY_TOOLS_LIB" "$TEST_TMPDIR"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *KILLED* ]]
 }

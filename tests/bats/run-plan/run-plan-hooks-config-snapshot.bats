@@ -72,7 +72,7 @@ teardown() {
   local snap record
   snap="$(ralph_hooks_config_snapshot_path "$_tmp")"
   record="$(tail -n1 "$snap")"
-  run jq -e '.timestamp and .planKey and (.iteration != null) and .runtime and (.channels | length == 4)' <<<"$record"
+  run jq -e '.timestamp and .planKey and (.iteration != null) and .runtime and (.channels | length == 5)' <<<"$record"
   [ "$status" -eq 0 ]
 }
 

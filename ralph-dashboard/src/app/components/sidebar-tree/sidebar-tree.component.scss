@@ -28,15 +28,15 @@
   display: flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.18rem 0.35rem 0.18rem 0.1rem;
+  padding: 0.22rem 0.4rem 0.22rem 0.15rem;
   cursor: pointer;
   font-size: 0.82rem;
   color: var(--text-primary);
   user-select: none;
   transition: background 0.1s ease;
-  min-height: 28px;
-  border-radius: 4px;
-  margin: 0 4px;
+  min-height: 30px;
+  border-radius: 6px;
+  margin: 0 2px;
   white-space: nowrap;
 
   &:hover {
@@ -44,11 +44,11 @@
   }
 
   &.selected {
-    background: var(--accent-active);
-    color: var(--text-on-accent);
+    background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+    color: var(--text-primary);
 
     .node-size {
-      color: var(--text-on-accent-muted);
+      color: var(--text-muted);
     }
   }
 

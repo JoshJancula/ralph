@@ -1,189 +1,158 @@
 import {
   ChangeDetectionStrategy,
-  ChangeDetectorRef,
   Component,
   OnInit,
+  OnDestroy,
   inject,
   effect,
+  input,
+  signal,
+  computed,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent } from '@ionic/angular/standalone';
-import { ApiService, MetricsSummary, MetricsSummaryItem, MetricsSummaryOverall } from '../../services/api.service';
+import { FormsModule } from '@angular/forms';
+import { ApiService, PlanInventoryItem, PlanInventoryResponse } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
-import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
-import { formatElapsedSeconds } from '../../utils/format-elapsed';
-import {
-  buildPlanFolderMetricLookup,
-  lookupFolderMetricRows,
-  rollupFolderMetrics,
-} from './plan-hub-folder-metrics';
+import { RequestLifecycleService } from '../../services/request-lifecycle.service';
+import { PlanListRowComponent } from './plan-list-row.component';
+import { RouteLoadStateComponent } from '../route-load-state/route-load-state.component';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Subject } from 'rxjs';
+import { debounceTime, distinctUntilChanged, takeUntil } from 'rxjs/operators';
+import { beginInventoryFetch, isAbortError, shouldShowRouteSkeleton } from '../../utils/request-lifecycle';
+import { markInventoryUsable } from '../../utils/perf-diagnostics';
 
-interface PlanItem {
-  name: string;
-  path: string;
-  mtime: number;
-  hasLogs: boolean;
-  /** Aggregate logs listing scope (absolute `.ralph-workspace` path) when multiple roots are merged. */
-  workspaceRoot?: string;
+type SortField = 'name' | 'status' | 'project' | 'lastActivity';
+type SortOrder = 'asc' | 'desc';
+type StatusFilter = '' | 'active' | 'completed' | 'waiting';
+type TypeFilter = '' | 'leaf' | 'generated-control' | 'supplied' | 'workflow-derived';
+
+interface QueryState {
+  search: string;
+  status: StatusFilter;
+  type: TypeFilter;
+  sort: SortField;
+  sortOrder: SortOrder;
+  pageSize: number;
+  cursor?: string;
 }
-
-type PlanCardRow = PlanItem & { folderMetrics: MetricsSummaryItem | null; mtimeLabel: string };
-
-interface PlanSection {
-  key: string;
-  label: string;
-  workspaceRoot: string | undefined;
-  rows: PlanCardRow[];
-}
-
-const INITIAL_PLAN_ROWS_PER_SECTION = 75;
-const PLAN_ROWS_LOAD_MORE_STEP = 75;
 
 @Component({
   selector: 'ralph-plan-hub',
   standalone: true,
-  imports: [CommonModule, IonSpinner, IonCard, IonCardHeader, IonCardTitle, IonCardSubtitle, IonCardContent],
+  imports: [CommonModule, FormsModule, RouterLink, PlanListRowComponent, RouteLoadStateComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="plan-hub">
-      <div class="header">
-        <h2>Plans</h2>
-        <div class="header-actions">
-          <button class="btn-secondary" (click)="openUsage()">Usage Details</button>
+    <div class="plan-hub hub-page">
+      <div class="header page-header">
+        <div>
+          <h1 class="page-title">Plans</h1>
+          <p class="page-lede">Inventory of discovered plans, progress, and latest activity.</p>
         </div>
       </div>
-      @if (error) {
-        <div class="error">{{ error }}</div>
-      } @else if (loading) {
-        <div class="loading">
-          <ion-spinner name="crescent"></ion-spinner>
-          <span>Loading plans...</span>
+
+      <div class="toolbar hub-toolbar plans-toolbar">
+        <div class="plans-filter-row">
+          <select [(ngModel)]="queryState().status" (change)="onStatusChange()" class="filter-select" aria-label="Filter by status">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="waiting">Waiting</option>
+          </select>
+          <select [(ngModel)]="queryState().type" (change)="onTypeChange()" class="filter-select" aria-label="Filter by type">
+            <option value="">All types</option>
+            <option value="leaf">Leaf</option>
+            <option value="generated-control">Generated</option>
+            <option value="supplied">Supplied</option>
+            <option value="workflow-derived">Workflow</option>
+          </select>
+          @if (hasFilters()) {
+            <button type="button" class="btn btn-ghost plans-clear-filters" (click)="clearFilters()">Clear filters</button>
+          }
         </div>
-      } @else if (planSections.length === 0 || totalPlanRows() === 0) {
-        <div class="empty-state">No plan directories found</div>
-      } @else {
-        @if (!metricsLoading && !metricsError && metricsSummary && displayOverallMetrics()) {
-          <ion-card class="overall-metrics-card">
-            <ion-card-header>
-              <ion-card-title>{{ overallMetricsTitle() }}</ion-card-title>
-            </ion-card-header>
-            <ion-card-content>
-              <div class="overall-metrics" aria-label="Overall usage metrics">
-                <div class="overall-metric">
-                  <span class="overall-metric-label">Total Elapsed</span>
-                  <span class="overall-metric-value">{{ formatSeconds(displayOverallMetrics()!.elapsed_seconds) }}</span>
-                </div>
-                <div class="overall-metric">
-                  <span class="overall-metric-label">Total Tokens</span>
-                  <span class="overall-metric-value">{{ formatOverallTokens(displayOverallMetrics()!) }}</span>
-                </div>
-                <div class="overall-metric">
-                  <span class="overall-metric-label">Cache Hit Ratio</span>
-                  <span class="overall-metric-value">{{ formatPercent(displayOverallMetrics()!.cache_hit_ratio) }}</span>
-                </div>
-                <div class="overall-metric">
-                  <span class="overall-metric-label">Peak Turn</span>
-                  <span class="overall-metric-value">{{ formatPeakTurn(displayOverallMetrics()!.max_turn_total_tokens) }}</span>
-                </div>
-                <div class="overall-metric">
-                  <span class="overall-metric-label">Tool Calls</span>
-                  <span class="overall-metric-value">{{ formatNumber(displayOverallMetrics()?.tool_calls_total ?? 0) }}</span>
-                </div>
+        <div class="plans-search-row">
+          <input
+            type="search"
+            class="search-input"
+            data-testid="plans-search"
+            placeholder="Search plans"
+            [(ngModel)]="queryState().search"
+            (ngModelChange)="onSearchChange($event)"
+            aria-label="Search plans"
+          />
+        </div>
+      </div>
+
+      @if (currentResponse()?.activityDiscoveryError; as activityError) {
+        <p class="activity-discovery-error" role="status">{{ activityError }} Existing plan inventory is still shown.</p>
+      }
+
+      <ralph-route-load-state
+        [loading]="showLoadingSkeleton()"
+        [errorDetail]="error()"
+        [columns]="5"
+        [rowCount]="8"
+        (retry)="fetchPlans()"
+      />
+
+      @if (!showLoadingSkeleton() && !error()) {
+        @if (visibleItems().length === 0) {
+          <div class="empty-state" data-testid="plans-empty">
+            @if (queryState().search || queryState().status || queryState().type) {
+              <p class="empty-title">No plans match your filters</p>
+              <p class="empty-hint">Clear search or filters to see the full inventory.</p>
+              <div class="empty-actions">
+                <button type="button" class="btn btn-secondary" (click)="clearFilters()">Clear filters</button>
               </div>
-            </ion-card-content>
-          </ion-card>
-        }
-        @for (section of planSections; track section.key) {
-          <div class="plan-section">
-            @if (planSections.length > 1) {
-              <h3 class="plan-section-title">{{ section.label }}</h3>
-            }
-            <div class="plan-list">
-              @for (row of visibleRowsForSection(section); track row.path + (row.workspaceRoot ?? '')) {
-                <ion-card>
-                  <ion-card-header>
-                    <ion-card-title>{{ row.name }}</ion-card-title>
-                    <ion-card-subtitle>{{ row.mtimeLabel }}</ion-card-subtitle>
-                  </ion-card-header>
-                  <ion-card-content>
-                    @if (metricsLoading) {
-                      <div class="plan-folder-metrics-empty">Loading usage metrics...</div>
-                    } @else if (metricsError) {
-                      <div class="plan-folder-metrics-empty">Usage metrics failed to load.</div>
-                    } @else if (metricsSummary) {
-                      @if (row.folderMetrics) {
-                        <div class="plan-folder-metrics" aria-label="Usage for this log folder">
-                          <div class="plan-folder-metric">
-                            <span class="plan-folder-metric-label">Elapsed</span>
-                            <span class="plan-folder-metric-value">{{ formatSeconds(row.folderMetrics.elapsed_seconds) }}</span>
-                          </div>
-                          <div class="plan-folder-metric">
-                            <span class="plan-folder-metric-label">Tokens</span>
-                            <span class="plan-folder-metric-value">{{ formatTokens(row.folderMetrics) }}</span>
-                          </div>
-                          <div class="plan-folder-metric">
-                            <span class="plan-folder-metric-label">Cache hit</span>
-                            <span class="plan-folder-metric-value">{{ formatPercent(row.folderMetrics.cache_hit_ratio) }}</span>
-                          </div>
-                          @if ((row.folderMetrics.tool_calls_total ?? 0) > 0) {
-                            <div class="plan-folder-metric">
-                              <span class="plan-folder-metric-label">Tool calls</span>
-                              <span class="plan-folder-metric-value">{{ formatNumber(row.folderMetrics.tool_calls_total ?? 0) }}</span>
-                            </div>
-                          }
-                          @if (row.folderMetrics.max_turn_total_tokens > 0) {
-                            <div class="plan-folder-metric">
-                              <span class="plan-folder-metric-label">Peak turn</span>
-                              <span class="plan-folder-metric-value">{{ formatPeakTurn(row.folderMetrics.max_turn_total_tokens) }}</span>
-                            </div>
-                          }
-                          @if (row.folderMetrics.overlay) {
-                            <div class="plan-folder-metric">
-                              <span class="plan-folder-metric-label">Native hooks</span>
-                              <span class="plan-folder-metric-value">{{
-                                row.folderMetrics.overlay.native_hooks_effective ? 'yes' : 'no'
-                              }}</span>
-                            </div>
-                            <div class="plan-folder-metric">
-                              <span class="plan-folder-metric-label">MCP</span>
-                              <span class="plan-folder-metric-value">{{
-                                row.folderMetrics.overlay.mcp_effective ? 'yes' : 'no'
-                              }}</span>
-                            </div>
-                            @if (row.folderMetrics.overlay.hook_bytes_saved > 0) {
-                              <div class="plan-folder-metric">
-                                <span class="plan-folder-metric-label">Compaction saved</span>
-                                <span class="plan-folder-metric-value">{{
-                                  formatNumber(row.folderMetrics.overlay.hook_bytes_saved)
-                                }}</span>
-                              </div>
-                            }
-                          }
-                        </div>
-                      } @else {
-                        <div class="plan-folder-metrics-empty">No usage summary for this log folder yet.</div>
-                      }
-                    }
-                    <div class="plan-actions">
-                      <button class="btn-primary" (click)="openPlan(row)">Open Plan</button>
-                      @if (row.hasLogs) {
-                        <button class="btn-secondary" (click)="viewLogs(row)">View Logs</button>
-                      }
-                    </div>
-                  </ion-card-content>
-                </ion-card>
-              }
-            </div>
-            @if (remainingRowsInSection(section) > 0) {
-              <div class="plan-section-more">
-                <button type="button" class="btn-secondary" (click)="showMoreForSection(section)">
-                  Show {{ showMoreCount(section) }} more
-                </button>
-                <span class="plan-section-more-meta">{{ remainingRowsInSection(section) }} not shown</span>
+            } @else {
+              <p class="empty-title">No plans found</p>
+              <p class="empty-hint">Ralph discovers leaf plans in this workspace. Create one from the terminal, then return here.</p>
+              <div class="empty-actions">
+                <a class="btn btn-secondary" routerLink="/home">Back to Home</a>
               </div>
             }
           </div>
+        } @else {
+          <div class="plan-table data-table" data-testid="plans-inventory" role="table" aria-label="Plans">
+            <div class="plan-table-header data-table-header" role="row">
+              <div class="col-name data-table-priority" role="columnheader">
+                <button type="button" class="sort-button" (click)="setSortField('name')">
+                  Name
+                  @if (queryState().sort === 'name') {
+                    <span class="sort-indicator">{{ queryState().sortOrder === 'asc' ? 'ASC' : 'DESC' }}</span>
+                  }
+                </button>
+              </div>
+              <div class="col-status data-table-priority" role="columnheader">Status</div>
+              <div class="col-progress data-table-priority" role="columnheader">Progress</div>
+              <div class="col-project data-table-secondary data-table-tablet-hide" role="columnheader">Project</div>
+              <div class="col-activity data-table-secondary" role="columnheader">
+                <button type="button" class="sort-button" (click)="setSortField('lastActivity')">
+                  Last activity
+                  @if (queryState().sort === 'lastActivity') {
+                    <span class="sort-indicator">{{ queryState().sortOrder === 'asc' ? 'ASC' : 'DESC' }}</span>
+                  }
+                </button>
+              </div>
+              <div class="col-actions" role="columnheader"><span class="sr-only">Actions</span></div>
+            </div>
+            @for (item of visibleItems(); track item.id) {
+              <ralph-plan-list-row [item]="item" (openPlan)="onOpenPlan($event)" (runPlan)="onRunPlan($event)" (stopPlan)="onStopPlan($event)" />
+            }
+          </div>
+
+          @if (pageInfo().total > queryState().pageSize) {
+            <div class="pagination">
+              <button type="button" class="btn btn-secondary" (click)="previousPage()" [disabled]="pageNumber() === 1">
+                Previous
+              </button>
+              <span class="pagination-info">Page {{ pageNumber() }} · {{ pageRangeLabel() }} of {{ pageInfo().total }}</span>
+              <button type="button" class="btn btn-secondary" (click)="nextPage()" [disabled]="!pageInfo().hasMore">
+                Next
+              </button>
+            </div>
+          }
         }
       }
     </div>
@@ -195,470 +164,407 @@ const PLAN_ROWS_LOAD_MORE_STEP = 75;
       min-height: 0;
     }
     .plan-hub {
-      flex: 1;
-      min-height: 0;
-      padding: 2rem;
-      overflow-y: auto;
+      background: transparent;
     }
-    .header {
-      margin-bottom: 2rem;
+
+    .plans-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-3);
+    }
+
+    .plans-filter-row {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
       flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
     }
-    .header h2 {
-      margin: 0;
-      font-size: 1.75rem;
-      font-weight: 600;
+
+    .plans-filter-row .filter-select {
+      flex: 1 1 0;
+      min-width: 9rem;
+      width: auto;
     }
-    .header-actions {
-      display: flex;
-      gap: 0.5rem;
+
+    .plans-clear-filters {
+      flex: 0 0 auto;
+      margin-left: auto;
     }
-    .error {
-      color: var(--danger);
-      padding: 1rem;
-      background: rgba(255, 0, 0, 0.1);
-      border-radius: 4px;
+
+    .plans-search-row {
+      width: 100%;
     }
-    .loading {
-      min-height: 220px;
+
+    .plans-search-row .search-input {
+      width: 100%;
+    }
+    .plan-table {
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 0.75rem;
-      padding: 3rem 2rem;
-      color: var(--text-muted);
+      border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
     }
-    .empty-state {
-      min-height: 220px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--text-muted);
-      padding: 3rem 2rem;
-      text-align: center;
-      background: var(--surface);
-      border-radius: 8px;
-      border: 1px solid var(--border);
-    }
-    .overall-metrics-card {
-      margin-bottom: 2rem;
-      --background: var(--surface);
-      --color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: none;
-    }
-    .overall-metrics {
+    .plan-table-header {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 1.5rem;
-      font-size: 0.9rem;
-    }
-    .overall-metric {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-    .overall-metric-label {
-      color: var(--text-muted);
+      grid-template-columns: minmax(0, 2.2fr) 7.5rem minmax(6.5rem, 1fr) minmax(0, 1fr) 7.5rem auto;
+      gap: var(--space-4);
+      padding: 0.7rem 0.9rem;
+      background: var(--table-header-bg);
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+      font-weight: 600;
       font-size: 0.75rem;
+      color: var(--text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.03em;
     }
-    .overall-metric-value {
-      color: var(--text-primary);
-      font-family: var(--monospace-font);
-      font-weight: 600;
-      font-size: 1.1rem;
+    .col-name {
+      grid-column: 1;
     }
-    .plan-section {
-      margin-bottom: 2rem;
+    .col-status {
+      grid-column: 2;
     }
-    .plan-section:last-child {
-      margin-bottom: 0;
+    .col-progress {
+      grid-column: 3;
     }
-    .plan-section-title {
-      margin: 0 0 1rem;
-      font-size: 1.15rem;
-      font-weight: 600;
-      color: var(--text-primary);
+    .col-project {
+      grid-column: 4;
     }
-    .plan-section-more {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.75rem;
-      margin-top: 0.75rem;
+    .col-activity {
+      grid-column: 5;
     }
-    .plan-section-more-meta {
-      font-size: 0.8rem;
-      color: var(--text-muted);
+    .col-actions {
+      grid-column: 6;
     }
-    .plan-list {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 1rem;
-    }
-    ion-card {
-      --background: var(--surface);
-      --color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: none;
-      margin: 0;
-    }
-    ion-card-title {
-      font-size: 1rem;
-      font-weight: 500;
-      font-family: var(--monospace-font);
-    }
-    ion-card-subtitle {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-    .plan-folder-metrics {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      margin-bottom: 0.75rem;
-      font-size: 0.85rem;
-    }
-    .plan-folder-metric {
-      display: flex;
-      flex-direction: column;
-      gap: 0.15rem;
-    }
-    .plan-folder-metric-label {
-      color: var(--text-muted);
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .plan-folder-metric-value {
-      color: var(--text-primary);
-      font-family: var(--monospace-font);
-      font-weight: 600;
-    }
-    .plan-folder-metrics-empty {
-      color: var(--text-muted);
-      font-size: 0.8rem;
-      margin-bottom: 0.75rem;
-    }
-    .plan-actions {
-      display: flex;
-      gap: 0.5rem;
-    }
-    button {
-      padding: 0.5rem 1rem;
+    .sort-button {
+      background: none;
       border: none;
-      border-radius: 4px;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: var(--font-size-sm);
+      text-transform: uppercase;
+      letter-spacing: var(--letter-label);
       cursor: pointer;
-      font-size: 0.85rem;
-      transition: background 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: 0;
+      min-width: 0;
     }
-    .btn-primary {
-      background: var(--accent);
-      color: var(--button-text);
-    }
-    .btn-primary:hover {
-      background: var(--accent-hover);
-    }
-    .btn-secondary {
-      background: var(--surface-hover);
+    .sort-button:hover {
       color: var(--text-primary);
-      border: 1px solid var(--border);
     }
-    .btn-secondary:hover {
-      background: var(--border);
+    .sort-indicator {
+      font-size: var(--font-size-xs);
+      opacity: 0.6;
+    }
+    @media (max-width: 720px) {
+      .plans-filter-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .plans-filter-row .filter-select {
+        width: 100%;
+      }
+
+      .plans-clear-filters {
+        margin-left: 0;
+        align-self: flex-start;
+      }
+    }
+
+    @media (max-width: 1024px) {
+      .plan-table-header {
+        grid-template-columns: minmax(0, 1.6fr) 7.5rem minmax(6.5rem, 1fr) 7.5rem auto;
+      }
+    }
+    @media (max-width: 720px) {
+      .plan-table-header {
+        display: none;
+      }
     }
   `,
 })
-export class PlanHubComponent implements OnInit {
-  items: PlanItem[] = [];
-  planCards: PlanCardRow[] = [];
-  planSections: PlanSection[] = [];
-  metricsSummary: MetricsSummary | null = null;
-  loading = false;
-  metricsLoading = false;
-  error = '';
-  metricsError = '';
-
-  /** Visible row cap per `PlanSection.key`; reset when plan list or metrics rebuild. */
-  private sectionVisibleRowCap: Record<string, number> = {};
+export class PlanHubComponent implements OnInit, OnDestroy {
+  readonly paneActive = input(false);
 
   private apiService = inject(ApiService);
   private navService = inject(NavService);
-  private planLogResolution = inject(PlanLogResolutionService);
   private workspaceSelector = inject(WorkspaceSelectorService);
-  private cdr = inject(ChangeDetectorRef);
-  private skipWorkspaceReloadEffect = true;
+  private requestLifecycle = inject(RequestLifecycleService);
+  private route = inject(ActivatedRoute);
+  private router = inject(Router);
+  private destroy$ = new Subject<void>();
+  private searchSubject$ = new Subject<string>();
+  private static readonly SLOT = 'plans-index';
+
+  queryState = signal<QueryState>({
+    search: '',
+    status: '',
+    type: '',
+    sort: 'lastActivity',
+    sortOrder: 'desc',
+    pageSize: 20,
+  });
+
+  currentResponse = signal<PlanInventoryResponse | null>(null);
+  loading = signal(false);
+  readonly hasLoadedOnce = signal(false);
+  readonly showLoadingSkeleton = computed(() => shouldShowRouteSkeleton(this.loading(), this.hasLoadedOnce()));
+  error = signal<unknown>(null);
+  pageNumber = signal(1);
+  private cursors: Array<string | undefined> = [undefined];
+
+  pageInfo = computed(() => {
+    const resp = this.currentResponse();
+    return resp?.pageInfo ?? { hasMore: false, total: 0 };
+  });
+
+  visibleItems = computed(() => {
+    const resp = this.currentResponse();
+    return resp?.items ?? [];
+  });
+
+  private initialized = false;
+  private readonly reloadNonce = signal(0);
 
   constructor() {
-    effect(() => {
+    effect((onCleanup) => {
+      if (!this.paneActive()) {
+        return;
+      }
       this.workspaceSelector.selectedWorkspacePath();
-      if (this.skipWorkspaceReloadEffect) {
+      this.reloadNonce();
+      if (!this.initialized) {
         return;
       }
       this.fetchPlans();
+      const timer = window.setInterval(() => this.fetchPlans(), 30_000);
+      onCleanup(() => window.clearInterval(timer));
     });
   }
 
   ngOnInit(): void {
-    this.fetchPlans();
-    this.fetchMetrics();
-    queueMicrotask(() => {
-      this.skipWorkspaceReloadEffect = false;
+    this.route.queryParams.pipe(takeUntil(this.destroy$)).subscribe((params) => {
+      const search = params['search'] ?? '';
+      const status = (params['status'] ?? '') as StatusFilter;
+      const type = (params['type'] ?? '') as TypeFilter;
+      const sort = (params['sort'] ?? 'lastActivity') as SortField;
+      const sortOrder = (params['sortOrder'] ?? 'desc') as SortOrder;
+      const current = this.queryState();
+
+      this.queryState.set({
+        search,
+        status,
+        type,
+        sort,
+        sortOrder,
+        pageSize: 20,
+        cursor: undefined,
+      });
+      this.resetPagination();
+      this.initialized = true;
+      this.reloadNonce.update((n) => n + 1);
     });
+
+    this.searchSubject$
+      .pipe(
+        debounceTime(300),
+        distinctUntilChanged(),
+        takeUntil(this.destroy$),
+      )
+      .subscribe((search) => {
+        const current = this.queryState();
+        this.queryState.set({ ...current, search, cursor: undefined });
+        this.resetPagination();
+        this.reloadNonce.update((n) => n + 1);
+        this.updateQueryParams();
+      });
+  }
+
+  private updateQueryParams(): void {
+    const query = this.queryState();
+    const params: Record<string, string> = {};
+
+    if (query.search) {
+      params['search'] = query.search;
+    }
+    if (query.status) {
+      params['status'] = query.status;
+    }
+    if (query.type) {
+      params['type'] = query.type;
+    }
+    if (query.sort !== 'lastActivity') {
+      params['sort'] = query.sort;
+    }
+    if (query.sortOrder !== 'desc') {
+      params['sortOrder'] = query.sortOrder;
+    }
+
+    this.router.navigate([], { relativeTo: this.route, queryParams: params, queryParamsHandling: 'merge' });
+  }
+
+  private resetPagination(): void {
+    this.cursors = [undefined];
+    this.pageNumber.set(1);
+  }
+
+  ngOnDestroy(): void {
+    this.requestLifecycle.cancel(PlanHubComponent.SLOT);
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 
   fetchPlans(): void {
-    this.loading = true;
-    this.error = '';
-    this.cdr.markForCheck();
+    const query = this.queryState();
+    const handle = this.requestLifecycle.start(PlanHubComponent.SLOT, {
+      project: this.workspaceSelector.selectedWorkspacePath(),
+      search: query.search,
+      status: query.status,
+      type: query.type,
+      sort: query.sort,
+      sortOrder: query.sortOrder,
+      cursor: query.cursor,
+      pageSize: query.pageSize,
+    });
 
-    const selectedProject = this.workspaceSelector.selectedWorkspacePath();
-    const registryEntry = selectedProject
-      ? this.workspaceSelector.workspaces().find((w) => w.path === selectedProject)
-      : undefined;
-    const scopedWorkspaceRoot = registryEntry?.workspaceRoot;
+    beginInventoryFetch(this.hasLoadedOnce(), (value) => this.loading.set(value));
+    this.error.set(null);
 
-    this.apiService.fetchListing('logs', '', scopedWorkspaceRoot).subscribe({
-      next: (response) => {
-        // Filter for directories (these are the plan folders)
-        this.items = response.entries
-          .filter((entry) => entry.type === 'dir')
-          .map((entry) => ({
-            name: entry.name,
-            path: entry.path,
-            mtime: entry.mtime,
-            hasLogs: true, // Since we're now using logs dir for plans, all have logs
-            workspaceRoot: entry.workspaceRoot,
-          }))
-          .sort((a, b) => b.mtime - a.mtime);
-        this.loading = false;
-        this.rebuildPlanFolderMetrics();
-        this.cdr.markForCheck();
-      },
-      error: (err) => {
-        const missingLogsMessage =
-          'Logs directory not found (.ralph-workspace/logs). Run a plan or set RALPH_DASHBOARD_WORKSPACE_ROOT to the workspace before loading plans.';
-        this.error =
-          err.status === 404 ? missingLogsMessage : err.error?.error || 'Failed to load plans';
-        this.loading = false;
-        this.rebuildPlanFolderMetrics();
-        this.cdr.markForCheck();
-      },
+    this.apiService
+      .fetchPlanIndex(
+        {
+          search: query.search || undefined,
+          status: query.status || undefined,
+          type: query.type || undefined,
+          projectRoot: this.workspaceSelector.selectedWorkspacePath() ?? undefined,
+          allProjects: this.workspaceSelector.selectedWorkspacePath() === null,
+          pageSize: query.pageSize,
+          cursor: query.cursor,
+        },
+        { signal: handle.signal },
+      )
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (resp) => {
+          if (!this.requestLifecycle.isCurrent(handle)) {
+            return;
+          }
+          this.currentResponse.set(resp);
+          this.hasLoadedOnce.set(true);
+          this.loading.set(false);
+          markInventoryUsable('plans');
+        },
+        error: (err) => {
+          if (!this.requestLifecycle.isCurrent(handle) || isAbortError(err)) {
+            return;
+          }
+          this.error.set(err);
+          this.hasLoadedOnce.set(true);
+          this.loading.set(false);
+        },
+      });
+  }
+
+  onSearchChange(value: string): void {
+    this.searchSubject$.next(value);
+  }
+
+  onStatusChange(): void {
+    const current = this.queryState();
+    this.queryState.set({ ...current, cursor: undefined });
+    this.resetPagination();
+    this.reloadNonce.update((n) => n + 1);
+    this.updateQueryParams();
+  }
+
+  onTypeChange(): void {
+    const current = this.queryState();
+    this.queryState.set({ ...current, cursor: undefined });
+    this.resetPagination();
+    this.reloadNonce.update((n) => n + 1);
+    this.updateQueryParams();
+  }
+
+  hasFilters(): boolean {
+    const query = this.queryState();
+    return Boolean(query.search || query.status || query.type);
+  }
+
+  clearFilters(): void {
+    const current = this.queryState();
+    this.queryState.set({
+      ...current,
+      search: '',
+      status: '',
+      type: '',
+      cursor: undefined,
+    });
+    this.resetPagination();
+    this.reloadNonce.update((n) => n + 1);
+    this.updateQueryParams();
+  }
+
+  setSortField(field: SortField): void {
+    const current = this.queryState();
+    if (current.sort === field) {
+      current.sortOrder = current.sortOrder === 'asc' ? 'desc' : 'asc';
+    } else {
+      current.sort = field;
+      current.sortOrder = 'asc';
+    }
+    this.queryState.set({ ...current, cursor: undefined });
+    this.resetPagination();
+    this.reloadNonce.update((n) => n + 1);
+    this.updateQueryParams();
+  }
+
+  nextPage(): void {
+    const resp = this.currentResponse();
+    if (resp?.pageInfo.cursor) {
+      const current = this.queryState();
+      const nextPage = this.pageNumber() + 1;
+      this.cursors[nextPage - 1] = resp.pageInfo.cursor;
+      this.queryState.set({ ...current, cursor: resp.pageInfo.cursor });
+      this.pageNumber.set(nextPage);
+      this.reloadNonce.update((n) => n + 1);
+    }
+  }
+
+  previousPage(): void {
+    const currentPage = this.pageNumber();
+    if (currentPage <= 1) return;
+    const previousPage = currentPage - 1;
+    const current = this.queryState();
+    this.queryState.set({ ...current, cursor: this.cursors[previousPage - 1] });
+    this.pageNumber.set(previousPage);
+    this.reloadNonce.update((n) => n + 1);
+  }
+
+  pageRangeLabel(): string {
+    const total = this.pageInfo().total;
+    if (total === 0) return '0';
+    const start = (this.pageNumber() - 1) * this.queryState().pageSize + 1;
+    const end = Math.min(start + this.visibleItems().length - 1, total);
+    return `${start}–${end}`;
+  }
+
+  onOpenPlan(item: PlanInventoryItem): void {
+    this.workspaceSelector.selectWorkspace(item.projectRoot);
+    const fileName = item.path.endsWith('.md') ? item.path : `${item.path}.md`;
+    void this.router.navigate(['/plan-detail', fileName], {
+      queryParams: { projectRoot: item.projectRoot },
     });
   }
 
-  fetchMetrics(): void {
-    this.metricsLoading = true;
-    this.metricsError = '';
-    this.cdr.markForCheck();
-
-    this.apiService.fetchMetricsSummary().subscribe({
-      next: (summary) => {
-        this.metricsSummary = summary;
-        this.metricsLoading = false;
-        this.rebuildPlanFolderMetrics();
-        this.cdr.markForCheck();
-      },
-      error: (err) => {
-        this.metricsError = err.error?.error || 'Failed to load metrics';
-        this.metricsLoading = false;
-        this.metricsSummary = null;
-        this.rebuildPlanFolderMetrics();
-        this.cdr.markForCheck();
-      },
-    });
+  onRunPlan(item: PlanInventoryItem): void {
+    this.apiService.runLeafPlan(item.path, item.projectRoot).subscribe({ next: () => this.fetchPlans() });
   }
 
-  openUsage(): void {
-    this.navService.navigate('usage');
+  onStopPlan(item: PlanInventoryItem): void {
+    this.apiService.stopLeafPlan(item.path, item.projectRoot).subscribe({ next: () => this.fetchPlans() });
   }
-
-  openPlan(item: PlanItem): void {
-    const directory = this.planLogResolution.resolvePlanDirectory(item.path);
-    if (!directory) {
-      return;
-    }
-
-    const planFile = `${directory}.md`;
-    this.navService.navigate('plans', '', planFile, null, this.projectRootForPlanItem(item));
-  }
-
-  viewLogs(row: PlanItem | PlanCardRow): void {
-    const dir = this.planLogResolution.resolvePlanDirectory(row.path);
-    if (!dir) {
-      return;
-    }
-
-    const ws =
-      ('folderMetrics' in row && row.folderMetrics?.workspace_root?.trim()) ||
-      row.workspaceRoot?.trim() ||
-      undefined;
-    this.planLogResolution.resolveLatestLogTarget(dir, ws).subscribe({
-      next: (target) => {
-        if (target.file) {
-          const dirArg = target.directory ?? '';
-          this.navService.navigate('logs', dirArg, target.file, ws ?? null);
-        } else if (target.directory) {
-          this.navService.navigate('logs', target.directory, null, ws ?? null);
-        } else {
-          this.navService.navigate('logs', null, null, ws ?? null);
-        }
-      },
-    });
-  }
-
-  formatNumber(value: number): string {
-    return new Intl.NumberFormat().format(value);
-  }
-
-  formatSeconds(value: number): string {
-    return formatElapsedSeconds(value);
-  }
-
-  formatTokens(item: MetricsSummaryItem): string {
-    const total =
-      item.input_tokens + item.output_tokens + item.cache_creation_input_tokens + item.cache_read_input_tokens;
-    if (total <= 0) {
-      return '--';
-    }
-    return this.formatNumber(total);
-  }
-
-  formatOverallTokens(overall: MetricsSummaryOverall): string {
-    const total =
-      overall.input_tokens + overall.output_tokens + overall.cache_creation_input_tokens + overall.cache_read_input_tokens;
-    if (total <= 0) {
-      return '--';
-    }
-    return this.formatNumber(total);
-  }
-
-  formatPercent(ratio: number): string {
-    if (!Number.isFinite(ratio) || ratio <= 0) {
-      return '--';
-    }
-    return `${(ratio * 100).toFixed(1)}%`;
-  }
-
-  formatPeakTurn(tokens: number): string {
-    if (!Number.isFinite(tokens) || tokens <= 0) {
-      return '--';
-    }
-    return this.formatNumber(tokens);
-  }
-
-  overallMetricsTitle(): string {
-    const selected = this.workspaceSelector.selectedWorkspacePath();
-    if (selected) {
-      const entry = this.workspaceSelector.workspaces().find((w) => w.path === selected);
-      if (entry) {
-        return `Overall Metrics (${entry.label})`;
-      }
-    }
-    return 'Overall Metrics';
-  }
-
-  displayOverallMetrics(): MetricsSummaryOverall | null {
-    const summary = this.metricsSummary;
-    if (!summary?.overall) {
-      return null;
-    }
-    const selected = this.workspaceSelector.selectedWorkspacePath();
-    const entry = selected ? this.workspaceSelector.workspaces().find((w) => w.path === selected) : undefined;
-    if (entry?.workspaceRoot && summary.projects?.length) {
-      const rollup = summary.projects.find((p) => p.workspace_root === entry.workspaceRoot);
-      if (rollup?.overall) {
-        return rollup.overall;
-      }
-    }
-    return summary.overall;
-  }
-
-  totalPlanRows(): number {
-    return this.planSections.reduce((sum, s) => sum + s.rows.length, 0);
-  }
-
-  visibleRowsForSection(section: PlanSection): PlanCardRow[] {
-    const cap = this.sectionVisibleRowCap[section.key] ?? INITIAL_PLAN_ROWS_PER_SECTION;
-    return section.rows.slice(0, Math.min(cap, section.rows.length));
-  }
-
-  remainingRowsInSection(section: PlanSection): number {
-    const cap = this.sectionVisibleRowCap[section.key] ?? INITIAL_PLAN_ROWS_PER_SECTION;
-    return Math.max(0, section.rows.length - cap);
-  }
-
-  showMoreCount(section: PlanSection): number {
-    return Math.min(PLAN_ROWS_LOAD_MORE_STEP, this.remainingRowsInSection(section));
-  }
-
-  showMoreForSection(section: PlanSection): void {
-    const cur = this.sectionVisibleRowCap[section.key] ?? INITIAL_PLAN_ROWS_PER_SECTION;
-    const next = Math.min(cur + PLAN_ROWS_LOAD_MORE_STEP, section.rows.length);
-    this.sectionVisibleRowCap = { ...this.sectionVisibleRowCap, [section.key]: next };
-    this.cdr.markForCheck();
-  }
-
-  private rebuildPlanFolderMetrics(): void {
-    this.sectionVisibleRowCap = {};
-    const summary = this.metricsSummary;
-    const lookup = summary ? buildPlanFolderMetricLookup(summary) : null;
-    this.planCards = this.items.map((item) => ({
-      ...item,
-      folderMetrics: lookup
-        ? rollupFolderMetrics(lookupFolderMetricRows(lookup, item.name, item.workspaceRoot), item.name)
-        : null,
-      mtimeLabel: this.formatMtimeLabel(item.mtime),
-    }));
-    this.planSections = this.groupPlanCardsIntoSections(this.planCards);
-  }
-
-  private groupPlanCardsIntoSections(rows: PlanCardRow[]): PlanSection[] {
-    const order: string[] = [];
-    const map = new Map<string, PlanCardRow[]>();
-    for (const row of rows) {
-      const key = row.workspaceRoot ?? '__default__';
-      if (!map.has(key)) {
-        order.push(key);
-        map.set(key, []);
-      }
-      map.get(key)!.push(row);
-    }
-    return order.map((key) => ({
-      key,
-      label: key === '__default__' ? 'Workspace' : this.sectionLabelForWorkspaceRoot(key),
-      workspaceRoot: key === '__default__' ? undefined : key,
-      rows: map.get(key)!,
-    }));
-  }
-
-  private sectionLabelForWorkspaceRoot(workspaceRoot: string): string {
-    const entry = this.workspaceSelector.workspaces().find((w) => w.workspaceRoot === workspaceRoot);
-    return entry?.label ?? workspaceRoot.split('/').filter(Boolean).pop() ?? workspaceRoot;
-  }
-
-  private projectRootForPlanItem(item: PlanItem): string | null {
-    const ws = item.workspaceRoot?.trim();
-    if (!ws) {
-      return null;
-    }
-    const entry = this.workspaceSelector.workspaces().find((w) => w.workspaceRoot === ws);
-    return entry?.projectRoot ?? null;
-  }
-
-  private formatMtimeLabel(mtimeMs: number): string {
-    const d = new Date(mtimeMs);
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
 }

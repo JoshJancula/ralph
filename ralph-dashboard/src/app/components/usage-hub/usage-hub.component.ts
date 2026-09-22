@@ -3,758 +3,725 @@ import {
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
-  OnInit,
+  HostListener,
   effect,
   inject,
+  input,
 } from '@angular/core';
-import { IonCard, IonCardContent, IonCardHeader, IonCardSubtitle, IonCardTitle, IonSpinner } from '@ionic/angular/standalone';
-
-import { forkJoin, of } from 'rxjs';
-import { catchError } from 'rxjs/operators';
-
+import { RouterLink } from '@angular/router';
 import {
   ApiService,
-  DiscoverPatternSummary,
-  MetricsSummary,
+  JevUsageResponse,
+  MetricsBreakdownResponse,
+  MetricsBreakdownRunRow,
+  MetricsDetailResponse,
+  MetricsInsightsSummary,
+  MetricsQueryFilters,
+  MetricsRunModelRow,
   MetricsSummaryItem,
-  ModelBreakdownItem,
-  RuntimeOverlayMetrics,
-  SavingsBucket,
-  SavingsPathName,
   SavingsReport,
   WorkspaceRegistry,
-  ToolCallClassificationMetrics,
 } from '../../services/api.service';
-import { NavService } from '../../services/nav.service';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
+import { RequestLifecycleService } from '../../services/request-lifecycle.service';
+import { RouteLoadStateComponent } from '../route-load-state/route-load-state.component';
+import { ErrorModalComponent } from '../error-modal/error-modal.component';
 import { formatElapsedSeconds } from '../../utils/format-elapsed';
-
-interface UsageModelRow {
-  runtime: string;
-  model: string;
-  invocations: number;
-  runs: number;
-  elapsed_seconds: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  max_turn_total_tokens: number;
-  tool_calls_total: number;
-  cache_hit_ratio: number;
-  total_tokens: number;
-}
-
-interface UsageRuntimeRow {
-  runtime: string;
-  model_count: number;
-  invocations: number;
-  runs: number;
-  elapsed_seconds: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  max_turn_total_tokens: number;
-  tool_calls_total: number;
-  cache_hit_ratio: number;
-  total_tokens: number;
-}
-
-interface MutableModelBucket {
-  runtime: string;
-  model: string;
-  invocations: number;
-  runKeys: Set<string>;
-  elapsed_seconds: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  max_turn_total_tokens: number;
-  tool_calls_total: number;
-}
-
-interface MutableRuntimeBucket {
-  runtime: string;
-  models: Set<string>;
-  invocations: number;
-  runKeys: Set<string>;
-  elapsed_seconds: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-  max_turn_total_tokens: number;
-  tool_calls_total: number;
-}
-
-interface StatItem {
-  label: string;
-  value: string;
-}
-
-interface DiscoverPlanEntry {
-  plan_key: string;
-  patterns: DiscoverPatternSummary[];
-  limitations: string[];
-}
-
-interface OverlayRunRow {
-  kind: Exclude<UsageKind, 'all'>;
-  plan_key: string;
-  stage_id?: string;
-  runtime?: string;
-  overlay: RuntimeOverlayMetrics;
-}
-
-interface ToolCallRunRow {
-  kind: Exclude<UsageKind, 'all'>;
-  plan_key: string;
-  stage_id?: string;
-  runtime?: string;
-  tool_calls: ToolCallClassificationMetrics;
-}
-
-interface SavingsPathEntry {
-  name: SavingsPathName;
-  label: string;
-  saved_tokens: number;
-  saved_bytes: number;
-  count: number;
-  pre_optimization_bytes: number;
-  post_optimization_bytes: number;
-  savings_percent?: number;
-  status_label: string;
-}
-
-const SAVINGS_PATH_ORDER: SavingsPathName[] = [
-  'pre_tool_rewrite',
-  'hook_compaction',
-  'proxy_shell_compaction',
-  'result_windowing',
-];
+import { isAbortError } from '../../utils/request-lifecycle';
+import { markInventoryUsable, markSecondaryReady } from '../../utils/perf-diagnostics';
 
 type UsageKind = 'all' | 'plan' | 'orchestration';
-
-interface UsageRunRecord {
-  kind: Exclude<UsageKind, 'all'>;
-  item: MetricsSummaryItem;
-  breakdown: ModelBreakdownItem[];
-  hasDetailedBreakdown: boolean;
-  startedAtMs: number | null;
-}
+type DrillSection = 'runtime' | 'model' | 'runs' | null;
 
 @Component({
   selector: 'ralph-usage-hub',
   standalone: true,
-  imports: [CommonModule, IonCard, IonCardContent, IonCardHeader, IonCardSubtitle, IonCardTitle, IonSpinner],
+  imports: [
+    CommonModule,
+    RouterLink,
+    RouteLoadStateComponent,
+    ErrorModalComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="usage-hub">
-      <div class="header">
+    <div class="usage-hub hub-page">
+      <header class="header page-header">
         <div class="title-wrap">
-          <h2>Usage</h2>
-          <p>Token and tool-call totals from plan logs, by runtime and model. Open this view with the chart icon in the header.</p>
+          <h1 class="page-title">Insights</h1>
+          <p class="page-lede">What changed in token use for this workspace.</p>
         </div>
         <div class="header-actions">
-          <button class="btn-secondary" (click)="goToPlans()">Back to Plans</button>
-          <button class="btn-primary" (click)="refresh()">Refresh</button>
-        </div>
-      </div>
-
-      @if (loading) {
-        <div class="loading">
-          <ion-spinner name="crescent"></ion-spinner>
-          <span>Loading usage metrics...</span>
-        </div>
-      } @else if (error) {
-        <div class="error">{{ error }}</div>
-      } @else if (summary) {
-        <section class="filters-section">
-          <div class="filters-grid">
-            <label class="filter-field">
-              <span>Kind</span>
-              <select [value]="filterKind" (change)="setFilterKind($any($event.target).value)">
-                <option value="all">All</option>
-                <option value="plan">Plans</option>
-                <option value="orchestration">Orchestrations</option>
-              </select>
-            </label>
-
-            <label class="filter-field">
-              <span>Runtime</span>
-              <select [value]="filterRuntime" (change)="setFilterRuntime($any($event.target).value)">
-                <option value="all">All</option>
-                @for (runtime of runtimeOptions; track runtime) {
-                  <option [value]="runtime">{{ runtime }}</option>
-                }
-              </select>
-            </label>
-
-            <label class="filter-field">
-              <span>Model</span>
-              <select [value]="filterModel" (change)="setFilterModel($any($event.target).value)">
-                <option value="all">All</option>
-                @for (model of modelOptions; track model) {
-                  <option [value]="model">{{ model }}</option>
-                }
-              </select>
-            </label>
-
-            <label class="filter-field">
-              <span>From Date</span>
-              <input type="date" [value]="filterDateFrom" (change)="setFilterDateFrom($any($event.target).value)" />
-            </label>
-
-            <label class="filter-field">
-              <span>To Date</span>
-              <input type="date" [value]="filterDateTo" (change)="setFilterDateTo($any($event.target).value)" />
-            </label>
-          </div>
-          <div class="filters-meta">
-            <span>Showing {{ formatNumber(filteredRunCount) }} of {{ formatNumber(totalRunCount) }} runs</span>
-            <button class="btn-secondary" type="button" (click)="clearFilters()">Clear Filters</button>
-          </div>
-        </section>
-
-        <section class="overview-grid">
-          @for (stat of statRows; track stat.label) {
-            <ion-card>
-              <ion-card-content>
-                <div class="metric-label">{{ stat.label }}</div>
-                <div class="metric-value">{{ stat.value }}</div>
-              </ion-card-content>
-            </ion-card>
+          @if (isRefreshing) {
+            <div class="insights-busy" role="status" aria-live="polite" data-testid="insights-busy">
+              <span class="busy-spinner" aria-hidden="true"></span>
+              <span>Updating</span>
+            </div>
           }
-        </section>
+          <button class="btn btn-ghost" type="button" (click)="refresh()">Refresh</button>
+        </div>
+      </header>
 
-        <section class="savings-panel" aria-label="Benchmark overview">
-          <div class="savings-panel-header">
-            <h3>Benchmark</h3>
-            @if (savingsReport?.run_count; as runCount) {
-              <span class="savings-panel-meta">
-                Measured across {{ runCount }} runs
-                @if (formatSavingsDateRange(savingsReport?.date_range); as savingsDateRange) {
-                  <span> • {{ savingsDateRange }}</span>
-                }
-              </span>
+      @if (summaryLoading && !insights) {
+        <ralph-route-load-state [loading]="true" [error]="null" [columns]="3" [rowCount]="4" />
+      } @else if (summaryError && !insights) {
+        <div class="error" data-testid="insights-summary-error" role="alert">
+          <ralph-error-modal class="is-embedded" [error]="summaryError" [embedded]="true" [showHeader]="false" />
+          <button type="button" class="btn btn-secondary" data-testid="insights-summary-retry" (click)="loadSummary()">
+            Retry
+          </button>
+        </div>
+      } @else if (insights && !hasUsageData) {
+        <div class="empty-state" data-testid="insights-empty">
+          <p class="empty-title">No usage in this scope</p>
+          <p class="empty-hint">
+            Run a plan or workflow to collect tokens, elapsed time, and tool calls. Filters stay available if you
+            already have data outside the current scope.
+          </p>
+          <div class="empty-actions">
+            <a class="btn btn-secondary" routerLink="/plans">Open plans</a>
+            @if (hasActiveFilters) {
+              <button type="button" class="btn btn-ghost" (click)="clearFilters()">Clear filters</button>
             }
           </div>
-          @if (savingsLoading) {
-            <div class="loading">Loading benchmark data...</div>
-          } @else if (savingsError) {
-            <div class="error">{{ savingsError }}</div>
-          } @else if (savingsReport) {
-            <div class="savings-headline-grid">
-              <ion-card>
-                <ion-card-content>
-                  <div class="metric-label">Session usage</div>
-                  <div class="metric-value">
-                    {{ formatNumber(savingsReport.session_usage.input_tokens +
-                       savingsReport.session_usage.cache_creation_input_tokens +
-                       savingsReport.session_usage.cache_read_input_tokens) }} tokens in
-                  </div>
-                  <p class="savings-sentence">
-                    {{ formatNumber(savingsReport.session_usage.input_tokens) }} input /
-                    {{ formatNumber(savingsReport.session_usage.cache_creation_input_tokens) }} cache created /
-                    {{ formatNumber(savingsReport.session_usage.cache_read_input_tokens) }} cache read /
-                    {{ formatNumber(savingsReport.session_usage.output_tokens) }} output
-                  </p>
-                </ion-card-content>
-              </ion-card>
-              <ion-card>
-                <ion-card-content>
-                  <div class="metric-label">Tool output counterfactual</div>
-                  <div class="metric-value">
-                    {{ formatNumber(savingsReport.tool_output_counterfactual.net_savings_bytes) }} bytes saved
-                  </div>
-                  <p class="savings-sentence">
-                    Without Ralph: ~{{ formatNumber(savingsReport.tool_output_counterfactual.hypothetical_without_ralph_tokens) }} tokens;
-                    with Ralph: ~{{ formatNumber(savingsReport.tool_output_counterfactual.actual_with_ralph_tokens) }} tokens
-                    ({{ savingsReport.tool_output_counterfactual.net_savings_percent }}%)
-                  </p>
-                </ion-card-content>
-              </ion-card>
-              <ion-card>
-                <ion-card-content>
-                  <div class="metric-label">Kept out of model context</div>
-                  <div class="metric-value">
-                    ~{{ formatNumber(savingsReport.saved_tokens) }} tokens /
-                    ~{{ formatNumber(savingsReport.saved_bytes) }} bytes
-                  </div>
-                  <p class="savings-sentence">
-                    Kept ~{{ formatNumber(savingsReport.saved_tokens) }} tokens (~{{ formatNumber(savingsReport.saved_bytes) }} bytes)
-                    out of model context
-                  </p>
-                </ion-card-content>
-              </ion-card>
+        </div>
+      } @else if (insights) {
+        <section class="answer-panel hub-panel-card" aria-label="Insights summary" data-testid="insights-summary">
+          @if (summaryError) {
+            <div class="inline-error" role="alert">
+              <ralph-error-modal class="is-embedded" [error]="summaryError" [embedded]="true" [showHeader]="false" />
+              <button type="button" class="btn btn-ghost" data-testid="insights-summary-retry" (click)="loadSummary()">
+                Retry
+              </button>
             </div>
-            <div class="savings-breakdown-grid">
-              @for (pathEntry of savingsPathEntries; track pathEntry.name) {
-                <ion-card>
-                  <ion-card-header>
-                    <ion-card-title>{{ pathEntry.label }}</ion-card-title>
-                    <ion-card-subtitle>{{ pathEntry.status_label }}</ion-card-subtitle>
-                  </ion-card-header>
-                  <ion-card-content>
-                    <div class="metric-line">
-                      <span>Pre bytes</span>
-                      <span>{{ formatNumber(pathEntry.pre_optimization_bytes) }}</span>
+          }
+          <div class="answer-headline">
+            <p class="eyebrow">What changed</p>
+            <p class="trend-sentence" [attr.data-direction]="insights.trend.direction">
+              {{ trendSentence(insights) }}
+            </p>
+            <p class="scope-meta">
+              {{ insights.date_scope.label }}
+              · {{ formatNumber(insights.date_scope.run_count) }} runs
+              · {{ insights.units.tokens }}
+            </p>
+          </div>
+
+          <div class="trend-chart" data-testid="insights-trend-chart" aria-label="Prior versus recent token volume">
+            <div class="trend-bar-row">
+              <span class="trend-bar-label">Prior</span>
+              <span class="trend-bar-track">
+                <span class="trend-bar is-prior" [style.width.%]="trendShare(insights.trend.prior_tokens)"></span>
+              </span>
+              <span class="trend-bar-value" [title]="formatNumber(insights.trend.prior_tokens)">
+                {{ formatCompact(insights.trend.prior_tokens) }}
+              </span>
+            </div>
+            <div class="trend-bar-row">
+              <span class="trend-bar-label">Recent</span>
+              <span class="trend-bar-track">
+                <span
+                  class="trend-bar is-recent"
+                  [attr.data-direction]="insights.trend.direction"
+                  [style.width.%]="trendShare(insights.trend.recent_tokens)"
+                ></span>
+              </span>
+              <span class="trend-bar-value" [title]="formatNumber(insights.trend.recent_tokens)">
+                {{ formatCompact(insights.trend.recent_tokens) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="headline-grid">
+            <div class="metric-tile hub-nested-panel">
+              <div class="metric-label">Total tokens</div>
+              <div class="metric-value" [title]="formatNumber(insights.headline.total_tokens)">
+                {{ formatCompact(insights.headline.total_tokens) }}
+              </div>
+              <p class="metric-sub">
+                {{ formatCompact(insights.headline.input_tokens) }} in /
+                {{ formatCompact(insights.headline.output_tokens) }} out /
+                {{ formatCompact(insights.headline.cache_read_input_tokens) }} cache
+              </p>
+            </div>
+            <div class="metric-tile hub-nested-panel">
+              <div class="metric-label">Elapsed</div>
+              <div class="metric-value">{{ formatSeconds(insights.headline.elapsed_seconds) }}</div>
+              <p class="metric-sub">{{ formatNumber(insights.headline.run_count) }} runs</p>
+            </div>
+            <div class="metric-tile hub-nested-panel">
+              <div class="metric-label">Cache hit</div>
+              <div class="metric-value">{{ formatPercent(insights.headline.cache_hit_ratio) }}</div>
+              <p class="metric-sub">{{ formatCompact(insights.headline.tool_calls_total) }} tool calls</p>
+            </div>
+          </div>
+
+          <div class="drivers-block hub-nested-panel">
+            <h2>Cost drivers</h2>
+            @if (insights.drivers.length === 0) {
+              <p class="quiet-empty">No concentrated drivers in this scope.</p>
+            } @else {
+              <ul class="driver-list">
+                @for (driver of insights.drivers; track driver.kind + '-' + driver.exact_value) {
+                  <li>
+                    <div class="driver-copy">
+                      <span class="driver-kind">{{ driver.kind }}</span>
+                      <span class="driver-label" [title]="driver.exact_value">{{ driver.label }}</span>
+                      <span class="driver-meta">
+                        {{ formatCompact(driver.total_tokens) }}
+                        ({{ driver.share_percent }}%) · {{ formatNumber(driver.runs) }} runs
+                      </span>
                     </div>
-                    <div class="metric-line">
-                      <span>Post bytes</span>
-                      <span>{{ formatNumber(pathEntry.post_optimization_bytes) }}</span>
+                    <span class="driver-share-track" aria-hidden="true">
+                      <span class="driver-share-fill" [style.width.%]="driver.share_percent"></span>
+                    </span>
+                    <span class="sr-only">Exact value: {{ driver.exact_value }}</span>
+                  </li>
+                }
+              </ul>
+            }
+          </div>
+
+          @if (insights.anomalies.length > 0) {
+            <div class="anomalies-block hub-nested-panel">
+              <h2>Watch</h2>
+              <ul class="anomaly-list">
+                @for (anomaly of insights.anomalies; track anomaly.code) {
+                  <li [attr.data-severity]="anomaly.severity">{{ anomaly.message }}</li>
+                }
+              </ul>
+            </div>
+          }
+
+          @if (insights.drilldowns.length > 0) {
+            <div class="drilldown-links" aria-label="Drill-down links">
+              <div class="drilldown-actions">
+                @for (link of insights.drilldowns; track link.id) {
+                  <button
+                    class="btn btn-ghost"
+                    type="button"
+                    (click)="openDrilldown(link.id)"
+                    [attr.data-testid]="'drilldown-' + link.id"
+                  >
+                    {{ link.label }}
+                  </button>
+                }
+              </div>
+            </div>
+          }
+        </section>
+      }
+
+      <section class="filters-section hub-panel-card" aria-label="Refine scope" data-testid="insights-filters">
+        <div class="section-head filters-header">
+          <h2 class="section-legend">Refine scope</h2>
+          <p class="section-hint filters-summary-meta">
+            @if (insights) {
+              {{ insights.date_scope.label }} · {{ formatNumber(insights.date_scope.run_count) }} runs
+            } @else {
+              Kind, runtime, model, dates
+            }
+          </p>
+        </div>
+        <div class="filters-toolbar">
+          <label class="filter-field">
+            <span>Kind</span>
+            <select
+              class="filter-select"
+              [value]="filterKind"
+              (change)="setFilterKind($any($event.target).value)"
+            >
+              <option value="all">All</option>
+              <option value="plan">Plans</option>
+              <option value="orchestration">Orchestrations</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span>Runtime</span>
+            <select
+              class="filter-select"
+              [value]="filterRuntime"
+              (change)="setFilterRuntime($any($event.target).value)"
+            >
+              <option value="all">All</option>
+              @for (runtime of runtimeOptions; track runtime) {
+                <option [value]="runtime">{{ runtime }}</option>
+              }
+            </select>
+          </label>
+          <label class="filter-field">
+            <span>Model</span>
+            <select
+              class="filter-select"
+              [value]="filterModel"
+              (change)="setFilterModel($any($event.target).value)"
+            >
+              <option value="all">All</option>
+              @for (model of modelOptions; track model.exact_value) {
+                <option [value]="model.exact_value" [title]="model.exact_value">{{ model.label }}</option>
+              }
+            </select>
+          </label>
+          <label class="filter-field">
+            <span>From</span>
+            <input
+              class="filter-select"
+              type="date"
+              [value]="filterDateFrom"
+              (change)="setFilterDateFrom($any($event.target).value)"
+            />
+          </label>
+          <label class="filter-field">
+            <span>To</span>
+            <input
+              class="filter-select"
+              type="date"
+              [value]="filterDateTo"
+              (change)="setFilterDateTo($any($event.target).value)"
+            />
+          </label>
+          @if (hasActiveFilters) {
+            <button class="btn btn-ghost filter-clear" type="button" (click)="clearFilters()">Clear filters</button>
+          }
+        </div>
+      </section>
+
+      @if (insights && hasUsageData) {
+      <section class="breakdown-section hub-panel-card" aria-label="Usage breakdown tables" data-testid="insights-breakdown">
+        <div class="breakdown-header section-head">
+          <h2 class="section-legend">Breakdown</h2>
+          <div class="breakdown-actions">
+            @if (breakdownLoading && breakdown) {
+              <span class="quiet-empty">Updating tables</span>
+            }
+            @if (breakdown) {
+              <button class="btn btn-ghost" type="button" (click)="downloadBreakdownCsv()">
+                Download CSV
+              </button>
+            }
+          </div>
+        </div>
+
+        @if (breakdownLoading && !breakdown) {
+          <div data-testid="insights-breakdown-loading">
+            <ralph-route-load-state [loading]="true" [error]="null" [columns]="5" [rowCount]="5" />
+          </div>
+        } @else if (breakdownError && !breakdown) {
+          <div class="error" data-testid="insights-breakdown-error" role="alert">
+            <ralph-error-modal class="is-embedded" [error]="breakdownError" [embedded]="true" [showHeader]="false" />
+            <button type="button" class="btn btn-secondary" data-testid="insights-breakdown-retry" (click)="loadBreakdown()">
+              Retry
+            </button>
+          </div>
+        } @else if (breakdown) {
+          <p class="scope-meta">
+            Showing {{ formatNumber(breakdown.filtered_run_count) }} of
+            {{ formatNumber(breakdown.total_run_count) }} runs ·
+            {{ breakdown.date_scope.label }}
+          </p>
+
+          <div class="tables-grid">
+            <details
+              class="breakdown-panel hub-nested-panel"
+              open
+              data-testid="insights-panel-runtime"
+              [class.is-highlighted]="activeDrill === 'runtime'"
+            >
+              <summary class="breakdown-panel-summary">
+                <span class="breakdown-panel-title">Runtime breakdown</span>
+                <span class="breakdown-panel-meta">{{ breakdown.runtime_rows.length }} runtimes</span>
+              </summary>
+              <div class="breakdown-panel-body">
+                @if (breakdown.runtime_rows.length === 0) {
+                  <div class="empty">No runtime-level usage data.</div>
+                } @else {
+                  <div class="usage-table-wrap">
+                    <div class="usage-table" role="table" aria-label="Runtime breakdown">
+                      <div class="usage-row usage-header runtime-columns" role="row">
+                        <span role="columnheader">Runtime</span>
+                        <span role="columnheader">Models</span>
+                        <span role="columnheader">Runs</span>
+                        <span role="columnheader">Total tokens</span>
+                        <span role="columnheader">Tool calls</span>
+                        <span role="columnheader">Cache hit</span>
+                      </div>
+                      @for (row of breakdown.runtime_rows; track row.runtime) {
+                        <div class="usage-row runtime-columns" role="row">
+                          <span class="mono cell-clip" data-label="Runtime" [title]="row.runtime">{{
+                            row.runtime
+                          }}</span>
+                          <span data-label="Models">{{ row.model_count ?? 0 }}</span>
+                          <span data-label="Runs">{{ formatNumber(row.runs) }}</span>
+                          <span data-label="Total tokens" class="mono">{{
+                            formatNumber(row.total_tokens)
+                          }}</span>
+                          <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
+                          <span data-label="Cache hit">{{ formatPercent(row.cache_hit_ratio) }}</span>
+                        </div>
+                      }
                     </div>
+                  </div>
+                }
+              </div>
+            </details>
+
+            <details
+              class="breakdown-panel hub-nested-panel"
+              data-testid="insights-panel-model"
+              [class.is-highlighted]="activeDrill === 'model'"
+            >
+              <summary class="breakdown-panel-summary">
+                <span class="breakdown-panel-title">Model breakdown</span>
+                <span class="breakdown-panel-meta">{{ breakdown.model_rows.length }} runtime/model buckets</span>
+              </summary>
+              <div class="breakdown-panel-body">
+                @if (breakdown.model_rows.length === 0) {
+                  <div class="empty">No model-level usage data.</div>
+                } @else {
+                  <div class="usage-table-wrap">
+                    <div class="usage-table" role="table" aria-label="Model breakdown">
+                      <div class="usage-row usage-header model-columns" role="row">
+                        <span role="columnheader">Runtime</span>
+                        <span role="columnheader">Model</span>
+                        <span role="columnheader">Runs</span>
+                        <span role="columnheader">Total tokens</span>
+                        <span role="columnheader">Tool calls</span>
+                        <span role="columnheader">Cache hit</span>
+                      </div>
+                      @for (row of breakdown.model_rows; track row.runtime + '-' + row.model_exact) {
+                        <div class="usage-row model-columns" role="row">
+                          <span class="mono cell-clip" data-label="Runtime" [title]="row.runtime">{{
+                            row.runtime
+                          }}</span>
+                          <span
+                            class="cell-clip"
+                            data-label="Model"
+                            [title]="row.model_exact || row.model || ''"
+                          >
+                            {{ row.model_label || row.model || 'Unspecified model' }}
+                            <span class="exact-hint">{{ row.model_exact || row.model }}</span>
+                          </span>
+                          <span data-label="Runs">{{ formatNumber(row.runs) }}</span>
+                          <span data-label="Total tokens" class="mono">{{
+                            formatNumber(row.total_tokens)
+                          }}</span>
+                          <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
+                          <span data-label="Cache hit">{{ formatPercent(row.cache_hit_ratio) }}</span>
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+              </div>
+            </details>
+
+            <details
+              class="breakdown-panel hub-nested-panel"
+              data-testid="insights-panel-runs"
+              [class.is-highlighted]="activeDrill === 'runs'"
+            >
+              <summary class="breakdown-panel-summary">
+                <span class="breakdown-panel-title">Run table</span>
+                <span class="breakdown-panel-meta">
+                  Page {{ pageLabel }} · sort {{ breakdown.sort.by }} {{ breakdown.sort.dir }}
+                </span>
+              </summary>
+              <div class="breakdown-panel-body">
+                @if (breakdown.run_rows.length === 0) {
+                  <div class="empty">No runs for this filter.</div>
+                } @else {
+                  <div class="usage-table-wrap">
+                    <div class="usage-table" role="table" aria-label="Run table">
+                      <div class="usage-row usage-header run-columns" role="row">
+                        <span role="columnheader">
+                          <button type="button" class="sort-btn" (click)="sortRuns('plan_key')">Plan</button>
+                        </span>
+                        <span role="columnheader">Runtime</span>
+                        <span role="columnheader">Model</span>
+                        <span role="columnheader">
+                          <button type="button" class="sort-btn" (click)="sortRuns('total_tokens')">
+                            Total tokens
+                          </button>
+                        </span>
+                        <span role="columnheader">Tool calls</span>
+                        <span role="columnheader">Elapsed</span>
+                        <span role="columnheader">Detail</span>
+                      </div>
+                      @for (row of breakdown.run_rows; track row.path) {
+                        <div
+                          class="usage-row run-columns is-clickable"
+                          role="row"
+                          tabindex="0"
+                          [attr.aria-label]="'Open run detail for ' + row.plan_key"
+                          [attr.data-testid]="'run-row-' + row.plan_key"
+                          (click)="loadDetail(row.plan_key)"
+                          (keydown.enter)="loadDetail(row.plan_key)"
+                          (keydown.space)="$event.preventDefault(); loadDetail(row.plan_key)"
+                        >
+                          <span class="mono cell-clip" data-label="Plan" [title]="row.plan_key">{{
+                            row.plan_key
+                          }}</span>
+                          <span class="mono cell-clip" data-label="Runtime" [title]="row.runtime">{{
+                            row.runtime
+                          }}</span>
+                          <span class="cell-clip" data-label="Model" [title]="runModelsTitle(row)">
+                            {{ row.model_label }}
+                            @if (extraModelCount(row); as extra) {
+                              <span class="more-models" [attr.data-testid]="'models-more-' + row.plan_key"
+                                >+{{ extra }} more</span
+                              >
+                            }
+                            <span class="exact-hint">{{ row.model_exact }}</span>
+                          </span>
+                          <span data-label="Total tokens" class="mono">{{
+                            formatNumber(row.total_tokens)
+                          }}</span>
+                          <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
+                          <span data-label="Elapsed">{{ formatSeconds(row.elapsed_seconds) }}</span>
+                          <span data-label="Detail">
+                            <button
+                              class="btn-link"
+                              type="button"
+                              (click)="$event.stopPropagation(); loadDetail(row.plan_key)"
+                              [attr.data-testid]="'detail-' + row.plan_key"
+                            >
+                              Inspect
+                            </button>
+                          </span>
+                        </div>
+                      }
+                    </div>
+                  </div>
+                  <div class="pager">
+                    <button
+                      class="btn btn-secondary"
+                      type="button"
+                      [disabled]="pageOffset <= 0"
+                      (click)="prevPage()"
+                    >
+                      Previous
+                    </button>
+                    <span>{{ pageLabel }}</span>
+                    <button
+                      class="btn btn-secondary"
+                      type="button"
+                      [disabled]="!hasNextPage"
+                      (click)="nextPage()"
+                    >
+                      Next
+                    </button>
+                  </div>
+                }
+              </div>
+            </details>
+          </div>
+        }
+      </section>
+      }
+
+      @if (detailLoading || detailError || detail) {
+        <div class="hub-modal-backdrop" data-testid="insights-detail-modal" (click)="closeDetail()">
+          <section
+            class="detail-modal hub-modal-panel hub-modal-panel--compact"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Run detail"
+            (click)="$event.stopPropagation()"
+          >
+            <header class="detail-modal-header">
+              <div>
+                <p class="eyebrow">Run detail</p>
+                @if (detail) {
+                  <h2>{{ detail.plan_key }}</h2>
+                } @else {
+                  <h2>Loading run</h2>
+                }
+              </div>
+              <button type="button" class="detail-modal-close" aria-label="Close run detail" (click)="closeDetail()">Close</button>
+            </header>
+            @if (detailLoading) {
+              <div class="loading" data-testid="insights-detail-loading">Loading run detail...</div>
+            } @else if (detailError) {
+              <div class="error" role="alert">
+                <ralph-error-modal class="is-embedded" [error]="detailError" [embedded]="true" [showHeader]="false" />
+              </div>
+            } @else if (detail) {
+              <section class="detail-panel" aria-label="Run detail" data-testid="insights-detail">
+                @if (!detail.item) {
+                  <p class="empty">No detail found for this plan key in the selected project.</p>
+                } @else {
+                  <p class="detail-meta">{{ detail.kind }} · {{ detail.item.runtime || '(unspecified)' }}</p>
+                  <a
+                    class="detail-plan-link"
+                    [routerLink]="['/plan-detail', detail.item.plan_key]"
+                    [queryParams]="{ projectRoot: detail.item.project_root }"
+                    (click)="closeDetail()"
+                    data-testid="insights-detail-plan-link"
+                  >
+                    Open plan
+                  </a>
+                  @if (detailModelRows(detail.item); as modelRows) {
+                    <div class="detail-models" data-testid="insights-detail-models">
+                      <h3 class="detail-models-title">
+                        Models used
+                        <span class="detail-models-meta">{{ modelRows.length }}</span>
+                      </h3>
+                      <div class="usage-table-wrap">
+                        <div class="usage-table detail-models-table" role="table" aria-label="Models used in this run">
+                          <div class="usage-row usage-header detail-model-columns" role="row">
+                            <span role="columnheader">Model</span>
+                            <span role="columnheader">Runtime</span>
+                            <span role="columnheader">Invocations</span>
+                            <span role="columnheader">Input</span>
+                            <span role="columnheader">Output</span>
+                            <span role="columnheader">Cache read</span>
+                            <span role="columnheader">Total</span>
+                            <span role="columnheader">Tool calls</span>
+                            <span role="columnheader">Elapsed</span>
+                          </div>
+                          @for (row of modelRows; track row.runtime + '-' + row.model_exact) {
+                            <div class="usage-row detail-model-columns" role="row">
+                              <span class="cell-clip" data-label="Model" [title]="row.model_exact">
+                                {{ row.model_label }}
+                                @if (showExactModelHint(row.model_label, row.model_exact)) {
+                                  <span class="exact-hint">{{ row.model_exact }}</span>
+                                }
+                              </span>
+                              <span class="mono cell-clip" data-label="Runtime">{{ row.runtime }}</span>
+                              <span data-label="Invocations">{{ formatNumber(row.invocations) }}</span>
+                              <span class="mono" data-label="Input">{{ formatNumber(row.input_tokens) }}</span>
+                              <span class="mono" data-label="Output">{{ formatNumber(row.output_tokens) }}</span>
+                              <span class="mono" data-label="Cache read">{{
+                                formatNumber(row.cache_read_input_tokens)
+                              }}</span>
+                              <span class="mono" data-label="Total">{{ formatNumber(row.total_tokens) }}</span>
+                              <span data-label="Tool calls">{{ formatNumber(row.tool_calls_total) }}</span>
+                              <span data-label="Elapsed">{{ formatSeconds(row.elapsed_seconds) }}</span>
+                            </div>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="metric-line">
+                      <span>Model</span>
+                      <span [title]="detail.item.model || ''">
+                        {{ friendlyModel(detail.item.model) }}
+                        @if (showExactModelHint(friendlyModel(detail.item.model), detail.item.model || '')) {
+                          <span class="exact-hint">{{ detail.item.model || '(unspecified)' }}</span>
+                        }
+                      </span>
+                    </div>
+                  }
+                  <div class="detail-summary-metrics">
                     <div class="metric-line">
                       <span>Tokens</span>
-                      <span>{{ formatNumber(pathEntry.saved_tokens) }}</span>
-                    </div>
-                    <div class="metric-line">
-                      <span>Bytes</span>
-                      <span>{{ formatNumber(pathEntry.saved_bytes) }}</span>
-                    </div>
-                    @if (pathEntry.count > 0) {
-                      <div class="metric-line">
-                        <span>Events</span>
-                        <span>{{ pathEntry.count }}</span>
-                      </div>
-                    }
-                    @if (pathEntry.savings_percent && pathEntry.savings_percent > 0) {
-                      <div class="metric-line">
-                        <span>Savings</span>
-                        <span>{{ pathEntry.savings_percent }}%</span>
-                      </div>
-                    }
-                  </ion-card-content>
-                </ion-card>
-              }
-            </div>
-            @if (savingsReport.could_have_saved.compaction_measured_not_applied_bytes > 0 ||
-                savingsReport.tool_output_counterfactual.compaction_measured_not_applied_bytes > 0) {
-              <div class="savings-context-efficiency">
-                <ion-card>
-                  <ion-card-content>
-                    <div class="metric-label">Could have saved</div>
-                    <div class="metric-value">
-                      {{ formatNumber(savingsReport.tool_output_counterfactual.compaction_measured_not_applied_bytes) }} bytes
-                    </div>
-                    <p class="savings-sentence">
-                      Compaction was measured on native hooks but not applied in this run mode.
-                    </p>
-                  </ion-card-content>
-                </ion-card>
-              </div>
-            }
-            @if (savingsReport.readback_summary && savingsReport.readback_summary.readback_count > 0) {
-              <div class="savings-context-efficiency">
-                <ion-card>
-                  <ion-card-content>
-                    <div class="metric-label">Stored result follow-ups</div>
-                    <div class="metric-line">
-                      <span>Readbacks</span>
-                      <span>{{ formatNumber(savingsReport.readback_summary.readback_count) }}</span>
-                    </div>
-                    <div class="metric-line">
-                      <span>Raw share</span>
-                      <span>{{ formatPercent(savingsReport.readback_summary.raw_readback_share) }}</span>
-                    </div>
-                    <div class="metric-line">
-                      <span>Effective windowing savings</span>
-                      <span>{{ formatPercent(savingsReport.readback_summary.effective_windowing_savings_rate) }}</span>
-                    </div>
-                    <div class="metric-line">
-                      <span>Negation rate</span>
-                      <span>{{ formatPercent(savingsReport.readback_summary.readback_negation_rate) }}</span>
-                    </div>
-                    <div class="metric-line">
-                      <span>Net consumed</span>
-                      <span>{{ formatNumber(savingsReport.readback_summary.net_consumed_bytes) }} bytes</span>
-                    </div>
-                  </ion-card-content>
-                </ion-card>
-              </div>
-            }
-            @if (discoverEntries.length > 0 && savingsReport.tool_output_counterfactual.net_savings_percent <= 0) {
-              <div class="savings-context-efficiency">
-                <ion-card>
-                  <ion-card-content>
-                    <div class="metric-label">Top discover opportunities</div>
-                    @for (entry of discoverEntries.slice(0, 3); track entry.plan_key) {
-                      <div class="metric-line opportunity">
-                        <span>{{ entry.plan_key }}</span>
-                        <span>{{ entry.patterns.slice(0, 2).map((p) => p.pattern_id).join(', ') }}</span>
-                      </div>
-                    }
-                  </ion-card-content>
-                </ion-card>
-              </div>
-            }
-            <div class="savings-context-efficiency">
-              <ion-card>
-                <ion-card-content>
-                  <div class="metric-label">Context efficiency</div>
-                  <div class="metric-value">{{ formatPercent(savingsReport.cache.cache_hit_ratio) }}</div>
-                  <div class="metric-line">
-                    <span>Cache reads</span>
-                    <span>{{ formatNumber(savingsReport.cache.cache_read_tokens) }} tokens</span>
-                  </div>
-                </ion-card-content>
-              </ion-card>
-            </div>
-          } @else {
-            <div class="empty">Benchmark data unavailable.</div>
-          }
-        </section>
-
-        @if (isShowingAllWorkspaces() && summary.projects && summary.projects.length > 1) {
-          <section class="project-rollups" aria-label="Per-project usage rollups">
-            <h3 class="project-rollups-title">By project</h3>
-            <div class="project-rollups-grid">
-              @for (proj of summary.projects; track proj.workspace_root) {
-                <ion-card>
-                  <ion-card-header>
-                    <ion-card-title>{{ proj.label }}</ion-card-title>
-                    <ion-card-subtitle>{{ proj.workspace_root }}</ion-card-subtitle>
-                  </ion-card-header>
-                  <ion-card-content>
-                    <div class="project-rollup-metrics">
-                      <div class="project-rollup-metric">
-                        <span class="metric-label">Elapsed</span>
-                        <span class="metric-value">{{ formatSeconds(proj.overall.elapsed_seconds) }}</span>
-                      </div>
-                      <div class="project-rollup-metric">
-                        <span class="metric-label">Total tokens</span>
-                        <span class="metric-value">{{
-                          formatNumber(
-                            proj.overall.input_tokens +
-                              proj.overall.output_tokens +
-                              proj.overall.cache_creation_input_tokens +
-                              proj.overall.cache_read_input_tokens
-                          )
-                        }}</span>
-                      </div>
-                      <div class="project-rollup-metric">
-                        <span class="metric-label">Cache hit</span>
-                        <span class="metric-value">{{ formatPercent(proj.overall.cache_hit_ratio) }}</span>
-                      </div>
-                      <div class="project-rollup-metric">
-                        <span class="metric-label">Peak turn</span>
-                        <span class="metric-value">{{ formatPeakTurn(proj.overall.max_turn_total_tokens) }}</span>
-                      </div>
-                      <div class="project-rollup-metric">
-                        <span class="metric-label">Tool calls</span>
-                        <span class="metric-value">{{ formatNumber(proj.overall.tool_calls_total ?? 0) }}</span>
-                      </div>
-                    </div>
-                  </ion-card-content>
-                </ion-card>
-              }
-            </div>
-          </section>
-        }
-
-        <section class="quality-note">
-          <span>{{ detailedBreakdownRuns }} runs include model-level breakdown.</span>
-          <span>{{ inferredBreakdownRuns }} runs are inferred from summary-level runtime/model fields.</span>
-        </section>
-
-        <section class="tables-grid">
-          <ion-card>
-            <ion-card-header>
-              <ion-card-title>Runtime Breakdown</ion-card-title>
-              <ion-card-subtitle>{{ runtimeRows.length }} runtimes</ion-card-subtitle>
-            </ion-card-header>
-            <ion-card-content>
-              @if (runtimeRows.length === 0) {
-                <div class="empty">No runtime-level usage data available.</div>
-              } @else {
-                <div class="usage-table">
-                  <div class="usage-row usage-header runtime-columns">
-                    <span>Runtime</span>
-                    <span>Models</span>
-                    <span>Runs</span>
-                    <span>Invocations</span>
-                    <span>Input</span>
-                    <span>Output</span>
-                    <span>Cache Read</span>
-                    <span>Total</span>
-                    <span>Tool calls</span>
-                    <span>Cache hit</span>
-                    <span>Peak turn</span>
-                  </div>
-                  @for (row of runtimeRows; track row.runtime) {
-                    <div class="usage-row runtime-columns">
-                      <span class="mono cell-clip" [title]="row.runtime">{{ row.runtime }}</span>
-                      <span>{{ row.model_count }}</span>
-                      <span>{{ formatNumber(row.runs) }}</span>
-                      <span>{{ formatNumber(row.invocations) }}</span>
-                      <span>{{ formatNumber(row.input_tokens) }}</span>
-                      <span>{{ formatNumber(row.output_tokens) }}</span>
-                      <span>{{ formatNumber(row.cache_read_input_tokens) }}</span>
-                      <span class="mono">{{ formatNumber(row.total_tokens) }}</span>
-                      <span>{{ formatNumber(row.tool_calls_total) }}</span>
-                      <span>{{ formatPercent(row.cache_hit_ratio) }}</span>
-                      <span>{{ formatPeakTurn(row.max_turn_total_tokens) }}</span>
-                    </div>
-                  }
-                </div>
-              }
-            </ion-card-content>
-          </ion-card>
-
-          <ion-card>
-            <ion-card-header>
-              <ion-card-title>Runtime + Model Breakdown</ion-card-title>
-              <ion-card-subtitle>{{ modelRows.length }} runtime/model buckets</ion-card-subtitle>
-            </ion-card-header>
-            <ion-card-content>
-              @if (modelRows.length === 0) {
-                <div class="empty">No runtime/model breakdown data available.</div>
-              } @else {
-                <div class="usage-table">
-                  <div class="usage-row model-columns usage-header">
-                    <span>Runtime</span>
-                    <span>Model</span>
-                    <span>Runs</span>
-                    <span>Invocations</span>
-                    <span>Input</span>
-                    <span>Output</span>
-                    <span>Cache Read</span>
-                    <span>Total</span>
-                    <span>Tool calls</span>
-                    <span>Cache hit</span>
-                    <span>Peak turn</span>
-                  </div>
-                  @for (row of modelRows; track row.runtime + '-' + row.model) {
-                    <div class="usage-row model-columns">
-                      <span class="mono cell-clip" [title]="row.runtime">{{ row.runtime }}</span>
-                      <span class="mono cell-clip" [title]="row.model">{{ row.model }}</span>
-                      <span>{{ formatNumber(row.runs) }}</span>
-                      <span>{{ formatNumber(row.invocations) }}</span>
-                      <span>{{ formatNumber(row.input_tokens) }}</span>
-                      <span>{{ formatNumber(row.output_tokens) }}</span>
-                      <span>{{ formatNumber(row.cache_read_input_tokens) }}</span>
-                      <span class="mono">{{ formatNumber(row.total_tokens) }}</span>
-                      <span>{{ formatNumber(row.tool_calls_total) }}</span>
-                      <span>{{ formatPercent(row.cache_hit_ratio) }}</span>
-                      <span>{{ formatPeakTurn(row.max_turn_total_tokens) }}</span>
-                    </div>
-                  }
-                </div>
-              }
-            </ion-card-content>
-          </ion-card>
-
-          @if (isShowingAllWorkspaces() && summary.plans.length > 0) {
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Plan Runs</ion-card-title>
-                <ion-card-subtitle>{{ summary.plans.length }} plan runs</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                <div class="usage-table">
-                  <div class="usage-row usage-header plan-columns">
-                    <span>Workspace</span>
-                    <span>Plan Key</span>
-                    <span>Runtime</span>
-                    <span>Model</span>
-                    <span>Input</span>
-                    <span>Output</span>
-                    <span>Cache Read</span>
-                    <span>Total</span>
-                    <span>Tool calls</span>
-                    <span>Cache hit</span>
-                  </div>
-                  @for (run of summary.plans; track run.path) {
-                    <div class="usage-row plan-columns">
-                      <span class="cell-clip" [title]="getWorkspaceDisplayName(run.path)">{{
-                        getWorkspaceDisplayName(run.path)
-                      }}</span>
-                      <span class="mono cell-clip" [title]="run.plan_key">{{ run.plan_key }}</span>
-                      <span class="mono cell-clip" [title]="run.runtime || '(unspecified)'">{{
-                        run.runtime || '(unspecified)'
-                      }}</span>
-                      <span class="mono cell-clip" [title]="run.model || '(unspecified)'">{{
-                        run.model || '(unspecified)'
-                      }}</span>
-                      <span>{{ formatNumber(run.input_tokens) }}</span>
-                      <span>{{ formatNumber(run.output_tokens) }}</span>
-                      <span>{{ formatNumber(run.cache_read_input_tokens) }}</span>
-                      <span class="mono">{{ formatNumber(run.input_tokens + run.output_tokens + run.cache_creation_input_tokens + run.cache_read_input_tokens) }}</span>
-                      <span>{{ formatNumber(run.tool_calls_total ?? 0) }}</span>
-                      <span>{{ formatPercent(run.cache_hit_ratio) }}</span>
-                    </div>
-                  }
-                </div>
-              </ion-card-content>
-            </ion-card>
-          }
-
-          @if (overlayRunRows.length > 0) {
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Runtime overlay effectiveness</ion-card-title>
-                <ion-card-subtitle>{{ overlayRunRows.length }} runs with overlay telemetry</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                <div class="usage-table">
-                  <div class="usage-row usage-header overlay-columns">
-                    <span>Kind</span>
-                    <span>Plan key</span>
-                    <span>Stage</span>
-                    <span>Native hooks</span>
-                    <span>MCP</span>
-                    <span>Compactions</span>
-                    <span>Rewrites</span>
-                    <span>Bytes saved</span>
-                    <span>Mode</span>
-                    <span>Warnings</span>
-                  </div>
-                  @for (row of overlayRunRows; track row.kind + row.plan_key + (row.stage_id ?? '')) {
-                    <div class="usage-row overlay-columns">
-                      <span>{{ row.kind }}</span>
-                      <span class="mono cell-clip" [title]="row.plan_key">{{ row.plan_key }}</span>
-                      <span class="mono cell-clip" [title]="row.stage_id || '(root)'">{{ row.stage_id || '(root)' }}</span>
-                      <span>{{ formatOverlayEffective(row.overlay.native_hooks_effective) }}</span>
-                      <span>{{ formatOverlayEffective(row.overlay.mcp_effective) }}</span>
-                      <span>{{ formatNumber(row.overlay.hook_compactions) }}</span>
-                      <span>{{ formatNumber(row.overlay.hook_rewrites) }}</span>
-                      <span>{{ formatNumber(row.overlay.hook_bytes_saved) }}</span>
-                      <span class="mono cell-clip" [title]="row.overlay.runtime_overlay_mode || '(none)'">{{
-                        row.overlay.runtime_overlay_mode || '(none)'
-                      }}</span>
-                      <span class="cell-clip" [title]="formatOverlayWarnings(row.overlay)">{{
-                        formatOverlayWarnings(row.overlay)
+                      <span>{{
+                        formatNumber(
+                          detail.item.input_tokens +
+                            detail.item.output_tokens +
+                            detail.item.cache_creation_input_tokens +
+                            detail.item.cache_read_input_tokens
+                        )
                       }}</span>
                     </div>
-                  }
-                </div>
-              </ion-card-content>
-            </ion-card>
-          }
-
-          @if (toolCallRunRows.length > 0) {
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Tool call classification</ion-card-title>
-                <ion-card-subtitle>{{ toolCallRunRows.length }} runs with classified tool-call counters</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                <div class="usage-table">
-                  <div class="usage-row usage-header tool-call-columns">
-                    <span>Kind</span>
-                    <span>Plan key</span>
-                    <span>Stage</span>
-                    <span>Proxy</span>
-                    <span>Knowledge</span>
-                    <span>Compat read</span>
-                    <span>Native read</span>
-                    <span>Search</span>
-                    <span>Shell</span>
-                    <span>Hook rewrite</span>
-                    <span>Hook compact</span>
-                  </div>
-                  @for (row of toolCallRunRows; track row.kind + row.plan_key + (row.stage_id ?? '')) {
-                    <div class="usage-row tool-call-columns">
-                      <span>{{ row.kind }}</span>
-                      <span class="mono cell-clip" [title]="row.plan_key">{{ row.plan_key }}</span>
-                      <span class="mono cell-clip" [title]="row.stage_id || '(root)'">{{ row.stage_id || '(root)' }}</span>
-                      <span>{{ formatNumber(row.tool_calls.ralph_proxy_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.ralph_knowledge_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.native_read_compatibility_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.native_file_read_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.native_search_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.native_shell_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.runtime_hook_rewrite_calls) }}</span>
-                      <span>{{ formatNumber(row.tool_calls.runtime_hook_compaction_calls) }}</span>
+                    <div class="metric-line">
+                      <span>Elapsed</span>
+                      <span>{{ formatSeconds(detail.item.elapsed_seconds) }}</span>
                     </div>
-                  }
-                </div>
-              </ion-card-content>
-            </ion-card>
-          }
-
-          @if (discoverEntries.length > 0) {
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Discover patterns</ion-card-title>
-                <ion-card-subtitle>Sequence and usage patterns from invocation logs (no whole-file-read detection)</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                @for (entry of discoverEntries; track entry.plan_key) {
-                  <div class="discover-plan-block">
-                    <div class="discover-plan-title mono">{{ entry.plan_key }}</div>
-                    @if (entry.patterns.length === 0) {
-                      <div class="empty">No sequence-level patterns detected.</div>
-                    } @else {
-                      <ul class="discover-pattern-list">
-                        @for (pattern of entry.patterns; track pattern.pattern_id) {
-                          <li>
-                            <span class="mono">{{ pattern.pattern_id }}</span>
-                            <span> ({{ pattern.count }})</span>
-                            @if (pattern.description) {
-                              <span class="discover-desc"> — {{ pattern.description }}</span>
-                            }
-                          </li>
-                        }
-                      </ul>
-                    }
+                    <div class="metric-line">
+                      <span>Started</span>
+                      <span>{{ detail.item.started_at || '--' }}</span>
+                    </div>
                   </div>
                 }
-              </ion-card-content>
-            </ion-card>
-          }
+              </section>
+            }
+          </section>
+        </div>
+      }
 
-          @if (isShowingAllWorkspaces() && summary.orchestrations.length > 0) {
-            <ion-card>
-              <ion-card-header>
-                <ion-card-title>Orchestration Runs</ion-card-title>
-                <ion-card-subtitle>{{ summary.orchestrations.length }} orchestration runs</ion-card-subtitle>
-              </ion-card-header>
-              <ion-card-content>
-                <div class="usage-table">
-                  <div class="usage-row usage-header orch-columns">
-                    <span>Workspace</span>
-                    <span>Plan Key</span>
-                    <span>Stage ID</span>
-                    <span>Runtime</span>
-                    <span>Model</span>
-                    <span>Input</span>
-                    <span>Output</span>
-                    <span>Cache Read</span>
-                    <span>Total</span>
-                    <span>Tool calls</span>
-                    <span>Cache hit</span>
-                  </div>
-                  @for (run of summary.orchestrations; track run.path) {
-                    <div class="usage-row orch-columns">
-                      <span class="cell-clip" [title]="getWorkspaceDisplayName(run.path)">{{
-                        getWorkspaceDisplayName(run.path)
-                      }}</span>
-                      <span class="mono cell-clip" [title]="run.plan_key">{{ run.plan_key }}</span>
-                      <span class="mono cell-clip" [title]="run.stage_id || '(root)'">{{
-                        run.stage_id || '(root)'
-                      }}</span>
-                      <span class="mono cell-clip" [title]="run.runtime || '(unspecified)'">{{
-                        run.runtime || '(unspecified)'
-                      }}</span>
-                      <span class="mono cell-clip" [title]="run.model || '(unspecified)'">{{
-                        run.model || '(unspecified)'
-                      }}</span>
-                      <span>{{ formatNumber(run.input_tokens) }}</span>
-                      <span>{{ formatNumber(run.output_tokens) }}</span>
-                      <span>{{ formatNumber(run.cache_read_input_tokens) }}</span>
-                      <span class="mono">{{ formatNumber(run.input_tokens + run.output_tokens + run.cache_creation_input_tokens + run.cache_read_input_tokens) }}</span>
-                      <span>{{ formatNumber(run.tool_calls_total ?? 0) }}</span>
-                      <span>{{ formatPercent(run.cache_hit_ratio) }}</span>
-                    </div>
-                  }
-                </div>
-              </ion-card-content>
-            </ion-card>
+      @if (insights && hasUsageData) {
+      <section class="savings-panel hub-panel-card" aria-label="Benchmark overview">
+        <div class="savings-panel-header section-head">
+          <h2 class="section-legend">Benchmark</h2>
+          @if (savingsReport?.run_count; as runCount) {
+            <span class="savings-panel-meta">Measured across {{ runCount }} runs</span>
           }
-        </section>
+        </div>
+        @if (savingsLoading && !savingsReport) {
+          <p class="quiet-empty">Loading benchmark data...</p>
+        } @else if (savingsError && !savingsReport) {
+          <div class="error" role="alert">
+            <ralph-error-modal class="is-embedded" [error]="savingsError" [embedded]="true" [showHeader]="false" />
+          </div>
+        } @else if (savingsReport) {
+          <div class="headline-grid">
+            <div class="metric-tile hub-nested-panel">
+              <div class="metric-label">Kept out of model context</div>
+              <div class="metric-value" [title]="formatNumber(savingsReport.saved_tokens)">
+                ~{{ formatCompact(savingsReport.saved_tokens) }} tokens
+              </div>
+            </div>
+            <div class="metric-tile hub-nested-panel">
+              <div class="metric-label">Tool output savings</div>
+              <div class="metric-value">
+                {{ savingsReport.tool_output_counterfactual.net_savings_percent }}%
+              </div>
+            </div>
+          </div>
+        } @else {
+          <p class="quiet-empty">Benchmark data is unavailable for this workspace.</p>
+        }
+      </section>
+      @if (jevUsage?.enabled) {
+      <section class="jev-usage-panel hub-panel-card" aria-label="Jev usage" data-testid="insights-jev-usage">
+        <div class="section-head">
+          <h2 class="section-legend">Jev (TypeSafe AI)</h2>
+          <span class="savings-panel-meta">Separate from runtime token totals</span>
+        </div>
+        <div class="headline-grid">
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Calls</div>
+            <div class="metric-value">{{ formatNumber(jevUsage!.calls) }}</div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Input tokens</div>
+            <div class="metric-value" [title]="formatNumber(jevUsage!.input_tokens)">
+              {{ formatCompact(jevUsage!.input_tokens) }}
+            </div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Output tokens</div>
+            <div class="metric-value" [title]="formatNumber(jevUsage!.output_tokens)">
+              {{ formatCompact(jevUsage!.output_tokens) }}
+            </div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Estimated cost</div>
+            <div class="metric-value" [title]="'$' + jevUsage!.estimated_usd">
+              {{ formatUsd(jevUsage!.estimated_usd) }}
+            </div>
+          </div>
+        </div>
+        @if (jevUsage!.calls_unavailable > 0) {
+          <p class="quiet-empty" data-testid="insights-jev-unavailable">
+            {{ formatNumber(jevUsage!.calls_unavailable) }} calls returned no usage and count as zero tokens.
+          </p>
+        }
+        <ul class="driver-list">
+          @for (row of jevUsage!.by_question_set; track row.question_set_id) {
+            <li class="driver-copy">
+              <span>{{ row.question_set_id }}</span>
+              <span class="metric-sub">
+                {{ formatNumber(row.calls) }} calls ·
+                {{ formatNumber(row.input_tokens) }} in ·
+                {{ formatNumber(row.output_tokens) }} out
+              </span>
+            </li>
+          }
+        </ul>
+      </section>
+      }
       }
     </div>
   `,
@@ -765,621 +732,718 @@ interface UsageRunRecord {
       min-height: 0;
     }
     .usage-hub {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 2rem;
       display: grid;
-      gap: 1rem;
+      gap: var(--space-4);
+      align-content: start;
     }
     .header {
       display: flex;
       justify-content: space-between;
-      align-items: flex-end;
-      gap: 1rem;
+      align-items: flex-start;
+      gap: var(--space-4);
       flex-wrap: wrap;
+      margin-bottom: 0;
     }
-    .title-wrap h2 {
-      margin: 0;
-      font-size: 1.75rem;
+    .header-actions,
+    .breakdown-actions,
+    .drilldown-actions,
+    .pager {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .insights-busy {
+      display: inline-flex;
+      align-items: center;
+      justify-self: start;
+      gap: 0.5rem;
+      padding: 0.4rem 0.65rem;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+      color: var(--text-secondary);
+      font-size: 0.78rem;
       font-weight: 600;
     }
-    .title-wrap p {
-      margin: 0.35rem 0 0;
+    .busy-spinner {
+      width: 0.8rem;
+      height: 0.8rem;
+      border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: insights-spin 0.7s linear infinite;
+    }
+    @keyframes insights-spin {
+      to { transform: rotate(360deg); }
+    }
+    .answer-panel {
+      gap: 1rem;
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent) 10%, var(--ion-color-step-50, #0d1117)),
+        var(--ion-color-step-50, #0d1117) 48%
+      );
+      border-color: color-mix(in srgb, var(--accent) 32%, var(--ion-color-step-200, #30363d));
+    }
+    .detail-panel {
+      display: grid;
+      gap: 0.85rem;
+    }
+    .breakdown-section,
+    .savings-panel,
+    .filters-section {
+      gap: 0.85rem;
+    }
+    .filters-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: baseline;
+      margin-bottom: 0;
+    }
+    .filters-summary-meta {
+      margin: 0;
+    }
+    .filters-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3);
+      margin: 0;
+      align-items: end;
+    }
+    .filter-clear {
+      align-self: end;
+      min-height: var(--touch-target-min, 44px);
+    }
+    [data-testid='insights-detail-modal'] {
+      z-index: 1000;
+    }
+    .detail-modal {
+      position: relative;
+      width: min(100%, 56rem);
+      max-height: min(48rem, calc(100vh - 2rem));
+      isolation: isolate;
+      overflow: auto;
+    }
+    .detail-meta {
+      margin: 0;
       color: var(--text-muted);
       font-size: 0.9rem;
     }
-    .header-actions {
+    .detail-modal-header {
       display: flex;
-      gap: 0.5rem;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
     }
-    .filters-section {
-      display: grid;
-      gap: 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.9rem;
-      background: var(--surface);
+    .detail-modal-header .eyebrow {
+      margin-bottom: 0.2rem;
     }
-    .filters-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 0.7rem;
-    }
-    .filter-field {
-      display: grid;
-      gap: 0.28rem;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-    .filter-field span {
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-      font-size: 0.72rem;
-    }
-    .filter-field select,
-    .filter-field input {
-      background: var(--surface);
+    .detail-modal-header h2 {
+      margin: 0;
       color: var(--text-primary);
+      font-size: 1.25rem;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .detail-modal-close {
+      flex: 0 0 auto;
+      min-height: var(--touch-target-min, 44px);
+      padding: 0.4rem 0.75rem;
       border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 0.45rem 0.55rem;
-      font-size: 0.85rem;
+      background: var(--surface);
+      color: var(--text-primary);
+      cursor: pointer;
     }
-    .filters-meta {
+    .detail-modal-close:focus-visible {
+      outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--accent));
+      outline-offset: var(--focus-ring-offset, 2px);
+    }
+    .detail-modal .detail-panel {
+      border: 0;
+      padding: 0;
+      background: transparent;
+    }
+    .detail-plan-link {
+      display: inline-flex;
+      margin: 0;
+      color: var(--accent);
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: underline;
+    }
+    .detail-plan-link:focus-visible {
+      outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, var(--accent));
+      outline-offset: var(--focus-ring-offset, 2px);
+    }
+    .filter-field {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.75rem;
-      flex-wrap: wrap;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: min(100%, 9.5rem);
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .filter-field span {
+      font-size: var(--font-size-xs);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: var(--letter-label);
+    }
+    .scope-meta,
+    .metric-sub,
+    .savings-panel-meta {
       color: var(--text-muted);
       font-size: 0.82rem;
     }
-    .overview-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 1rem;
+    .breakdown-header h2,
+    .detail-panel h3,
+    .savings-panel-header h2,
+    .drivers-block h2,
+    .anomalies-block h2 {
+      margin: 0;
+      font-size: var(--font-size-md);
+      font-weight: 600;
     }
-    .savings-panel {
-      padding: 1rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface);
-      display: grid;
-      gap: 0.8rem;
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
     }
+    .breakdown-header,
     .savings-panel-header {
       display: flex;
       justify-content: space-between;
-      align-items: baseline;
+      gap: 0.75rem;
       flex-wrap: wrap;
-      gap: 0.35rem;
+      align-items: flex-start;
+      margin-bottom: 0.15rem;
     }
-    .savings-panel-header h3 {
-      margin: 0;
-      font-size: 1.25rem;
+    .trend-sentence {
+      margin: 0.4rem 0 0;
+      color: var(--text-primary);
+      font-size: clamp(1.25rem, 2.4vw, 1.85rem);
+      font-weight: 650;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
     }
-    .savings-panel-meta {
-      color: var(--text-muted);
-      font-size: 0.86rem;
-    }
-    .savings-headline,
-    .savings-headline-grid,
-    .savings-context-efficiency {
+    .trend-chart {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 1rem;
+      gap: 0.45rem;
+      max-width: 36rem;
     }
-    .savings-breakdown-grid {
+    .trend-bar-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 0.8rem;
+      grid-template-columns: 4.2rem minmax(0, 1fr) auto;
+      gap: 0.55rem;
+      align-items: center;
     }
-    .savings-sentence {
-      margin-top: 0.4rem;
-      font-size: 0.9rem;
+    .trend-bar-label,
+    .trend-bar-value {
       color: var(--text-muted);
+      font-size: 0.75rem;
     }
-    .metric-line {
+    .trend-bar-value {
+      font-variant-numeric: tabular-nums;
+      min-width: 3.2rem;
+      text-align: right;
+    }
+    .trend-bar-track {
+      display: block;
+      height: 0.55rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+    }
+    .trend-bar {
+      display: block;
+      height: 100%;
+      min-width: 0.35rem;
+      border-radius: inherit;
+      background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+    }
+    .trend-bar.is-recent[data-direction='up'] {
+      background: var(--accent);
+    }
+    .trend-bar.is-recent[data-direction='down'] {
+      background: color-mix(in srgb, var(--accent) 55%, #16a34a);
+    }
+    .trend-bar.is-recent[data-direction='flat'],
+    .trend-bar.is-recent[data-direction='unknown'] {
+      background: color-mix(in srgb, var(--accent) 70%, var(--text-muted));
+    }
+    .headline-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.65rem;
+    }
+    .metric-tile {
+      min-width: 0;
+      padding: 0.7rem 0.8rem;
+    }
+    .inline-error {
       display: flex;
-      justify-content: space-between;
-      gap: 0.4rem;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.75rem;
+      align-items: center;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid var(--error, #f85149);
+      border-radius: 6px;
+      color: var(--error, #f85149);
       font-size: 0.85rem;
+    }
+    .quiet-empty {
+      margin: 0;
       color: var(--text-muted);
-    }
-    .metric-line span:last-child {
-      color: var(--text-primary);
-    }
-    .metric-line.opportunity {
-      font-weight: 500;
-    }
-    .project-rollups {
-      display: grid;
-      gap: 0.75rem;
-    }
-    .project-rollups-title {
-      margin: 0;
-      font-size: 1.15rem;
-      font-weight: 600;
-      color: var(--text-primary);
-    }
-    .project-rollups-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 1rem;
-    }
-    .project-rollup-metrics {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.75rem;
-    }
-    .project-rollup-metric {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-    .project-rollup-metric .metric-label {
-      margin-bottom: 0;
-    }
-    .project-rollup-metric .metric-value {
-      font-size: 1rem;
-    }
-    ion-card {
-      --background: var(--surface);
-      --color: var(--text-primary);
-      margin: 0;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: none;
+      font-size: 0.85rem;
     }
     .metric-label {
       color: var(--text-muted);
-      font-size: 0.78rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 0.35rem;
+      letter-spacing: 0.03em;
     }
     .metric-value {
-      font-size: 1.25rem;
+      font-size: clamp(1.05rem, 2vw, 1.35rem);
       font-weight: 600;
-      font-family: var(--monospace-font);
+      margin-top: 0.2rem;
+      overflow-wrap: anywhere;
     }
-    .quality-note {
+    .metric-sub {
+      margin: 0.35rem 0 0;
+    }
+    .driver-list,
+    .anomaly-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 0.45rem;
+    }
+    .driver-list li,
+    .anomaly-list li {
+      display: grid;
+      gap: 0.35rem;
+      border: 0;
+      border-radius: 0;
+      padding: 0.35rem 0;
+      background: transparent;
+    }
+    .driver-copy {
       display: flex;
       flex-wrap: wrap;
-      gap: 1rem;
+      gap: 0.35rem 0.7rem;
+      align-items: baseline;
+    }
+    .driver-share-track {
+      display: block;
+      height: 0.35rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+    }
+    .driver-share-fill {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: color-mix(in srgb, var(--accent) 55%, var(--border));
+    }
+    .anomaly-list li {
+      border-left: 3px solid #b45309;
+      padding-left: 0.65rem;
+    }
+    .driver-kind {
+      text-transform: uppercase;
+      font-size: 0.7rem;
       color: var(--text-muted);
-      font-size: 0.85rem;
-      padding: 0.75rem 0.9rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface);
+      letter-spacing: 0.04em;
+    }
+    .driver-label {
+      font-weight: 600;
+    }
+    .driver-meta,
+    .exact-hint {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+    .exact-hint {
+      display: block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-wrap: anywhere;
+    }
+    .anomaly-list li[data-severity='warn'] {
+      border-color: #b45309;
     }
     .tables-grid {
       display: grid;
-      grid-template-columns: 1fr;
-      gap: 1rem;
+      gap: 0.65rem;
     }
-    :host ion-card-content:has(.usage-table) {
-      --padding-start: 12px;
-      --padding-end: 12px;
-      --padding-top: 12px;
-      --padding-bottom: 12px;
+    .breakdown-panel {
+      padding: 0;
+      gap: 0;
+      overflow: hidden;
+    }
+    .breakdown-panel.is-highlighted {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .breakdown-panel-summary {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 0.55rem 0.75rem;
+      align-items: center;
+      padding: 0.7rem 0.85rem;
+      cursor: pointer;
+      list-style: none;
+      min-height: var(--touch-target-min, 44px);
+      user-select: none;
+    }
+    .breakdown-panel-summary::-webkit-details-marker {
+      display: none;
+    }
+    .breakdown-panel-summary::before {
+      content: '';
+      width: 0.4rem;
+      height: 0.4rem;
+      border-right: 1.5px solid var(--text-muted);
+      border-bottom: 1.5px solid var(--text-muted);
+      transform: rotate(-45deg);
+      transition: transform 0.12s ease;
+    }
+    .breakdown-panel[open] > .breakdown-panel-summary::before {
+      transform: rotate(45deg);
+    }
+    .breakdown-panel-title {
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .breakdown-panel-meta {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      text-align: right;
+    }
+    .breakdown-panel-body {
+      display: grid;
+      gap: 0.75rem;
+      padding: 0 0.85rem 0.85rem;
+    }
+    .usage-table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .usage-table {
       display: grid;
       gap: 0;
-      overflow-x: auto;
+      min-width: 0;
+      overflow: hidden;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface-muted);
+      border-radius: var(--radius-md);
     }
     .usage-row {
       display: grid;
-      gap: 0.7rem;
+      gap: 0.5rem;
       align-items: center;
-      font-size: 0.88rem;
-      min-width: 940px;
-      padding: 0.48rem 0.65rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+      font-size: 0.85rem;
     }
-    .usage-row:nth-child(even):not(.usage-header) {
-      background: var(--surface-muted);
+    .usage-header {
+      background: var(--table-header-bg);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      border-bottom-width: 2px;
     }
-    .usage-row:last-child {
-      border-bottom: none;
+    .usage-row:not(.usage-header):nth-child(even) {
+      background: color-mix(in srgb, var(--surface-hover) 55%, transparent);
     }
-    .usage-row.usage-header {
-      padding-bottom: 0.55rem;
-      border-bottom: 2px solid var(--border);
-      background: var(--surface-muted);
+    .usage-row:not(.usage-header):hover {
+      background: var(--table-row-hover);
+    }
+    .runtime-columns,
+    .model-columns {
+      grid-template-columns: minmax(0, 1.4fr) repeat(5, minmax(0, 1fr));
+    }
+    .run-columns {
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.3fr) repeat(3, minmax(0, 1fr)) auto;
+    }
+    .usage-row.is-clickable {
+      cursor: pointer;
+    }
+    .usage-row.is-clickable:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .more-models {
+      display: inline-block;
+      margin-left: 0.35rem;
+      padding: 0 0.35rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      color: var(--accent);
+      font-size: 0.72rem;
+      white-space: nowrap;
+    }
+    .detail-models {
+      margin-top: var(--space-3);
+    }
+    .detail-models-title {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0 0 0.35rem;
+      font-size: 0.9rem;
+    }
+    .detail-models-meta {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+    .detail-models-table {
+      min-width: 52rem;
+    }
+    .detail-model-columns {
+      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) repeat(7, minmax(0, 0.8fr));
+    }
+    .detail-summary-metrics {
+      display: grid;
+      gap: 0.15rem;
+      margin-top: 0.35rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
     }
     .cell-clip {
-      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-    .runtime-columns {
-      grid-template-columns: 1fr 0.55fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr 0.8fr;
-    }
-    .model-columns {
-      grid-template-columns: 0.9fr 1.5fr 0.55fr 0.8fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr 0.8fr;
-    }
-    .plan-columns {
-      grid-template-columns: 1fr 1.2fr 0.9fr 1.2fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr;
-    }
-    .orch-columns {
-      grid-template-columns: 1fr 1.2fr 0.9fr 0.9fr 1.2fr 0.8fr 0.8fr 0.95fr 0.95fr 0.75fr 0.8fr;
-    }
-    .overlay-columns {
-      grid-template-columns: 0.7fr 1.1fr 0.7fr 0.7fr 0.5fr 0.7fr 0.7fr 0.8fr 0.7fr 1.4fr;
-    }
-    .tool-call-columns {
-      grid-template-columns: 0.7fr 1.1fr 0.7fr 0.6fr 0.7fr 0.7fr 0.7fr 0.6fr 0.6fr 0.7fr 0.7fr;
-    }
-    .usage-header {
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--text-muted);
-      opacity: 0.9;
+      min-width: 0;
     }
     .mono {
       font-family: var(--monospace-font);
     }
-    .loading,
-    .empty,
-    .error {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1rem;
-      background: var(--surface);
-    }
-    .loading {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-      color: var(--text-muted);
-    }
-    .error {
-      color: var(--danger);
-      border-color: rgba(255, 0, 0, 0.35);
-      background: rgba(255, 0, 0, 0.08);
-    }
-    .empty {
-      color: var(--text-muted);
-    }
-    button {
-      padding: 0.5rem 1rem;
+    .btn-link,
+    .sort-btn {
       border: none;
-      border-radius: 4px;
+      background: transparent;
+      padding: 0;
+      text-decoration: underline;
+      color: var(--accent);
       cursor: pointer;
-      font-size: 0.85rem;
-      transition: background 0.2s ease;
+      font: inherit;
     }
-    .btn-primary {
-      background: var(--accent);
-      color: var(--button-text);
+    .loading,
+    .error,
+    .empty {
+      padding: var(--space-3) 0;
+      color: var(--text-muted);
     }
-    .btn-primary:hover {
-      background: var(--accent-hover);
+    .error {
+      color: #b91c1c;
     }
-    .btn-secondary {
-      background: var(--surface-hover);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-    }
-    .btn-secondary:hover {
-      background: var(--border);
-    }
-    .discover-plan-block + .discover-plan-block {
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--border);
-    }
-    .discover-plan-title {
-      font-weight: 600;
-      margin-bottom: 0.35rem;
-    }
-    .discover-pattern-list {
-      margin: 0;
-      padding-left: 1.25rem;
+    .metric-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.25rem 0;
       font-size: 0.9rem;
     }
-    .discover-desc {
-      color: var(--text-muted);
+    @media (max-width: 720px) {
+      .detail-models-table {
+        min-width: 0;
+      }
+      .usage-table-wrap {
+        overflow-x: visible;
+      }
+      .usage-header {
+        display: none;
+      }
+      .usage-row.runtime-columns,
+      .usage-row.model-columns,
+      .usage-row.run-columns,
+      .usage-row.detail-model-columns {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.35rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.65rem 0.75rem;
+        margin-bottom: 0.55rem;
+      }
+      .usage-row > span {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+      }
+      .usage-row > span::before {
+        content: attr(data-label);
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        flex: 0 0 auto;
+      }
+      .exact-hint {
+        text-align: right;
+      }
+      .trend-bar-row {
+        grid-template-columns: 3.5rem minmax(0, 1fr) auto;
+      }
+      .header-actions {
+        width: 100%;
+      }
     }
   `,
 })
-export class UsageHubComponent implements OnInit {
-  loading = false;
-  error = '';
-  summary: MetricsSummary | null = null;
-  discoverEntries: DiscoverPlanEntry[] = [];
-  overlayRunRows: OverlayRunRow[] = [];
-  toolCallRunRows: ToolCallRunRow[] = [];
+export class UsageHubComponent {
+  readonly paneActive = input(false);
+
+  summaryLoading = false;
+  summaryError: unknown = null;
+  insights: MetricsInsightsSummary | null = null;
+
+  breakdownLoading = false;
+  breakdownError: unknown = null;
+  breakdown: MetricsBreakdownResponse | null = null;
+
+  detailLoading = false;
+  detailError: unknown = null;
+  detail: MetricsDetailResponse | null = null;
+
   savingsReport: SavingsReport | null = null;
-  savingsPathEntries: SavingsPathEntry[] = [];
   savingsLoading = false;
-  savingsError = '';
-  statRows: StatItem[] = [];
-  runtimeRows: UsageRuntimeRow[] = [];
-  modelRows: UsageModelRow[] = [];
-  detailedBreakdownRuns = 0;
-  inferredBreakdownRuns = 0;
-  totalRunCount = 0;
-  filteredRunCount = 0;
+  savingsError: unknown = null;
+
+  jevUsage: JevUsageResponse | null = null;
+
+  @HostListener('document:keydown.escape')
+  closeDetailOnEscape(): void {
+    if (this.detailLoading || this.detailError || this.detail) {
+      this.closeDetail();
+    }
+  }
+
   runtimeOptions: string[] = [];
-  modelOptions: string[] = [];
+  modelOptions: Array<{ label: string; exact_value: string }> = [];
+  private detailModelRowsCache: MetricsRunModelRow[] | null = null;
+  private detailModelRowsCacheKey = '';
   filterKind: UsageKind = 'all';
   filterRuntime = 'all';
   filterModel = 'all';
   filterDateFrom = '';
   filterDateTo = '';
+  pageOffset = 0;
+  pageLimit = 25;
+  sortBy = 'total_tokens';
+  sortDir: 'asc' | 'desc' = 'desc';
+  activeDrill: DrillSection = null;
 
   private readonly apiService = inject(ApiService);
-  private readonly navService = inject(NavService);
   private readonly cdr = inject(ChangeDetectorRef);
   readonly workspaceSelectorService = inject(WorkspaceSelectorService);
-  private skipWorkspaceReloadEffect = true;
+  private readonly requestLifecycle = inject(RequestLifecycleService);
 
   constructor() {
     effect(() => {
-      this.workspaceSelectorService.selectedWorkspacePath();
-      if (this.skipWorkspaceReloadEffect) {
+      if (!this.paneActive()) {
         return;
       }
+      this.workspaceSelectorService.selectedWorkspacePath();
       this.refresh();
     });
   }
 
-  ngOnInit(): void {
-    this.refresh();
-    queueMicrotask(() => {
-      this.skipWorkspaceReloadEffect = false;
-    });
-  }
-
-  goToPlans(): void {
-    this.navService.navigate('plans');
-  }
-
-  refresh(): void {
-    this.loading = true;
-    this.error = '';
-    this.summary = null;
-    this.statRows = [];
-    this.runtimeRows = [];
-    this.modelRows = [];
-    this.detailedBreakdownRuns = 0;
-    this.inferredBreakdownRuns = 0;
-    this.totalRunCount = 0;
-    this.filteredRunCount = 0;
-    this.runtimeOptions = [];
-    this.modelOptions = [];
-    this.discoverEntries = [];
-    this.overlayRunRows = [];
-    this.toolCallRunRows = [];
-    this.savingsReport = null;
-    this.savingsPathEntries = [];
-    this.savingsLoading = false;
-    this.savingsError = '';
-    this.cdr.markForCheck();
-
-    this.apiService.fetchMetricsSummary().subscribe({
-      next: (summary) => {
-        this.summary = summary;
-        this.totalRunCount = this.countWorkspaceScopedRecords(summary);
-        this.recomputeRuntimeOptions(summary);
-        this.recomputeModelOptions(summary);
-        this.applyFilters(summary);
-        this.loadDiscoverReports(this.getFilteredPlans(summary));
-        this.loadSavings();
-        this.loading = false;
-        this.cdr.markForCheck();
-      },
-      error: (err) => {
-        this.loading = false;
-        this.error = err.error?.error || 'Failed to load usage metrics';
-        this.summary = null;
-        this.discoverEntries = [];
-        this.overlayRunRows = [];
-        this.toolCallRunRows = [];
-        this.statRows = [];
-        this.runtimeRows = [];
-        this.modelRows = [];
-        this.detailedBreakdownRuns = 0;
-        this.inferredBreakdownRuns = 0;
-        this.totalRunCount = 0;
-        this.filteredRunCount = 0;
-        this.runtimeOptions = [];
-        this.modelOptions = [];
-        this.cdr.markForCheck();
-      },
-    });
-  }
-
-  private getFilteredPlans(summary: MetricsSummary | null): MetricsSummaryItem[] {
-    if (!summary) {
-      return [];
+  get pageLabel(): string {
+    if (!this.breakdown) {
+      return '0 / 0';
     }
-    return summary.plans.filter((plan) =>
-      this.passesWorkspaceScopeFilter({
-        kind: 'plan',
-        item: plan,
-        breakdown: [],
-        hasDetailedBreakdown: false,
-        startedAtMs: null,
-      }),
+    const total = this.breakdown.page.total;
+    if (total === 0) {
+      return '0 / 0';
+    }
+    const start = this.breakdown.page.offset + 1;
+    const end = Math.min(this.breakdown.page.offset + this.breakdown.page.limit, total);
+    return `${start}-${end} / ${total}`;
+  }
+
+  get hasNextPage(): boolean {
+    if (!this.breakdown) {
+      return false;
+    }
+    return this.breakdown.page.offset + this.breakdown.page.limit < this.breakdown.page.total;
+  }
+
+  get hasActiveFilters(): boolean {
+    return (
+      this.filterKind !== 'all' ||
+      this.filterRuntime !== 'all' ||
+      this.filterModel !== 'all' ||
+      !!this.filterDateFrom ||
+      !!this.filterDateTo
     );
   }
 
-  private loadDiscoverReports(plans: MetricsSummaryItem[]): void {
-    const targets = plans.slice(0, 8);
-    if (targets.length === 0) {
-      this.discoverEntries = [];
-      return;
-    }
-    forkJoin(
-      targets.map((plan) =>
-        this.apiService.fetchDiscoverReport(plan.plan_key, plan.workspace_root).pipe(
-          catchError(() => of(null)),
-        ),
-      ),
-    ).subscribe((responses) => {
-      this.discoverEntries = responses
-        .filter((response): response is NonNullable<typeof response> => response !== null)
-        .map((response) => ({
-          plan_key: response.plan_key,
-          patterns: response.report.sequence_patterns ?? [],
-          limitations: response.report.limitations ?? [],
-        }))
-        .filter(
-          (entry) =>
-            entry.patterns.length > 0 ||
-            entry.limitations.some((line) => line.includes('whole_file_reads')),
-        );
-      this.cdr.markForCheck();
-    });
+  get hasUsageData(): boolean {
+    return (this.insights?.headline.run_count ?? 0) > 0;
   }
 
-  private loadSavings(): void {
-    const filters = this.buildSavingsFilters();
-    this.savingsLoading = true;
-    this.savingsError = '';
-    this.savingsReport = null;
-    this.savingsPathEntries = [];
-    this.apiService.fetchSavings(filters).subscribe({
-      next: (report) => {
-        this.savingsReport = report;
-        this.savingsPathEntries = this.buildSavingsPathEntries(report);
-        this.savingsLoading = false;
-        this.cdr.markForCheck();
-      },
-      error: (err) => {
-        this.savingsError = err.error?.error || 'Failed to load savings data';
-        this.savingsLoading = false;
-        this.cdr.markForCheck();
-      },
-    });
+  get isRefreshing(): boolean {
+    return !!(
+      this.insights &&
+      (this.summaryLoading || this.breakdownLoading || this.savingsLoading)
+    );
   }
 
-  private buildSavingsFilters(): {
-    workspaceRoot?: string;
-    runtime?: string;
-    model?: string;
-    plan?: string;
-  } {
-    const filters: {
-      workspaceRoot?: string;
-      runtime?: string;
-      model?: string;
-      plan?: string;
-    } = {};
-    const workspace = this.getSelectedWorkspaceEntry();
-    if (workspace?.workspaceRoot) {
-      filters.workspaceRoot = workspace.workspaceRoot;
-    }
-    if (this.filterRuntime !== 'all') {
-      filters.runtime = this.filterRuntime;
-    }
-    if (this.filterModel !== 'all') {
-      filters.model = this.filterModel;
-    }
-    if (workspace?.planKey) {
-      filters.plan = workspace.planKey;
-    }
-    return filters;
-  }
-
-  private buildSavingsPathEntries(report: SavingsReport): SavingsPathEntry[] {
-    const perPath = report.per_path ?? {};
-    return SAVINGS_PATH_ORDER.map((pathName) => {
-      const bucket: SavingsBucket = perPath[pathName] ?? {
-        pre_optimization_bytes: 0,
-        post_optimization_bytes: 0,
-        saved_bytes: 0,
-        count: 0,
-        pre_optimization_tokens: 0,
-        post_optimization_tokens: 0,
-        saved_tokens: 0,
-        token_cap_triggers: 0,
-      };
-      return {
-        name: pathName,
-        label: this.formatSavingsPathLabel(pathName),
-        saved_tokens: bucket.saved_tokens,
-        saved_bytes: bucket.saved_bytes,
-        count: bucket.count,
-        pre_optimization_bytes: bucket.pre_optimization_bytes,
-        post_optimization_bytes: bucket.post_optimization_bytes,
-        savings_percent: bucket.savings_percent,
-        status_label: bucket.status_label || bucket.status || 'inactive',
-      };
-    });
-  }
-
-  private getSelectedWorkspaceEntry(): WorkspaceRegistry | undefined {
-    const selected = this.workspaceSelectorService.selectedWorkspacePath();
-    if (!selected) {
-      return undefined;
-    }
-    return this.workspaceSelectorService.workspaces().find((ws) => ws.path === selected);
-  }
-
-  private formatSavingsPathLabel(pathName: SavingsPathName): string {
-    return pathName
-      .split('_')
-      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-      .join(' ');
+  refresh(): void {
+    this.pageOffset = 0;
+    this.detail = null;
+    this.detailError = null;
+    this.loadSummary();
+    this.loadBreakdown();
+    this.loadSavings();
+    this.loadJevUsage();
   }
 
   setFilterKind(value: string): void {
-    this.filterKind = this.normalizeKindFilter(value);
-    this.recomputeRuntimeOptions(this.summary);
-    this.recomputeModelOptions(this.summary);
-    this.applyFilters();
-    if (this.summary) {
-      this.loadDiscoverReports(this.getFilteredPlans(this.summary));
-    }
-    this.loadSavings();
-    this.cdr.markForCheck();
+    this.filterKind = value === 'plan' || value === 'orchestration' ? value : 'all';
+    this.pageOffset = 0;
+    this.reloadFiltered();
   }
 
   setFilterRuntime(value: string): void {
-    this.filterRuntime = this.normalizeSelection(value);
-    this.recomputeModelOptions(this.summary);
-    this.applyFilters();
-    this.loadSavings();
-    this.cdr.markForCheck();
+    this.filterRuntime = value?.trim() || 'all';
+    this.pageOffset = 0;
+    this.reloadFiltered();
   }
 
   setFilterModel(value: string): void {
-    this.filterModel = this.normalizeSelection(value);
-    this.applyFilters();
-    this.loadSavings();
-    this.cdr.markForCheck();
+    this.filterModel = value?.trim() || 'all';
+    this.pageOffset = 0;
+    this.reloadFiltered();
   }
 
   setFilterDateFrom(value: string): void {
     this.filterDateFrom = value?.trim() || '';
-    this.recomputeRuntimeOptions(this.summary);
-    this.recomputeModelOptions(this.summary);
-    this.applyFilters();
-    this.loadSavings();
-    this.cdr.markForCheck();
+    this.pageOffset = 0;
+    this.reloadFiltered();
   }
 
   setFilterDateTo(value: string): void {
     this.filterDateTo = value?.trim() || '';
-    this.recomputeRuntimeOptions(this.summary);
-    this.recomputeModelOptions(this.summary);
-    this.applyFilters();
-    this.loadSavings();
-    this.cdr.markForCheck();
+    this.pageOffset = 0;
+    this.reloadFiltered();
   }
 
   clearFilters(): void {
@@ -1388,11 +1452,129 @@ export class UsageHubComponent implements OnInit {
     this.filterModel = 'all';
     this.filterDateFrom = '';
     this.filterDateTo = '';
-    this.recomputeRuntimeOptions(this.summary);
-    this.recomputeModelOptions(this.summary);
-    this.applyFilters();
-    this.loadSavings();
+    this.pageOffset = 0;
+    this.reloadFiltered();
+  }
+
+  openDrilldown(id: string): void {
+    if (id === 'runtime' || id === 'model' || id === 'runs') {
+      this.activeDrill = id;
+      const panel = document.querySelector(`[data-testid="insights-panel-${id}"]`);
+      if (panel instanceof HTMLDetailsElement) {
+        panel.open = true;
+        panel.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      }
+      this.cdr.markForCheck();
+    }
+  }
+
+  sortRuns(field: string): void {
+    if (this.sortBy === field) {
+      this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.sortBy = field;
+      this.sortDir = field === 'plan_key' ? 'asc' : 'desc';
+    }
+    this.pageOffset = 0;
+    this.loadBreakdown();
+  }
+
+  prevPage(): void {
+    this.pageOffset = Math.max(0, this.pageOffset - this.pageLimit);
+    this.loadBreakdown();
+  }
+
+  nextPage(): void {
+    if (!this.hasNextPage) {
+      return;
+    }
+    this.pageOffset += this.pageLimit;
+    this.loadBreakdown();
+  }
+
+  loadDetail(planKey: string): void {
+    const handle = this.requestLifecycle.start('insights-detail', {
+      project: this.workspaceSelectorService.selectedWorkspacePath(),
+      planKey,
+    });
+    this.detailLoading = true;
+    this.detailError = null;
+    this.detail = null;
     this.cdr.markForCheck();
+    const workspaceRoot = this.selectedWorkspaceRoot();
+    this.apiService.fetchMetricsDetail(planKey, workspaceRoot, { signal: handle.signal }).subscribe({
+      next: (detail) => {
+        if (!this.requestLifecycle.isCurrent(handle)) {
+          return;
+        }
+        this.detail = detail;
+        this.detailLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        if (!this.requestLifecycle.isCurrent(handle) || isAbortError(err)) {
+          return;
+        }
+        this.detailLoading = false;
+        this.detailError = err;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  closeDetail(): void {
+    this.requestLifecycle.cancel('insights-detail');
+    this.detailLoading = false;
+    this.detailError = null;
+    this.detail = null;
+    this.cdr.markForCheck();
+  }
+
+  downloadBreakdownCsv(): void {
+    if (!this.breakdown) {
+      return;
+    }
+    const rows: string[][] = [
+      [
+        'kind',
+        'plan_key',
+        'runtime',
+        'model_label',
+        'model_exact',
+        'model_count',
+        'models_all',
+        'total_tokens',
+        'tool_calls',
+        'elapsed_seconds',
+      ],
+      ...this.breakdown.run_rows.map((row) => [
+        row.kind,
+        row.plan_key,
+        row.runtime,
+        row.model_label,
+        row.model_exact,
+        String(this.runModelCount(row)),
+        (row.models ?? []).map((model) => model.model_exact).join(' | ') || row.model_exact,
+        String(row.total_tokens),
+        String(row.tool_calls_total),
+        String(row.elapsed_seconds),
+      ]),
+    ];
+    const csv = rows.map((cols) => cols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'insights-breakdown.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  formatUsd(value: number): string {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '$0';
+    }
+    return value < 0.01 ? `<$0.01` : `$${value.toFixed(2)}`;
   }
 
   formatNumber(value: number): string {
@@ -1400,6 +1582,36 @@ export class UsageHubComponent implements OnInit {
       return '0';
     }
     return new Intl.NumberFormat().format(Math.round(value));
+  }
+
+  formatCompact(value: number): string {
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    const sign = value < 0 ? '-' : '';
+    const abs = Math.abs(value);
+    const trim = (n: number) => n.toFixed(1).replace(/\.0$/, '');
+    if (abs >= 1e12) {
+      return `${sign}${trim(abs / 1e12)}T`;
+    }
+    if (abs >= 1e9) {
+      return `${sign}${trim(abs / 1e9)}B`;
+    }
+    if (abs >= 1e6) {
+      return `${sign}${trim(abs / 1e6)}M`;
+    }
+    if (abs >= 1e3) {
+      return `${sign}${trim(abs / 1e3)}K`;
+    }
+    return this.formatNumber(value);
+  }
+
+  trendShare(part: number): number {
+    const recent = this.insights?.trend.recent_tokens ?? 0;
+    const prior = this.insights?.trend.prior_tokens ?? 0;
+    const max = Math.max(recent, prior, 1);
+    const safe = Number.isFinite(part) ? Math.max(0, part) : 0;
+    return Math.round((safe / max) * 100);
   }
 
   formatSeconds(value: number): string {
@@ -1413,495 +1625,292 @@ export class UsageHubComponent implements OnInit {
     return `${(ratio * 100).toFixed(1)}%`;
   }
 
-  formatSavingsDateRange(range: { started_at: string | null; ended_at: string | null } | null | undefined): string {
-    if (!range) {
-      return '';
-    }
-    const started = range.started_at ? range.started_at.split('T')[0] : '';
-    const ended = range.ended_at ? range.ended_at.split('T')[0] : '';
-    if (started && ended) {
-      return `${started} → ${ended}`;
-    }
-    return started || ended || '';
+  /** Distinct models recorded for a run; falls back to the single summary model. */
+  runModelCount(row: MetricsBreakdownRunRow): number {
+    const count = row.model_count ?? row.models?.length ?? 0;
+    return count > 0 ? count : 1;
   }
 
-  formatPeakTurn(tokens: number): string {
-    if (!Number.isFinite(tokens) || tokens <= 0) {
-      return '--';
-    }
-    return this.formatNumber(tokens);
+  /** Models beyond the one shown in the table cell, for the "+N more" badge. */
+  extraModelCount(row: MetricsBreakdownRunRow): number {
+    return Math.max(0, this.runModelCount(row) - 1);
   }
 
-  formatOverlayEffective(effective: boolean): string {
-    return effective ? 'yes' : 'no';
+  runModelsTitle(row: MetricsBreakdownRunRow): string {
+    const models = row.models ?? [];
+    if (models.length === 0) {
+      return row.model_exact;
+    }
+    return models.map((model) => `${model.model_exact} (${model.runtime})`).join('\n');
   }
 
-  formatOverlayWarnings(overlay: RuntimeOverlayMetrics): string {
-    if (!overlay.runtime_overlay_warnings.length) {
-      return '--';
+  /** Per-model usage rows for the run detail modal, or null when unavailable. */
+  detailModelRows(item: MetricsSummaryItem | null): MetricsRunModelRow[] | null {
+    const breakdown = item?.model_breakdown;
+    if (!item || !breakdown?.length) {
+      this.detailModelRowsCache = null;
+      this.detailModelRowsCacheKey = '';
+      return null;
     }
-    return overlay.runtime_overlay_warnings.join('; ');
-  }
-
-  private applyFilters(summary = this.summary): void {
-    if (!summary) {
-      this.runtimeRows = [];
-      this.modelRows = [];
-      this.statRows = [];
-      this.totalRunCount = 0;
-      this.filteredRunCount = 0;
-      this.detailedBreakdownRuns = 0;
-      this.inferredBreakdownRuns = 0;
-      this.overlayRunRows = [];
-      this.toolCallRunRows = [];
-      return;
+    if (this.detailModelRowsCacheKey === item.path && this.detailModelRowsCache) {
+      return this.detailModelRowsCache;
     }
-
-    let records = this.buildRunRecords(summary);
-    records = records.filter((record) => this.passesWorkspaceScopeFilter(record));
-    this.totalRunCount = records.length;
-    const fromMs = this.parseDateStartMs(this.filterDateFrom);
-    const toMs = this.parseDateEndMs(this.filterDateTo);
-    const scopedRuns = records
-      .filter((record) => this.passesKindFilter(record))
-      .filter((record) => this.passesDateFilter(record.startedAtMs, fromMs, toMs));
-    const filtered = scopedRuns
-      .map((record) => ({
-        run: record,
-        entries: record.breakdown.filter((entry) => this.matchesRuntimeModel(entry)),
-      }))
-      .filter((match) => match.entries.length > 0);
-
-    this.filteredRunCount = filtered.length;
-    this.detailedBreakdownRuns = filtered.filter((match) => match.run.hasDetailedBreakdown).length;
-    this.inferredBreakdownRuns = filtered.length - this.detailedBreakdownRuns;
-    this.overlayRunRows = scopedRuns
-      .filter((run) => run.item.overlay !== undefined)
-      .map((run) => ({
-        kind: run.kind,
-        plan_key: run.item.plan_key,
-        stage_id: run.item.stage_id,
-        runtime: run.item.runtime,
-        overlay: run.item.overlay as RuntimeOverlayMetrics,
-      }))
-      .sort((a, b) => a.plan_key.localeCompare(b.plan_key) || (a.stage_id ?? '').localeCompare(b.stage_id ?? ''));
-
-    this.toolCallRunRows = scopedRuns
-      .filter((run) => run.item.tool_calls !== undefined)
-      .map((run) => ({
-        kind: run.kind,
-        plan_key: run.item.plan_key,
-        stage_id: run.item.stage_id,
-        runtime: run.item.runtime,
-        tool_calls: run.item.tool_calls as ToolCallClassificationMetrics,
-      }))
-      .sort((a, b) => a.plan_key.localeCompare(b.plan_key) || (a.stage_id ?? '').localeCompare(b.stage_id ?? ''));
-
-    this.buildBreakdowns(filtered);
-  }
-
-  private buildBreakdowns(
-    filtered: Array<{
-      run: UsageRunRecord;
-      entries: ModelBreakdownItem[];
-    }>,
-  ): void {
-    const modelBuckets = new Map<string, MutableModelBucket>();
-    const runtimeBuckets = new Map<string, MutableRuntimeBucket>();
-
-    for (const match of filtered) {
-      const runKey = match.run.item.path;
-      for (const entry of match.entries) {
-        const runtime = this.normalizeRuntime(entry.runtime);
-        const model = this.normalizeModel(entry.model);
-        const modelKey = `${runtime}\u0000${model}`;
-        const modelBucket = modelBuckets.get(modelKey) ?? {
-          runtime,
-          model,
-          invocations: 0,
-          runKeys: new Set<string>(),
-          elapsed_seconds: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          max_turn_total_tokens: 0,
-          tool_calls_total: 0,
-        };
-        modelBucket.invocations += this.normalizeInvocations(entry.invocations);
-        modelBucket.runKeys.add(runKey);
-        modelBucket.elapsed_seconds += this.toNumber(entry.elapsed_seconds);
-        modelBucket.input_tokens += this.toNumber(entry.input_tokens);
-        modelBucket.output_tokens += this.toNumber(entry.output_tokens);
-        modelBucket.cache_creation_input_tokens += this.toNumber(entry.cache_creation_input_tokens);
-        modelBucket.cache_read_input_tokens += this.toNumber(entry.cache_read_input_tokens);
-        modelBucket.tool_calls_total += this.toNumber(entry.tool_calls_total);
-        const modelMaxTurn = this.toNumber(entry.max_turn_total_tokens);
-        if (modelMaxTurn > modelBucket.max_turn_total_tokens) {
-          modelBucket.max_turn_total_tokens = modelMaxTurn;
-        }
-        modelBuckets.set(modelKey, modelBucket);
-
-        const runtimeBucket = runtimeBuckets.get(runtime) ?? {
-          runtime,
-          models: new Set<string>(),
-          invocations: 0,
-          runKeys: new Set<string>(),
-          elapsed_seconds: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-          max_turn_total_tokens: 0,
-          tool_calls_total: 0,
-        };
-        runtimeBucket.models.add(model);
-        runtimeBucket.invocations += this.normalizeInvocations(entry.invocations);
-        runtimeBucket.runKeys.add(runKey);
-        runtimeBucket.elapsed_seconds += this.toNumber(entry.elapsed_seconds);
-        runtimeBucket.input_tokens += this.toNumber(entry.input_tokens);
-        runtimeBucket.output_tokens += this.toNumber(entry.output_tokens);
-        runtimeBucket.cache_creation_input_tokens += this.toNumber(entry.cache_creation_input_tokens);
-        runtimeBucket.cache_read_input_tokens += this.toNumber(entry.cache_read_input_tokens);
-        runtimeBucket.tool_calls_total += this.toNumber(entry.tool_calls_total);
-        const runtimeMaxTurn = this.toNumber(entry.max_turn_total_tokens);
-        if (runtimeMaxTurn > runtimeBucket.max_turn_total_tokens) {
-          runtimeBucket.max_turn_total_tokens = runtimeMaxTurn;
-        }
-        runtimeBuckets.set(runtime, runtimeBucket);
-      }
-    }
-
-    this.modelRows = Array.from(modelBuckets.values())
-      .map((bucket) => {
-        const totalInput = bucket.input_tokens + bucket.cache_creation_input_tokens + bucket.cache_read_input_tokens;
-        const totalTokens =
-          bucket.input_tokens +
-          bucket.output_tokens +
-          bucket.cache_creation_input_tokens +
-          bucket.cache_read_input_tokens;
-        return {
-          runtime: bucket.runtime,
-          model: bucket.model,
-          invocations: bucket.invocations,
-          runs: bucket.runKeys.size,
-          elapsed_seconds: bucket.elapsed_seconds,
-          input_tokens: bucket.input_tokens,
-          output_tokens: bucket.output_tokens,
-          cache_creation_input_tokens: bucket.cache_creation_input_tokens,
-          cache_read_input_tokens: bucket.cache_read_input_tokens,
-          max_turn_total_tokens: bucket.max_turn_total_tokens,
-          tool_calls_total: bucket.tool_calls_total,
-          cache_hit_ratio: totalInput > 0 ? this.round4(bucket.cache_read_input_tokens / totalInput) : 0,
-          total_tokens: totalTokens,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.total_tokens - a.total_tokens ||
-          a.runtime.localeCompare(b.runtime) ||
-          a.model.localeCompare(b.model),
-      );
-
-    this.runtimeRows = Array.from(runtimeBuckets.values())
-      .map((bucket) => {
-        const totalInput = bucket.input_tokens + bucket.cache_creation_input_tokens + bucket.cache_read_input_tokens;
-        const totalTokens =
-          bucket.input_tokens +
-          bucket.output_tokens +
-          bucket.cache_creation_input_tokens +
-          bucket.cache_read_input_tokens;
-        return {
-          runtime: bucket.runtime,
-          model_count: bucket.models.size,
-          invocations: bucket.invocations,
-          runs: bucket.runKeys.size,
-          elapsed_seconds: bucket.elapsed_seconds,
-          input_tokens: bucket.input_tokens,
-          output_tokens: bucket.output_tokens,
-          cache_creation_input_tokens: bucket.cache_creation_input_tokens,
-          cache_read_input_tokens: bucket.cache_read_input_tokens,
-          max_turn_total_tokens: bucket.max_turn_total_tokens,
-          tool_calls_total: bucket.tool_calls_total,
-          cache_hit_ratio: totalInput > 0 ? this.round4(bucket.cache_read_input_tokens / totalInput) : 0,
-          total_tokens: totalTokens,
-        };
-      })
-      .sort((a, b) => b.total_tokens - a.total_tokens || a.runtime.localeCompare(b.runtime));
-
-    const runtimeTotals = this.runtimeRows.reduce(
-      (acc, row) => {
-        acc.invocations += row.invocations;
-        acc.elapsed_seconds += row.elapsed_seconds;
-        acc.input_tokens += row.input_tokens;
-        acc.output_tokens += row.output_tokens;
-        acc.cache_creation_input_tokens += row.cache_creation_input_tokens;
-        acc.cache_read_input_tokens += row.cache_read_input_tokens;
-        acc.tool_calls_total += row.tool_calls_total;
-        if (row.max_turn_total_tokens > acc.max_turn_total_tokens) {
-          acc.max_turn_total_tokens = row.max_turn_total_tokens;
-        }
-        return acc;
-      },
-      {
+    const buckets = new Map<string, MetricsRunModelRow>();
+    for (const entry of breakdown) {
+      const runtime = (entry.runtime || item.runtime || '').trim() || '(unspecified)';
+      const model = (entry.model || item.model || '').trim() || '(unspecified)';
+      const key = `${runtime} ${model}`;
+      const bucket = buckets.get(key) ?? {
+        runtime,
+        model,
+        model_label: this.friendlyModel(model),
+        model_exact: model,
         invocations: 0,
-        elapsed_seconds: 0,
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
-        max_turn_total_tokens: 0,
+        total_tokens: 0,
         tool_calls_total: 0,
-      },
+        elapsed_seconds: 0,
+      };
+      bucket.invocations += Math.max(1, entry.invocations ?? 0);
+      bucket.input_tokens += entry.input_tokens ?? 0;
+      bucket.output_tokens += entry.output_tokens ?? 0;
+      bucket.cache_creation_input_tokens += entry.cache_creation_input_tokens ?? 0;
+      bucket.cache_read_input_tokens += entry.cache_read_input_tokens ?? 0;
+      bucket.total_tokens +=
+        (entry.input_tokens ?? 0) +
+        (entry.output_tokens ?? 0) +
+        (entry.cache_creation_input_tokens ?? 0) +
+        (entry.cache_read_input_tokens ?? 0);
+      bucket.tool_calls_total += entry.tool_calls_total ?? 0;
+      bucket.elapsed_seconds += entry.elapsed_seconds ?? 0;
+      buckets.set(key, bucket);
+    }
+    const rows = Array.from(buckets.values()).sort(
+      (a, b) =>
+        b.total_tokens - a.total_tokens ||
+        b.invocations - a.invocations ||
+        a.model_exact.localeCompare(b.model_exact),
     );
-
-    const totalInput =
-      runtimeTotals.input_tokens +
-      runtimeTotals.cache_creation_input_tokens +
-      runtimeTotals.cache_read_input_tokens;
-    const cacheHitRatio = totalInput > 0 ? this.round4(runtimeTotals.cache_read_input_tokens / totalInput) : 0;
-
-    this.statRows = [
-      { label: 'Runs', value: this.formatNumber(this.filteredRunCount) },
-      { label: 'Invocations', value: this.formatNumber(runtimeTotals.invocations) },
-      { label: 'Input Tokens', value: this.formatNumber(runtimeTotals.input_tokens) },
-      { label: 'Output Tokens', value: this.formatNumber(runtimeTotals.output_tokens) },
-      { label: 'Cache Created', value: this.formatNumber(runtimeTotals.cache_creation_input_tokens) },
-      { label: 'Cache Read', value: this.formatNumber(runtimeTotals.cache_read_input_tokens) },
-      { label: 'Tool Calls', value: this.formatNumber(runtimeTotals.tool_calls_total) },
-      { label: 'Cache Hit', value: this.formatPercent(cacheHitRatio) },
-      { label: 'Peak Turn', value: this.formatPeakTurn(runtimeTotals.max_turn_total_tokens) },
-      { label: 'Elapsed', value: this.formatSeconds(runtimeTotals.elapsed_seconds) },
-    ];
+    this.detailModelRowsCache = rows;
+    this.detailModelRowsCacheKey = item.path;
+    return rows;
   }
 
-  private buildRunRecords(summary: MetricsSummary): UsageRunRecord[] {
-    const records: UsageRunRecord[] = [];
-    for (const item of summary.plans) {
-      records.push({
-        kind: 'plan',
-        item,
-        breakdown: this.resolveRunBreakdown(item),
-        hasDetailedBreakdown: Array.isArray(item.model_breakdown) && item.model_breakdown.length > 0,
-        startedAtMs: this.resolveStartedAtMs(item),
-      });
+  friendlyModel(raw: string | undefined): string {
+    const exact = (raw ?? '').trim();
+    if (!exact) {
+      return 'Unspecified model';
     }
-    for (const item of summary.orchestrations) {
-      records.push({
-        kind: 'orchestration',
-        item,
-        breakdown: this.resolveRunBreakdown(item),
-        hasDetailedBreakdown: Array.isArray(item.model_breakdown) && item.model_breakdown.length > 0,
-        startedAtMs: this.resolveStartedAtMs(item),
-      });
+    const lower = exact.toLowerCase();
+    if (lower.includes('claude') && lower.includes('opus')) {
+      return 'Claude Opus';
     }
-    return records;
+    if (lower.includes('claude') && lower.includes('sonnet')) {
+      return 'Claude Sonnet';
+    }
+    if (lower.includes('gpt-5') || lower.includes('gpt5')) {
+      return 'GPT-5 family';
+    }
+    if (lower.includes('gpt-4o')) {
+      return 'GPT-4o';
+    }
+    return exact.length > 28 ? `${exact.slice(0, 25)}...` : exact;
   }
 
-  private recomputeRuntimeOptions(summary: MetricsSummary | null): void {
-    if (!summary) {
-      this.runtimeOptions = [];
-      this.filterRuntime = 'all';
-      return;
-    }
-    const fromMs = this.parseDateStartMs(this.filterDateFrom);
-    const toMs = this.parseDateEndMs(this.filterDateTo);
-    const runtimes = new Set<string>();
-    for (const record of this.buildRunRecords(summary).filter((r) => this.passesWorkspaceScopeFilter(r))) {
-      if (!this.passesKindFilter(record)) {
-        continue;
-      }
-      if (!this.passesDateFilter(record.startedAtMs, fromMs, toMs)) {
-        continue;
-      }
-      for (const entry of record.breakdown) {
-        runtimes.add(this.normalizeRuntime(entry.runtime));
-      }
-    }
-    this.runtimeOptions = Array.from(runtimes.values()).sort((a, b) => a.localeCompare(b));
-    if (this.filterRuntime !== 'all' && !this.runtimeOptions.includes(this.filterRuntime)) {
-      this.filterRuntime = 'all';
-    }
-  }
-
-  private recomputeModelOptions(summary: MetricsSummary | null): void {
-    if (!summary) {
-      this.modelOptions = [];
-      this.filterModel = 'all';
-      return;
-    }
-    const fromMs = this.parseDateStartMs(this.filterDateFrom);
-    const toMs = this.parseDateEndMs(this.filterDateTo);
-    const models = new Set<string>();
-    for (const record of this.buildRunRecords(summary).filter((r) => this.passesWorkspaceScopeFilter(r))) {
-      if (!this.passesKindFilter(record)) {
-        continue;
-      }
-      if (!this.passesDateFilter(record.startedAtMs, fromMs, toMs)) {
-        continue;
-      }
-      for (const entry of record.breakdown) {
-        const runtime = this.normalizeRuntime(entry.runtime);
-        if (this.filterRuntime !== 'all' && runtime !== this.filterRuntime) {
-          continue;
-        }
-        models.add(this.normalizeModel(entry.model));
-      }
-    }
-    this.modelOptions = Array.from(models.values()).sort((a, b) => a.localeCompare(b));
-    if (this.filterModel !== 'all' && !this.modelOptions.includes(this.filterModel)) {
-      this.filterModel = 'all';
-    }
-  }
-
-  private passesKindFilter(record: UsageRunRecord): boolean {
-    return this.filterKind === 'all' || record.kind === this.filterKind;
-  }
-
-  private matchesRuntimeModel(entry: ModelBreakdownItem): boolean {
-    const runtime = this.normalizeRuntime(entry.runtime);
-    const model = this.normalizeModel(entry.model);
-    const runtimeMatch = this.filterRuntime === 'all' || runtime === this.filterRuntime;
-    const modelMatch = this.filterModel === 'all' || model === this.filterModel;
-    return runtimeMatch && modelMatch;
-  }
-
-  private passesDateFilter(
-    startedAtMs: number | null,
-    fromMs: number | null,
-    toMs: number | null,
-  ): boolean {
-    if (fromMs === null && toMs === null) {
-      return true;
-    }
-    if (startedAtMs === null) {
+  /** Show monospace exact id only when it differs from the friendly label. */
+  showExactModelHint(label: string, exact: string): boolean {
+    const normalizedLabel = (label ?? '').trim();
+    const normalizedExact = (exact ?? '').trim();
+    if (!normalizedExact || normalizedExact === '(unspecified)') {
       return false;
     }
-    if (fromMs !== null && startedAtMs < fromMs) {
-      return false;
+    return normalizedExact !== normalizedLabel;
+  }
+
+  trendSentence(insights: MetricsInsightsSummary): string {
+    const trend = insights.trend;
+    if (trend.direction === 'unknown') {
+      return 'Not enough dated runs to compute a trend yet.';
     }
-    if (toMs !== null && startedAtMs > toMs) {
-      return false;
+    const delta =
+      trend.delta_percent === null
+        ? `${this.formatCompact(Math.abs(trend.delta_tokens))} tokens`
+        : `${Math.abs(trend.delta_percent)}%`;
+    if (trend.direction === 'flat') {
+      return 'Token volume is roughly flat versus the prior half of this scope.';
     }
-    return true;
-  }
-
-  private parseDateStartMs(value: string): number | null {
-    if (!value) {
-      return null;
+    if (trend.direction === 'up') {
+      return `Token volume is up ${delta} versus the prior half of this scope.`;
     }
-    const timestamp = new Date(`${value}T00:00:00`).getTime();
-    return Number.isFinite(timestamp) ? timestamp : null;
+    return `Token volume is down ${delta} versus the prior half of this scope.`;
   }
 
-  private parseDateEndMs(value: string): number | null {
-    if (!value) {
-      return null;
+  private reloadFiltered(): void {
+    this.loadSummary();
+    this.loadBreakdown();
+    this.loadSavings();
+    this.loadJevUsage();
+  }
+
+  private buildFilters(includePaging = false): MetricsQueryFilters {
+    const filters: MetricsQueryFilters = {
+      kind: this.filterKind,
+      runtime: this.filterRuntime,
+      model: this.filterModel,
+      dateFrom: this.filterDateFrom || undefined,
+      dateTo: this.filterDateTo || undefined,
+    };
+    const workspaceRoot = this.selectedWorkspaceRoot();
+    if (workspaceRoot) {
+      filters.workspaceRoot = workspaceRoot;
     }
-    const timestamp = new Date(`${value}T23:59:59.999`).getTime();
-    return Number.isFinite(timestamp) ? timestamp : null;
-  }
-
-  private resolveRunBreakdown(run: MetricsSummaryItem): ModelBreakdownItem[] {
-    if (Array.isArray(run.model_breakdown) && run.model_breakdown.length > 0) {
-      return run.model_breakdown;
+    if (includePaging) {
+      filters.offset = this.pageOffset;
+      filters.limit = this.pageLimit;
+      filters.sortBy = this.sortBy;
+      filters.sortDir = this.sortDir;
     }
-
-    return [
-      {
-        runtime: run.runtime || 'unknown',
-        model: run.model || '(summary)',
-        invocations: 1,
-        elapsed_seconds: run.elapsed_seconds,
-        input_tokens: run.input_tokens,
-        output_tokens: run.output_tokens,
-        cache_creation_input_tokens: run.cache_creation_input_tokens,
-        cache_read_input_tokens: run.cache_read_input_tokens,
-        max_turn_total_tokens: run.max_turn_total_tokens,
-        cache_hit_ratio: run.cache_hit_ratio,
-      },
-    ];
+    return filters;
   }
 
-  private resolveStartedAtMs(run: MetricsSummaryItem): number | null {
-    const source = run.started_at || run.ended_at;
-    if (!source) {
-      return null;
-    }
-    const timestamp = Date.parse(source);
-    return Number.isFinite(timestamp) ? timestamp : null;
-  }
-
-  private normalizeKindFilter(value: string): UsageKind {
-    if (value === 'plan' || value === 'orchestration') {
-      return value;
-    }
-    return 'all';
-  }
-
-  private normalizeSelection(value: string): string {
-    const normalized = value?.trim() || 'all';
-    return normalized.length > 0 ? normalized : 'all';
-  }
-
-  private normalizeRuntime(runtime: string): string {
-    const value = runtime.trim();
-    return value.length > 0 ? value : 'unknown';
-  }
-
-  private normalizeModel(model: string): string {
-    const value = model.trim();
-    return value.length > 0 ? value : '(unspecified)';
-  }
-
-  private normalizeInvocations(value: number): number {
-    const parsed = this.toNumber(value);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return 1;
-    }
-    return Math.max(1, Math.round(parsed));
-  }
-
-  private toNumber(value: number | undefined | null): number {
-    if (value === undefined || value === null) {
-      return 0;
-    }
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  private round4(value: number): number {
-    return Math.round(value * 10000) / 10000;
-  }
-
-  getWorkspaceDisplayName(metricPath: string): string {
-    const workspacePath = this.workspaceSelectorService.getWorkspaceForMetricPath(metricPath);
-    if (!workspacePath) {
-      return '(unknown)';
-    }
-    const entry = this.workspaceSelectorService.workspaces().find((w) => w.path === workspacePath);
-    return entry?.label ?? (workspacePath.split('/').pop() || workspacePath);
-  }
-
-  isShowingAllWorkspaces(): boolean {
-    return this.workspaceSelectorService.selectedWorkspacePath() === null &&
-           this.workspaceSelectorService.workspaces().length > 1;
-  }
-
-  private passesWorkspaceScopeFilter(record: UsageRunRecord): boolean {
+  private selectedWorkspaceRoot(): string | undefined {
     const selected = this.workspaceSelectorService.selectedWorkspacePath();
     if (!selected) {
-      return true;
+      return undefined;
     }
-    const entry = this.workspaceSelectorService.workspaces().find((w) => w.path === selected);
-    if (!entry?.workspaceRoot) {
-      return true;
-    }
-    return record.item.workspace_root === entry.workspaceRoot;
+    const entry = this.workspaceSelectorService.workspaces().find((ws: WorkspaceRegistry) => ws.path === selected);
+    return entry?.workspaceRoot || undefined;
   }
 
-  private countWorkspaceScopedRecords(summary: MetricsSummary): number {
-    let records = this.buildRunRecords(summary);
-    records = records.filter((r) => this.passesWorkspaceScopeFilter(r));
-    return records.length;
+  loadSummary(): void {
+    const handle = this.requestLifecycle.start('insights-summary', {
+      project: this.workspaceSelectorService.selectedWorkspacePath(),
+      kind: this.filterKind,
+      runtime: this.filterRuntime,
+      model: this.filterModel,
+      dateFrom: this.filterDateFrom,
+      dateTo: this.filterDateTo,
+    });
+    if (!this.insights) {
+      this.summaryLoading = true;
+    }
+    this.summaryError = null;
+    this.cdr.markForCheck();
+    this.apiService.fetchMetricsInsightsSummary(this.buildFilters(false), { signal: handle.signal }).subscribe({
+      next: (insights) => {
+        if (!this.requestLifecycle.isCurrent(handle)) {
+          return;
+        }
+        this.insights = insights;
+        this.runtimeOptions = insights.filter_options.runtimes;
+        this.modelOptions = insights.filter_options.models;
+        this.summaryLoading = false;
+        markInventoryUsable('insights');
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        if (!this.requestLifecycle.isCurrent(handle) || isAbortError(err)) {
+          return;
+        }
+        this.summaryLoading = false;
+        this.summaryError = err;
+        if (!this.insights) {
+          this.insights = null;
+        }
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  loadBreakdown(): void {
+    const handle = this.requestLifecycle.start('insights-breakdown', {
+      project: this.workspaceSelectorService.selectedWorkspacePath(),
+      kind: this.filterKind,
+      runtime: this.filterRuntime,
+      model: this.filterModel,
+      dateFrom: this.filterDateFrom,
+      dateTo: this.filterDateTo,
+      offset: this.pageOffset,
+      limit: this.pageLimit,
+      sortBy: this.sortBy,
+      sortDir: this.sortDir,
+    });
+    if (!this.breakdown) {
+      this.breakdownLoading = true;
+    }
+    this.breakdownError = null;
+    this.cdr.markForCheck();
+    this.apiService.fetchMetricsBreakdown(this.buildFilters(true), { signal: handle.signal }).subscribe({
+      next: (breakdown) => {
+        if (!this.requestLifecycle.isCurrent(handle)) {
+          return;
+        }
+        this.breakdown = breakdown;
+        this.breakdownLoading = false;
+        markSecondaryReady('insights');
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        if (!this.requestLifecycle.isCurrent(handle) || isAbortError(err)) {
+          return;
+        }
+        this.breakdownLoading = false;
+        this.breakdownError = err;
+        if (!this.breakdown) {
+          this.breakdown = null;
+        }
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private loadJevUsage(): void {
+    const workspaceRoot = this.selectedWorkspaceRoot();
+    this.apiService.fetchJevUsage(workspaceRoot ? { workspaceRoot } : undefined).subscribe({
+      next: (usage) => {
+        this.jevUsage = usage;
+        this.cdr.markForCheck();
+      },
+      // Jev is optional; a failed read simply leaves the panel hidden.
+      error: () => {
+        this.jevUsage = null;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private loadSavings(): void {
+    this.savingsLoading = true;
+    this.savingsError = null;
+    const filters: {
+      workspaceRoot?: string;
+      runtime?: string;
+      model?: string;
+    } = {};
+    const workspaceRoot = this.selectedWorkspaceRoot();
+    if (workspaceRoot) {
+      filters.workspaceRoot = workspaceRoot;
+    }
+    if (this.filterRuntime !== 'all') {
+      filters.runtime = this.filterRuntime;
+    }
+    if (this.filterModel !== 'all') {
+      filters.model = this.filterModel;
+    }
+    this.apiService.fetchSavings(filters).subscribe({
+      next: (report) => {
+        this.savingsReport = report;
+        this.savingsLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: (err) => {
+        this.savingsError = err;
+        this.savingsLoading = false;
+        this.cdr.markForCheck();
+      },
+    });
   }
 }

@@ -1,0 +1,13 @@
+{
+  "conversationId": "conv-0001",
+  "workspacePaths": ["/tmp/ralph-agy-workspace"],
+  "transcriptPath": "/tmp/ralph-agy-workspace/.transcript.jsonl",
+  "modelName": "gemini-test",
+  "stepIdx": 4,
+  "toolCall": {
+    "name": "view_file",
+    "args": {
+      "AbsolutePath": "/tmp/ralph-agy-workspace/README.md"
+    }
+  }
+}

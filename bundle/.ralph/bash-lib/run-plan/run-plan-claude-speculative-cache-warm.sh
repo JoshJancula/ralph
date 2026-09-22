@@ -77,7 +77,11 @@ ralph_claude_speculative_cache_warm_sidecar_path() {
   local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
   local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-${WORKSPACE:-}/.ralph-workspace}"
   [[ -n "$plan_key" ]] || return 1
-  printf '%s/sessions/%s/speculative-cache-warm.pid\n' "${state_root%/}" "$plan_key"
+  if declare -F ralph_state_sessions_dir >/dev/null 2>&1; then
+    printf '%s/speculative-cache-warm.pid\n' "$(ralph_state_sessions_dir "${state_root%/}" "$plan_key")"
+  else
+    printf '%s/sessions/%s/speculative-cache-warm.pid\n' "${state_root%/}" "$plan_key"
+  fi
 }
 
 ralph_claude_speculative_cache_warm_log_path() {
@@ -187,7 +191,7 @@ print(input_t, output_t, cache_create, cache_read)
     "${RALPH_SPECULATIVE_CACHE_WARM_FINGERPRINT:-}" \
     0 \
     0 \
-    "${RALPH_PROMPT_STABLE_PREFIX_BYTES:-0}" \
+    0 \
     0 \
     0 \
     "" \
@@ -227,7 +231,7 @@ ralph_claude_speculative_cache_warm_maybe_start() {
     return 0
   fi
 
-  local sidecar log_file agent_ws warm_pid started_at fingerprint
+  local sidecar log_file agent_ws warm_pid started_at
   sidecar="$(ralph_claude_speculative_cache_warm_sidecar_path 2>/dev/null || true)"
   log_file="$(ralph_claude_speculative_cache_warm_log_path 2>/dev/null || true)"
   [[ -n "$sidecar" && -n "$log_file" ]] || return 0
@@ -237,11 +241,7 @@ ralph_claude_speculative_cache_warm_maybe_start() {
   export RALPH_PLAN_SPECULATIVE_CACHE_WARM_LOG_FILE="$log_file"
   export RALPH_SPECULATIVE_CACHE_WARM_TODO_LINE="$todo_line"
   export RALPH_SPECULATIVE_CACHE_WARM_TODO_ORDINAL="${RALPH_TODO_ORDINAL:-}"
-  fingerprint="${RALPH_PROMPT_STABLE_PREFIX_FINGERPRINT:-}"
-  if [[ -z "$fingerprint" ]] && declare -F ralph_run_plan_stable_prefix_fingerprint >/dev/null 2>&1; then
-    fingerprint="$(ralph_run_plan_stable_prefix_fingerprint "$PROMPT_STATIC")"
-  fi
-  export RALPH_SPECULATIVE_CACHE_WARM_FINGERPRINT="$fingerprint"
+  export RALPH_SPECULATIVE_CACHE_WARM_FINGERPRINT=""
 
   ralph_claude_speculative_cache_warm_teardown
 
@@ -261,14 +261,14 @@ ralph_claude_speculative_cache_warm_maybe_start() {
     cd "$agent_ws" || exit 1
     if declare -F ralph_process_scope_exec >/dev/null 2>&1 && [[ -n "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
       printf '%s' "." | ralph_process_scope_exec cache-warm claude "$cli_name" \
-        --system-prompt "$PROMPT_STATIC" \
+        --append-system-prompt "$PROMPT_STATIC" \
         --cache-control break \
         --max-output-tokens 1 \
         --output-format stream-json \
         >"$log_file" 2>&1
     else
       printf '%s' "." | "$cli_name" \
-        --system-prompt "$PROMPT_STATIC" \
+        --append-system-prompt "$PROMPT_STATIC" \
         --cache-control break \
         --max-output-tokens 1 \
         --output-format stream-json \

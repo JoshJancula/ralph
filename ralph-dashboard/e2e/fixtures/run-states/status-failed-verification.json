@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "runId": "run-failed-verification",
+    "workflowId": "feature-delivery",
+    "mode": "dependency",
+    "state": "failed",
+    "createdAt": "2026-09-13T08:00:00Z",
+    "updatedAt": "2026-09-13T08:40:00Z"
+  },
+  "stages": [
+    {
+      "id": "implement",
+      "state": "completed",
+      "stageKind": "agent",
+      "attempt": 1,
+      "createdAt": "2026-09-13T08:00:00Z",
+      "updatedAt": "2026-09-13T08:20:00Z"
+    },
+    {
+      "id": "qa",
+      "state": "failed",
+      "stageKind": "agent",
+      "attempt": 1,
+      "reasonCode": "verification-failed",
+      "summary": "qa-approved verification step did not find an approved verdict artifact",
+      "createdAt": "2026-09-13T08:21:00Z",
+      "updatedAt": "2026-09-13T08:40:00Z"
+    }
+  ],
+  "diagnosis": {
+    "state": "failed",
+    "reasonCode": "verification-failed",
+    "summary": "Verification profile qa-verdict failed: missing approved qa-verdict.json",
+    "stageId": "qa",
+    "evidence": [
+      { "path": ".ralph-workspace/artifacts/run-failed-verification/qa-verdict.json", "present": false }
+    ],
+    "retryable": true,
+    "nextAction": {
+      "label": "review the failed verification and reset the stage",
+      "argv": ["ralph", "workflow", "reset", "run-failed-verification", "--stage", "qa"]
+    }
+  },
+  "nextAction": {
+    "label": "review the failed verification and reset the stage",
+    "argv": ["ralph", "workflow", "reset", "run-failed-verification", "--stage", "qa"]
+  }
+}

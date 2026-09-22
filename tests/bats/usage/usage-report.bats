@@ -11,11 +11,15 @@ setup() {
   mkdir -p "$tmpdir/PLAN1"
   cat <<'JSON' >"$tmpdir/PLAN1/plan-usage-summary.json"
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "plan_usage_summary",
   "plan": "PLAN1.md",
   "plan_key": "PLAN1",
   "artifact_ns": "PLAN1",
+  "run_id": "process-run-1",
+  "workflow_run_id": "workflow-run-1",
+  "graph_run_id": "graph-run-1",
+  "graph_namespace": "graph-ns-1",
   "stage_id": "stage-1",
   "model": "claude-sonnet-4-6",
   "runtime": "claude",
@@ -134,7 +138,6 @@ JSON
   "stages": [
     {
       "step": 1,
-      "agent": "research",
       "runtime": "claude",
       "input_tokens": 15,
       "output_tokens": 10,
@@ -143,7 +146,6 @@ JSON
     },
     {
       "step": 2,
-      "agent": "implementation",
       "runtime": "codex",
       "input_tokens": 15,
       "output_tokens": 10,
@@ -268,6 +270,23 @@ JSON
   [[ "$output" == *"output=0"* ]]
 }
 
+@test "usage-report without discovered logs renders an empty aggregate" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+
+  local empty_workspace="$tmpdir/empty-workspace"
+  local empty_home="$tmpdir/empty-home"
+  # Match the common partially initialized state: state root exists, but no
+  # plan has created its logs directory yet.
+  mkdir -p "$empty_workspace/.ralph-workspace" "$empty_home"
+
+  run env HOME="$empty_home" RALPH_WORKSPACES_FILE="$tmpdir/no-registry.json" \
+    bash "$REPORT_SCRIPT" --workspace "$empty_workspace"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$output" == *"Overall totals"* ]]
+  [[ "$output" == *"input=0"* ]]
+  [[ "$output" == *"output=0"* ]]
+}
+
 @test "usage-report with explicit --logs-dir ignores registry and workspace discovery" {
   [ -x "$(command -v python3)" ] || skip "python3 required"
 
@@ -285,3 +304,51 @@ JSON
   [[ "$output" != *"LOCALPLAN"* ]]
 }
 
+@test "usage-report --run scopes a Dependency workflow to its stage attempts" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+
+  local ws_dir="$tmpdir/run-ws"
+  local state_root="$ws_dir/.ralph-workspace"
+  local run_id="run-20260902T160031Z-0-usage"
+  local graph_run="$state_root/graph-runs/workflow/$run_id"
+  mkdir -p "$state_root/workflow-runs/$run_id" "$graph_run/logs/nodes/implement/attempt-1"
+  write_usage_summary "$graph_run/logs/nodes/implement/attempt-1" "RUNSCOPED"
+  write_usage_summary "$state_root/logs" "UNRELATED"
+  jq -n \
+    --arg runId "$run_id" \
+    --arg statePath "$graph_run" \
+    '{runId:$runId,mode:"dependency",engine:{kind:"graph",statePath:$statePath,namespace:"workflow"}}' \
+    >"$state_root/workflow-runs/$run_id/run.json"
+
+  run env RALPH_WORKSPACES_FILE=/nonexistent bash "$REPORT_SCRIPT" \
+    --workspace "$ws_dir" --run "$run_id"
+  [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+  [[ "$output" == *"RUNSCOPED"* ]]
+  [[ "$output" != *"UNRELATED"* ]]
+}
+
+@test "workflow usage exit helper prints the run aggregate without taking over exit status" {
+  [ -x "$(command -v python3)" ] || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+
+  local ws_dir="$tmpdir/helper-ws"
+  local state_root="$ws_dir/.ralph-workspace"
+  local run_id="run-20260902T160031Z-0-helper"
+  local graph_run="$state_root/graph-runs/workflow/$run_id"
+  mkdir -p "$state_root/workflow-runs/$run_id" "$graph_run/logs/nodes/qa/attempt-1"
+  write_usage_summary "$graph_run/logs/nodes/qa/attempt-1" "HELPERPLAN"
+  jq -n \
+    --arg runId "$run_id" \
+    --arg statePath "$graph_run" \
+    '{runId:$runId,mode:"dependency",state:"failed",engine:{kind:"graph",statePath:$statePath,namespace:"workflow"}}' \
+    >"$state_root/workflow-runs/$run_id/run.json"
+
+  run env RALPH_WORKSPACES_FILE=/nonexistent bash -c \
+    'source "$1"; workflow_usage_print_run_report "$2" "$3" "$4"; exit 17' \
+    _ "$REPO_ROOT/bundle/.ralph/bash-lib/workflow/workflow-usage.sh" \
+    "$state_root" "$run_id" "$ws_dir"
+  [ "$status" -eq 17 ] || { echo "$output"; return 1; }
+  [[ "$output" == *"Workflow session usage: $run_id (failed)"* ]]
+  [[ "$output" == *"HELPERPLAN"* ]]
+}

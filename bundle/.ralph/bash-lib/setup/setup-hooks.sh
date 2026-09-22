@@ -83,6 +83,7 @@ setup_merge_json_with_template() {
   local template="$2"
   local merge_script="$3"
   local label="$4"
+  shift 4
   local tmpfile=""
 
   if [[ ! -f "$template" ]]; then
@@ -110,7 +111,7 @@ setup_merge_json_with_template() {
     printf '{}\n' >"$tmpfile"
   fi
 
-  if ! python3 "$merge_script" "$tmpfile" "$template"; then
+  if ! python3 "$merge_script" "$tmpfile" "$template" "$@"; then
     printf 'Error: failed to merge %s into %s\n' "$label" "$target" >&2
     return 1
   fi
@@ -149,7 +150,7 @@ setup_hooks_claude() {
     "$settings_target" \
     "$settings_template" \
     "$merge_script" \
-    "Claude hook settings"; then
+    "Claude hook settings" "$target_hooks"; then
     return 1
   fi
 

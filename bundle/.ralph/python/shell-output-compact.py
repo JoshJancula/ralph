@@ -7,11 +7,12 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -39,6 +40,9 @@ from shell_command_registry import (
     FAMILY_TREE,
     FAMILY_TSC,
     FAMILY_VITEST,
+    _basename,
+    _join_line_continuations,
+    _normalize_tokens,
     classify_registry_family,
     classifier_for_family,
     should_bail,
@@ -54,16 +58,74 @@ FAMILY_CARGO_BUILD = "cargo_build"
 FAMILY_MAVEN_BUILD = "maven_build"
 FAMILY_GRADLE_BUILD = "gradle_build"
 FAMILY_GENERIC_LARGE = "generic_large"
+FAMILY_JEV_RANKED = "jev_ranked"
+
+# Documented TypeSafe choice-question ceiling; window rather than discover a 422.
+_JEV_CHOICE_MAX_OPTIONS = 255
+_JEV_QUESTION_SET_ID = "compaction.line-relevance"
+
+# Source-output families: these commands return content the agent asked for
+# (paths, matches, diffs, logs), not progress noise, so summarizing them
+# destroys the answer and forces a re-run. There is deliberately no environment
+# variable to re-enable compaction of these families; source output is never
+# summarized on the shell path. Operators who want source output windowed
+# already have that control through RALPH_NATIVE_RESULT_COMPACT.
+SOURCE_OUTPUT_FAMILIES = frozenset(
+    {
+        FAMILY_FIND,
+        FAMILY_LS,
+        FAMILY_TREE,
+        FAMILY_GREP,
+        FAMILY_GIT_DIFF,
+        FAMILY_GIT_SHOW,
+        FAMILY_GIT_LOG,
+    }
+)
 
 _GENERIC_LARGE_MIN_BYTES = 4096
 _GENERIC_LARGE_MIN_LINES = 80
 _GENERIC_LARGE_HEAD_LINES = 30
 _GENERIC_LARGE_TAIL_LINES = 5
 
-# Size-triggered fallback when no family rule matches (RALPH_COMPACT_GENERIC_THRESHOLD_BYTES).
+# Optional size-triggered fallback when no family rule matches. It is off by
+# default because unknown shell output may be source data rather than noise.
 _GENERIC_FALLBACK_DEFAULT_THRESHOLD_BYTES = 8192
 _GENERIC_FALLBACK_MAX_ERROR_LINES = 40
 _GENERIC_FALLBACK_ERROR_RE = re.compile(r"error|fail|fatal|exception|not ok", re.IGNORECASE)
+
+# Commands whose stdout is the answer (file contents, matches, diffs). Generic
+# size truncation must not rewrite them even when no family rule matched.
+_GENERIC_FALLBACK_SOURCE_BINARIES = frozenset(
+    {
+        "cat",
+        "sed",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "bat",
+        "jq",
+        "awk",
+        "cut",
+        "diff",
+        "grep",
+        "rg",
+        "ag",
+        "find",
+        "ls",
+        "tree",
+        # Non-zero exit is a normal boolean answer, not a failure signal.
+        "test",
+        "[",
+    }
+)
+_GENERIC_FALLBACK_SOURCE_GIT_SUBCOMMANDS = frozenset({"diff", "show", "log"})
+_GENERIC_FALLBACK_PREFIX_WRAPPERS = frozenset({"sudo", "time", "nice"})
+_CD_AND_PREFIX_RE = re.compile(
+    r"^\s*cd\s+(?:[^\s;&|]+|\"[^\"]*\"|'[^']*')\s*&&\s*",
+    re.IGNORECASE,
+)
+_PIPELINE_SPLIT_RE = re.compile(r"(?<!\|)\|(?!\|)")
 
 # Failure-aware compaction for non-zero exits (RALPH_COMPACT_FAILURE; default on).
 FAMILY_FAILURE_AWARE = "failure_aware"
@@ -235,8 +297,8 @@ def compact_shell_output(
 
     Primary path: command-based classification.
     Fallback path: shape detection when command is unknown/incomplete.
-    Size-triggered generic compaction when no family rule matches and combined
-    output exceeds RALPH_COMPACT_GENERIC_THRESHOLD_BYTES.
+    Optional size-triggered generic compaction when no family rule matches and
+    combined output exceeds RALPH_COMPACT_GENERIC_THRESHOLD_BYTES.
     Failure-aware compaction on non-zero exit when family rules decline or
     output is below the generic threshold (RALPH_COMPACT_FAILURE=0 opts out).
     """
@@ -247,16 +309,53 @@ def compact_shell_output(
         return _not_compacted(command, stdout, stderr, exit_status)
 
     family_id = classify_command(command)
-    if family_id is None:
-        if _command_allows_shape_fallback(command):
-            family_id = detect_output_shape(combined_original)
-        elif _command_allows_generic_shape_fallback(command):
-            family_id = detect_output_shape_generic_only(combined_original)
-
     family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
+    if family_entry is None and _command_allows_shape_fallback(command):
+        family_id = detect_output_shape(combined_original)
+        family_entry = _FAMILY_MAP.get(family_id) if family_id is not None else None
+    # Hard passthrough: no env var (including RALPH_JEV_COMPACT) can re-enable
+    # compaction or consult Jev for source-output families.
+    if family_id in SOURCE_OUTPUT_FAMILIES:
+        return CompactResult(
+            stdout=stdout,
+            stderr=stderr,
+            compacted=False,
+            stdout_compacted=False,
+            stderr_compacted=False,
+            family=family_id,
+            status="not compacted",
+            exit_status=exit_status,
+        )
     if family_entry is None:
-        generic_result = _generic_size_fallback(
-            command, stdout, stderr, exit_status, combined_original
+        # Optional Jev tier: only when no family classifier matched (same path as
+        # _generic_size_fallback). Source denylist predicates below decline before
+        # any Jev consult. Gate-closed / decline falls through unchanged.
+        jev_entry = _FAMILY_MAP.get(FAMILY_JEV_RANKED)
+        if jev_entry is not None:
+            out_stdout, out_stderr, did = jev_entry.compactor(
+                command, stdout, stderr, exit_status
+            )
+            if did:
+                combined_candidate = _join_streams(out_stdout, out_stderr)
+                if _safety_gate_passes(
+                    jev_entry, combined_original, combined_candidate
+                ):
+                    stdout_compacted = out_stdout != stdout
+                    stderr_compacted = out_stderr != stderr
+                    return CompactResult(
+                        stdout=out_stdout,
+                        stderr=out_stderr,
+                        compacted=stdout_compacted or stderr_compacted,
+                        stdout_compacted=stdout_compacted,
+                        stderr_compacted=stderr_compacted,
+                        family=FAMILY_JEV_RANKED,
+                        status="compacted",
+                        exit_status=exit_status,
+                    )
+        generic_result = (
+            _generic_size_fallback(command, stdout, stderr, exit_status, combined_original)
+            if _generic_fallback_enabled()
+            else _not_compacted(command, stdout, stderr, exit_status)
         )
         if generic_result.status == "compacted" or exit_status == 0:
             return generic_result
@@ -408,16 +507,95 @@ def _command_allows_shape_fallback(command: str) -> bool:
     return not cmd
 
 
+def _strip_leading_cd_and_chains(command: str) -> str:
+    """Drop leading `cd <dir> &&` prefixes so the real command is visible."""
+    current = command
+    while True:
+        match = _CD_AND_PREFIX_RE.match(current)
+        if match is None:
+            return current
+        current = current[match.end() :]
+
+
+def _pipeline_stages(command: str) -> list[str]:
+    """Split on bare `|` only; leave `||` intact for bail handling."""
+    return [part.strip() for part in _PIPELINE_SPLIT_RE.split(command) if part.strip()]
+
+
+def _parse_stage_tokens(stage: str) -> list[str] | None:
+    """Argv-split one pipeline stage via the registry tokenizer helpers."""
+    text = (stage or "").strip()
+    if not text:
+        return None
+    try:
+        tokens = shlex.split(text, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    tokens, _rewrite_prefix = _normalize_tokens(tokens)
+    while tokens and _basename(tokens[0]) in _GENERIC_FALLBACK_PREFIX_WRAPPERS:
+        tokens = tokens[1:]
+        if not tokens:
+            return None
+        tokens, _rewrite_prefix = _normalize_tokens(tokens)
+    return tokens or None
+
+
+def _tokens_are_source_output_command(tokens: list[str]) -> bool:
+    base = _basename(tokens[0])
+    if base in _GENERIC_FALLBACK_SOURCE_BINARIES:
+        return True
+    if (
+        base == "git"
+        and len(tokens) >= 2
+        and tokens[1] in _GENERIC_FALLBACK_SOURCE_GIT_SUBCOMMANDS
+    ):
+        return True
+    return False
+
+
+def _source_output_denies_generic_fallback(command: str) -> bool:
+    """True when first word or last pipeline stage is a source-output command."""
+    stages = _pipeline_stages(command)
+    if not stages:
+        return False
+    first_tokens = _parse_stage_tokens(stages[0])
+    if first_tokens and _tokens_are_source_output_command(first_tokens):
+        return True
+    last_tokens = _parse_stage_tokens(stages[-1])
+    if last_tokens and _tokens_are_source_output_command(last_tokens):
+        return True
+    return False
+
+
+def _is_pure_pipeline(command: str) -> bool:
+    """True when the only compound operator is `|` (not `||`, `&&`, `;`, ...)."""
+    if _PIPELINE_SPLIT_RE.search(command) is None:
+        return False
+    without_pipes = _PIPELINE_SPLIT_RE.sub(" ", command)
+    return not should_bail(without_pipes)
+
+
 def _command_allows_generic_shape_fallback(command: str) -> bool:
-    """The safe generic_large/numbered_dump shape fallback (size- and
-    repetition-based truncation, no semantic family claim) applies whenever
-    the command doesn't explicitly bail, regardless of whether the command
-    itself was classified.
+    """Whether the safe generic_large size fallback may run for this command.
+
+    Empty/unknown provenance stays eligible. Source-output commands (cat, sed,
+    grep, git diff/show/log, ...) are denied even when no family matched, so
+    the agent's answer is not head/tail truncated. Pure pipelines of unknown
+    commands remain eligible; other bail forms (&&, $(), background) stay out.
     """
     cmd = (command or "").strip()
     if not cmd:
         return True
-    return not should_bail(cmd)
+    inspected = _strip_leading_cd_and_chains(_join_line_continuations(cmd)).strip()
+    if not inspected:
+        return True
+    if _source_output_denies_generic_fallback(inspected):
+        return False
+    if _is_pure_pipeline(inspected):
+        return True
+    return not should_bail(inspected)
 
 
 def _detect_shape_git_diff(text: str) -> bool:
@@ -617,6 +795,330 @@ def _generic_fallback_threshold_bytes() -> int:
     return value
 
 
+def _generic_fallback_enabled() -> bool:
+    """Return True only when generic unknown-command compaction is requested."""
+    return os.environ.get("RALPH_COMPACT_GENERIC_FALLBACK", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _jev_line_id(index: int) -> str:
+    """Stable line option key of the form L000, L001, ..."""
+    return f"L{index:03d}"
+
+
+def _jev_tagged_state(pairs: list[tuple[str, str]]) -> str:
+    """Format surviving lines as TypeSafe line-search cookbook tags."""
+    return "\n".join(f"{line_id}| {text}" for line_id, text in pairs)
+
+
+def _jev_line_relevance_questions(
+    base_questions: dict[str, Any], line_ids: list[str]
+) -> dict[str, Any]:
+    """Clone the registry question set with relevant_lines criteria filled in.
+
+    Option descriptions are null: tagged line text already lives in state.
+    has_failure travels in the same request so both questions share one round trip.
+    """
+    relevant = dict(base_questions.get("relevant_lines") or {})
+    relevant["criteria"] = {line_id: None for line_id in line_ids}
+    questions: dict[str, Any] = {"relevant_lines": relevant}
+    has_failure = base_questions.get("has_failure")
+    if isinstance(has_failure, dict):
+        questions["has_failure"] = has_failure
+    return questions
+
+
+def _jev_fit_window(
+    pairs: list[tuple[str, str]],
+    base_questions: dict[str, Any],
+    estimate_request_size: Callable[[str, dict[str, Any]], bool],
+) -> list[tuple[str, str]] | None:
+    """Largest prefix of pairs that fits the request budget, capped at 255."""
+    n = min(len(pairs), _JEV_CHOICE_MAX_OPTIONS)
+    while n > 0:
+        window = pairs[:n]
+        state_text = _jev_tagged_state(window)
+        questions = _jev_line_relevance_questions(
+            base_questions, [line_id for line_id, _text in window]
+        )
+        if estimate_request_size(state_text, questions):
+            return window
+        n //= 2
+    return None
+
+
+def _jev_merge_window_rankings(
+    rankings: dict[str, float], response: Mapping[str, Any]
+) -> None:
+    """Fold one window's relevant_lines probabilities into the merged ranking."""
+    answers = response.get("answers")
+    if not isinstance(answers, dict):
+        return
+    relevant = answers.get("relevant_lines")
+    if not isinstance(relevant, dict):
+        return
+    probabilities = relevant.get("probabilities")
+    if isinstance(probabilities, dict):
+        for line_id, raw_score in probabilities.items():
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            prior = rankings.get(str(line_id), 0.0)
+            if score > prior:
+                rankings[str(line_id)] = score
+    chosen = relevant.get("choice")
+    if isinstance(chosen, str) and chosen:
+        conf = relevant.get("confidence")
+        try:
+            boost = float(conf) if conf is not None else 1.0
+        except (TypeError, ValueError):
+            boost = 1.0
+        rankings[chosen] = max(rankings.get(chosen, 0.0), boost)
+
+
+def _jev_rank_surviving_lines(
+    jev_client: Any,
+    pairs: list[tuple[str, str]],
+) -> dict[str, float] | None:
+    """Window, ask compaction.line-relevance, and merge rankings. None on decline."""
+    base_questions, q_code = jev_client.policy_questions(_JEV_QUESTION_SET_ID)
+    if q_code != 0 or not isinstance(base_questions, dict):
+        return None
+
+    rankings: dict[str, float] = {}
+    index = 0
+    request_count = 0
+    while index < len(pairs):
+        window = _jev_fit_window(
+            pairs[index:],
+            base_questions,
+            jev_client.estimate_request_size,
+        )
+        if not window:
+            return None
+        state_text = _jev_tagged_state(window)
+        questions = _jev_line_relevance_questions(
+            base_questions, [line_id for line_id, _text in window]
+        )
+        request, b_code = jev_client.build_request(state_text, questions)
+        if b_code != 0 or request is None:
+            return None
+        request = dict(request)
+        request["questionSetId"] = _JEV_QUESTION_SET_ID
+        response, p_code = jev_client.post_systemone(request)
+        request_count += 1
+        if p_code != 0 or not isinstance(response, dict):
+            return None
+        _jev_merge_window_rankings(rankings, response)
+        index += len(window)
+
+    if request_count < 1:
+        return None
+    return rankings
+
+
+def _format_jev_ranked_output(
+    command: str,
+    text: str,
+    exit_status: int,
+    collapsed_lines: list[str],
+    omitted_stats: dict[str, int],
+    rankings: dict[str, float],
+    line_ids: list[str],
+    original_bytes: int,
+) -> str | None:
+    """Assemble head + ranked middle + tail within Ralph's byte budget."""
+    max_kept = _GENERIC_LARGE_HEAD_LINES + _GENERIC_LARGE_TAIL_LINES
+    if len(collapsed_lines) <= max_kept:
+        if not omitted_stats and len(collapsed_lines) == len(text.splitlines()):
+            return None
+        summary = _generic_summary_prefix(
+            command, text, exit_status, len(text.splitlines()), omitted_stats
+        )
+        return summary + "\n" + "\n".join(collapsed_lines)
+
+    head = collapsed_lines[:_GENERIC_LARGE_HEAD_LINES]
+    tail = collapsed_lines[len(collapsed_lines) - _GENERIC_LARGE_TAIL_LINES :]
+    middle = collapsed_lines[
+        _GENERIC_LARGE_HEAD_LINES : len(collapsed_lines) - _GENERIC_LARGE_TAIL_LINES
+    ]
+    middle_ids = line_ids[
+        _GENERIC_LARGE_HEAD_LINES : len(line_ids) - _GENERIC_LARGE_TAIL_LINES
+    ]
+
+    preserve_lines = [line for line in middle if _should_preserve_generic_line(line)]
+    preserve_set = set(preserve_lines)
+    ranked_middle: list[tuple[float, int, str]] = []
+    for offset, (line_id, line) in enumerate(zip(middle_ids, middle)):
+        if line in preserve_set:
+            continue
+        score = rankings.get(line_id, 0.0)
+        ranked_middle.append((score, offset, line))
+    ranked_middle.sort(key=lambda item: (-item[0], item[1]))
+
+    summary = _generic_summary_prefix(
+        command, text, exit_status, len(text.splitlines()), omitted_stats
+    )
+    # Seed with summary + head + omission marker + preserve + tail, then fill
+    # highest-ranked middle lines while the candidate stays under original_bytes.
+    omission_marker = f"... ({len(middle)} line(s) omitted) ..."
+    selected_ranked: list[str] = []
+    extra_preserve = max(0, len(preserve_lines) - _GENERIC_FALLBACK_MAX_ERROR_LINES)
+    keep_preserve = preserve_lines[:_GENERIC_FALLBACK_MAX_ERROR_LINES]
+
+    def _candidate_bytes(ranked_extra: list[str]) -> int:
+        parts = [summary]
+        parts.extend(head)
+        if middle:
+            parts.append(omission_marker)
+        if keep_preserve or ranked_extra:
+            parts.append("important line(s) extracted from omitted region:")
+            parts.extend(keep_preserve)
+            parts.extend(ranked_extra)
+            if extra_preserve:
+                parts.append(
+                    f"... ({extra_preserve} more matching line(s) omitted) ..."
+                )
+        parts.extend(tail)
+        return len("\n".join(parts).encode("utf-8"))
+
+    for _score, _offset, line in ranked_middle:
+        if len(keep_preserve) + len(selected_ranked) >= _GENERIC_FALLBACK_MAX_ERROR_LINES:
+            break
+        trial = selected_ranked + [line]
+        if _candidate_bytes(trial) >= original_bytes:
+            break
+        selected_ranked = trial
+
+    body_lines = [summary]
+    body_lines.extend(head)
+    if middle:
+        body_lines.append(omission_marker)
+    if keep_preserve or selected_ranked:
+        body_lines.append("important line(s) extracted from omitted region:")
+        body_lines.extend(keep_preserve)
+        body_lines.extend(selected_ranked)
+        if extra_preserve:
+            body_lines.append(
+                f"... ({extra_preserve} more matching line(s) omitted) ..."
+            )
+    body_lines.extend(tail)
+    return "\n".join(body_lines)
+
+
+def _compact_jev_ranked(
+    command: str,
+    stdout: str,
+    stderr: str,
+    exit_status: int,
+) -> tuple[str, str, bool]:
+    """Optional Jev ranked-line compaction for unmatched commands.
+
+    Gate order (return did=False with no Jev consult / network on any failure):
+      1. RALPH_JEV_COMPACT is 1
+      2. SOURCE_OUTPUT_FAMILIES classification (defense in depth; dispatch
+         already hard-passthroughs these before reaching this tier)
+      3. _command_allows_generic_shape_fallback — same denylist /
+         sudo|time|nice wrapper handling as _generic_size_fallback
+      4. _command_denies_failure_aware_fallback — same source-binary
+         predicate as the failure-aware path (no duplicated lists)
+      5. combined output exceeds the generic size threshold
+      6. jev_client.available() is True
+
+    Selection only: collapse repetitive runs, tag surviving lines, window at the
+    choice-question ceiling, ask compaction.line-relevance (relevant_lines +
+    has_failure in one request), then assemble head/ranked-middle/tail under
+    Ralph's byte budget. Jev never sees or computes a byte count.
+
+    Candidates are advisory. Before delivery they must pass, in order:
+      1. _safety_gate_passes
+      2. on failure output only, the preserve-line round-trip check
+      3. a hard byte check (no small-output allowance)
+    Any abort returns did=False so the deterministic path is delivered.
+    """
+    if os.environ.get("RALPH_JEV_COMPACT", "").strip() != "1":
+        return stdout, stderr, False
+    # Exclusions before any Jev import/available/network consult.
+    if classify_command(command) in SOURCE_OUTPUT_FAMILIES:
+        return stdout, stderr, False
+    if not _command_allows_generic_shape_fallback(command):
+        return stdout, stderr, False
+    if _command_denies_failure_aware_fallback(command):
+        return stdout, stderr, False
+
+    combined_original = _join_streams(stdout, stderr)
+    original_bytes = len(combined_original.encode("utf-8"))
+    if original_bytes <= _generic_fallback_threshold_bytes():
+        return stdout, stderr, False
+
+    try:
+        import jev_client as _jev_client
+    except ImportError:
+        return stdout, stderr, False
+    if not _jev_client.available():
+        return stdout, stderr, False
+
+    lines = combined_original.splitlines()
+    if not lines:
+        return stdout, stderr, False
+
+    collapsed_lines, omitted_stats = _collapse_generic_pattern_runs(lines)
+    if not collapsed_lines:
+        return stdout, stderr, False
+
+    pairs = [
+        (_jev_line_id(index), line)
+        for index, line in enumerate(collapsed_lines)
+    ]
+    rankings = _jev_rank_surviving_lines(_jev_client, pairs)
+    if rankings is None:
+        return stdout, stderr, False
+
+    body = _format_jev_ranked_output(
+        command,
+        combined_original,
+        exit_status,
+        collapsed_lines,
+        omitted_stats,
+        rankings,
+        [line_id for line_id, _line in pairs],
+        original_bytes,
+    )
+    if body is None:
+        return stdout, stderr, False
+
+    out_stdout, out_stderr = (body, "") if stdout.strip() else ("", body)
+    candidate_combined = _join_streams(out_stdout, out_stderr)
+    # Advisory trust boundary: Jev candidates are untrusted. Abort to the
+    # deterministic path on any of these checks (order is intentional).
+    if not _safety_gate_passes(
+        _FAMILY_MAP.get(FAMILY_JEV_RANKED), combined_original, candidate_combined
+    ):
+        return stdout, stderr, False
+    # Failure output only: same round-trip preserve-line check as
+    # _failure_aware_fallback — every preserve line from the ORIGINAL must
+    # appear verbatim in the candidate, or abort.
+    if exit_status != 0:
+        preserve_lines = _collect_preserve_lines(combined_original.splitlines())
+        if preserve_lines:
+            missing = [
+                line for line in preserve_lines if line not in candidate_combined
+            ]
+            if missing:
+                return stdout, stderr, False
+    # Pure size reduction is the only goal here; never grow the output
+    # (the gate's small-output allowance does not apply to this path).
+    if len(candidate_combined.encode("utf-8")) >= original_bytes:
+        return stdout, stderr, False
+
+    return out_stdout, out_stderr, True
+
+
 def _generic_size_fallback(
     command: str,
     stdout: str,
@@ -632,6 +1134,9 @@ def _generic_size_fallback(
     """
     original_bytes = len(combined_original.encode("utf-8"))
     if original_bytes <= _generic_fallback_threshold_bytes():
+        return _not_compacted(command, stdout, stderr, exit_status)
+
+    if not _command_allows_generic_shape_fallback(command):
         return _not_compacted(command, stdout, stderr, exit_status)
 
     body = _format_generic_large_output(command, combined_original, exit_status)
@@ -748,6 +1253,22 @@ def _format_failure_aware_output(
     return "\n".join(body_lines)
 
 
+def _command_denies_failure_aware_fallback(command: str) -> bool:
+    """True when non-zero exit is a normal answer (grep/diff/test/D2 source).
+
+    Reuses the generic-fallback source denylist so failure-aware compaction
+    does not rewrite grep/rg no-match, diff differences, test/[ false, or
+    other source-output commands.
+    """
+    cmd = (command or "").strip()
+    if not cmd:
+        return False
+    inspected = _strip_leading_cd_and_chains(_join_line_continuations(cmd)).strip()
+    if not inspected:
+        return False
+    return _source_output_denies_generic_fallback(inspected)
+
+
 def _failure_aware_fallback(
     command: str,
     stdout: str,
@@ -757,6 +1278,8 @@ def _failure_aware_fallback(
 ) -> CompactResult:
     """Conservative compaction for failed commands with noisy output."""
     if exit_status == 0 or not _failure_compaction_enabled():
+        return _not_compacted(command, stdout, stderr, exit_status)
+    if _command_denies_failure_aware_fallback(command):
         return _not_compacted(command, stdout, stderr, exit_status)
 
     original_bytes = len(combined_original.encode("utf-8"))
@@ -1165,59 +1688,6 @@ def _git_diff_summary_line(
     return summary
 
 
-def _compact_grep(
-    command: str,
-    stdout: str,
-    stderr: str,
-    exit_status: int,
-) -> tuple[str, str, bool]:
-    text = stdout if stdout.strip() else stderr
-    if not text.strip():
-        return stdout, stderr, False
-    lines = text.splitlines()
-    by_file: dict[str, list[str]] = defaultdict(list)
-    unparsed: list[str] = []
-    for line in lines:
-        if not line.strip():
-            continue
-        match = _GREP_RG_FILE_RE.match(line)
-        if match:
-            path, lineno, _content = match.groups()
-            by_file[path].append(lineno or "?")
-        else:
-            unparsed.append(line)
-    if not by_file:
-        return stdout, stderr, False
-    prefix = _common_path_prefix(list(by_file.keys()))
-    total = sum(len(items) for items in by_file.values())
-    header = (
-        f"{_grep_tool_name(command)} (exit {exit_status}): "
-        f"{total} match(es) in {len(by_file)} file(s)"
-    )
-    parts = [header]
-    max_files = 30
-    max_sample = 3
-    for index, (path, nums) in enumerate(sorted(by_file.items(), key=lambda item: item[0])):
-        if index >= max_files:
-            parts.append(f"... and {len(by_file) - max_files} more file(s)")
-            break
-        display = path[len(prefix) :] if prefix and path.startswith(prefix) else path
-        sample = ", ".join(nums[:max_sample])
-        extra = ""
-        if len(nums) > max_sample:
-            extra = f", +{len(nums) - max_sample} more"
-        parts.append(f"  {display}: {len(nums)} match(es) (lines {sample}{extra})")
-    if unparsed:
-        parts.append(f"({len(unparsed)} non-matching line(s) preserved below)")
-        parts.extend(unparsed[:10])
-    return "\n".join(parts), "", True
-
-
-def _grep_tool_name(command: str) -> str:
-    token = (command.strip().split() or ["grep"])[0]
-    return token.rsplit("/", 1)[-1]
-
-
 def _compact_find(
     command: str,
     stdout: str,
@@ -1359,9 +1829,8 @@ def _compact_tsc(
 
     if exit_status != 0 and error_lines:
         parts = [f"tsc errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:20])
-        if len(error_lines) > 20:
-            parts.append(f"... and {len(error_lines) - 20} more error(s)")
+        # Every distinct TS error code and location must survive compaction.
+        parts.extend(error_lines)
         output = "\n".join(parts)
         return output, "", True
 
@@ -1460,9 +1929,9 @@ def _compact_pytest(
         parts = [f"pytest failures (exit {exit_status}) for: {command.strip()}"]
         if passed_count > 0:
             parts.append(f"({passed_count} test(s) passing omitted)")
-        parts.extend(failed_tests[:30])
-        if len(failed_tests) > 30:
-            parts.append(f"... and {len(failed_tests) - 30} more failed test(s)")
+        # Every distinct failed/errored test identifier must survive compaction;
+        # never truncate this list, only the passing-test noise above it.
+        parts.extend(failed_tests)
         output = "\n".join([p for p in parts if p.strip()])
         return output, "", True
 
@@ -1524,6 +1993,7 @@ def _compact_go_test(
     lines = text.splitlines()
 
     test_lines = []
+    failed_test_names = []
     passed_count = 0
     failed_count = 0
 
@@ -1534,11 +2004,17 @@ def _compact_go_test(
         elif line.startswith("FAIL"):
             test_lines.append(line)
             failed_count += 1
+        elif line.strip().startswith("--- FAIL:"):
+            # Individual failing subtest/test identifier, e.g. "--- FAIL: TestFoo (0.00s)".
+            failed_test_names.append(line)
 
-    if exit_status != 0 and (failed_count > 0 or any("FAIL" in l for l in lines)):
+    if exit_status != 0 and (
+        failed_count > 0 or failed_test_names or any("FAIL" in l for l in lines)
+    ):
         parts = [f"go test failures (exit {exit_status}) for: {command.strip()}"]
         if passed_count > 0:
             parts.append(f"({passed_count} test(s) passing omitted)")
+        parts.extend(failed_test_names)
         parts.extend([l for l in test_lines if "FAIL" in l])
         output = "\n".join([p for p in parts if p.strip()])
         return output, "", True
@@ -1696,7 +2172,9 @@ def _compact_cargo_build(
 
     for line in lines:
         lower = line.lower()
-        if re.search(r"(?:error|failed)", lower) and "error:" in line:
+        # rustc emits both "error: <message>" and "error[E0308]: <message>";
+        # both forms, plus the final "aborting due to ..." line, must be kept.
+        if re.search(r"^\s*error(?:\[[a-z0-9]+\])?:", lower) or "aborting due to" in lower:
             error_lines.append(line)
         elif re.search(r"^\s*warning", lower):
             warning_lines.append(line)
@@ -1705,7 +2183,7 @@ def _compact_cargo_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"cargo build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
         if warning_lines:
             parts.append(f"({len(warning_lines)} warning(s) omitted)")
         output = "\n".join(parts)
@@ -1743,7 +2221,9 @@ def _compact_maven_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"maven build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
+        # Preserve the trailing BUILD FAILURE / test-count summary alongside errors.
+        parts.extend(summary_lines)
         output = "\n".join(parts)
         return output, "", True
 
@@ -1779,7 +2259,9 @@ def _compact_gradle_build(
 
     if exit_status != 0 and error_lines:
         parts = [f"gradle build errors (exit {exit_status}) for: {command.strip()}"]
-        parts.extend(error_lines[:10])
+        parts.extend(error_lines)
+        # Preserve the trailing BUILD FAILED summary alongside the error lines.
+        parts.extend(summary_lines)
         output = "\n".join(parts)
         return output, "", True
 
@@ -2325,24 +2807,6 @@ def _format_generic_large_output(
     return "\n".join(body_lines)
 
 
-def _common_path_prefix(paths: list[str]) -> str:
-    if not paths:
-        return ""
-    parts_list = [path.split("/") for path in paths]
-    common: list[str] = []
-    for segment_group in zip(*parts_list):
-        if len(set(segment_group)) == 1:
-            common.append(segment_group[0])
-        else:
-            break
-    if not common:
-        return ""
-    prefix = "/".join(common)
-    if "/" in prefix and not prefix.endswith("/"):
-        prefix += "/"
-    return prefix
-
-
 def _join_streams(stdout: str, stderr: str) -> str:
     if stdout and stderr:
         return stdout.rstrip("\n") + "\n" + stderr
@@ -2383,14 +2847,7 @@ def _dsl_compactor_for_rule(rule: Any) -> CompactorFn:
     return compactor
 
 
-def _load_builtin_dsl_families() -> list[CompactorFamily]:
-    rules_path = Path(__file__).parent.parent / "bash-lib" / "compactor-dsl-builtin-rules.json"
-    if not rules_path.is_file():
-        return []
-    dsl = _compactor_dsl_rules_module()
-    rules, errors = dsl.load_dsl_rules(rules_path.read_text(encoding="utf-8"))
-    if errors:
-        return []
+def _families_from_dsl_rules(dsl: Any, rules: list[Any]) -> list[CompactorFamily]:
     families: list[CompactorFamily] = []
     for rule in rules:
         families.append(
@@ -2402,6 +2859,49 @@ def _load_builtin_dsl_families() -> list[CompactorFamily]:
             )
         )
     return families
+
+
+def _load_external_dsl_families(dsl: Any) -> list[CompactorFamily]:
+    """Load optional operator DSL rules from RALPH_COMPACTOR_DSL_RULES_PATH.
+
+    Missing, unreadable, or malformed files degrade to [] so PostToolUse never
+    raises from bad operator config. Valid external families are prepended by
+    the caller so they win over built-ins and core families.
+    """
+    raw_path = os.environ.get("RALPH_COMPACTOR_DSL_RULES_PATH", "").strip()
+    if not raw_path:
+        return []
+    try:
+        path = Path(raw_path)
+        if not path.is_file():
+            return []
+        rules, errors = dsl.load_dsl_rules(path.read_text(encoding="utf-8"))
+        if errors:
+            return []
+        return _families_from_dsl_rules(dsl, rules)
+    except Exception:
+        return []
+
+
+def _load_builtin_dsl_families() -> list[CompactorFamily]:
+    rules_path = Path(__file__).parent.parent / "bash-lib" / "compactor-dsl-builtin-rules.json"
+    builtin_families: list[CompactorFamily] = []
+    dsl: Any | None = None
+    if rules_path.is_file():
+        dsl = _compactor_dsl_rules_module()
+        rules, errors = dsl.load_dsl_rules(rules_path.read_text(encoding="utf-8"))
+        if not errors:
+            builtin_families = _families_from_dsl_rules(dsl, rules)
+
+    # External rules prepend so they win over built-ins (_FAMILY_REGISTRY = DSL + core).
+    external_families: list[CompactorFamily] = []
+    try:
+        if dsl is None:
+            dsl = _compactor_dsl_rules_module()
+        external_families = _load_external_dsl_families(dsl)
+    except Exception:
+        external_families = []
+    return external_families + builtin_families
 
 
 def _safety_gate_passes(
@@ -2438,27 +2938,9 @@ _CORE_FAMILY_REGISTRY: list[CompactorFamily] = [
         safety_metadata={"safe": True, "phase": "phase2"},
     ),
     CompactorFamily(
-        family_id=FAMILY_GIT_DIFF,
-        classifier=classifier_for_family(FAMILY_GIT_DIFF),
-        compactor=_compact_git_diff,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
-        family_id=FAMILY_GIT_SHOW,
-        classifier=classifier_for_family(FAMILY_GIT_SHOW),
-        compactor=_compact_git_diff,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
         family_id=FAMILY_GIT_LOG,
         classifier=classifier_for_family(FAMILY_GIT_LOG),
         compactor=_compact_generic_large,
-        safety_metadata={"safe": True, "phase": "phase2"},
-    ),
-    CompactorFamily(
-        family_id=FAMILY_GREP,
-        classifier=classifier_for_family(FAMILY_GREP),
-        compactor=_compact_grep,
         safety_metadata={"safe": True, "phase": "phase2"},
     ),
     CompactorFamily(
@@ -2604,6 +3086,12 @@ _CORE_FAMILY_REGISTRY: list[CompactorFamily] = [
         classifier=_classifier_never,
         compactor=_compact_generic_large,
         safety_metadata={"safe": True, "phase": "failure_fallback"},
+    ),
+    CompactorFamily(
+        family_id=FAMILY_JEV_RANKED,
+        classifier=_classifier_never,
+        compactor=_compact_jev_ranked,
+        safety_metadata={"safe": True, "phase": "jev"},
     ),
 ]
 

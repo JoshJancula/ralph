@@ -11,11 +11,36 @@ set -euo pipefail
 #   cleanup_plan_session_dir, cleanup_plan_legacy_plan_session_dir -- session directory paths.
 #   cleanup_plan_artifact_dir -- artifact tree for the namespace.
 #   cleanup_plan_tool_results_dir -- stored MCP proxy tool results for the namespace.
+#   cleanup_plan_legacy_tool_results_dir -- pre-layout-2 tool-results path.
 #   cleanup_plan_delete_log_files, cleanup_plan_delete_artifact_dir -- destructive deletes.
 #   cleanup_plan_delete_tool_results_dir -- remove tool-results/<namespace>/ tree.
 #   cleanup_plan_remove_human_action_file -- remove workspace HUMAN_ACTION_REQUIRED.md when safe.
 
 _CLEANUP_PLAN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+if ! declare -F ralph_state_graph_run_dir >/dev/null 2>&1; then
+  # shellcheck source=state-paths.sh
+  source "$_CLEANUP_PLAN_LIB_DIR/state-paths.sh"
+fi
+if ! declare -F graph_logs_resolve >/dev/null 2>&1; then
+  # shellcheck source=graph/graph-logs.sh
+  source "$_CLEANUP_PLAN_LIB_DIR/graph/graph-logs.sh"
+fi
+if ! declare -F graph_state_reconcile_run_owner_file >/dev/null 2>&1; then
+  # shellcheck source=graph/graph-state.sh
+  source "$_CLEANUP_PLAN_LIB_DIR/graph/graph-state.sh"
+fi
+
+# cleanup_plan_state_root <workspace_root>
+# Durable state root for graph-run retention (honors RALPH_PLAN_WORKSPACE_ROOT).
+cleanup_plan_state_root() {
+  local workspace_root="${1:-}"
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    printf '%s\n' "${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  else
+    printf '%s/.ralph-workspace\n' "${workspace_root%/}"
+  fi
+}
 
 cleanup_plan_usage() {
   local script_path="${1:-.ralph/cleanup-plan.sh}"
@@ -75,13 +100,17 @@ cleanup_plan_legacy_plan_log_dir() {
 cleanup_plan_session_dir() {
   local workspace_root="$1"
   local namespace="$2"
-  printf '%s/.ralph-workspace/sessions/%s' "$workspace_root" "$namespace"
+  local state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  printf '%s\n' "$(ralph_state_sessions_dir "$state_root" "$namespace")"
 }
 
 cleanup_plan_legacy_plan_session_dir() {
   local workspace_root="$1"
   local namespace="$2"
-  printf '%s/.ralph-workspace/sessions/%s' "$workspace_root" "$namespace"
+  local state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  printf '%s/sessions/%s\n' "$state_root" "$namespace"
 }
 
 cleanup_plan_artifact_dir() {
@@ -93,7 +122,17 @@ cleanup_plan_artifact_dir() {
 cleanup_plan_tool_results_dir() {
   local workspace_root="$1"
   local namespace="$2"
-  printf '%s/.ralph-workspace/tool-results/%s' "$workspace_root" "$namespace"
+  local state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  printf '%s/%s\n' "$(ralph_state_shared_dir "$state_root" tool-results)" "$namespace"
+}
+
+cleanup_plan_legacy_tool_results_dir() {
+  local workspace_root="$1"
+  local namespace="$2"
+  local state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  printf '%s/tool-results/%s\n' "$state_root" "$namespace"
 }
 
 cleanup_plan_delete_log_files() {
@@ -140,4 +179,260 @@ cleanup_plan_remove_human_action_file() {
   else
     echo "Human action file not found: $human_file"
   fi
+}
+
+# --- Graph-run retention ---------------------------------------------------
+#
+# Terminal run statuses that are safe to prune:
+#   succeeded, failed, cancelled
+# Non-terminal run statuses that must never be pruned:
+#   running (scheduler is active), awaiting-ack (waiting on human checkpoint)
+#
+# Retention defaults (override via environment):
+#   RALPH_GRAPH_RUN_MAX_AGE_DAYS=30  Prune terminal runs older than 30 days.
+#   RALPH_GRAPH_RUN_MAX_COUNT=10     Keep at most 10 terminal runs per namespace.
+
+# cleanup_plan_graph_runs_namespace_dir <workspace_root> <namespace>
+# Prints the layout-1 per-namespace graph-runs directory (listing root).
+cleanup_plan_graph_runs_namespace_dir() {
+  local workspace_root="$1" namespace="$2" state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  ralph_state_path_segment "$namespace" "graph namespace" >/dev/null || return 1
+  ralph_state_path_resolve "$state_root" "graph-runs/$namespace"
+}
+
+# cleanup_plan_graph_run_dir <workspace_root> <namespace> <run_id>
+# One graph run directory for the recorded layout (via state-paths).
+cleanup_plan_graph_run_dir() {
+  local workspace_root="$1" namespace="$2" run_id="$3" state_root
+  state_root="$(cleanup_plan_state_root "$workspace_root")" || return 1
+  ralph_state_graph_run_dir "$state_root" "$namespace" "$run_id"
+}
+
+# cleanup_plan_stage_outcomes_dir <workspace_root> <namespace>
+# Prints the stage-outcomes directory path for the given namespace.
+cleanup_plan_stage_outcomes_dir() {
+  local workspace_root="$1" namespace="$2"
+  printf '%s/.ralph-workspace/artifacts/%s/stage-outcomes' "$workspace_root" "$namespace"
+}
+
+# cleanup_plan_graph_run_is_terminal <run_json_path>
+# Returns 0 when the run's status is succeeded, failed, or cancelled.
+# Returns 1 for non-terminal statuses (running, awaiting-ack) or unreadable JSON.
+cleanup_plan_graph_run_is_terminal() {
+  local run_json="$1"
+  [[ -f "$run_json" ]] || return 1
+  local status
+  status="$(jq -r '.status // empty' "$run_json" 2>/dev/null)" || return 1
+  case "$status" in
+    succeeded|failed|cancelled) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# cleanup_plan_file_mtime <path>
+# Prints the mtime of <path> as a Unix epoch integer.
+# Tries macOS BSD stat first, then GNU stat.
+# Epoch mtime, or 0 when it cannot be read.
+#
+# Probe GNU coreutils first. BSD `stat -c` fails cleanly and falls through, but
+# GNU `stat -f` *succeeds* with filesystem info -- a multi-line "File: ..."
+# block -- so the BSD-first order returns prose on Linux. Callers compare the
+# result arithmetically, where `File` is then evaluated as a variable name and
+# aborts the run under `set -u`. Validate the result rather than trusting the
+# exit status alone.
+cleanup_plan_file_mtime() {
+  local path="$1" mtime=""
+  mtime="$(stat -c %Y "$path" 2>/dev/null)" || mtime=""
+  if [[ ! "$mtime" =~ ^[0-9]+$ ]]; then
+    mtime="$(stat -f %m "$path" 2>/dev/null)" || mtime=""
+  fi
+  [[ "$mtime" =~ ^[0-9]+$ ]] || mtime=0
+  printf '%s\n' "$mtime"
+}
+
+# cleanup_plan_epoch_days_ago <days>
+# Prints the Unix epoch N days in the past.
+# Tries GNU date first, then macOS BSD date.
+cleanup_plan_epoch_days_ago() {
+  local days="$1"
+  local epoch
+  if epoch="$(date -d "$days days ago" +%s 2>/dev/null)"; then
+    printf '%s' "$epoch"
+  elif epoch="$(date -v "-${days}d" +%s 2>/dev/null)"; then
+    printf '%s' "$epoch"
+  else
+    printf '0'
+  fi
+}
+
+# cleanup_plan_prune_stage_outcomes_for_run <stage_outcomes_dir> <run_id>
+# Removes stage-outcome JSON files whose name encodes <run_id>.
+# Attempt IDs have the form <node_id>__<run_id>__<attempt_number>, so files
+# are matched by the pattern *__<run_id>__*.json.
+cleanup_plan_prune_stage_outcomes_for_run() {
+  local stage_outcomes_dir="$1" run_id="$2"
+  [[ -d "$stage_outcomes_dir" ]] || return 0
+  local f removed=0
+  for f in "$stage_outcomes_dir"/*__"${run_id}"__*.json; do
+    [[ -f "$f" ]] || continue
+    rm -f "$f"
+    removed=$((removed + 1))
+  done
+  if [[ "$removed" -gt 0 ]]; then
+    echo "Pruned $removed stage-outcome file(s) for run $run_id"
+  fi
+}
+
+# cleanup_plan_prune_graph_bases <workspace_root> <namespace>
+#
+# Base snapshots serve the dashboard diff before-side, so retain them longer
+# than whole graph runs and always retain the newest three terminal ledgers.
+# Older snapshots degrade gracefully once run.json records basePruned.
+cleanup_plan_prune_graph_bases() {
+  local workspace_root="$1" namespace="$2"
+  local max_age_days="${RALPH_GRAPH_BASE_MAX_AGE_DAYS:-90}"
+  local ns_dir cutoff_epoch entry run_id run_json run_mtime run_dir
+  local terminal_seen=0 base_dir base_json
+
+  ns_dir="$(cleanup_plan_graph_runs_namespace_dir "$workspace_root" "$namespace")"
+  [[ -d "$ns_dir" ]] || return 0
+  cutoff_epoch="$(cleanup_plan_epoch_days_ago "$max_age_days")"
+  [[ "$cutoff_epoch" -gt 0 ]] || return 0
+
+  while IFS= read -r entry; do
+    [[ "$entry" == "latest" ]] && continue
+    [[ -d "$ns_dir/$entry" ]] || continue
+    run_id="$entry"
+    run_dir="$(cleanup_plan_graph_run_dir "$workspace_root" "$namespace" "$run_id")" || continue
+    run_json="$run_dir/run.json"
+    cleanup_plan_graph_run_is_terminal "$run_json" || continue
+    terminal_seen=$((terminal_seen + 1))
+    [[ "$terminal_seen" -gt 3 ]] || continue
+    run_mtime="$(cleanup_plan_file_mtime "$run_dir")"
+    [[ "$run_mtime" -lt "$cutoff_epoch" ]] || continue
+    base_dir="$run_dir/base"
+    [[ -d "$base_dir" && ! -L "$base_dir" ]] || continue
+    # Compacted workspaces are released and rebuilt from base/ plus their
+    # reconstruction bundle; pruning base/ would make them unrecoverable.
+    if find "$run_dir/workspaces/changesets" -maxdepth 1 -name '*.reconstruction.json' -type f -print 2>/dev/null | grep -q .; then
+      continue
+    fi
+
+    if [[ "${RALPH_CLEANUP_DRY_RUN:-0}" == "1" ]]; then
+      echo "Would prune graph base snapshot: $run_id (namespace: $namespace)"
+      continue
+    fi
+    rm -rf "$base_dir" || return 1
+    base_json="$(jq -c . "$run_json" 2>/dev/null)" || return 1
+    ralph_atomic_write_json "$run_json" \
+      '($base | fromjson) | .basePruned = true' \
+      --arg base "$base_json" || return 1
+    echo "Pruned graph base snapshot: $run_id (namespace: $namespace)"
+  done < <(ls -t1 "$ns_dir" 2>/dev/null || true)
+}
+
+# cleanup_plan_prune_graph_runs <workspace_root> <namespace>
+# Prunes terminal graph runs by age and by run count for the given namespace.
+#
+# Rules enforced:
+#   - Never deletes the run pointed at by the latest symlink.
+#   - Never deletes a run whose status is non-terminal (running or awaiting-ack).
+#   - When a run is pruned, also removes its associated stage-outcome files.
+#
+# Retention defaults (override via environment):
+#   RALPH_GRAPH_RUN_MAX_AGE_DAYS=30  Prune terminal runs older than 30 days.
+#   RALPH_GRAPH_RUN_MAX_COUNT=10     Keep at most 10 terminal runs per namespace.
+cleanup_plan_prune_graph_runs() {
+  local workspace_root="$1" namespace="$2"
+  local max_age_days="${RALPH_GRAPH_RUN_MAX_AGE_DAYS:-30}"
+  local max_count="${RALPH_GRAPH_RUN_MAX_COUNT:-10}"
+
+  local ns_dir stage_outcomes_dir
+  ns_dir="$(cleanup_plan_graph_runs_namespace_dir "$workspace_root" "$namespace")"
+  stage_outcomes_dir="$(cleanup_plan_stage_outcomes_dir "$workspace_root" "$namespace")"
+
+  if [[ ! -d "$ns_dir" ]]; then
+    return 0
+  fi
+
+  # Resolve the latest symlink target (basename of the run_id only).
+  local latest_link="$ns_dir/latest"
+  local latest_run_id=""
+  if [[ -L "$latest_link" ]]; then
+    latest_run_id="$(basename "$(readlink "$latest_link")")" || true
+  fi
+
+  # Collect run directories sorted newest-first by mtime.
+  local run_ids=()
+  local entry
+  while IFS= read -r entry; do
+    [[ "$entry" == "latest" ]] && continue
+    [[ -d "$ns_dir/$entry" ]] || continue
+    run_ids+=("$entry")
+  done < <(ls -t1 "$ns_dir" 2>/dev/null || true)
+
+  if [[ "${#run_ids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  cleanup_plan_prune_graph_bases "$workspace_root" "$namespace"
+
+  # Compute cutoff epoch for age-based pruning.
+  local cutoff_epoch
+  cutoff_epoch="$(cleanup_plan_epoch_days_ago "$max_age_days")"
+
+  local run_id run_json run_dir should_prune run_mtime kept_terminal=0
+
+  for run_id in "${run_ids[@]}"; do
+    run_dir="$(cleanup_plan_graph_run_dir "$workspace_root" "$namespace" "$run_id")" || continue
+    run_json="$run_dir/run.json"
+
+    # Reconcile dead scheduler ownership before applying terminal-only
+    # retention. A stale "running" ledger would otherwise be immortal.
+    if [[ "${RALPH_CLEANUP_DRY_RUN:-0}" != "1" ]]; then
+      graph_state_reconcile_run_owner_file "$run_json" || true
+    fi
+
+    # Never prune the run pointed at by the latest symlink.
+    if [[ -n "$latest_run_id" && "$run_id" == "$latest_run_id" ]]; then
+      continue
+    fi
+
+    # The shared retention gate also protects resumable graph attempts and
+    # workflow-owned failed candidates, even where their graph status is
+    # technically terminal.
+    if ! declare -F ralph_retention_eligibility >/dev/null 2>&1; then
+      # shellcheck source=retention.sh
+      source "$_CLEANUP_PLAN_LIB_DIR/retention.sh"
+    fi
+    if ! ralph_retention_eligibility "$(cleanup_plan_state_root "$workspace_root")" graph-run "$run_dir" "$namespace" >/dev/null; then
+      continue
+    fi
+
+    should_prune=0
+
+    # Age-based: prune if the run directory is older than the cutoff.
+    if [[ "$cutoff_epoch" -gt 0 ]]; then
+      run_mtime="$(cleanup_plan_file_mtime "$run_dir")"
+      if [[ "$run_mtime" -lt "$cutoff_epoch" ]]; then
+        should_prune=1
+      fi
+    fi
+
+    # Count-based: prune once we have retained max_count terminal runs.
+    if [[ "$should_prune" -eq 0 && "$kept_terminal" -ge "$max_count" ]]; then
+      should_prune=1
+    fi
+
+    if [[ "$should_prune" -eq 1 && "${RALPH_CLEANUP_DRY_RUN:-0}" == "1" ]]; then
+      echo "Would prune graph run: $run_id (namespace: $namespace)"
+    elif [[ "$should_prune" -eq 1 ]]; then
+      rm -rf "$run_dir"
+      echo "Pruned graph run: $run_id (namespace: $namespace)"
+      cleanup_plan_prune_stage_outcomes_for_run "$stage_outcomes_dir" "$run_id"
+    else
+      kept_terminal=$((kept_terminal + 1))
+    fi
+  done
 }

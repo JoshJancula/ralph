@@ -266,18 +266,51 @@ def render_invocation_summary(
     ]
     runtime_label_codes = ["cyan", "dim", "cyan", "cyan", "cyan", "cyan"]
 
-    try:
-        hit_pct = float(cache_hit)
-    except (TypeError, ValueError):
-        hit_pct = 0.0
-    if hit_pct >= 90:
-        hit_code = "green"
-    elif hit_pct >= 70:
-        hit_code = "yellow"
-    elif hit_pct > 0:
-        hit_code = "red"
+    # Cache reads bill at ~0.1x base input price; writes are priced by the TTL of the
+    # breakpoint they land on (~1.25x for 5-minute, ~2x for 1-hour). Raw token counts
+    # therefore badly misrepresent cost: writes are a small share of cached volume and
+    # a large share of the bill. Report the write premium's share of cost so the
+    # expensive bucket is the one that stands out.
+    CACHE_READ_PRICE = 0.10
+
+    def _as_int(value: Any) -> int:
+        try:
+            return max(0, int(float(value)))
+        except (TypeError, ValueError):
+            return 0
+
+    read_tokens = _as_int(cache_read)
+    write_tokens = _as_int(cache_create)
+    # Measured Claude Code runs write entirely at the 1-hour TTL, so an unreported
+    # split falls back to that rate rather than understating cost.
+    tokens_5m = _as_int((usage_data or {}).get("cache_creation_5m_input_tokens"))
+    tokens_1h = _as_int((usage_data or {}).get("cache_creation_1h_input_tokens"))
+    if tokens_5m + tokens_1h > 0:
+        write_price = (tokens_5m * 1.25 + tokens_1h * 2.00) / (tokens_5m + tokens_1h)
     else:
-        hit_code = "dim"
+        write_price = 2.00
+    read_cost = read_tokens * CACHE_READ_PRICE
+    write_cost = write_tokens * write_price
+    cached_cost = read_cost + write_cost
+    write_share = round(100 * write_cost / cached_cost) if cached_cost > 0 else 0
+
+    # A high write share means cache writes are not being amortized -- the invocation
+    # paid the 1.25x premium on context it then barely re-read. Break-even on a
+    # 5-minute TTL is roughly two reads per write.
+    if write_share >= 60:
+        write_code = "red"
+    elif write_share >= 40:
+        write_code = "yellow"
+    elif cached_cost > 0:
+        write_code = "green"
+    else:
+        write_code = "dim"
+
+    # cache_read / API requests is the real context-size signal. Unlike cache hit
+    # ratio (pinned near 100% in any cached agent loop, so it never varies), this
+    # moves when context actually grows.
+    requests = _as_int((usage_data or {}).get("tool_turns"))
+    context_per_req = fmt_int(str(round(read_tokens / requests))) if requests else "-"
 
     usage_rows: List[Optional[List[str]]] = [
         ["Input", "n/a" if usage_unsupported else fmt_int(input_tokens)],
@@ -286,11 +319,22 @@ def render_invocation_summary(
         ["Cache Read", "n/a" if usage_unsupported else fmt_int(cache_read)],
         ["Cache Write", "n/a" if usage_unsupported else fmt_int(cache_create)],
         [
-            "Cache Hit",
-            "n/a" if usage_unsupported else renderer.paint(f"{cache_hit}%", hit_code),
+            "Write Cost",
+            "n/a"
+            if usage_unsupported
+            else renderer.paint(f"{write_share}% of cache spend", write_code),
         ],
+        ["Context/Req", "n/a" if usage_unsupported else context_per_req],
     ]
-    usage_label_codes = ["green", "green", "cyan", "yellow", "yellow", "yellow"]
+    usage_label_codes = [
+        "green",
+        "green",
+        "cyan",
+        "yellow",
+        "yellow",
+        "yellow",
+        "cyan",
+    ]
 
     height = max(len(runtime_rows), len(usage_rows))
     runtime_rows_padded = runtime_rows + [None] * (height - len(runtime_rows))

@@ -6,6 +6,18 @@
 #   ralph_run_plan_interrupt_trap_handler -- INT/TERM/HUP trap: teardown first, then finalize usage and overlay cleanup
 #   prompt_cleanup_on_exit -- may run cleanup-plan.sh or print the command
 
+_RALPH_RUN_PLAN_CLEANUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_retention_auto_prune >/dev/null 2>&1; then
+  # shellcheck source=../retention.sh
+  source "$_RALPH_RUN_PLAN_CLEANUP_DIR/../retention.sh"
+fi
+
+ralph_run_plan_auto_retention() {
+  local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}" key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
+  [[ -n "$state_root" && -n "$key" ]] || return 0
+  ralph_retention_auto_prune "$state_root" "$key" "${RALPH_ARTIFACT_NS:-$key}"
+}
+
 # Prompt the user for optional cleanup output when the runner exits.
 # Args: none
 # Returns: 0 after handling cleanup prompt, non-zero on error
@@ -42,8 +54,12 @@ ralph_run_plan_exit_trap_handler() {
   if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
     _ralph_finalize_plan_usage_on_exit
   fi
+  if declare -F ralph_run_plan_write_manifest >/dev/null 2>&1; then
+    ralph_run_plan_write_manifest || true
+  fi
   ralph_run_plan_process_teardown_on_exit
   ralph_process_run_close "run-plan-exit" || true
+  ralph_run_plan_auto_retention || true
   prompt_cleanup_on_exit
 }
 
@@ -72,10 +88,14 @@ ralph_run_plan_interrupt_trap_handler() {
   # usage finalization can never leave the agent tree running.
   ralph_run_plan_process_teardown_on_exit
   ralph_process_run_close "run-plan-signal-${signal}" || true
+  ralph_run_plan_auto_retention || true
   printf '[%s] Agent process tree terminated.\n' "$(date '+%H:%M:%S')" >&2
 
   if declare -F _ralph_finalize_plan_usage_on_exit >/dev/null 2>&1; then
     _ralph_finalize_plan_usage_on_exit || true
+  fi
+  if declare -F ralph_run_plan_write_manifest >/dev/null 2>&1; then
+    ralph_run_plan_write_manifest || true
   fi
   if declare -F ralph_runtime_overlay_signal_trap_handler >/dev/null 2>&1; then
     ralph_runtime_overlay_signal_trap_handler || true

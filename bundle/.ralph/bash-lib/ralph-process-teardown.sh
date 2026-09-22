@@ -11,15 +11,22 @@ RALPH_PROCESS_TEARDOWN_LOADED=1
 
 # Recursively terminate a process tree, walking descendants breadth-first and
 # sending TERM to leaves before the root. Any survivors receive KILL after a
-# brief grace period.
+# brief grace period. Also tears down execImage containers registered to the
+# root's process group (dockerd orphans escape the tree).
 # Args: $1 = root pid
 ralph_kill_tree() {
   local root_pid="${1:-}"
   local -a queue descendants
   local queue_index=0 current_pid child_pid
   local descendant_index
+  local root_pgid=""
 
   [[ "$root_pid" =~ ^[0-9]+$ ]] || return 0
+
+  root_pgid="$(ps -o pgid= -p "$root_pid" 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$root_pgid" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    root_pgid="$(python3 -c 'import os, sys; print(os.getpgid(int(sys.argv[1])))' "$root_pid" 2>/dev/null || true)"
+  fi
 
   queue=("$root_pid")
   while (( queue_index < ${#queue[@]} )); do
@@ -43,6 +50,10 @@ ralph_kill_tree() {
     kill -0 "$current_pid" 2>/dev/null || continue
     kill -KILL "$current_pid" 2>/dev/null || true
   done
+
+  if [[ "$root_pgid" =~ ^[0-9]+$ ]]; then
+    ralph_exec_containers_teardown_for_pgid "$root_pgid" || true
+  fi
 }
 
 # Kill a process tree and reap the root process.
@@ -56,9 +67,96 @@ ralph_kill_tree_and_reap() {
   wait "$root_pid" 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------------------
+# Opt-in execImage container identity (graph verification).
+#
+# Docker containers are owned by dockerd and escape Unix process trees, so
+# SIGTERM/SIGKILL of the `docker run` client can leave orphans. Callers register
+# a unique --name before start; process-group teardown and local EXIT/INT/TERM
+# traps remove the container by that name.
+# ---------------------------------------------------------------------------
+
+# Directory of one-line registration files: <name> contains "pgid=<n>".
+ralph_exec_container_registry_dir() {
+  if [[ -n "${RALPH_EXEC_CONTAINER_REGISTRY_DIR:-}" ]]; then
+    printf '%s\n' "$RALPH_EXEC_CONTAINER_REGISTRY_DIR"
+    return 0
+  fi
+  printf '%s\n' "${TMPDIR:-/tmp}/ralph-exec-containers"
+}
+
+# Best-effort PGID for the current shell (ps, then python3, then $$).
+ralph_exec_container_current_pgid() {
+  local value=""
+  value="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] && command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import os; print(os.getpgid(0))' 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[0-9]+$ ]] || value="$$"
+  printf '%s\n' "$value"
+}
+
+# ralph_exec_container_register <container_name> [pgid]
+# Records container identity for later process-group or local teardown.
+ralph_exec_container_register() {
+  local name="${1:-}"
+  local pgid="${2:-}"
+  local dir
+  [[ -n "$name" ]] || return 1
+  # Docker --name: start with alnum; allow [_.-] after that.
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || return 1
+  [[ -n "$pgid" ]] || pgid="$(ralph_exec_container_current_pgid)"
+  [[ "$pgid" =~ ^[0-9]+$ ]] || return 1
+  dir="$(ralph_exec_container_registry_dir)"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  printf 'pgid=%s\n' "$pgid" >"$dir/$name" 2>/dev/null || return 1
+}
+
+# ralph_exec_container_unregister <container_name>
+ralph_exec_container_unregister() {
+  local name="${1:-}"
+  local dir
+  [[ -n "$name" ]] || return 0
+  dir="$(ralph_exec_container_registry_dir)"
+  rm -f "$dir/$name" 2>/dev/null || true
+}
+
+# ralph_exec_container_teardown_one <container_name>
+# Idempotent: docker rm -f when docker is present, then drop the registry entry.
+ralph_exec_container_teardown_one() {
+  local name="${1:-}"
+  local docker_bin
+  [[ -n "$name" ]] || return 0
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+  if [[ -n "$docker_bin" ]]; then
+    "$docker_bin" rm -f "$name" >/dev/null 2>&1 || true
+  fi
+  ralph_exec_container_unregister "$name"
+}
+
+# ralph_exec_containers_teardown_for_pgid <pgid>
+# Removes every registered execImage container owned by this process group.
+ralph_exec_containers_teardown_for_pgid() {
+  local pgid="${1:-}"
+  local dir entry name recorded
+  [[ "$pgid" =~ ^[0-9]+$ ]] || return 0
+  dir="$(ralph_exec_container_registry_dir)"
+  [[ -d "$dir" ]] || return 0
+  for entry in "$dir"/*; do
+    [[ -f "$entry" ]] || continue
+    name="${entry##*/}"
+    recorded="$(tr -d '[:space:]' <"$entry" 2>/dev/null || true)"
+    if [[ "$recorded" == "pgid=$pgid" ]]; then
+      ralph_exec_container_teardown_one "$name"
+    fi
+  done
+}
+
 # Send signals to the entire process group whose leader is $1. First TERM,
 # then KILL after a grace period. Returns 0 whether or not the group still
 # existed; any live members after KILL are left to the caller to handle.
+# Also tears down any execImage containers registered to this PGID (dockerd
+# orphans escape the Unix process tree).
 # Args: $1 = process-group leader pid
 # Optional: $2 = max wait seconds before KILL (default: 2)
 ralph_kill_process_group() {
@@ -75,6 +173,9 @@ ralph_kill_process_group() {
   if kill -0 -"$pgid" 2>/dev/null; then
     kill -KILL -"$pgid" 2>/dev/null || true
   fi
+  # Container cleanup after signals so EXIT traps in the child get a chance
+  # first; this pass covers SIGKILL races and clients that die without traps.
+  ralph_exec_containers_teardown_for_pgid "$pgid" || true
 }
 
 # Watch the launcher process and tear down the current shell if it disappears.
@@ -193,7 +294,19 @@ ralph_run_plan_invoke_with_group_guard() {
   if [[ -z "${RALPH_PROCESS_RUN_DIR:-}" ]]; then
     ralph_run_plan_agent_group_guard "$$" "$BASHPID"
   fi
-  "$invoke_fn"
+  local invoke_rc=0
+  if "$invoke_fn"; then
+    invoke_rc=0
+  else
+    invoke_rc=$?
+  fi
+  # The normal demux path writes this sidecar itself. Pre-invocation failures
+  # (capability/config checks) never reach that path, so preserve their real
+  # status instead of reporting the runner's synthetic 125 sentinel.
+  if [[ -n "${EXIT_CODE_FILE:-}" && ! -f "$EXIT_CODE_FILE" ]]; then
+    printf '%s\n' "$invoke_rc" >"$EXIT_CODE_FILE" 2>/dev/null || true
+  fi
+  return "$invoke_rc"
 }
 
 # Read a numeric runtime CLI PID from the per-invocation sidecar when present.
@@ -233,28 +346,44 @@ ralph_run_plan_reap_agent_group_guard() {
 # Cancel runner-owned async shell jobs recorded under the plan tool-results tree.
 ralph_run_plan_async_shell_jobs_teardown() {
   local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
-  local root state_file pid pgid isolated status
+  local state_root root legacy_root candidate status state_file pid pgid isolated
+  local -a roots=()
   [[ -n "$plan_key" && -n "${WORKSPACE:-}" ]] || return 0
   [[ "$plan_key" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
-  root="$WORKSPACE/.ralph-workspace/tool-results/$plan_key/shell-jobs"
-  [[ -d "$root" ]] || return 0
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  else
+    state_root="$WORKSPACE/.ralph-workspace"
+  fi
+  if declare -F ralph_state_shared_dir >/dev/null 2>&1; then
+    root="$(ralph_state_shared_dir "$state_root" tool-results 2>/dev/null || true)"
+  fi
+  [[ -n "${root:-}" ]] || root="$state_root/tool-results"
+  roots+=("$root/$plan_key/shell-jobs")
+  legacy_root="$state_root/tool-results/$plan_key/shell-jobs"
+  if [[ "$legacy_root" != "${roots[0]}" ]]; then
+    roots+=("$legacy_root")
+  fi
   command -v jq >/dev/null 2>&1 || return 0
-  while IFS= read -r state_file; do
-    [[ -f "$state_file" ]] || continue
-    status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
-    [[ "$status" == "running" ]] || continue
-    pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
-    pgid="$(jq -r '.pgid // empty' "$state_file" 2>/dev/null || true)"
-    isolated="$(jq -r '.isolatedProcessGroup // false' "$state_file" 2>/dev/null || true)"
-    if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
-      ralph_kill_process_group "$pgid" 1
-    elif [[ "$pid" =~ ^[0-9]+$ ]]; then
-      ralph_kill_tree_and_reap "$pid"
-    else
-      continue
-    fi
-    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt | .terminationReason = "cancelled"' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
-  done < <(find "$root" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
+  for candidate in "${roots[@]}"; do
+    [[ -d "$candidate" ]] || continue
+    while IFS= read -r state_file; do
+      [[ -f "$state_file" ]] || continue
+      status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
+      [[ "$status" == "running" ]] || continue
+      pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
+      pgid="$(jq -r '.pgid // empty' "$state_file" 2>/dev/null || true)"
+      isolated="$(jq -r '.isolatedProcessGroup // false' "$state_file" 2>/dev/null || true)"
+      if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
+        ralph_kill_process_group "$pgid" 1
+      elif [[ "$pid" =~ ^[0-9]+$ ]]; then
+        ralph_kill_tree_and_reap "$pid"
+      else
+        continue
+      fi
+      jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt | .terminationReason = "cancelled"' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
+    done < <(find "$candidate" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
+  done
 }
 
 # Idempotent run-plan agent teardown: process group, escaped CLI, watchdog, async jobs.
@@ -270,9 +399,11 @@ ralph_run_plan_agent_teardown() {
   fi
   RALPH_RUN_PLAN_AGENT_TEARDOWN_DONE=1
 
-  # The durable registry owns runtime processes. Stop its verified sessions
-  # before touching the legacy shell wrapper group so a live runtime cannot
-  # replace children while teardown walks a stale snapshot.
+  # The durable registry owns runtime processes. Stop verified agent/runtime
+  # sessions before touching the legacy shell wrapper group. Durable background
+  # job scopes (kind=bg-job) are preserved across per-invocation teardown so
+  # stop-hook / invocation-boundary waiters and the completion gate can still
+  # observe running jobs; plan-exit teardown finalizes them.
   if declare -F ralph_process_stop_active >/dev/null 2>&1; then
     ralph_process_stop_active "agent-teardown" || true
   fi
@@ -303,6 +434,26 @@ ralph_run_plan_agent_teardown() {
 }
 
 # Public alias used by run-plan exit and interrupt handlers.
+# Also finalizes durable background jobs that per-invocation agent teardown
+# intentionally preserves.
 ralph_run_plan_process_teardown_on_exit() {
+  local bg_reason="cancelled"
+
   ralph_run_plan_agent_teardown
+
+  case "${EXIT_STATUS:-}" in
+    interrupted) bg_reason="interrupted" ;;
+  esac
+
+  if ! declare -F ralph_run_plan_background_jobs_teardown >/dev/null 2>&1; then
+    local _ralph_bg_teardown_lib
+    _ralph_bg_teardown_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-plan/run-plan-bg-teardown.sh"
+    if [[ -f "$_ralph_bg_teardown_lib" ]]; then
+      # shellcheck source=run-plan/run-plan-bg-teardown.sh
+      source "$_ralph_bg_teardown_lib"
+    fi
+  fi
+  if declare -F ralph_run_plan_background_jobs_teardown >/dev/null 2>&1; then
+    ralph_run_plan_background_jobs_teardown "$bg_reason" || true
+  fi
 }

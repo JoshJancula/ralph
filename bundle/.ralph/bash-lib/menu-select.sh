@@ -9,12 +9,19 @@ RALPH_MENU_SELECT_LOADED=1
 #   ralph_menu_select -- lightweight numbered picker (no fzf); see inline Args/Returns below.
 
 # Interactive numbered pick from argv (after --). Prints the chosen word on stdout.
-# Options: --prompt TEXT, --default N (1-based). Reads from /dev/tty.
-# Returns 0 on success; 1 on empty/invalid input (no stdout).
+# Options:
+#   --prompt TEXT   label printed with the input cursor
+#   --default N     1-based index used when the operator just presses enter
+#   --desc TEXT     one-line description for the next choice, in choice order.
+#                   Repeatable; the Nth --desc annotates the Nth choice. Choices
+#                   without a --desc render exactly as before. Descriptions are
+#                   display-only: the bare choice word is still what gets printed.
+# Reads from /dev/tty. Returns 0 on success; 1 on empty/invalid input (no stdout).
 ralph_menu_select() {
   local prompt="Choose"
   local default_idx=1
   local -a choices=()
+  local -a descs=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -24,6 +31,10 @@ ralph_menu_select() {
         ;;
       --default)
         default_idx="$2"
+        shift 2
+        ;;
+      --desc)
+        descs+=("$2")
         shift 2
         ;;
       --)
@@ -47,9 +58,24 @@ ralph_menu_select() {
   fi
 
   local raw idx=1
+  # Pad labels to a common width only when at least one description will be
+  # printed beside them, so undescribed menus keep their existing exact layout.
+  local label_width=0
+  if [[ ${#descs[@]} -gt 0 ]]; then
+    for choice in "${choices[@]}"; do
+      [[ ${#choice} -gt $label_width ]] && label_width=${#choice}
+    done
+  fi
   printf '\n' >&2
   for choice in "${choices[@]}"; do
-    printf '  %s%2d)%s %s\n' "${C_G:-}" "$idx" "${C_RST:-}" "$choice" >&2
+    local desc="${descs[$((idx - 1))]:-}"
+    if [[ -n "$desc" ]]; then
+      printf '  %s%2d)%s %-*s  %s%s%s\n' \
+        "${C_G:-}" "$idx" "${C_RST:-}" "$label_width" "$choice" \
+        "${C_DIM:-}" "$desc" "${C_RST:-}" >&2
+    else
+      printf '  %s%2d)%s %s\n' "${C_G:-}" "$idx" "${C_RST:-}" "$choice" >&2
+    fi
     idx=$((idx + 1))
   done
   printf '%s' "${C_Y:-}${C_BOLD:-}${prompt}${C_RST:-} ${C_DIM:-}[${default_idx}]${C_RST:-}: " >&2

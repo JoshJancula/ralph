@@ -8,7 +8,7 @@ separate from transcript-level tool call counters. Key distinctions:
    (hook-shaped tool calls recorded in CLI transcript, distinct from overlay-observed activity)
 3) Overlay-observed hook activity: hook_rewrites, hook_compactions, hook_original_bytes,
    hook_compacted_bytes, native_hook_events (from overlay journals: bash-rewrite.jsonl,
-   bash-compact.jsonl, proxy-shell-compact.jsonl, result-windowing.jsonl)
+   bash-compact.jsonl, proxy-shell-compact.jsonl, jev-compact.jsonl, result-windowing.jsonl)
 4) Capability flags: native_hooks_effective (proven capability on tested build),
    native_hooks_used_on_run (true when hook telemetry observed events this run)
 """
@@ -67,6 +67,8 @@ OVERLAY_USAGE_DEFAULTS: dict[str, Any] = {
     "mcp_effective": False,
     "runtime_overlay_mode": "",
     "runtime_overlay_warnings": [],
+    "bg_tier": "",
+    "bg_tier_reason": "",
     "byte_savings_by_path": {},
     "byte_savings_by_channel": {},
     "native_optimization_proven_channels": [],
@@ -274,6 +276,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
         "hook_compaction": empty_savings_bucket(include_hidden=True),
         "proxy_shell_compaction": empty_savings_bucket(include_hidden=True),
         "result_windowing": empty_savings_bucket(include_hidden=True),
+        "jev_compaction": empty_savings_bucket(include_hidden=True),
     }
     if not state_dir:
         return savings_by_path
@@ -330,6 +333,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
 
     _accumulate_compact(os.path.join(state_dir, "bash-compact.jsonl"), "hook_compaction")
     _accumulate_compact(os.path.join(state_dir, "proxy-shell-compact.jsonl"), "proxy_shell_compaction")
+    _accumulate_compact(os.path.join(state_dir, "jev-compact.jsonl"), "jev_compaction")
 
     rewrite_path = os.path.join(state_dir, "bash-rewrite.jsonl")
     if os.path.isfile(rewrite_path):
@@ -739,6 +743,9 @@ def fields_from_summary(summary: Any) -> dict[str, Any]:
         warnings = summary.get("warnings")
     out["runtime_overlay_warnings"] = coerce_warnings(warnings)
 
+    out["bg_tier"] = str(summary.get("bg_tier") or "")
+    out["bg_tier_reason"] = str(summary.get("bg_tier_reason") or "")
+
     byte_savings = summary.get("byte_savings_by_path")
     if isinstance(byte_savings, dict):
         out["byte_savings_by_path"] = byte_savings
@@ -791,6 +798,8 @@ RUNTIME_OVERLAY_SCALAR_FIELDS = (
     "cache_key_injected",
     "cache_key_injected_provider_id",
     "overlay_mode",
+    "bg_tier",
+    "bg_tier_reason",
 )
 
 RUNTIME_OVERLAY_NUMERIC_FIELDS = (

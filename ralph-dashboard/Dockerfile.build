@@ -1,0 +1,21 @@
+# Build-only image for ralph-dashboard.
+# Docker is an optional operator convenience; it is not a Ralph core runtime dependency.
+FROM node:22.12.0
+
+WORKDIR /app
+
+# Lockfile + manifests first for layer caching, then a clean install.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Explicit source copy (avoids host node_modules / Darwin binaries replacing the Linux install).
+# Broader context exclusions land with the follow-on .dockerignore + wrapper.
+COPY angular.json tsconfig.json tsconfig.app.json ./
+COPY public ./public
+COPY scripts ./scripts
+COPY src ./src
+
+# Exact existing package.json build entry (NODE_OPTIONS memory ceiling + angular-launch-server-stub preload).
+RUN npm run build
+
+# Output: /app/dist/ralph-dashboard (Angular application builder default).

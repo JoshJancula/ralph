@@ -139,8 +139,7 @@
       "tool_call_targets": [
         {"tool": "Read", "target": "config.py"},
         {"tool": "ralph_proxy_read", "target": "config.py"}
-      ],
-      "permission_denials": [{"tool": "Read", "reason": "strict proxy policy"}]
+      ]
     },
     "artifact-lookup": {
       "completed": true,

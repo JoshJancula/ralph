@@ -302,22 +302,26 @@ class TestWrapperPrefixes(unittest.TestCase):
 
 
 class TestGitStatusRewrite(unittest.TestCase):
-    """Tests for git status rewrite rule."""
+    """git status is match-only: it is classified but never rewritten.
 
-    def test_git_status_basic_rewrite(self) -> None:
-        """Basic git status should be rewritten with porcelain and branch."""
+    Rewriting `git status` to `--porcelain=v2 --branch` changes the output
+    form the agent explicitly requested, which is a different and less
+    defensible trade than dropping progress noise. Only the git_status
+    compactor trims output; the command text passed through untouched.
+    """
+
+    def test_git_status_basic_unchanged(self) -> None:
+        """Basic git status should be unchanged, not rewritten."""
         result = scr.rewrite_command("git status")
-        self.assertTrue(result.rewritten)
-        self.assertEqual(result.rule_id, scr.RULE_GIT_STATUS)
-        self.assertIn("--porcelain=v2", result.rewritten_command)
-        self.assertIn("--branch", result.rewritten_command)
+        self.assertFalse(result.rewritten)
+        self.assertEqual(result.status, "unchanged")
+        self.assertEqual(result.rewritten_command, "git status")
 
-    def test_git_status_with_path_rewrite(self) -> None:
-        """Git status with path should be rewritten preserving path."""
+    def test_git_status_with_path_unchanged(self) -> None:
+        """Git status with path should be unchanged, not rewritten."""
         result = scr.rewrite_command("git status src/")
-        self.assertTrue(result.rewritten)
-        self.assertIn("--porcelain=v2", result.rewritten_command)
-        self.assertIn("src/", result.rewritten_command)
+        self.assertFalse(result.rewritten)
+        self.assertEqual(result.rewritten_command, "git status src/")
 
     def test_git_status_with_short_flag_no_rewrite(self) -> None:
         """Git status with -s flag should not be rewritten."""
@@ -345,19 +349,17 @@ class TestGitStatusRewrite(unittest.TestCase):
         result = scr.rewrite_command("git status --untracked-files=all")
         self.assertFalse(result.rewritten)
 
-    def test_git_status_preserves_wrapper_prefix(self) -> None:
-        """Git status rewrite should preserve wrapper prefixes."""
+    def test_git_status_preserves_wrapper_prefix_unchanged(self) -> None:
+        """Git status with a wrapper prefix should still be unchanged."""
         result = scr.rewrite_command("env GIT_PAGER=cat git status")
-        self.assertTrue(result.rewritten)
-        self.assertIn("env", result.rewritten_command)
-        self.assertIn("GIT_PAGER=cat", result.rewritten_command)
+        self.assertFalse(result.rewritten)
+        self.assertEqual(result.rewritten_command, "env GIT_PAGER=cat git status")
 
-    def test_git_status_preserves_global_options(self) -> None:
-        """Git status rewrite should preserve global options."""
+    def test_git_status_preserves_global_options_unchanged(self) -> None:
+        """Git status with global options should still be unchanged."""
         result = scr.rewrite_command("git -C /path status")
-        self.assertTrue(result.rewritten)
-        self.assertIn("-C", result.rewritten_command)
-        self.assertIn("/path", result.rewritten_command)
+        self.assertFalse(result.rewritten)
+        self.assertEqual(result.rewritten_command, "git -C /path status")
 
 
 class TestPytestRewrite(unittest.TestCase):
@@ -612,7 +614,7 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_path_in_binary(self) -> None:
         """Full path to binary should match basename."""
-        result = scr.rewrite_command("/usr/bin/git status")
+        result = scr.rewrite_command("/usr/bin/pytest")
         self.assertTrue(result.rewritten)
 
     def test_relative_path_in_binary(self) -> None:
@@ -643,6 +645,30 @@ class TestShellCommandRule(unittest.TestCase):
         self.assertEqual(rule.family_id, "test_family")
         self.assertTrue(rule.match("test", ["test"]))
         self.assertEqual(rule.rewrite("", [""], []), "rewritten")
+
+
+class TestRewriteRuleCount(unittest.TestCase):
+    """Guard the documented rewrite-rule table in docs/HOOKS.md.
+
+    Exactly two SHELL_COMMAND_RULES entries may carry a rewrite= callable:
+    pytest and tsc. Any change to that set must also update the rewrite
+    table in docs/HOOKS.md and the header comments in
+    bundle/.claude/hooks/rewrite-bash-command.sh and
+    bundle/.ralph/python/shell_command_registry.py; this test fails first
+    to force that update.
+    """
+
+    def test_exactly_two_rewrite_rules(self) -> None:
+        rewrite_rule_ids = sorted(
+            rule.rule_id for rule in scr.SHELL_COMMAND_RULES if rule.rewrite is not None
+        )
+        self.assertEqual(
+            rewrite_rule_ids,
+            ["pytest", "tsc"],
+            "SHELL_COMMAND_RULES rewrite-rule set changed; update docs/HOOKS.md "
+            "and the header comments in rewrite-bash-command.sh and "
+            "shell_command_registry.py before changing this test.",
+        )
 
 
 if __name__ == "__main__":

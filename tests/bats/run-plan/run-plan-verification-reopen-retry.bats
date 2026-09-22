@@ -108,7 +108,7 @@ AGENT
   grep -Fq -- "- [ ] first task with failing verification" "$plan_file"
   ! grep -Fq -- "- [x] first task with failing verification" "$plan_file"
   grep -Fq -- "- [ ] second task should not run" "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "verification_gate TODO stops after one failed invocation without blind retries" {
@@ -153,7 +153,7 @@ AGENT
   [ "$status" -ne 0 ]
   [ "$(cat "$invocation_count")" = "1" ]
   grep -Fq 'verification: printf done' "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen retry uses compact resume when available" {
@@ -166,8 +166,23 @@ AGENT
   session_home="$workspace/.sessions"
   verify_script="$workspace/verify.sh"
   counter="$workspace/counter.txt"
-  mkdir -p "$bin_dir" "$session_home"
-  setup_stub_run_plan_support "$workspace"
+  mkdir -p "$bin_dir" "$session_home" "$workspace/.codex/ralph" "$workspace/.ralph"
+  cat > "$workspace/.codex/ralph/select-model.sh" <<'EOF'
+#!/usr/bin/env bash
+select_model_codex() {
+  if [[ "$1" == "--batch" ]]; then
+    shift
+  fi
+  printf '%s\n' "stub-model"
+}
+export -f select_model_codex >/dev/null 2>&1 || true
+EOF
+  chmod +x "$workspace/.codex/ralph/select-model.sh"
+  cat > "$workspace/.ralph/agent-config-tool.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$workspace/.ralph/agent-config-tool.sh"
 
   cat > "$verify_script" <<SCRIPT
 #!/usr/bin/env bash
@@ -175,7 +190,7 @@ counter_path="$counter"
 n=0
 [[ -f "\$counter_path" ]] && n=\$(cat "\$counter_path")
 n=\$((n+1))
-printf '%s' "\$n" > "\$counter_path"
+printf '%s' "\$n" >"\$counter_path"
 [[ \$n -lt 2 ]] && exit 1
 exit 0
 SCRIPT
@@ -187,27 +202,37 @@ SCRIPT
 - [ ] task with retry that needs fix
 PLAN
 
-  cat > "$bin_dir/cursor-agent" <<AGENT
+  cat > "$bin_dir/codex" <<AGENT
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >>"$workspace/prompts.txt"
 printf '%s\n' "AGENT_INVOCATION_COMPLETE"
 exit 0
 AGENT
-  chmod +x "$bin_dir/cursor-agent"
+  chmod +x "$bin_dir/codex"
 
   mkdir -p "$session_home/post-verify-test"
-  printf '%s\n' "test-session-id" > "$session_home/post-verify-test/session-id.cursor.txt"
+  printf '%s\n' "test-session-id" > "$session_home/post-verify-test/session-id.codex.txt"
 
-  run_plan_with_stub "$workspace" "$bin_dir" "$plan_file" "$session_home" \
-    CURSOR_PLAN_MAX_ITER=10 \
-    CURSOR_PLAN_GUTTER_ITER=3 \
-    RALPH_VERIFY_AFTER_TODO="bash $verify_script" \
-    RALPH_PLAN_CLI_RESUME=1
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    export PATH="$2:$PATH"
+    export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_PLAN_SESSION_HOME="$3"
+    export RALPH_PLAN_NO_CAFFEINATE=1
+    export RALPH_LAUNCHER_PID=$$
+    export CODEX_PLAN_MAX_ITER=10
+    export CODEX_PLAN_GUTTER_ITER=3
+    export RALPH_VERIFY_AFTER_TODO="bash $4"
+    export RALPH_PLAN_CLI_RESUME=1
+    unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_MODE RALPH_PLAN_KEY RALPH_ARTIFACT_NS
+    "$5" --runtime codex --plan "$(basename "$6")" --non-interactive --model stub-model --workspace "$1"
+  ' _ "$workspace" "$bin_dir" "$session_home" "$verify_script" "$RUN_PLAN_SH" "$plan_file"
 
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] task with retry that needs fix" "$plan_file"
   [[ "$output" == *"compact"* ]] || [[ "$output" == *"post-verify"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "runner does not advance to next TODO while reopened TODO still failing verification" {
@@ -258,7 +283,7 @@ AGENT
   [ ! -f "$second_ran" ]
   grep -Fq -- "- [ ] first task with failing verification" "$plan_file"
   grep -Fq -- "- [ ] second task" "$plan_file"
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen preserves attempt counter across multiple retries" {
@@ -306,7 +331,7 @@ AGENT
   [ "$status" -ne 0 ]
   [ -f "$counter" ]
   [ "$(cat "$counter")" = "3" ] || [ "$(cat "$counter")" -ge 3 ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "retry prompt contains prior verification-failure context" {
@@ -352,7 +377,7 @@ AGENT
   local prompt_content
   prompt_content="$(cat "$prompts")"
   [[ "$prompt_content" == *"verification"* ]] || [[ "$prompt_content" == *"fail"* ]] || [[ "$prompt_content" == *"failed"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "post-verification reopen stops immediately when gutter limit exceeded" {
@@ -393,5 +418,5 @@ AGENT
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"exhausted"* ]] || [[ "$output" == *"gutter"* ]] || [[ "$output" == *"budget"* ]]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

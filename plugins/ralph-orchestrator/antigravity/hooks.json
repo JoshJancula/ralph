@@ -1,0 +1,21 @@
+{
+  "ralph-native": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "hooks/pre-tool-shell-policy.sh",
+            "timeout": 30
+          }
+        ],
+        "matcher": "run_command"
+      }
+    ],
+    "Stop": [
+      {
+        "command": "hooks/stop-continuation.sh",
+        "timeout": 5400
+      }
+    ]
+  }
+}

@@ -3,24 +3,43 @@ import { Component, Input, OnInit, effect, inject, signal } from '@angular/core'
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { IonSpinner, IonButton } from '@ionic/angular/standalone';
 import { Subscription } from 'rxjs';
-import { ApiService, FileChunk, MetricsSummary, MetricsSummaryItem } from '../../services/api.service';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { NavService } from '../../services/nav.service';
 import { PlanLogResolutionService } from '../../services/plan-log-resolution.service';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { sanitizeHtmlDocument } from '../../utils/sanitize-html';
-import { formatElapsedSeconds } from '../../utils/format-elapsed';
+import { ResourceError } from '../../../shared/resource-error';
+import { ErrorModalComponent } from '../error-modal/error-modal.component';
 
-interface TokenTotals {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
+export type AssignedFileRole = 'plan-usage-summary' | 'discover-report' | 'run-manifest' | 'overlay-summary';
+
+const ROLE_LABELS: Record<AssignedFileRole, string> = {
+  'plan-usage-summary': 'Plan usage summary',
+  'discover-report': 'Discover report',
+  'run-manifest': 'Run manifest',
+  'overlay-summary': 'Overlay summary',
+};
+
+function fileBasename(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1] ?? path;
+}
+
+export function assignedFileRole(path: string): AssignedFileRole | null {
+  const name = fileBasename(path);
+  if (name === 'plan-usage-summary.json') return 'plan-usage-summary';
+  if (name === 'discover-report.json') return 'discover-report';
+  if (name === 'run-manifest.json') return 'run-manifest';
+  if (name === 'overlay-summary.json' || name.startsWith('runtime-overlay-summary-') || /^iter-\d+-/.test(name)) {
+    return 'overlay-summary';
+  }
+  return null;
 }
 
 @Component({
   selector: 'app-file-viewer',
   standalone: true,
-  imports: [CommonModule, IonSpinner, IonButton],
+  imports: [CommonModule, IonSpinner, IonButton, ErrorModalComponent],
   templateUrl: './file-viewer.component.html',
   styleUrls: ['./file-viewer.component.scss'],
 })
@@ -36,13 +55,10 @@ export class FileViewerComponent implements OnInit {
   filePathSignal = signal<string>('');
   content = signal<string>('');
   loading = signal<boolean>(false);
-  error = signal<string | null>(null);
+  error = signal<ResourceError | null>(null);
   isRendered = signal<boolean>(true);
   safeHtml = signal<SafeHtml | null>(null);
   workspaceRoot = signal<string>('');
-  planMetrics = signal<MetricsSummaryItem | null>(null);
-
-  private metricsSummary = signal<MetricsSummary | null>(null);
 
   constructor() {
     // Coalesce root/filePath changes into one load and cancel any in-flight request.
@@ -62,10 +78,6 @@ export class FileViewerComponent implements OnInit {
       const subscription = this.loadFile(root, filePath);
       onCleanup(() => subscription.unsubscribe());
     });
-
-    effect(() => {
-      this.syncPlanMetrics();
-    });
   }
 
   ngOnInit(): void {
@@ -76,17 +88,6 @@ export class FileViewerComponent implements OnInit {
       error: () => {
         // Fallback to empty string, component will still work
         this.workspaceRoot.set('');
-      },
-    });
-
-    this.api.fetchMetricsSummary().subscribe({
-      next: (summary) => {
-        this.metricsSummary.set(summary);
-        this.syncPlanMetrics();
-      },
-      error: () => {
-        this.metricsSummary.set(null);
-        this.planMetrics.set(null);
       },
     });
   }
@@ -128,12 +129,25 @@ export class FileViewerComponent implements OnInit {
             this.loading.set(false);
           }
         },
-        error: () => {
+        error: (err) => {
           if (requestToken !== this.loadSequence) {
             return;
           }
 
-          this.error.set('Failed to load file');
+          // Check if error is a ResourceError object
+          if (err && typeof err === 'object' && 'code' in err && 'title' in err) {
+            this.error.set(err as ResourceError);
+          } else {
+            // Fallback for unexpected error types
+            this.error.set({
+              code: 'UNKNOWN',
+              message: 'Failed to load file',
+              title: 'Error Loading File',
+              explanation: 'An unexpected error occurred while loading the file.',
+              recoverable: true,
+              suggestedActions: ['RETRY', 'RETURN_TO_PLANS'],
+            });
+          }
           this.loading.set(false);
         },
       });
@@ -143,6 +157,27 @@ export class FileViewerComponent implements OnInit {
     this.isRendered.update((val) => !val);
     if (this.isRendered() && this.isMarkdown()) {
       void this.renderMarkdown(this.content(), this.loadSequence);
+    }
+  }
+
+  performErrorAction(action: string): void {
+    switch (action) {
+      case 'RETRY':
+        // Retry loading the file
+        const subscription = this.loadFile(this.rootSignal(), this.filePathSignal());
+        subscription.unsubscribe();
+        break;
+      case 'REFRESH_INDEX':
+        // Trigger index refresh - navigate to plans to refresh
+        this.nav.navigate('plans');
+        break;
+      case 'RETURN_TO_PLANS':
+        this.nav.navigate('plans');
+        break;
+      case 'SELECT_PROJECT':
+        // Navigate to plans to allow project selection
+        this.nav.navigate('plans');
+        break;
     }
   }
 
@@ -157,34 +192,6 @@ export class FileViewerComponent implements OnInit {
       path.endsWith('.orch.json') ||
       path.endsWith('.ndjson') ||
       path.endsWith('.jsonl')
-    );
-  }
-
-  formatSeconds(value: number): string {
-    return formatElapsedSeconds(value);
-  }
-
-  formatCompactTokens(value: number): string {
-    if (!Number.isFinite(value) || value <= 0) {
-      return '--';
-    }
-
-    if (value < 10000) {
-      return new Intl.NumberFormat().format(Math.round(value));
-    }
-
-    return new Intl.NumberFormat(undefined, {
-      notation: 'compact',
-      maximumFractionDigits: 1,
-    }).format(value);
-  }
-
-  totalTokensForEntry(entry: TokenTotals): number {
-    return (
-      entry.input_tokens +
-      entry.output_tokens +
-      entry.cache_creation_input_tokens +
-      entry.cache_read_input_tokens
     );
   }
 
@@ -204,6 +211,43 @@ export class FileViewerComponent implements OnInit {
     }
   }
 
+  fileRole(): AssignedFileRole | null {
+    if (!this.isJson() || this.isStructuredJsonStream()) {
+      return null;
+    }
+    try {
+      JSON.parse(this.content() || '{}');
+    } catch {
+      return null;
+    }
+    if (!this.content().trim()) {
+      return assignedFileRole(this.filePathSignal());
+    }
+    return assignedFileRole(this.filePathSignal());
+  }
+
+  fileRoleLabel(): string {
+    const role = this.fileRole();
+    return role ? ROLE_LABELS[role] : '';
+  }
+
+  roleViewRows(): Array<{ label: string; value: string }> {
+    const role = this.fileRole();
+    if (!role) {
+      return [];
+    }
+    let parsed: Record<string, unknown> = {};
+    try {
+      const value = JSON.parse(this.content()) as unknown;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        parsed = value as Record<string, unknown>;
+      }
+    } catch {
+      return [];
+    }
+    return this.rowsForRole(role, parsed);
+  }
+
   isPlainText(): boolean {
     return !this.isMarkdown() && !this.isJson();
   }
@@ -221,7 +265,7 @@ export class FileViewerComponent implements OnInit {
     const dir = this.planDirectory;
     if (!dir) return;
 
-    const ws = this.planMetrics()?.workspace_root;
+    const ws = this.nav.activeWorkspaceRoot() ?? undefined;
     this.planLogResolution.resolveLatestLogTarget(dir, ws).subscribe({
       next: (target) => {
         if (!target.file) {
@@ -336,6 +380,14 @@ export class FileViewerComponent implements OnInit {
   }
 
   private formatStructuredJsonRecord(record: Record<string, unknown>): string {
+    const path = fileBasename(this.filePathSignal());
+    if (path === 'overlay-timeline.jsonl' || ('compaction_saved_bytes' in record && 'iteration' in record)) {
+      return this.formatOverlayTimelineRecord(record);
+    }
+    if (path === 'tool-catalog-telemetry.jsonl' || (record['event'] && (record['toolName'] !== undefined || record['outcome'] !== undefined))) {
+      return this.formatToolCatalogTelemetryRecord(record);
+    }
+
     const type = this.readStringField(record, 'type');
     const subtype = this.readStringField(record, 'subtype');
     const headline = this.formatStreamHeadline(type, subtype);
@@ -346,6 +398,85 @@ export class FileViewerComponent implements OnInit {
     }
 
     return details ? `${headline} (${details})` : headline;
+  }
+
+  private formatOverlayTimelineRecord(record: Record<string, unknown>): string {
+    const iteration = this.formatStreamValue(record['iteration'] ?? '');
+    const runtime = this.readStringField(record, 'runtime') ?? 'unknown';
+    const saved = this.formatStreamValue(record['compaction_saved_bytes'] ?? 0);
+    const hooks = this.formatStreamValue(record['hook_compactions'] ?? 0);
+    const tier = this.readStringField(record, 'bg_tier');
+    const parts = [`overlay iter ${iteration}`, runtime, `saved_bytes=${saved}`, `hook_compactions=${hooks}`];
+    if (tier) {
+      parts.push(`bg_tier=${tier}`);
+    }
+    return parts.join(', ');
+  }
+
+  private formatToolCatalogTelemetryRecord(record: Record<string, unknown>): string {
+    const event = this.readStringField(record, 'event') ?? 'catalog event';
+    const tool = this.readStringField(record, 'toolName');
+    const outcome = this.readStringField(record, 'outcome');
+    const ts = this.readStringField(record, 'timestamp');
+    const parts = [this.humanizeStreamToken(event)];
+    if (tool) parts.push(`tool=${tool}`);
+    if (outcome) parts.push(`outcome=${outcome}`);
+    if (typeof record['rank'] === 'number') parts.push(`rank=${record['rank']}`);
+    if (ts) parts.push(ts);
+    return parts.join(', ');
+  }
+
+  private rowsForRole(role: AssignedFileRole, parsed: Record<string, unknown>): Array<{ label: string; value: string }> {
+    const field = (label: string, key: string): { label: string; value: string } => ({
+      label,
+      value: this.formatStreamValue(parsed[key] ?? '—'),
+    });
+    switch (role) {
+      case 'plan-usage-summary':
+        return [
+          field('Plan key', 'plan_key'),
+          field('Status', 'status'),
+          field('Runtime', 'runtime'),
+          field('Model', 'model'),
+          field('Todos done', 'todos_done'),
+          field('Todos total', 'todos_total'),
+          field('Input tokens', 'input_tokens'),
+          field('Output tokens', 'output_tokens'),
+          field('Elapsed seconds', 'elapsed_seconds'),
+        ];
+      case 'discover-report':
+        return [
+          field('Kind', 'kind'),
+          field('Plan key', 'plan_key'),
+          field('Generated at', 'generated_at'),
+          {
+            label: 'Sequence patterns',
+            value: String(Array.isArray(parsed['sequence_patterns']) ? parsed['sequence_patterns'].length : 0),
+          },
+          {
+            label: 'Aggregate findings',
+            value: String(Array.isArray(parsed['aggregate_findings']) ? parsed['aggregate_findings'].length : 0),
+          },
+        ];
+      case 'run-manifest':
+        return [
+          field('Run id', 'run_id'),
+          field('Plan key', 'plan_key'),
+          field('Status', 'status'),
+          field('Runtime', 'runtime'),
+          field('Model', 'model'),
+          field('Started at', 'started_at'),
+          field('Ended at', 'ended_at'),
+        ];
+      case 'overlay-summary':
+        return [
+          field('Overlay mode', 'runtime_overlay_mode'),
+          field('Native hooks', 'native_hooks_effective'),
+          field('MCP', 'mcp_effective'),
+          field('Compaction saved bytes', 'compaction_saved_bytes'),
+          field('Hook compactions', 'hook_compactions'),
+        ];
+    }
   }
 
   private formatStreamHeadline(type?: string, subtype?: string): string {
@@ -437,51 +568,6 @@ export class FileViewerComponent implements OnInit {
 
   private humanizeStreamToken(value: string): string {
     return value.replace(/[_-]+/g, ' ').trim();
-  }
-
-  private syncPlanMetrics(): void {
-    const summary = this.metricsSummary();
-    const fileName = this.filePathSignal().split('/').filter(Boolean).pop() ?? '';
-    const planKey = this.stripPlanSuffix(fileName);
-
-    if (!summary || !planKey) {
-      this.planMetrics.set(null);
-      return;
-    }
-
-    this.planMetrics.set(this.findLatestPlanMetrics(summary, planKey));
-  }
-
-  private findLatestPlanMetrics(summary: MetricsSummary, planKey: string): MetricsSummaryItem | null {
-    const matches = summary.plans.filter((item) => item.plan_key === planKey);
-    if (matches.length === 0) {
-      return null;
-    }
-    return matches.reduce((latest, candidate) =>
-      this.metricTimestamp(candidate) > this.metricTimestamp(latest) ? candidate : latest,
-    );
-  }
-
-  private metricTimestamp(item: MetricsSummaryItem): number {
-    return this.parseTimestamp(item.ended_at) || this.parseTimestamp(item.started_at);
-  }
-
-  private parseTimestamp(value?: string): number {
-    if (!value) {
-      return 0;
-    }
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  private stripPlanSuffix(fileName: string): string {
-    if (fileName.endsWith('.mdc')) {
-      return fileName.slice(0, -4);
-    }
-    if (fileName.endsWith('.md')) {
-      return fileName.slice(0, -3);
-    }
-    return fileName;
   }
 
   private async renderMarkdown(source: string, requestToken: number, finalizeLoad = false): Promise<void> {

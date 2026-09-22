@@ -2,9 +2,17 @@
 """Merge Ralph Claude hook template entries into a settings.json file."""
 import json
 import os
+import shlex
 import sys
 
-target, template = sys.argv[1:]
+target, template = sys.argv[1:3]
+# Setup merges through a temporary file: never infer the installation path
+# from that file. Overlays explicitly pass the framework's hook directory.
+hooks_dir = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else os.path.abspath(
+    os.path.join(os.path.dirname(target), "hooks")
+)
+include_stop = len(sys.argv) <= 4 or sys.argv[4] == "1"
+hook_timeout = int(sys.argv[5]) if len(sys.argv) > 5 else None
 
 
 def load_json(path):
@@ -21,7 +29,31 @@ with open(template) as fh:
 template_hooks = template_data.get("hooks") or {}
 hooks = data.setdefault("hooks", {})
 
+replacements = {}
 for event, groups in template_hooks.items():
+    if event == "Stop" and not include_stop:
+        continue
+    for group in groups:
+        for entry in group.get("hooks") or []:
+            command = entry.get("command", "")
+            if command.startswith(".claude/hooks/"):
+                replacements[command] = shlex.quote(os.path.join(hooks_dir, os.path.basename(command)))
+                entry["command"] = replacements[command]
+            if event == "Stop" and hook_timeout is not None:
+                entry["timeout"] = hook_timeout
+
+# Repair only exact Ralph template commands, preserving custom commands and
+# entry metadata. Do this before deduplication so setup is repeatable.
+for groups in hooks.values():
+    for group in groups:
+        for entry in group.get("hooks") or []:
+            command = entry.get("command", "")
+            if command in replacements:
+                entry["command"] = replacements[command]
+
+for event, groups in template_hooks.items():
+    if event == "Stop" and not include_stop:
+        continue
     hooks.setdefault(event, [])
     for tpl_group in groups:
         matcher = tpl_group.get("matcher")
@@ -42,8 +74,6 @@ for event, groups in template_hooks.items():
         for entry in tpl_entries:
             cmd = entry.get("command") or ""
             if cmd in existing_cmds:
-                continue
-            if any(cmd.endswith(os.path.basename(c)) for c in existing_cmds if c):
                 continue
             existing["hooks"].append(json.loads(json.dumps(entry)))
 

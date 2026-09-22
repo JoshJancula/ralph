@@ -10,8 +10,8 @@
 #
 # Modes:
 #   --test / --dry-run   MCP verification only; print planned runtime runs without invoking CLIs.
-#   --live               Run live plan invocations for installed runtime CLIs (default when unset).
-#   (default)            Same as --live when stdout is a TTY; otherwise behaves like --test.
+#   --live               Explicitly run live plan invocations for installed runtime CLIs.
+#   (default)            MCP verification only; never invokes a runtime CLI.
 #
 # Requires: bash, jq. Live runs also need runtime CLIs and credentials.
 set -euo pipefail
@@ -26,7 +26,7 @@ RESULT_LIB="$REPO_ROOT/.ralph/bash-lib/mcp-proxy/mcp-proxy-result.sh"
 TOOLS_LIB="$REPO_ROOT/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
 
 ALL_RUNTIMES=(cursor claude codex opencode)
-DRY_RUN=0
+DRY_RUN=1
 LIVE_RUN=0
 SELECTED_RUNTIMES=()
 KEEP_WORKSPACE=0
@@ -51,7 +51,8 @@ Options:
   --keep-workspace        Do not remove a temporary workspace on exit.
   -h, --help              Show this help.
 
-When neither --test nor --live is given, live runs run on a TTY; otherwise --test is assumed.
+When neither --test nor --live is given, this script performs MCP-only verification
+and never invokes a runtime CLI. Pass --live deliberately to spend provider usage.
 EOF
 }
 
@@ -96,6 +97,7 @@ parse_args() {
     case "$arg" in
       --test | --dry-run)
         DRY_RUN=1
+        LIVE_RUN=0
         ;;
       --live)
         LIVE_RUN=1
@@ -127,13 +129,6 @@ parse_args() {
     shift
   done
 
-  if [[ "$LIVE_RUN" -eq 0 && "$DRY_RUN" -eq 0 ]]; then
-    if [[ -t 1 ]]; then
-      LIVE_RUN=1
-    else
-      DRY_RUN=1
-    fi
-  fi
 }
 
 runtime_in_selection() {

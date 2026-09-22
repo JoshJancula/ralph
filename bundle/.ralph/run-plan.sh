@@ -36,7 +36,8 @@
 #     fresh (default): strict isolation between TODO invocations.
 #     resume: continue same CLI session context between TODOs.
 #     reset: reuse session ids and prefix a runtime reset command before each reset TODO (Claude defaults to `/clear`).
-#     compact: reuse session ids and prefix a compact command before each TODO (Codex=/compact, Cursor=/compress).
+  #     compact: reuse session ids and run a standalone compact turn (`/compact`) once at the start of each TODO.
+#   Cross-run TODO sessions: RALPH_PLAN_RESUME_RUN or --resume-run <run-id|last> (opt-in; fresh remains default).
 #   CLI session resume compatibility: RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
 #     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt and, when that file exists, passes --resume <id> (or runtime
 #     equivalent) with a compact prompt (TODO + plan path + human-replies only). Interactive TTY runs ask unless
@@ -52,9 +53,17 @@
 #     standard: lowers human context byte cap (RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME, default 2048).
 #     lean: standard + skips downstream stage context (RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME, default 0).
 #     full: no trimming applied. Set per-stage via contextBudget in .orch.json (orchestrator injects automatically).
+#   Jev (TypeSafe AI): optional, off by default, and independent of RALPH_MODE - no mode value enables it.
+#     Resolution order: RALPH_JEV env, saved jev_default in .ralph-workspace/preferences.json
+#     (none|compaction|mcp|both), interactive "Enable Jev (TypeSafe AI) for this run?" on TTY runs
+#     without --non-interactive, then 0.
+#     The prompt appears ONLY when a TypeSafe key is already configured (see: ralph jev key status);
+#     with no key it never fires. Choices: none (default), compaction (RALPH_JEV=1 + RALPH_JEV_COMPACT=1),
+#     mcp (RALPH_JEV=1 + RALPH_JEV_MCP=1), or both.
 #   Ralph mode: use --ralph-mode <no|native|ralph|hybrid> (or RALPH_MODE) to control Ralph MCP tools and native hook adapters.
-#     Resolution order: --ralph-mode flag, RALPH_MODE env, saved ralph_mode_default in .ralph-workspace/preferences.json,
-#     interactive prompt (TTY runs without --non-interactive), then default no.
+#     Recommended opt-in is hybrid. Resolution order: --ralph-mode flag, RALPH_MODE env, saved ralph_mode_default in
+#     .ralph-workspace/preferences.json, interactive "Enable Ralph tooling?" (yes=hybrid, no=no) on TTY runs without
+#     --non-interactive, then default no. Expert cells native/ralph are flag/env/preference only.
 # Optional tooling:
 #   fzf: Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf).
 #        Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
@@ -74,19 +83,21 @@
 #     ralph models list|add|remove <claude|codex> [model-id]
 #     bash .ralph/models.sh list|add|remove <claude|codex> [model-id]
 #   Store: ${RALPH_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ralph}/models.json
-#   The first saved model per runtime is the default fallback. Override the config root with RALPH_CONFIG_HOME.
+#   Attended leaf runs show every saved model and ask you to pick one.
+#   The first saved model is only a non-interactive / no-TTY fallback.
+#   Override the config root with RALPH_CONFIG_HOME.
 #
-#   Claude/Codex resolution order (highest wins):
-#     1. --model <id> CLI flag
-#     2. CLAUDE_PLAN_MODEL or CODEX_PLAN_MODEL (each falls back to CURSOR_PLAN_MODEL when unset)
-#     3. Non-empty agent config `model` (.claude/agents/<id>/config.json etc.)
-#     4. First saved model from models.json (see `ralph models add`)
-#     5. Interactive prompt (saved-model menu or manual entry; offers to save new ids)
-#   Orchestration stage `model` in .orch.json overrides agent config for that stage only.
+#   Claude/Codex leaf resolution order (highest wins):
+#     1. --model <id> CLI flag (or plan-header model:)
+#     2. TODO model:
+#     3. Attended TTY: interactive picker (full saved-model catalog + custom entry)
+#     4. Non-interactive / no TTY: first saved model from models.json
+#     5. Runtime-native default (omit Ralph --model)
+#   Staged graph/orchestration: stage/voter model: > saved > native (runner is non-interactive).
 #
-#   Non-interactive Claude/Codex runs fail when none of steps 1-4 resolve a model. Add a saved default:
-#     ralph models add claude <id>   (or `ralph models add codex <id>`)
-#   Non-interactive Cursor/OpenCode still require --agent, --model, or CURSOR_PLAN_MODEL (unchanged).
+#   Non-interactive Claude/Codex runs use the first saved model when CLI/TODO pins are unset.
+#   Add a saved default: ralph models add claude <id>   (or `ralph models add codex <id>`)
+#   Non-interactive Cursor/OpenCode still require --model or CURSOR_PLAN_MODEL (unchanged).
 # A plan file path is required: pass --plan <path> (relative paths resolve against the workspace directory).
 #
 # Usage:
@@ -149,10 +160,14 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-compaction-provenance.sh"
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-effective-hook-config.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-hooks-config-snapshot.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-hooks-config-snapshot.sh"
+# shellcheck source=bash-lib/state-paths.sh
+source "$SCRIPT_DIR/bash-lib/state-paths.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-session.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-session.sh"
 # shellcheck source=bash-lib/runtime-overlay/runtime-overlay.sh
 source "$SCRIPT_DIR/bash-lib/runtime-overlay/runtime-overlay.sh"
+# shellcheck source=bash-lib/run-plan/run-plan-bg-tier-probe.sh
+source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-bg-tier-probe.sh"
 # shellcheck source=bash-lib/runtime-config/runtime-config-mcp.sh
 source "$SCRIPT_DIR/bash-lib/runtime-config/runtime-config-mcp.sh"
 # shellcheck source=bash-lib/ralph-named-shell.sh

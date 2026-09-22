@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "ralphVersion": "1.0.0",
+  "name": "exec-image-invalid-unsafe",
+  "namespace": "exec-image-invalid-unsafe",
+  "maxParallel": 1,
+  "failurePolicy": "drain",
+  "nodes": [
+    {
+      "id": "verify",
+      "type": "stage",
+      "dependsOn": [],
+      "derivedFrom": "stage",
+      "stage": {
+        "execImage": "python:3.12-slim; rm -rf /"
+      }
+    }
+  ],
+  "edges": []
+}

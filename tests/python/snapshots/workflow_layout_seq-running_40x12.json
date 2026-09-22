@@ -1,0 +1,14 @@
+[
+  "Ralph fixture-seq-running",
+  "bug-fix | Sequential",
+  "RUNNING  Fix the timeout",
+  "1/2 stages  2m 0s",
+  "> running   implement",
+  "implement  plan-backed  running",
+  "Live tail  press l for the exact command",
+  "TODO  implement-core",
+  "TODOs  2/5",
+  "Plan source  generated from plan-implem\u2026",
+  "Attempt  1  Duration  1m 30s",
+  "Artifacts  implementation.md"
+]

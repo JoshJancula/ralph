@@ -1,0 +1,758 @@
+{
+  "width": 120,
+  "height": 40,
+  "plain": [
+    "Ralph fixture-dep-approval  feature-delivery \u00b7 Dependency",
+    "Task  Ship the feature",
+    "WAITING  Elapsed 0s  Updated just now  Stages 0/1",
+    "waiting 1",
+    "[\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500] 0/1",
+    "the run is waiting for the operator to decide an approval gate",
+    "Progress tree",
+    "> waiting    \u2500\u2500 approve-plan",
+    "\u250c\u2500 Selected stage \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+    "\u2502 approve-plan  approval  waiting                                                                                      \u2502",
+    "\u2502 Live tail  ralph workflow logs fixture-dep-approval --stage approve-plan --attempt 1 --stream combined --follow      \u2502",
+    "\u2502 Next  answer the outstanding request                                                                                 \u2502",
+    "\u2502 Question  Approve the implementation plan?                                                                           \u2502",
+    "\u2502 Request  outstanding                                                                                                 \u2502",
+    "\u2502 Changes target  implement                                                                                            \u2502",
+    "\u2502 Attempt  1  Duration  1m 0s                                                                                          \u2502",
+    "\u2502 Blocker  approval (outstanding)                                                                                      \u2502",
+    "\u2502 Evidence  1                                                                                                          \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2502                                                                                                                      \u2502",
+    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518"
+  ],
+  "spans": [
+    [
+      {
+        "col": 0,
+        "text": "Ralph ",
+        "role": "heading",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "fixture-dep-approval",
+        "role": "path",
+        "width": 20
+      },
+      {
+        "col": 28,
+        "text": "feature-delivery",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 44,
+        "text": " \u00b7 Dependency",
+        "role": "muted",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Task  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 6,
+        "text": "Ship the feature                                                                                                  ",
+        "role": "default",
+        "width": 114
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "WAITING",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 7,
+        "text": "  Elapsed ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 17,
+        "text": "0s",
+        "role": "default",
+        "width": 2
+      },
+      {
+        "col": 19,
+        "text": "  Updated ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 29,
+        "text": "just now",
+        "role": "default",
+        "width": 8
+      },
+      {
+        "col": 37,
+        "text": "  Stages ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 46,
+        "text": "0/1                                                                       ",
+        "role": "default",
+        "width": 74
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "waiting ",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 8,
+        "text": "1",
+        "role": "warning",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "[\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500] ",
+        "role": "muted",
+        "width": 45
+      },
+      {
+        "col": 45,
+        "text": "0/1",
+        "role": "accent",
+        "width": 3
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "the run is waiting for the operator to decide an approval gate",
+        "role": "muted",
+        "width": 62
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "Progress tree",
+        "role": "heading",
+        "width": 13
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "> waiting    \u2500\u2500 approve-plan                                                                                            ",
+        "role": "focus",
+        "width": 120
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u250c\u2500",
+        "role": "muted",
+        "width": 2
+      },
+      {
+        "col": 2,
+        "text": " Selected stage ",
+        "role": "heading",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+        "role": "muted",
+        "width": 102
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "approve-plan",
+        "role": "heading",
+        "width": 12
+      },
+      {
+        "col": 16,
+        "text": "approval",
+        "role": "muted",
+        "width": 8
+      },
+      {
+        "col": 26,
+        "text": "waiting",
+        "role": "warning",
+        "width": 7
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Live tail  ",
+        "role": "muted",
+        "width": 11
+      },
+      {
+        "col": 13,
+        "text": "ralph workflow logs fixture-dep-approval --stage approve-plan --attempt 1 --stream combined --follow",
+        "role": "command",
+        "width": 100
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Next  ",
+        "role": "muted",
+        "width": 6
+      },
+      {
+        "col": 8,
+        "text": "answer the outstanding request",
+        "role": "command",
+        "width": 30
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Question  ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "Approve the implementation plan?                                                                           ",
+        "role": "default",
+        "width": 107
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Request  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "outstanding",
+        "role": "warning",
+        "width": 11
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Changes target  ",
+        "role": "muted",
+        "width": 16
+      },
+      {
+        "col": 18,
+        "text": "implement",
+        "role": "path",
+        "width": 9
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Attempt  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "1",
+        "role": "default",
+        "width": 1
+      },
+      {
+        "col": 12,
+        "text": "  Duration  ",
+        "role": "muted",
+        "width": 12
+      },
+      {
+        "col": 24,
+        "text": "1m 0s                                                                                          ",
+        "role": "default",
+        "width": 95
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Blocker  ",
+        "role": "muted",
+        "width": 9
+      },
+      {
+        "col": 11,
+        "text": "approval (outstanding)",
+        "role": "warning",
+        "width": 22
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 2,
+        "text": "Evidence  ",
+        "role": "muted",
+        "width": 10
+      },
+      {
+        "col": 12,
+        "text": "1                                                                                                          ",
+        "role": "default",
+        "width": 107
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      },
+      {
+        "col": 119,
+        "text": "\u2502",
+        "role": "muted",
+        "width": 1
+      }
+    ],
+    [
+      {
+        "col": 0,
+        "text": "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+        "role": "muted",
+        "width": 120
+      }
+    ]
+  ]
+}

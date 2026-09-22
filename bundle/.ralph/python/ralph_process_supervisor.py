@@ -29,6 +29,13 @@ EXIT_LIMIT = 78
 EXIT_SURVIVORS = 79
 
 
+def _style(text: str, code: str) -> str:
+    """Apply terminal-only styling; JSON and captured output remain plain."""
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -99,10 +106,37 @@ def pid_identity(pid: int) -> str:
 
 
 def pid_matches(pid: int, identity: str) -> bool:
+    """Return True only when the PID is alive and its birth identity matches.
+
+    Never infers ownership from PID alone: a missing recorded identity or an
+    unreadable current identity is a non-match.
+    """
+    if pid <= 0 or not identity:
+        return False
     if not pid_alive(pid):
         return False
     current = pid_identity(pid)
-    return not identity or not current or current == identity
+    if not current:
+        return False
+    return current == identity
+
+
+def ownership_proof(pid: int, identity: str = "") -> dict[str, Any]:
+    """Serialize ownership evidence for audit / regression checks.
+
+    ``matches`` is True only when PID liveness and process-start identity both
+    prove the same owner. PID alone never yields a positive ownership claim.
+    """
+    recorded = str(identity or "")
+    current = pid_identity(pid) if pid > 0 else ""
+    alive = pid_alive(pid) if pid > 0 else False
+    return {
+        "pid": int(pid) if pid else 0,
+        "identity": recorded or None,
+        "current_identity": current or None,
+        "alive": alive,
+        "matches": bool(recorded) and pid_matches(pid, recorded),
+    }
 
 
 def process_table() -> dict[int, dict[str, Any]]:
@@ -316,8 +350,27 @@ def lease_key(plan_path: str) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _layout_version() -> str:
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return "1"
+    return "2"
+
+
+def processes_root(state_root: Path) -> Path:
+    """Layout-aware processes home (internal/processes under layout 2)."""
+    root = Path(state_root)
+    if _layout_version() == "1":
+        return root / "processes"
+    return root / "internal" / "processes"
+
+
+def processes_legacy_root(state_root: Path) -> Path:
+    return Path(state_root) / "processes"
+
+
 def lease_dir(state_root: Path) -> Path:
-    return state_root / "processes" / "leases"
+    return processes_root(state_root) / "leases"
 
 
 def release_run_leases(run_dir: Path) -> None:
@@ -325,13 +378,21 @@ def release_run_leases(run_dir: Path) -> None:
     state_root_raw = run.get("state_root")
     if not state_root_raw:
         return
-    for path in lease_dir(Path(str(state_root_raw))).glob("*.json"):
-        value = read_json(path)
-        if value and value.get("run_dir") == str(run_dir):
-            try:
-                path.unlink()
-            except OSError:
-                pass
+    state_root = Path(str(state_root_raw))
+    lease_roots = [lease_dir(state_root)]
+    legacy = processes_legacy_root(state_root) / "leases"
+    if legacy != lease_roots[0]:
+        lease_roots.append(legacy)
+    for leases in lease_roots:
+        if not leases.is_dir():
+            continue
+        for path in leases.glob("*.json"):
+            value = read_json(path)
+            if value and value.get("run_dir") == str(run_dir):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 def acquire_lease(state_root: Path, run_dir: Path, plan_path: str, owner_pid: int) -> Path:
@@ -398,7 +459,7 @@ def shell_exports(values: dict[str, Any]) -> str:
 
 def command_init(args: argparse.Namespace) -> int:
     state_root = Path(args.state_root).resolve()
-    active = state_root / "processes" / "active"
+    active = processes_root(state_root) / "active"
     active.mkdir(parents=True, exist_ok=True)
     run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{args.owner_pid}-{secrets.token_hex(4)}"
     run_dir = active / run_id
@@ -632,7 +693,12 @@ def command_run_scope(args: argparse.Namespace) -> int:
 def command_stop_active(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir)
     survivors: set[int] = set()
+    preserve_bg = str(args.reason or "").startswith("agent-teardown")
     for path in active_scope_paths(run_dir, args.owner_pid):
+        if preserve_bg:
+            scope = read_json(path) or {}
+            if str(scope.get("kind") or "") == "bg-job":
+                continue
         survivors.update(terminate_scope(path, args.reason, args.force))
     return EXIT_SURVIVORS if survivors else 0
 
@@ -645,10 +711,22 @@ def command_close(args: argparse.Namespace) -> int:
 
 def runs_for_state_root(state_root: Path) -> list[tuple[Path, dict[str, Any]]]:
     result = []
-    for path in sorted((state_root / "processes" / "active").glob("*/run.json")):
-        value = read_json(path)
-        if value and value.get("status") == "running":
-            result.append((path.parent, value))
+    seen: set[str] = set()
+    roots = [processes_root(state_root) / "active"]
+    legacy = processes_legacy_root(state_root) / "active"
+    if legacy != roots[0]:
+        roots.append(legacy)
+    for active in roots:
+        if not active.is_dir():
+            continue
+        for path in sorted(active.glob("*/run.json")):
+            key = str(path.resolve()) if path.exists() else str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            value = read_json(path)
+            if value and value.get("status") == "running":
+                result.append((path.parent, value))
     return result
 
 
@@ -671,9 +749,20 @@ def command_list(args: argparse.Namespace) -> int:
     elif not rows:
         print("No active Ralph process runs.")
     else:
-        print("RUN ID\tOWNER\tLIVE\tKIND\tPLAN")
+        print(_style("Active Ralph process runs", "1;33"))
         for row in rows:
-            print(f"{row['run_id']}\t{row['owner_pid']}\t{row['live_processes']}\t{row['kind']}\t{row['plan_path']}")
+            # Keep the default terminal view scannable. Full absolute paths
+            # remain available through --json rather than breaking the layout.
+            plan_name = Path(str(row["plan_path"] or "")).name or "(unknown plan)"
+            stop_command = f"ralph process stop --run {row['run_id']}"
+            print(f"\n  {_style(str(row['run_id']), '1;36')}")
+            print(f"    {_style(str(row['kind']), '36')}  {_style('·', '2')}  owner {row['owner_pid']}  {_style('·', '2')}  {row['live_processes']} live process(es)")
+            print(f"    {_style('plan:', '2')} {plan_name}")
+            print(f"    {_style('stop:', '2')} {_style(stop_command, '36')}")
+        print(f"\n{_style('Next steps', '1;33')}")
+        print(f"  {_style('View full records:', '2')} ralph process list --json")
+        print(f"  {_style('Stop every listed run:', '2')} ralph process stop --all")
+        print(f"  {_style('Force-stop a stuck run:', '2')} ralph process stop --run <run-id> --force")
     return 0
 
 

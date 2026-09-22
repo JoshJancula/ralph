@@ -119,8 +119,12 @@ EOF
 @test "non-interactive gate includes --model (PLAN_MODEL_CLI)" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
   grep -Fq 'PLAN_MODEL_CLI' "$RUN_PLAN_ARGS_FILE"
-  run grep -F 'Non-interactive mode requires a prebuilt agent' "$RUN_PLAN_CORE_FILE"
+  # The prebuilt-agent wording was removed with the profile surface; the gate
+  # now names the model inputs only.
+  run grep -F 'Non-interactive mode requires --model <id>' "$RUN_PLAN_CORE_FILE"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"--model <id>"* ]]
+  ! grep -Fq 'prebuilt agent' "$RUN_PLAN_CORE_FILE"
 }
 
 @test "--model requires a value" {
@@ -241,7 +245,7 @@ assert records[0]["runtime"] == "cursor", records
 PY
   [ "$status" -eq 0 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -292,7 +296,7 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] Verification: run npm test" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan accepts verified completion when evidence is present" {
@@ -341,7 +345,7 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] Verification: run npm test" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan accepts implementation completion without repo-delta gate" {
@@ -381,6 +385,7 @@ EOF
     export PATH="$2:$PATH"
     export RALPH_MODE=hybrid
     export RALPH_USAGE_RISKS_ACKNOWLEDGED=1
+    export RALPH_ALLOW_NESTED_RUNS=1
     export RALPH_PLAN_SESSION_HOME="$5"
     export CURSOR_PLAN_MAX_ITER=1
     export STUB_PLAN_PATH="$4"
@@ -390,7 +395,16 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fq -- "- [x] Implement the helper validation guardrails" "$plan_file"
 
-  rm -rf "$workspace"
+  local summary_file invocation_file
+  summary_file="$(find "$workspace/.ralph-workspace/logs" -name plan-usage-summary.json -print -quit)"
+  invocation_file="$(find "$workspace/.ralph-workspace/logs" -name invocation-usage.json -print -quit)"
+  [ -n "$summary_file" ]
+  [ -n "$invocation_file" ]
+  jq -e '.schema_version == 2 and .run_id != ""' "$summary_file"
+  jq -e '[.invocations[].run_id] | all(. != null)' "$invocation_file"
+  jq . "$summary_file" >/dev/null
+
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "artifact inputs fail fast when a required input file is missing" {
@@ -456,7 +470,7 @@ EOF
   [[ "$output" == *"Missing required input artifact(s) for TODO line 1:"* ]]
   [[ ! -f "$record" ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -525,7 +539,7 @@ EOF
   [[ -s "$record" ]]
   grep -Fq -- "AGENT_INVOCATION_COMPLETE" "$record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -594,7 +608,7 @@ EOF
   [ -s "$output_path" ]
   grep -Fq -- "AGENT_INVOCATION_COMPLETE" "$record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -672,7 +686,7 @@ EOF
   grep -Fq -- "- inputs/artifact-plan/inputs-stage/shared-input.txt" "$record"
   grep -Fq -- "Second TODO without inputs" "$record"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
   rm -f "$registry_file"
 }
 
@@ -741,7 +755,7 @@ assert record["todo_completed"] is False
 PY
   [ "$status" -eq 0 ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "generic CLI failure is not labeled a strict proxy violation" {
@@ -785,7 +799,7 @@ EOF
   [[ "$plan_output" == *"Runtime CLI failed; stopping plan run."* ]]
   [[ "$plan_output" == *"Exit code: 3"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "MCP transport death is classified in the failure report" {
@@ -829,7 +843,7 @@ EOF
   [[ "$plan_output" == *"Ralph MCP transport failed during the invocation"* ]]
   [[ "$plan_output" == *"No such tool available: mcp__ralph__ralph_proxy_shell"* ]]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan accepts manual ack for a final manual TODO" {
@@ -891,7 +905,7 @@ EOF
   grep -Fq -- "- [x] Ask the user to approve deployment" "$plan_file"
   [ ! -f "$ack_file" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan accepts manual TODO completion without autonomous-evidence gate" {
@@ -941,7 +955,7 @@ EOF
   grep -Fq -- "- [x] Ask the user to approve deployment" "$plan_file"
   [ ! -f "$session_home/PLAN/pending-human.txt" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "run-plan does not reopen completed manual TODOs for operator prompts" {
@@ -992,7 +1006,7 @@ EOF
   grep -Fq -- "- [x] Ask the user to approve deployment" "$plan_file"
   [ ! -f "$session_home/PLAN/pending-human.txt" ]
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "long-plan resume hint fires once per run" {
@@ -1072,7 +1086,7 @@ EOF
   [ "$hint_count" = "1" ]
   grep -Fq -- "- [x] complete third task" "$plan_file"
 
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }
 
 @test "bundle run-plan.sh is valid bash" {
@@ -1175,5 +1189,5 @@ EOF
   ' _ "$workspace" "$bin_dir" "$session_home" "$RUN_PLAN_SH"
 
   [ "$status" -eq 0 ]
-  rm -rf "$workspace"
+  ralph_test_rm_workspace "$workspace"
 }

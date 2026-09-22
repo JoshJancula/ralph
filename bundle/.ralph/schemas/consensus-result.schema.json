@@ -1,0 +1,92 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "nodeId",
+    "policy",
+    "decision",
+    "voters"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "nodeId": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "policy": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "changes-required",
+        "escalate"
+      ]
+    },
+    "voters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "voterId",
+          "runtime",
+          "status"
+        ],
+        "properties": {
+          "voterId": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "runtime": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "changes-required",
+              "error"
+            ]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "artifact": {
+            "type": "string"
+          },
+          "feedback": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agreement": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "dissent": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

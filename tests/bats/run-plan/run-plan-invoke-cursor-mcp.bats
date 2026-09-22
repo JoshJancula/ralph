@@ -124,7 +124,36 @@ run_cursor_with_resolver() {
     "$WORKSPACE" "$ISOLATED_HOME" "$TEST_TMPDIR"
 }
 
-@test "cursor ralph mode merges ambient user/project servers and ralph into project overlay" {
+# Exercise the MCP overlay prepare/cleanup pair in a subshell (the overlay
+# registers an EXIT-time cleanup, which must not run inside the bats process).
+# Dumps the overlaid project config and both recorded decision values.
+run_cursor_mcp_prepare_probe() {
+  local resolve_path="$1" agent_entries="$2" mode="$3" overlay_dump="$4" decision_out="$5"
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    source "$3"
+    export WORKSPACE="$4"
+    export RALPH_PROJECT_ROOT="$4"
+    export HOME="$5"
+    export RALPH_RUNTIME_MCP_HOME="$5"
+    export RALPH_MODE="$8"
+    if [[ -n "$6" ]]; then export RALPH_RUNTIME_MCP_RESOLVE_PATH="$6"; else unset RALPH_RUNTIME_MCP_RESOLVE_PATH; fi
+    if [[ -n "$7" ]]; then export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON="$7"; else unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON; fi
+    run_plan_invoke_cursor_mcp_config_prepare >/dev/null
+    cp "$4/.cursor/mcp.json" "$9"
+    printf "%s\n%s\n" "$CURSOR_PLAN_MCP_OVERLAY_DECISION" "${RUNTIME_OVERLAY_SUMMARY_MCP_OVERRIDE_DECISIONS:-}" >"${10}"
+    run_plan_invoke_cursor_mcp_config_cleanup
+  ' _ \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-overlay/runtime-overlay.sh" \
+    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh" \
+    "$WORKSPACE" "$ISOLATED_HOME" "$resolve_path" "$agent_entries" "$mode" \
+    "$overlay_dump" "$decision_out"
+}
+
+@test "cursor ralph mode layers ralph onto the project overlay and leaves user-level ambient to native discovery" {
   [ -x "$(command -v jq)" ] || skip "jq required"
   [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
 
@@ -148,12 +177,17 @@ run_cursor_with_resolver() {
   grep -Fxq -- "--approve-mcps" "$record"
   grep -q 'MCP_CONFIG:' "$mcp_capture"
   grep -q '"ralph"' "$mcp_capture"
-  grep -q '"user-server"' "$mcp_capture"
+  # Ambient-MCP boundary rule: the project-level ambient server and unrelated
+  # keys survive the merge, and the user-level ambient server is NOT reproduced
+  # into the project file -- cursor-agent loads ~/.cursor/mcp.json natively at
+  # the same time as the project file, so re-emitting it would only be a lossy
+  # reconstructed copy.
   grep -q '"project-server"' "$mcp_capture"
+  ! grep -q '"user-server"' "$mcp_capture"
   grep -q '"keep"[[:space:]]*:[[:space:]]*"keep-value"' "$mcp_capture"
 }
 
-@test "cursor hybrid mode keeps ambient servers and ralph proxy" {
+@test "cursor hybrid mode leaves ambient user servers to native discovery and layers ralph proxy" {
   [ -x "$(command -v jq)" ] || skip "jq required"
   [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
 
@@ -165,105 +199,72 @@ run_cursor_with_resolver() {
   run_cursor_with_resolver "hybrid" "$record" "$mcp_capture"
 
   [ "$status" -eq 0 ]
-  grep -q '"shared"' "$mcp_capture"
+  # The user-level ambient server stays visible through Cursor's own loading of
+  # ~/.cursor/mcp.json; the overlay only layers Ralph.
+  ! grep -q '"shared"' "$mcp_capture"
   grep -q '"ralph"' "$mcp_capture"
   grep -Fxq -- "--workspace" "$record"
   grep -Fxq -- "--approve-mcps" "$record"
 }
 
-@test "cursor agent portable MCP overrides ambient server collision" {
+@test "cursor ralph profile records the layered native decision in the overlay summary" {
   [ -x "$(command -v jq)" ] || skip "jq required"
-  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
 
-  printf '%s\n' '{"mcpServers":{"tools":{"command":"ambient-cmd"}}}' >"$WORKSPACE/.cursor/mcp.json"
+  printf '%s\n' '{"mcpServers":{"user-server":{"command":"user-cmd"}}}' >"$ISOLATED_HOME/.cursor/mcp.json"
+  printf '%s\n' '{"mcpServers":{"project-server":{"command":"project-cmd"}}}' >"$WORKSPACE/.cursor/mcp.json"
+  local original_bytes
+  original_bytes="$(cat "$WORKSPACE/.cursor/mcp.json")"
 
-  local record="$TEST_TMPDIR/cursor-collision.args"
-  local mcp_capture="$TEST_TMPDIR/cursor-collision.mcp"
-  write_cursor_stub "$record" "$mcp_capture"
+  # A reconstructed effective catalog is available, but with no agent-declared
+  # mcp_servers the Ralph profile must not use it.
+  local resolve_path="$TEST_TMPDIR/resolve.json"
+  jq -n '{"mcpServers":{"user-server":{"command":"user-cmd"},"project-server":{"command":"project-cmd"},"ralph":{"command":"true"}}}' >"$resolve_path"
+  local overlay_dump="$TEST_TMPDIR/layered-overlay.json"
 
-  run bash -c '
-    set -euo pipefail
-    export PATH="$1/bin:$PATH"
-    source "$2"
-    source "$3"
-    source "$4"
-    export RALPH_MODE=no
-    export WORKSPACE="$5"
-    export RALPH_PROJECT_ROOT="$5"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'[{"name":"tools","transport":"stdio","command":"agent-cmd"}]'"'"'
-    ralph_runtime_config_mcp_resolve cursor "$5" "test-agent" "$5"
-    export PROMPT=cursor-collision-prompt
-    export OUTPUT_LOG="$6/output.log"
-    export EXIT_CODE_FILE="$6/exit-code"
-    ralph_run_plan_invoke_cursor
-  ' _ "$TEST_TMPDIR" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh" \
-    "$WORKSPACE" "$TEST_TMPDIR"
+  run_cursor_mcp_prepare_probe \
+    "$resolve_path" "" "ralph" "$overlay_dump" "$TEST_TMPDIR/layered-decision"
 
   [ "$status" -eq 0 ]
-  grep -q 'agent-cmd' "$mcp_capture"
-  ! grep -q 'ambient-cmd' "$mcp_capture"
-  grep -Fxq -- "--workspace" "$record"
-  grep -Fxq -- "--approve-mcps" "$record"
+  [ "$(cat "$TEST_TMPDIR/layered-decision")" = "profile_ralph_layered_native_project_mcp_json
+profile_ralph_layered_native_project_mcp_json" ]
+  grep -q '"ralph"' "$overlay_dump"
+  grep -q '"project-server"' "$overlay_dump"
+  ! grep -q '"user-server"' "$overlay_dump"
+  # Byte-exact restoration of the project config after cleanup.
+  [ "$(cat "$WORKSPACE/.cursor/mcp.json")" = "$original_bytes" ]
 }
 
-@test "cursor agent string reference resolves ambient server by name" {
+@test "cursor ralph profile with agent overrides records the reconstructed-catalog limitation" {
   [ -x "$(command -v jq)" ] || skip "jq required"
-  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
 
-  printf '%s\n' '{"mcpServers":{"ambient-tool":{"command":"ambient-tool-cmd"}}}' >"$ISOLATED_HOME/.cursor/mcp.json"
+  printf '%s\n' '{"mcpServers":{"project-server":{"command":"project-cmd"}}}' >"$WORKSPACE/.cursor/mcp.json"
+  local original_bytes
+  original_bytes="$(cat "$WORKSPACE/.cursor/mcp.json")"
 
-  local record="$TEST_TMPDIR/cursor-ref.args"
-  local mcp_capture="$TEST_TMPDIR/cursor-ref.mcp"
-  write_cursor_stub "$record" "$mcp_capture"
+  # An agent-declared mcp_servers override must win over an ambient entry of the
+  # same name, and Cursor has no invocation-local mechanism for that, so the
+  # safest current merge (the reconstructed effective catalog) is retained and
+  # the limitation is recorded rather than left silent.
+  local resolve_path="$TEST_TMPDIR/resolve-agent.json"
+  jq -n '{"mcpServers":{"tools":{"command":"agent-cmd"},"user-server":{"command":"user-cmd"},"ralph":{"command":"true"}}}' >"$resolve_path"
+  local overlay_dump="$TEST_TMPDIR/agent-overlay.json"
 
-  run bash -c '
-    set -euo pipefail
-    export PATH="$1/bin:$PATH"
-    source "$2"
-    source "$3"
-    source "$4"
-    export RALPH_MODE=no
-    export WORKSPACE="$5"
-    export RALPH_PROJECT_ROOT="$5"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'["ambient-tool"]'"'"'
-    ralph_runtime_config_mcp_resolve cursor "$5" "test-agent" "$5"
-    export PROMPT=cursor-ref-prompt
-    export OUTPUT_LOG="$6/output.log"
-    export EXIT_CODE_FILE="$6/exit-code"
-    ralph_run_plan_invoke_cursor
-  ' _ "$TEST_TMPDIR" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh" \
-    "$WORKSPACE" "$TEST_TMPDIR"
+  run_cursor_mcp_prepare_probe \
+    "$resolve_path" '[{"name":"tools"}]' "ralph" "$overlay_dump" "$TEST_TMPDIR/agent-decision"
 
   [ "$status" -eq 0 ]
-  grep -q 'ambient-tool-cmd' "$mcp_capture"
+  [ "$(cat "$TEST_TMPDIR/agent-decision")" = "profile_ralph_agent_overrides_reconstructed_catalog
+profile_ralph_agent_overrides_reconstructed_catalog" ]
+  grep -q 'agent-cmd' "$overlay_dump"
+  grep -q '"user-server"' "$overlay_dump"
+  # Byte-exact restoration of the project config after cleanup.
+  [ "$(cat "$WORKSPACE/.cursor/mcp.json")" = "$original_bytes" ]
 }
 
-@test "cursor missing ambient MCP reference fails before CLI invoke" {
-  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
-
-  run bash -c '
-    source "$1"
-    source "$2"
-    export RALPH_MODE=no
-    export WORKSPACE="$3"
-    export RALPH_PROJECT_ROOT="$3"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'["missing-server"]'"'"'
-    ralph_runtime_config_mcp_resolve cursor "$3" "test-agent" "$3"
-  ' _ "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" \
-    "$WORKSPACE"
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"missing ambient MCP server"* ]]
-  [[ "$output" == *"missing-server"* ]]
-  [[ "$output" == *"Searched MCP config sources"* ]]
-}
+# Profile-declared MCP entries were removed: MCP composition is native
+# ambient configuration plus Ralph's protected server. See
+# tests/bats/runtime-config/runtime-config-mcp.bats for the replacement
+# coverage, including the rejection of the removed agent-entries env.
 
 @test "cursor invalid existing project mcp.json fails closed without modifying it" {
   [ -x "$(command -v jq)" ] || skip "jq required"
@@ -387,39 +388,109 @@ run_cursor_with_resolver() {
   [ "$(cat "$original_config")" = "$original_bytes" ]
 }
 
-@test "cursor agent-only overlay applies without ralph mode and adds approve-mcps" {
-  [ -x "$(command -v jq)" ] || skip "jq required"
-  [ -f "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" ] || skip "runtime-config-mcp.sh missing"
+@test "cursor session continuation tier probe selects hook matching evaluate" {
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  command -v setsid >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || skip "no isolation primitive"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-bg-tier-probe.sh"
 
-  local record="$TEST_TMPDIR/cursor-agent-only.args"
-  local mcp_capture="$TEST_TMPDIR/cursor-agent-only.mcp"
-  write_cursor_stub "$record" "$mcp_capture"
+  export RALPH_BG_JOBS=1
+  export RALPH_BG_TIER=auto
+  export RALPH_AGENT_WORKSPACE="$WORKSPACE"
+  export RALPH_PROJECT_ROOT="$WORKSPACE"
+  mkdir -p "$WORKSPACE/.cursor"
 
-  run bash -c '
-    set -euo pipefail
-    export PATH="$1/bin:$PATH"
-    source "$2"
-    source "$3"
-    source "$4"
-    export RALPH_MODE=no
-    export WORKSPACE="$5"
-    export RALPH_PROJECT_ROOT="$5"
-    export RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON='"'"'[{"name":"agent-srv","transport":"stdio","command":"agent-only-cmd"}]'"'"'
-    ralph_runtime_config_mcp_resolve cursor "$5" "test-agent" "$5"
-    export PROMPT=cursor-agent-only-prompt
-    export OUTPUT_LOG="$6/output.log"
-    export EXIT_CODE_FILE="$6/exit-code"
-    ralph_run_plan_invoke_cursor
-  ' _ "$TEST_TMPDIR" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/mcp/mcp-setup.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/runtime-config/runtime-config-mcp.sh" \
-    "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-invoke-cursor.sh" \
-    "$WORKSPACE" "$TEST_TMPDIR"
+  local probe expected
+  probe="$(ralph_bg_tier_probe_evaluate cursor)"
+  expected="$(jq -r '.tier' <<<"$probe")"
+  [ "$expected" = "hook" ]
+  [[ "$(jq -r '.reason' <<<"$probe")" == *"cursor-stop-hook"* ]]
 
+  # Call apply in-process (not under run/$(...)) so exports persist.
+  ralph_bg_tier_probe_apply cursor >/dev/null
+  [ "${RALPH_BG_TIER_SELECTED:-}" = "$expected" ]
+  [[ "${RALPH_BG_TIER_REASON:-}" == *"cursor-stop-hook"* ]]
+}
+
+@test "cursor tier1 continuation holds session and emits no resume argv" {
+  local record="$TEST_TMPDIR/cursor-tier1-held.args"
+  write_cursor_stub "$record"
+  export SESSION_ID_FILE="$TEST_TMPDIR/session-id.cursor.txt"
+  printf '%s\n' "held-cursor-session" >"$SESSION_ID_FILE"
+  export RALPH_BG_TIER_SELECTED=hook
+  export RALPH_USAGE_SESSION_CONTINUITY=held
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=0
+  unset RALPH_MODE
+  unset RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export PROMPT="cursor-tier1-held"
+
+  run ralph_run_plan_invoke_cursor
   [ "$status" -eq 0 ]
-  grep -q 'agent-only-cmd' "$mcp_capture"
-  # Ralph must not be added when ralph mode is off and only agent entries exist.
-  ! grep -q '"ralph"' "$mcp_capture"
-  grep -Fxq -- "--workspace" "$record"
-  grep -Fxq -- "--approve-mcps" "$record"
+  [ -s "$record" ]
+  ! grep -Fxq -- "--resume" "$record"
+  ! grep -Fxq -- "held-cursor-session" "$record"
+}
+
+@test "cursor tier2 continuation resumes exact session id while fresh todo-start omits resume" {
+  command -v jq >/dev/null 2>&1 || skip "jq required"
+  # shellcheck disable=SC1090
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  ralph_run_plan_log() { :; }
+
+  export RALPH_SESSION_DIR="$TEST_TMPDIR/session"
+  mkdir -p "$RALPH_SESSION_DIR"
+  export RUNTIME=cursor
+  export RALPH_PROCESS_RUN_ID=run-cursor-tier2
+  export RALPH_CURRENT_TODO_ORDINAL=1
+  export SESSION_ID_FILE="$RALPH_SESSION_DIR/session-id.cursor.txt"
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  export RALPH_PLAN_CLI_RESUME=0
+  export RALPH_PLAN_CAPTURE_USAGE=0
+  export RALPH_BG_TIER_SELECTED=invocation
+  unset RALPH_MODE
+
+  export RALPH_CURRENT_TODO_LINE=17
+  export RALPH_CURRENT_TODO_ID=cursor-tier2-start-todo
+  export RALPH_CURRENT_TODO_HASH=hash-cursor-tier2-start
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
+
+  local start_record="$TEST_TMPDIR/cursor-tier2-start.args"
+  write_cursor_stub "$start_record"
+  export PROMPT="cursor-tier2-start"
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  ! grep -Fxq -- "--resume" "$start_record"
+
+  export RALPH_CURRENT_TODO_LINE=18
+  export RALPH_CURRENT_TODO_ID=cursor-tier2-cont-todo
+  export RALPH_CURRENT_TODO_HASH=hash-cursor-tier2-cont
+  ralph_session_todo_create "exact-cursor-session" "exact" >/dev/null
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-continue" ]
+  [ "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" = "exact-cursor-session" ]
+
+  local cont_record="$TEST_TMPDIR/cursor-tier2-cont.args"
+  write_cursor_stub "$cont_record"
+  export PROMPT="cursor-tier2-continue"
+  run ralph_run_plan_invoke_cursor
+  [ "$status" -eq 0 ]
+  grep -Fxq -- "--resume" "$cont_record"
+  grep -Fxq -- "exact-cursor-session" "$cont_record"
+
+  # Cross-TODO / deliberate rework under fresh strategy starts without resume.
+  export RALPH_CURRENT_TODO_ID=cursor-tier2-rework
+  export RALPH_CURRENT_TODO_HASH=hash-cursor-tier2-rework
+  export RALPH_CURRENT_TODO_LINE=19
+  export RALPH_PLAN_CLI_RESUME=0
+  unset RALPH_PLAN_INVOCATION_REASON RALPH_RUN_PLAN_RESUME_SESSION_ID RALPH_RUN_PLAN_NEW_SESSION_ID RALPH_RUN_PLAN_RESUME_BARE
+  export RALPH_PLAN_SESSION_STRATEGY=fresh
+  ralph_session_todo_prepare_invocation
+  [ "${RALPH_PLAN_INVOCATION_REASON:-}" = "todo-start" ]
+  [ -z "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]
 }

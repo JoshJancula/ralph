@@ -11,7 +11,7 @@ Each Ralph agent is described by a canonical markdown file with frontmatter plus
 
 | File | Read by | Fields that matter |
 |------|---------|-------------------|
-| `agents/agents/<agent-id>.md` or `bundle/.ralph/agents/<agent-id>.md` | `scripts/sync-runtime-assets.sh` | YAML frontmatter (`description`, `models`, `rules`, `skills`, `output_artifacts`) + instruction body |
+| `bundle/.ralph/agents/<agent-id>.md` | `scripts/sync-runtime-assets.sh` | YAML frontmatter (`description`, `models`, `rules`, `skills`, `output_artifacts`) + instruction body |
 | `<runtime>/agents/<agent-id>/config.json` | Orchestrator, `agent-config-tool.sh` | Generated runtime metadata derived from the canonical frontmatter |
 | `<runtime>/agents/<agent-id>/<agent-id>.md` or `.toml` | Cursor / Claude / Codex / OpenCode / Antigravity native session | Generated native session file derived from the canonical frontmatter + instruction body |
 

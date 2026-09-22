@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "category": "buried-actionable-status",
+  "summary": "The shared per-node plan-output log for implement-cli-bootstrap accumulates output across multiple historical attempts (it is keyed by plan_key, not by run id or attempt id), so the final actionable status line (TODO_COMPLETION / TODO_VERIFICATION) from the most recent attempt sits after roughly a thousand lines of interleaved tool-call records, edits, and compacted-result pointers from earlier, unrelated attempts.",
+  "affectedAttempts": [
+    "implement-cli-bootstrap (all attempts sharing plan-runner-ralph-plugin-beta-graph-18-implement-cli-bootstrap.plan-output.log)"
+  ],
+  "sourceLog": ".ralph-workspace/logs/ralph-plugin-beta-graph/nodes/implement-cli-bootstrap/plan-runner-ralph-plugin-beta-graph-18-implement-cli-bootstrap.plan-output.log",
+  "logLineCount": 1007,
+  "actionableStatusLineNumber": "near end of file (line ~992), preceded by an unrelated 'Orchestrator stopped: step 1 failed (exit 4)' block from an earlier attempt near the top of the same file",
+  "operatorImpact": "An operator who tails or greps the top of this log first sees a failed-attempt banner from a different run and may reasonably conclude the node is still broken, without scrolling to the end to find the later attempt's TODO_COMPLETION/TODO_VERIFICATION lines. Because the log is shared and append/overwrite semantics are not run-scoped, the most actionable line is not the most visible one."
+}

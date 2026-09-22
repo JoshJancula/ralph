@@ -13,6 +13,7 @@ import {
   untracked,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { RouterLink, RouterLinkActive } from '@angular/router';
 import { IonIcon } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import {
@@ -22,8 +23,12 @@ import {
   documentTextOutline,
   folderOpenOutline,
   folderOutline,
+  homeOutline,
   layersOutline,
   listOutline,
+  playCircleOutline,
+  shieldOutline,
+  statsChartOutline,
   terminalOutline,
   timeOutline,
 } from 'ionicons/icons';
@@ -33,25 +38,29 @@ import { NavService } from '../../services/nav.service';
 import { WorkspaceSelectorService } from '../../services/workspace-selector.service';
 import { SidebarTreeComponent } from '../sidebar-tree/sidebar-tree.component';
 
-const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'plans', 'artifacts', 'sessions'];
+const ROOT_ORDER = ['docs', 'logs', 'orchestration-plans', 'graph-runs', 'plans', 'artifacts', 'sessions'];
 
 const SECTION_HOST_SEP = '\x1e';
 
 const ROOT_SECTION_KEYS: readonly string[] = ROOT_ORDER;
+const RALPH_DOCS_LABEL = 'Ralph docs';
 
 @Component({
   selector: 'app-workspace-sidebar',
   standalone: true,
-  imports: [IonIcon, SidebarTreeComponent],
+  imports: [IonIcon, RouterLink, RouterLinkActive, SidebarTreeComponent],
   templateUrl: './workspace-sidebar.component.html',
   styleUrls: ['./workspace-sidebar.component.scss'],
 })
 export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
   private readonly api = inject(ApiService);
-  private readonly nav = inject(NavService);
+  protected readonly nav = inject(NavService);
   private readonly workspaceSelector = inject(WorkspaceSelectorService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly hostVisibilityVersion = signal(0);
+
+  /** Deliberately parked while Plans, Runs, and Workflows become the primary information architecture. */
+  readonly workspaceExplorerEnabled = false;
 
   roots = signal<Root[]>([]);
   primaryProjectRoot = signal<string | null>(null);
@@ -71,12 +80,27 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
   sectionHosts!: QueryList<ElementRef<HTMLElement>>;
 
   readonly useProjectLayout = computed(() => this.workspaceSelector.workspaces().length >= 1);
+  readonly showBrowseSection = computed(
+    () => this.workspaceExplorerEnabled && this.nav.activeSection() === 'browse',
+  );
+  /**
+   * True only before the first workspaces response lands. Gates the
+   * template so it never renders the legacy single-workspace root list as
+   * a false "zero workspaces" reading while the real (usually nonempty)
+   * list is still in flight — that render-then-replace was the sidebar's
+   * "jumpy" full-layout swap on a fresh load.
+   */
+  readonly workspacesLoading = computed(() => !this.workspaceSelector.hasLoadedOnce());
 
   readonly sortedWorkspaces = computed(() => {
     const selected = this.workspaceSelector.selectedWorkspacePath();
     const workspaces = this.workspaceSelector.workspaces().filter((ws) => ws.exists);
     const scoped = selected ? workspaces.filter((ws) => ws.path === selected) : workspaces;
-    return [...scoped].sort((a, b) => a.projectRoot.localeCompare(b.projectRoot));
+    return [...scoped].sort((a, b) => {
+      if (a.label === RALPH_DOCS_LABEL) return -1;
+      if (b.label === RALPH_DOCS_LABEL) return 1;
+      return a.projectRoot.localeCompare(b.projectRoot);
+    });
   });
 
   readonly rootSectionKeys = ROOT_SECTION_KEYS;
@@ -93,8 +117,12 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
       documentTextOutline,
       folderOpenOutline,
       folderOutline,
+      homeOutline,
       layersOutline,
       listOutline,
+      playCircleOutline,
+      shieldOutline,
+      statsChartOutline,
       terminalOutline,
       timeOutline,
     });
@@ -179,6 +207,8 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
       case 'logs':
         return 'terminal-outline';
       case 'orchestration-plans':
+        return 'layers-outline';
+      case 'graph-runs':
         return 'layers-outline';
       case 'plans':
         return 'list-outline';
@@ -429,5 +459,13 @@ export class WorkspaceSidebarComponent implements OnInit, AfterViewInit {
       return next;
     });
     this.nav.navigate(root.key);
+  }
+
+  toggleBrowseSection(): void {
+    if (this.nav.activeSection() === 'browse') {
+      this.nav.navigate('plans');
+    } else {
+      this.nav.navigate('docs');
+    }
   }
 }

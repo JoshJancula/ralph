@@ -20,9 +20,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reportsDirectory: 'coverage/vitest',
+      reporter: ['text', 'html', 'clover', 'json', 'json-summary'],
       include: ['src/app/**/*.ts'],
       exclude: [
         'src/app/**/*.spec.ts',
+        'src/app/**/*.test.ts',
+        'src/app/**/*.types.ts',
         'src/main.ts',
         'src/main.server.ts',
         'src/app/app.config.ts',

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "run": {"runId":"fixture-dep-cancelled","workflowId":"feature-delivery","mode":"dependency","entryKind":"task","task":"Ship the feature","taskProvenance":"explicit","sourcePath":"/fixtures/feature-delivery.workflow.md","sourceKind":"project","state":"cancelled","inputPath":"/fixtures/input.plan.md","inputPlan":null,"createdAt":"2026-08-27T04:00:00Z","updatedAt":"2026-08-27T04:01:00Z"},
+  "stages": [{"id":"implement","state":"cancelled","stageKind":"executable","attempt":1,"terminalResult":"cancelled","completedTodos":1,"totalTodos":3,"artifacts":[],"blocker":null,"createdAt":"2026-08-27T04:00:00Z","updatedAt":"2026-08-27T04:01:00Z"}],
+  "diagnosis": {"state":"cancelled","reasonCode":"cancelled","summary":"the run was cancelled by the operator","stageId":null,"requestKind":null,"requestId":null,"evidence":[],"retryable":false,"nextAction":null},
+  "nextAction": null
+}

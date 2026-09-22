@@ -329,7 +329,7 @@ setup() {
     ralph_root="$2"
     source "$ralph_root/bash-lib/run-plan/run-plan-runtime.sh"
     source "$ralph_root/bash-lib/run-plan/run-plan-args.sh"
-    ralph_menu_select() { printf "%s" "hybrid"; }
+    ralph_menu_select() { printf "%s" "yes"; }
     ralph_run_plan_parse_args --runtime cursor --plan "$plan"
     if [[ -z "${RALPH_MODE:-}" ]]; then
       prompt_ralph_mode
@@ -677,7 +677,7 @@ setup() {
   [[ "$output" == *"skipped_interactive"* ]]
 }
 
-@test "prompt_ralph_mode sets hybrid mode interactively" {
+@test "prompt_ralph_mode sets hybrid mode when yes is selected" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
   run bash -c '
@@ -685,7 +685,7 @@ setup() {
     unset RALPH_MODE
     C_Y="" C_DIM="" C_RST=""
     source "$1/bash-lib/run-plan/run-plan-runtime.sh"
-    ralph_menu_select() { printf "%s" "hybrid"; }
+    ralph_menu_select() { printf "%s" "yes"; }
     prompt_ralph_mode
     printf "%s" "${RALPH_MODE:-unset}"
   ' _ "$(dirname "$RUN_PLAN_SH")"
@@ -704,14 +704,12 @@ setup() {
     source "$1/bash-lib/run-plan/run-plan-runtime.sh"
     ralph_menu_select() {
       [[ "$1" == "--prompt" ]]
-      [[ "$2" == "Ralph mode" ]]
+      [[ "$2" == "Enable Ralph tooling" ]]
       [[ "$3" == "--default" ]]
       [[ "$4" == "1" ]]
       shift 5
       [[ "$1" == "no" ]]
-      [[ "$2" == "native" ]]
-      [[ "$3" == "ralph" ]]
-      [[ "$4" == "hybrid" ]]
+      [[ "$2" == "yes" ]]
       printf "%s" "no"
     }
     prompt_ralph_mode
@@ -720,23 +718,6 @@ setup() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"no"* ]]
-}
-
-@test "prompt_ralph_mode sets ralph mode interactively" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  run bash -c '
-    export RALPH_MODE_PROMPT_ASSUME_TTY=1
-    unset RALPH_MODE
-    C_Y="" C_DIM="" C_RST=""
-    source "$1/bash-lib/run-plan/run-plan-runtime.sh"
-    ralph_menu_select() { printf "%s" "ralph"; }
-    prompt_ralph_mode
-    printf "%s" "${RALPH_MODE:-unset}"
-  ' _ "$(dirname "$RUN_PLAN_SH")"
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ralph"* ]]
 }
 
 @test "run-plan --session-strategy compact parses correctly" {
@@ -774,6 +755,47 @@ setup() {
 
   [ "$status" -eq 0 ]
   [ "$output" = "compact" ]
+
+  rm -f "$plan_file"
+}
+
+@test "run-plan --resume-run last parses into RALPH_PLAN_RESUME_RUN" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  printf '%s\n' "- [ ] pending task" >"$plan_file"
+
+  run bash -c '
+    set -euo pipefail
+    WORKSPACE="$(pwd)"
+    export WORKSPACE
+    PREBUILT_AGENT=""
+    PLAN_MODEL_CLI=""
+    INTERACTIVE_SELECT_AGENT_FLAG=0
+    NON_INTERACTIVE_FLAG=1
+    SKIP_MCP_PREFLIGHT_FLAG=1
+    CLI_RESUME_FLAG=0
+    NO_CLI_RESUME_FLAG=0
+    ALLOW_UNSAFE_RESUME_FLAG=0
+    RESUME_SESSION_ID_OVERRIDE=""
+    RESUME_RUN_FLAG=""
+    SESSION_STRATEGY_FLAG=""
+    RUNTIME="cursor"
+    RALPH_PLAN_TODO_MAX_ITERATIONS=""
+    CLAUDE_TOOLS_FROM_AGENT=""
+    unset RALPH_PLAN_SESSION_STRATEGY RALPH_PLAN_CLI_RESUME RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS
+    _RALPH_CLI_RESUME_ENV_WAS_SET=0
+    plan="$1"
+    ralph_root="$2"
+    source "$ralph_root/bash-lib/run-plan/run-plan-session.sh"
+    source "$ralph_root/bash-lib/run-plan/run-plan-args.sh"
+    ralph_run_plan_parse_args --runtime cursor --plan "$plan" --resume-run last --non-interactive
+    printf "%s %s" "${RALPH_PLAN_RESUME_RUN:-}" "${RALPH_PLAN_SESSION_STRATEGY:-}"
+  ' _ "$plan_file" "$(dirname "$RUN_PLAN_SH")"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "last fresh" ]
 
   rm -f "$plan_file"
 }
@@ -890,7 +912,7 @@ setup() {
   [[ "$output" == *"ralph_bash=unset"* ]]
 }
 
-@test "ralph_apply_mode_compaction_defaults enables RALPH_NATIVE_RESULT_COMPACT for native and hybrid modes" {
+@test "ralph_apply_mode_compaction_defaults leaves native exploration compaction opt-in" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
   run bash -c '
@@ -904,8 +926,8 @@ setup() {
   ' _ "$(dirname "$RUN_PLAN_SH")"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"native_result=1"* ]]
-  [[ "$output" == *"hybrid_result=1"* ]]
+  [[ "$output" == *"native_result=unset"* ]]
+  [[ "$output" == *"hybrid_result=unset"* ]]
 }
 
 @test "ralph_apply_mode_transcript_eviction_defaults enables safe eviction for ralph and hybrid modes" {

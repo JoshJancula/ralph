@@ -339,10 +339,6 @@ ralph_mcp_proxy_build_rerun_cmd() {
   local proxy_mode="${4:-legacy}"
   local non_interactive="${5:-0}"
   local plan_model="${6:-}"
-  local prebuilt_agent="${7:-}"
-  local proxy_policy="${8:-}"
-  local proxy_policy_file="${9:-}"
-  local proxy_policy_inline="${10:-}"
 
   local cmd=".ralph/run-plan.sh --runtime $(printf '%q' "$runtime") --plan $(printf '%q' "$plan_path") --workspace $(printf '%q' "$workspace")"
 
@@ -360,8 +356,6 @@ ralph_mcp_proxy_build_rerun_cmd() {
   fi
   if [[ -n "$plan_model" ]]; then
     cmd+=" --model $(printf '%q' "$plan_model")"
-  elif [[ -n "$prebuilt_agent" ]]; then
-    cmd+=" --agent $(printf '%q' "$prebuilt_agent")"
   fi
 
   printf '%s\n' "$cmd"
@@ -375,14 +369,10 @@ ralph_mcp_proxy_print_remediation() {
   local detail="${5:-}"
   local non_interactive="${6:-0}"
   local plan_model="${7:-}"
-  local prebuilt_agent="${8:-}"
-  local proxy_policy="${9:-}"
-  local proxy_policy_file="${10:-}"
-  local proxy_policy_inline="${11:-}"
   local retry_cmd disable_cmd
 
-  retry_cmd="$(ralph_mcp_proxy_build_rerun_cmd "$runtime" "$plan_path" "$workspace" proxy "$non_interactive" "$plan_model" "$prebuilt_agent" "$proxy_policy" "$proxy_policy_file" "$proxy_policy_inline")"
-  disable_cmd="$(ralph_mcp_proxy_build_rerun_cmd "$runtime" "$plan_path" "$workspace" legacy "$non_interactive" "$plan_model" "$prebuilt_agent" "" "" "")"
+  retry_cmd="$(ralph_mcp_proxy_build_rerun_cmd "$runtime" "$plan_path" "$workspace" proxy "$non_interactive" "$plan_model")"
+  disable_cmd="$(ralph_mcp_proxy_build_rerun_cmd "$runtime" "$plan_path" "$workspace" legacy "$non_interactive" "$plan_model")"
 
   echo "Ralph MCP tools preflight failed before model execution." >&2
   echo "  Runtime: ${runtime:-unknown}" >&2

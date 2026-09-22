@@ -1,0 +1,51 @@
+{
+  "publishMode": "on-verified",
+  "stages": [
+    {
+      "id": "characterize",
+      "dependsOn": []
+    },
+    {
+      "id": "implement",
+      "dependsOn": [
+        "plan-implementation"
+      ]
+    },
+    {
+      "id": "integrate",
+      "dependsOn": [
+        "review-approved"
+      ]
+    },
+    {
+      "id": "plan-implementation",
+      "dependsOn": [
+        "characterize"
+      ]
+    },
+    {
+      "id": "plan-qa",
+      "dependsOn": [
+        "integrate"
+      ]
+    },
+    {
+      "id": "qa",
+      "dependsOn": [
+        "plan-qa"
+      ]
+    },
+    {
+      "id": "qa-gate",
+      "dependsOn": [
+        "qa"
+      ]
+    },
+    {
+      "id": "review",
+      "dependsOn": [
+        "implement"
+      ]
+    }
+  ]
+}

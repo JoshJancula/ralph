@@ -80,6 +80,7 @@ ralph_hook_telemetry_compact_record_json() {
   local exit_code="${8:-0}"
   local plan_key_fallback="${9:-}" plan_key_fallback_reason="${10:-}"
   local delivered_bytes="${11:-}" delivered_tokens="${12:-}"
+  local duration_ms="${13:-}" fingerprint="${14:-}"
 
   local original_combined compact_stdout compact_stderr compact_combined
   local original_bytes compacted_bytes command_hash compaction_skipped family
@@ -116,6 +117,8 @@ ralph_hook_telemetry_compact_record_json() {
     --arg planKeyFallbackReason "$plan_key_fallback_reason" \
     --arg deliveredBytes "$delivered_bytes" \
     --arg deliveredTokens "$delivered_tokens" \
+    --arg durationMs "$duration_ms" \
+    --arg fingerprint "$fingerprint" \
     '
     def is_nat($v): ($v != "") and ($v | test("^[0-9]+$"));
     {
@@ -138,7 +141,9 @@ ralph_hook_telemetry_compact_record_json() {
        else {} end)
     + (if is_nat($deliveredBytes) or is_nat($deliveredTokens) then {measurementVersion: 2} else {} end)
     + (if is_nat($deliveredBytes) then {deliveredBytes: ($deliveredBytes | tonumber)} else {} end)
-    + (if is_nat($deliveredTokens) then {deliveredTokens: ($deliveredTokens | tonumber)} else {} end)'
+    + (if is_nat($deliveredTokens) then {deliveredTokens: ($deliveredTokens | tonumber)} else {} end)
+    + (if is_nat($durationMs) then {durationMs: ($durationMs | tonumber)} else {} end)
+    + (if $fingerprint != "" then {fingerprint: $fingerprint} else {} end)'
 }
 
 # Build one JSON object for bash command rewrite telemetry.
@@ -187,6 +192,7 @@ ralph_hook_telemetry_append_compact_log() {
   local exit_code="${8:-0}" log_path="${9:-}"
   local plan_key_fallback="${10:-}" plan_key_fallback_reason="${11:-}"
   local delivered_bytes="${12:-}" delivered_tokens="${13:-}"
+  local duration_ms="${14:-}" fingerprint="${15:-}"
   local line
 
   ralph_hook_telemetry_enabled || return 0
@@ -207,7 +213,9 @@ ralph_hook_telemetry_append_compact_log() {
     "$plan_key_fallback" \
     "$plan_key_fallback_reason" \
     "$delivered_bytes" \
-    "$delivered_tokens")"
+    "$delivered_tokens" \
+    "$duration_ms" \
+    "$fingerprint")"
   ralph_hook_telemetry_append_jsonl "$log_path" "$line"
 }
 

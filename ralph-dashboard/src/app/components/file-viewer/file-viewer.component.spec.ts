@@ -1,7 +1,7 @@
 import '../../../angular-test-env';
 import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { ApiService, FileChunk, MetricsSummary } from '../../services/api.service';
+import { ApiService, FileChunk } from '../../services/api.service';
 import { FileViewerComponent } from './file-viewer.component';
 import { markdownToHtml } from '../../utils/markdown-to-html';
 import { NavService } from '../../services/nav.service';
@@ -21,23 +21,6 @@ describe('FileViewerComponent', () => {
     await TestBed.configureTestingModule({
       imports: [FileViewerComponent, HttpClientTestingModule, RouterTestingModule.withRoutes([])],
     }).compileComponents();
-    const api = TestBed.inject(ApiService);
-    const emptySummary: MetricsSummary = {
-      overall: {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        max_turn_total_tokens: 0,
-        cache_hit_ratio: 0,
-        elapsed_seconds: 0,
-        count: 0,
-      },
-      plans: [],
-      orchestrations: [],
-      projects: [],
-    };
-    vi.spyOn(api, 'fetchMetricsSummary').mockReturnValue(of(emptySummary));
     httpMock = TestBed.inject(HttpTestingController);
   });
 
@@ -157,6 +140,146 @@ describe('FileViewerComponent', () => {
 
     const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
     expect(pre?.textContent).toBe(JSON.stringify(JSON.parse(raw), null, 2));
+  });
+
+  it('plan-usage-summary role uses the handwritten summary view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      plan_key: 'PLAN',
+      status: 'succeeded',
+      runtime: 'cursor',
+      model: 'composer',
+      todos_done: 2,
+      todos_total: 4,
+      input_tokens: 11,
+      output_tokens: 7,
+      elapsed_seconds: 9,
+    });
+    fixture.componentInstance.filePath = 'PLAN/plan-usage-summary.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/plan-usage-summary.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-plan-usage-summary"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('Plan usage summary');
+    expect(view.textContent).toContain('cursor');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('discover-report role uses the handwritten discover view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      kind: 'discover',
+      plan_key: 'PLAN',
+      generated_at: '2026-01-01T00:00:00Z',
+      sequence_patterns: [{ pattern_id: 'a' }],
+      aggregate_findings: [],
+    });
+    fixture.componentInstance.filePath = 'PLAN/discover-report.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/discover-report.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-discover-report"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('Discover report');
+    expect(view.textContent).toContain('Sequence patterns');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('run-manifest role uses the handwritten manifest view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      run_id: 'run-1',
+      plan_key: 'PLAN',
+      status: 'succeeded',
+      runtime: 'cursor',
+      model: 'composer',
+      started_at: '2026-01-01T00:00:00Z',
+      ended_at: '2026-01-01T00:01:00Z',
+    });
+    fixture.componentInstance.filePath = 'PLAN/runs/run-1/run-manifest.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runs/run-1/run-manifest.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-run-manifest"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('run-1');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('overlay-summary role uses the handwritten overlay view', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = JSON.stringify({
+      runtime_overlay_mode: 'hybrid',
+      native_hooks_effective: true,
+      mcp_effective: true,
+      compaction_saved_bytes: 80,
+      hook_compactions: 2,
+    });
+    fixture.componentInstance.filePath = 'PLAN/runtime-overlay-summary-1-cursor-1.json';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runtime-overlay-summary-1-cursor-1.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const view = fixture.nativeElement.querySelector('[data-testid="role-view-overlay-summary"]');
+    expect(view).toBeTruthy();
+    expect(view.textContent).toContain('hybrid');
+    expect(fixture.nativeElement.querySelector('.json-content')).toBeNull();
+  });
+
+  it('unknown json role falls back to pretty-printed <pre>', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = '{"z":1,"a":2}';
+    fixture.componentInstance.filePath = 'PLAN2/config.json';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('plans', 'PLAN2/config.json', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[data-testid^="role-view-"]')).toBeNull();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toBe(JSON.stringify(JSON.parse(raw), null, 2));
+  });
+
+  it('formats overlay-timeline.jsonl without throwing', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '{"iteration":1,"runtime":"cursor","compaction_saved_bytes":12,"hook_compactions":1,"bg_tier":"1"}',
+      '{"iteration":2,"runtime":"codex","compaction_saved_bytes":0,"hook_compactions":0}',
+    ].join('\n');
+    fixture.componentInstance.filePath = 'PLAN/runs/run-1/overlay-timeline.jsonl';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/runs/run-1/overlay-timeline.jsonl', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toContain('overlay iter 1');
+    expect(pre?.textContent).toContain('saved_bytes=12');
+  });
+
+  it('formats tool-catalog-telemetry.jsonl without throwing', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    const raw = [
+      '{"timestamp":"2026-01-01T00:00:00Z","event":"tool_search_search","toolName":"ralph_proxy_grep","rank":1,"outcome":"hit","queryHash":"abc","toolsListCount":3,"schemaBytes":12,"argumentShape":{}}',
+    ].join('\n');
+    fixture.componentInstance.filePath = 'PLAN/tool-catalog-telemetry.jsonl';
+    fixture.componentInstance.root = 'logs';
+    fixture.detectChanges();
+    flushWorkspaceAndFile('logs', 'PLAN/tool-catalog-telemetry.jsonl', raw);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector('.json-content');
+    expect(pre?.textContent).toContain('tool search search');
+    expect(pre?.textContent).toContain('tool=ralph_proxy_grep');
+    expect(pre?.textContent).toContain('outcome=hit');
   });
 
   it('.ndjson file: structured stream events are rendered as readable lines', async () => {
@@ -290,12 +413,79 @@ describe('FileViewerComponent', () => {
     const wsReq = expectWorkspaceRequest();
     wsReq.flush({ root: '/test' });
     const req = expectFileRequest('plans', 'PLAN2/missing.md');
-    req.flush('fail', { status: 500, statusText: 'Internal Server Error' });
+    req.flush(
+      {
+        code: 'NOT_FOUND',
+        message: 'File not found',
+        title: 'Plan Not Found',
+        explanation: 'The plan was not found.',
+        recoverable: true,
+        suggestedActions: ['REFRESH_INDEX', 'RETURN_TO_PLANS'],
+      },
+      { status: 404, statusText: 'Not Found' }
+    );
     await fixture.whenStable();
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('.error-message')?.textContent?.trim()).toBe('Failed to load file');
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+    expect(fixture.componentInstance.error()?.title).toBe('Plan Not Found');
+    expect(errorPanel?.textContent).toContain('File not found');
+    expect(errorPanel?.textContent).toContain('The plan was not found.');
+  });
+
+  it('displays structured error with recovery actions', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/missing.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    const req = expectFileRequest('plans', 'PLAN2/missing.md');
+    req.flush(
+      {
+        code: 'NOT_FOUND',
+        message: 'File not found',
+        requestedPath: 'PLAN2/missing.md',
+        title: 'File Not Found',
+        explanation: 'The file could not be found.',
+        recoverable: true,
+        suggestedActions: ['REFRESH_INDEX', 'RETURN_TO_PLANS'],
+      },
+      { status: 404, statusText: 'Not Found' }
+    );
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+
+    const buttons = errorPanel?.querySelectorAll('ion-button');
+    expect(buttons?.length).toBeGreaterThan(0);
+    const buttonTexts = Array.from(buttons || []).map(b => b.textContent?.trim()).join(',');
+    expect(buttonTexts).toContain('Refresh Index');
+  });
+
+  it('handles non-structured error responses gracefully', async () => {
+    const fixture = TestBed.createComponent(FileViewerComponent);
+    fixture.componentInstance.filePath = 'PLAN2/missing.md';
+    fixture.componentInstance.root = 'plans';
+    fixture.detectChanges();
+
+    const wsReq = expectWorkspaceRequest();
+    wsReq.flush({ root: '/test' });
+    const req = expectFileRequest('plans', 'PLAN2/missing.md');
+    req.error(new ProgressEvent('error'));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const errorPanel = el.querySelector('.error-panel');
+    expect(errorPanel).toBeTruthy();
+    expect(fixture.componentInstance.error()).toBeTruthy();
   });
 
   it('toggle button switches between rendered and source for .md files', async () => {

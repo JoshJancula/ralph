@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "case": "undeclared-changed-leaf",
+  "description": "A real changed leaf falls outside every declared writeScope glob; it must be reported as an out-of-scope violation.",
+  "fixture": {
+    "namespace": "sample-graph",
+    "nodeId": "node-fixture-scope-violation",
+    "writeScopes": ["src/feature/**"],
+    "changedPaths": ["src/other/leaked-file.txt"],
+    "outOfScope": ["src/other/leaked-file.txt"]
+  }
+}

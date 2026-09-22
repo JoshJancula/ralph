@@ -1,22 +1,52 @@
 import { Component, computed, inject } from '@angular/core';
 import { Routes } from '@angular/router';
 import { FileViewerComponent } from './components/file-viewer/file-viewer.component';
+import { GraphHubComponent } from './components/graph-hub/graph-hub.component';
+import { HomeHubComponent } from './components/home-hub/home-hub.component';
 import { LogViewerComponent } from './components/log-viewer/log-viewer.component';
 import { PlanHubComponent } from './components/plan-hub/plan-hub.component';
+import { RunsHubComponent } from './components/runs-hub/runs-hub.component';
 import { UsageHubComponent } from './components/usage-hub/usage-hub.component';
+import { DocsHubComponent } from './components/docs-hub/docs-hub.component';
+import { PlanLogsComponent } from './components/plan-logs/plan-logs.component';
+import { WorkflowStageLogsPageComponent } from './workflows/workflow-stage-logs.page';
+import { RuntimeStatusComponent } from './components/runtime-status/runtime-status.component';
 import { NavService } from './services/nav.service';
+import { workflowEditCanDeactivate } from './workflows/workflow-edit.guard';
 
 @Component({
   selector: 'app-workspace-view',
   standalone: true,
-  imports: [FileViewerComponent, LogViewerComponent, PlanHubComponent, UsageHubComponent],
+  imports: [FileViewerComponent, GraphHubComponent, HomeHubComponent, LogViewerComponent, PlanHubComponent, RunsHubComponent, UsageHubComponent],
   template: `
+    <div class="inventory-panes">
+      <section class="workspace-pane" [hidden]="viewKind() !== 'home'">
+        <ralph-home-hub [paneActive]="viewKind() === 'home'"></ralph-home-hub>
+      </section>
+      <section class="workspace-pane" [hidden]="viewKind() !== 'plan'">
+        <ralph-plan-hub [paneActive]="viewKind() === 'plan'"></ralph-plan-hub>
+      </section>
+      <section class="workspace-pane" [hidden]="viewKind() !== 'runs'">
+        <ralph-runs-hub [paneActive]="viewKind() === 'runs'"></ralph-runs-hub>
+      </section>
+      <section class="workspace-pane" [hidden]="viewKind() !== 'usage'">
+        <ralph-usage-hub [paneActive]="viewKind() === 'usage'"></ralph-usage-hub>
+      </section>
+      <section class="workspace-pane" [hidden]="viewKind() !== 'graph-runs'">
+        <ralph-graph-hub [paneActive]="viewKind() === 'graph-runs'"></ralph-graph-hub>
+      </section>
+    </div>
+
     @switch (viewKind()) {
+      @case ('home') {
+      }
       @case ('plan') {
-        <ralph-plan-hub></ralph-plan-hub>
+      }
+      @case ('runs') {
       }
       @case ('usage') {
-        <ralph-usage-hub></ralph-usage-hub>
+      }
+      @case ('graph-runs') {
       }
       @case ('browse') {
         <div class="browse-state">
@@ -68,10 +98,12 @@ import { NavService } from './services/nav.service';
         }
       }
       @default {
-        @if (activeRoot()) {
-          <div class="empty-state">Select a file to inspect its contents.</div>
-        } @else {
-          <div class="empty-state">Select a section from the sidebar to get started.</div>
+        @if (viewKind() === 'empty') {
+          @if (activeRoot()) {
+            <div class="empty-state">Select a file to inspect its contents.</div>
+          } @else {
+            <div class="empty-state">Select a section from the sidebar to get started.</div>
+          }
         }
       }
     }
@@ -81,21 +113,27 @@ import { NavService } from './services/nav.service';
       display: flex;
       flex: 1;
       min-height: 0;
+      flex-direction: column;
+    }
+
+    .inventory-panes {
+      display: contents;
+    }
+
+    .workspace-pane {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .workspace-pane[hidden] {
+      display: none !important;
     }
 
     .empty-state {
-      display: flex;
-      flex: 1;
-      align-items: center;
-      justify-content: center;
       min-height: 0;
-      color: var(--text-muted);
-      font-size: 0.9rem;
-      text-align: center;
-      padding: 2rem;
-      background: var(--surface);
-      border-radius: 8px;
-      border: 1px solid var(--border);
     }
 
     .browse-state {
@@ -134,7 +172,7 @@ export class WorkspaceViewComponent {
   private readonly nav = inject(NavService);
   readonly activeRoot = this.nav.activeRoot;
   readonly activeFile = this.nav.activeFile;
-  readonly viewKind = computed<'plan' | 'usage' | 'file' | 'log' | 'browse' | 'empty'>(() => {
+  readonly viewKind = computed<'home' | 'plan' | 'runs' | 'usage' | 'graph-runs' | 'file' | 'log' | 'browse' | 'empty'>(() => {
     const root = this.activeRoot();
     const file = this.activeFile();
 
@@ -144,11 +182,20 @@ export class WorkspaceViewComponent {
     if (file) {
       return file.endsWith('.log') ? 'log' : 'file';
     }
-    if (root === 'usage') {
-      return 'usage';
+    if (root === 'home') {
+      return 'home';
     }
     if (root === 'plans') {
       return 'plan';
+    }
+    if (root === 'runs') {
+      return 'runs';
+    }
+    if (root === 'usage' || root === 'insights') {
+      return 'usage';
+    }
+    if (root === 'graph-runs') {
+      return 'graph-runs';
     }
     if (
       root === 'docs' ||
@@ -163,19 +210,118 @@ export class WorkspaceViewComponent {
   });
 }
 
+/** Docs index and in-app doc files share one section; file URLs use `/docs/file/...`. */
+@Component({
+  selector: 'app-docs-shell',
+  standalone: true,
+  imports: [DocsHubComponent, FileViewerComponent],
+  template: `
+    @if (nav.activeFile(); as file) {
+      <app-file-viewer root="docs" [filePath]="file"></app-file-viewer>
+    } @else {
+      <ralph-docs-hub></ralph-docs-hub>
+    }
+  `,
+  styles: `
+    :host {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+    }
+  `,
+})
+export class DocsShellComponent {
+  readonly nav = inject(NavService);
+}
+
 export const routes: Routes = [
   {
     path: '',
     pathMatch: 'full',
-    redirectTo: 'plans',
+    redirectTo: 'home',
+  },
+  {
+    path: 'home',
+    component: WorkspaceViewComponent,
+  },
+  {
+    path: 'runs',
+    component: WorkspaceViewComponent,
   },
   {
     path: 'plans',
     component: WorkspaceViewComponent,
   },
   {
+    path: 'plan-detail/:file/logs',
+    component: PlanLogsComponent,
+  },
+  {
+    path: 'plan-runs/:runId',
+    component: PlanLogsComponent,
+  },
+  {
+    path: 'plan-detail/:file',
+    loadComponent: () => import('./components/plan-detail/plan-detail.component').then((m) => m.PlanDetailComponent),
+  },
+  {
+    path: 'insights',
+    component: WorkspaceViewComponent,
+  },
+  {
+    path: 'runtimes',
+    component: RuntimeStatusComponent,
+  },
+  {
     path: 'usage',
     component: WorkspaceViewComponent,
+  },
+  {
+    path: 'docs',
+    component: DocsShellComponent,
+  },
+  {
+    path: 'workflows',
+    loadComponent: () => import('./workflows/workflows-list.page').then((m) => m.WorkflowsListPageComponent),
+  },
+  {
+    path: 'tasks',
+    pathMatch: 'full',
+    redirectTo: 'tasks/active-board',
+  },
+  {
+    path: 'tasks/:taskView',
+    loadComponent: () => import('./tasks/tasks.page').then((m) => m.TasksPageComponent),
+  },
+  {
+    path: 'schedules',
+    loadComponent: () => import('./schedules/schedules.page').then((m) => m.SchedulesPageComponent),
+  },
+  {
+    path: 'safety',
+    loadComponent: () => import('./safety/safety.page').then((m) => m.SafetyPageComponent),
+  },
+  {
+    path: 'workflows/new',
+    loadComponent: () => import('./workflows/workflow-new.page').then((m) => m.WorkflowNewPageComponent),
+  },
+  {
+    path: 'workflows/runs/:runId/stages/:stageId/logs',
+    component: WorkflowStageLogsPageComponent,
+  },
+  {
+    path: 'workflows/runs/:runId',
+    loadComponent: () => import('./workflows/workflow-run-detail.page').then((m) => m.WorkflowRunDetailPageComponent),
+  },
+  {
+    path: 'workflows/:id',
+    loadComponent: () => import('./workflows/workflow-detail.page').then((m) => m.WorkflowDetailPageComponent),
+  },
+  {
+    path: 'workflows/:id/edit',
+    loadComponent: () => import('./workflows/workflow-edit.page').then((m) => m.WorkflowEditPageComponent),
+    canDeactivate: [workflowEditCanDeactivate],
   },
   {
     path: ':root/path/:path/file/:file',
@@ -195,6 +341,6 @@ export const routes: Routes = [
   },
   {
     path: '**',
-    redirectTo: 'plans',
+    redirectTo: 'home',
   },
 ];
