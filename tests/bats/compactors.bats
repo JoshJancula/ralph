@@ -1,68 +1,21 @@
 #!/usr/bin/env bats
 
 source "$BATS_TEST_DIRNAME/helper/load-lib.bash"
+# shellcheck source=helper/compactor-fixtures.bash
+source "$BATS_TEST_DIRNAME/helper/compactor-fixtures.bash"
 
-COMPACTORS_LIB="$REPO_ROOT/bundle/.ralph/bash-lib/compactors.sh"
-FIXTURE_ROOT="$REPO_ROOT/tests/fixtures/compactors"
-
-load_compactors() {
-  # shellcheck source=/dev/null
-  source "$COMPACTORS_LIB"
+setup() {
+  # Keep default-off: Jev-enabled cases in sibling files must not leak here.
+  unset RALPH_JEV_COMPACT RALPH_JEV JEV_TRANSPORT JEV_FIXTURE_DIR TYPESAFE_API_KEY RALPH_JEV_STATE_DIR \
+    RALPH_COMPACT_GENERIC_FALLBACK RALPH_COMPACT_FAILURE 2>/dev/null || true
+  JEV_TEST_HOME=""
 }
 
-assert_compactor_fixture() {
-  local case_name="$1"
-  local fixture_dir="$FIXTURE_ROOT/$case_name"
-
-  [ -d "$fixture_dir" ] || skip "fixture missing: $case_name"
-  [ -f "$fixture_dir/result.json" ] || skip "pinned result missing: $case_name"
-
-  if ! command -v python3 >/dev/null 2>&1; then
-    skip "python3 required for compactor tests"
+teardown() {
+  if [ -n "${JEV_TEST_HOME:-}" ] && [ -d "$JEV_TEST_HOME" ]; then
+    rm -rf "$JEV_TEST_HOME"
   fi
-
-  local command stdout stderr exit_status expected actual
-  command="$(<"$fixture_dir/command.txt")"
-  stdout="$(<"$fixture_dir/stdout.txt")"
-  stderr="$(<"$fixture_dir/stderr.txt")"
-  exit_status="$(<"$fixture_dir/exit_status.txt")"
-  expected="$(jq -S . <"$fixture_dir/result.json")"
-
-  run bash -c '
-    source "$1"
-    export RALPH_COMPACT_STDOUT="$2"
-    export RALPH_COMPACT_STDERR="$3"
-    ralph_compact_shell_output "$4" "$5"
-  ' _ "$COMPACTORS_LIB" "$stdout" "$stderr" "$command" "$exit_status"
-
-  [ "$status" -eq 0 ]
-  actual="$(printf '%s\n' "$output" | jq -S .)"
-  [ "$actual" = "$expected" ]
-}
-
-assert_compactor_preserves_fixture() {
-  local case_name="$1"
-  local fixture_dir="$FIXTURE_ROOT/$case_name"
-  local fixture_command="" expected_stdout="" expected_stderr="" exit_status=""
-  fixture_command="$(<"$fixture_dir/command.txt")"
-  expected_stdout="$(<"$fixture_dir/stdout.txt")"
-  expected_stderr="$(<"$fixture_dir/stderr.txt")"
-  exit_status="$(<"$fixture_dir/exit_status.txt")"
-
-  run bash -c '
-    source "$1"
-    export RALPH_COMPACT_STDOUT="$2"
-    export RALPH_COMPACT_STDERR="$3"
-    ralph_compact_shell_output "$4" "$5"
-  ' _ "$COMPACTORS_LIB" "$expected_stdout" "$expected_stderr" "$fixture_command" "$exit_status"
-
-  [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | jq -e --arg stdout "$expected_stdout" --arg stderr "$expected_stderr" '
-    .status == "not compacted"
-    and .compacted == false
-    and .stdout == $stdout
-    and .stderr == $stderr
-  '
+  unset JEV_TEST_HOME
 }
 
 @test "bats family: successful run matches pinned fixture" {

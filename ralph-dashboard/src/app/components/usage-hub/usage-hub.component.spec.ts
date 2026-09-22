@@ -335,9 +335,24 @@ const mockAmbientUsage = {
   ],
 };
 
+const noJevUsage = {
+  enabled: false,
+  calls: 0,
+  calls_measured: 0,
+  calls_unavailable: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  estimated_usd: 0,
+  by_question_set: [],
+};
+
 function flushPendingSavings(httpMock: HttpTestingController): void {
   for (const req of httpMock.match((r) => r.url.startsWith('/api/benchmarks'))) {
     req.flush(mockSavingsReport);
+  }
+  // Jev is optional; unless a test flushes its own payload, report none.
+  for (const req of httpMock.match((r) => r.url.startsWith('/api/metrics/jev-usage'))) {
+    req.flush(noJevUsage);
   }
 }
 
@@ -412,6 +427,49 @@ describe('UsageHubComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="insights-summary"]')).toBeTruthy();
     expect(fixture.nativeElement.textContent).toContain('What changed');
     expect(fixture.nativeElement.textContent).toContain('GPT-5 family');
+  });
+
+  it('shows a separate Jev panel only when Jev usage was recorded', () => {
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    mountUsageHub(fixture);
+
+    expectInsightsSummary(httpMock).flush(mockInsights);
+    expectBreakdown(httpMock).flush(mockBreakdown);
+    for (const req of httpMock.match((r) => r.url.startsWith('/api/benchmarks'))) {
+      req.flush(mockSavingsReport);
+    }
+    const jevReq = httpMock.expectOne((r) => r.url.startsWith('/api/metrics/jev-usage'));
+    jevReq.flush({
+      enabled: true,
+      calls: 3,
+      calls_measured: 2,
+      calls_unavailable: 1,
+      input_tokens: 592,
+      output_tokens: 40,
+      estimated_usd: 0.000025,
+      by_question_set: [
+        { question_set_id: 'graph.router-confidence', calls: 3, input_tokens: 592, output_tokens: 40 },
+      ],
+    });
+    fixture.detectChanges();
+
+    const panel = fixture.nativeElement.querySelector('[data-testid="insights-jev-usage"]');
+    expect(panel).toBeTruthy();
+    expect(panel.textContent).toContain('graph.router-confidence');
+    expect(panel.textContent).toContain('Separate from runtime token totals');
+    expect(fixture.nativeElement.querySelector('[data-testid="insights-jev-unavailable"]')).toBeTruthy();
+  });
+
+  it('hides the Jev panel when no Jev usage was recorded', () => {
+    const fixture = TestBed.createComponent(UsageHubComponent);
+    mountUsageHub(fixture);
+
+    expectInsightsSummary(httpMock).flush(mockInsights);
+    expectBreakdown(httpMock).flush(mockBreakdown);
+    flushPendingSavings(httpMock);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('[data-testid="insights-jev-usage"]')).toBeNull();
   });
 
   it('does not block summary render while breakdown is still loading', () => {

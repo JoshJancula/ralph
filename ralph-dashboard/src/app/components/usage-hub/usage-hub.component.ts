@@ -11,6 +11,7 @@ import {
 import { RouterLink } from '@angular/router';
 import {
   ApiService,
+  JevUsageResponse,
   MetricsBreakdownResponse,
   MetricsBreakdownRunRow,
   MetricsDetailResponse,
@@ -672,6 +673,55 @@ type DrillSection = 'runtime' | 'model' | 'runs' | null;
           <p class="quiet-empty">Benchmark data is unavailable for this workspace.</p>
         }
       </section>
+      @if (jevUsage?.enabled) {
+      <section class="jev-usage-panel hub-panel-card" aria-label="Jev usage" data-testid="insights-jev-usage">
+        <div class="section-head">
+          <h2 class="section-legend">Jev (TypeSafe AI)</h2>
+          <span class="savings-panel-meta">Separate from runtime token totals</span>
+        </div>
+        <div class="headline-grid">
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Calls</div>
+            <div class="metric-value">{{ formatNumber(jevUsage!.calls) }}</div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Input tokens</div>
+            <div class="metric-value" [title]="formatNumber(jevUsage!.input_tokens)">
+              {{ formatCompact(jevUsage!.input_tokens) }}
+            </div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Output tokens</div>
+            <div class="metric-value" [title]="formatNumber(jevUsage!.output_tokens)">
+              {{ formatCompact(jevUsage!.output_tokens) }}
+            </div>
+          </div>
+          <div class="metric-tile hub-nested-panel">
+            <div class="metric-label">Estimated cost</div>
+            <div class="metric-value" [title]="'$' + jevUsage!.estimated_usd">
+              {{ formatUsd(jevUsage!.estimated_usd) }}
+            </div>
+          </div>
+        </div>
+        @if (jevUsage!.calls_unavailable > 0) {
+          <p class="quiet-empty" data-testid="insights-jev-unavailable">
+            {{ formatNumber(jevUsage!.calls_unavailable) }} calls returned no usage and count as zero tokens.
+          </p>
+        }
+        <ul class="driver-list">
+          @for (row of jevUsage!.by_question_set; track row.question_set_id) {
+            <li class="driver-copy">
+              <span>{{ row.question_set_id }}</span>
+              <span class="metric-sub">
+                {{ formatNumber(row.calls) }} calls ·
+                {{ formatNumber(row.input_tokens) }} in ·
+                {{ formatNumber(row.output_tokens) }} out
+              </span>
+            </li>
+          }
+        </ul>
+      </section>
+      }
       }
     </div>
   `,
@@ -1276,6 +1326,8 @@ export class UsageHubComponent {
   savingsLoading = false;
   savingsError: unknown = null;
 
+  jevUsage: JevUsageResponse | null = null;
+
   @HostListener('document:keydown.escape')
   closeDetailOnEscape(): void {
     if (this.detailLoading || this.detailError || this.detail) {
@@ -1361,6 +1413,7 @@ export class UsageHubComponent {
     this.loadSummary();
     this.loadBreakdown();
     this.loadSavings();
+    this.loadJevUsage();
   }
 
   setFilterKind(value: string): void {
@@ -1515,6 +1568,13 @@ export class UsageHubComponent {
     anchor.download = 'insights-breakdown.csv';
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  formatUsd(value: number): string {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '$0';
+    }
+    return value < 0.01 ? `<$0.01` : `$${value.toFixed(2)}`;
   }
 
   formatNumber(value: number): string {
@@ -1692,6 +1752,7 @@ export class UsageHubComponent {
     this.loadSummary();
     this.loadBreakdown();
     this.loadSavings();
+    this.loadJevUsage();
   }
 
   private buildFilters(includePaging = false): MetricsQueryFilters {
@@ -1801,6 +1862,21 @@ export class UsageHubComponent {
         if (!this.breakdown) {
           this.breakdown = null;
         }
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private loadJevUsage(): void {
+    const workspaceRoot = this.selectedWorkspaceRoot();
+    this.apiService.fetchJevUsage(workspaceRoot ? { workspaceRoot } : undefined).subscribe({
+      next: (usage) => {
+        this.jevUsage = usage;
+        this.cdr.markForCheck();
+      },
+      // Jev is optional; a failed read simply leaves the panel hidden.
+      error: () => {
+        this.jevUsage = null;
         this.cdr.markForCheck();
       },
     });

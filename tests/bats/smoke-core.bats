@@ -44,7 +44,7 @@ teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
-@test "smoke: MCP server initialize and tools/list expose ralph_proxy_read" {
+@test "smoke: MCP server initialize and tools/list expose ralph_proxy_shell" {
   command -v jq >/dev/null || skip "jq required"
   [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
 
@@ -63,7 +63,7 @@ teardown() {
 
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | jq -s -e '.[0].result.capabilities.tools.listChanged == false'
-  printf '%s\n' "$output" | jq -s -e '[.[1].result.tools[]?.name] | index("ralph_proxy_read") != null'
+  printf '%s\n' "$output" | jq -s -e '[.[1].result.tools[]?.name] | index("ralph_proxy_shell") != null'
 }
 
 @test "smoke: cursor ralph mode injects MCP config and restores existing mcp.json" {

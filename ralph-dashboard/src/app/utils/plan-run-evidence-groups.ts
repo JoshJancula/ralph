@@ -58,7 +58,13 @@ export function groupPlanRunEvidence(entries: readonly PlanRunEvidenceEntry[]): 
 
 export function concisePlanRunEvidencePath(path: string, planKey: string): string {
   const normalized = path.replace(/\\/g, '/');
-  const prefixes = [`logs/${planKey}/`, `runtime-config/${planKey}/`, `sessions/${planKey}/`];
+  const prefixes = [
+    `logs/${planKey}/`,
+    `runtime-config/${planKey}/`,
+    `internal/runtime-config/${planKey}/`,
+    `internal/sessions/${planKey}/`,
+    `sessions/${planKey}/`,
+  ];
   for (const prefix of prefixes) {
     if (normalized.startsWith(prefix)) {
       return normalized.slice(prefix.length);
@@ -69,6 +75,9 @@ export function concisePlanRunEvidencePath(path: string, planKey: string): strin
   }
   if (normalized.startsWith('runtime-config/')) {
     return normalized.slice('runtime-config/'.length);
+  }
+  if (normalized.startsWith('internal/runtime-config/')) {
+    return normalized.slice('internal/runtime-config/'.length);
   }
   return normalized;
 }

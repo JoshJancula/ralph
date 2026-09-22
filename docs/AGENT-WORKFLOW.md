@@ -136,11 +136,21 @@ finishes. Do not build polling loops into prompts or plans.
 
 ## Outputs and cleanup
 
-| Output | Location |
-| --- | --- |
-| Combined run logs | `.ralph-workspace/logs/<plan-key>/` |
-| Declared artifacts | `.ralph-workspace/artifacts/<artifact-namespace>/` |
-| Session state | `.ralph-workspace/sessions/<plan-key>/` |
+Declared artifacts stay under `.ralph-workspace/artifacts/<artifact-namespace>/`
+in every layout. Where logs and session state live depends on
+`RALPH_STATE_LAYOUT` (default `2` for new runs; see
+[ENVIRONMENT.md](ENVIRONMENT.md#state-layout-ralph_state_layout) and
+[WORKSPACE.md](WORKSPACE.md)):
+
+| Output | Layout 1 | Layout 2 (default for new runs) |
+| --- | --- | --- |
+| Plan attempt logs | `.ralph-workspace/logs/<plan-key>/runs/<run-id>/` | `.ralph-workspace/runs/<run-id>/stages/plan/attempts/<run-id>/` |
+| Declared artifacts | `.ralph-workspace/artifacts/<artifact-namespace>/` | unchanged |
+| Session state | `.ralph-workspace/sessions/<plan-key>/` | `.ralph-workspace/internal/sessions/<plan-key>/` |
+
+Existing layout 1 runs keep their recorded paths on resume. Inspect or reclaim
+state with `ralph state status|runs|show|prune|orphans` rather than deleting
+directories by hand.
 
 To remove the state for a known namespace before an intentional fresh run:
 

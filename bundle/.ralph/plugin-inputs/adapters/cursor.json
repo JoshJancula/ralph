@@ -18,16 +18,6 @@
       "mode": "0644"
     },
     {
-      "source": "bundle/.cursor/hooks/pre-tool-proxy-read-handoff.sh",
-      "destination": "hooks/pre-tool-proxy-read-handoff.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.cursor/hooks/pre-tool-exploration-policy.sh",
-      "destination": "hooks/pre-tool-exploration-policy.sh",
-      "mode": "0755"
-    },
-    {
       "source": "bundle/.cursor/hooks/pre-tool-shell-policy.sh",
       "destination": "hooks/pre-tool-shell-policy.sh",
       "mode": "0755"

@@ -133,6 +133,28 @@ describe('plan-run routes and explorer roots', () => {
     writeFileSync(join(graphRunDir, 'run.json'), JSON.stringify({ runId: graphRunId, startedAt: '2026-01-02T00:00:00Z', status: 'succeeded' }), 'utf8');
     writeFileSync(join(graphRunDir, 'graph.json'), JSON.stringify({ nodes: [] }), 'utf8');
     writeFileSync(join(graphRunDir, 'observability.jsonl'), `${JSON.stringify({ event: 'admission', timestamp: '2026-01-02T00:00:01Z' })}\n`, 'utf8');
+    writeFileSync(
+      join(graphRunDir, 'events.jsonl'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        sequence: 2,
+        timestamp: '2026-01-02T00:00:02Z',
+        runId: graphRunId,
+        event: 'routing-decision',
+        nodeId: 'classify',
+        attemptId: null,
+        details: {
+          selectedTarget: 'scope-request',
+          alternatives: ['deep-investigation'],
+          reason: 'jev: high-confidence',
+          confidence: 0.91,
+          source: 'jev',
+          questionSetId: 'graph.router-confidence',
+          registryVersion: '1',
+        },
+      })}\n`,
+      'utf8',
+    );
     writeFileSync(join(graphRunDir, 'nodes', 'implement.json'), JSON.stringify({ nodeId: 'implement', status: 'succeeded', attempts: [] }), 'utf8');
 
     const legacyDir = join(workspaceRoot, 'logs', 'legacy-plan');
@@ -237,9 +259,21 @@ describe('plan-run routes and explorer roots', () => {
       asReq({ namespace: 'demo-ns', runId: 'run-20260102T000000Z-graph' }, { workspaceRoot }),
     );
     expect(detail.statusCode).toBe(200);
-    const body = detail.body as { files: { summary: unknown[] }; timeline: unknown[] };
+    const body = detail.body as {
+      files: { summary: Array<{ path: string; label: string }> };
+      timeline: unknown[];
+      routingDecisions: Array<{ nodeId: string; selectedTarget: string; source: string }>;
+    };
     expect(body.files.summary.length).toBeGreaterThan(0);
+    expect(body.files.summary.some((entry) => entry.path === 'events.jsonl')).toBe(true);
     expect(Array.isArray(body.timeline)).toBe(true);
+    expect(body.routingDecisions).toEqual([
+      expect.objectContaining({
+        nodeId: 'classify',
+        selectedTarget: 'scope-request',
+        source: 'jev',
+      }),
+    ]);
 
     const missing = await capture(
       handleGraphRunDetailRequest,

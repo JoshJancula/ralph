@@ -13,6 +13,10 @@ from typing import Any
 
 REDACTED = "***REDACTED***"
 RESERVED_RALPH = "ralph"
+RESERVED_JEV = "ralph-jev"
+# Ralph-owned protected server names. Ambient entries with these names are
+# skipped during merge; protected definitions overwrite any collision.
+RESERVED_SERVER_NAMES = (RESERVED_RALPH, RESERVED_JEV)
 ENV_REF_RE = re.compile(r"^\$\{[A-Z_][A-Z0-9_]*\}$")
 ENV_REF_SUB_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
@@ -74,6 +78,18 @@ def _expand_path(template: str, project: str, home: str, xdg: str) -> str:
         template.replace("{project}", project)
         .replace("{home}", home)
         .replace("{xdg}", xdg)
+    )
+
+
+def _is_reserved_server_name(name: str) -> bool:
+    return name.strip() in RESERVED_SERVER_NAMES
+
+
+def _jev_mcp_enabled() -> bool:
+    """True when both RALPH_JEV and RALPH_JEV_MCP are explicitly enabled."""
+    return (
+        os.environ.get("RALPH_JEV", "").strip() == "1"
+        and os.environ.get("RALPH_JEV_MCP", "").strip() == "1"
     )
 
 
@@ -225,7 +241,7 @@ def _extract_json_mcp_servers(data: dict[str, Any], origin: str, source_path: st
     for name, entry in servers.items():
         if not isinstance(name, str) or not name.strip():
             continue
-        if name.strip() == RESERVED_RALPH:
+        if _is_reserved_server_name(name):
             continue
         if not isinstance(entry, dict):
             raise McpResolveError(
@@ -244,7 +260,7 @@ def _extract_opencode_mcp(data: dict[str, Any], origin: str, source_path: str) -
     for name, entry in mcp.items():
         if not isinstance(name, str) or not name.strip():
             continue
-        if name.strip() == RESERVED_RALPH:
+        if _is_reserved_server_name(name):
             continue
         if not isinstance(entry, dict):
             raise McpResolveError(
@@ -307,7 +323,7 @@ def _extract_codex_mcp(data: dict[str, Any], origin: str, source_path: str) -> d
     for name, entry in servers.items():
         if not isinstance(name, str) or not name.strip():
             continue
-        if name.strip() == RESERVED_RALPH:
+        if _is_reserved_server_name(name):
             continue
         if not isinstance(entry, dict):
             raise McpResolveError(
@@ -410,6 +426,67 @@ def _ralph_server_definition(server_script: str, workspace: str, env_extra: dict
         "source_path": "",
         "layer": "ralph",
     }
+
+
+def _jev_server_script_from_request(request: dict[str, Any]) -> str:
+    """Resolve the Jev MCP server script path (override, sibling of ralph, or RALPH_DIR).
+
+    Returns "" when no path can be resolved. Jev is advisory: a missing server
+    drops ralph-jev from the catalog, it never fails the resolve. Raising here
+    would abort MCP setup for every runtime and kill the plan run.
+    """
+    explicit = str(request.get("jev_server_script") or "").strip()
+    if explicit:
+        return explicit
+    ralph_script = str(request.get("ralph_server_script") or "").strip()
+    if ralph_script:
+        return str(Path(ralph_script).with_name("jev-mcp-server.sh"))
+    ralph_dir = os.environ.get("RALPH_DIR", "").strip()
+    if ralph_dir:
+        return os.path.join(ralph_dir, "jev-mcp-server.sh")
+    return ""
+
+
+def _jev_server_definition(server_script: str, workspace: str) -> dict[str, Any]:
+    """Protected Jev MCP server. The key is NEVER carried in this config.
+
+    ralph-jev speaks stdio, so it has no HTTP request for a header to ride on.
+    The server resolves the API key itself through the key-resolution chain
+    (env, workspace .env, credential command, OS keychain, file), which is why
+    no TYPESAFE_API_KEY env-ref appears here: requiring one would demand an
+    exported variable and defeat four of the five supported backends.
+
+    Absence is handled at runtime, not at launch: with no usable key every tool
+    returns {available: false, isError: false} and the agent carries on.
+    """
+    return {
+        "name": RESERVED_JEV,
+        "transport": "stdio",
+        "command": "bash",
+        "args": [server_script],
+        "env": {
+            "RALPH_MCP_WORKSPACE": workspace,
+        },
+        "headers": {},
+        "url": "",
+        "origin": "ralph",
+        "source_path": "",
+        "layer": "ralph",
+    }
+
+
+def _apply_protected_server(
+    catalog: dict[str, dict[str, Any]],
+    server_def: dict[str, Any],
+    override_decisions: list[str],
+) -> None:
+    """Install a Ralph-owned server, recording protected-overlay semantics."""
+    name = str(server_def.get("name") or "")
+    if name in catalog:
+        override_decisions.append(f"{name}:protected overlay replaces ambient entry")
+    else:
+        override_decisions.append(f"{name}:protected overlay applied")
+    catalog[name] = server_def
 
 
 def _resolve_env_value(value: str, server_name: str, field: str) -> str:
@@ -605,11 +682,18 @@ def resolve_effective_mcp(request: dict[str, Any]) -> dict[str, Any]:
             if val:
                 ralph_env_extra[key] = val
         ralph_def = _ralph_server_definition(server_script, workspace, ralph_env_extra)
-        if RESERVED_RALPH in catalog:
-            override_decisions.append("ralph:protected overlay replaces ambient entry")
+        _apply_protected_server(catalog, ralph_def, override_decisions)
+
+    if _jev_mcp_enabled():
+        jev_script = _jev_server_script_from_request(request)
+        if jev_script and os.path.isfile(jev_script):
+            jev_def = _jev_server_definition(jev_script, workspace)
+            _apply_protected_server(catalog, jev_def, override_decisions)
         else:
-            override_decisions.append("ralph:protected overlay applied")
-        catalog[RESERVED_RALPH] = ralph_def
+            # Advisory server: record why it is absent and continue. Never fatal.
+            override_decisions.append(
+                f"{RESERVED_JEV}:omitted (jev mcp server script not found)"
+            )
 
     resolved_catalog = {name: _resolve_server_env(server) for name, server in catalog.items()}
     runtime_shape = _to_runtime_shape(runtime, resolved_catalog)

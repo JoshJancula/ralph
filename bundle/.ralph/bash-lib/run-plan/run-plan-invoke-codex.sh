@@ -153,8 +153,9 @@ _run_plan_invoke_codex_mcp_tools_approval_mode_resolve() {
 
 _run_plan_invoke_codex_mcp_tools_approval_mode_config_line() {
   local mode="$1"
+  local server_name="${2:-ralph}"
   [[ -n "$mode" ]] || return 1
-  printf '%s' "mcp_servers.ralph.default_tools_approval_mode=\"$(_run_plan_invoke_codex_toml_escape "$mode")\""
+  printf '%s' "mcp_servers.${server_name}.default_tools_approval_mode=\"$(_run_plan_invoke_codex_toml_escape "$mode")\""
 }
 
 _run_plan_invoke_codex_mcp_print_proxy_config_values() {
@@ -166,6 +167,7 @@ _run_plan_invoke_codex_mcp_print_proxy_config_values() {
   local command_path workspace_root
   local -a proxy_args=()
   local env_key env_value
+  local server_name
 
   command_path="$(jq -r '.mcpServers.ralph.command // empty' "$config_path")"
   workspace_root="$(jq -r '.mcpServers.ralph.env.RALPH_MCP_WORKSPACE // empty' "$config_path")"
@@ -184,35 +186,59 @@ _run_plan_invoke_codex_mcp_print_proxy_config_values() {
     return 1
   fi
 
-  printf '%s\n' 'mcp_servers.ralph.enabled=true'
-  printf '%s\n' "mcp_servers.ralph.command=\"$( _run_plan_invoke_codex_toml_escape "$command_path" )\""
+  # Emit every Ralph-owned server present in the ephemeral mcpServers catalog
+  # (ralph always; ralph-jev when Jev MCP is enabled). Under --strict-config a
+  # server that is listed but not permitted via --config is present-and-broken.
+  while IFS= read -r server_name; do
+    [[ -n "$server_name" ]] || continue
+    command_path="$(jq -r --arg n "$server_name" '.mcpServers[$n].command // empty' "$config_path")"
+    [[ -n "$command_path" ]] || continue
 
-  local args_value="["
-  local args_sep=""
-  local proxy_arg
-  for proxy_arg in "${proxy_args[@]}"; do
-    args_value+="${args_sep}\"$(_run_plan_invoke_codex_toml_escape "$proxy_arg")\""
-    args_sep=", "
-  done
-  args_value+="]"
-  printf '%s\n' "mcp_servers.ralph.args=$args_value"
+    proxy_args=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && proxy_args+=("$line")
+    done < <(jq -r --arg n "$server_name" '.mcpServers[$n].args[]? // empty' "$config_path")
+    if [[ ${#proxy_args[@]} -eq 0 ]]; then
+      echo "Error: Codex proxy config is missing MCP args for server '$server_name'." >&2
+      return 1
+    fi
 
-  while IFS=$'\t' read -r env_key env_value; do
-    [[ -n "${env_key:-}" ]] || continue
-    printf '%s\n' "mcp_servers.ralph.env.$env_key=\"$( _run_plan_invoke_codex_toml_escape "$env_value" )\""
-  done < <(jq -r '.mcpServers.ralph.env | to_entries[]? | [.key, .value] | @tsv' "$config_path")
+    printf '%s\n' "mcp_servers.${server_name}.enabled=true"
+    printf '%s\n' "mcp_servers.${server_name}.command=\"$( _run_plan_invoke_codex_toml_escape "$command_path" )\""
 
-  if [[ "$include_type" == "1" ]]; then
-    printf '%s\n' 'mcp_servers.ralph.type="stdio"'
-  fi
+    local args_value="["
+    local args_sep=""
+    local proxy_arg
+    for proxy_arg in "${proxy_args[@]}"; do
+      args_value+="${args_sep}\"$(_run_plan_invoke_codex_toml_escape "$proxy_arg")\""
+      args_sep=", "
+    done
+    args_value+="]"
+    printf '%s\n' "mcp_servers.${server_name}.args=$args_value"
 
-  if [[ "$include_required" == "1" ]]; then
-    printf '%s\n' 'mcp_servers.ralph.required=true'
-  fi
+    while IFS=$'\t' read -r env_key env_value; do
+      [[ -n "${env_key:-}" ]] || continue
+      printf '%s\n' "mcp_servers.${server_name}.env.$env_key=\"$( _run_plan_invoke_codex_toml_escape "$env_value" )\""
+    done < <(jq -r --arg n "$server_name" '.mcpServers[$n].env // {} | to_entries[]? | [.key, .value] | @tsv' "$config_path")
 
-  if [[ "$include_approval_mode" == "1" && -n "$approval_mode_value" ]]; then
-    printf '%s\n' "$(_run_plan_invoke_codex_mcp_tools_approval_mode_config_line "$approval_mode_value")"
-  fi
+    if [[ "$include_type" == "1" ]]; then
+      printf '%s\n' "mcp_servers.${server_name}.type=\"stdio\""
+    fi
+
+    # required + approval_mode remain ralph-only (proxy enforcement semantics).
+    if [[ "$server_name" == "ralph" ]]; then
+      if [[ "$include_required" == "1" ]]; then
+        printf '%s\n' 'mcp_servers.ralph.required=true'
+      fi
+      if [[ "$include_approval_mode" == "1" && -n "$approval_mode_value" ]]; then
+        printf '%s\n' "$(_run_plan_invoke_codex_mcp_tools_approval_mode_config_line "$approval_mode_value" ralph)"
+      fi
+    elif [[ "$server_name" == "ralph-jev" && "$include_approval_mode" == "1" && -n "$approval_mode_value" ]]; then
+      # Jev tools must also be auto-approvable under lockdown or they appear
+      # as present-but-always-failing tools in the catalog.
+      printf '%s\n' "$(_run_plan_invoke_codex_mcp_tools_approval_mode_config_line "$approval_mode_value" "ralph-jev")"
+    fi
+  done < <(jq -r '.mcpServers // {} | keys[]?' "$config_path" | sort)
 }
 
 _run_plan_invoke_codex_mcp_probe_config_values() {

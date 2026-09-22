@@ -159,7 +159,9 @@ if [[ -n "$run_id" ]]; then
     exit 1
   }
   state_root="$(cd "$state_root" && pwd)"
-  run_file="$state_root/workflow-runs/$run_id/run.json"
+  # shellcheck source=bash-lib/state-paths.sh
+  source "$SCRIPT_DIR/bash-lib/state-paths.sh"
+  run_file="$(ralph_state_workflow_run_dir "$state_root" "$run_id")/run.json"
   if [[ ! -f "$run_file" || -L "$run_file" ]]; then
     echo "Error: workflow run not found: $run_id" >&2
     exit 1
@@ -179,6 +181,7 @@ if [[ -n "$run_id" ]]; then
       engine_state="$(cd "$engine_state" && pwd)"
       case "$engine_state" in
         "$state_root"/graph-runs/*/"$run_id") ;;
+        "$state_root"/runs/"$run_id"/engine/graph) ;;
         *)
           echo "Error: workflow run has an invalid Dependency usage path" >&2
           exit 1
@@ -272,4 +275,23 @@ for d in "${logs_dirs[@]}"; do
   logs_args+=(--logs-dir "$d")
 done
 
-RALPH_USAGE_REPORT_SHOW_TOOLS=1 exec python3 "$SCRIPT_DIR/python/ralph-usage-summary-text.py" all "${logs_args[@]}" --workspace "$workspace" --format "$format"
+# Jev (TypeSafe AI) is an HTTP adapter, so its usage lives beside, not inside,
+# the runtime buckets. The block is omitted entirely when Jev was never used.
+jev_state_dir="${RALPH_JEV_STATE_DIR:-${state_root:-$workspace/.ralph-workspace}/jev}"
+summary_cmd=(python3 "$SCRIPT_DIR/python/ralph-usage-summary-text.py" all "${logs_args[@]}" --workspace "$workspace" --format "$format")
+
+if [[ "$format" == "json" ]]; then
+  RALPH_USAGE_REPORT_SHOW_TOOLS=1 "${summary_cmd[@]}" |
+    python3 "$SCRIPT_DIR/python/jev_usage.py" --merge-json --state-dir "$jev_state_dir"
+  exit "${PIPESTATUS[0]}"
+fi
+
+summary_rc=0
+RALPH_USAGE_REPORT_SHOW_TOOLS=1 "${summary_cmd[@]}" || summary_rc=$?
+if [[ "$summary_rc" -eq 0 ]]; then
+  jev_block="$(python3 "$SCRIPT_DIR/python/jev_usage.py" --omit-empty --state-dir "$jev_state_dir" 2>/dev/null || true)"
+  if [[ -n "$jev_block" ]]; then
+    printf '\n%s\n' "$jev_block"
+  fi
+fi
+exit "$summary_rc"

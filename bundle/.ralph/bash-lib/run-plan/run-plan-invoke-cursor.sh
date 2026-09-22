@@ -266,7 +266,11 @@ ralph_run_plan_invoke_cursor() {
   # shellcheck disable=SC2034
   CURSOR_CLI="$cli"
 
-  local -a args=(-p --force)
+  local -a args=(-p)
+  # --force auto-approves tool calls; without it headless runs stall on prompts.
+  if [[ "${CURSOR_PLAN_FORCE:-1}" == "1" ]]; then
+    args+=(--force)
+  fi
   run_plan_invoke_common_add_model_flag args --model
   run_plan_invoke_common_add_reasoning_effort_flag args cursor "${CURSOR_PLAN_CLI:-cursor-agent}"
   run_plan_invoke_common_add_resume_args \

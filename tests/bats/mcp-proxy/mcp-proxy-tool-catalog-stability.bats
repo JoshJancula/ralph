@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # tools/list catalog must stay byte-identical across server starts and
-# different RALPH_PLAN_KEY values; five exploration tools advertise a "cap"
+# different RALPH_PLAN_KEY values; the shell tool advertises a "cap"
 # (COMPACTION-CACHE-AUDIT a4).
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
@@ -53,7 +53,7 @@ invoke_tools_list() {
   '
 }
 
-@test "tool-catalog-stability: tools/list identical across plan keys; five tools mention cap" {
+@test "tool-catalog-stability: tools/list identical across plan keys; shell tool mentions cap" {
   local list_a list_b
   list_a="$(invoke_tools_list "plan-catalog-a")"
   list_b="$(invoke_tools_list "plan-catalog-b")"
@@ -62,7 +62,7 @@ invoke_tools_list() {
 
   printf '%s\n' "$list_a" | jq -e '
     (.tools // []) as $tools
-    | ["ralph_proxy_read","ralph_proxy_grep","ralph_proxy_glob","ralph_proxy_search","ralph_proxy_shell"] as $names
+    | ["ralph_proxy_shell"] as $names
     | ($names | all(. as $n | ($tools | map(select(.name == $n)) | length == 1)))
     and ($names | all(. as $n |
       ($tools | map(select(.name == $n))[0].description | test("cap"))

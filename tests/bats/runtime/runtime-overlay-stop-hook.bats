@@ -457,40 +457,32 @@ EOF
   export RALPH_BG_JOBS=1
   export RALPH_BG_HOOK_TIMEOUT=5400
   export RALPH_NATIVE_HOOKS=on
-  printf '%s\n' '{"version":1,"keep":"user","hooks":{"preToolUse":[{"command":"./keep-me.sh","matcher":"Shell"}]}}' \
+  printf '%s\n' '{"user-hook":{"Stop":[{"command":"./keep-me.sh"}]}}' \
     >"$workspace/.agents/hooks.json"
   runtime_overlay_antigravity_merge_hooks_file "$workspace/.agents/hooks.json" "$ANTIGRAVITY_TEMPLATE" 1
-  run jq -r '.hooks.Stop[0].timeout,.hooks.Stop[0].command,.keep' "$workspace/.agents/hooks.json"
+  run jq -r '.["ralph-native"].Stop[0].timeout,.["ralph-native"].Stop[0].command,.["user-hook"].Stop[0].command' "$workspace/.agents/hooks.json"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "5400" ]
   [[ "${lines[1]}" == *"stop-continuation.sh"* ]]
-  [ "${lines[2]}" = "user" ]
+  [ "${lines[2]}" = "./keep-me.sh" ]
 }
 
 @test "antigravity merge omits Stop hook when RALPH_BG_JOBS is disabled" {
   source "$ANTIGRAVITY_OVERLAY"
   export RALPH_BG_JOBS=0
-  printf '%s\n' '{"version":1,"hooks":{}}' >"$workspace/.agents/hooks.json"
+  printf '%s\n' '{}' >"$workspace/.agents/hooks.json"
   runtime_overlay_antigravity_merge_hooks_file "$workspace/.agents/hooks.json" "$ANTIGRAVITY_TEMPLATE" 0
-  run jq -r '.hooks.Stop // empty' "$workspace/.agents/hooks.json"
+  run jq -r '.["ralph-native"].Stop // empty' "$workspace/.agents/hooks.json"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
 
-@test "antigravity durable hook detection requires stop-continuation hook" {
+@test "antigravity durable hook detection requires the ralph-native key" {
   source "$ANTIGRAVITY_OVERLAY"
   cp "$ANTIGRAVITY_TEMPLATE" "$workspace/.agents/hooks.json"
   runtime_overlay_antigravity_hooks_detected_in_file "$workspace/.agents/hooks.json"
-  python3 - <<'PY' "$workspace/.agents/hooks.json"
-import json, sys
-path = sys.argv[1]
-data = json.load(open(path))
-stop = data.get("hooks", {}).get("Stop") or []
-data["hooks"]["Stop"] = [entry for entry in stop if "stop-continuation" not in entry.get("command", "")]
-with open(path, "w") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
+  jq 'del(.["ralph-native"])' "$workspace/.agents/hooks.json" >"$workspace/.agents/hooks.json.tmp"
+  mv "$workspace/.agents/hooks.json.tmp" "$workspace/.agents/hooks.json"
   run runtime_overlay_antigravity_hooks_detected_in_file "$workspace/.agents/hooks.json"
   [ "$status" -ne 0 ]
 }
@@ -675,6 +667,7 @@ EOF
   command -v python3 >/dev/null 2>&1 || skip "python3 unavailable"
   export RALPH_BG_JOBS=1
   export RALPH_BG_TIER=auto
+  unset RALPH_BG_TIER_SELECTED RALPH_BG_TIER_REASON RALPH_BG_TIER_PROBE_JSON
   export RUNTIME=opencode
   export RALPH_MODE=hybrid
   export RALPH_NATIVE_HOOKS=on

@@ -60,6 +60,14 @@ const WORKFLOWS: readonly WorkflowListItem[] = [
     },
   },
   {
+    id: 'small-feature-delivery',
+    scope: 'bundled',
+    effectiveScope: 'bundled',
+    overview: 'Deliver a localized feature',
+    editable: false,
+    catalog: { ...CATALOG_BASE, purpose: 'Deliver a localized feature', stageCount: 5, writes: true },
+  },
+  {
     id: 'human-verified-delivery',
     scope: 'global',
     effectiveScope: 'global',
@@ -164,6 +172,11 @@ describe('WorkflowsListPageComponent', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.querySelector('[data-workflow-id="plan-delivery"]')).not.toBeNull();
     expect(el.querySelector('[data-workflow-id="bug-fix"]')).toBeNull();
+  });
+
+  it('lists the small-feature delivery template', async () => {
+    const fixture = await build(fakeFacade(WORKFLOWS), fakeCapabilities());
+    expect(fixture.nativeElement.querySelector('[data-workflow-id="small-feature-delivery"]')).not.toBeNull();
   });
 
   it('shows an empty state when there are no workflows', async () => {

@@ -118,22 +118,25 @@ def _parse_last_seen(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def prune_registry(registry_path: str, days: int) -> tuple[int, int]:
+def prune_registry(registry_path: str, days: int, dry_run: bool = False) -> tuple[list[tuple[str, str]], int]:
+    """Drop missing or stale entries; return ([(path, reason)], kept_count)."""
     path = Path(registry_path)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     kept = []
+    removed: list[tuple[str, str]] = []
     for record in _load_existing(path):
         workspace = _record_value(record, "path")
         last_seen = _parse_last_seen(_record_value(record, "lastSeen"))
         if not workspace or last_seen is None:
-            continue
-        if not Path(workspace).exists():
-            continue
-        if last_seen < cutoff:
-            continue
-        kept.append(record)
-    removed = len(_load_existing(path)) - len(kept)
-    _write_registry(path, kept)
+            removed.append((workspace or "(no path)", "invalid record"))
+        elif not Path(workspace).exists():
+            removed.append((workspace, "directory no longer exists"))
+        elif last_seen < cutoff:
+            removed.append((workspace, f"not used in the last {days} day(s)"))
+        else:
+            kept.append(record)
+    if not dry_run:
+        _write_registry(path, kept)
     return removed, len(kept)
 
 
@@ -172,7 +175,11 @@ def main(argv: list[str]) -> int:
     if command == "list" and len(argv) == 3:
         list_registry(registry_path)
         return 0
-    if command == "prune" and len(argv) == 4:
+    if command == "prune" and len(argv) in (4, 5):
+        dry_run = len(argv) == 5
+        if dry_run and argv[4] != "--dry-run":
+            print(f"invalid prune argument: {argv[4]}", file=sys.stderr)
+            return 2
         try:
             days = int(argv[3])
         except ValueError:
@@ -181,8 +188,11 @@ def main(argv: list[str]) -> int:
         if days < 0:
             print("prune days must be non-negative", file=sys.stderr)
             return 2
-        removed, kept = prune_registry(registry_path, days)
-        print(f"Pruned {removed} workspace(s); kept {kept}.")
+        removed, kept = prune_registry(registry_path, days, dry_run)
+        verb = "Would remove" if dry_run else "Removed"
+        for entry, reason in removed:
+            print(f"  {verb}: {entry} ({reason})")
+        print(f"{verb} {len(removed)} registry entr{'y' if len(removed) == 1 else 'ies'}; kept {kept}. No project files were touched.")
         return 0
     if command == "add" and len(argv) == 4:
         workspace = _abs_path(argv[3])

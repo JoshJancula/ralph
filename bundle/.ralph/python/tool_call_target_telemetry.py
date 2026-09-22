@@ -640,6 +640,9 @@ def result_windowing_log_path(
     ).strip()
     if not plan:
         return None
+    path = root / "internal" / "runtime-config" / plan / "result-windowing.jsonl"
+    if path.is_file():
+        return path
     path = root / "runtime-config" / plan / "result-windowing.jsonl"
     return path if path.is_file() else None
 

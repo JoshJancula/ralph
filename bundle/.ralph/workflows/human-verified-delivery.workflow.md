@@ -114,6 +114,8 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/human-verified-implementation-handoff.md
           required: true
     - id: review
+      workspaceMode: snapshot
+      candidateFrom: implement
       sessionStrategy: fresh
       instructions: |
         Review the candidate snapshot for {{TASK}} without mutation. Inspect the
@@ -169,7 +171,7 @@ pipeline:
         product choices. Write the sole required planner JSON to
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/human-verified-qa-plan.json.
         Successful integration is the approval boundary, so make checks read-only
-        against the integrated tree and give every TODO executable verification.
+        against the integrated candidate snapshot and give every TODO executable verification.
         The operator accepts these results at the final gate, so make each check
         legible on its own.
         If a missing product decision, unavailable credential configuration,
@@ -193,10 +195,18 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      workspaceMode: snapshot
+      candidateFrom: integrate
+      loopBackTo: implement
+      loopCheck:
+        path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-verdict.json
+        schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
+      onExhausted: fail
+      maxQaRepairRounds: 1
       sessionStrategy: fresh
       instructions: |
         Execute the entire generated QA plan for {{TASK}} TODO by TODO on the
-        integrated tree. Read
+        integrated candidate snapshot. Read
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/human-verified-investigation.md,
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/human-verified-implementation-handoff.md,
         and .ralph-workspace/artifacts/{{ARTIFACT_NS}}/human-verified-qa-plan.json.

@@ -15,6 +15,10 @@ fi
 if ! declare -F get_next_todo >/dev/null 2>&1; then
   source "$_GRAPH_COMPOSITE_SUCCESS_DIR/../plan-todo.sh"
 fi
+if ! declare -F ralph_state_sessions_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_GRAPH_COMPOSITE_SUCCESS_DIR/../state-paths.sh"
+fi
 
 graph_composite_success_sha256_file() {
   local path="$1"
@@ -86,7 +90,7 @@ graph_composite_success_validate() {
     GRAPH_COMPOSITE_SUCCESS_REASON="internal-plan-incomplete"; return 1
   fi
   session_key="${namespace}-${node_id}"; session_key="$(printf '%s' "$session_key" | sed 's/[^A-Za-z0-9_.-]/_/g')"
-  if [[ -e "$state_root/sessions/$session_key/pending-human.txt" ]]; then
+  if [[ -e "$(ralph_state_sessions_dir "$state_root" "$session_key")/pending-human.txt" ]]; then
     GRAPH_COMPOSITE_SUCCESS_REASON="pending-human-request"; return 1
   fi
   stage="$(_graph_composite_success_stage "$graph" "$node_id")" || { GRAPH_COMPOSITE_SUCCESS_REASON="unknown-node"; return 1; }

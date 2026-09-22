@@ -78,10 +78,17 @@ def _collect_proxy_read_bytes(
     plan_key = _resolve_plan_key(plan_key)
     if not workspace_root or not plan_key:
         return None
-    index_path = os.path.join(
-        workspace_root, "tool-results", plan_key, "index.jsonl"
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    candidates = []
+    if layout != "1":
+        candidates.append(
+            os.path.join(workspace_root, "cache", "tool-results", plan_key, "index.jsonl")
+        )
+    candidates.append(
+        os.path.join(workspace_root, "tool-results", plan_key, "index.jsonl")
     )
-    if not os.path.isfile(index_path):
+    index_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not index_path:
         return None
     total = 0
     matched = False

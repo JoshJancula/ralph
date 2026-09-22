@@ -15,7 +15,7 @@ make_run() {
   local ns_dir="$1" run_id="$2" status="$3"
   local run_dir="$ns_dir/$run_id"
   mkdir -p "$run_dir"
-  printf '{"schemaVersion":1,"runId":"%s","status":"%s"}\n' "$run_id" "$status" \
+  printf '{"schemaVersion":1,"kind":"graph","runId":"%s","status":"%s"}\n' "$run_id" "$status" \
     > "$run_dir/run.json"
 }
 
@@ -93,7 +93,8 @@ make_prunable_workspace() {
   terminal_path="$ns_dir/run-terminal/workspaces/nodes/$node_key"
   graph_workspace_cleanup_run "$ns_dir/run-terminal"
   [ ! -e "$terminal_path" ]
-  [ -f "$ns_dir/run-terminal/workspaces/changesets/$node_key.tar" ]
+  [ -f "$ns_dir/run-terminal/workspaces/changesets/$node_key.tar.gz" ]
+  [ -f "$ns_dir/run-terminal/workspaces/changesets/$node_key.fallback.json" ]
 
   make_prunable_workspace "$ns_dir" "run-running" "running" "$project"
   running_path="$ns_dir/run-running/workspaces/nodes/$node_key"
@@ -341,4 +342,27 @@ make_prunable_workspace() {
   [ "$(cat "$decoy")" = "not-uniquely-owned" ]
   [ -f "$historical_file" ]
   [ "$(cat "$historical_file")" = "historical" ]
+}
+
+@test "base pruning keeps base/ for runs whose workspaces were compacted into reconstruction bundles" {
+  local root ns_dir run
+  root="$(mktemp -d)"
+  ns_dir="$root/.ralph-workspace/graph-runs/myns"
+  for run in run-a run-b run-c run-bundle run-plain; do
+    make_run "$ns_dir" "$run" succeeded
+    mkdir -p "$ns_dir/$run/base/source"
+    printf 'x\n' >"$ns_dir/$run/base/source/file.txt"
+  done
+  mkdir -p "$ns_dir/run-bundle/workspaces/changesets"
+  printf '{"kind":"graph-workspace-reconstruction"}\n' \
+    >"$ns_dir/run-bundle/workspaces/changesets/node.reconstruction.json"
+  for run in run-a run-b run-c; do set_mtime_days_ago "$ns_dir/$run" 100; done
+  for run in run-bundle run-plain; do set_mtime_days_ago "$ns_dir/$run" 200; done
+
+  RALPH_PLAN_WORKSPACE_ROOT="$root/.ralph-workspace" \
+    cleanup_plan_prune_graph_bases "$root" myns >/dev/null
+
+  [ -d "$ns_dir/run-bundle/base" ]
+  [ ! -d "$ns_dir/run-plain/base" ]
+  rm -rf "$root"
 }

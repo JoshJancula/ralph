@@ -275,7 +275,6 @@ Widget rule body.'
   [[ "$output" == *"are the primary exploration tools"* ]]
   [[ "$output" == *"Native"* && "$output" == *"Grep"* && "$output" == *"Glob"* ]]
   [[ "$output" == *"mcp__ralph__ralph_proxy_shell"* ]]
-  [[ "$output" == *"read-only plan roots"* ]]
   [[ "$output" == *"mcp__ralph__ralph_proxy_batch"* ]]
   [[ "$output" != *"primary path for read"* ]]
   [[ "$output" != *"does NOT satisfy that requirement"* ]]
@@ -291,13 +290,12 @@ Widget rule body.'
 }
 
 # D4 / F6 (other runtimes): same native-first exploration catalog; proxy shell
-# for shell; proxy read reserved for plan roots / batch.
+# for shell; exploration reads/greps/globs are batch-internal only.
 @test "cursor ralph catalog guidance prefers native exploration over proxy read/search" {
   run ralph_mode_prompt_guidance_ralph_catalog cursor
   [ "$status" -eq 0 ]
   [[ "$output" == *"are the primary exploration tools"* ]]
   [[ "$output" == *"ralph_proxy_shell"* ]]
-  [[ "$output" == *"read-only plan roots"* ]]
   [[ "$output" == *"ralph_proxy_batch"* ]]
   [[ "$output" != *"primary path for read"* ]]
   [[ "$output" != *"Use native \`Read\` only immediately before"* ]]
@@ -308,7 +306,6 @@ Widget rule body.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"are the primary exploration tools"* ]]
   [[ "$output" == *"ralph_proxy_shell"* ]]
-  [[ "$output" == *"read-only plan roots"* ]]
   [[ "$output" != *"primary path for read"* ]]
   [[ "$output" != *"Use native \`Read\` only immediately before"* ]]
 }
@@ -318,7 +315,6 @@ Widget rule body.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"are the primary exploration tools"* ]]
   [[ "$output" == *"ralph_proxy_shell"* ]]
-  [[ "$output" == *"read-only plan roots"* ]]
   [[ "$output" != *"primary path for read"* ]]
   [[ "$output" != *"Prefer Ralph tooling first"* ]]
   [[ "$output" != *"Use \`ralph_proxy_read\` for large file reads instead of native"* ]]
@@ -338,7 +334,6 @@ Widget rule body.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"are the primary exploration tools"* ]]
   [[ "$output" == *"ralph_proxy_shell"* ]]
-  [[ "$output" == *"read-only plan roots"* ]]
   [[ "$output" != *"primary path for read"* ]]
 }
 

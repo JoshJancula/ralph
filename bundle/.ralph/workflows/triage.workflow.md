@@ -38,6 +38,14 @@ pipeline:
         anything.
         {{INCLUDE:investigation-rigor}}
         {{INCLUDE:evidence-citation}}
+
+        When RALPH_JEV_ROUTING=1 and Jev is available, the scheduler may ask the
+        graph.router-confidence question set before this agent turn for any node
+        that carries a non-empty stage.router object (agent or router type). A
+        high-confidence Jev act writes triage-decision.json (machine reason
+        only) and skips the agent; gather/fallback or Jev unavailable keeps this
+        stage unchanged. Jev never bypasses router-decision.schema.json or
+        resolve-target validation against allowedTargets.
       router:
         allowedTargets:
           - scope-request
@@ -113,13 +121,16 @@ pipeline:
         naming the single Ralph workflow that should execute this work and why the
         alternatives lose. Choose from the workflows actually installed here; list
         them with `ralph workflow list` rather than assuming a catalog. Match the
-        shape of the work to the shape of the workflow: a defect with an
-        established root cause, a feature needing requirements work, a
-        behavior-preserving restructure, a read-only assessment or review of
-        existing work, and a change whose blast radius warrants an operator
-        approving the plan before any code moves are all different answers. If the
-        findings show an open decision only the operator can make, recommend that
-        the operator settle it first and say exactly what you need from them.
+        shape of the work to the shape of the workflow: choose
+        small-feature-delivery only when intent is unambiguous, the change is
+        localized, and executable acceptance checks are known up front; choose
+        feature-delivery when investigation is needed or the surface is broad;
+        choose human-verified-delivery when an operator must approve the plan or
+        result. A TODO count is never the criterion. A defect with an established
+        root cause, a behavior-preserving restructure, and a read-only assessment
+        or review of existing work are also different answers. If the findings
+        show an open decision only the operator can make, recommend that the
+        operator settle it first and say exactly what you need from them.
 
         Then write the sole required planner JSON to
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/triage-plan.json as the runnable

@@ -147,3 +147,41 @@ teardown() {
     ls -ld \"\$RALPH_SESSION_DIR\" | awk '{print \$1}' | grep -q 'rwx------'
   "
 }
+
+@test "layout 2 session home defaults to workspace .ralph-workspace/internal/sessions" {
+  local workspace="$TMPDIR/project"
+  mkdir -p "$workspace"
+
+  unset RALPH_PLAN_SESSION_HOME
+  unset RALPH_HOME
+
+  local result
+  result="$(RALPH_STATE_LAYOUT=2 bash -c "
+    source '$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh'
+    RALPH_PLAN_KEY='test-plan'
+    RALPH_SESSION_DIR=''
+    ralph_session_init '$workspace' ''
+    echo \"\$RALPH_PLAN_SESSION_HOME\"
+  ")"
+
+  [[ "$result" == *"/.ralph-workspace/internal/sessions" ]]
+}
+
+@test "layout 2 keeps resolving a plan whose sessions exist only at the layout-1 path" {
+  local workspace="$TMPDIR/project"
+  mkdir -p "$workspace/.ralph-workspace/sessions/test-plan"
+
+  unset RALPH_PLAN_SESSION_HOME
+  unset RALPH_HOME
+
+  local result
+  result="$(RALPH_STATE_LAYOUT=2 bash -c "
+    source '$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh'
+    RALPH_PLAN_KEY='test-plan'
+    RALPH_SESSION_DIR=''
+    ralph_session_init '$workspace' ''
+    echo \"\$RALPH_PLAN_SESSION_HOME\"
+  ")"
+
+  [[ "$result" == *"/.ralph-workspace/sessions" ]]
+}

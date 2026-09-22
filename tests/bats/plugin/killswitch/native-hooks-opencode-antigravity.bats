@@ -194,38 +194,81 @@ NODE
   jq -e '.runtime == "opencode" and .decision == "fatal" and .applied == true' "$RECORD"
 }
 
-@test "antigravity fatal denylist matches core evaluator and writes sentinel" {
-  local payload expected
-  payload="$(pretool_json preToolUse Shell "echo hi")"
-  expected="$(core_decision antigravity Shell "echo hi")"
-  [ "$expected" = "fatal" ]
+AGY_FIXTURES="$REPO_ROOT/tests/bats/fixtures/antigravity-hooks"
 
-  run bash -c "$(hook_env native) bash '$ANTIGRAVITY_HOOK'" <<<"$payload"
-  [ "$status" -eq 77 ]
+agy_payload() {
+  local fixture="${1:-pretool-run-command.json}"
+  local command="${2:-}"
+  jq -c --arg ws "$WS" --arg cmd "$command" '
+    .workspacePaths = [$ws]
+    | if $cmd != "" then .toolCall.args.CommandLine = $cmd else . end
+  ' "$AGY_FIXTURES/$fixture"
+}
+
+agy_run_hook() {
+  local mode="${1:-native}"
+  local overrides="${2:-}"
+  local payload="${3:-}"
+  run bash -c "$(hook_env "$mode") $overrides bash '$ANTIGRAVITY_HOOK'" <<<"$payload"
+}
+
+agy_deny_denylist() {
+  jq '.tool_denylist += ["run_command"]' "$WS/.ralph-workspace/killswitch.json" >"$WS/ks.tmp"
+  mv "$WS/ks.tmp" "$WS/.ralph-workspace/killswitch.json"
+}
+
+@test "antigravity killswitch fatal yields a deny decision and writes sentinel" {
+  agy_deny_denylist
+  agy_run_hook native "" "$(agy_payload pretool-run-command.json "echo hi")"
+  [ "$status" -eq 0 ]
+  jq -e '.decision == "deny" and (.reason | length > 0)' <<<"$output"
   [ -f "$(sentinel_path)" ]
-  jq -e '.tool == "Shell" and .reason == "tool denylist"' "$(sentinel_path)"
   jq -e '.runtime == "antigravity" and .decision == "fatal" and .applied == true' "$RECORD"
 }
 
-@test "ralph-mode-off does not write a sentinel for opencode or antigravity" {
-  local payload
-  payload="$(pretool_json preToolUse Shell "echo hi")"
-
-  RALPH_MODE=no run invoke_opencode_hook "tool.execute.before" "bash" "echo hi"
+@test "antigravity killswitch deny is skipped when ralph mode is off" {
+  agy_deny_denylist
+  agy_run_hook no "" "$(agy_payload pretool-run-command.json "echo hi")"
   [ "$status" -eq 0 ]
-  [ ! -f "$(sentinel_path)" ]
-  jq -e '.runtime == "opencode" and .decision == "skip" and .applied == false' "$RECORD"
-
-  : >"$RECORD"
-  run bash -c "$(hook_env no) bash '$ANTIGRAVITY_HOOK'" <<<"$payload"
-  [ "$status" -eq 0 ]
+  [ "$output" = '{"decision":"allow"}' ]
   [ ! -f "$(sentinel_path)" ]
   jq -e '.runtime == "antigravity" and .decision == "skip" and .applied == false' "$RECORD"
 }
 
+@test "antigravity wrapper gate rewrites run_command into overwrite.CommandLine and logs it" {
+  agy_run_hook native "RALPH_NATIVE_SHELL_WRAPPER=1 RALPH_BASH_REWRITE=1 RALPH_BASH_REWRITE_LOG=$WS/rewrite.jsonl" \
+    "$(agy_payload pretool-run-command.json "pytest tests")"
+  [ "$status" -eq 0 ]
+  jq -e '.decision == "allow" and (.overwrite.CommandLine | contains("native-shell-wrapper"))' <<<"$output"
+  [ -s "$WS/rewrite.jsonl" ]
+}
+
+@test "antigravity fail-open cases all print an allow decision" {
+  local cases=(
+    "native||"
+    "native||not json at all"
+    "native||{}"
+    "native|RALPH_NATIVE_SHELL_WRAPPER=0 RALPH_BASH_REWRITE=0|$(agy_payload pretool-run-command.json "npm test")"
+    "native|RALPH_NATIVE_SHELL_WRAPPER=1|$(agy_payload pretool-view-file.json)"
+    "native|RALPH_NATIVE_SHELL_WRAPPER=1|$(jq -c '.workspacePaths = []' "$AGY_FIXTURES/pretool-run-command.json")"
+    "native|RALPH_NATIVE_SHELL_WRAPPER=1|$(agy_payload pretool-run-command.json "npm test" | jq -c '.toolCall.args.CommandLine = ""')"
+    "native|RALPH_NATIVE_SHELL_WRAPPER=1|$(agy_payload pretool-run-command.json "npm test" | jq -c '.workspacePaths = ["/nonexistent-agy-ws"]')"
+  )
+  local c mode overrides payload
+  for c in "${cases[@]}"; do
+    mode="${c%%|*}"
+    c="${c#*|}"
+    overrides="${c%%|*}"
+    payload="${c#*|}"
+    agy_run_hook "$mode" "$overrides" "$payload"
+    [ "$status" -eq 0 ]
+    [ "$output" = '{"decision":"allow"}' ]
+  done
+}
+
 @test "nudge does not write a sentinel for opencode or antigravity" {
   local payload
-  payload="$(read_nudge_json preToolUse Grep)"
+  payload="$(agy_payload pretool-view-file.json)"
 
   run invoke_opencode_hook "tool.execute.before" "grep" ""
   [ "$status" -eq 0 ]
@@ -233,8 +276,9 @@ NODE
   jq -e '.runtime == "opencode" and .decision == "nudge" and .applied == false' "$RECORD"
 
   : >"$RECORD"
-  run bash -c "$(hook_env native) bash '$ANTIGRAVITY_HOOK'" <<<"$payload"
+  agy_run_hook native "" "$payload"
   [ "$status" -eq 0 ]
+  [ "$output" = '{"decision":"allow"}' ]
   [ ! -f "$(sentinel_path)" ]
   jq -e '.runtime == "antigravity" and .decision == "nudge" and .applied == false' "$RECORD"
 }

@@ -50,6 +50,23 @@ function fakeFacade(workflows: WorkflowListItem[] = [
     },
   },
   {
+    id: 'small-feature-delivery',
+    scope: 'bundled',
+    overview: 'Deliver an unambiguous localized feature',
+    editable: false,
+    catalog: {
+      purpose: 'Deliver an unambiguous localized feature',
+      expectedOutcome: 'Independently verified delivery',
+      mode: 'dependency',
+      stageCount: 5,
+      executableStageCount: 3,
+      supervisorStageCount: 2,
+      requiresSuppliedPlan: false,
+      writes: true,
+      hasHumanGates: false,
+    },
+  },
+  {
     id: 'human-verified-delivery',
     scope: 'bundled',
     overview: 'Deliver with human gates',
@@ -231,6 +248,7 @@ describe('WorkflowNewPageComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="wizard-panel-template"]')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('[data-testid="wizard-template-bug-fix"]')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('[data-testid="wizard-template-plan-delivery"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-testid="wizard-template-small-feature-delivery"]')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('[data-testid="wizard-template-blank"]')).not.toBeNull();
     expect(fixture.componentInstance.canGoNext()).toBe(false);
   });

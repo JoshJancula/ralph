@@ -103,6 +103,10 @@ ralph_native_hook_normalize_exploration_tool_name() {
   esac
 }
 
+# Maps a native tool name to the envelope/policy-cap key used for its output.
+# These keys keep the historical ralph_proxy_* spelling because policy
+# toolResultByteCaps and the stored-result schema are keyed by them. The
+# matching MCP tools were removed; nothing here dispatches to them.
 ralph_native_hook_native_to_proxy_tool() {
   local tool_name="${1:-}"
   case "$tool_name" in

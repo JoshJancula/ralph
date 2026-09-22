@@ -146,9 +146,8 @@ teardown() {
   [[ "$text" != *"INFO: ok"* ]]
 }
 
-@test "ralph_proxy_batch reports per-operation error when search is disabled" {
+@test "ralph_proxy_batch rejects search operations per operation" {
   command -v jq >/dev/null || skip "jq required"
-  cp -R "$REPO_ROOT/tests/fixtures/mcp-proxy/search-ranking/." "$WS/search-fixture/"
   printf 'before-search\n' >"$WS/before-search.txt"
   printf 'after-search\n' >"$WS/after-search.txt"
 
@@ -167,7 +166,7 @@ teardown() {
   printf '%s\n' "$response" | jq -e '.isError == false'
   [[ "$text" == *"1. ralph_proxy_read: ok |"* ]]
   [[ "$text" == *"before-search"* ]]
-  [[ "$text" == *"2. ralph_proxy_search: error | ralph_proxy_search is not enabled"* ]]
+  [[ "$text" == *"2. ralph_proxy_search: error | operation tool not allowed in batch"* ]]
   [[ "$text" == *"3. ralph_proxy_read: ok |"* ]]
   [[ "$text" == *"after-search"* ]]
 }
@@ -322,7 +321,7 @@ teardown() {
     ' _ "$POLICY_LIB" "$RESULT_LIB" "$TOOLS_LIB" "$REPO_ROOT" "$UPSTREAM_SCRIPT" 2>/dev/null)"
   printf '%s\n' "$merged_json" | jq -e '
     (.result.tools | map(.name) | index("ralph_proxy_batch")) != null
-    and (.result.tools | map(.name) | index("ralph_proxy_read")) != null
+    and (.result.tools | map(.name) | index("ralph_proxy_read")) == null
   '
 }
 

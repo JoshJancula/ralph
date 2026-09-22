@@ -77,7 +77,16 @@ _DEPLOY_PUBLISH_RELEASE_RE = re.compile(r"(?i)\b(?:deploy|publish|release)\b")
 
 
 def profiles_dir(state_root: Path) -> Path:
-    return Path(state_root) / "command-profiles"
+    """Layout-aware command-profiles home (internal/ under layout 2)."""
+    root = Path(state_root)
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return root / "command-profiles"
+    shared = root / "internal" / "command-profiles"
+    legacy = root / "command-profiles"
+    if legacy.is_dir() and not shared.is_dir():
+        return legacy
+    return shared
 
 
 def profiles_path(state_root: Path) -> Path:

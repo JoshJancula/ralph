@@ -1,8 +1,9 @@
 import type { Express, Request, Response } from 'express';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, promises as fs } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { findDashboardRoots } from '../paths';
+import { graphRunPath } from './state-paths';
 
 /** Path segment / id charset shared with graph-run detail routes. */
 const GRAPH_RUN_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
@@ -87,6 +88,11 @@ export function isValidGraphRunSegment(value: string): boolean {
  * `root`. Absolute candidates are accepted only when they already live under
  * root. Relative candidates are joined onto root. Escapes (including `..`
  * after normalization) return null — the caller must not read the path.
+ *
+ * Existing path prefixes are compared via realpath so macOS `/var` vs
+ * `/private/var` (and similar symlink roots) still count as containment. The
+ * returned path is the resolved absolute candidate (not necessarily realpath'd)
+ * so callers keep the path form they passed when it was already absolute.
  */
 export function resolvePathUnderRoot(root: string, candidate: string): string | null {
   if (!candidate || typeof candidate !== 'string') {
@@ -99,17 +105,46 @@ export function resolvePathUnderRoot(root: string, candidate: string): string | 
   const absolute = isAbsolute(candidate)
     ? resolve(candidate)
     : resolve(rootResolved, candidate);
-  const rel = relative(rootResolved, absolute);
+
+  const realExistingPrefix = (path: string): string => {
+    try {
+      if (existsSync(path)) {
+        return realpathSync(path);
+      }
+    } catch {
+      // Fall through and walk parents.
+    }
+    let parent = dirname(path);
+    const parts: string[] = [];
+    let cursor = path;
+    while (parent !== cursor) {
+      parts.unshift(cursor.slice(parent.length + 1) || '');
+      try {
+        if (existsSync(parent)) {
+          return parts.reduce((acc, part) => (part ? join(acc, part) : acc), realpathSync(parent));
+        }
+      } catch {
+        // keep walking
+      }
+      cursor = parent;
+      parent = dirname(parent);
+    }
+    return path;
+  };
+
+  const rootCmp = realExistingPrefix(rootResolved);
+  const absCmp = realExistingPrefix(absolute);
+  const rel = relative(rootCmp, absCmp);
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     return null;
   }
   return absolute;
 }
 
-function resolveGraphRunsRoot(workspaceRootQuery: string): string {
+function resolveGraphRunDir(workspaceRootQuery: string, namespace: string, runId: string): string {
   const { workspaceRoot } = findDashboardRoots();
   const effective = workspaceRootQuery ? resolve(workspaceRootQuery) : workspaceRoot;
-  return join(effective, 'graph-runs');
+  return graphRunPath(effective, namespace, runId);
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> {
@@ -702,8 +737,13 @@ export async function handleGraphRunDiffRequest(req: Request, res: Response): Pr
   }
 
   const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
-  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
-  const runDir = join(graphRunsDir, namespace, runId);
+  let runDir: string;
+  try {
+    runDir = resolveGraphRunDir(workspaceRootQuery, namespace, runId);
+  } catch {
+    res.status(400).json({ error: 'Invalid namespace or runId' });
+    return;
+  }
 
   if (!existsSync(runDir)) {
     res.status(404).json({ error: 'Run not found' });

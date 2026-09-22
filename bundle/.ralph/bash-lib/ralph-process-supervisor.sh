@@ -101,6 +101,13 @@ ralph_process_scope_exec() {
   local kind="$1"
   local runtime="$2"
   shift 2
+  # Bats graph-dispatch fixtures use a shell stub in place of run-plan.  They
+  # deliberately exercise dispatch/materialization, not guardian lifecycle;
+  # this opt-in keeps the fixture independent of host process inspection.
+  if [[ "${RALPH_TEST_DIRECT_PROCESS_SCOPE:-0}" == "1" ]]; then
+    "$@"
+    return $?
+  fi
   local script scope_id
   ralph_process_require_python || return $?
   if [[ -z "${RALPH_PROCESS_RUN_DIR:-}" ]]; then

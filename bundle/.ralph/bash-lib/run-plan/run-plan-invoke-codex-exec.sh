@@ -118,6 +118,12 @@ if [[ "$resume_bare" != "1" && "$resume_session" != "1" ]]; then
   fi
 fi
 
+# Live web search is a config value, so it applies to fresh runs and resume alike
+# (`codex exec resume` does not accept --search).
+if [[ "${CODEX_PLAN_WEB_SEARCH:-0}" == "1" ]]; then
+  args+=(--config 'web_search="live"')
+fi
+
 # Append bypass flag after sandbox/model/add-dir logic, before --json or prompt.
 if [[ "${CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX:-0}" == "1" ]]; then
   args+=(--dangerously-bypass-approvals-and-sandbox)

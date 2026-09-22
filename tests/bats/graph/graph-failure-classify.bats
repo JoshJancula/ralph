@@ -273,6 +273,154 @@ assert_classification() {
 }
 
 # ---------------------------------------------------------------------------
+# Optional Jev text-tier classifier (graph.failure-class). Structured tiers
+# stay unreachable; low confidence falls through to graph_failure_match_text.
+# ---------------------------------------------------------------------------
+
+_jev_failure_fixture() {
+  local out_path="$1"
+  local choice="$2"
+  local confidence="$3"
+  python3 - "$out_path" "$choice" "$confidence" <<'PY'
+import json, sys
+out, choice, conf = sys.argv[1], sys.argv[2], float(sys.argv[3])
+classes = [
+    "transient-runtime",
+    "agent-correctable",
+    "operator-permission",
+    "plan-contract",
+    "terminal-configuration",
+    "integrity",
+    "cancelled",
+    "unknown",
+]
+probs = {c: (conf if c == choice else max(0.0, (1.0 - conf) / max(1, len(classes) - 1))) for c in classes}
+doc = {
+    "model": "jev-1.13.0",
+    "answers": {
+        "failure_class": {
+            "choice": choice,
+            "probabilities": probs,
+            "confidence": conf,
+        }
+    },
+    "usage": {"input_tokens": 40, "output_tokens": 8},
+}
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+PY
+}
+
+_jev_failure_env() {
+  local tmpd="$1"
+  local fixture_dir="$2"
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  export RALPH_JEV=1
+  export RALPH_JEV_ENV_FILE=0
+  export TYPESAFE_API_KEY="test-key-jev-failure"
+  export JEV_TRANSPORT=fixture
+  export JEV_FIXTURE_DIR="$fixture_dir"
+  export RALPH_JEV_STATE_DIR="$tmpd/jev-state"
+  export RALPH_CONFIG_HOME="$tmpd/config"
+  export HOME="$tmpd/home"
+  export RALPH_WAIT_SCALE=0
+  mkdir -p "$tmpd/jev-state" "$tmpd/config" "$tmpd/home"
+}
+
+_jev_failure_unset() {
+  unset RALPH_JEV TYPESAFE_API_KEY JEV_TRANSPORT JEV_FIXTURE_DIR \
+    RALPH_JEV_STATE_DIR RALPH_JEV_ENV_FILE RALPH_JEV_REGISTRY RALPH_WAIT_SCALE
+}
+
+@test "jev failure: structured evidence classifies identically with Jev enabled and disabled" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd fixture_dir report disabled_out enabled_out
+  tmpd="$(mktemp -d)"
+  fixture_dir="$tmpd/fixtures"
+  mkdir -p "$fixture_dir"
+  # Fixture would claim agent-correctable; structured kind:network must win.
+  _jev_failure_fixture "$fixture_dir/graph.failure-class.json" "agent-correctable" "0.95"
+  report='{"kind":"network","summary":"provider connection reset"}'
+
+  _jev_failure_unset
+  disabled_out="$(graph_failure_classify "$report")"
+
+  _jev_failure_env "$tmpd" "$fixture_dir"
+  enabled_out="$(graph_failure_classify "$report")"
+  _jev_failure_unset
+
+  [ "$disabled_out" = "$enabled_out" ]
+  assert_classification "$enabled_out" "transient-runtime" "true" "none"
+
+  # v2 structured timeout marker must also ignore the Jev fixture.
+  _jev_failure_env "$tmpd" "$fixture_dir"
+  enabled_out="$(graph_failure_classify_v2 '{"timeoutMarker":{"owner":"run-plan","seconds":2},"text":"permission denied"}')"
+  _jev_failure_unset
+  disabled_out="$(graph_failure_classify_v2 '{"timeoutMarker":{"owner":"run-plan","seconds":2},"text":"permission denied"}')"
+  [ "$(jq -c '{classification,cause,retryable}' <<<"$disabled_out")" = \
+    "$(jq -c '{classification,cause,retryable}' <<<"$enabled_out")" ]
+  [ "$(jq -r '.classification' <<<"$enabled_out")" = "transient-runtime" ]
+
+  rm -rf "$tmpd"
+}
+
+@test "jev failure: high-confidence text-only fixture uses the Jev class" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd fixture_dir
+  tmpd="$(mktemp -d)"
+  fixture_dir="$tmpd/fixtures"
+  mkdir -p "$fixture_dir"
+  # Gibberish that match_text would not classify; Jev picks agent-correctable.
+  _jev_failure_fixture "$fixture_dir/graph.failure-class.json" "agent-correctable" "0.92"
+
+  _jev_failure_env "$tmpd" "$fixture_dir"
+  run graph_failure_classify '{"message":"stage ended with opaque harness code ZZZ-9"}'
+  _jev_failure_unset
+  [ "$status" -eq 0 ]
+  assert_classification "$output" "agent-correctable" "true" "none"
+
+  rm -rf "$tmpd"
+}
+
+@test "jev failure: low-confidence text-only fixture falls through to match_text" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd fixture_dir
+  tmpd="$(mktemp -d)"
+  fixture_dir="$tmpd/fixtures"
+  mkdir -p "$fixture_dir"
+  # Jev would prefer transient-runtime, but confidence is below actThreshold;
+  # permission wording must still classify via the glob cascade.
+  _jev_failure_fixture "$fixture_dir/graph.failure-class.json" "transient-runtime" "0.40"
+
+  _jev_failure_env "$tmpd" "$fixture_dir"
+  run graph_failure_classify '{"message":"Error: permission denied for Bash"}'
+  _jev_failure_unset
+  [ "$status" -eq 0 ]
+  assert_classification "$output" "operator-permission" "false" "await-operator"
+
+  rm -rf "$tmpd"
+}
+
+@test "jev failure: retryable stays a pure function of class for all eight classes" {
+  local class
+  while IFS= read -r class; do
+    [[ -n "$class" ]] || continue
+    case "$class" in
+      transient-runtime|agent-correctable)
+        [ "$(graph_failure_retryable "$class")" = "true" ]
+        ;;
+      *)
+        [ "$(graph_failure_retryable "$class")" = "false" ]
+        ;;
+    esac
+  done <<< "$GRAPH_FAILURE_KNOWN_CLASSES"
+}
+
+# ---------------------------------------------------------------------------
 # G10/G11 termination branch: six distinct causes, markers outrank wording.
 # ---------------------------------------------------------------------------
 

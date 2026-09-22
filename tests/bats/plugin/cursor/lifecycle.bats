@@ -38,7 +38,7 @@ teardown() {
     [ ! -e "$PLUGIN_ROOT/skills/$workflow/SKILL.md" ]
   done
   [ "$(find "$PLUGIN_ROOT/rules" -maxdepth 1 -type f -name '*.mdc' | wc -l | tr -d ' ')" -eq 2 ]
-  [ "$(find "$PLUGIN_ROOT/hooks" -maxdepth 1 -type f -name '*.sh' | wc -l | tr -d ' ')" -eq 7 ]
+  [ "$(find "$PLUGIN_ROOT/hooks" -maxdepth 1 -type f -name '*.sh' | wc -l | tr -d ' ')" -eq 5 ]
 
   jq -e '
     .id == "ralph-orchestrator" and

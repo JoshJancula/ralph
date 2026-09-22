@@ -170,15 +170,6 @@
         "bundle/.ralph/python/mcp-proxy-search-rank.py"
       ]
     },
-    "mcp-path-allowed": {
-      "precision_at_5": 1.0,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
-      ]
-    },
     "mcp-permission-classify-path": {
       "precision_at_5": 1.0,
       "recall_at_10": 1.0,
@@ -278,15 +269,6 @@
         "tests/python/test_tool_call_target_telemetry.py"
       ]
     },
-    "shell-gather-candidates": {
-      "precision_at_5": 0.6,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
-      ]
-    },
     "shell-inject-handoffs": {
       "precision_at_5": 1.0,
       "recall_at_10": 0.5,
@@ -330,15 +312,6 @@
       "reciprocal_rank": 1.0,
       "safety_top10": [
         "tests/python/test_evaluator_contract.py"
-      ]
-    },
-    "test-proxy-search-bats": {
-      "precision_at_5": 0.8,
-      "recall_at_10": 1.0,
-      "recall_at_5": 1.0,
-      "reciprocal_rank": 1.0,
-      "safety_top10": [
-        "tests/bats/mcp-proxy/mcp-proxy-search.bats"
       ]
     },
     "test-search-rank-unit": {

@@ -10,8 +10,9 @@
 # resume (succeeded nodes stay succeeded). See p3-resume for the load-bearing
 # rationale.
 #
-# Layout under <state-root>/graph-runs/<namespace>/<run_id>/ (the default
-# state root remains <workspace>/.ralph-workspace):
+# Layout under <state-root>/graph-runs/<namespace>/<run_id>/ (layout 1) or
+# <state-root>/runs/<run_id>/engine/graph/ (layout 2; internal layout unchanged).
+# The default state root remains <workspace>/.ralph-workspace:
 #   run.json     - schemaVersion, ralphVersion, runId, planPath, graphSha,
 #                  startedAt, status, maxParallel, tooling. tooling records
 #                  the workflow-level defaultProfile and the per-node
@@ -30,7 +31,7 @@
 #                  are an opaque parent-owned cost that Ralph cannot itemize, so
 #                  a run that had nativeSubagents=inherit for one node is not
 #                  comparable to a run that used off without this provenance.
-# A `latest` symlink at <state-root>/graph-runs/<namespace>/latest
+# A `latest` symlink at <state-root>/graph-runs/<namespace>/latest (layout 1)
 # points at the newest run directory so resume can address it by name.
 #
 # All node state writes go through the shared ralph_atomic_write_json helper
@@ -45,6 +46,11 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 GRAPH_STATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! declare -F ralph_state_graph_run_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$GRAPH_STATE_SCRIPT_DIR/../state-paths.sh"
+fi
 
 if ! declare -F ralph_atomic_write_json >/dev/null 2>&1; then
   # shellcheck source=../atomic-json.sh
@@ -125,7 +131,7 @@ graph_state_run_dir() {
     echo "Error: graph_state_run_dir requires workspace, namespace, and run_id" >&2
     return 1
   fi
-  printf '%s/%s\n' "$(graph_state_runs_namespace_root "$workspace" "$namespace")" "$run_id"
+  ralph_state_graph_run_dir "$(graph_state_state_root "$workspace")" "$namespace" "$run_id"
 }
 
 # graph_state_run_file <workspace> <namespace> <run_id>
@@ -370,10 +376,19 @@ graph_state_validate_run_status() {
 # graph_state_update_latest <workspace> <namespace> <run_id>
 # Points the `latest` symlink at <run_id>. Idempotent. Uses ln -sfn where
 # available, falls back to rm + ln -s. Never fails the caller when the
-# namespace directory exists.
+# namespace directory exists. Layout 2 has no per-namespace graph-runs tree,
+# so this is a no-op when the run lives under runs/<id>/engine/graph/.
 graph_state_update_latest() {
   local workspace="$1" namespace="$2" run_id="$3"
-  local ns_root symlink target
+  local ns_root symlink target run_dir state_root
+  state_root="$(graph_state_state_root "$workspace")" || return 1
+  run_dir="$(ralph_state_graph_run_dir "$state_root" "$namespace" "$run_id")" || return 1
+  # Match on the layout-2 suffix only: the resolver returns a physical path
+  # (pwd -P), which differs from a state root under /var, /tmp, or any
+  # symlinked directory, so a "$state_root/..." prefix test would miss it.
+  if [[ "$run_dir" == */runs/*/engine/graph ]]; then
+    return 0
+  fi
   ns_root="$(graph_state_runs_namespace_root "$workspace" "$namespace")" || return 1
   symlink="$(graph_state_latest_symlink "$workspace" "$namespace")" || return 1
   if [[ ! -d "$ns_root" ]]; then
@@ -404,7 +419,7 @@ graph_state_read_graph() {
 # Preserves all other fields by reading the existing file and merging.
 graph_state_set_run_status() {
   local workspace="$1" namespace="$2" run_id="$3" status="$4"
-  local run_file base_json
+  local run_file base_json state_root
   if ! graph_state_validate_run_status "$status"; then
     echo "Error: invalid run status: ${status:-}" >&2
     return 1
@@ -418,6 +433,16 @@ graph_state_set_run_status() {
     --arg status "$status"; then
     echo "Error: failed to update run status" >&2
     return 1
+  fi
+  # Layout-2 standalone graph runs mirror status onto the outer catalog so
+  # managed READMEs refresh on status change and terminal status.
+  state_root="$(graph_state_state_root "$workspace")" || return 0
+  if [[ "$(ralph_state_run_layout "$state_root" "$run_id" 2>/dev/null || true)" == 2 ]]; then
+    ralph_state_catalog_update "$state_root" "$run_id" \
+      '.runKind = (.runKind // "graph")
+       | .status = $status
+       | .endedAt = (if ($status | IN("succeeded","failed","cancelled")) then (.endedAt // $now) else null end)' \
+      --arg status "$status" --arg now "$(ralph_state_now_iso)" || true
   fi
   return 0
 }
@@ -1124,6 +1149,22 @@ graph_state_init_run() {
   if ! mkdir -p "$run_dir" "$nodes_dir"; then
     echo "Error: failed to create run directory: $run_dir" >&2
     return 1
+  fi
+
+  # Standalone graph runs under layout 2 use the graph run id as the outer
+  # catalog id. Workflow-backed runs already have a catalog from admission.
+  local state_root catalog_file
+  state_root="$(graph_state_state_root "$workspace")" || return 1
+  if [[ "$run_dir" == */runs/"$run_id"/engine/graph ]]; then
+    catalog_file="$(ralph_state_run_catalog_file "$state_root" "$run_id")" || return 1
+    if [[ ! -f "$catalog_file" ]]; then
+      ralph_state_catalog_update "$state_root" "$run_id" \
+        '.runKind = "graph" | .status = "running" | .artifactNamespace = $ns | .engine = {graph: "engine/graph"}' \
+        --arg ns "$namespace" || {
+        echo "Error: failed to admit layout-2 graph run catalog for $run_id" >&2
+        return 1
+      }
+    fi
   fi
 
   local tmp_graph

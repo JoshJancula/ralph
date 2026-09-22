@@ -117,22 +117,6 @@
       "rationale": "Loads inline or file-based MCP proxy policy for owned tools."
     },
     {
-      "id": "shell-gather-candidates",
-      "category": "shell_function",
-      "query": "ralph_mcp_proxy_owned_tool_search_gather_candidates",
-      "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
-      ],
-      "line_hints": [
-        2366
-      ],
-      "symbol_hints": [
-        "ralph_mcp_proxy_owned_tool_search_gather_candidates"
-      ],
-      "rationale": "rg/grep candidate gathering used before BM25 ranking."
-    },
-    {
       "id": "shell-inject-handoffs",
       "category": "shell_function",
       "query": "inject_handoffs_into_plan",
@@ -283,16 +267,6 @@
       "rationale": "Contract tests for evaluator JSON parsing and feedback rules."
     },
     {
-      "id": "test-proxy-search-bats",
-      "category": "tests",
-      "query": "ralph_proxy_search searchEnabled policy",
-      "search_path": "tests/bats/mcp-proxy",
-      "relevant_paths": [
-        "tests/bats/mcp-proxy/mcp-proxy-search.bats"
-      ],
-      "rationale": "Bats integration tests for owned search tool policy gating."
-    },
-    {
       "id": "test-continuation-summary",
       "category": "tests",
       "query": "test_continuation_summary render markdown",
@@ -394,22 +368,6 @@
         "tests/bats/plan/validate-plan.bats"
       ],
       "rationale": "Bats coverage for classic and yaml plan format validation."
-    },
-    {
-      "id": "mcp-path-allowed",
-      "category": "mcp_policy",
-      "query": "ralph_mcp_proxy_path_is_allowed",
-      "search_path": "bundle/.ralph/bash-lib/mcp-proxy",
-      "relevant_paths": [
-        "bundle/.ralph/bash-lib/mcp-proxy/mcp-proxy-tools.sh"
-      ],
-      "line_hints": [
-        798
-      ],
-      "symbol_hints": [
-        "ralph_mcp_proxy_path_is_allowed"
-      ],
-      "rationale": "Path allowlist guard for proxy read/search/write operations."
     },
     {
       "id": "mcp-permission-classify-path",

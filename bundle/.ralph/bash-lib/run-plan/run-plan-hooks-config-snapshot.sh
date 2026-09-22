@@ -19,12 +19,16 @@ if ! declare -F ralph_effective_hook_config_resolve_all >/dev/null 2>&1; then
   # shellcheck source=/dev/null
   source "$_RALPH_HOOKS_CONFIG_SNAPSHOT_DIR/run-plan-effective-hook-config.sh"
 fi
+if ! declare -F ralph_state_hooks_config_path >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  source "$_RALPH_HOOKS_CONFIG_SNAPSHOT_DIR/../state-paths.sh"
+fi
 
-# Default snapshot path for a given workspace root.
+# Default snapshot path for a given state root (RALPH_PLAN_WORKSPACE_ROOT).
 ralph_hooks_config_snapshot_path() {
   local workspace_root="${1:-}"
   [[ -n "$workspace_root" ]] || return 1
-  printf '%s/hooks-config.jsonl\n' "${workspace_root%/}"
+  ralph_state_hooks_config_path "${workspace_root%/}"
 }
 
 # Args: workspace_root plan_key iteration runtime [mode] [mode_source]

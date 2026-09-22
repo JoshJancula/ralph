@@ -62,29 +62,52 @@ function findingText(entry: Record<string, unknown>): string {
       } @else {
         <section class="run-list" data-testid="plan-runs-list">
           @for (run of runs(); track run.runId) {
-            <a
-              class="run-card"
-              [class.selected]="run.runId === selectedRunId()"
-              [routerLink]="['/plan-runs', run.runId]"
-              [queryParams]="{ projectRoot: projectRoot(), plan: planPath() }"
-              data-testid="plan-run-card"
-            >
-              <div class="run-card-head">
-                <strong class="run-id">{{ run.runId }}</strong>
-                <span class="status-badge">{{ run.status }}</span>
-              </div>
-              @if (run.source === 'legacy') {
-                <span class="compat-badge" data-testid="run-card-legacy-badge">Legacy layout</span>
+            <div class="run-card-group" [attr.data-testid]="'plan-run-group-' + run.runId">
+              <a
+                class="run-card"
+                [class.selected]="run.runId === selectedRunId()"
+                [routerLink]="['/plan-runs', run.runId]"
+                [queryParams]="{ projectRoot: projectRoot(), plan: planPath() }"
+                data-testid="plan-run-card"
+              >
+                <div class="run-card-head">
+                  <strong class="run-id">{{ run.runId }}</strong>
+                  <span class="status-badge">{{ run.status }}</span>
+                </div>
+                @if (run.source === 'legacy') {
+                  <span class="compat-badge" data-testid="run-card-legacy-badge">Legacy layout</span>
+                }
+                <p class="run-card-meta">
+                  {{ run.runtime || 'runtime unset' }} · {{ run.model || 'model unset' }}
+                </p>
+                <p class="run-card-meta">
+                  {{ durationLabel(run) }}
+                  · todos {{ run.todosDone ?? '—' }} / {{ run.todosTotal ?? '—' }}
+                  · tokens {{ run.inputTokens + run.outputTokens }}
+                </p>
+              </a>
+              @if (run.children?.length) {
+                <ul class="run-children" data-testid="plan-run-children">
+                  @for (child of run.children; track child.runId) {
+                    <li>
+                      <a
+                        class="run-card run-card-child"
+                        [class.selected]="child.runId === selectedRunId()"
+                        [routerLink]="['/plan-runs', child.runId]"
+                        [queryParams]="{ projectRoot: projectRoot(), plan: planPath() }"
+                        data-testid="plan-run-child-card"
+                      >
+                        <div class="run-card-head">
+                          <strong class="run-id">{{ child.runId }}</strong>
+                          <span class="status-badge">{{ child.status }}</span>
+                        </div>
+                        <p class="run-card-meta">stage {{ child.stageId || '—' }} · attempt under {{ run.runId }}</p>
+                      </a>
+                    </li>
+                  }
+                </ul>
               }
-              <p class="run-card-meta">
-                {{ run.runtime || 'runtime unset' }} · {{ run.model || 'model unset' }}
-              </p>
-              <p class="run-card-meta">
-                {{ durationLabel(run) }}
-                · todos {{ run.todosDone ?? '—' }} / {{ run.todosTotal ?? '—' }}
-                · tokens {{ run.inputTokens + run.outputTokens }}
-              </p>
-            </a>
+            </div>
           }
         </section>
 
@@ -100,6 +123,18 @@ function findingText(entry: Record<string, unknown>): string {
                 }
               </div>
               <p class="run-id-line">{{ d.runId }}</p>
+              @if (d.navigation?.task; as task) {
+                <p class="run-task" data-testid="run-nav-task">Task: {{ task }}</p>
+              }
+              @if (d.navigation?.currentWork; as work) {
+                <p class="run-current-work" data-testid="run-nav-current-work">
+                  Current work: {{ work.stageId }}
+                  @if (work.attemptId) {
+                    <span> / {{ work.attemptId }}</span>
+                  }
+                  <span> ({{ work.status }})</span>
+                </p>
+              }
               @if (d.source === 'legacy') {
                 <p class="state legacy-note" data-testid="run-legacy-note">
                   Attributed from plan-level logs (synthetic run). Full evidence for this layout is shown below.
@@ -116,6 +151,76 @@ function findingText(entry: Record<string, unknown>): string {
               }
             </header>
 
+            @if (d.navigation; as nav) {
+              <section class="hub-panel-card" data-testid="run-navigation-summary">
+                <h3>Status and results</h3>
+                <dl class="nav-summary">
+                  <dt>Status</dt>
+                  <dd data-testid="run-nav-status">{{ nav.status }}</dd>
+                  @if (nav.results.length) {
+                    <dt>Results</dt>
+                    <dd data-testid="run-nav-results">
+                      @for (item of nav.results; track item.path) {
+                        <span>{{ item.label }}</span>
+                      }
+                    </dd>
+                  }
+                  @if (nav.decisions.length) {
+                    <dt>Decisions</dt>
+                    <dd data-testid="run-nav-decisions">
+                      @for (item of nav.decisions; track item.path) {
+                        <span>{{ item.label }}</span>
+                      }
+                    </dd>
+                  }
+                  @if (nav.verification.length) {
+                    <dt>Verification</dt>
+                    <dd data-testid="run-nav-verification">
+                      @for (item of nav.verification; track item.path) {
+                        <span>{{ item.label }}</span>
+                      }
+                    </dd>
+                  }
+                </dl>
+              </section>
+            }
+
+            @if ((d.navigation?.failedChecks ?? []).length > 0) {
+              <section class="hub-panel-card" data-testid="run-failed-checks">
+                <h3>Failed checks</h3>
+                <ul class="failed-check-list">
+                  @for (check of d.navigation!.failedChecks; track check.id) {
+                    <li class="failed-check-row">
+                      <button
+                        type="button"
+                        class="failed-check-open"
+                        data-testid="run-failed-check"
+                        (click)="selectFailedCheck(check.id)"
+                      >
+                        {{ check.command }}
+                      </button>
+                      @if (selectedFailedCheckId() === check.id) {
+                        <div class="failed-check-detail" data-testid="run-failed-check-detail">
+                          <p class="failed-check-command" data-testid="run-failed-check-command">{{ check.command }}</p>
+                          <pre class="failed-check-output" data-testid="run-failed-check-output">{{ check.output }}</pre>
+                          @if (check.relatedArtifact) {
+                            <button
+                              type="button"
+                              class="artifact-link"
+                              data-testid="run-failed-check-artifact"
+                              (click)="openRelatedArtifact(check.relatedArtifact)"
+                            >
+                              Open related artifact
+                            </button>
+                          }
+                        </div>
+                      }
+                    </li>
+                  }
+                </ul>
+              </section>
+            }
+
             <section class="usage-tiles" data-testid="run-usage-tiles">
               <div class="tile"><span>Input tokens</span><strong>{{ d.usage.inputTokens }}</strong></div>
               <div class="tile"><span>Output tokens</span><strong>{{ d.usage.outputTokens }}</strong></div>
@@ -126,14 +231,14 @@ function findingText(entry: Record<string, unknown>): string {
             <section class="hub-panel-card evidence-panel" data-testid="run-evidence">
               <div class="evidence-panel-head">
                 <h3>Run evidence</h3>
-                <span class="evidence-count" data-testid="run-evidence-count">{{ d.files.evidence.length }} files</span>
+                <span class="evidence-count" data-testid="run-evidence-count">{{ summaryEvidence().length }} files</span>
               </div>
-              @if (d.files.evidence.length === 0) {
+              @if (summaryEvidence().length === 0) {
                 <p class="state" data-testid="run-evidence-empty">
-                  No evidence files were discovered for this run. Check the Logs sidebar or run the plan again.
+                  No summary evidence files were discovered for this run. Open Details for raw logs.
                 </p>
               } @else {
-                @for (group of evidenceGroups(); track group.id) {
+                @for (group of summaryEvidenceGroups(); track group.id) {
                   <div class="evidence-group" [attr.data-testid]="'run-evidence-group-' + group.id">
                     <h4>{{ group.title }} ({{ group.entries.length }})</h4>
                     <ul class="evidence-list">
@@ -157,6 +262,36 @@ function findingText(entry: Record<string, unknown>): string {
                 }
               }
             </section>
+
+            <details
+              class="hub-panel-card run-details-disclosure"
+              data-testid="run-details-disclosure"
+              (toggle)="onDetailsToggle($event)"
+            >
+              <summary>Details</summary>
+              <p class="state">Raw logs and internals. Prefer failed checks and summary evidence above when diagnosing.</p>
+              @if (detailsOpen()) {
+                @if (rawEvidence().length === 0) {
+                  <p class="state" data-testid="run-raw-files-empty">No raw log files for this run.</p>
+                } @else {
+                  <ul class="evidence-list" data-testid="run-raw-files">
+                    @for (entry of rawEvidence(); track entry.id) {
+                      <li class="evidence-row">
+                        <button
+                          type="button"
+                          class="evidence-link"
+                          data-testid="run-raw-open"
+                          (click)="openEvidence(entry)"
+                        >
+                          {{ entry.label }}
+                        </button>
+                        <span class="path">{{ concisePath(entry.path, d.planKey) }}</span>
+                      </li>
+                    }
+                  </ul>
+                }
+              }
+            </details>
 
             <section class="hub-panel-card" data-testid="run-timeline">
               <h3>Timeline</h3>
@@ -323,6 +458,28 @@ function findingText(entry: Record<string, unknown>): string {
       text-align:left; font:inherit; text-decoration:underline;
     }
     h4 { margin:var(--space-3) 0 var(--space-1); font-size:var(--font-size-sm); }
+    .run-children {
+      list-style:none; margin:0 0 var(--space-3) var(--space-4); padding:0; display:grid; gap:var(--space-2);
+    }
+    .run-card-child { border-left:3px solid var(--panel-border); }
+    .nav-summary {
+      display:grid; grid-template-columns:8rem 1fr; gap:var(--space-2) var(--space-3); margin:0;
+    }
+    .nav-summary dt { color:var(--text-muted); font-size:var(--font-size-sm); }
+    .nav-summary dd { margin:0; }
+    .failed-check-list { list-style:none; margin:0; padding:0; display:grid; gap:var(--space-3); }
+    .failed-check-open {
+      background:none; border:none; padding:0; color:var(--danger, #b33); cursor:pointer;
+      font:inherit; text-align:left; text-decoration:underline;
+    }
+    .failed-check-detail {
+      margin-top:var(--space-2); padding:var(--space-3); border:1px solid var(--panel-border);
+      border-radius:var(--radius-md); background:var(--surface-secondary);
+    }
+    .failed-check-output {
+      white-space:pre-wrap; font-size:var(--font-size-sm); max-height:16rem; overflow:auto;
+    }
+    .run-details-disclosure summary { cursor:pointer; font-weight:600; }
   `,
 })
 export class PlanLogsComponent implements OnInit {
@@ -341,10 +498,21 @@ export class PlanLogsComponent implements OnInit {
   readonly projectRoot = signal<string | null>(null);
   readonly workspaceRoot = signal<string | null>(null);
   readonly selectedRunId = signal('');
+  readonly selectedFailedCheckId = signal('');
+  readonly detailsOpen = signal(false);
 
   readonly selectedRun = computed(() => {
     const id = this.selectedRunId();
-    return this.runs().find((run) => run.runId === id);
+    for (const run of this.runs()) {
+      if (run.runId === id) {
+        return run;
+      }
+      const child = run.children?.find((c) => c.runId === id);
+      if (child) {
+        return child;
+      }
+    }
+    return undefined;
   });
 
   readonly evidenceGroups = computed(() => {
@@ -352,9 +520,46 @@ export class PlanLogsComponent implements OnInit {
     return groupPlanRunEvidence(evidence);
   });
 
+  readonly summaryEvidence = computed(() => {
+    const evidence = this.detail()?.files.evidence ?? [];
+    return evidence.filter((entry) => entry.category !== 'execution-output' && entry.category !== 'other');
+  });
+
+  readonly rawEvidence = computed(() => {
+    const evidence = this.detail()?.files.evidence ?? [];
+    return evidence.filter((entry) => entry.category === 'execution-output' || entry.category === 'other');
+  });
+
+  readonly summaryEvidenceGroups = computed(() => groupPlanRunEvidence(this.summaryEvidence()));
+
   findingText = findingText;
   concisePath = concisePlanRunEvidencePath;
   formatSize = formatEvidenceByteSize;
+
+  selectFailedCheck(id: string): void {
+    this.selectedFailedCheckId.set(this.selectedFailedCheckId() === id ? '' : id);
+  }
+
+  onDetailsToggle(event: Event): void {
+    const el = event.target as HTMLDetailsElement;
+    this.detailsOpen.set(!!el.open);
+  }
+
+  openRelatedArtifact(path: string): void {
+    const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+    const underArtifacts = normalized.startsWith('artifacts/')
+      ? normalized.slice('artifacts/'.length)
+      : normalized;
+    const slash = underArtifacts.indexOf('/');
+    const dir = slash >= 0 ? underArtifacts.slice(0, slash) : underArtifacts;
+    this.nav.navigate(
+      'artifacts',
+      dir || null,
+      underArtifacts,
+      this.workspaceRoot(),
+      this.projectRoot(),
+    );
+  }
 
   openEvidence(entry: PlanRunEvidenceEntry): void {
     this.nav.navigate(
@@ -392,6 +597,12 @@ export class PlanLogsComponent implements OnInit {
     return 'unknown';
   }
 
+  private applyDetail(detail: PlanRunDetail): void {
+    this.detail.set(detail);
+    this.selectedFailedCheckId.set('');
+    this.detailsOpen.set(false);
+  }
+
   async ngOnInit(): Promise<void> {
     const planPath = this.route.snapshot.paramMap.get('file') ?? this.route.snapshot.queryParamMap.get('plan') ?? '';
     const runIdParam = this.route.snapshot.paramMap.get('runId') ?? '';
@@ -420,7 +631,7 @@ export class PlanLogsComponent implements OnInit {
 
       if (runIdParam) {
         const detail = await firstValueFrom(this.api.fetchPlanRunDetail(runIdParam, workspace.workspaceRoot));
-        this.detail.set(detail);
+        this.applyDetail(detail);
         this.planPath.set(planPath || detail.planKey);
         const listed = await firstValueFrom(this.api.fetchPlanRuns(detail.planKey, workspace.workspaceRoot));
         this.runs.set(listed.items);
@@ -436,7 +647,7 @@ export class PlanLogsComponent implements OnInit {
       if (first) {
         this.selectedRunId.set(first.runId);
         const detail = await firstValueFrom(this.api.fetchPlanRunDetail(first.runId, workspace.workspaceRoot));
-        this.detail.set(detail);
+        this.applyDetail(detail);
         await this.loadDiscover(detail);
         await this.loadArtifacts(detail.planKey);
       }

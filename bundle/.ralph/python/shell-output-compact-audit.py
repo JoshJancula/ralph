@@ -163,13 +163,17 @@ def _ralph_audit_scan_locations(
         )
     )
 
-    tool_results_dir = ralph_workspace / "tool-results" / plan_key / "results"
-    candidates.extend(
-        _ralph_audit_scan_directory(
-            tool_results_dir,
-            source_type="stored_tool_result",
+    tool_results_dirs = [
+        ralph_workspace / "cache" / "tool-results" / plan_key / "results",
+        ralph_workspace / "tool-results" / plan_key / "results",
+    ]
+    for tool_results_dir in tool_results_dirs:
+        candidates.extend(
+            _ralph_audit_scan_directory(
+                tool_results_dir,
+                source_type="stored_tool_result",
+            )
         )
-    )
 
     return candidates
 

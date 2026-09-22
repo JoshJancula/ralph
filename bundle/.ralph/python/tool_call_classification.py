@@ -197,6 +197,7 @@ SAVINGS_PATH_NAMES = (
     "hook_compaction",
     "proxy_shell_compaction",
     "result_windowing",
+    "jev_compaction",
 )
 
 

@@ -137,7 +137,23 @@ def resolve_state_root(workspace: str, state_root_arg: str | None) -> Path:
 
 def memory_root(state_root: Path, plan_key: str) -> Path:
     validate_plan_key(plan_key)
-    return state_root / "memory" / plan_key
+    shared = memory_shared_root(state_root) / plan_key
+    legacy = memory_legacy_root(state_root) / plan_key
+    if shared != legacy and legacy.is_dir() and not shared.is_dir():
+        return legacy
+    return shared
+
+
+def memory_shared_root(state_root: Path) -> Path:
+    """Layout-aware memory home (internal/memory under layout 2)."""
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return Path(state_root) / "memory"
+    return Path(state_root) / "internal" / "memory"
+
+
+def memory_legacy_root(state_root: Path) -> Path:
+    return Path(state_root) / "memory"
 
 
 def content_relpath(key: str) -> str:
@@ -162,7 +178,7 @@ def path_under_root(root: Path, candidate: Path) -> Path:
 
 
 def memory_lock_path(state_root: Path) -> Path:
-    return state_root / "memory" / ".lock"
+    return memory_shared_root(state_root) / ".lock"
 
 
 def locked_run(state_root: Path, callback):

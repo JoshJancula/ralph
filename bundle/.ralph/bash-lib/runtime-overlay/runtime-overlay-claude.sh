@@ -45,73 +45,9 @@ runtime_overlay_claude_hooks_detected_in_file() {
   if ! command -v python3 &>/dev/null; then
     return 1
   fi
-  python3 - "$settings_file" "${2:-0}" <<'PY'
-import json, os, shlex, sys
-
-path = sys.argv[1]
-try:
-    with open(path) as fh:
-        data = json.load(fh)
-except (OSError, json.JSONDecodeError):
-    sys.exit(1)
-
-hooks = data.get("hooks") or {}
-
-def group_commands(event, matcher):
-    out = []
-    for group in hooks.get(event) or []:
-        if group.get("matcher") != matcher:
-            continue
-        for entry in group.get("hooks") or []:
-            cmd = entry.get("command") or ""
-            if cmd:
-                out.append(cmd)
-    return out
-
-def has_cmd(commands, needle):
-    if sys.argv[2] == "1":
-        for cmd in commands:
-            try:
-                words = shlex.split(cmd)
-            except ValueError:
-                continue
-            if (len(words) == 1 and os.path.isabs(words[0])
-                    and os.path.basename(words[0]) == needle
-                    and os.path.isfile(words[0]) and os.access(words[0], os.X_OK)):
-                return True
-        return False
-    return any(needle in cmd or cmd.endswith(needle) for cmd in commands)
-
-pre = hooks.get("PreToolUse") or []
-post = hooks.get("PostToolUse") or []
-_ = pre, post
-
-env_cmds = group_commands("PreToolUse", "Read|Edit|MultiEdit|Glob|Grep|LS")
-bash_pre = group_commands("PreToolUse", "Bash")
-bash_post = group_commands("PostToolUse", "Bash")
-exploration_post = group_commands("PostToolUse", "Read|Grep|Glob")
-stop_cmds = []
-for group in hooks.get("Stop") or []:
-    for entry in group.get("hooks") or []:
-        cmd = entry.get("command") or ""
-        if cmd:
-            stop_cmds.append(cmd)
-
-if not has_cmd(env_cmds, "block-env-reads.sh"):
-    sys.exit(1)
-if not has_cmd(bash_pre, "rewrite-bash-command.sh"):
-    sys.exit(1)
-if not has_cmd(bash_post, "compact-bash-output.sh"):
-    sys.exit(1)
-if not (
-    has_cmd(exploration_post, "native-result-compact.sh")
-    or has_cmd(exploration_post, "compact-native-result-output.sh")
-):
-    sys.exit(1)
-if not has_cmd(stop_cmds, "stop-continuation.sh"):
-    sys.exit(1)
-sys.exit(0)
-PY
+  local py
+  py="$(dirname "${BASH_SOURCE[0]}")/../../python/runtime-overlay-claude-hooks-detected.py"
+  python3 "$py" "$settings_file" "${2:-0}"
 }
 
 runtime_overlay_claude_preserve_durable_install() {

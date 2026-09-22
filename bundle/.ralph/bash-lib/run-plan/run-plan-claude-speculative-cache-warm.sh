@@ -77,7 +77,11 @@ ralph_claude_speculative_cache_warm_sidecar_path() {
   local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
   local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-${WORKSPACE:-}/.ralph-workspace}"
   [[ -n "$plan_key" ]] || return 1
-  printf '%s/sessions/%s/speculative-cache-warm.pid\n' "${state_root%/}" "$plan_key"
+  if declare -F ralph_state_sessions_dir >/dev/null 2>&1; then
+    printf '%s/speculative-cache-warm.pid\n' "$(ralph_state_sessions_dir "${state_root%/}" "$plan_key")"
+  else
+    printf '%s/sessions/%s/speculative-cache-warm.pid\n' "${state_root%/}" "$plan_key"
+  fi
 }
 
 ralph_claude_speculative_cache_warm_log_path() {

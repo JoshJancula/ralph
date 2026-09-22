@@ -350,8 +350,27 @@ def lease_key(plan_path: str) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _layout_version() -> str:
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return "1"
+    return "2"
+
+
+def processes_root(state_root: Path) -> Path:
+    """Layout-aware processes home (internal/processes under layout 2)."""
+    root = Path(state_root)
+    if _layout_version() == "1":
+        return root / "processes"
+    return root / "internal" / "processes"
+
+
+def processes_legacy_root(state_root: Path) -> Path:
+    return Path(state_root) / "processes"
+
+
 def lease_dir(state_root: Path) -> Path:
-    return state_root / "processes" / "leases"
+    return processes_root(state_root) / "leases"
 
 
 def release_run_leases(run_dir: Path) -> None:
@@ -359,13 +378,21 @@ def release_run_leases(run_dir: Path) -> None:
     state_root_raw = run.get("state_root")
     if not state_root_raw:
         return
-    for path in lease_dir(Path(str(state_root_raw))).glob("*.json"):
-        value = read_json(path)
-        if value and value.get("run_dir") == str(run_dir):
-            try:
-                path.unlink()
-            except OSError:
-                pass
+    state_root = Path(str(state_root_raw))
+    lease_roots = [lease_dir(state_root)]
+    legacy = processes_legacy_root(state_root) / "leases"
+    if legacy != lease_roots[0]:
+        lease_roots.append(legacy)
+    for leases in lease_roots:
+        if not leases.is_dir():
+            continue
+        for path in leases.glob("*.json"):
+            value = read_json(path)
+            if value and value.get("run_dir") == str(run_dir):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 def acquire_lease(state_root: Path, run_dir: Path, plan_path: str, owner_pid: int) -> Path:
@@ -432,7 +459,7 @@ def shell_exports(values: dict[str, Any]) -> str:
 
 def command_init(args: argparse.Namespace) -> int:
     state_root = Path(args.state_root).resolve()
-    active = state_root / "processes" / "active"
+    active = processes_root(state_root) / "active"
     active.mkdir(parents=True, exist_ok=True)
     run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{args.owner_pid}-{secrets.token_hex(4)}"
     run_dir = active / run_id
@@ -684,10 +711,22 @@ def command_close(args: argparse.Namespace) -> int:
 
 def runs_for_state_root(state_root: Path) -> list[tuple[Path, dict[str, Any]]]:
     result = []
-    for path in sorted((state_root / "processes" / "active").glob("*/run.json")):
-        value = read_json(path)
-        if value and value.get("status") == "running":
-            result.append((path.parent, value))
+    seen: set[str] = set()
+    roots = [processes_root(state_root) / "active"]
+    legacy = processes_legacy_root(state_root) / "active"
+    if legacy != roots[0]:
+        roots.append(legacy)
+    for active in roots:
+        if not active.is_dir():
+            continue
+        for path in sorted(active.glob("*/run.json")):
+            key = str(path.resolve()) if path.exists() else str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            value = read_json(path)
+            if value and value.get("status") == "running":
+                result.append((path.parent, value))
     return result
 
 

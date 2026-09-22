@@ -5,6 +5,13 @@
 # capturing original files for restoration, registering cleanup callbacks, logging
 # overlay decisions, and producing a JSON summary for dashboard/metrics ingestion.
 
+_RUNTIME_OVERLAY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_state_runtime_config_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_RUNTIME_OVERLAY_LIB_DIR/../state-paths.sh"
+fi
+unset _RUNTIME_OVERLAY_LIB_DIR
+
 RUNTIME_OVERLAY_STATE_DIR=""
 RUNTIME_OVERLAY_ORIGINALS_DIR=""
 RUNTIME_OVERLAY_SUMMARY_RUNTIME=""
@@ -118,7 +125,7 @@ _runtime_overlay_state_root() {
   else
     state_root="$(_runtime_overlay_project_root)/.ralph-workspace"
   fi
-  printf '%s/runtime-config/%s' "$state_root" "$plan_key"
+  ralph_state_runtime_config_dir "$state_root" "$plan_key"
 }
 
 _runtime_overlay_abs_path() {
@@ -331,6 +338,7 @@ runtime_overlay_restore_stale_runs() {
   local threshold_seconds="${3:-$(runtime_overlay_threshold_seconds)}"
   local recovered_status="${4:-cleaned}"
   local runtime_filter="${5:-}"
+  local state_root shared_root legacy_root
   if [[ "$plan_filter_arg" == "--all" || "$plan_filter_arg" == "all" ]]; then
     plan_filter_arg=""
   fi
@@ -342,17 +350,28 @@ runtime_overlay_restore_stale_runs() {
     printf 'runtime_overlay_restore_stale_runs requires python3\n' >&2
     return 1
   fi
-  python3 - "$workspace_root" "$plan_filter_arg" "$threshold_seconds" "$recovered_status" "$runtime_filter" <<'PY'
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="$(_runtime_overlay_workspace_root)"
+  else
+    state_root="${workspace_root%/}/.ralph-workspace"
+  fi
+  shared_root="$(ralph_state_shared_dir "$state_root" runtime-config 2>/dev/null || printf '%s/runtime-config' "$state_root")"
+  legacy_root="$state_root/runtime-config"
+  python3 - "$shared_root" "$legacy_root" "$plan_filter_arg" "$threshold_seconds" "$recovered_status" "$runtime_filter" <<'PY'
 import json, os, shutil, sys, time
 
-workspace_root = sys.argv[1]
-plan_filter_arg = sys.argv[2]
-threshold_seconds = int(sys.argv[3]) if sys.argv[3].isdigit() else 3600
-recovered_status = sys.argv[4] or "cleaned"
-runtime_filter = sys.argv[5] or None
+shared_root = sys.argv[1]
+legacy_root = sys.argv[2]
+plan_filter_arg = sys.argv[3]
+threshold_seconds = int(sys.argv[4]) if sys.argv[4].isdigit() else 3600
+recovered_status = sys.argv[5] or "cleaned"
+runtime_filter = sys.argv[6] or None
 plan_filter = None if not plan_filter_arg else plan_filter_arg
-runtime_config_root = os.path.join(workspace_root, ".ralph-workspace", "runtime-config")
-if not os.path.isdir(runtime_config_root):
+runtime_config_roots = []
+for candidate in (shared_root, legacy_root):
+    if candidate and os.path.isdir(candidate) and candidate not in runtime_config_roots:
+        runtime_config_roots.append(candidate)
+if not runtime_config_roots:
     sys.exit(0)
 now = int(time.time())
 messages = []
@@ -442,7 +461,8 @@ def _preserve_generated_target(path):
     hooks_json = os.path.join(os.path.dirname(os.path.dirname(path)), "hooks.json")
     return _cursor_hooks_detected(hooks_json)
 
-for plan_dir in sorted(os.listdir(runtime_config_root)):
+for runtime_config_root in runtime_config_roots:
+  for plan_dir in sorted(os.listdir(runtime_config_root)):
     plan_path = os.path.join(runtime_config_root, plan_dir)
     if not os.path.isdir(plan_path):
         continue

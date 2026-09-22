@@ -3,11 +3,12 @@
     "fetchedAtMs": 1786284230391,
     "utilization": {
       "five_hour": { "utilization": 12.5, "resets_at": "2026-09-18T08:00:00.000Z" },
-      "seven_day": { "utilization": 79, "resets_at": "2026-09-20T08:00:00.000Z" }
-    },
-    "limits": [
-      { "kind": "session", "percent": 0, "resets_at": "2026-09-18T08:00:00.000Z" }
-    ]
+      "seven_day": { "utilization": 79, "resets_at": "2026-09-20T08:00:00.000Z" },
+      "limits": [
+        { "kind": "session", "percent": 12.5, "resets_at": "2026-09-18T08:00:00.000Z" },
+        { "kind": "weekly_all", "percent": 79, "resets_at": "2026-09-20T08:00:00.000Z" }
+      ]
+    }
   },
   "oauthToken": "must-not-leak"
 }

@@ -297,6 +297,101 @@ teardown() {
   [ "${GRAPH_NODE_REMAINING_INDEGREE[$join_idx]}" -gt 0 ]
 }
 
+@test "scheduler: exhausted QA round fails with reason qa-repair-exhausted" {
+  command -v jq >/dev/null || skip "jq required"
+  command -v python3 >/dev/null || skip "python3 required"
+
+  # Fixture: final QA round with qaRepair=true and only a passed edge (no
+  # changes-required successor). Mirrors the compiled qa-qN fail-closed shape.
+  local graph_json="$TMPD/qa-repair-exhausted.graph.json"
+  local workspace="$TMPD/ws" state_root="$TMPD/state" run_dir="$TMPD/run" ledger="$TMPD/ledger.tsv"
+  mkdir -p "$workspace" "$state_root" "$run_dir"
+  : >"$ledger"
+
+  jq -n '
+    {
+      schemaVersion: 1,
+      ralphVersion: "test",
+      name: "qa-repair-exhausted",
+      namespace: "qa-repair-exhausted",
+      maxParallel: 1,
+      failurePolicy: "drain",
+      nodes: [
+        {
+          id: "qa-q1", type: "agent", dependsOn: [], derivedFrom: "qa-repair",
+          stage: {
+            id: "qa-q1", runtime: "cursor", qaRepair: true,
+            loopCheck: {path: ".ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-verdict.json"},
+            _inlineTodos: [{id: "qa-q1-1", content: "qa", status: "pending"}]
+          }
+        },
+        {
+          id: "qa-approved", type: "join", dependsOn: ["qa-q1"], derivedFrom: "qa-repair",
+          stage: {id: "qa-approved", type: "join"}
+        }
+      ],
+      edges: [
+        {from: "qa-q1", to: "qa-approved", reasons: ["qa-repair"], condition: "passed"}
+      ]
+    }
+  ' >"$graph_json"
+
+  # Capture ledger transitions compactly (node, state, attemptId, outcome, reason).
+  _graph_schedule_ledger_record() {
+    printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "${3:-}" "${4:-}" "${10:-}" >>"$ledger"
+  }
+
+  local run_id="run1"
+  local attempt_id="qa-q1__${run_id}__1"
+  graph_schedule_load_index "$graph_json"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph_json"
+  GRAPH_SCHEDULE_WORKSPACE="$workspace"
+  GRAPH_SCHEDULE_NAMESPACE="qa-repair-exhausted"
+  GRAPH_SCHEDULE_RUN_ID="$run_id"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR=""
+  GRAPH_SCHEDULE_LOG_RUN_DIR="$run_dir"
+  GRAPH_SCHEDULE_FAILURE_POLICY="drain"
+  GRAPH_SCHEDULE_EXIT_CODE=0
+  GRAPH_SCHEDULE_FAILED_NODE=""
+  GRAPH_SCHEDULE_STOP_DISPATCH=0
+  GRAPH_SCHEDULE_CANCEL_REQUESTED=0
+  export RALPH_PLAN_WORKSPACE_ROOT="$state_root"
+  export RALPH_GRAPH_STATE_ROOT="$state_root"
+  unset RALPH_GRAPH_COMPOSITE_SUCCESS 2>/dev/null || true
+
+  local idx
+  idx="$(graph_schedule_index_map_get qa-q1)"
+  GRAPH_NODE_STATES[$idx]="running"
+  GRAPH_NODE_ATTEMPT_NUMBERS[$idx]="1"
+
+  local report="$state_root/artifacts/qa-repair-exhausted/stage-outcomes/${attempt_id}.json"
+  mkdir -p "$(dirname "$report")"
+  jq -n --arg run "$run_id" --arg attempt "$attempt_id" '{
+    schemaVersion: 2,
+    runId: $run,
+    stageId: "qa-q1",
+    attemptId: $attempt,
+    outcome: "success",
+    exitCode: 0
+  }' >"$report"
+
+  local verdict="$state_root/artifacts/qa-repair-exhausted/qa-verdict.json"
+  mkdir -p "$(dirname "$verdict")"
+  printf '{"status":"changes-required","feedback":["qa still fails"]}' >"$verdict"
+
+  GRAPH_REAP_NODE=qa-q1
+  GRAPH_REAP_REPORT_PATH="$report"
+  GRAPH_REAP_EXIT_CODE=0
+  GRAPH_REAP_MISSING_REPORT=0
+
+  local rc=0
+  _graph_schedule_handle_reaped_node 0 || rc=$?
+  [ "$rc" -ne 0 ]
+  [ "$(graph_schedule_node_state_by_id qa-q1)" = "failed" ]
+  grep -q $'qa-q1\tfailed\t[^\t]*\tfailed\tqa-repair-exhausted' "$ledger"
+  ! grep -q $'qa-q1\tsucceeded\t' "$ledger"
+}
+
 # ---------------------------------------------------------------------------
 # Resume mid-round
 # ---------------------------------------------------------------------------

@@ -160,16 +160,18 @@ teardown() {
   [ "${args[3]}" = "" ]
 }
 
-@test "claude strict proxy and subagent policies deny only the selected tools" {
-  local record="$TEST_TMPDIR/strict-proxy.args"
+@test "ralph tooling is additive: native Bash is never denied, Agent deny still works" {
+  # Ralph tooling used to strip native Bash, which left an agent with no shell
+  # when the MCP transport dropped mid-session (the tool schema is fixed at
+  # launch, so it could not cut back over to native).
+  local record="$TEST_TMPDIR/ralph-tools.args"
   run_plan_invoke_test_write_claude_stub "$record"
   export RALPH_MODE=ralph RALPH_MCP_PREFLIGHT_PASSED=1 RALPH_PLAN_SUBAGENTS=off
   run ralph_run_plan_invoke_claude
   [ "$status" -eq 0 ]
+  grep -q -- "Bash" "$record"
   grep -Fxq -- "--disallowedTools" "$record"
-  grep -Fxq -- "Bash" "$record"
   grep -Fxq -- "Agent" "$record"
-  ! grep -Fxq -- "Skill" "$record"
   ! grep -Fxq -- "--tools" "$record"
 }
 

@@ -71,6 +71,8 @@ Usage: ralph workflow start <id> --task <text> [options]
   --agent-workspace <path>   Agent sandbox
   --yes                      Required for noninteractive confirmation (later dispatch)
   --ralph-mode <mode>        Shared Ralph tooling mode (no|native|ralph|hybrid)
+  --jev [routing|tooling|all]
+                             Enable the Jev adapter (bare = all); also --jev=<choice>
   --session-strategy <s>     Shared session strategy (fresh|resume|reset|compact)
   --cli-resume|--no-cli-resume|--allow-unsafe-resume|--resume <id>
                              Shared CLI session flags
@@ -1001,6 +1003,7 @@ workflow_cli_parse_start() {
   WORKFLOW_CLI_START_AGENT_WORKSPACE=""
   WORKFLOW_CLI_START_YES=0
   WORKFLOW_CLI_START_RALPH_MODE=""
+  WORKFLOW_CLI_START_JEV=""
   WORKFLOW_CLI_START_SESSION_STRATEGY=""
   WORKFLOW_CLI_START_CLI_RESUME=""
   WORKFLOW_CLI_START_RESUME_ID=""
@@ -1079,6 +1082,28 @@ workflow_cli_parse_start() {
         workflow_cli_require_flag_value "--ralph-mode" "${2:-}"
         WORKFLOW_CLI_START_RALPH_MODE="$2"
         shift 2
+        ;;
+      --jev)
+        workflow_cli_reject_duplicate "--jev" "$WORKFLOW_CLI_START_JEV"
+        case "${2:-}" in
+          routing|tooling|all) WORKFLOW_CLI_START_JEV="$2"; shift 2 ;;
+          ""|-*) WORKFLOW_CLI_START_JEV="all"; shift ;;
+          *)
+            echo "Error: --jev value must be one of routing, tooling, or all (got \"$2\")." >&2
+            exit 2
+            ;;
+        esac
+        ;;
+      --jev=*)
+        workflow_cli_reject_duplicate "--jev" "$WORKFLOW_CLI_START_JEV"
+        case "${arg#--jev=}" in
+          routing|tooling|all) WORKFLOW_CLI_START_JEV="${arg#--jev=}" ;;
+          *)
+            echo "Error: --jev value must be one of routing, tooling, or all (got \"${arg#--jev=}\")." >&2
+            exit 2
+            ;;
+        esac
+        shift
         ;;
       --session-strategy)
         workflow_cli_reject_duplicate "--session-strategy" "$WORKFLOW_CLI_START_SESSION_STRATEGY"
@@ -2061,6 +2086,16 @@ workflow_cli_start_dispatch_engine() {
     --max-parallel "$max_parallel" >/dev/null || return 1
 }
 
+# Export the --jev choice parsed by workflow_cli_parse_start (no-op when unset).
+workflow_cli_apply_start_jev() {
+  [[ -n "${WORKFLOW_CLI_START_JEV:-}" ]] || return 0
+  if ! declare -F ralph_jev_apply_cli_choice >/dev/null 2>&1; then
+    # shellcheck source=bash-lib/run-plan/run-plan-runtime.sh
+    source "$script_dir/bash-lib/run-plan/run-plan-runtime.sh"
+  fi
+  ralph_jev_apply_cli_choice "$WORKFLOW_CLI_START_JEV" || exit 2
+}
+
 workflow_cli_cmd_start() {
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     workflow_cli_start_usage
@@ -2068,6 +2103,10 @@ workflow_cli_cmd_start() {
   fi
 
   workflow_cli_parse_start "$@"
+
+  # An explicit --jev choice is exported before any engine dispatch so graph
+  # scheduling and child run-plan stages inherit it.
+  workflow_cli_apply_start_jev
 
   # If --task looks like a file path, redirect to --plan so the smart
   # detection (no TODOs = task text, has TODOs = leaf plan) applies.
@@ -2440,9 +2479,10 @@ USAGE
 
 workflow_cli_status_usage() {
   cat >&2 <<'USAGE'
-Usage: ralph workflow status <exact-run-id> [--json]
+Usage: ralph workflow status <exact-run-id> [--json] [--expanded]
 
   --json          Emit {schemaVersion,run,stages,diagnosis,nextAction}
+  --expanded      Include the frozen compiled graph as compiledGraph in JSON output.
 
 status is read-only: it never mutates, adopts, or recovers a run.
 USAGE
@@ -2517,11 +2557,12 @@ workflow_cli_cmd_status() {
     exit 0
   fi
 
-  local run_id="" as_json=0 arg
+  local run_id="" as_json=0 expanded=0 arg
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
       --json) as_json=1; shift ;;
+      --expanded) expanded=1; shift ;;
       --*)
         echo "Error: unknown option for ralph workflow status: $arg" >&2
         exit 2
@@ -2549,6 +2590,16 @@ workflow_cli_cmd_status() {
   local status_json
   if ! status_json="$(workflow_operator_view_load "${_WORKFLOW_RESOURCE_STATE_ROOT}" "$run_id")"; then
     exit 1
+  fi
+
+  if [[ "$expanded" -eq 1 ]]; then
+    local registry_run graph_path graph_json=""
+    registry_run="$(workflow_state_run_dir "${_WORKFLOW_RESOURCE_STATE_ROOT}" "$run_id" 2>/dev/null || true)"
+    graph_path="$registry_run/engine-graph.json"
+    if [[ -f "$graph_path" ]]; then
+      graph_json="$(<"$graph_path")" || graph_json=""
+    fi
+    status_json="$(workflow_operator_attach_compiled_graph "$status_json" "$graph_json")" || exit 1
   fi
 
   if [[ "$as_json" -eq 1 ]]; then

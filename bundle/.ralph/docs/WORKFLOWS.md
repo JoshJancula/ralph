@@ -38,7 +38,9 @@ Bundled workflows are starting points, not mandatory ceremony:
 
 | Workflow | Use it for |
 | --- | --- |
+| `small-feature-delivery` | An unambiguous, localized feature whose acceptance criteria are executable checks up front |
 | `feature-delivery` | Investigate, plan, implement, review, integrate, and verify a feature |
+| `adaptive-delivery` | Let an entry router choose between the small localized path and the full delivery path |
 | `bug-fix` | Reproduce and repair a defect with review and QA |
 | `refactor` | Preserve behavior while changing structure |
 | `plan-delivery` | Execute an existing leaf plan under review and QA |
@@ -48,6 +50,22 @@ Bundled workflows are starting points, not mandatory ceremony:
 | `assessment` | Run parallel read-only correctness, security, performance, and compatibility reviews |
 | `review-jury` | Ask three runtimes to vote on existing work |
 | `release-gate` | Verify a release candidate without publishing it |
+
+Prefer `small-feature-delivery` when the intent is unambiguous, the change is
+localized, and acceptance criteria can be stated as executable checks up front.
+Choose `feature-delivery` when investigation is still needed or the change
+surface is broad. Choose `human-verified-delivery` when a human must approve the
+plan or the result. A TODO count is never the criterion.
+
+Choose `adaptive-delivery` when the size of the change is not known up front.
+Its entry router stage picks the small or full path. Add `--jev routing` (or
+bare `--jev`) to `ralph workflow start` to let Jev classify that route before
+the agent runs; without it the agent always decides. Jev is independent of
+`RALPH_MODE`.
+
+```bash
+ralph workflow start adaptive-delivery --task "Add CSV export" --jev routing
+```
 
 Run `ralph workflow show <id>` for the current definition. Project or global
 customizations can change a bundled shape, so the installed file is the source
@@ -196,6 +214,36 @@ rework budget.
 Delivery workflows finish with a model-free verdict gate. A QA handoff is useful
 to humans; the schema-valid verdict is what decides success.
 
+### Candidate binding (`candidateFrom`)
+
+Read-only Dependency evaluators declare `candidateFrom: <stage-id>` together
+with `workspaceMode: snapshot` and no `writeScopes`. The named stage must be a
+transitive `dependsOn` ancestor that is either mutating (has `writeScopes`) or
+`type: integrate`. At dispatch the supervisor copies that ancestor's retained
+candidate workspace; model prose never locates a candidate. Rework and QA
+repair clones rewrite `candidateFrom` onto the matching round's target (for
+example `implement-r1` or `integrate-q1`). Publication refuses when QA or
+approval receipts do not match the published integrate identity.
+
+### QA repair (`maxQaRepairRounds`)
+
+A QA evaluator may declare `loopBackTo` (a transitive implement ancestor),
+`loopCheck` on its verdict, `onExhausted: fail`, and `maxQaRepairRounds`
+(integer `0`–`3`; default `0` means no QA repair; bundled delivery workflows
+typically set `1`). Values `>= 1` require exactly one review loop and one
+`integrate` stage between the implement target and QA. The compiler unrolls
+each round into implement, review (with its own bounded rework), integrate, and
+QA clones; `0` keeps the authored graph without those clones.
+
+### Logical stages
+
+Compile-time rework and QA repair clones carry `logicalStage` and `attempt`
+provenance. Operator status, the CLI stage projection, and the dashboard graph
+default to authored logical stages and collapse those clones into attempt
+history. Toggle the expanded compiled graph when you need every clone id.
+Graphs compiled before provenance existed render expanded with a
+"compiled before logical stage provenance" note.
+
 ## Author a workflow
 
 Scaffold one of the two public modes:
@@ -272,7 +320,8 @@ ralph workflow start --file ./focused-investigation.workflow.md \
 | `requires`, `produces` | Artifact inputs and outputs |
 | `planner` | Make the stage produce a validated plan file |
 | `planFrom` | Execute a plan produced by another stage |
-| `workspaceMode`, `writeScopes` | Candidate workspace and mutation boundary |
+| `workspaceMode`, `writeScopes`, `candidateFrom` | Candidate workspace and mutation boundary; see [Candidate binding](#candidate-binding-candidatefrom) |
+| `maxQaRepairRounds`, `loopBackTo`, `loopCheck`, `onExhausted` | Bounded QA repair after a failed verdict; see [QA repair](#qa-repair-maxqarepairrounds) |
 
 Use `planInput.stage` at the workflow root when one stage accepts an
 operator-supplied leaf plan. `{{TASK}}`, `{{INPUT_PLAN}}`, `{{ARTIFACT_NS}}`,

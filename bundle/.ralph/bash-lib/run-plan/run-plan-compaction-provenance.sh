@@ -13,7 +13,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 # Args: channel mode [mode_source]
-#   channel: bash_compact | native_result_compact | proxy_shell_compact | bash_rewrite | auto_background
+#   channel: bash_compact | native_result_compact | proxy_shell_compact | bash_rewrite | auto_background | jev_compact
 #   mode: resolved RALPH_MODE value (no|native|ralph|hybrid); defaults to $RALPH_MODE or "no"
 #   mode_source: how RALPH_MODE itself was resolved -- "explicit" (flag/env) or
 #     "workspace_preference" (.ralph-workspace/preferences.json ralph_mode_default).
@@ -33,6 +33,8 @@ ralph_compaction_gate_provenance() {
     bash_rewrite) env_var="RALPH_BASH_REWRITE" ;;
     # Shares RALPH_BASH_REWRITE: auto-background rides the PreToolUse rewrite hook.
     auto_background) env_var="RALPH_BASH_REWRITE" ;;
+    # Opt-in only: no RALPH_MODE enables Jev, so source is never mode_default.
+    jev_compact) env_var="RALPH_JEV_COMPACT" ;;
     *) return 1 ;;
   esac
 
@@ -58,10 +60,11 @@ ralph_compaction_gate_provenance() {
         ralph | hybrid) mode_gate="on" ;;
       esac
       ;;
-    bash_rewrite)
+    bash_rewrite | jev_compact)
       # bash_rewrite has no Ralph-mode default of its own; it is set
       # unconditionally by runtime-capability logic (e.g. the Cursor overlay
       # for native shell wrapper activation), never by RALPH_MODE alone.
+      # jev_compact is explicit-env only; no RALPH_MODE turns it on.
       mode_gate="off"
       ;;
   esac

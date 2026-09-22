@@ -21,9 +21,6 @@ import artifact_json_schema as ajs  # noqa: E402
 import continuation_summary as cs  # noqa: E402
 import evaluator_contract as ec  # noqa: E402
 import retrieval_eval as reval  # noqa: E402
-from ralph_script_loader import load_ralph_script  # noqa: E402
-
-tool_search_rank = load_ralph_script("mcp-proxy-tool-search-rank")
 
 
 def _load_manifest() -> dict:
@@ -77,32 +74,6 @@ class TestCookbookOfflineE2E(unittest.TestCase):
         rendered = cs.rebuild_markdown(migrated)
         for needle in spec["expect_markdown_contains"]:
             self.assertIn(needle, rendered, msg=f"missing {needle!r} in continuation block")
-
-    def test_compact_tool_search_ranks_expected_tool(self) -> None:
-        spec = self.manifest["compact_tool_search"]
-        catalog = [
-            {
-                "name": "ralph_proxy_glob",
-                "description": "Find files by glob pattern.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"glob_pattern": {"type": "string"}},
-                    "required": ["glob_pattern"],
-                },
-            },
-            {
-                "name": "ralph_proxy_read",
-                "description": "Read file with line limits.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                },
-            },
-        ]
-        ranked = tool_search_rank.rank_tools(catalog, spec["query"], max_results=3)
-        self.assertGreaterEqual(len(ranked), 1)
-        self.assertEqual(ranked[0]["name"], spec["expect_top_tool"])
 
     def test_contextual_retrieval_ranks_workspace_hit(self) -> None:
         workspace = REPO_ROOT / self.manifest["workspace_root"]

@@ -6,12 +6,16 @@ import {
   collectAntigravityAmbientUsage,
   rateLimitsFromAgyUsagePayload,
 } from '../src/server/ambient-usage/antigravity';
+import { refreshClaudeQuotaCacheIfStale } from '../src/server/ambient-usage/claude';
 import { clearAmbientUsageCache, collectAmbientUsage } from '../src/server/ambient-usage';
+import { resolveAmbientCollectorPaths } from '../src/server/ambient-usage/paths';
 
 const fixturesDir = join(process.cwd(), 'tests/fixtures/ambient-usage');
 
 /** Keep tests offline from a real agy binary on the developer PATH. */
 const noAgy = { binary: null as string | null };
+/** Fixture homes must not invoke the real Claude CLI (it writes the operator home cache). */
+const noClaudeRefresh = { refresh: null as null };
 
 async function makeHomeFixture(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'ralph-ambient-home-'));
@@ -57,14 +61,15 @@ describe('ambient usage collectors', () => {
     const home = await makeHomeFixture();
     const response = await collectAmbientUsage(
       { dateFrom: '2026-09-10', dateTo: '2026-09-10' },
-      { homeDir: home, bypassCache: true, antigravity: noAgy },
+      { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy },
     );
     expect(response.enabled).toBe(true);
     const claude = response.providers.find((p) => p.id === 'claude_code');
     expect(claude?.status).toBe('available');
     expect(claude?.tokens.input_tokens).toBe(100);
     expect(claude?.tokens.output_tokens).toBe(50);
-    expect(claude?.rate_limits.some((w) => w.id === 'five_hour' && w.used_percent === 12.5)).toBe(true);
+    expect(claude?.rate_limits.some((w) => w.id === 'session' && w.used_percent === 12.5)).toBe(true);
+    expect(claude?.rate_limits.some((w) => w.id === 'seven_day' && w.used_percent === 79)).toBe(true);
     expect(JSON.stringify(response)).not.toContain('oauthToken');
   });
 
@@ -72,7 +77,7 @@ describe('ambient usage collectors', () => {
     const home = await makeHomeFixture();
     const response = await collectAmbientUsage(
       { dateFrom: '2026-09-10', dateTo: '2026-09-10' },
-      { homeDir: home, bypassCache: true, antigravity: noAgy },
+      { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy },
     );
     const codex = response.providers.find((p) => p.id === 'codex');
     expect(codex?.status).toBe('available');
@@ -89,7 +94,7 @@ describe('ambient usage collectors', () => {
     await mkdir(codexDir, { recursive: true });
     await cp(join(fixturesDir, 'codex-primary-weekly.jsonl'), join(codexDir, 'rollout.jsonl'));
 
-    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, antigravity: noAgy });
+    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy });
     const codex = response.providers.find((p) => p.id === 'codex');
     expect(codex?.rate_limits).toEqual([
       expect.objectContaining({ id: 'weekly', label: 'Weekly', used_percent: 83 }),
@@ -105,7 +110,7 @@ describe('ambient usage collectors', () => {
     await cp(join(fixturesDir, 'codex-stale-weekly.jsonl'), join(staleDir, 'rollout.jsonl'));
     await cp(join(fixturesDir, 'codex-primary-weekly.jsonl'), join(freshDir, 'rollout.jsonl'));
 
-    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, antigravity: noAgy });
+    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy });
     const codex = response.providers.find((p) => p.id === 'codex');
     expect(codex?.rate_limits.some((w) => w.id === 'weekly' && w.used_percent === 83)).toBe(true);
   });
@@ -118,7 +123,7 @@ describe('ambient usage collectors', () => {
 
     const response = await collectAmbientUsage(
       { dateFrom: '2026-09-01', dateTo: '2026-09-02' },
-      { homeDir: home, bypassCache: true, antigravity: noAgy },
+      { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy },
     );
     const codex = response.providers.find((p) => p.id === 'codex');
     expect(codex?.tokens.total_tokens).toBe(0);
@@ -129,7 +134,7 @@ describe('ambient usage collectors', () => {
     const home = await makeHomeFixture();
     const response = await collectAmbientUsage(
       { dateFrom: '2026-09-11', dateTo: '2026-09-11' },
-      { homeDir: home, bypassCache: true, antigravity: noAgy },
+      { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy },
     );
     const claude = response.providers.find((p) => p.id === 'claude_code');
     expect(claude?.tokens.input_tokens).toBe(20);
@@ -139,8 +144,108 @@ describe('ambient usage collectors', () => {
   it('reports not_installed when directories are missing', async () => {
     const home = await mkdtemp(join(tmpdir(), 'ralph-ambient-empty-'));
     await writeFile(join(home, '.keep'), '');
-    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, antigravity: noAgy });
+    const response = await collectAmbientUsage({}, { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy });
     expect(response.providers.every((p) => p.status === 'not_installed')).toBe(true);
+  });
+
+  it('refreshes a stale Claude quota cache via claude --print /usage', async () => {
+    const home = await makeHomeFixture();
+    const paths = resolveAmbientCollectorPaths(home);
+    let refreshCalls = 0;
+    const refreshed = await refreshClaudeQuotaCacheIfStale(paths, {
+      binary: 'claude',
+      maxAgeMs: 0,
+      refresh: async () => {
+        refreshCalls += 1;
+        await writeFile(
+          paths.claudeJsonPath,
+          JSON.stringify({
+            cachedUsageUtilization: {
+              fetchedAtMs: Date.now(),
+              utilization: {
+                five_hour: { utilization: 23, resets_at: '2026-09-20T00:20:00.000Z' },
+                seven_day: { utilization: 88, resets_at: '2026-09-20T02:00:00.000Z' },
+                limits: [
+                  { kind: 'session', percent: 23, resets_at: '2026-09-20T00:20:00.000Z' },
+                  { kind: 'weekly_all', percent: 88, resets_at: '2026-09-20T02:00:00.000Z' },
+                ],
+              },
+            },
+          }),
+        );
+        return { stdout: 'Current session: 23% used', stderr: '' };
+      },
+    });
+    expect(refreshed).toBe(true);
+    expect(refreshCalls).toBe(1);
+
+    const response = await collectAmbientUsage(
+      {},
+      {
+        homeDir: home,
+        bypassCache: true,
+        claude: { refresh: null },
+        antigravity: noAgy,
+      },
+    );
+    const claude = response.providers.find((p) => p.id === 'claude_code');
+    expect(claude?.rate_limits.some((w) => w.id === 'session' && w.used_percent === 23)).toBe(true);
+    expect(claude?.rate_limits.some((w) => w.id === 'seven_day' && w.used_percent === 88)).toBe(true);
+  });
+
+  it('skips Claude quota refresh when the on-disk snapshot is fresh', async () => {
+    const home = await makeHomeFixture();
+    const paths = resolveAmbientCollectorPaths(home);
+    await writeFile(
+      paths.claudeJsonPath,
+      JSON.stringify({
+        cachedUsageUtilization: {
+          fetchedAtMs: Date.now(),
+          utilization: {
+            five_hour: { utilization: 5, resets_at: '2026-09-20T00:00:00.000Z' },
+            seven_day: { utilization: 10, resets_at: '2026-09-20T00:00:00.000Z' },
+          },
+        },
+      }),
+    );
+    let refreshCalls = 0;
+    const refreshed = await refreshClaudeQuotaCacheIfStale(paths, {
+      binary: 'claude',
+      maxAgeMs: 60_000,
+      refresh: async () => {
+        refreshCalls += 1;
+        return { stdout: '', stderr: '' };
+      },
+    });
+    expect(refreshed).toBe(false);
+    expect(refreshCalls).toBe(0);
+  });
+
+  it('falls back to five_hour utilization when nested limits are absent', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'ralph-ambient-claude-five-hour-'));
+    const claudeDir = join(home, '.claude');
+    await mkdir(join(claudeDir, 'projects'), { recursive: true });
+    await writeFile(
+      join(home, '.claude.json'),
+      JSON.stringify({
+        cachedUsageUtilization: {
+          fetchedAtMs: Date.now(),
+          utilization: {
+            five_hour: { utilization: 41, resets_at: '2026-09-20T01:00:00.000Z' },
+            seven_day: { utilization: 55, resets_at: '2026-09-20T02:00:00.000Z' },
+          },
+        },
+      }),
+    );
+    const response = await collectAmbientUsage(
+      {},
+      { homeDir: home, bypassCache: true, claude: noClaudeRefresh, antigravity: noAgy },
+    );
+    const claude = response.providers.find((p) => p.id === 'claude_code');
+    expect(claude?.rate_limits).toEqual([
+      expect.objectContaining({ id: 'five_hour', label: 'Session', used_percent: 41 }),
+      expect.objectContaining({ id: 'seven_day', label: 'Weekly', used_percent: 55 }),
+    ]);
   });
 
   it('maps Antigravity remaining_fraction buckets into used_percent windows', async () => {
@@ -168,6 +273,7 @@ describe('ambient usage collectors', () => {
       {
         homeDir: home,
         bypassCache: true,
+        claude: noClaudeRefresh,
         antigravity: {
           binary: 'agy',
           runner: async () => ({ stdout: fixture, stderr: '' }),

@@ -2,12 +2,6 @@
   "generatedPaths": [
     ".ralph-plugin-generated.json",
     "hooks.json",
-    "hooks/after-shell-telemetry.sh",
-    "hooks/post-tool-mcp-compact.sh",
-    "hooks/post-tool-native-result-compact.sh",
-    "hooks/post-tool-shell-telemetry.sh",
-    "hooks/pre-tool-exploration-policy.sh",
-    "hooks/pre-tool-proxy-read-handoff.sh",
     "hooks/pre-tool-shell-policy.sh",
     "host-manifest.json",
     "mcp_config.json",

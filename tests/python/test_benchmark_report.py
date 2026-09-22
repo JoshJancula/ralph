@@ -908,6 +908,7 @@ class TestSavingsReport(unittest.TestCase):
                 "hook_compaction",
                 "proxy_shell_compaction",
                 "result_windowing",
+                "jev_compaction",
             },
         )
         self.assertGreater(savings["result_windowing"]["saved_bytes"], 0)

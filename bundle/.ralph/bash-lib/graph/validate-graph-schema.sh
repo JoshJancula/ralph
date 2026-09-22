@@ -678,6 +678,29 @@ graph_schema_validate_file() {
     fi
   done < <(jq -c '.edges[]?' "$graph_file")
 
+  # candidateFrom binds a read-only snapshot evaluator to a producer's
+  # candidate. The producer must write (writeScopes) or integrate, and must be
+  # a transitive predecessor through dependsOn or edges (joins included).
+  local candidate_error
+  candidate_error="$(jq -r '
+    . as $g
+    | ($g.nodes | map({key: .id, value: .}) | from_entries) as $by_id
+    | def preds($id): ([($by_id[$id].dependsOn // [])[]] + [$g.edges[]? | select(.to == $id) | .from]) | unique;
+      def ancestors($id): [recurse(preds(.)[]; true)] | .[1:];
+    [ $g.nodes[] | select((.stage.candidateFrom // "") != "") | . as $n
+      | $n.stage.candidateFrom as $src
+      | if ($by_id[$src] // null) == null then "node \($n.id): candidateFrom \($src) references absent node"
+        elif ($n.stage.workspaceMode // "") != "snapshot" then "node \($n.id): candidateFrom requires workspaceMode snapshot"
+        elif (($n.stage.writeScopes // []) | length) > 0 then "node \($n.id): candidateFrom stage must be read-only (no writeScopes)"
+        elif ((($by_id[$src].stage.writeScopes // []) | length) == 0 and $by_id[$src].type != "integrate") then "node \($n.id): candidateFrom \($src) is read-only"
+        elif ([$n.id | ancestors(.)] | flatten | index($src)) == null then "node \($n.id): candidateFrom \($src) must be an ancestor"
+        else empty end ] | first // empty
+  ' "$graph_file" 2>/dev/null)"
+  if [[ -n "$candidate_error" ]]; then
+    graph_schema_fail "$candidate_error"
+    return 1
+  fi
+
   graph_schema_validate_limits "$graph_file" || return 1
   return 0
 }

@@ -3,9 +3,11 @@
 #
 # Usage:
 #   .ralph/cleanup-plan.sh [OPTIONS] <artifact-namespace> [workspace]
-#     Removes `.ralph-workspace/logs/<namespace>/plan-runner-*` files, `.ralph-workspace/sessions/<namespace>/`,
-#     legacy `.ralph-workspace/logs/<namespace>/` plan-runner files if present, legacy `.ralph-workspace/sessions/<namespace>/` if present,
-#     `.ralph-workspace/artifacts/<namespace>/`, and `.ralph-workspace/tool-results/<namespace>/`.
+#     Removes `.ralph-workspace/logs/<namespace>/plan-runner-*` files, `.ralph-workspace/sessions/<namespace>/`
+#     (layout 2: `.ralph-workspace/internal/sessions/<namespace>/`, with legacy path also removed),
+#     legacy `.ralph-workspace/logs/<namespace>/` plan-runner files if present,
+#     `.ralph-workspace/artifacts/<namespace>/`, and `.ralph-workspace/tool-results/<namespace>/`
+#     (layout 2: `.ralph-workspace/cache/tool-results/<namespace>/`, with legacy path also removed).
 #     Defaults to `$RALPH_ARTIFACT_NS` if the namespace argument is empty.
 set -euo pipefail
 
@@ -24,9 +26,10 @@ cleanup_plan_run_namespace_cleanup() {
   session_dir="$(cleanup_plan_session_dir "$workspace_root" "$namespace")"
   legacy_session_dir="$(cleanup_plan_legacy_plan_session_dir "$workspace_root" "$namespace")"
 
-  local artifact_dir tool_results_dir
+  local artifact_dir tool_results_dir legacy_tool_results_dir
   artifact_dir="$(cleanup_plan_artifact_dir "$workspace_root" "$namespace")"
   tool_results_dir="$(cleanup_plan_tool_results_dir "$workspace_root" "$namespace")"
+  legacy_tool_results_dir="$(cleanup_plan_legacy_tool_results_dir "$workspace_root" "$namespace")"
 
   cleanup_plan_delete_log_files "$log_dir"
   if [[ -d "$legacy_log_dir" ]]; then
@@ -41,7 +44,12 @@ cleanup_plan_run_namespace_cleanup() {
     echo "Removed legacy session directory $legacy_session_dir"
   fi
   cleanup_plan_delete_artifact_dir "$artifact_dir"
-  cleanup_plan_delete_tool_results_dir "$tool_results_dir"
+  if [[ -d "$tool_results_dir" ]]; then
+    cleanup_plan_delete_tool_results_dir "$tool_results_dir"
+  fi
+  if [[ -d "$legacy_tool_results_dir" && "$legacy_tool_results_dir" != "$tool_results_dir" ]]; then
+    cleanup_plan_delete_tool_results_dir "$legacy_tool_results_dir"
+  fi
   cleanup_plan_remove_human_action_file "$workspace_root"
   cleanup_plan_prune_graph_runs "$workspace_root" "$namespace"
 }

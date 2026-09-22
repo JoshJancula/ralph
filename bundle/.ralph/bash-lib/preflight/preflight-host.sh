@@ -77,6 +77,70 @@ graph_preflight_cli_exists() {
   graph_preflight_cmd_available "$cli"
 }
 
+# graph_preflight_runtime_label <normalized-runtime>
+# Human label aligned with ralph-dashboard RUNTIME_PROBES / Runtimes page.
+graph_preflight_runtime_label() {
+  case "${1:-}" in
+    claude) printf 'Claude (Anthropic)\n' ;;
+    codex) printf 'Codex (OpenAI)\n' ;;
+    antigravity) printf 'Antigravity (Google)\n' ;;
+    cursor) printf 'Cursor Agent\n' ;;
+    opencode) printf 'OpenCode\n' ;;
+    *) printf '%s\n' "${1:-}" ;;
+  esac
+}
+
+# graph_preflight_runtime_status_argv <normalized-runtime>
+# Status probe argv aligned with ralph-dashboard/src/server/runtime-status.ts.
+# Prints one flag/subcommand per line. Returns 1 when unknown.
+graph_preflight_runtime_status_argv() {
+  case "${1:-}" in
+    cursor)
+      printf '%s\n' status
+      ;;
+    claude)
+      printf '%s\n' auth
+      printf '%s\n' status
+      ;;
+    codex)
+      printf '%s\n' login
+      printf '%s\n' status
+      ;;
+    opencode)
+      printf '%s\n' auth
+      printf '%s\n' list
+      ;;
+    antigravity)
+      printf '%s\n' models
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# graph_preflight_runtime_signed_out <normalized-runtime> <probe-output>
+# Returns 0 when output indicates the runtime is not signed in (dashboard signedOut).
+graph_preflight_runtime_signed_out() {
+  local runtime="$1" text
+  text="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$runtime" in
+    cursor | claude | codex)
+      [[ "$text" == *"not logged"* || "$text" == *"logged out"* || "$text" == *"not authenticated"* ]]
+      ;;
+    opencode)
+      [[ "$text" == *"no credentials"* || "$text" == *"not logged"* || "$text" == *"logged out"* ]]
+      ;;
+    antigravity)
+      [[ "$text" == *"not signed in"* || "$text" == *"sign in"* || \
+         "$text" == *"select login method"* || "$text" == *"authentication required"* ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # graph_preflight_auth_argv <normalized-runtime>
 # Prints one flag/subcommand per line. Returns 1 when no auth probe exists.
 graph_preflight_auth_argv() {
@@ -134,7 +198,7 @@ graph_preflight_run_probe() {
     args+=("$line")
   done
   [[ ${#args[@]} -gt 0 ]] || return 1
-  "$cli" "${args[@]}" 2>/dev/null
+  "$cli" "${args[@]}" 2>&1
 }
 
 # graph_preflight_parse_model_list <normalized-runtime> <raw-text>
@@ -224,29 +288,293 @@ graph_preflight_worst() {
   ' "$file"
 }
 
+# graph_preflight_table_style_init
+# Sets PREFLIGHT_TBL_* color variables when stdout/stderr is a TTY.
+graph_preflight_table_style_init() {
+  PREFLIGHT_TBL_RST=""
+  PREFLIGHT_TBL_BOLD=""
+  PREFLIGHT_TBL_DIM=""
+  PREFLIGHT_TBL_CYAN=""
+  PREFLIGHT_TBL_PASS=""
+  PREFLIGHT_TBL_WARN=""
+  PREFLIGHT_TBL_FAIL=""
+  if { [[ -t 1 ]] || [[ -t 2 ]]; } \
+    && [[ "${NO_COLOR+x}" == x ]] \
+    && [[ "${RALPH_INSTALL_NO_COLOR:-0}" != "1" ]]; then
+    PREFLIGHT_TBL_RST=$'\033[0m'
+    PREFLIGHT_TBL_BOLD=$'\033[1m'
+    PREFLIGHT_TBL_DIM=$'\033[2m'
+    PREFLIGHT_TBL_CYAN=$'\033[36m'
+    PREFLIGHT_TBL_PASS=$'\033[32m'
+    PREFLIGHT_TBL_WARN=$'\033[33m'
+    PREFLIGHT_TBL_FAIL=$'\033[31m'
+  fi
+}
+
+graph_preflight_table_repeat() {
+  local ch="$1" count="$2" out="" i
+  for ((i = 0; i < count; i++)); do
+    out+="$ch"
+  done
+  printf '%s' "$out"
+}
+
+graph_preflight_table_status_color() {
+  case "$1" in
+    pass) printf '%s' "$PREFLIGHT_TBL_PASS" ;;
+    warn) printf '%s' "$PREFLIGHT_TBL_WARN" ;;
+    fail) printf '%s' "$PREFLIGHT_TBL_FAIL" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+# graph_preflight_table_next_chunk <text> <max-len>
+# Sets PREFLIGHT_TBL_CHUNK and PREFLIGHT_TBL_WRAP_REST (no subshell-safe stdout).
+graph_preflight_table_next_chunk() {
+  local text="$1" max="$2" chunk="" break_at
+  PREFLIGHT_TBL_CHUNK=""
+  PREFLIGHT_TBL_WRAP_REST=""
+  [[ -n "$text" ]] || return 0
+  if ((${#text} <= max)); then
+    PREFLIGHT_TBL_CHUNK="$text"
+    return 0
+  fi
+  chunk="${text:0:max}"
+  if [[ "$chunk" == *"; "* ]]; then
+    break_at="${chunk%%; *}"
+    if ((${#break_at} > 12)); then
+      PREFLIGHT_TBL_CHUNK="$break_at"
+      PREFLIGHT_TBL_WRAP_REST="${text:${#break_at}}"
+      PREFLIGHT_TBL_WRAP_REST="${PREFLIGHT_TBL_WRAP_REST#; }"
+      return 0
+    fi
+  fi
+  if [[ "$chunk" == *"/"* ]]; then
+    break_at="${chunk%/*}"
+    if ((${#break_at} > 8)); then
+      PREFLIGHT_TBL_CHUNK="$break_at/"
+      PREFLIGHT_TBL_WRAP_REST="${text:${#break_at}}"
+      PREFLIGHT_TBL_WRAP_REST="${PREFLIGHT_TBL_WRAP_REST#/}"
+      return 0
+    fi
+  fi
+  if [[ "$chunk" == *" "* ]]; then
+    break_at="${chunk% *}"
+    if ((${#break_at} > 8)); then
+      PREFLIGHT_TBL_CHUNK="$break_at"
+      PREFLIGHT_TBL_WRAP_REST="${text:${#break_at}}"
+      PREFLIGHT_TBL_WRAP_REST="${PREFLIGHT_TBL_WRAP_REST# }"
+      return 0
+    fi
+  fi
+  PREFLIGHT_TBL_CHUNK="$chunk"
+  PREFLIGHT_TBL_WRAP_REST="${text:max}"
+}
+
+graph_preflight_table_rule() {
+  local c_w="$1" s_w="$2" d_w="$3"
+  printf '  +%s+%s+%s+\n' \
+    "$(graph_preflight_table_repeat '-' "$((c_w + 2))")" \
+    "$(graph_preflight_table_repeat '-' "$((s_w + 2))")" \
+    "$(graph_preflight_table_repeat '-' "$((d_w + 2))")"
+}
+
+graph_preflight_table_print_row() {
+  local c_w="$1" s_w="$2" d_w="$3" check="$4" internal_status="$5" display_status="$6" detail="$7"
+  local rest chunk sc evidence fix=""
+  [[ -n "$display_status" ]] || display_status="$internal_status"
+  if [[ "$detail" == *" | fix: "* ]]; then
+    evidence="${detail%% | fix: *}"
+    fix="${detail#* | fix: }"
+  else
+    evidence="$detail"
+  fi
+  rest="$evidence"
+  while :; do
+    graph_preflight_table_next_chunk "$rest" "$d_w"
+    chunk="$PREFLIGHT_TBL_CHUNK"
+    rest="${PREFLIGHT_TBL_WRAP_REST:-}"
+    if [[ -n "$check" || -n "$internal_status" ]]; then
+      sc="$(graph_preflight_table_status_color "$internal_status")"
+      printf '  | %-*s | %s%-*s%s | %-*s |\n' \
+        "$c_w" "$check" "$sc" "$s_w" "$display_status" "$PREFLIGHT_TBL_RST" "$d_w" "$chunk"
+      check=""
+      internal_status=""
+      display_status=""
+    else
+      printf '  | %-*s | %-*s | %-*s |\n' "$c_w" "" "$s_w" "" "$d_w" "$chunk"
+    fi
+    [[ -n "$rest" ]] || break
+  done
+  if [[ -n "$fix" ]]; then
+    rest="fix: $fix"
+    while :; do
+      graph_preflight_table_next_chunk "$rest" "$d_w"
+      chunk="$PREFLIGHT_TBL_CHUNK"
+      rest="${PREFLIGHT_TBL_WRAP_REST:-}"
+      printf '  | %-*s | %-*s | %-*s |\n' "$c_w" "" "$s_w" "" "$d_w" "$chunk"
+      [[ -n "$rest" ]] || break
+    done
+  fi
+}
+
+graph_preflight_table_section() {
+  local json="$1" section="$2" title="$3" c_w="$4" s_w="$5" d_w="$6"
+  local rows row check internal_status display_status detail count=0
+  local col_check="Check"
+
+  if [[ "$section" == "runtime" ]]; then
+    col_check="Runtime"
+    rows="$(jq -c '
+      def runtime_label($r):
+        if $r == "claude" then "Claude (Anthropic)"
+        elif $r == "codex" then "Codex (OpenAI)"
+        elif $r == "antigravity" then "Antigravity (Google)"
+        elif $r == "cursor" then "Cursor Agent"
+        elif $r == "opencode" then "OpenCode"
+        else $r end;
+      def runtime_order($r):
+        (["claude","codex","antigravity","cursor","opencode"] | index($r)) // 99;
+      [.findings[]
+        | select((.id | startswith("runtime:")) and (.id | endswith(":auth") | not))
+        | .runtime as $r
+        | {
+            check: runtime_label($r),
+            status: .status,
+            statusLabel: (
+              if .status == "pass" then "Connected"
+              elif (.evidence // "") == "CLI not found on PATH" then "Not installed"
+              else "Not connected" end
+            ),
+            detail: (
+              (.evidence // .summary // "") as $e
+              | (.repair // "") as $r
+              | if $r == "" then $e
+                elif $e == "" then ("fix: " + $r)
+                else ($e + " | fix: " + $r)
+                end
+            ),
+            sortKey: runtime_order($r)
+          }
+      ]
+      | sort_by(.sortKey)
+    ' <<<"$json")"
+  else
+    rows="$(jq -c --arg sec "$section" '
+      [.findings[]
+        | select(
+            if $sec == "host" then .id != "dashboard" and (.id | startswith("host:"))
+            elif $sec == "dashboard" then .id == "dashboard"
+            else (.id != "dashboard" and (.id | startswith("host:") | not) and (.id | startswith("runtime:") | not))
+            end
+          )
+        | {
+            check: .id,
+            status: .status,
+            statusLabel: .status,
+            detail: (
+              (.evidence // .summary // "") as $e
+              | (.repair // "") as $r
+              | if $r == "" then $e
+                elif $e == "" then ("fix: " + $r)
+                else ($e + " | fix: " + $r)
+                end
+            )
+          }
+      ]
+    ' <<<"$json")"
+  fi
+
+  count="$(jq 'length' <<<"$rows")"
+  [[ "$count" -gt 0 ]] || return 0
+
+  printf '\n  %s%s%s\n' "$PREFLIGHT_TBL_CYAN$PREFLIGHT_TBL_BOLD" "$title" "$PREFLIGHT_TBL_RST"
+  graph_preflight_table_rule "$c_w" "$s_w" "$d_w"
+  printf '  | %-*s | %-*s | %-*s |\n' "$c_w" "$col_check" "$s_w" "Status" "$d_w" "Details"
+  graph_preflight_table_rule "$c_w" "$s_w" "$d_w"
+
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    check="$(jq -r '.check' <<<"$row")"
+    internal_status="$(jq -r '.status' <<<"$row")"
+    display_status="$(jq -r '.statusLabel' <<<"$row")"
+    detail="$(jq -r '.detail' <<<"$row")"
+    graph_preflight_table_print_row "$c_w" "$s_w" "$d_w" "$check" "$internal_status" "$display_status" "$detail"
+  done < <(jq -c '.[]' <<<"$rows")
+
+  graph_preflight_table_rule "$c_w" "$s_w" "$d_w"
+}
+
 # graph_preflight_format_table <report-json>
-# Concise table: check ID, status, evidence, repair.
+# Grouped bordered readiness tables with a short summary line.
 graph_preflight_format_table() {
-  local json="${1:-}"
-  printf '%s\n' "$json" | jq -r '
-    ["ID","STATUS","EVIDENCE","REPAIR"],
-    (.findings[] | [
-      .id,
-      .status,
-      (.evidence // .summary),
-      (.repair // "-")
-    ])
-    | @tsv
-  ' | awk -F'\t' '
-    BEGIN {
-      w[1]=24; w[2]=6; w[3]=40; w[4]=32
-    }
-    {
-      for (i=1;i<=4;i++) {
-        s=$i
-        if (length(s) > w[i]) s=substr(s,1,w[i]-1) ">"
-        printf "%-*s%s", w[i], s, (i==4 ? "\n" : "  ")
-      }
-    }
-  '
+  local json="${1:-}" term_w c_w s_w d_w pass warn fail outcome
+  local max_id rid rt label_len
+
+  term_w="${COLUMNS:-80}"
+  if [[ "$term_w" -lt 72 ]]; then
+    term_w=72
+  elif [[ "$term_w" -gt 132 ]]; then
+    term_w=132
+  fi
+
+  graph_preflight_table_style_init
+
+  if ! jq -e 'type == "object" and (.findings | type == "array")' <<<"$json" >/dev/null 2>&1; then
+    printf '%s\n' "$json"
+    return 0
+  fi
+
+  pass="$(jq '[.findings[] | select(.status == "pass")] | length' <<<"$json")"
+  warn="$(jq '[.findings[] | select(.status == "warn")] | length' <<<"$json")"
+  fail="$(jq '[.findings[] | select(.status == "fail")] | length' <<<"$json")"
+  outcome="$(jq -r '.outcome // "pass"' <<<"$json")"
+  max_id="$(jq -r '[.findings[].id] | max_by(length) | length' <<<"$json")"
+  c_w="$max_id"
+  while IFS= read -r rid; do
+    [[ "$rid" == runtime:* ]] || continue
+    rt="${rid#runtime:}"
+    rt="${rt%%:auth}"
+    label_len="$(graph_preflight_runtime_label "$rt" | wc -c | tr -d ' ')"
+    label_len=$((label_len - 1))
+    ((label_len > c_w)) && c_w="$label_len"
+  done < <(jq -r '.findings[].id' <<<"$json")
+
+  ((c_w < 10)) && c_w=10
+  ((c_w > 24)) && c_w=24
+  s_w=14
+  d_w=$((term_w - c_w - s_w - 11))
+  ((d_w < 28)) && d_w=28
+
+  printf '\n'
+  printf '  %sSummary:%s  ' "$PREFLIGHT_TBL_BOLD" "$PREFLIGHT_TBL_RST"
+  printf '%s%d passed%s' "$PREFLIGHT_TBL_PASS" "$pass" "$PREFLIGHT_TBL_RST"
+  if [[ "$warn" -gt 0 ]]; then
+    printf ', %s%d warnings%s' "$PREFLIGHT_TBL_WARN" "$warn" "$PREFLIGHT_TBL_RST"
+  fi
+  if [[ "$fail" -gt 0 ]]; then
+    printf ', %s%d failed%s' "$PREFLIGHT_TBL_FAIL" "$fail" "$PREFLIGHT_TBL_RST"
+  fi
+  printf '\n  %sOverall:%s  ' "$PREFLIGHT_TBL_DIM" "$PREFLIGHT_TBL_RST"
+  case "$outcome" in
+    pass)
+      printf '%sready%s\n' "$PREFLIGHT_TBL_PASS" "$PREFLIGHT_TBL_RST"
+      ;;
+    warn)
+      printf '%sready with warnings%s' "$PREFLIGHT_TBL_WARN" "$PREFLIGHT_TBL_RST"
+      printf ' %s(soft checks only; exit 0)%s\n' "$PREFLIGHT_TBL_DIM" "$PREFLIGHT_TBL_RST"
+      ;;
+    fail)
+      printf '%snot ready%s\n' "$PREFLIGHT_TBL_FAIL" "$PREFLIGHT_TBL_RST"
+      ;;
+    *)
+      printf '%s\n' "$outcome"
+      ;;
+  esac
+
+  graph_preflight_table_section "$json" host "Host environment" "$c_w" "$s_w" "$d_w"
+  graph_preflight_table_section "$json" dashboard "Dashboard" "$c_w" "$s_w" "$d_w"
+  graph_preflight_table_section "$json" runtime "Runtimes" "$c_w" "$s_w" "$d_w"
+  graph_preflight_table_section "$json" other "Other checks" "$c_w" "$s_w" "$d_w"
+  printf '\n'
 }

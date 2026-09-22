@@ -10,7 +10,7 @@ RALPH_RUN_PLAN_INVOKE_CLAUDE_LOADED=1
 #   run_plan_invoke_claude_minimal_mode_validate -- normalize CLAUDE_PLAN_MINIMAL.
 #   run_plan_invoke_claude_minimal_mcp_lockdown_validate -- normalize CLAUDE_PLAN_MINIMAL_DISABLE_MCP.
 #   run_plan_invoke_claude_apply_minimal_flags -- append CLAUDE_PLAN_MINIMAL auth-safe flags.
-#   run_plan_invoke_claude_mcp_config_prepare / run_plan_invoke_claude_mcp_config_cleanup -- ralph-mode ephemeral MCP config containing only the ralph server.
+#   run_plan_invoke_claude_mcp_config_prepare / run_plan_invoke_claude_mcp_config_cleanup -- ralph-mode ephemeral MCP config containing Ralph-owned servers (ralph, plus ralph-jev when Jev MCP is enabled).
 #   run_plan_invoke_claude_mcp_prepare_ralph_layer -- validate + prepare that ephemeral config for the "layered" (non-strict) MCP lockdown mode.
 #   run_plan_invoke_claude_native_hooks_prepare / run_plan_invoke_claude_native_hooks_cleanup -- dynamic Claude hook settings overlay.
 #   run_plan_invoke_claude_permission_mode_validate -- normalize CLAUDE_PLAN_PERMISSION_MODE.
@@ -177,9 +177,10 @@ run_plan_invoke_claude_mcp_config_prepare() {
   # ambient+agent+ralph catalog rebuilt by ralph_runtime_config_mcp_resolve).
   # That rebuilt copy loses ambient MCP server state (for example OAuth/session
   # state) that lives outside the config file. Ralph-profile runs always get an
-  # ephemeral config containing ONLY the ralph server here, so native discovery
+  # ephemeral config containing ONLY Ralph-owned servers here (ralph, and
+  # ralph-jev when RALPH_JEV=1 and RALPH_JEV_MCP=1), so native discovery
   # (left on by the caller for a Ralph profile) is what surfaces ambient
-  # servers, and this call only ever adds Ralph's own server on top.
+  # servers, and this call only ever adds Ralph's own servers on top.
   if [[ -z "$config_path" ]]; then
     config_path="$(mktemp "${TMPDIR:-/tmp}/ralph-claude-mcp-XXXXXX")"
     owns_config=1
@@ -252,26 +253,13 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
   fi
 
   case "$compact_catalog" in
-    1)
+    0 | 1)
       tools_list=(
-        "${_ns}ralph_proxy_read"
-        "${_ns}ralph_proxy_grep"
-        "${_ns}ralph_proxy_glob"
         "${_ns}ralph_proxy_shell"
         "${_ns}ralph_proxy_result_read"
         "${_ns}ralph_proxy_result_search"
         "${_ns}ralph_proxy_result_summary"
         "${_ns}ralph_proxy_batch"
-      )
-      ;;
-    0)
-      tools_list=(
-        "${_ns}ralph_proxy_read"
-        "${_ns}ralph_proxy_grep"
-        "${_ns}ralph_proxy_shell"
-        "${_ns}ralph_proxy_result_read"
-        "${_ns}ralph_proxy_batch"
-        "${_ns}ralph_proxy_tool_search"
       )
       ;;
     *)
@@ -280,12 +268,6 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
       ;;
   esac
 
-  if [[ "${RALPH_MCP_PROXY_POLICY_OWNED_SEARCH_ENABLED:-0}" == "1" ]]; then
-    tools_list+=("${_ns}ralph_proxy_search")
-  fi
-  if [[ "${RALPH_MCP_PROXY_POLICY_OWNED_REPOMAP_ENABLED:-0}" == "1" ]]; then
-    tools_list+=("${_ns}ralph_proxy_repomap")
-  fi
   if [[ "${RALPH_PROXY_SHELL_ASYNC:-1}" != "0" ]]; then
     tools_list+=(
       "${_ns}ralph_proxy_shell_start"
@@ -296,6 +278,35 @@ ralph_run_plan_invoke_claude_proxy_tool_names() {
     )
   fi
 
+  IFS=','
+  printf '%s' "${tools_list[*]}"
+  IFS="$_old_ifs"
+}
+
+# Newline-separated MCP tool namespace prefixes for --allowedTools under
+# --strict-mcp-config. Always includes the Ralph proxy namespace; adds
+# mcp__ralph-jev__ when Track 2 Jev MCP registration is enabled.
+ralph_run_plan_invoke_claude_mcp_tool_namespaces() {
+  printf '%s\n' "${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
+  if declare -F ralph_mcp_jev_mcp_enabled >/dev/null 2>&1; then
+    if ralph_mcp_jev_mcp_enabled; then
+      printf '%s\n' "mcp__ralph-jev__"
+    fi
+  elif [[ "${RALPH_JEV:-}" == "1" && "${RALPH_JEV_MCP:-}" == "1" ]]; then
+    printf '%s\n' "mcp__ralph-jev__"
+  fi
+}
+
+# Jev decision tools under mcp__ralph-jev__ (server name "ralph-jev").
+ralph_run_plan_invoke_claude_jev_tool_names() {
+  local _ns="mcp__ralph-jev__"
+  local _old_ifs="$IFS"
+  local -a tools_list=(
+    "${_ns}jev_ask"
+    "${_ns}jev_classify_failure"
+    "${_ns}jev_classify_request"
+    "${_ns}jev_rank_relevance"
+  )
   IFS=','
   printf '%s' "${tools_list[*]}"
   IFS="$_old_ifs"
@@ -314,10 +325,10 @@ ralph_run_plan_invoke_claude_delegation_tool_names() {
 
 ralph_run_plan_invoke_claude_allowed_tools_list() {
   local tools_use="${1:-}"
-  local strip_native_read_tools="${2:-0}"
-  local strip_native_bash_tools="${3:-0}"
   local _old_ifs="$IFS"
   local -a tools_list=()
+  local ns
+  local has_jev_ns=0
 
   if [[ -z "$tools_use" ]]; then
     tools_use=""
@@ -327,65 +338,67 @@ ralph_run_plan_invoke_claude_allowed_tools_list() {
   for tool in $tools_use; do
     IFS="$_old_ifs"
     tool="${tool// /}"
-    case "$tool" in
-      Bash)
-        if [[ "$strip_native_bash_tools" == "1" ]]; then
-          :
-        else
-          tools_list+=("$tool")
-        fi
-        ;;
-      Read)
-        if [[ "$strip_native_read_tools" == "1" ]]; then
-          :
-        else
-          tools_list+=("$tool")
-        fi
-        ;;
-      Edit|Write)
-        tools_list+=("$tool")
-        ;;
-      "")
-        ;;
-      *)
-        tools_list+=("$tool")
-        ;;
-    esac
+    [[ -n "$tool" ]] || { IFS=','; continue; }
+    tools_list+=("$tool")
     IFS=','
   done
   IFS="$_old_ifs"
 
-  tools_use="$(ralph_run_plan_invoke_claude_proxy_tool_names)"
-  if [[ -n "$tools_use" ]]; then
-    IFS=','
-    for tool in $tools_use; do
-      IFS="$_old_ifs"
-      tools_list+=("$tool")
-      IFS=','
-    done
-    IFS="$_old_ifs"
-  fi
+  # Iterate MCP namespaces so --strict-mcp-config permits every Ralph-owned
+  # server that appears in the ephemeral catalog (not only mcp__ralph__).
+  while IFS= read -r ns; do
+    [[ -n "$ns" ]] || continue
+    case "$ns" in
+      mcp__ralph-jev__)
+        has_jev_ns=1
+        ;;
+      *)
+        # Primary Ralph proxy namespace: owned proxy / completion / delegation tools.
+        tools_use="$(ralph_run_plan_invoke_claude_proxy_tool_names)"
+        if [[ -n "$tools_use" ]]; then
+          IFS=','
+          for tool in $tools_use; do
+            IFS="$_old_ifs"
+            tools_list+=("$tool")
+            IFS=','
+          done
+          IFS="$_old_ifs"
+        fi
+        tools_use="$(ralph_run_plan_invoke_claude_completion_tool_names)"
+        if [[ -n "$tools_use" ]]; then
+          IFS=','
+          for tool in $tools_use; do
+            IFS="$_old_ifs"
+            tools_list+=("$tool")
+            IFS=','
+          done
+          IFS="$_old_ifs"
+        fi
+        tools_use="$(ralph_run_plan_invoke_claude_delegation_tool_names)"
+        if [[ -n "$tools_use" ]]; then
+          IFS=','
+          for tool in $tools_use; do
+            IFS="$_old_ifs"
+            tools_list+=("$tool")
+            IFS=','
+          done
+          IFS="$_old_ifs"
+        fi
+        ;;
+    esac
+  done < <(ralph_run_plan_invoke_claude_mcp_tool_namespaces)
 
-  tools_use="$(ralph_run_plan_invoke_claude_completion_tool_names)"
-  if [[ -n "$tools_use" ]]; then
-    IFS=','
-    for tool in $tools_use; do
-      IFS="$_old_ifs"
-      tools_list+=("$tool")
+  if [[ "$has_jev_ns" == "1" ]]; then
+    tools_use="$(ralph_run_plan_invoke_claude_jev_tool_names)"
+    if [[ -n "$tools_use" ]]; then
       IFS=','
-    done
-    IFS="$_old_ifs"
-  fi
-
-  tools_use="$(ralph_run_plan_invoke_claude_delegation_tool_names)"
-  if [[ -n "$tools_use" ]]; then
-    IFS=','
-    for tool in $tools_use; do
+      for tool in $tools_use; do
+        IFS="$_old_ifs"
+        tools_list+=("$tool")
+        IFS=','
+      done
       IFS="$_old_ifs"
-      tools_list+=("$tool")
-      IFS=','
-    done
-    IFS="$_old_ifs"
+    fi
   fi
 
   IFS=','
@@ -578,41 +591,13 @@ ralph_run_plan_invoke_claude() {
     runtime_overlay_set_mcp_effective "false"
   fi
   if [[ "$ralph_tools_mode" == "1" ]]; then
-
-    if [[ "${RALPH_MCP_PREFLIGHT_PASSED:-0}" == "1" ]] && [[ "${RALPH_CLAUDE_RALPH_STRICT_PROXY+set}" != "set" ]] && { [[ "${_ralph_mode}" == "ralph" ]] || [[ "${RALPH_AGENT_TOOL_ACCESS:-}" == "ralph" ]]; }; then
-      RALPH_CLAUDE_RALPH_STRICT_PROXY=1
-      export RALPH_CLAUDE_RALPH_STRICT_PROXY
-    fi
-
-    # In ralph strict-proxy mode we replace native Bash with the bounded
-    # ralph_proxy_shell once preflight proves Claude can reach the proxy.
+    # Enabling Ralph tooling is ADDITIVE and never edits the operator's tool
+    # configuration: the agent keeps every native tool it would normally have
+    # and gains the Ralph MCP catalog on top.
     #
-    # We deliberately do NOT strip native Read by default. Claude Code's Edit and
-    # Write tools refuse to modify an existing file unless it was first read by
-    # the native Read tool ("File has not been read yet. Read it first before
-    # writing to it."), and a ralph_proxy_read does not satisfy that internal
-    # read-tracking. Stripping native Read therefore deadlocks every edit/write of
-    # an existing file -- the agent can neither Read (stripped) nor Edit (needs a
-    # prior native Read) and correctly bails. Native Read stays available (proxy
-    # reads are still preferred for bounded large reads via prompt guidance).
-    # Set RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1 only for read-only/analysis
-    # plans that never modify existing files.
-    local strip_native_read_tools=0
-    local strip_native_bash_tools=0
-    case "${RALPH_CLAUDE_RALPH_STRICT_PROXY:-0}" in
-      1|true|yes|on)
-        if [[ "${RALPH_MCP_PREFLIGHT_PASSED:-0}" == "1" ]]; then
-          strip_native_bash_tools=1
-          case "${RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ:-0}" in
-            1|true|yes|on)
-              strip_native_read_tools=1
-              ;;
-          esac
-        fi
-        ;;
-    esac
-
-    tools_use="$(ralph_run_plan_invoke_claude_allowed_tools_list "$tools_use" "$strip_native_read_tools" "$strip_native_bash_tools")"
+    # Native Read stays: Claude's Edit and Write refuse to modify a file that
+    # was not first read by the native Read tool.
+    tools_use="$(ralph_run_plan_invoke_claude_allowed_tools_list "$tools_use")"
   fi
 
   local _bare_idx=-1
@@ -644,14 +629,6 @@ ralph_run_plan_invoke_claude() {
   local -a denied_tools=()
   if [[ "$subagents_mode" == "off" ]]; then
     denied_tools+=(Agent)
-  fi
-  # Enforce the explicit proxy policy with a deny control now that native
-  # tools are no longer narrowed to the permission allowlist.
-  if [[ "${strip_native_bash_tools:-0}" == "1" ]]; then
-    denied_tools+=(Bash)
-  fi
-  if [[ "${strip_native_read_tools:-0}" == "1" ]]; then
-    denied_tools+=(Read Grep Glob)
   fi
   if [[ ${#denied_tools[@]} -gt 0 ]]; then
     args+=(--disallowedTools "${denied_tools[@]}")
@@ -691,9 +668,30 @@ ralph_run_plan_invoke_claude() {
     esac
   fi
 
+  # Optional in-process compaction: send the compact slash command and then the TODO prompt as two
+  # stream-json user messages, so the session compacts and continues within one invocation.
+  local _compact_first="${RALPH_CLAUDE_COMPACT_FIRST:-}"
+  local _stdin_payload=""
+  if [[ -n "$_compact_first" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      _stdin_payload="$(jq -nc --arg t "$_compact_first" '{type:"user",message:{role:"user",content:$t}}')"$'\n'"$(jq -nc --arg t "$PROMPT" '{type:"user",message:{role:"user",content:$t}}')"
+    elif command -v python3 >/dev/null 2>&1; then
+      _stdin_payload="$(RALPH_C1="$_compact_first" RALPH_C2="$PROMPT" python3 -c 'import json,os
+for k in ("RALPH_C1","RALPH_C2"):
+    print(json.dumps({"type":"user","message":{"role":"user","content":os.environ[k]}}))')"
+    fi
+    if [[ -n "$_stdin_payload" ]]; then
+      args+=(--input-format stream-json)
+    else
+      echo "Warning: compact requested but neither jq nor python3 is available; running without compaction." >&2
+    fi
+  fi
+
   run_plan_invoke_claude_cli() {
     local agent_ws="${RALPH_AGENT_WORKSPACE:-$(pwd)}"
-    printf '%s' "$PROMPT" | (
+    local _stdin_text="$PROMPT"
+    [[ -n "$_stdin_payload" ]] && _stdin_text="${_stdin_payload}"$'\n'
+    printf '%s' "$_stdin_text" | (
       cd "$agent_ws" || exit 1
       export CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD="${CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD:-1}"
       run_plan_invoke_common_launch_cli claude "$cli" "${args[@]}"

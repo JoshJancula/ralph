@@ -56,6 +56,9 @@ ralph run --plan path/to/pipeline.plan.md                      # run a multi-sta
 ralph models add claude claude-sonnet-4-6                      # save a model id
 ralph dashboard                                                # start the dashboard UI
 ralph workspaces list                                          # list registered projects
+ralph ws status                                                # disk usage of this project's .ralph-workspace (ws = workspaces)
+ralph ws doctor --fix                                          # repair runs stuck as "running" after a crash
+ralph ws clean --yes                                           # reclaim disk (omit --yes to preview)
 ralph safety status                                            # show effective killswitch source and paths
 ralph safety init --project                                    # add per-project killswitch config
 ralph plugin list                                              # packaged plugin availability for all five runtimes
@@ -187,7 +190,7 @@ Codex note: when a run uses a user-level runtime root, add only that resolved di
 
 ### Workspace registry
 
-Global mode tracks the projects you run plans in (`~/.config/ralph/workspaces.json`, capped at the 100 most recent). The registry powers `ralph workspaces list` and lets the global dashboard aggregate metrics across projects. A registry write failure warns but never fails a plan run.
+Global mode tracks the projects you run plans in (`~/.config/ralph/workspaces.json`, capped at the 100 most recent). The registry powers `ralph workspaces list` (`ralph workspaces prune` only trims registry entries for missing or long-unused projects and never deletes project files; use `ralph workspaces clean` to reclaim `.ralph-workspace` disk space) and lets the global dashboard aggregate metrics across projects. A registry write failure warns but never fails a plan run.
 
 ### Migrating a project from local to global
 
@@ -200,6 +203,17 @@ bash "$RALPH_HOME/bundle/.ralph/migrate-to-global.sh" --yes /path/to/project    
 ```
 
 The script registers the project in the workspace registry and, with confirmation (or `--yes`), removes the project-local Ralph directories. The project keeps working through the global install, and any runtime configs you leave in place still take precedence over global defaults.
+
+### State workspace after upgrade
+
+Upgrading Ralph does not move or rewrite existing `.ralph-workspace/` runs.
+Layout 1 paths (`logs/`, `sessions/`, `graph-runs/`, `workflow-runs/`, and the
+other pre-existing top-level homes) stay where they are and remain readable and
+resumable. New runs default to layout 2 under `runs/<run-id>/`, with shared
+cache and coordination state under `cache/` and `internal/`. Set
+`RALPH_STATE_LAYOUT=1` to keep writing the pre-existing top-level paths. See
+[WORKSPACE.md](WORKSPACE.md) and
+[ENVIRONMENT.md](ENVIRONMENT.md#state-layout-ralph_state_layout).
 
 ## In-repo install (alternative)
 

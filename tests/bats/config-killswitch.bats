@@ -475,7 +475,7 @@ EOF
   "allowed_commands": [],
   "allowed_patterns": [],
   "deniedArgumentPatterns": [
-    {"tool": "ralph_proxy_read", "pattern": "/etc/passwd"}
+    {"tool": "ralph_proxy_shell", "pattern": "/etc/passwd"}
   ],
   "custom_rules": []
 }
@@ -485,7 +485,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "fatal" ]
 
-  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_proxy_read","action":"execute","effect":"read","resource":"/etc/passwd","arguments":"path=/etc/passwd"}'
+  run run_killswitch_core killswitch_evaluate '{"schemaVersion":1,"source":"mcp","runtime":"claude","tool":"ralph_proxy_shell","action":"execute","effect":"read","resource":"/etc/passwd","arguments":"path=/etc/passwd"}'
   [ "$status" -eq 0 ]
   [ "$output" = "fatal" ]
 }

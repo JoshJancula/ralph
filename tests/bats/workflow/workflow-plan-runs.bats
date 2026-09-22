@@ -21,6 +21,7 @@ setup_file() {
 }
 
 setup() {
+  export RALPH_STATE_LAYOUT=1
   WPR_TMP="$(mktemp -d)"
   WPR_HOME="$WPR_TMP/home"
   WPR_WS="$WPR_TMP/workspace"

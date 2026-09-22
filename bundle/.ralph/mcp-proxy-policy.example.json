@@ -23,7 +23,6 @@
     "ralph_proxy_glob": 8192,
     "ralph_proxy_shell": 8192,
     "ralph_proxy_search": 8192,
-    "ralph_proxy_repomap": 8192,
     "resources/read": 1024
   },
   "resultTokenCap": 0,
@@ -141,11 +140,7 @@
         "ralph_plan_status",
         "ralph_next_todo",
         "ralph_plan_tree",
-        "ralph_proxy_read",
-        "ralph_proxy_grep",
-        "ralph_proxy_glob",
-        "ralph_proxy_shell",
-        "ralph_proxy_search"
+        "ralph_proxy_shell"
       ],
       "resultByteCap": 65536,
       "toolResultByteCaps": {

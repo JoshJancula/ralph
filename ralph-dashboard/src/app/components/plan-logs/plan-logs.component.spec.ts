@@ -196,14 +196,15 @@ describe('PlanLogsComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="plan-run-card"]').textContent).toContain('cursor');
     expect(fixture.nativeElement.querySelector('[data-testid="run-headline-status"]').textContent).toContain('succeeded');
     expect(fixture.nativeElement.querySelector('[data-testid="run-manifest-badge"]')).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-count"]').textContent).toContain('3 files');
+    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-count"]').textContent).toContain('2 files');
     expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-group-metadata"]')).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-group-execution"]')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-group-execution"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-testid="run-details-disclosure"]')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('[data-testid="run-timeline"]').textContent).toContain('invocation');
     expect(fixture.nativeElement.querySelector('[data-testid="run-raw-files"]')).toBeNull();
   });
 
-  it('lists every evidence file as an open control', async () => {
+  it('lists summary evidence files as open controls; raw logs stay behind Details', async () => {
     const d = detail();
     const fixture = buildComponent({ file: 'PLAN.md' }, { projectRoot: '/proj' }, defaultApi({
       fetchPlanRunDetail: vi.fn(() => of(d)),
@@ -212,10 +213,11 @@ describe('PlanLogsComponent', () => {
     fixture.detectChanges();
 
     const buttons = fixture.nativeElement.querySelectorAll('[data-testid="run-evidence-open"]');
-    expect(buttons.length).toBe(d.files.evidence.length);
+    expect(buttons.length).toBe(2);
+    expect(fixture.nativeElement.querySelector('[data-testid="run-raw-files"]')).toBeNull();
   });
 
-  it('opens log and json evidence via navigation targets', async () => {
+  it('opens summary evidence via navigation targets', async () => {
     const navigate = vi.fn();
     const fixture = buildComponent({ file: 'PLAN.md' }, { projectRoot: '/proj' }, defaultApi(), null, navigate);
     await fixture.componentInstance.ngOnInit();
@@ -227,15 +229,6 @@ describe('PlanLogsComponent', () => {
       'logs',
       '',
       'PLAN/plan-usage-summary.json',
-      '/proj/.ralph-workspace',
-      '/proj',
-    );
-
-    (buttons[2] as HTMLButtonElement).click();
-    expect(navigate).toHaveBeenCalledWith(
-      'logs',
-      '',
-      'PLAN/plan-runner-output.log',
       '/proj/.ralph-workspace',
       '/proj',
     );
@@ -274,7 +267,8 @@ describe('PlanLogsComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-testid="run-legacy-badge"]')).toBeTruthy();
     expect(fixture.nativeElement.textContent).toContain('Legacy compatibility');
     expect(fixture.nativeElement.textContent).not.toContain('degraded');
-    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-group-execution"]')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('[data-testid="run-evidence-group-execution"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-testid="run-details-disclosure"]')).toBeTruthy();
   });
 
   it('loads a deep-linked run from plan-runs/:runId', async () => {

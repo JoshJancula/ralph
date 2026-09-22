@@ -93,7 +93,8 @@ except (ValueError, TypeError):
     _RESULT_BODY_LARGE_BYTE_THRESHOLD = 4096
 
 # Proxy envelopes embed the stored-result id; the full output lives under
-# .ralph-workspace/tool-results/<ns>/results/<id>.txt.
+# .ralph-workspace/tool-results/<ns>/results/<id>.txt (layout 1) or
+# .ralph-workspace/cache/tool-results/<ns>/results/<id>.txt (layout 2).
 _RESULT_ID_RE = re.compile(r'\\?"resultId\\?"\s*:\s*\\?"([A-Za-z0-9_-]{4,})\\?"')
 _PROXY_ENVELOPE_ID_RE = re.compile(r"^[a-f0-9]{16}$")
 
@@ -756,6 +757,7 @@ class PrettyRenderer:
         self.tool_uses: Dict[str, Tuple[str, Dict[str, Any]]] = {}
         self.tool_calls_total = 0
         self.turns_seen = 0
+        self._compacting = False
         on = self.color_depth > 0
         if _TERM is not None:
             self._style = _TERM.Style(self.color_depth, ascii_only=self.ascii_only)
@@ -1063,9 +1065,26 @@ class PrettyRenderer:
     def _render_claude(self, obj: Dict[str, Any]) -> Optional[List[str]]:
         typ = _safe_str(obj.get("type")).strip().lower()
         if typ == "system":
+            # An in-invocation /compact runs as its own turn: show one status line and hide the
+            # summary echo and empty result it produces, so the TODO appears to just continue.
+            if (
+                _safe_str(obj.get("subtype")).strip().lower() == "status"
+                and _safe_str(obj.get("status")).strip().lower() == "compacting"
+                and not self._compacting
+            ):
+                self._compacting = True
+                return [f"{self.dim}Compacting session context...{self.reset}"]
             return []
         if typ == "rate_limit_event":
             return []
+        if self._compacting:
+            if typ == "user":
+                return []
+            if typ == "result" and not _safe_str(obj.get("result")).strip() and not int(obj.get("num_turns") or 0):
+                self._compacting = False
+                return []
+            if typ == "assistant":
+                self._compacting = False
         if typ == "assistant":
             self.turns_seen += 1
             return self._render_claude_assistant(obj)
@@ -1974,7 +1993,11 @@ class PrettyRenderer:
             or "default"
         )
         result_id = match.group(1)
-        path = f".ralph-workspace/tool-results/{namespace}/results/{result_id}.txt"
+        layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+        if layout == "1":
+            path = f".ralph-workspace/tool-results/{namespace}/results/{result_id}.txt"
+        else:
+            path = f".ralph-workspace/cache/tool-results/{namespace}/results/{result_id}.txt"
         return (
             f"{self.linkdim}{self.branch} full output: {path}; "
             f"ralph_proxy_result_read resultId={result_id}{self.reset}"

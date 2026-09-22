@@ -35,3 +35,6 @@ tests/tmp.wrk/
 settings.local.json
 docs/cookbook-review
 logs
+.env
+.mcp.json
+/cache

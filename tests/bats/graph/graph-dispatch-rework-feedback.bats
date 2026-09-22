@@ -53,6 +53,7 @@ setup_rework_dispatch_workspace() {
   export RALPH_MODE=no
   export RALPH_ARTIFACT_SCHEMA_VALIDATION=0
   export RALPH_ARTIFACT_PROVENANCE=0
+  export RALPH_TEST_DIRECT_PROCESS_SCOPE=1
   export RALPH_DIR="$REPO_ROOT/.ralph"
   export RALPH_PLAN_WORKSPACE_ROOT="$DISPATCH_WORKSPACE/.ralph-workspace"
   unset RALPH_ARTIFACT_NS 2>/dev/null || true
@@ -168,6 +169,7 @@ rework_node_plan_abs() {
   [ "$before_checksum" = "$after_checksum" ]
 
   unset RALPH_PLAN_WORKSPACE_ROOT
+  unset RALPH_TEST_DIRECT_PROCESS_SCOPE
   rm -rf "$tmpd"
 }
 
@@ -195,6 +197,7 @@ rework_node_plan_abs() {
   [ ! -f "$capture_dir/attempt-1.json" ]
 
   unset RALPH_PLAN_WORKSPACE_ROOT
+  unset RALPH_TEST_DIRECT_PROCESS_SCOPE
   rm -rf "$tmpd"
 }
 

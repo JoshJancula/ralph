@@ -497,7 +497,7 @@ EOF
 
 @test "bundled mode is dependency with no engine field" {
   local wf
-  [ "$(find "$BUNDLED_WORKFLOWS" -maxdepth 1 -name '*.workflow.md' | wc -l | tr -d ' ')" = "10" ]
+  [ "$(find "$BUNDLED_WORKFLOWS" -maxdepth 1 -name '*.workflow.md' | wc -l | tr -d ' ')" = "12" ]
   for wf in "$BUNDLED_WORKFLOWS"/*.workflow.md; do
     grep -qx 'mode: dependency' "$wf"
     refute_cmd grep -E '^engine:' "$wf"
@@ -560,7 +560,7 @@ PY
     [ "$status" -eq 0 ]
   done
 
-  for wf in feature-delivery bug-fix refactor human-verified-delivery plan-delivery; do
+  for wf in feature-delivery bug-fix refactor human-verified-delivery plan-delivery small-feature-delivery; do
     grep -A2 '^    - id: implement$' "$BUNDLED_WORKFLOWS/$wf.workflow.md" | \
       grep -qx '      sessionStrategy: compact'
   done
@@ -644,6 +644,19 @@ EOF
         grep -Fq 'create the smallest independent QA plan justified by the task and evidence.' "$wf"
         grep -Fq 'Execute the entire generated QA plan for {{TASK}}' "$wf"
         ;;
+      adaptive-delivery)
+        [ "$(grep -c '^      instructions:' "$wf")" -eq 11 ]
+        grep -Fq 'Decide the delivery depth for {{TASK}} read-only' "$wf"
+        grep -Fq -- '--jev routing' "$wf"
+        grep -q '^      router:$' "$wf"
+        ;;
+      small-feature-delivery)
+        [ "$(grep -c '^      instructions:' "$wf")" -eq 3 ]
+        grep -Fq 'Scope and plan the small feature {{TASK}}.' "$wf"
+        grep -Fq 'Execute the generated small-feature plan for {{TASK}} TODO by TODO' "$wf"
+        grep -Fq 'Evaluate the candidate for {{TASK}} without mutation.' "$wf"
+        grep -Fq 'ralph workflow actions request --question <text> [--details <text>]' "$wf"
+        ;;
       investigation)
         [ "$(grep -c '^      instructions:' "$wf")" -eq 2 ]
         grep -Fq 'Investigate {{TASK}} read-only.' "$wf"
@@ -665,7 +678,7 @@ EOF
         [ "$(grep -c '^      instructions:' "$wf")" -eq 6 ]
         grep -Fq 'Investigate {{TASK}} as a bounded requirements and repository study.' "$wf"
         grep -Fq 'The operator reviews this plan at the next gate' "$wf"
-        grep -Fq 'The operator has already' "$wf"
+        grep -Fq 'has already approved this plan' "$wf"
         grep -Fq 'Review the candidate snapshot for {{TASK}} without mutation.' "$wf"
         grep -Fq 'The operator accepts these results at the final gate' "$wf"
         grep -Fq 'Execute the entire generated QA plan for {{TASK}} TODO by TODO' "$wf"
@@ -755,6 +768,25 @@ EOF
           s && /^todos:/{exit}
         ' "$wf" | tr '\n' ' ' | grep -Eq '^investigate plan-implementation implement review integrate plan-qa qa qa-gate ?$'
         refute_cmd grep -q '^    - id: review-approved$' "$wf"
+        ;;
+      adaptive-delivery)
+        grep -q '^  publishMode: on-verified$' "$wf"
+        awk '
+          /^  stages:/{s=1; next}
+          s && /^    - id: /{print $3}
+          s && /^todos:/{exit}
+        ' "$wf" | tr '\n' ' ' | grep -Eq '^route scope-and-plan implement-small evaluate integrate-small verdict-gate investigate plan-implementation implement-full review integrate-full plan-qa qa qa-gate delivery-report ?$'
+        ;;
+      small-feature-delivery)
+        grep -q '^  maxReworkIterations: 2$' "$wf"
+        grep -q '^  publishMode: on-verified$' "$wf"
+        grep -q '^      planFrom: scope-and-plan$' "$wf"
+        grep -q '^      candidateFrom: implement$' "$wf"
+        awk '
+          /^  stages:/{s=1; next}
+          s && /^    - id: /{print $3}
+          s && /^todos:/{exit}
+        ' "$wf" | tr '\n' ' ' | grep -Eq '^scope-and-plan implement evaluate integrate verdict-gate ?$'
         ;;
       investigation)
         grep -q 'path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md' "$wf"
@@ -2431,7 +2463,7 @@ EOF
   command -v jq >/dev/null || skip "jq required"
   local tmp; tmp="$(mktemp -d)"
   local wf name out graph gates
-  for name in bug-fix feature-delivery refactor human-verified-delivery plan-delivery; do
+  for name in bug-fix feature-delivery refactor human-verified-delivery plan-delivery small-feature-delivery; do
     wf="$BUNDLED_WORKFLOWS/$name.workflow.md"
     out="$tmp/$name.plan.md"
     if grep -q '^planInput:' "$wf"; then
@@ -2448,10 +2480,17 @@ EOF
     [ "$status" -eq 0 ] || { echo "compile failed for $name: $output"; false; }
     printf '%s' "$output" >"$graph"
 
-    gates="$(jq -r '[.nodes[] | select(.type == "gate") | .id] | join(",")' "$graph")"
-    [ "$gates" = "qa-gate" ] || { echo "$name gates: $gates"; false; }
-    [ "$(jq -r '.nodes[] | select(.id == "qa-gate") | .stage.profile' "$graph")" = "qa-verdict" ]
-    jq -e '.verificationProfiles[] | select(.name == "qa-verdict")' "$graph" >/dev/null
+    if [ "$name" = "small-feature-delivery" ]; then
+      gates="$(jq -r '[.nodes[] | select(.type == "gate") | .id] | join(",")' "$graph")"
+      [ "$gates" = "verdict-gate" ] || { echo "$name gates: $gates"; false; }
+      [ "$(jq -r '.nodes[] | select(.id == "verdict-gate") | .stage.profile' "$graph")" = "evaluate-verdict" ]
+      jq -e '.verificationProfiles[] | select(.name == "evaluate-verdict")' "$graph" >/dev/null
+    else
+      gates="$(jq -r '[.nodes[] | select(.type == "gate") | .id] | join(",")' "$graph")"
+      [ "$gates" = "qa-gate" ] || { echo "$name gates: $gates"; false; }
+      [ "$(jq -r '.nodes[] | select(.id == "qa-gate") | .stage.profile' "$graph")" = "qa-verdict" ]
+      jq -e '.verificationProfiles[] | select(.name == "qa-verdict")' "$graph" >/dev/null
+    fi
   done
   rm -rf "$tmp"
 }
@@ -2527,5 +2566,17 @@ EOF
   run bash -c "source '$REPO_ROOT/bundle/.ralph/bash-lib/plan-todo.sh'; plan_pipeline_graph_json '$tmp/rt.plan.md'"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"late-name"* ]]
+  rm -rf "$tmp"
+}
+
+@test "workflow instantiate tolerates placeholder include syntax in prose" {
+  command -v python3 >/dev/null || skip "python3 required"
+  local tmp; tmp="$(mktemp -d)"
+  write_fragment_workflow "$tmp/f.workflow.md" "scope-discipline"
+  sed -i.bak 's|Do the work for {{TASK}}.|Reuse {{INCLUDE:...}} or {{INCLUDE:<name>}} fragments for {{TASK}}.|' "$tmp/f.workflow.md"
+
+  run plan_workflow_instantiate "$tmp/f.workflow.md" "task" "$tmp/out.plan.md"
+  [ "$status" -eq 0 ]
+  grep -Fq "{{INCLUDE:...}}" "$tmp/out.plan.md"
   rm -rf "$tmp"
 }

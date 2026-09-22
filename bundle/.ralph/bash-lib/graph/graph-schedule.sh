@@ -64,6 +64,10 @@ if ! declare -F graph_integration_run >/dev/null 2>&1; then
   # shellcheck source=graph-integration.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-integration.sh"
 fi
+if ! declare -F graph_publish_approval_integration_source >/dev/null 2>&1; then
+  # shellcheck source=graph-publish.sh
+  source "$GRAPH_SCHEDULE_SCRIPT_DIR/graph-publish.sh"
+fi
 if ! declare -F ralph_evaluator_parse_status >/dev/null 2>&1; then
   # shellcheck source=../review-status.sh
   source "$GRAPH_SCHEDULE_SCRIPT_DIR/../review-status.sh"
@@ -499,6 +503,84 @@ _graph_schedule_log_observability() {
       ;;
   esac
   graph_events_append "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$GRAPH_SCHEDULE_RUN_ID" "$mapped" "$node_id" "$attempt_id" "$details_json" >/dev/null 2>&1 || true
+}
+
+# _graph_schedule_emit_routing_decision <node_id> <selected_target>
+#   <alternatives_space_separated> <reason> <confidence> <source> <question_set_id>
+# Observability-only journal of a routing or conditional edge selection.
+# Never changes scheduling state. No-ops when no ledger run is active.
+# details carry exactly: selectedTarget, alternatives, reason, confidence,
+# source (agent|jev|default), questionSetId, registryVersion.
+_graph_schedule_emit_routing_decision() {
+  local node_id="$1"
+  local selected_target="$2"
+  local alternatives_ss="$3"
+  local reason="$4"
+  local confidence="$5"
+  local source="$6"
+  local question_set_id="$7"
+  local alternatives_json details_json registry_version registry_path conf_json
+
+  if [[ -z "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" || -z "${GRAPH_SCHEDULE_RUN_ID:-}" ]]; then
+    return 0
+  fi
+
+  if [[ -z "$alternatives_ss" ]]; then
+    alternatives_json='[]'
+  else
+    alternatives_json="$(
+      # shellcheck disable=SC2086
+      printf '%s\n' $alternatives_ss | jq -R . 2>/dev/null | jq -sc --arg sel "$selected_target" '
+        map(select(. != "" and . != $sel))
+      ' 2>/dev/null || echo '[]'
+    )"
+  fi
+  [[ -n "$alternatives_json" ]] || alternatives_json='[]'
+
+  registry_version="1"
+  if declare -F _jev_policy_registry_path >/dev/null 2>&1; then
+    registry_path="$(_jev_policy_registry_path 2>/dev/null || true)"
+    if [[ -n "$registry_path" && -f "$registry_path" ]]; then
+      registry_version="$(jq -r '.registryVersion // "1"' "$registry_path" 2>/dev/null || echo "1")"
+    fi
+  elif [[ -n "${RALPH_DIR:-}" && -f "${RALPH_DIR}/jev/questions.registry.json" ]]; then
+    registry_version="$(jq -r '.registryVersion // "1"' "${RALPH_DIR}/jev/questions.registry.json" 2>/dev/null || echo "1")"
+  fi
+  [[ -n "$registry_version" ]] || registry_version="1"
+
+  if [[ -n "$confidence" && "$confidence" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    conf_json="$confidence"
+  else
+    conf_json="null"
+  fi
+
+  details_json="$(
+    jq -nc \
+      --arg selectedTarget "$selected_target" \
+      --argjson alternatives "$alternatives_json" \
+      --arg reason "$reason" \
+      --argjson confidence "$conf_json" \
+      --arg source "$source" \
+      --arg questionSetId "$question_set_id" \
+      --arg registryVersion "$registry_version" \
+      '{
+         selectedTarget: $selectedTarget,
+         alternatives: $alternatives,
+         reason: $reason,
+         confidence: $confidence,
+         source: $source,
+         questionSetId: $questionSetId,
+         registryVersion: $registryVersion
+       }' 2>/dev/null || echo '{}'
+  )"
+
+  graph_events_append \
+    "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" \
+    "$GRAPH_SCHEDULE_RUN_ID" \
+    "routing-decision" \
+    "$node_id" \
+    "" \
+    "$details_json" >/dev/null 2>&1 || true
 }
 
 # A parent that waits for a brokered child occupies one graph slot. It
@@ -5215,6 +5297,7 @@ _graph_schedule_apply_conditional_outcome() {
   local idx cond_succ_str succ cond node_to to_idx old_ifs
   local matching_cond_count=0
   local skip_targets=()
+  local matching_targets=()
 
   # Release unconditional successors (existing behavior, unchanged).
   if ! _graph_schedule_release_successors "$node_id"; then
@@ -5246,6 +5329,7 @@ _graph_schedule_apply_conditional_outcome() {
           GRAPH_NODE_REMAINING_INDEGREE[$to_idx]=$(( ${GRAPH_NODE_REMAINING_INDEGREE[$to_idx]} - 1 ))
         fi
         matching_cond_count=$(( matching_cond_count + 1 ))
+        matching_targets+=("$node_to")
         echo "graph-schedule: node=$node_to released by conditional outcome=$outcome from $node_id" >&2
       fi
     else
@@ -5261,12 +5345,429 @@ _graph_schedule_apply_conditional_outcome() {
     _graph_schedule_skip_cond_branches "$node_id" "$outcome" "${skip_targets[@]}"
   fi
 
+  # Observability-only: journal which conditional edge was selected.
+  # selectedTarget is the first matching successor (or the outcome token when
+  # none matched); alternatives are the skipped non-matching branches.
+  local selected_cond alt_ss
+  if [[ "${#matching_targets[@]}" -gt 0 ]]; then
+    selected_cond="${matching_targets[0]}"
+  else
+    selected_cond="$outcome"
+  fi
+  alt_ss=""
+  if [[ "${#skip_targets[@]}" -gt 0 ]]; then
+    alt_ss="${skip_targets[*]}"
+  fi
+  _graph_schedule_emit_routing_decision \
+    "$node_id" \
+    "$selected_cond" \
+    "$alt_ss" \
+    "conditional-outcome:$outcome" \
+    "" \
+    "agent" \
+    ""
+
   # For changes-required specifically: if no conditional(changes-required)
   # edge exists, the caller should fail closed. Signal this with return 2.
   if [[ "$outcome" == "changes-required" && "$matching_cond_count" -eq 0 ]]; then
     return 2
   fi
 
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Jev pre-agent router classifier (RALPH_JEV_ROUTING)
+#
+# When enabled, ask graph.router-confidence BEFORE spawning the router agent.
+# On policy decision "act", write the router-decision artifact (and short
+# machine stubs for other required produces) and complete the node without an
+# agent turn. gather / fallback / unavailable fall through to today's agent path.
+# Jev never gets a privileged resolve path: written artifacts still go through
+# router_contract.py resolve-target via _graph_schedule_apply_router_decision.
+# ---------------------------------------------------------------------------
+
+# Ensure Jev client + policy helpers are sourced. Silent on missing files.
+_graph_schedule_jev_ensure_libs() {
+  if ! declare -F jev_key_resolve >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-key-store.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../jev/jev-key-store.sh" 2>/dev/null || true
+  fi
+  if ! declare -F jev_available >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-client.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../jev/jev-client.sh" 2>/dev/null || true
+  fi
+  if ! declare -F jev_policy_decide >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-policy.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../jev/jev-policy.sh" 2>/dev/null || true
+  fi
+}
+
+# Build graph.router-confidence questions with target.criteria from the node's
+# actual allowedTargets (not a hardcoded list). Prints questions JSON.
+# Args: <allowed_targets_json_array>
+_graph_schedule_jev_router_questions() {
+  local allowed_json="${1:-}"
+  local base_questions
+  [[ -n "$allowed_json" ]] || return 1
+  _graph_schedule_jev_ensure_libs
+  declare -F jev_policy_questions >/dev/null 2>&1 || return 1
+  base_questions="$(jev_policy_questions "graph.router-confidence")" || return 1
+  jq -c --argjson allowed "$allowed_json" '
+    . as $q
+    | ($allowed
+        | map(select(type == "string" and length > 0))
+        | unique) as $targets
+    | if ($targets | length) == 0 then empty else
+        .target.criteria = (
+          $targets
+          | map({key: ., value: ("Allowed router target: " + .)})
+          | from_entries
+        )
+      end
+  ' <<<"$base_questions" 2>/dev/null || return 1
+}
+
+# Resolve bounded state text for the router confidence ask (task / overview).
+_graph_schedule_jev_router_state() {
+  local node_id="${1:-}"
+  local task="" registry_run
+
+  if [[ -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" && -f "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" ]]; then
+    task="$(jq -r '
+      .task // .input.task // .overview // .goal // empty
+    ' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null || true)"
+    if [[ -z "$task" ]]; then
+      registry_run="$(jq -r '.registryRunPath // empty' \
+        "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null || true)"
+      if [[ -n "$registry_run" && -f "$registry_run/run.json" ]]; then
+        task="$(jq -r '.task // .input.task // .overview // empty' \
+          "$registry_run/run.json" 2>/dev/null || true)"
+      fi
+    fi
+  fi
+  if [[ -z "$task" && -n "${RALPH_WORKFLOW_TASK:-}" ]]; then
+    task="$RALPH_WORKFLOW_TASK"
+  fi
+  if [[ -z "$task" ]]; then
+    task="Router decision for node ${node_id:-unknown}"
+  fi
+  # Bound state size so a huge task cannot trip the request-size gate alone.
+  if [[ "${#task}" -gt 8000 ]]; then
+    task="${task:0:8000}"
+  fi
+  printf '%s\n' "$task"
+}
+
+# Ask graph.router-confidence and run jev_policy_decide.
+# Prints a compact JSON object on stdout when policy decision is "act":
+#   {target, confidence, reason, decision, questionSetId, registryVersion}
+# Returns 1 for gather/fallback/unavailable/error (caller falls through to agent).
+# Args: <node_id> <allowed_targets_json_array>
+_graph_schedule_jev_router_ask_act() {
+  local node_id="${1:-}"
+  local allowed_json="${2:-}"
+  local questions state_text request response answers decision
+  local target confidence reason registry_version ask_ec=0
+  local question_set_id="graph.router-confidence"
+
+  [[ "${RALPH_JEV_ROUTING:-}" == "1" ]] || return 1
+  [[ -n "$node_id" && -n "$allowed_json" ]] || return 1
+
+  _graph_schedule_jev_ensure_libs
+  declare -F jev_available >/dev/null 2>&1 || return 1
+  declare -F jev_build_request >/dev/null 2>&1 || return 1
+  declare -F jev_post_systemone >/dev/null 2>&1 || return 1
+  declare -F jev_policy_decide >/dev/null 2>&1 || return 1
+
+  if ! jev_available; then
+    return 1
+  fi
+
+  questions="$(_graph_schedule_jev_router_questions "$allowed_json")" || return 1
+  state_text="$(_graph_schedule_jev_router_state "$node_id")"
+
+  if ! request="$(jev_build_request "$state_text" "$questions")"; then
+    return 1
+  fi
+  if ! request="$(
+    jq -c --arg id "$question_set_id" '. + {questionSetId: $id}' <<<"$request" 2>/dev/null
+  )"; then
+    return 1
+  fi
+
+  response="$(jev_post_systemone "$request")" || ask_ec=$?
+  if [[ "$ask_ec" -ne 0 || -z "$response" ]]; then
+    return 1
+  fi
+
+  answers="$(jq -c '.answers // empty' <<<"$response" 2>/dev/null)" || answers=""
+  if [[ -z "$answers" || "$answers" == "null" ]]; then
+    return 1
+  fi
+
+  if ! decision="$(jev_policy_decide "$question_set_id" "$answers")"; then
+    return 1
+  fi
+  if [[ "$(jq -r '.decision // empty' <<<"$decision" 2>/dev/null)" != "act" ]]; then
+    return 1
+  fi
+
+  target="$(jq -r '.answers.target.choice // empty' <<<"$response" 2>/dev/null || true)"
+  confidence="$(jq -r '.answers.target.confidence // .confidence // empty' <<<"$response" 2>/dev/null || true)"
+  if [[ -z "$confidence" || "$confidence" == "null" ]]; then
+    confidence="$(jq -r '.confidence // empty' <<<"$decision" 2>/dev/null || true)"
+  fi
+  [[ -n "$target" ]] || return 1
+  if [[ -z "$confidence" || ! "$confidence" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    return 1
+  fi
+
+  registry_version="1"
+  if declare -F _jev_policy_registry_path >/dev/null 2>&1; then
+    local registry_path
+    registry_path="$(_jev_policy_registry_path 2>/dev/null || true)"
+    if [[ -n "$registry_path" && -f "$registry_path" ]]; then
+      registry_version="$(jq -r '.registryVersion // "1"' "$registry_path" 2>/dev/null || echo "1")"
+    fi
+  fi
+  [[ -n "$registry_version" ]] || registry_version="1"
+
+  # Machine-generated reason only (Jev cannot author prose). Prefix "jev:" so
+  # _graph_schedule_apply_router_decision records source=jev on the event.
+  reason="jev: ${question_set_id} conf=${confidence} registry=${registry_version}"
+
+  jq -nc \
+    --arg target "$target" \
+    --argjson confidence "$confidence" \
+    --arg reason "$reason" \
+    --argjson decision "$decision" \
+    --arg questionSetId "$question_set_id" \
+    --arg registryVersion "$registry_version" \
+    '{
+       target: $target,
+       confidence: $confidence,
+       reason: $reason,
+       decision: $decision,
+       questionSetId: $questionSetId,
+       registryVersion: $registryVersion
+     }' 2>/dev/null || return 1
+}
+
+# Resolve the router-decision artifact absolute path for a node (same rules as
+# _graph_schedule_apply_router_decision). Prints path; exit 1 if missing.
+_graph_schedule_router_decision_artifact_abs() {
+  local node_id="$1"
+  local graph_json="$2"
+  local workspace="$3"
+  local artifact_rel artifact_abs
+
+  artifact_rel="$(jq -r --arg id "$node_id" '
+    .nodes[] | select(.id == $id) | .stage |
+    [(.artifacts // []), (.outputArtifacts // [])] | add |
+    map(select((.schema // "") | test("router-decision\\.schema\\.json$"))) |
+    first // null |
+    if . == null then
+      [(.artifacts // []), (.outputArtifacts // [])] | add |
+      map(select((.path // "") | test("\\.json$"))) |
+      first // null |
+      if . == null then empty else .path end
+    else .path end
+  ' "$graph_json" 2>/dev/null || echo "")"
+  [[ -n "$artifact_rel" && "$artifact_rel" != "null" ]] || return 1
+
+  if [[ "$artifact_rel" == /* ]]; then
+    artifact_abs="$artifact_rel"
+  else
+    artifact_abs="$workspace/$artifact_rel"
+  fi
+  printf '%s\n' "$artifact_abs"
+}
+
+# Write the schema-valid router-decision artifact and short machine stubs for
+# other required produces (never prose authored by Jev).
+# Args: <node_id> <graph_json> <workspace> <act_json>
+_graph_schedule_jev_router_write_artifacts() {
+  local node_id="$1"
+  local graph_json="$2"
+  local workspace="$3"
+  local act_json="$4"
+  local artifact_abs target confidence reason stub_line declared required path_abs
+  local state_root
+
+  artifact_abs="$(_graph_schedule_router_decision_artifact_abs \
+    "$node_id" "$graph_json" "$workspace")" || return 1
+  target="$(jq -r '.target // empty' <<<"$act_json")"
+  confidence="$(jq -r '.confidence // empty' <<<"$act_json")"
+  reason="$(jq -r '.reason // empty' <<<"$act_json")"
+  [[ -n "$target" && -n "$confidence" && -n "$reason" ]] || return 1
+
+  mkdir -p "$(dirname "$artifact_abs")" || return 1
+  jq -nc \
+    --arg target "$target" \
+    --argjson confidence "$confidence" \
+    --arg reason "$reason" \
+    '{target: $target, reason: $reason, confidence: $confidence}' \
+    >"$artifact_abs" || return 1
+
+  stub_line="jev: graph.router-confidence conf=${confidence} target=${target} (machine-generated; agent turn skipped)"
+  state_root="${RALPH_PLAN_WORKSPACE_ROOT:-$workspace/.ralph-workspace}"
+  if [[ -n "${GRAPH_SCHEDULE_LEDGER_RUN_DIR:-}" && -f "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" ]]; then
+    local ledger_state
+    ledger_state="$(jq -r '.roots.stateRoot // empty' \
+      "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" 2>/dev/null || true)"
+    [[ -n "$ledger_state" ]] && state_root="$ledger_state"
+  fi
+
+  while IFS=$'\t' read -r declared required || [[ -n "$declared" ]]; do
+    [[ -n "$declared" ]] || continue
+    declared="${declared//\{\{ARTIFACT_NS\}\}/${GRAPH_SCHEDULE_NAMESPACE:-}}"
+    # Skip the router-decision JSON already written above.
+    if [[ "$declared" == "$artifact_abs" || "$workspace/$declared" == "$artifact_abs" ]]; then
+      continue
+    fi
+    case "$declared" in
+      *.json)
+        # Do not invent non-decision JSON schemas.
+        continue
+        ;;
+    esac
+    if [[ "$declared" == /* ]]; then
+      path_abs="$declared"
+    elif [[ "$declared" == .ralph-workspace/* ]]; then
+      path_abs="$state_root/${declared#.ralph-workspace/}"
+    else
+      path_abs="$workspace/$declared"
+    fi
+    [[ "$path_abs" == "$artifact_abs" ]] && continue
+    mkdir -p "$(dirname "$path_abs")" || return 1
+    if [[ ! -f "$path_abs" ]]; then
+      printf '%s\n' "$stub_line" >"$path_abs" || return 1
+    fi
+  done < <(jq -r --arg id "$node_id" '
+    .nodes[] | select(.id == $id) | .stage |
+    [(.outputArtifacts // [])[], (.artifacts // [])[]] |
+    map(if type == "string" then {path:., required:true} else . end) |
+    unique_by(.path)[]? |
+    select((.schema // "") | test("router-decision\\.schema\\.json$") | not) |
+    [.path, (.required // true)] | @tsv
+  ' "$graph_json" 2>/dev/null)
+
+  return 0
+}
+
+# True when the node carries a non-empty .stage.router object (agent or
+# router typed). Supervisor type:router nodes without router metadata do not
+# qualify, so they keep their existing behavior.
+_graph_schedule_node_has_router_stage() {
+  local node_id="$1"
+  local graph_json="${GRAPH_SCHEDULE_GRAPH_JSON:-}"
+  [[ -n "$node_id" && -n "$graph_json" && -f "$graph_json" ]] || return 1
+  jq -e --arg id "$node_id" \
+    '[.nodes[] | select(.id == $id) | .stage.router] | .[0] | type == "object" and length > 0' \
+    "$graph_json" >/dev/null 2>&1
+}
+
+# Attempt Jev pre-agent classification for a router node.
+# Returns 0 when the node was handled without an agent turn (success or
+# router-decision failure after writing). Returns 1 to fall through to spawn.
+_graph_schedule_try_jev_router_node() {
+  local node_id="$1"
+  local idx started finished attempt_id attempt_number
+  local router_json allowed_json act_json
+  local graph_json workspace
+
+  [[ "${RALPH_JEV_ROUTING:-}" == "1" ]] || return 1
+  [[ -n "$node_id" ]] || return 1
+  if ! idx="$(graph_schedule_index_map_get "$node_id")"; then
+    return 1
+  fi
+  _graph_schedule_node_has_router_stage "$node_id" || return 1
+  [[ "${GRAPH_NODE_STATES[$idx]}" == "pending" ]] || return 1
+
+  graph_json="${GRAPH_SCHEDULE_GRAPH_JSON:-}"
+  workspace="${GRAPH_SCHEDULE_WORKSPACE:-}"
+  [[ -n "$graph_json" && -f "$graph_json" && -n "$workspace" ]] || return 1
+
+  router_json="$(jq -c --arg id "$node_id" \
+    '.nodes[] | select(.id == $id) | .stage.router' \
+    "$graph_json" 2>/dev/null || echo "")"
+  if [[ -z "$router_json" || "$router_json" == "null" ]]; then
+    return 1
+  fi
+  allowed_json="$(printf '%s' "$router_json" | jq -c '.allowedTargets // []' 2>/dev/null || echo '[]')"
+  if [[ "$(jq 'length' <<<"$allowed_json" 2>/dev/null || echo 0)" -lt 1 ]]; then
+    return 1
+  fi
+
+  act_json="$(_graph_schedule_jev_router_ask_act "$node_id" "$allowed_json")" || return 1
+
+  if ! _graph_schedule_jev_router_write_artifacts \
+    "$node_id" "$graph_json" "$workspace" "$act_json"; then
+    echo "graph-schedule: jev router: failed to write decision artifacts for $node_id; falling through to agent" >&2
+    return 1
+  fi
+
+  # Complete synchronously (no orchestrator / no runtime admission), then apply
+  # the same resolve-target path agent-authored decisions use.
+  started="$(graph_state_now_iso 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+  attempt_number=$(( ${GRAPH_NODE_ATTEMPT_NUMBERS[$idx]:-0} + 1 ))
+  GRAPH_NODE_ATTEMPT_NUMBERS[$idx]="$attempt_number"
+  if [[ -n "${GRAPH_SCHEDULE_RUN_ID:-}" ]] && declare -F graph_dispatch_mint_attempt_id >/dev/null 2>&1; then
+    attempt_id="$(graph_dispatch_mint_attempt_id "$node_id" "$GRAPH_SCHEDULE_RUN_ID" "$attempt_number")" \
+      || attempt_id="${node_id}__jev__${attempt_number}"
+  else
+    attempt_id="${node_id}__jev__${attempt_number}"
+  fi
+
+  GRAPH_NODE_STATES[$idx]="running"
+  if declare -F _graph_schedule_ledger_record >/dev/null 2>&1; then
+    _graph_schedule_ledger_record "$node_id" "running" "$attempt_id" "" "" \
+      "$started" "" "" "" "jev-router" 2>/dev/null || true
+  fi
+
+  finished="$(graph_state_now_iso 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Same order as the agent reap path: release successors, mark succeeded,
+  # then resolve+skip via apply_router_decision.
+  if declare -F _graph_schedule_apply_conditional_outcome >/dev/null 2>&1; then
+    if ! _graph_schedule_apply_conditional_outcome "$node_id" "passed"; then
+      echo "graph-schedule: jev router: successor release failed for $node_id" >&2
+      GRAPH_NODE_STATES[$idx]="failed"
+      if declare -F _graph_schedule_ledger_record >/dev/null 2>&1; then
+        _graph_schedule_ledger_record "$node_id" "failed" "$attempt_id" "failed" "1" \
+          "$started" "$finished" "" "" "jev-router-successor-release" 2>/dev/null || true
+      fi
+      if declare -F _graph_schedule_apply_node_failure >/dev/null 2>&1; then
+        _graph_schedule_apply_node_failure "$node_id" 1 "jev-router-successor-release"
+      fi
+      return 0
+    fi
+  elif declare -F _graph_schedule_release_successors >/dev/null 2>&1; then
+    _graph_schedule_release_successors "$node_id" || true
+  fi
+
+  GRAPH_NODE_STATES[$idx]="succeeded"
+  if declare -F _graph_schedule_ledger_record >/dev/null 2>&1; then
+    _graph_schedule_ledger_record "$node_id" "succeeded" "$attempt_id" "success" "0" \
+      "$started" "$finished" "" "" "jev-router-act" 2>/dev/null || true
+  fi
+  if declare -F _graph_schedule_log_observability >/dev/null 2>&1; then
+    _graph_schedule_log_observability "node-succeeded" "$node_id" "$attempt_id" "" "" \
+      "$(jq -nc --argjson act "$act_json" '{jevRouter: $act}' 2>/dev/null || echo '{}')"
+  fi
+
+  if ! _graph_schedule_apply_router_decision "$node_id" "$graph_json" "$workspace"; then
+    echo "graph-schedule: jev router: resolve-target rejected decision for $node_id" >&2
+    if declare -F _graph_schedule_apply_node_failure >/dev/null 2>&1; then
+      _graph_schedule_apply_node_failure "$node_id" 1 "jev-router-decision-failed"
+    else
+      GRAPH_NODE_STATES[$idx]="failed"
+    fi
+    return 0
+  fi
+
+  echo "graph-schedule: node=$node_id jev router act target=$(jq -r '.target' <<<"$act_json") conf=$(jq -r '.confidence' <<<"$act_json"); agent turn skipped" >&2
   return 0
 }
 
@@ -5353,11 +5854,16 @@ _graph_schedule_apply_router_decision() {
   fi
 
   # Resolve the target in graph mode (no backward/wave restrictions).
+  # Pass declared node ids so resolve-target can validate membership the same
+  # way the sequential orchestrator passes stage ids. An empty list would make
+  # every non-terminal target look undeclared.
+  local stage_ids_json
+  stage_ids_json="$(jq -c '[.nodes[].id]' "$graph_json" 2>/dev/null || echo '[]')"
   if ! resolved_json="$(python3 "$py" resolve-target \
     --artifact "$artifact_abs" \
     --router-json "$router_json" \
     --stage-index 0 \
-    --stage-ids-json "[]" \
+    --stage-ids-json "$stage_ids_json" \
     --mode graph 2>&1)"; then
     echo "graph-schedule: router decision: resolve-target failed: $resolved_json" >&2
     return 1
@@ -5373,7 +5879,64 @@ _graph_schedule_apply_router_decision() {
     return 1
   fi
 
+  # Consume calibrated confidence against the local graph.router-confidence
+  # actThreshold (registry only via jev_policy_threshold). Not gated on
+  # RALPH_JEV_ROUTING -- this enforces policy whether or not Jev is enabled.
+  # Runs only after resolve-target succeeded; never rescues an invalid target.
+  local decision_confidence decision_reason default_target conf_threshold agent_pick
+  local routing_source="agent"
+  decision_confidence="$(jq -r '.confidence // empty' "$artifact_abs" 2>/dev/null || true)"
+  decision_reason="$(jq -r '.reason // empty' "$artifact_abs" 2>/dev/null || true)"
+  default_target="$(printf '%s' "$router_json" | jq -r '.defaultTarget // empty' 2>/dev/null || true)"
+  conf_threshold=""
+  if ! declare -F jev_policy_threshold >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-policy.sh
+    source "$GRAPH_SCHEDULE_SCRIPT_DIR/../jev/jev-policy.sh" 2>/dev/null || true
+  fi
+  if declare -F jev_policy_threshold >/dev/null 2>&1; then
+    conf_threshold="$(jev_policy_threshold "graph.router-confidence" act 2>/dev/null || true)"
+  fi
+  conf_threshold="$(printf '%s' "$conf_threshold" | tr -d '[:space:]')"
+
+  # Jev-authored decisions (later TODO) use a machine reason prefixed with "jev:"
+  # or "jev ". Detect before threshold override so low-confidence Jev picks still
+  # report source=default when the threshold forces defaultTarget.
+  case "$decision_reason" in
+    [Jj][Ee][Vv]:*|[Jj][Ee][Vv]\ *) routing_source="jev" ;;
+  esac
+
+  if [[ -z "$default_target" ]]; then
+    echo "graph-schedule: router $node_id confidence=${decision_confidence:-unknown}: no defaultTarget fallback available; honoring agent target=$selected_target" >&2
+  elif [[ -z "$conf_threshold" || ! "$conf_threshold" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "graph-schedule: router $node_id confidence=${decision_confidence:-unknown}: actThreshold unavailable; honoring agent target=$selected_target" >&2
+  elif [[ -z "$decision_confidence" || ! "$decision_confidence" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "graph-schedule: router $node_id: decision confidence missing or non-numeric; honoring agent target=$selected_target" >&2
+  elif awk -v c="$decision_confidence" -v t="$conf_threshold" 'BEGIN { exit (c + 0 < t + 0) ? 0 : 1 }'; then
+    agent_pick="$selected_target"
+    selected_target="$default_target"
+    routing_source="default"
+    if printf '%s' "$router_json" | jq -e --arg t "$selected_target" \
+      '((.terminalOutcomes // []) | index($t)) != null' >/dev/null 2>&1; then
+      selected_kind="default-terminal"
+    else
+      selected_kind="default-stage"
+    fi
+    echo "graph-schedule: router $node_id confidence=$decision_confidence below actThreshold=$conf_threshold; using defaultTarget=$selected_target (agent pick was $agent_pick)" >&2
+  else
+    echo "graph-schedule: router $node_id confidence=$decision_confidence meets actThreshold=$conf_threshold; honoring agent target=$selected_target" >&2
+  fi
+
   echo "graph-schedule: router $node_id selected target=$selected_target kind=$selected_kind" >&2
+
+  # Observability-only: journal the routing decision. Does not affect scheduling.
+  _graph_schedule_emit_routing_decision \
+    "$node_id" \
+    "$selected_target" \
+    "$allowed_targets" \
+    "$decision_reason" \
+    "$decision_confidence" \
+    "$routing_source" \
+    "graph.router-confidence"
 
   case "$selected_kind" in
     terminal|default-terminal)
@@ -5910,14 +6473,24 @@ _graph_schedule_handle_approval_node() {
   request_id="$(printf '%s' "$activation" | jq -r '.requestId // empty')"
   blocker="$(printf '%s' "$activation" | jq -c '.blocker // null')"
   registry_run="$(printf '%s' "$activation" | jq -r '.registryRun // empty')"
+  # The approval binds to the candidate that publish would ship.
+  local approval_source approval_identity approval_ledger_key
+  approval_source="$(graph_publish_approval_integration_source "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id")"
+  approval_identity=""
+  if [[ -n "$approval_source" ]]; then
+    approval_ledger_key="$(printf '%s' "$approval_source" | sed 's/[^A-Za-z0-9._-]/_/g')"
+    approval_identity="$(jq -r '.integrationResultIdentity // .attempts[-1].integrationResultIdentity // .candidateIdentity // .attempts[-1].candidateIdentity // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/nodes/$approval_ledger_key.json" 2>/dev/null)"
+  fi
   extra_json="$(jq -cn \
     --arg rid "$request_id" \
+    --arg candidateIdentity "$approval_identity" \
     --argjson blocker "$blocker" \
     --arg registryRun "$registry_run" \
     --argjson evidence "$(printf '%s' "$activation" | jq -c '.evidence // []')" \
     '{
       operatorRequestId: $rid,
       workflowActionKind: "approval",
+      candidateIdentity: (if $candidateIdentity == "" then null else $candidateIdentity end),
       blocker: $blocker,
       registryRunPath: $registryRun,
       approvalEvidence: $evidence
@@ -6284,7 +6857,7 @@ _graph_schedule_handle_integration_node() {
     local success_json
     success_json="$(printf '%s' "$integration_context_json" | jq -c \
       --arg resultIdentity "${result_identity:-}" \
-      '. + {integrationResultIdentity: (if $resultIdentity == "" then null else $resultIdentity end)}')"
+      '. + {integrationResultIdentity: (if $resultIdentity == "" then null else $resultIdentity end), candidateIdentity: (if $resultIdentity == "" then null else $resultIdentity end)}')"
     _graph_schedule_ledger_record "$node_id" "succeeded" "$attempt_id" "success" "0" \
       "$started" "$finished" "" "" "integration-complete" "$success_json"
     _graph_schedule_log_observability "integration-complete" "$node_id" "$attempt_id" "" "" "$success_json"
@@ -6735,6 +7308,7 @@ _graph_schedule_spawn_node() {
   local changeset_baseline="" changeset_scopes="" changeset_mode="" changeset_base_identity=""
   local planfrom_planner="" planfrom_binding="" registry_run_path="" planfrom_force_fresh=0
   local provided_kind="" provided_binding="" provided_force_fresh=0
+  local seeded_from_json="null"
 
   if [[ -z "$node_id" ]]; then
     echo "Error: graph_schedule_spawn_node requires node_id" >&2
@@ -6897,6 +7471,17 @@ _graph_schedule_spawn_node() {
         _graph_schedule_runtime_release "$node_id"
         return 1
       }
+    # Decision 2: rework / QA-repair implement clones seed from the prior
+    # candidate after baseline capture so the new changeset stays cumulative
+    # against the run base.
+    if graph_changeset_needs_rework_seed "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id"; then
+      seeded_from_json="$(graph_changeset_seed_rework_node \
+        "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$GRAPH_SCHEDULE_GRAPH_JSON" \
+        "$node_id" "$attempt_id" "$node_workspace")" || {
+          _graph_schedule_runtime_release "$node_id"
+          return 1
+        }
+    fi
     if graph_changeset_is_mutating "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id"; then
       changeset_baseline="$(graph_changeset_baseline_path \
         "$GRAPH_SCHEDULE_LEDGER_RUN_DIR" "$node_id" "$attempt_id")" || return 1
@@ -7108,6 +7693,13 @@ _graph_schedule_spawn_node() {
   # the structured observability log without reading back from the child.
   local spawn_context_json
   spawn_context_json="$(_graph_schedule_node_spawn_context_json "$node_id" "$node_workspace" "$changeset_mode" "$changeset_scopes" "$changeset_base_identity" "$changeset_baseline")"
+  if [[ "$seeded_from_json" != "null" && -n "$seeded_from_json" ]]; then
+    spawn_context_json="$(printf '%s' "$spawn_context_json" | jq -c --argjson seeded "$seeded_from_json" \
+      '. + {seededFrom: $seeded}')" || {
+        _graph_schedule_runtime_release "$node_id"
+        return 1
+      }
+  fi
 
   # Background the fresh single-stage process in its own session/process group
   # so failurePolicy=cancel can SIGTERM the child PGID without reaching the
@@ -7351,7 +7943,7 @@ _graph_schedule_usage_snapshot_from_report() {
 # delegation ledger under the parent node.
 _graph_schedule_node_success_observability_json() {
   local node_id="$1" attempt_id="$2" workspace="$3" state_root="$4"
-  local extra_json changeset_manifest changeset_hash publish_readiness usage_json idx node_runtime node_native_subagents admission_summary
+  local extra_json changeset_manifest changeset_hash publish_readiness usage_json idx node_runtime node_native_subagents admission_summary candidate_identity candidate_from exclude_file
   extra_json="$(_graph_schedule_node_observability_json "$node_id" "$workspace" "")"
   changeset_manifest=""
   changeset_hash=""
@@ -7367,6 +7959,24 @@ _graph_schedule_node_success_observability_json() {
   node_runtime="${GRAPH_NODE_RUNTIMES[$idx]:-}"
   node_native_subagents="${GRAPH_NODE_NATIVE_SUBAGENTS[$idx]:-}"
   admission_summary="$(_graph_schedule_admission_summary_json "$node_id" "$node_runtime" "$node_native_subagents" "admitted")"
+  candidate_identity=""
+  # Every mutating stage and integration produces a candidate receipt. An
+  # evaluator carries the identity it was bound to, which later lets publish
+  # refuse a QA/approval result from a different tree.
+  if graph_changeset_is_mutating "$GRAPH_SCHEDULE_GRAPH_JSON" "$node_id" || \
+    [[ "$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .type' "$GRAPH_SCHEDULE_GRAPH_JSON")" == "integrate" ]]; then
+    exclude_file="$(mktemp "${TMPDIR:-/tmp}/ralph-candidate-excludes.XXXXXX")" || return 1
+    jq -r '.sourceBase.secretExcludes[]? // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" >"$exclude_file"
+    candidate_identity="$(python3 "$GRAPH_WORKSPACE_HELPER" identity --source "$workspace" --state-root "$state_root" --exclude-file "$exclude_file" 2>/dev/null | jq -r '.filesystemIdentity // empty')"
+    rm -f "$exclude_file"
+  else
+    candidate_from="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.candidateFrom // empty' "$GRAPH_SCHEDULE_GRAPH_JSON")"
+    if [[ -n "$candidate_from" ]]; then
+      local candidate_ledger_key
+      candidate_ledger_key="$(printf '%s' "$candidate_from" | sed 's/[^A-Za-z0-9._-]/_/g')"
+      candidate_identity="$(jq -r '.candidateIdentity // .attempts[-1].candidateIdentity // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/nodes/$candidate_ledger_key.json" 2>/dev/null)"
+    fi
+  fi
   local usage_reliable="false" usage_norm=""
   usage_norm="$(graph_schedule_normalize_usage "${usage_json:-}" "")"
   if [[ "$(printf '%s' "$usage_norm" | jq -r '.reliability // empty' 2>/dev/null)" == "authoritative" ]]; then
@@ -7375,6 +7985,7 @@ _graph_schedule_node_success_observability_json() {
   extra_json="$(printf '%s' "$extra_json" | jq -c \
     --arg changeset "${changeset_manifest:-}" \
     --arg changesetHash "${changeset_hash:-}" \
+    --arg candidateIdentity "${candidate_identity:-}" \
     --arg publish "${publish_readiness:-}" \
     --argjson usage "${usage_json:-null}" \
     --argjson admission "${admission_summary:-null}" \
@@ -7382,6 +7993,7 @@ _graph_schedule_node_success_observability_json() {
     '. + {
        changesetManifest: (if $changeset == "" then null else $changeset end),
        changesetHash: (if $changesetHash == "" then null else $changesetHash end),
+       candidateIdentity: (if $candidateIdentity == "" then null else $candidateIdentity end),
        publishReadiness: (if $publish == "" then null else ($publish | fromjson) end),
        usageSnapshot: (if $usage == null then null else $usage end),
        usageReliable: $usageReliable,
@@ -7741,6 +8353,26 @@ _graph_schedule_handle_reaped_node() {
       _graph_schedule_finish_failed_or_requeue 1 "composite-success-failed" "$attempt_id"
       return $?
     fi
+    # Read-only evaluators receive a private copy of candidateFrom.  Its
+    # identity must remain byte-for-byte equal to the producer receipt.
+    local bound_candidate expected_candidate actual_candidate candidate_excludes
+    bound_candidate="$(jq -r --arg id "$GRAPH_REAP_NODE" '.nodes[] | select(.id == $id) | .stage.candidateFrom // empty' "$GRAPH_SCHEDULE_GRAPH_JSON")"
+    if [[ -n "$bound_candidate" ]] && ! graph_changeset_is_mutating "$GRAPH_SCHEDULE_GRAPH_JSON" "$GRAPH_REAP_NODE"; then
+      local candidate_ledger_key
+      candidate_ledger_key="$(printf '%s' "$bound_candidate" | sed 's/[^A-Za-z0-9._-]/_/g')"
+      expected_candidate="$(jq -r '.candidateIdentity // .attempts[-1].candidateIdentity // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/nodes/$candidate_ledger_key.json" 2>/dev/null)"
+      candidate_excludes="$(mktemp "${TMPDIR:-/tmp}/ralph-candidate-excludes.XXXXXX")" || return 1
+      jq -r '.sourceBase.secretExcludes[]? // empty' "$GRAPH_SCHEDULE_LEDGER_RUN_DIR/run.json" >"$candidate_excludes"
+      actual_candidate="$(python3 "$GRAPH_WORKSPACE_HELPER" identity --source "$succeeded_workspace" --state-root "$succeeded_state_root" --exclude-file "$candidate_excludes" 2>/dev/null | jq -r '.filesystemIdentity // empty')"
+      rm -f "$candidate_excludes"
+      if [[ -z "$expected_candidate" || "$actual_candidate" != "$expected_candidate" ]]; then
+        GRAPH_NODE_STATES[$idx]="failed"
+        _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
+        _graph_schedule_ledger_record "$GRAPH_REAP_NODE" "failed" "$attempt_id" "failed" "1" "" "$finished_at" "$node_runtime" "$node_native_subagents" "candidate-mutated"
+        _graph_schedule_apply_node_failure "$GRAPH_REAP_NODE" 1 "candidate-mutated"
+        return 1
+      fi
+    fi
     # Resolve the node's semantic review outcome before touching any
     # succeeded state. A regular agent node with no declared loopCheck
     # resolves "passed" unconditionally; a review node's outcome comes from
@@ -7786,7 +8418,13 @@ _graph_schedule_handle_reaped_node() {
       if [[ "$cond_outcome_rc" -eq 2 && "$agent_review_outcome" == "changes-required" ]]; then
         # Fail-closed exhaustion path: a valid changes-required verdict with
         # no matching conditional(changes-required) edge cannot proceed.
-        cond_fail_reason="review-changes-required-no-edge"
+        local qa_repair_node=""
+        qa_repair_node="$(jq -r --arg id "$GRAPH_REAP_NODE" '.nodes[] | select(.id == $id) | .stage.qaRepair // false' "$GRAPH_SCHEDULE_GRAPH_JSON" 2>/dev/null)"
+        if [[ "$qa_repair_node" == "true" ]]; then
+          cond_fail_reason="qa-repair-exhausted"
+        else
+          cond_fail_reason="review-changes-required-no-edge"
+        fi
         cond_fail_exit=2
       fi
       _graph_schedule_runtime_release "$GRAPH_REAP_NODE"
@@ -7819,7 +8457,7 @@ _graph_schedule_handle_reaped_node() {
     _graph_schedule_log_observability "node-succeeded" "$GRAPH_REAP_NODE" "$attempt_id" "$node_runtime" "$node_native_subagents" "$success_extra_json"
     graph_ui_node "$agent_review_outcome" "$GRAPH_REAP_NODE" "$node_runtime"
     # Router nodes: resolve decision artifact and skip unselected branches.
-    if [[ "${GRAPH_NODE_TYPES[$idx]:-}" == "router" && -n "${GRAPH_SCHEDULE_GRAPH_JSON:-}" ]]; then
+    if [[ -n "${GRAPH_SCHEDULE_GRAPH_JSON:-}" ]] && _graph_schedule_node_has_router_stage "$GRAPH_REAP_NODE"; then
       _graph_schedule_apply_router_decision \
         "$GRAPH_REAP_NODE" \
         "$GRAPH_SCHEDULE_GRAPH_JSON" \
@@ -8133,6 +8771,14 @@ graph_schedule_run() {
           _graph_schedule_handle_gate_node "$ready_id" || true
           continue
         fi
+        # Router + RALPH_JEV_ROUTING: optional Jev pre-agent classifier. On
+        # policy "act", write the decision artifact and complete without an
+        # agent turn; gather/fallback/disabled fall through to spawn below.
+        if _graph_schedule_node_has_router_stage "$ready_id"; then
+          if _graph_schedule_try_jev_router_node "$ready_id"; then
+            continue
+          fi
+        fi
         # A join node with no declared runtime is a policy pass-through
         # (see _graph_schedule_handle_join_node); a join node that declares
         # a runtime (a manually authored adjudicator) falls through to
@@ -8171,7 +8817,7 @@ graph_schedule_run() {
 
     running_count="$(_graph_schedule_count_running)"
     if [[ "$running_count" -eq 0 ]]; then
-      # Synchronous handlers (checkpoint/consensus-barrier/join/gate) can
+      # Synchronous handlers (checkpoint/consensus-barrier/join/gate/jev-router) can
       # release new successors without ever spawning a tracked subprocess, so
       # running_count alone cannot decide the run is done -- re-check the
       # ready set before concluding no more progress is possible. A just-
@@ -9058,6 +9704,13 @@ _graph_schedule_resume_loop() {
         if [[ "${GRAPH_NODE_TYPES[$ready_idx]:-}" == "gate" ]]; then
           _graph_schedule_handle_gate_node "$ready_id" || true
           continue
+        fi
+        # Router + RALPH_JEV_ROUTING: optional Jev pre-agent classifier (mirrors
+        # the main schedule loop).
+        if _graph_schedule_node_has_router_stage "$ready_id"; then
+          if _graph_schedule_try_jev_router_node "$ready_id"; then
+            continue
+          fi
         fi
         # A join node with no declared runtime is a policy pass-through; one
         # that declares a runtime falls through to ordinary agent dispatch.

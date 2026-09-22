@@ -29,10 +29,10 @@ _runtime_overlay_antigravity_hooks_source_dir() {
 }
 
 _runtime_overlay_antigravity_ralph_hook_script_names() {
-  printf '%s\n' pre-tool-shell-policy.sh pre-tool-proxy-read-handoff.sh pre-tool-exploration-policy.sh post-tool-shell-telemetry.sh post-tool-native-result-compact.sh post-tool-mcp-compact.sh after-shell-telemetry.sh stop-continuation.sh
+  printf '%s\n' pre-tool-shell-policy.sh stop-continuation.sh
 }
 
-ralph_native_hooks_want_activation() {
+_runtime_overlay_antigravity_want_activation() {
   local mode="${RALPH_NATIVE_HOOKS:-}"
   case "$mode" in
     off) return 1 ;;
@@ -50,52 +50,17 @@ runtime_overlay_antigravity_hooks_detected_in_file() {
     return 1
   fi
   python3 - "$hooks_file" <<'PY'
-import json, os, sys
-
-path = sys.argv[1]
-required = {
-    "pre-tool-shell-policy.sh",
-    "post-tool-shell-telemetry.sh",
-    "post-tool-native-result-compact.sh",
-    "post-tool-mcp-compact.sh",
-    "after-shell-telemetry.sh",
-    "stop-continuation.sh",
-}
+import json, sys
 
 try:
-    with open(path) as fh:
+    with open(sys.argv[1]) as fh:
         data = json.load(fh)
 except (OSError, json.JSONDecodeError):
     sys.exit(1)
 
-hooks = data.get("hooks") or {}
-found = set()
-
-def scan_entries(entries):
-    for entry in entries or []:
-        cmd = entry.get("command") or ""
-        base = os.path.basename(cmd)
-        if base in required:
-            found.add(base)
-        for nested in entry.get("hooks") or []:
-            nested_cmd = nested.get("command") or ""
-            nested_base = os.path.basename(nested_cmd)
-            if nested_base in required:
-                found.add(nested_base)
-
-for event in ("preToolUse", "postToolUse", "afterShellExecution", "Stop"):
-    scan_entries(hooks.get(event))
-
-if found == required:
-    sys.exit(0)
-sys.exit(1)
+entry = data.get("ralph-native") if isinstance(data, dict) else None
+sys.exit(0 if isinstance(entry, dict) and entry else 1)
 PY
-}
-
-runtime_overlay_antigravity_preserve_durable_install() {
-  local hooks_file="${1:-}"
-  [[ -n "$hooks_file" ]] || return 1
-  runtime_overlay_antigravity_hooks_detected_in_file "$hooks_file"
 }
 
 runtime_overlay_antigravity_hook_timeout() {
@@ -120,9 +85,13 @@ target, template, include_stop_raw, hook_timeout_raw = sys.argv[1:]
 include_stop = include_stop_raw == "1"
 hook_timeout = int(hook_timeout_raw) if hook_timeout_raw.isdigit() else 5400
 
-RALPH_BASES = {
+NAMED_KEY = "ralph-native"
+
+# Script basenames written by older Ralph into a Cursor-shaped hooks file.
+LEGACY_RALPH_BASES = {
     "pre-tool-shell-policy.sh",
     "post-tool-shell-telemetry.sh",
+    "post-tool-native-result-compact.sh",
     "post-tool-mcp-compact.sh",
     "after-shell-telemetry.sh",
     "stop-continuation.sh",
@@ -133,54 +102,67 @@ def load_json(path):
     if not os.path.isfile(path):
         return {}
     with open(path) as fh:
-        return json.load(fh)
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError("hooks file top level must be a JSON object")
+    return data
 
 
-def entry_command(entry):
-    return entry.get("command") or ""
+def is_ralph_command(cmd):
+    return isinstance(cmd, str) and os.path.basename(cmd) in LEGACY_RALPH_BASES
 
 
-def entry_basename(entry):
-    return os.path.basename(entry_command(entry))
-
-
-def merge_entries(existing, template_entries, event):
-    existing_cmds = {entry_command(e) for e in existing}
-    existing_bases = {entry_basename(e) for e in existing if entry_basename(e)}
-    for entry in template_entries:
-        cmd = entry_command(entry)
-        base = entry_basename(entry)
-        if cmd in existing_cmds:
+def strip_legacy(data):
+    """Remove only Ralph-owned entries from a legacy {version, hooks} file."""
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for event in list(hooks):
+        entries = hooks[event]
+        if not isinstance(entries, list):
             continue
-        if base in existing_bases:
-            continue
-        if any(cmd.endswith(b) for b in existing_bases if b):
-            continue
-        merged = copy.deepcopy(entry)
-        if event == "Stop":
-            merged["timeout"] = hook_timeout
-        existing.append(merged)
-        existing_cmds.add(cmd)
-        if base:
-            existing_bases.add(base)
+        kept = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                kept.append(entry)
+                continue
+            if is_ralph_command(entry.get("command")):
+                continue
+            nested = entry.get("hooks")
+            if isinstance(nested, list):
+                remaining = [
+                    n for n in nested
+                    if not (isinstance(n, dict) and is_ralph_command(n.get("command")))
+                ]
+                if not remaining and nested:
+                    continue
+                entry = dict(entry)
+                entry["hooks"] = remaining
+            kept.append(entry)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if not hooks:
+        del data["hooks"]
+        # A bare legacy version key carries no user content once hooks are gone.
+        if set(data) == {"version"}:
+            del data["version"]
 
 
 data = load_json(target)
 with open(template) as fh:
     template_data = json.load(fh)
 
-data.setdefault("version", template_data.get("version", 1))
-template_hooks = template_data.get("hooks") or {}
-hooks = data.setdefault("hooks", {})
+strip_legacy(data)
 
-for event, template_entries in template_hooks.items():
-    if event == "Stop" and not include_stop:
-        continue
-    hooks.setdefault(event, [])
-    merge_entries(hooks[event], template_entries, event)
-
-if not include_stop:
-    hooks.pop("Stop", None)
+named = copy.deepcopy(template_data.get(NAMED_KEY) or {})
+if include_stop:
+    for entry in named.get("Stop") or []:
+        entry["timeout"] = hook_timeout
+else:
+    named.pop("Stop", None)
+data[NAMED_KEY] = named
 
 os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
 with open(target, "w") as fh:
@@ -229,24 +211,6 @@ run_plan_invoke_antigravity_hooks_scripts_prepare() {
 run_plan_invoke_antigravity_hooks_config_cleanup() {
   local target="${ANTIGRAVITY_PLAN_HOOKS_CONFIG_TARGET:-}"
   local idx backup script_target
-
-  if [[ -n "$target" ]] && runtime_overlay_antigravity_preserve_durable_install "$target"; then
-    if declare -F runtime_overlay_forget_recorded_file >/dev/null 2>&1; then
-      runtime_overlay_forget_recorded_file "$target"
-      if [[ "${ANTIGRAVITY_PLAN_HOOKS_SCRIPT_TARGETS+set}" == "set" && "${#ANTIGRAVITY_PLAN_HOOKS_SCRIPT_TARGETS[@]}" -gt 0 ]]; then
-        for ((idx = 0; idx < ${#ANTIGRAVITY_PLAN_HOOKS_SCRIPT_TARGETS[@]}; idx++)); do
-          runtime_overlay_forget_recorded_file "${ANTIGRAVITY_PLAN_HOOKS_SCRIPT_TARGETS[idx]}"
-        done
-      fi
-    fi
-    unset ANTIGRAVITY_PLAN_HOOKS_CONFIG_TARGET
-    unset ANTIGRAVITY_PLAN_HOOKS_CONFIG_BACKUP
-    unset ANTIGRAVITY_PLAN_HOOKS_CONFIG_HAD_FILE
-    unset ANTIGRAVITY_PLAN_NATIVE_HOOKS_ACTIVE
-    ANTIGRAVITY_PLAN_HOOKS_SCRIPT_TARGETS=()
-    ANTIGRAVITY_PLAN_HOOKS_SCRIPT_BACKUPS=()
-    return 0
-  fi
 
   if [[ -n "$target" ]]; then
     if [[ "${ANTIGRAVITY_PLAN_HOOKS_CONFIG_HAD_FILE:-0}" == "1" ]]; then
@@ -394,7 +358,7 @@ run_plan_invoke_antigravity_native_hooks_prepare() {
     runtime_overlay_set_overlay_mode "$tooling_profile"
   fi
 
-  if ! ralph_native_hooks_want_activation; then
+  if ! _runtime_overlay_antigravity_want_activation; then
     if declare -F runtime_overlay_set_native_hooks_effective >/dev/null 2>&1; then
       runtime_overlay_set_native_hooks_effective "false"
     fi

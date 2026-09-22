@@ -36,6 +36,7 @@ import {
   type MetricsFilterQuery,
 } from './metrics-insights';
 import { collectAmbientUsage } from './ambient-usage';
+import { collectJevUsage } from './jev-usage';
 import { registerGraphRunDiffRoutes } from './graph-run-diff';
 import { enrichPlanRunDetail } from './plan-run-detail';
 import {
@@ -45,6 +46,12 @@ import {
   isSafePlanRunStatePath,
 } from './plan-run-evidence';
 import { enrichGraphRunDetail } from './graph-run-detail';
+import { graphRunPath, planAttemptPath, resolveStatePath, delegationRootPath, sessionsDirPath, runtimeConfigDirPath } from './state-paths';
+import {
+  buildRunNavigationSummary,
+  isCandidateWorkspaceTreePath,
+  listCatalogRuns,
+} from './state-navigation';
 
 export { resolveDashboardRootsForWorkspaceRoot } from './dashboard-workspace-resolve';
 export {
@@ -1055,8 +1062,17 @@ function windowingLogForSummary(summaryPath: string): string | null {
   if (!planKey) {
     return null;
   }
-  const candidate = join(logDir, '..', '..', 'runtime-config', planKey, 'result-windowing.jsonl');
-  return existsSync(candidate) ? candidate : null;
+  const stateRoot = join(logDir, '..', '..');
+  for (const rel of [
+    join('internal', 'runtime-config', planKey, 'result-windowing.jsonl'),
+    join('runtime-config', planKey, 'result-windowing.jsonl'),
+  ]) {
+    const candidate = join(stateRoot, rel);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function recordPlanKey(record: Record<string, unknown>): string {
@@ -1330,8 +1346,14 @@ function stateDirForSummary(summaryPath: string): string | null {
   if (!planKey) {
     return null;
   }
-  const candidate = join(logDir, '..', '..', 'runtime-config', planKey);
-  return existsSync(candidate) ? candidate : null;
+  const stateRoot = join(logDir, '..', '..');
+  for (const rel of [join('internal', 'runtime-config', planKey), join('runtime-config', planKey)]) {
+    const candidate = join(stateRoot, rel);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function loadWindowingRecords(path: string): Record<string, unknown>[] {
@@ -3542,6 +3564,18 @@ export async function handleAmbientUsageRequest(req: Request, res: Response): Pr
   res.json(payload);
 }
 
+export async function handleJevUsageRequest(req: Request, res: Response): Promise<void> {
+  const filters = parseMetricsFilterQuery(req);
+  const payload = await withServerTiming(res, 'jev-usage', 'Collect Jev usage', async () => {
+    const logsRoots = filterAggregateRootsByWorkspace(
+      await findWorkspaceLogsRootsAsync(),
+      filters.workspaceRoot ?? '',
+    );
+    return collectJevUsage({ logsRoots, dateFrom: filters.dateFrom, dateTo: filters.dateTo });
+  });
+  res.json(payload);
+}
+
 export async function handleMetricsDetailRequest(req: Request, res: Response): Promise<void> {
   const planKey = typeof req.params['planKey'] === 'string' ? req.params['planKey'] : '';
   if (!planKey.trim()) {
@@ -4595,6 +4629,19 @@ export interface GraphNodeState {
   nativeSubagentEvents?: NativeSubagentEvent[];
 }
 
+export interface GraphRoutingDecision {
+  nodeId: string;
+  selectedTarget: string;
+  alternatives: string[];
+  reason: string;
+  confidence: number | null;
+  source: string;
+  registryVersion: string;
+  questionSetId: string;
+  timestamp: string;
+  sequence: number | null;
+}
+
 export interface GraphRunDetail {
   namespace: string;
   runId: string;
@@ -4603,6 +4650,10 @@ export interface GraphRunDetail {
   graph: Record<string, unknown>;
   usage?: GraphUsageSummary;
   concurrencyReductions?: string[];
+  routingDecisions?: GraphRoutingDecision[];
+  files?: { summary: Array<{ path: string; label: string }>; raw: string[] };
+  timeline?: Array<{ at: string; prose: string }>;
+  operatorNext?: { label: string; description: string; enabled: boolean; disabledReason?: string };
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> {
@@ -4778,7 +4829,7 @@ function planTodoHashes(planPath: string): Set<string> {
 }
 
 function countResumableTodos(workspaceRoot: string, planKey: string, runId: string, planPath: string): number {
-  const dir = join(workspaceRoot, 'sessions', planKey, 'todo-sessions');
+  const dir = join(sessionsDirPath(workspaceRoot, planKey), 'todo-sessions');
   let entries: string[] = [];
   try {
     entries = readdirSync(dir).filter((name) => name.endsWith('.json'));
@@ -4816,6 +4867,8 @@ interface LocatedPlanRun {
   logDir: string;
   runDir: string | null;
   manifest: Record<string, unknown> | null;
+  parentRunId?: string | null;
+  stageId?: string | null;
 }
 
 function parseManifestRecord(raw: Record<string, unknown>, fallbackPlanKey: string, runDir: string): LocatedPlanRun | null {
@@ -4839,11 +4892,12 @@ function parseManifestRecord(raw: Record<string, unknown>, fallbackPlanKey: stri
 async function collectPlanRunsFromWorkspace(workspaceRoot: string, planKeyFilter: string): Promise<LocatedPlanRun[]> {
   const logsRoot = join(workspaceRoot, 'logs');
   const found: LocatedPlanRun[] = [];
+  const seen = new Set<string>();
   let planDirs: Dirent[];
   try {
     planDirs = await fs.readdir(logsRoot, { withFileTypes: true });
   } catch {
-    return found;
+    planDirs = [];
   }
 
   for (const planEntry of planDirs) {
@@ -4868,7 +4922,13 @@ async function collectPlanRunsFromWorkspace(workspaceRoot: string, planKeyFilter
       if (!runEntry.isDirectory() || isHiddenEntryName(runEntry.name)) {
         continue;
       }
-      const runDir = join(runsDir, runEntry.name);
+      const runId = runEntry.name;
+      let runDir: string;
+      try {
+        runDir = planAttemptPath(workspaceRoot, planKey, runId);
+      } catch {
+        continue;
+      }
       const manifestPath = join(runDir, 'run-manifest.json');
       if (!existsSync(manifestPath)) {
         continue;
@@ -4878,8 +4938,18 @@ async function collectPlanRunsFromWorkspace(workspaceRoot: string, planKeyFilter
       if (!parsed) {
         continue;
       }
+      const parentRec =
+        (raw['parent'] && typeof raw['parent'] === 'object' && !Array.isArray(raw['parent']))
+          ? (raw['parent'] as Record<string, unknown>)
+          : null;
+      parsed.parentRunId =
+        (typeof parentRec?.['workflow_run_id'] === 'string' && parentRec['workflow_run_id'])
+        || (typeof parentRec?.['graph_run_id'] === 'string' && parentRec['graph_run_id'])
+        || null;
+      parsed.stageId = typeof parentRec?.['stage_id'] === 'string' ? parentRec['stage_id'] : null;
       parsed.logDir = logDir;
       found.push(parsed);
+      seen.add(runId);
       sawManifest = true;
     }
 
@@ -4936,6 +5006,82 @@ async function collectPlanRunsFromWorkspace(workspaceRoot: string, planKeyFilter
       runDir: null,
       manifest: null,
     });
+    seen.add(runId);
+  }
+
+  // Layout 2: discover only via runs/<id>/run.json catalogs (no candidate-tree walks).
+  for (const catalog of listCatalogRuns(workspaceRoot)) {
+    if (seen.has(catalog.runId)) {
+      continue;
+    }
+    const stagesDir = join(workspaceRoot, 'runs', catalog.runId, 'stages');
+    if (!existsSync(stagesDir)) {
+      continue;
+    }
+    let stageEntries: Dirent[] = [];
+    try {
+      stageEntries = await fs.readdir(stagesDir, { withFileTypes: true });
+    } catch {
+      stageEntries = [];
+    }
+    for (const stageEnt of stageEntries) {
+      if (!stageEnt.isDirectory() || isHiddenEntryName(stageEnt.name)) {
+        continue;
+      }
+      const attemptsDir = join(stagesDir, stageEnt.name, 'attempts');
+      let attemptEntries: Dirent[] = [];
+      try {
+        attemptEntries = await fs.readdir(attemptsDir, { withFileTypes: true });
+      } catch {
+        attemptEntries = [];
+      }
+      for (const attemptEnt of attemptEntries) {
+        if (!attemptEnt.isDirectory() || isHiddenEntryName(attemptEnt.name)) {
+          continue;
+        }
+        const attemptRel = `runs/${catalog.runId}/stages/${stageEnt.name}/attempts/${attemptEnt.name}`;
+        if (isCandidateWorkspaceTreePath(attemptRel)) {
+          continue;
+        }
+        const runDir = join(attemptsDir, attemptEnt.name);
+        const manifestPath = join(runDir, 'run-manifest.json');
+        if (!existsSync(manifestPath)) {
+          continue;
+        }
+        const raw = safeReadJson(manifestPath);
+        const planKey =
+          (typeof raw['plan_key'] === 'string' && raw['plan_key'])
+          || catalog.artifactNamespace
+          || '';
+        if (!planKey || (planKeyFilter && planKey !== planKeyFilter)) {
+          continue;
+        }
+        const parsed = parseManifestRecord(raw, planKey, runDir);
+        if (!parsed) {
+          continue;
+        }
+        if (seen.has(parsed.runId)) {
+          continue;
+        }
+        const parentFromManifest =
+          (raw['parent'] && typeof raw['parent'] === 'object' && !Array.isArray(raw['parent']))
+            ? raw['parent'] as Record<string, unknown>
+            : null;
+        const parentRunId =
+          catalog.parent?.runId
+          ?? (typeof parentFromManifest?.['workflow_run_id'] === 'string' ? parentFromManifest['workflow_run_id'] : null)
+          ?? (typeof parentFromManifest?.['graph_run_id'] === 'string' ? parentFromManifest['graph_run_id'] : null)
+          ?? (parsed.runId !== catalog.runId ? catalog.runId : null);
+        parsed.parentRunId = parentRunId;
+        parsed.stageId =
+          catalog.parent?.stageId
+          ?? (typeof parentFromManifest?.['stage_id'] === 'string' ? parentFromManifest['stage_id'] : null)
+          ?? stageEnt.name;
+        parsed.logDir = join(workspaceRoot, 'logs', planKey);
+        found.push(parsed);
+        seen.add(parsed.runId);
+      }
+    }
   }
 
   found.sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
@@ -4958,6 +5104,25 @@ function invocationRecordsFromLogDir(logDir: string): Array<Record<string, unkno
 
 async function collectPlanRunFilePaths(run: LocatedPlanRun, workspaceRoot: string): Promise<string[]> {
   const files = new Set<string>();
+  const rootResolved = resolve(workspaceRoot);
+  const rootReal = existsSync(rootResolved) ? realpathSync(rootResolved) : rootResolved;
+  const toRel = (abs: string): string | null => {
+    let absNorm = resolve(abs);
+    if (absNorm === rootResolved || absNorm.startsWith(`${rootResolved}/`)) {
+      absNorm = `${rootReal}${absNorm.slice(rootResolved.length)}`;
+    } else if (existsSync(absNorm)) {
+      try {
+        absNorm = realpathSync(absNorm);
+      } catch {
+        // keep
+      }
+    }
+    const rel = relative(rootReal, absNorm).replace(/\\/g, '/');
+    if (!rel || rel.startsWith('..') || rel.split('/').includes('..')) {
+      return null;
+    }
+    return rel;
+  };
   const manifestFiles = run.manifest && Array.isArray(run.manifest['files']) ? run.manifest['files'] : [];
   for (const entry of manifestFiles) {
     if (isJsonRecord(entry) && typeof entry['path'] === 'string') {
@@ -4965,7 +5130,7 @@ async function collectPlanRunFilePaths(run: LocatedPlanRun, workspaceRoot: strin
       if (!isSafePlanRunStatePath(path)) {
         continue;
       }
-      const abs = join(workspaceRoot, path);
+      const abs = join(rootReal, path);
       if (!isPathUnderWorkspaceRoot(abs, workspaceRoot)) {
         continue;
       }
@@ -4974,18 +5139,27 @@ async function collectPlanRunFilePaths(run: LocatedPlanRun, workspaceRoot: strin
   }
   if (run.runDir) {
     for (const rel of await listRelativeFiles(run.runDir)) {
-      files.add(relative(workspaceRoot, join(run.runDir, rel)).replace(/\\/g, '/'));
+      const stateRel = toRel(join(run.runDir, rel));
+      if (stateRel) {
+        files.add(stateRel);
+      }
     }
   }
   for (const rel of await listRelativeFiles(run.logDir)) {
     if (rel === 'runs' || rel.startsWith('runs/')) {
       continue;
     }
-    files.add(relative(workspaceRoot, join(run.logDir, rel)).replace(/\\/g, '/'));
+    const stateRel = toRel(join(run.logDir, rel));
+    if (stateRel) {
+      files.add(stateRel);
+    }
   }
-  const runtimeConfigDir = join(workspaceRoot, 'runtime-config', run.planKey);
+  const runtimeConfigDir = runtimeConfigDirPath(workspaceRoot, run.planKey);
   for (const rel of await listRelativeFiles(runtimeConfigDir)) {
-    files.add(relative(workspaceRoot, join(runtimeConfigDir, rel)).replace(/\\/g, '/'));
+    const stateRel = toRel(join(runtimeConfigDir, rel));
+    if (stateRel) {
+      files.add(stateRel);
+    }
   }
   return filterSafePlanRunStatePaths(workspaceRoot, files);
 }
@@ -5056,16 +5230,51 @@ export async function handlePlanRunsListRequest(req: Request, res: Response): Pr
   const workspaceRootQuery = typeof req.query['workspaceRoot'] === 'string' ? req.query['workspaceRoot'].trim() : '';
   const workspaceRoot = planRunsWorkspaceRoot(workspaceRootQuery);
   const runs = await collectPlanRunsFromWorkspace(workspaceRoot, planKey);
+  const parentIds = new Set(runs.map((r) => r.runId));
+  const childrenByParent = new Map<string, typeof runs>();
+  const topLevel: typeof runs = [];
+  for (const run of runs) {
+    const parentId = run.parentRunId;
+    if (parentId && parentIds.has(parentId) && parentId !== run.runId) {
+      const list = childrenByParent.get(parentId) ?? [];
+      list.push(run);
+      childrenByParent.set(parentId, list);
+    } else {
+      topLevel.push(run);
+    }
+  }
+  type PlanRunListPayload = {
+    runId: string;
+    planKey: string;
+    status: string;
+    startedAt: string;
+    endedAt: string;
+    source: 'manifest' | 'legacy';
+    parentRunId: string | null;
+    stageId: string | null;
+    children: PlanRunListPayload[];
+    runtime: string;
+    model: string;
+    todosDone: number | null;
+    todosTotal: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    elapsedSeconds: number | null;
+  };
+  const toItem = (run: LocatedPlanRun, children: LocatedPlanRun[] = []): PlanRunListPayload => ({
+    runId: run.runId,
+    planKey: run.planKey,
+    status: run.status,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt,
+    source: run.source,
+    parentRunId: run.parentRunId ?? null,
+    stageId: run.stageId ?? null,
+    children: children.map((child) => toItem(child)),
+    ...planRunCardFields(run),
+  });
   res.json({
-    items: runs.map((run) => ({
-      runId: run.runId,
-      planKey: run.planKey,
-      status: run.status,
-      startedAt: run.startedAt,
-      endedAt: run.endedAt,
-      source: run.source,
-      ...planRunCardFields(run),
-    })),
+    items: topLevel.map((run) => toItem(run, childrenByParent.get(run.runId) ?? [])),
   });
 }
 
@@ -5115,12 +5324,16 @@ export async function handlePlanRunDetailRequest(req: Request, res: Response): P
     planPath,
     resumableTodoCount,
   });
+  const navigation = buildRunNavigationSummary(workspaceRoot, run.runId);
   res.json({
     ...detail,
     planKey: run.planKey,
     status: run.status,
     source: run.source,
     usage: planRunCardFields(run),
+    parentRunId: run.parentRunId ?? null,
+    stageId: run.stageId ?? null,
+    navigation,
   });
 }
 
@@ -5161,10 +5374,14 @@ function concurrencyReduction(event: Record<string, unknown>): string | null {
   return /verification|resource/i.test(reason) ? 'verification resource class' : null;
 }
 
-function resolveGraphRunsRoot(workspaceRootQuery: string): string {
-  const { workspaceRoot } = findDashboardRoots();
-  const effective = workspaceRootQuery ? resolve(workspaceRootQuery) : workspaceRoot;
-  return join(effective, 'graph-runs');
+/** Resolve one graph run directory through state-paths (layout-aware). */
+export function resolveGraphRunDir(workspaceRoot: string, namespace: string, runId: string): string {
+  return graphRunPath(workspaceRoot, namespace, runId);
+}
+
+/** Resolve one plan attempt directory through state-paths (layout-aware). */
+export function resolvePlanRunDir(workspaceRoot: string, planKey: string, runId: string): string {
+  return planAttemptPath(workspaceRoot, planKey, runId);
 }
 
 export async function handleGraphRunsRequest(req: Request, res: Response): Promise<void> {
@@ -5178,12 +5395,7 @@ export async function handleGraphRunsRequest(req: Request, res: Response): Promi
       res.json({ runs: [] });
       return;
     }
-    const graphRunsDir = join(resolved.workspaceRoot, 'graph-runs');
-    if (!existsSync(graphRunsDir)) {
-      res.json({ runs: [] });
-      return;
-    }
-    const runs = await scanGraphRunsDirectory(graphRunsDir, resolved.workspaceRoot, resolved.projectRoot);
+    const runs = await collectGraphRunsForWorkspace(resolved.workspaceRoot, resolved.projectRoot);
     sortAndLimitGraphRuns(runs, req);
     res.json({ runs });
     return;
@@ -5193,12 +5405,8 @@ export async function handleGraphRunsRequest(req: Request, res: Response): Promi
   const { workspaces, skipped } = await enumerateRegisteredWorkspaces();
   const runs: GraphRunSummary[] = [];
   for (const workspace of workspaces) {
-    const graphRunsDir = join(workspace.workspaceRoot, 'graph-runs');
-    if (!existsSync(graphRunsDir)) {
-      continue;
-    }
     try {
-      const workspaceRuns = await scanGraphRunsDirectory(graphRunsDir, workspace.workspaceRoot, workspace.projectRoot);
+      const workspaceRuns = await collectGraphRunsForWorkspace(workspace.workspaceRoot, workspace.projectRoot);
       runs.push(...workspaceRuns);
     } catch {
       // Best-effort per workspace; continue scanning remaining roots.
@@ -5207,6 +5415,91 @@ export async function handleGraphRunsRequest(req: Request, res: Response): Promi
 
   sortAndLimitGraphRuns(runs, req);
   res.json({ runs, skipped });
+}
+
+async function collectGraphRunsForWorkspace(
+  workspaceRoot: string,
+  projectRoot: string,
+): Promise<GraphRunSummary[]> {
+  const runs: GraphRunSummary[] = [];
+  const seen = new Set<string>();
+
+  // Layout 2 first: catalog only (never walk engine/workspaces/candidate trees).
+  for (const catalog of listCatalogRuns(workspaceRoot)) {
+    let namespace = catalog.artifactNamespace ?? '';
+    let runDir: string;
+    try {
+      // Prefer engine ledger namespace when present.
+      const engineProbe = join(workspaceRoot, 'runs', catalog.runId, 'engine', 'graph', 'run.json');
+      if (!existsSync(engineProbe)) {
+        continue;
+      }
+      const engineRaw = safeReadJson(engineProbe);
+      if (typeof engineRaw['namespace'] === 'string' && engineRaw['namespace']) {
+        namespace = engineRaw['namespace'];
+      }
+      if (!namespace) {
+        continue;
+      }
+      runDir = graphRunPath(workspaceRoot, namespace, catalog.runId);
+    } catch {
+      continue;
+    }
+    const engineRunJson = join(runDir, 'run.json');
+    if (!existsSync(engineRunJson)) {
+      continue;
+    }
+    const runJson = safeReadJson(engineRunJson);
+    namespace = typeof runJson['namespace'] === 'string' ? runJson['namespace'] : namespace;
+    if (!namespace) {
+      continue;
+    }
+    const key = `${namespace}/${catalog.runId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    let nodeCount = 0;
+    const nodesDir = join(runDir, 'nodes');
+    if (existsSync(nodesDir)) {
+      try {
+        const nodeFiles = await fs.readdir(nodesDir);
+        nodeCount = nodeFiles.filter((f) => f.endsWith('.json')).length;
+      } catch {
+        // ignore
+      }
+    }
+    runs.push({
+      namespace,
+      runId: catalog.runId,
+      isLatest: false,
+      status: typeof runJson['status'] === 'string' ? runJson['status'] : catalog.status,
+      startedAt: typeof runJson['startedAt'] === 'string' ? runJson['startedAt'] : catalog.createdAt,
+      nodeCount,
+      workspaceRoot,
+      projectRoot,
+    });
+    seen.add(key);
+  }
+
+  // Layout 1: legacy graph-runs/<ns>/<id>/run.json only (shallow namespace dirs).
+  let graphRunsDir: string;
+  try {
+    graphRunsDir = resolveStatePath(workspaceRoot, 'graph-runs');
+  } catch {
+    graphRunsDir = '';
+  }
+  if (graphRunsDir && existsSync(graphRunsDir)) {
+    for (const run of await scanGraphRunsDirectory(graphRunsDir, workspaceRoot, projectRoot)) {
+      const key = `${run.namespace}/${run.runId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      runs.push(run);
+    }
+  }
+
+  return runs;
 }
 
 async function scanGraphRunsDirectory(
@@ -5298,8 +5591,15 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
   }
 
   const workspaceRootQuery = String(req.query['workspaceRoot'] ?? '').trim();
-  const graphRunsDir = resolveGraphRunsRoot(workspaceRootQuery);
-  const runDir = join(graphRunsDir, namespace, runId);
+  const { workspaceRoot: defaultRoot } = findDashboardRoots();
+  const workspaceRoot = workspaceRootQuery ? resolve(workspaceRootQuery) : defaultRoot;
+  let runDir: string;
+  try {
+    runDir = graphRunPath(workspaceRoot, namespace, runId);
+  } catch {
+    res.status(400).json({ error: 'Invalid namespace or runId' });
+    return;
+  }
 
   if (!existsSync(runDir)) {
     res.status(404).json({ error: 'Run not found' });
@@ -5309,6 +5609,7 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
   const runJson = safeReadJson(join(runDir, 'run.json'));
   const graphJson = safeReadJson(join(runDir, 'graph.json'));
   const observabilityEvents = readJsonLines(join(runDir, 'observability.jsonl'));
+  const graphEvents = readJsonLines(join(runDir, 'events.jsonl'));
   const parentUsage: Record<string, number> = {};
   const delegatedRunsUsage: Record<string, number> = {};
 
@@ -5349,7 +5650,7 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
     }
   }
 
-  const delegatedRunsDir = join(graphRunsDir, '..', 'delegated-runs');
+  const delegatedRunsDir = delegationRootPath(workspaceRoot, runId);
   if (existsSync(delegatedRunsDir)) {
     try {
       const delegatedEntries = await fs.readdir(delegatedRunsDir, { withFileTypes: true });
@@ -5439,6 +5740,7 @@ export async function handleGraphRunDetailRequest(req: Request, res: Response): 
     status,
     files: graphFiles,
     records: observabilityEvents,
+    events: graphEvents,
   });
   res.json({
     run: omitTokenFields(runJson),
@@ -6115,6 +6417,7 @@ export function registerDashboardApi(app: Express): void {
   app.get('/api/metrics/insights-summary', handleMetricsInsightsSummaryRequest);
   app.get('/api/metrics/breakdown', handleMetricsBreakdownRequest);
   app.get('/api/metrics/ambient-usage', handleAmbientUsageRequest);
+  app.get('/api/metrics/jev-usage', handleJevUsageRequest);
   app.get('/api/metrics/detail/:planKey', handleMetricsDetailRequest);
   app.get('/api/benchmarks', handleSavingsRequest);
   app.get('/api/metrics/discover/:planKey', handleMetricsDiscoverRequest);

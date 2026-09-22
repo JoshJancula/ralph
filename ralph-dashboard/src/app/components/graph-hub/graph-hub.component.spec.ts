@@ -88,6 +88,7 @@ const completedRunDetail: GraphRunDetail = {
     ],
     edges: [{ from: 'source', to: 'analyze', reasons: ['declared'] }],
   },
+  routingDecisions: [],
 };
 
 // Fixture: an in-progress run with a running node
@@ -135,6 +136,7 @@ const inProgressRunDetail: GraphRunDetail = {
     },
   ],
   graph: completedRunDetail.graph,
+  routingDecisions: [],
 };
 
 function mountGraphHub(fixture: ComponentFixture<GraphHubComponent>): void {
@@ -275,6 +277,62 @@ describe('GraphHubComponent', () => {
     // Changeset diff panel mounts even when manifests are absent
     expect(compiled.querySelector('.changeset-diff-section')).not.toBeNull();
     expect(compiled.textContent).toContain('No changeset for this node');
+
+    // Empty routing panel renders without error
+    expect(compiled.querySelector('[data-testid="routing-decisions-panel"]')).not.toBeNull();
+    expect(compiled.querySelector('[data-testid="routing-decisions-empty"]')?.textContent)
+      .toContain('No routing-decision events');
+  }));
+
+  it('renders routing-decision events from a seeded fixture run', fakeAsync(() => {
+    const fixture = TestBed.createComponent(GraphHubComponent);
+    const component = fixture.componentInstance;
+    mountGraphHub(fixture);
+
+    httpMock.expectOne('/api/graph-runs').flush(runsResponse);
+    tick();
+    fixture.detectChanges();
+
+    const seeded: GraphRunDetail = {
+      ...structuredClone(completedRunDetail),
+      routingDecisions: [
+        {
+          nodeId: 'classify',
+          selectedTarget: 'scope-request',
+          alternatives: ['deep-investigation', 'close'],
+          reason: 'jev: high-confidence',
+          confidence: 0.91,
+          source: 'jev',
+          registryVersion: '2',
+          questionSetId: 'graph.router-confidence',
+          timestamp: '2026-01-01T00:00:04Z',
+          sequence: 4,
+        },
+      ],
+    };
+
+    component.selectRun(runsResponse.runs[1]);
+    fixture.detectChanges();
+    flushDetailAndDiff(
+      httpMock,
+      'my-graph',
+      'run-20260101T000000Z-0-abc123',
+      seeded,
+    );
+    tick();
+    fixture.detectChanges();
+
+    const compiled: HTMLElement = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('[data-testid="routing-decisions-empty"]')).toBeNull();
+    expect(compiled.querySelector('[data-testid="routing-decisions-table"]')).not.toBeNull();
+    const row = compiled.querySelector('[data-testid="routing-decision-classify"]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain('scope-request');
+    expect(row?.textContent).toContain('deep-investigation');
+    expect(row?.textContent).toContain('jev: high-confidence');
+    expect(row?.textContent).toContain('0.91');
+    expect(row?.textContent).toContain('jev');
+    expect(row?.textContent).toContain('2');
   }));
 
   it('renders node table and mermaid block for an in-progress run without error', fakeAsync(() => {

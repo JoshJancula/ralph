@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Public ralph doctor: host/runtime table, soft optional-tool rows, hard jq gate.
-# Auth probes stay hermetic via GRAPH_PREFLIGHT_CLI_* stubs (no live services).
+# Runtime probes stay hermetic via GRAPH_PREFLIGHT_CLI_* stubs (no live services).
 
 source "$BATS_TEST_DIRNAME/../helper/load-lib.bash"
 
@@ -23,39 +23,57 @@ teardown() {
 }
 
 # write_cli_stub <path> <runtime> [mode]
-# Same seam as graph-preflight.bats: list/status/help only; never starts a session.
+# Probes mirror ralph-dashboard runtime-status (status/auth list/models only).
 write_cli_stub() {
   local path="$1" runtime="$2" mode="${3:-ok}"
   cat >"$path" <<EOF
 #!/usr/bin/env bash
+signed_out() {
+  if [[ "$mode" == "no-auth" ]]; then
+    printf '%s\n' "not logged in"
+    return 0
+  fi
+  return 1
+}
 case "\$1" in
   --help|help|-h)
     printf '%s\n' "Usage: $runtime"
     exit 0
     ;;
-  auth)
-    if [[ "\${2:-}" == "status" ]]; then
-      if [[ "$mode" == "no-auth" ]]; then
-        printf '%s\n' "not logged in"
-        exit 1
-      fi
+  status)
+    if [[ "$runtime" == "cursor" ]]; then
+      if signed_out; then exit 1; fi
       printf '%s\n' "Logged in"
       exit 0
     fi
     ;;
+  auth)
+    if [[ "\${2:-}" == "status" ]]; then
+      if signed_out; then exit 1; fi
+      printf '%s\n' "Logged in"
+      exit 0
+    fi
+    if [[ "\${2:-}" == "list" ]]; then
+      if [[ "$runtime" == "opencode" ]]; then
+        if signed_out; then exit 1; fi
+        printf '%s\n' "credentials configured"
+        exit 0
+      fi
+    fi
+    ;;
   login)
     if [[ "\${2:-}" == "status" ]]; then
-      if [[ "$mode" == "no-auth" ]]; then
-        printf '%s\n' "not logged in"
-        exit 1
-      fi
+      if signed_out; then exit 1; fi
       printf '%s\n' "Logged in"
       exit 0
     fi
     ;;
   models|--list-models)
-    printf '%s\n' "stub-model"
-    exit 0
+    if [[ "$runtime" == "antigravity" ]]; then
+      if signed_out; then exit 1; fi
+      printf '%s\n' "stub-model"
+      exit 0
+    fi
     ;;
 esac
 printf '%s\n' "model session must not start during doctor" >&2
@@ -67,10 +85,10 @@ EOF
 install_runtime_stubs() {
   local auth_mode="${1:-ok}"
   write_cli_stub "$BIN_DIR/claude" claude "$auth_mode"
-  write_cli_stub "$BIN_DIR/cursor-agent" cursor ok
+  write_cli_stub "$BIN_DIR/cursor-agent" cursor "$auth_mode"
   write_cli_stub "$BIN_DIR/codex" codex "$auth_mode"
-  write_cli_stub "$BIN_DIR/opencode" opencode ok
-  write_cli_stub "$BIN_DIR/agy" antigravity ok
+  write_cli_stub "$BIN_DIR/opencode" opencode "$auth_mode"
+  write_cli_stub "$BIN_DIR/agy" antigravity "$auth_mode"
   export GRAPH_PREFLIGHT_CLI_CLAUDE="$BIN_DIR/claude"
   export GRAPH_PREFLIGHT_CLI_CURSOR="$BIN_DIR/cursor-agent"
   export GRAPH_PREFLIGHT_CLI_CODEX="$BIN_DIR/codex"
@@ -79,7 +97,7 @@ install_runtime_stubs() {
 }
 
 run_doctor() {
-  env PATH="$PATH" \
+  env NO_COLOR=1 PATH="$PATH" \
     GRAPH_PREFLIGHT_UNAVAILABLE="${GRAPH_PREFLIGHT_UNAVAILABLE-}" \
     GRAPH_PREFLIGHT_CLI_CLAUDE="${GRAPH_PREFLIGHT_CLI_CLAUDE-}" \
     GRAPH_PREFLIGHT_CLI_CURSOR="${GRAPH_PREFLIGHT_CLI_CURSOR-}" \
@@ -91,12 +109,15 @@ run_doctor() {
 
 assert_row() {
   local id="$1" status="$2"
-  printf '%s\n' "$output" | grep -E "^${id}[[:space:]]+${status}[[:space:]]" >/dev/null
+  printf '%s\n' "$output" | grep -E "\\| ${id} +\\| +${status} +\\|" >/dev/null
 }
 
-assert_id_present() {
-  local id="$1"
-  printf '%s\n' "$output" | grep -E "^${id}[[:space:]]" >/dev/null
+assert_runtime_row() {
+  local label="$1" state="$2" line
+  while IFS= read -r line; do
+    [[ "$line" == *"| ${label} "* && "$line" == *"| ${state} "* ]] && return 0
+  done <<<"$output"
+  return 1
 }
 
 # Minimal --version stubs so optional host rows are deterministic pass when absent
@@ -122,7 +143,8 @@ EOF
   run run_doctor
   [ "$status" -eq 0 ]
   [[ "$output" == *"Ralph doctor (read-only)"* ]]
-  [[ "$output" == *"ID"* && "$output" == *"STATUS"* && "$output" == *"EVIDENCE"* && "$output" == *"REPAIR"* ]]
+  [[ "$output" == *"Summary:"* && "$output" == *"Host environment"* && "$output" == *"Runtimes"* ]]
+  [[ "$output" == *"Check"* && "$output" == *"Status"* && "$output" == *"Details"* ]]
 
   assert_row "host:bash" pass
   assert_row "host:jq" pass
@@ -134,15 +156,13 @@ EOF
   assert_row "host:setsid" pass
   assert_row "host:sha256" pass
 
-  assert_row "runtime:claude" pass
-  assert_row "runtime:codex" pass
-  assert_row "runtime:cursor" pass
-  assert_row "runtime:opencode" pass
-  assert_row "runtime:antigravity" pass
-
-  assert_id_present "runtime:cursor:auth"
-  assert_id_present "runtime:opencode:auth"
-  assert_id_present "runtime:antigravity:auth"
+  assert_runtime_row "Claude (Anthropic)" "Connected"
+  assert_runtime_row "Codex (OpenAI)" "Connected"
+  assert_runtime_row "Cursor Agent" "Connected"
+  assert_runtime_row "OpenCode" "Connected"
+  assert_runtime_row "Antigravity (Google)" "Connected"
+  [[ "$output" != *"runtime:cursor:auth"* ]]
+  [[ "$output" != *"authProbe=unsupported"* ]]
   [[ "$output" != *"model session must not start"* ]]
 }
 
@@ -200,10 +220,10 @@ EOF
 
   run run_doctor
   [ "$status" -eq 0 ]
-  assert_row "runtime:claude" fail
-  assert_row "runtime:codex" fail
-  # Repair column (table shows evidence first; summary is not always printed).
-  [[ "$output" == *"log in to claude"* ]]
-  [[ "$output" == *"log in to codex"* ]]
+  assert_runtime_row "Claude (Anthropic)" "Not connected"
+  assert_runtime_row "Codex (OpenAI)" "Not connected"
+  [[ "$output" == *"No active sign-in found"* ]]
+  [[ "$output" == *"sign in with the claude CLI"* ]]
+  [[ "$output" == *"sign in with the codex CLI"* ]]
   [[ "$output" != *"model session must not start"* ]]
 }

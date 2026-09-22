@@ -583,6 +583,18 @@ graph_dispatch_build_argv() {
     env
     -u RALPH_AGENT_TOOL_ACCESS
     -u RALPH_NATIVE_HOOKS
+    # Direct dispatches run an orchestrator child just like scheduler-spawned
+    # nodes. Do not attach that child to a caller's process guardian: the
+    # child owns its own workspace-local run and must initialize its guardian
+    # before launching the stage runner.
+    -u RALPH_PROCESS_RUN_DIR
+    -u RALPH_PROCESS_RUN_ID
+    -u RALPH_PROCESS_RUN_TOKEN
+    -u RALPH_PROCESS_GUARDIAN_PID
+    -u RALPH_PROCESS_RUN_OWNED
+    -u RALPH_PROCESS_RUN_DEPTH
+    -u RALPH_PROCESS_ATTACHED_PLAN
+    -u RALPH_PROCESS_ALLOW_CHILD
     "RALPH_PROJECT_ROOT=${project_root}"
     "RALPH_PLAN_WORKSPACE_ROOT=${state_root}"
     "RALPH_AGENT_WORKSPACE=${agent_workspace}"

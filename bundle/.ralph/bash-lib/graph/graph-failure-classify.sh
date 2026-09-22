@@ -4,9 +4,13 @@
 # Maps a structured runner/supervisor report to one of the supported classes
 # plus retryability, an operator action, and a bounded human summary.
 # Structured fields always win. Bounded text matching runs only when
-# those classifying fields are absent. A successful report is never reclassified
-# as a failure because its text contains words such as permission, denied, or
-# error. Summaries are redacted for credential-looking text and length-capped.
+# those classifying fields are absent. Optional Jev (graph.failure-class)
+# may replace the free-text guess at that text tier when available and
+# above the registry act threshold; below threshold the existing
+# graph_failure_match_text cascade is unchanged. A successful report is
+# never reclassified as a failure because its text contains words such as
+# permission, denied, or error. Summaries are redacted for credential-looking
+# text and length-capped.
 #
 # Supported classifications:
 #   transient-runtime, agent-correctable, operator-permission, plan-contract,
@@ -24,6 +28,8 @@ if [[ -n "${GRAPH_FAILURE_CLASSIFY_LOADED:-}" ]]; then
   return 0
 fi
 GRAPH_FAILURE_CLASSIFY_LOADED=1
+
+_GRAPH_FAILURE_CLASSIFY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Maximum summary length in characters. Tests may override.
 GRAPH_FAILURE_SUMMARY_MAX="${GRAPH_FAILURE_SUMMARY_MAX:-200}"
@@ -272,6 +278,94 @@ graph_failure_match_text() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Optional Jev text-tier classifier (graph.failure-class).
+#
+# Structured tiers stay deterministic. Jev is consulted ONLY when the caller
+# has already decided text fallback (or the unknown terminus after text) is
+# eligible -- never for proved structured evidence. On policy "act" with a
+# known class, Jev supplies the CLASS only; retryable and operatorAction still
+# come from graph_failure_retryable / graph_failure_operator_action.
+# gather / fallback / unavailable / shadow fall through to graph_failure_match_text.
+# ---------------------------------------------------------------------------
+
+# Soft-source Jev client + policy. Silent when files are missing.
+graph_failure_jev_ensure_libs() {
+  if ! declare -F jev_key_resolve >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-key-store.sh
+    source "$_GRAPH_FAILURE_CLASSIFY_DIR/../jev/jev-key-store.sh" 2>/dev/null || true
+  fi
+  if ! declare -F jev_available >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-client.sh
+    source "$_GRAPH_FAILURE_CLASSIFY_DIR/../jev/jev-client.sh" 2>/dev/null || true
+  fi
+  if ! declare -F jev_policy_decide >/dev/null 2>&1; then
+    # shellcheck source=../jev/jev-policy.sh
+    source "$_GRAPH_FAILURE_CLASSIFY_DIR/../jev/jev-policy.sh" 2>/dev/null || true
+  fi
+}
+
+# graph_failure_jev_classify_text <bounded_text>
+# Ask graph.failure-class over the eight GRAPH_FAILURE_KNOWN_CLASSES.
+# Prints a known class and returns 0 only on policy decision "act".
+# Otherwise returns 1 with empty stdout (caller keeps graph_failure_match_text).
+# State must already be capped (GRAPH_FAILURE_TEXT_MAX); this helper does not
+# re-expand truncated logs.
+graph_failure_jev_classify_text() {
+  local text="${1:-}"
+  local question_set_id="graph.failure-class"
+  local questions request response answers decision class ask_ec=0
+
+  [[ -n "$text" ]] || return 1
+
+  graph_failure_jev_ensure_libs
+  declare -F jev_available >/dev/null 2>&1 || return 1
+  declare -F jev_build_request >/dev/null 2>&1 || return 1
+  declare -F jev_post_systemone >/dev/null 2>&1 || return 1
+  declare -F jev_policy_questions >/dev/null 2>&1 || return 1
+  declare -F jev_policy_decide >/dev/null 2>&1 || return 1
+
+  if ! jev_available; then
+    return 1
+  fi
+
+  questions="$(jev_policy_questions "$question_set_id")" || return 1
+  if ! request="$(jev_build_request "$text" "$questions")"; then
+    return 1
+  fi
+  if ! request="$(
+    jq -c --arg id "$question_set_id" '. + {questionSetId: $id}' <<<"$request" 2>/dev/null
+  )"; then
+    return 1
+  fi
+
+  response="$(jev_post_systemone "$request")" || ask_ec=$?
+  if [[ "$ask_ec" -ne 0 || -z "$response" ]]; then
+    return 1
+  fi
+
+  answers="$(jq -c '.answers // empty' <<<"$response" 2>/dev/null)" || answers=""
+  if [[ -z "$answers" || "$answers" == "null" ]]; then
+    return 1
+  fi
+
+  if ! decision="$(jev_policy_decide "$question_set_id" "$answers")"; then
+    return 1
+  fi
+  if [[ "$(jq -r '.decision // empty' <<<"$decision" 2>/dev/null)" != "act" ]]; then
+    return 1
+  fi
+
+  class="$(jq -r '.answers.failure_class.choice // empty' <<<"$response" 2>/dev/null || true)"
+  class="$(graph_failure_normalize_token "$class")"
+  if ! graph_failure_is_known_class "$class"; then
+    return 1
+  fi
+
+  printf '%s\n' "$class"
+  return 0
+}
+
 # graph_failure_reason_token <reason>
 # Returns the structured token from a reason field: the full value when it is
 # already a known token, otherwise the prefix before ":" or "=".
@@ -444,6 +538,11 @@ graph_failure_classify() {
 
   if [[ "$structured_present" -eq 0 ]]; then
     fallback_text="$(graph_failure_bound_text "${summary} ${reason} ${extra_text}")"
+    # Text tier / unknown terminus: optional Jev first, then match_text cascade.
+    if mapped="$(graph_failure_jev_classify_text "$fallback_text")"; then
+      graph_failure_emit "$mapped" "${summary:-$reason}"
+      return 0
+    fi
     if mapped="$(graph_failure_match_text "$fallback_text")"; then
       graph_failure_emit "$mapped" "${summary:-$reason}"
       return 0
@@ -499,7 +598,9 @@ graph_failure_classify() {
 #   6b. runner-owned timeout wording in the transcript (run-plan marker
 #      lines) outranks later permission-shaped diagnostics;
 #   7. bounded text, only when no structured evidence at all was
-#      present (tiers 1-6 all empty);
+#      present (tiers 1-6 all empty). Optional Jev (graph.failure-class)
+#      runs first; below threshold / unavailable falls through to
+#      graph_failure_match_text unchanged;
 #   8. unknown.
 #
 # Output: one compact JSON `failure` object (the G10 shape). Never called
@@ -714,13 +815,24 @@ graph_failure_classify_v2() {
   esac
 
   # Tier 7: bounded text, only when every structured tier above was
-  # empty. Signal/timeout exits (124/130/143) never become operator-permission
-  # from transcript wording alone (G11: exit 143 alone never creates a
-  # permission request). Exit 4 remains eligible for text permission
-  # matching because it is the historical permission exit; runner-owned
-  # timeout wording is already handled above.
+  # empty. Optional Jev supplies a class on policy "act"; otherwise the
+  # existing graph_failure_match_text cascade runs unchanged. Signal/timeout
+  # exits (124/130/143) never become operator-permission from transcript
+  # wording alone (G11: exit 143 alone never creates a permission request).
+  # Exit 4 remains eligible for text permission matching because it is the
+  # historical permission exit; runner-owned timeout wording is already
+  # handled above.
   local fallback_text mapped_fallback
   fallback_text="$(graph_failure_bound_text "${summary} ${reason} ${extra_text}")"
+  if mapped_fallback="$(graph_failure_jev_classify_text "$fallback_text")"; then
+    if [[ "$mapped_fallback" == "operator-permission" ]] && \
+       [[ "$exit_code" == "124" || "$exit_code" == "130" || "$exit_code" == "143" ]]; then
+      :
+    else
+      graph_failure_v2_emit "$mapped_fallback" "" "${caller_source:-run-plan}" "${summary:-$reason}" "$missing_json" "$offending_json" "$verification" "" ""
+      return 0
+    fi
+  fi
   if mapped_fallback="$(graph_failure_match_text "$fallback_text")"; then
     if [[ "$mapped_fallback" == "operator-permission" ]] && \
        [[ "$exit_code" == "124" || "$exit_code" == "130" || "$exit_code" == "143" ]]; then
@@ -732,6 +844,7 @@ graph_failure_classify_v2() {
   fi
 
   # Tier 8: unknown. Reached only when no evidence at any tier applied.
+  # Jev was already offered at tier 7; do not re-ask.
   graph_failure_v2_emit "unknown" "unknown" "${caller_source:-scheduler}" "${summary:-$reason}" "$missing_json" "$offending_json" "$verification" "" ""
   return 0
 }

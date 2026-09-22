@@ -337,6 +337,10 @@ ralph_run_plan_routing_apply_effective_todo_context() {
     ralph_run_plan_log "TODO routing: runtime-only switch to $eff_runtime; baseline model not carried across runtimes"
   fi
   if [[ -n "$eff_session_strategy" ]]; then
+    if [[ "$eff_session_strategy" == "compact" ]] && ! ralph_session_runtime_supports_compact "${eff_runtime:-${RUNTIME:-}}"; then
+      ralph_run_plan_log "TODO routing: rejected compact sessionStrategy for runtime ${eff_runtime:-${RUNTIME:-}} (not supported); falling back to fresh"
+      eff_session_strategy="fresh"
+    fi
     RALPH_PLAN_SESSION_STRATEGY="$eff_session_strategy"
   fi
   if [[ -n "$eff_context_budget" ]]; then

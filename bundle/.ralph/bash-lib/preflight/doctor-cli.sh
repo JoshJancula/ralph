@@ -136,44 +136,45 @@ doctor_cli_append_hash_tool() {
 }
 
 # doctor_cli_append_runtime <findings> <normalized-runtime>
-# CLI resolution plus existing auth-probe behavior (list/status only).
+# One row per runtime; probes match ralph-dashboard /api/runtime-status (status only).
 doctor_cli_append_runtime() {
   local findings="$1" runtime="$2"
-  local cli auth_out probe_rc
+  local cli probe_out probe_rc label
 
+  label="$(graph_preflight_runtime_label "$runtime")"
   cli="$(graph_preflight_resolve_cli "$runtime")"
   if ! graph_preflight_cli_exists "$cli"; then
-    graph_preflight_append "$findings" "runtime:${runtime}" runtime fail \
-      "runtime CLI is not available" \
-      "cli=${cli:-none}" \
+    graph_preflight_append "$findings" "runtime:${runtime}" runtime warn \
+      "${label} is not installed" \
+      "CLI not found on PATH" \
       "install the ${runtime} CLI or set the runtime CLI override" "" "$runtime"
     return 0
   fi
 
-  if graph_preflight_auth_argv "$runtime" >/dev/null; then
-    auth_out=""
-    probe_rc=0
-    auth_out="$(graph_preflight_auth_argv "$runtime" | graph_preflight_run_probe "$cli")" || probe_rc=$?
-    if [[ "$probe_rc" -ne 0 ]] || graph_preflight_auth_indicates_missing "$auth_out"; then
-      graph_preflight_append "$findings" "runtime:${runtime}" runtime fail \
-        "runtime authentication is missing" \
-        "cli=$cli exit=$probe_rc" \
-        "log in to ${runtime} with its documented auth command" "" "$runtime"
-      return 0
-    fi
-    graph_preflight_append "$findings" "runtime:${runtime}" runtime pass \
-      "runtime CLI is present and authenticated" \
-      "cli=$cli" "" "" "$runtime"
+  probe_out=""
+  probe_rc=0
+  probe_out="$(graph_preflight_runtime_status_argv "$runtime" | graph_preflight_run_probe "$cli")" || probe_rc=$?
+
+  if graph_preflight_runtime_signed_out "$runtime" "$probe_out"; then
+    graph_preflight_append "$findings" "runtime:${runtime}" runtime warn \
+      "${label} is not connected" \
+      "No active sign-in found" \
+      "sign in with the ${runtime} CLI" "" "$runtime"
     return 0
   fi
 
-  graph_preflight_append "$findings" "runtime:${runtime}:auth" runtime warn \
-    "runtime has no non-billable auth status command" \
-    "cli=$cli authProbe=unsupported" \
-    "confirm ${runtime} auth before runs" "" "$runtime"
+  if [[ "$probe_rc" -ne 0 ]]; then
+    graph_preflight_append "$findings" "runtime:${runtime}" runtime warn \
+      "${label} connection could not be verified" \
+      "Failed to verify sign-in" \
+      "sign in with the ${runtime} CLI" "" "$runtime"
+    return 0
+  fi
+
   graph_preflight_append "$findings" "runtime:${runtime}" runtime pass \
-    "runtime CLI is present" \
-    "cli=$cli" "" "" "$runtime"
+      "${label} is connected" \
+      "Signed in" \
+      "" "" "$runtime"
 }
 
 doctor_cli_append_dashboard() {
@@ -218,7 +219,7 @@ doctor_cli_build_findings() {
   doctor_cli_append_hash_tool "$findings"
   doctor_cli_append_dashboard "$findings"
 
-  for runtime in cursor claude codex opencode antigravity; do
+  for runtime in claude codex antigravity cursor opencode; do
     doctor_cli_append_runtime "$findings" "$runtime"
   done
 }
@@ -252,7 +253,8 @@ doctor_cli_render() {
       findings: $findings
     }')"
 
-  printf 'Ralph doctor (read-only)\n'
+  ralph_help_style_init
+  ralph_help_title "Ralph doctor (read-only)"
   graph_preflight_format_table "$report"
   return 0
 }

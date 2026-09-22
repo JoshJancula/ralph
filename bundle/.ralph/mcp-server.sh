@@ -2253,7 +2253,7 @@ handle_call_tool() {
     ralph_complete_todo)
       handle_complete_todo "$args_json" "$id_present" "$id_raw"
       ;;
-    ralph_proxy_read|ralph_proxy_grep|ralph_proxy_glob|ralph_proxy_shell|ralph_proxy_shell_start|ralph_proxy_shell_status|ralph_proxy_shell_wait|ralph_proxy_shell_read|ralph_proxy_shell_cancel|ralph_proxy_search|ralph_proxy_repomap|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_result_reduce|ralph_proxy_batch|ralph_proxy_tool_search)
+    ralph_proxy_shell|ralph_proxy_shell_start|ralph_proxy_shell_status|ralph_proxy_shell_wait|ralph_proxy_shell_read|ralph_proxy_shell_cancel|ralph_proxy_result_read|ralph_proxy_result_search|ralph_proxy_result_summary|ralph_proxy_result_reduce|ralph_proxy_batch)
       handle_proxy_owned_tool "$tool_name" "$args_json" "$id_present" "$id_raw"
       ;;
     *)
@@ -2400,12 +2400,11 @@ main() {
   # RALPH_MCP_PROXY_LOG_FILE is not already configured. This enables plan-scoped
   # observability without requiring the caller to set the path explicitly.
   if [[ -n "${RALPH_PLAN_KEY:-}" && -z "${RALPH_MCP_PROXY_LOG_FILE:-}" ]]; then
-    local auto_log_dir state_root
-    state_root="$(ralph_mcp_proxy_state_root)" || state_root=""
-    auto_log_dir="${state_root:+${state_root}/logs/${RALPH_PLAN_KEY}}"
-    [[ -n "$auto_log_dir" ]] || return 1
-    mkdir -p "$auto_log_dir" 2>/dev/null || true
-    export RALPH_MCP_PROXY_LOG_FILE="${auto_log_dir}/mcp.log"
+    local auto_log_file
+    auto_log_file="$(ralph_mcp_proxy_plan_log_path)" || auto_log_file=""
+    [[ -n "$auto_log_file" ]] || return 1
+    mkdir -p "$(dirname "$auto_log_file")" 2>/dev/null || true
+    export RALPH_MCP_PROXY_LOG_FILE="$auto_log_file"
   fi
 
   WORKSPACE_ROOT="${workspace%/}"

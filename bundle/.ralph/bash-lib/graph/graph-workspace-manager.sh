@@ -15,7 +15,10 @@ fi
 GRAPH_WORKSPACE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRAPH_WORKSPACE_RALPH_ROOT="$(cd "$GRAPH_WORKSPACE_SCRIPT_DIR/../.." && pwd)"
 GRAPH_WORKSPACE_HELPER="$GRAPH_WORKSPACE_RALPH_ROOT/python/graph_source_snapshot.py"
+GRAPH_WORKSPACE_INTEGRATE_HELPER="$GRAPH_WORKSPACE_RALPH_ROOT/python/graph_integrate.py"
 GRAPH_WORKSPACE_SCHEMA_VERSION=1
+# Set by _graph_workspace_archive_changeset: reconstruction | fallback
+GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=""
 
 if ! declare -F ralph_atomic_write_json >/dev/null 2>&1; then
   # shellcheck source=../atomic-json.sh
@@ -432,7 +435,7 @@ _graph_workspace_apply_profile() {
 graph_workspace_prepare_node() {
   local run_dir="$1" graph_json="$2" node_id="$3"
   local run_file run_id project_root agent_workspace mode profile node_key metadata
-  local workspace_root path expected source head status existing_mode existing_node existing_path existing_profile
+  local workspace_root path expected source head status existing_mode existing_node existing_path existing_profile candidate_from candidate_key candidate_node candidate_path candidate_safe
   run_dir="$(graph_workspace_real_dir "$run_dir")" || {
     echo "Error: invalid graph workspace run directory" >&2
     return 1
@@ -453,6 +456,7 @@ graph_workspace_prepare_node() {
     return 1
   }
   mode="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.workspaceMode // "shared"' "$graph_json")"
+  candidate_from="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.candidateFrom // empty' "$graph_json")"
   profile="$(jq -r --arg id "$node_id" '.nodes[] | select(.id == $id) | .stage.setupProfile // empty' "$graph_json")"
   case "$mode" in
     shared|snapshot|worktree) ;;
@@ -463,7 +467,21 @@ graph_workspace_prepare_node() {
   _graph_workspace_validate_owned_roots "$run_dir" 1 || return 1
   metadata="$(_graph_workspace_metadata_path "$run_dir" "$node_key")"
   expected="$(_graph_workspace_expected_path "$run_dir" "$node_key")"
-  if [[ "$mode" == "shared" ]]; then
+  if [[ -n "$candidate_from" ]]; then
+    candidate_key="$(graph_workspace_node_key "$candidate_from")" || return 1
+    candidate_safe="$(printf '%s' "$candidate_from" | sed 's/[^A-Za-z0-9._-]/_/g')"
+    candidate_node="$run_dir/nodes/$candidate_safe.json"
+    [[ -f "$candidate_node" && "$(jq -r '.status // empty' "$candidate_node")" == "succeeded" ]] || {
+      echo "Error: candidate-missing: $node_id requires succeeded candidate $candidate_from" >&2
+      return 1
+    }
+    candidate_path="$(jq -r '.workspacePath // .attempts[-1].workspacePath // empty' "$candidate_node")"
+    candidate_path="$(graph_workspace_real_dir "$candidate_path")" || {
+      echo "Error: candidate-missing: workspace for $candidate_from is missing or unsafe" >&2
+      return 1
+    }
+  fi
+  if [[ "$mode" == "shared" && -z "$candidate_from" ]]; then
     path="$(graph_workspace_real_dir "$agent_workspace")" || {
       echo "Error: shared graph agent workspace is missing" >&2
       return 1
@@ -506,7 +524,7 @@ graph_workspace_prepare_node() {
         "$(jq -r '.includesApplied' "$metadata")" "$(jq -r '.setupCompleted' "$metadata")" || return 1
       ;;
     snapshot)
-      source="$(jq -r '.sourceBase.sourcePath // empty' "$run_file")"
+      source="${candidate_path:-$(jq -r '.sourceBase.sourcePath // empty' "$run_file")}"
       source="$(graph_workspace_real_dir "$source")" || {
         echo "Error: recorded frozen snapshot source is missing or unsafe" >&2
         return 1
@@ -528,34 +546,271 @@ graph_workspace_prepare_node() {
   printf '%s\n' "$path"
 }
 
+_graph_workspace_filesystem_identity() {
+  local workspace="$1" state_root="$2" exclude_file="$3"
+  python3 "$GRAPH_WORKSPACE_HELPER" identity \
+    --source "$workspace" --state-root "$state_root" --exclude-file "$exclude_file" |
+    jq -r '.filesystemIdentity'
+}
+
+# _graph_workspace_retention_allows_release <run-dir>
+# True when ralph_retention_eligibility reports no active or resumable owner.
+_graph_workspace_retention_allows_release() {
+  local run_dir="$1" run_file state_root namespace reason
+  if ! declare -F ralph_retention_eligibility >/dev/null 2>&1; then
+    # shellcheck source=../retention.sh
+    source "$GRAPH_WORKSPACE_SCRIPT_DIR/../retention.sh"
+  fi
+  run_file="$run_dir/run.json"
+  state_root="$(jq -r '.roots.stateRoot // empty' "$run_file")"
+  [[ -n "$state_root" && -d "$state_root" ]] || return 1
+  namespace="$(jq -r '.namespace // empty' "$run_file")"
+  [[ -n "$namespace" ]] || namespace="$(basename "$(dirname "$run_dir")")"
+  reason="$(ralph_retention_eligibility "$state_root" graph-run "$run_dir" "$namespace" 2>/dev/null)" || return 1
+  [[ "$reason" == "eligible" ]]
+}
+
+# _graph_workspace_prove_reconstruction <run-dir> <node-key> <workspace-path> <node-id>
+# Reconstructs base + changeset into a temp directory and compares filesystem
+# identity to the live workspace. Prints a stable failure reason on stderr-free
+# stdout when proof fails (caller captures it); returns 0 only on match.
+_graph_workspace_prove_reconstruction() {
+  local run_dir="$1" node_key="$2" path="$3" node_id="$4"
+  local run_file manifest base_identity source_path state_root
+  local exclude_file tmp integrate_out integrate_conflict
+  local expected reconstructed manifest_base
+  run_file="$run_dir/run.json"
+  manifest="$run_dir/changesets/nodes/$node_key.json"
+  [[ -f "$manifest" && ! -L "$manifest" ]] || {
+    printf 'missing-changeset-manifest\n'
+    return 1
+  }
+  base_identity="$(jq -r '.sourceBase.filesystemIdentity // empty' "$run_file")"
+  source_path="$(jq -r '.sourceBase.sourcePath // empty' "$run_file")"
+  state_root="$(jq -r '.roots.stateRoot // empty' "$run_file")"
+  [[ -n "$base_identity" ]] || {
+    printf 'missing-run-base-identity\n'
+    return 1
+  }
+  [[ -n "$source_path" && -d "$source_path" && ! -L "$source_path" ]] || {
+    printf 'missing-run-base-source\n'
+    return 1
+  }
+  [[ -n "$state_root" && -d "$state_root" ]] || {
+    printf 'missing-state-root\n'
+    return 1
+  }
+  manifest_base="$(jq -r '.baseIdentity // empty' "$manifest")"
+  [[ "$manifest_base" == "$base_identity" ]] || {
+    printf 'changeset-base-mismatch\n'
+    return 1
+  }
+  [[ -f "$GRAPH_WORKSPACE_INTEGRATE_HELPER" ]] || {
+    printf 'missing-integrate-helper\n'
+    return 1
+  }
+  exclude_file="$(mktemp "${TMPDIR:-/tmp}/ralph-compaction-excludes.XXXXXX")" || {
+    printf 'exclude-temp-failed\n'
+    return 1
+  }
+  jq -r '.sourceBase.secretExcludes[]? // empty' "$run_file" >"$exclude_file" || {
+    rm -f "$exclude_file"
+    printf 'exclude-write-failed\n'
+    return 1
+  }
+  expected="$(_graph_workspace_filesystem_identity "$path" "$state_root" "$exclude_file")" || {
+    rm -f "$exclude_file"
+    printf 'workspace-identity-failed\n'
+    return 1
+  }
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ralph-compaction-recon.XXXXXX")" || {
+    rm -f "$exclude_file"
+    printf 'recon-temp-failed\n'
+    return 1
+  }
+  integrate_out="$(mktemp "${TMPDIR:-/tmp}/ralph-compaction-integrate.XXXXXX")" || {
+    rm -f "$exclude_file"
+    rm -rf "$tmp"
+    printf 'integrate-temp-failed\n'
+    return 1
+  }
+  integrate_conflict="$(mktemp "${TMPDIR:-/tmp}/ralph-compaction-conflict.XXXXXX")" || {
+    rm -f "$exclude_file" "$integrate_out"
+    rm -rf "$tmp"
+    printf 'conflict-temp-failed\n'
+    return 1
+  }
+  # Frozen base/ stays immutable for the dashboard diff viewer; reconstruct into
+  # a disposable copy only.
+  if ! cp -a "$source_path"/. "$tmp"/; then
+    rm -f "$exclude_file" "$integrate_out" "$integrate_conflict"
+    chmod -R u+w "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+    printf 'base-copy-failed\n'
+    return 1
+  fi
+  chmod -R u+w "$tmp" 2>/dev/null || true
+  if ! python3 "$GRAPH_WORKSPACE_INTEGRATE_HELPER" \
+    --workspace "$tmp" \
+    --output "$integrate_out" \
+    --conflict-output "$integrate_conflict" \
+    --node-id "$node_id" \
+    --base-identity "$base_identity" \
+    --manifest "$manifest" >/dev/null; then
+    rm -f "$exclude_file" "$integrate_out" "$integrate_conflict"
+    chmod -R u+w "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+    printf 'integrate-apply-failed\n'
+    return 1
+  fi
+  reconstructed="$(_graph_workspace_filesystem_identity "$tmp" "$state_root" "$exclude_file")" || {
+    rm -f "$exclude_file" "$integrate_out" "$integrate_conflict"
+    chmod -R u+w "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+    printf 'reconstructed-identity-failed\n'
+    return 1
+  }
+  rm -f "$exclude_file" "$integrate_out" "$integrate_conflict"
+  chmod -R u+w "$tmp" 2>/dev/null || true
+  rm -rf "$tmp"
+  if [[ "$reconstructed" != "$expected" ]]; then
+    printf 'identity-mismatch\n'
+    return 1
+  fi
+  printf '%s\n' "$expected"
+  return 0
+}
+
+_graph_workspace_write_reconstruction_bundle() {
+  local run_dir="$1" node_key="$2" node_id="$3" path="$4" workspace_identity="$5"
+  local changeset_root destination run_file manifest base_identity source_path
+  changeset_root="$run_dir/workspaces/changesets"
+  destination="$changeset_root/$node_key.reconstruction.json"
+  run_file="$run_dir/run.json"
+  manifest="$run_dir/changesets/nodes/$node_key.json"
+  base_identity="$(jq -r '.sourceBase.filesystemIdentity // empty' "$run_file")"
+  source_path="$(jq -r '.sourceBase.sourcePath // empty' "$run_file")"
+  [[ ! -L "$destination" ]] || return 1
+  ralph_atomic_write_json "$destination" \
+    '{
+      schemaVersion: 1,
+      kind: "graph-workspace-reconstruction",
+      nodeId: $nodeId,
+      nodeKey: $nodeKey,
+      workspacePath: $workspace,
+      baseIdentity: $baseIdentity,
+      baseSourcePath: $baseSource,
+      changesetManifest: $manifest,
+      changesetBlobsDir: $blobs,
+      workspaceIdentity: $identity,
+      reconstructionVerified: true,
+      archivedAt: $now
+    }' \
+    --arg nodeId "$node_id" \
+    --arg nodeKey "$node_key" \
+    --arg workspace "$path" \
+    --arg baseIdentity "$base_identity" \
+    --arg baseSource "$source_path" \
+    --arg manifest "$manifest" \
+    --arg blobs "$run_dir/changesets/nodes/blobs" \
+    --arg identity "$workspace_identity" \
+    --arg now "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || return 1
+  # Drop any prior full-tree archives once reconstruction is proved.
+  rm -f "$changeset_root/$node_key.tar" "$changeset_root/$node_key.tar.gz" \
+    "$changeset_root/$node_key.fallback.json"
+}
+
+_graph_workspace_write_fallback_archive() {
+  local run_dir="$1" node_key="$2" path="$3" reason="$4"
+  local changeset_root destination temporary reason_file
+  changeset_root="$run_dir/workspaces/changesets"
+  destination="$changeset_root/$node_key.tar.gz"
+  temporary="${destination}.tmp.$$"
+  reason_file="$changeset_root/$node_key.fallback.json"
+  [[ ! -L "$destination" && ! -L "$reason_file" ]] || return 1
+  rm -f "$temporary"
+  tar -czf "$temporary" --exclude='./.git' -C "$path" . || {
+    rm -f "$temporary"
+    return 1
+  }
+  ralph_atomic_write_json "$reason_file" \
+    '{
+      schemaVersion: 1,
+      kind: "graph-workspace-archive-fallback",
+      nodeKey: $nodeKey,
+      archive: $archive,
+      reason: $reason,
+      archivedAt: $now
+    }' \
+    --arg nodeKey "$node_key" \
+    --arg archive "$destination" \
+    --arg reason "$reason" \
+    --arg now "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || {
+      rm -f "$temporary"
+      return 1
+    }
+  mv "$temporary" "$destination" || {
+    rm -f "$temporary"
+    return 1
+  }
+  rm -f "$changeset_root/$node_key.tar" "$changeset_root/$node_key.reconstruction.json"
+}
+
+# _graph_workspace_archive_changeset <run-dir> <node-key> <path> <node-id>
+# Prefer a reconstruction bundle (changeset + run-base identity) when applying
+# the frozen base plus the captured changeset reproduces the workspace identity.
+# Otherwise write a gzip-compressed tar and record the fallback reason.
+# Sets GRAPH_WORKSPACE_LAST_ARCHIVE_MODE to reconstruction|fallback.
+# Does not remove the workspace; the caller decides release.
 _graph_workspace_archive_changeset() {
-  local run_dir="$1" node_key="$2" path="$3" changeset_root destination temporary
+  local run_dir="$1" node_key="$2" path="$3" node_id="${4:-}"
+  local changeset_root reconstruction fallback proof_identity reason
+  GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=""
   changeset_root="$run_dir/workspaces/changesets"
   [[ ! -L "$changeset_root" ]] || return 1
   mkdir -p "$changeset_root" || return 1
   [[ "$(cd "$changeset_root" 2>/dev/null && pwd -P)" == "$changeset_root" ]] || return 1
-  destination="$changeset_root/$node_key.tar"
-  temporary="${destination}.tmp.$$"
-  [[ ! -L "$destination" ]] || return 1
+  reconstruction="$changeset_root/$node_key.reconstruction.json"
+  fallback="$changeset_root/$node_key.tar.gz"
   if [[ ! -e "$path" ]]; then
-    [[ -f "$destination" && ! -L "$destination" ]]
-    return
+    if [[ -f "$reconstruction" && ! -L "$reconstruction" ]]; then
+      GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=reconstruction
+      return 0
+    fi
+    if [[ -f "$fallback" && ! -L "$fallback" ]]; then
+      GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=fallback
+      return 0
+    fi
+    # Legacy uncompressed archives remain recoverable.
+    if [[ -f "$changeset_root/$node_key.tar" && ! -L "$changeset_root/$node_key.tar" ]]; then
+      GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=fallback
+      return 0
+    fi
+    return 1
   fi
   [[ -d "$path" && ! -L "$path" ]] || return 1
-  rm -f "$temporary"
-  tar -cf "$temporary" --exclude='./.git' -C "$path" . || {
-    rm -f "$temporary"
-    return 1
-  }
-  mv "$temporary" "$destination"
+  reason="missing-node-id"
+  if [[ -n "$node_id" ]]; then
+    if proof_identity="$(_graph_workspace_prove_reconstruction "$run_dir" "$node_key" "$path" "$node_id")"; then
+      _graph_workspace_write_reconstruction_bundle \
+        "$run_dir" "$node_key" "$node_id" "$path" "$proof_identity" || return 1
+      GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=reconstruction
+      return 0
+    fi
+    reason="${proof_identity:-reconstruction-unproved}"
+  fi
+  _graph_workspace_write_fallback_archive "$run_dir" "$node_key" "$path" "$reason" || return 1
+  GRAPH_WORKSPACE_LAST_ARCHIVE_MODE=fallback
 }
 
 # graph_workspace_cleanup_run <run-dir>
 # Cleanup is opt-in through retention=prune and only runs for terminal runs.
-# Every isolated workspace is archived before its exact owned path is removed.
+# Isolated workspaces are compacted (reconstruction bundle or gzip tar) before
+# their exact owned path is removed. The run base/ directory is never compacted.
+# Reconstruction-backed release also requires ralph_retention_eligibility.
 graph_workspace_cleanup_run() {
   local run_dir="$1" run_file status retention run_id project_root metadata_dir list_file namespace_dir latest_dir
-  local metadata node_id mode path owner node_key head
+  local metadata node_id mode path owner node_key head release=0
   run_dir="$(graph_workspace_real_dir "$run_dir")" || return 1
   run_file="$run_dir/run.json"
   [[ -f "$run_file" ]] || return 1
@@ -613,11 +868,37 @@ PYLIST
       echo "Error: refusing cleanup of symlink workspace: $path" >&2
       return 1
     }
-    _graph_workspace_archive_changeset "$run_dir" "$node_key" "$path" || {
+    _graph_workspace_archive_changeset "$run_dir" "$node_key" "$path" "$node_id" || {
       rm -f "$list_file"
       echo "Error: failed to record recoverable changeset for $node_id" >&2
       return 1
     }
+    release=0
+    case "$GRAPH_WORKSPACE_LAST_ARCHIVE_MODE" in
+      fallback)
+        release=1
+        ;;
+      reconstruction)
+        if _graph_workspace_retention_allows_release "$run_dir"; then
+          release=1
+        fi
+        ;;
+      *)
+        rm -f "$list_file"
+        echo "Error: compaction produced no recoverable archive mode for $node_id" >&2
+        return 1
+        ;;
+    esac
+    if [[ "$release" -ne 1 ]]; then
+      # Reconstruction proved, but an active/resumable owner still owns the
+      # run: keep the materialized workspace for inspection/resume.
+      continue
+    fi
+    if [[ "${RALPH_GRAPH_COMPACTION_TEST_INTERRUPT:-}" == "1" ]]; then
+      rm -f "$list_file"
+      echo "Error: simulated compaction interrupt before workspace release" >&2
+      return 1
+    fi
     if [[ "$mode" == "worktree" ]]; then
       head="$(jq -r '.sourceBase.git.head // empty' "$run_file")"
       if _graph_workspace_worktree_registered "$project_root" "$path"; then

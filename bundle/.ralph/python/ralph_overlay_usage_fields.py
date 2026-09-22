@@ -8,7 +8,7 @@ separate from transcript-level tool call counters. Key distinctions:
    (hook-shaped tool calls recorded in CLI transcript, distinct from overlay-observed activity)
 3) Overlay-observed hook activity: hook_rewrites, hook_compactions, hook_original_bytes,
    hook_compacted_bytes, native_hook_events (from overlay journals: bash-rewrite.jsonl,
-   bash-compact.jsonl, proxy-shell-compact.jsonl, result-windowing.jsonl)
+   bash-compact.jsonl, proxy-shell-compact.jsonl, jev-compact.jsonl, result-windowing.jsonl)
 4) Capability flags: native_hooks_effective (proven capability on tested build),
    native_hooks_used_on_run (true when hook telemetry observed events this run)
 """
@@ -276,6 +276,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
         "hook_compaction": empty_savings_bucket(include_hidden=True),
         "proxy_shell_compaction": empty_savings_bucket(include_hidden=True),
         "result_windowing": empty_savings_bucket(include_hidden=True),
+        "jev_compaction": empty_savings_bucket(include_hidden=True),
     }
     if not state_dir:
         return savings_by_path
@@ -332,6 +333,7 @@ def aggregate_byte_savings_by_path(state_dir: str, plan_key: str = "") -> dict[s
 
     _accumulate_compact(os.path.join(state_dir, "bash-compact.jsonl"), "hook_compaction")
     _accumulate_compact(os.path.join(state_dir, "proxy-shell-compact.jsonl"), "proxy_shell_compaction")
+    _accumulate_compact(os.path.join(state_dir, "jev-compact.jsonl"), "jev_compaction")
 
     rewrite_path = os.path.join(state_dir, "bash-rewrite.jsonl")
     if os.path.isfile(rewrite_path):

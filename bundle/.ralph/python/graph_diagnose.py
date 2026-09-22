@@ -3,10 +3,12 @@
 
 Two-stage diagnosis: deterministic path ownership first (matching a failing
 step's implicated files against each repair lane's declared writeScopes),
-falling back to a delegation-disabled router/diagnostic agent only when a
-finding's files match more than one lane's write scope. Never uses the
-carried "confidence" field to decide ownership -- it is diagnostic metadata
-only.
+optionally asking Jev (graph.lane-ownership) when a finding's files match more
+than one lane, then falling back to a delegation-disabled router/diagnostic
+agent only when ownership is still ambiguous. Never uses the carried
+"confidence" field to decide ownership -- it is diagnostic metadata only.
+Ladder confidence values are calibrated from the graph.lane-ownership
+registry escalateThreshold so there is one place to tune them.
 
 Reads gate-result.json (schemaVersion 1, produced by graph-gate.sh) and each
 step's bounded log file, never the unbounded raw step output: log reads are
@@ -22,7 +24,7 @@ import json
 import re
 import sys
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from graph_changeset import CaptureError, atomic_write, in_scope, validate_scopes
 from graph_source_snapshot import canonical_json
@@ -39,6 +41,11 @@ SUMMARY_MAX_CHARS = 500
 # Cap on how many candidate file paths a single finding can carry, so a log
 # crafted to list thousands of paths cannot blow up the artifact.
 MAX_FILES_PER_FINDING = 20
+
+# Optional Jev question set for the ambiguous-ownership tier only.
+_JEV_QUESTION_SET_ID = "graph.lane-ownership"
+# Fallback when the registry is missing; matches current escalateThreshold.
+_DEFAULT_ESCALATE_THRESHOLD = 0.6
 
 # Conservative relative-path extraction: no leading '/', no '..' traversal,
 # no whitespace, must contain a path separator and end in a plausible
@@ -127,6 +134,125 @@ def _candidate_lanes(files: Sequence[str], lane_scopes: Dict[str, List[str]]) ->
     return sorted(candidates)
 
 
+def _escalate_threshold() -> float:
+    """Read graph.lane-ownership escalateThreshold; fall back to the historical default."""
+    try:
+        import jev_client as jev
+    except ImportError:
+        return _DEFAULT_ESCALATE_THRESHOLD
+    try:
+        value, code = jev.policy_threshold(_JEV_QUESTION_SET_ID, "escalate")
+    except Exception:
+        return _DEFAULT_ESCALATE_THRESHOLD
+    if code != 0 or value is None:
+        return _DEFAULT_ESCALATE_THRESHOLD
+    return float(value)
+
+
+def _ladder_confidence(kind: str) -> float:
+    """Diagnostic confidence for the deterministic ownership ladder.
+
+    Derived from registry escalateThreshold so calibration lives in one place.
+    With the current placeholder escalateThreshold (0.6) this preserves the
+    historical values: no-files 0.0, deterministic 0.6, zero-candidates 0.2,
+    ambiguous 0.4.
+    """
+    esc = _escalate_threshold()
+    if kind == "no-files":
+        return 0.0
+    if kind == "deterministic":
+        return esc
+    if kind == "zero-candidates":
+        # Round so escalateThreshold 0.6 yields the historical exact 0.2
+        # (raw 0.6/3 is a repeating float).
+        return round(esc / 3.0, 1)
+    if kind == "ambiguous":
+        # Same rounding for historical exact 0.4 when escalateThreshold is 0.6.
+        return round(esc * 2.0 / 3.0, 1)
+    return 0.0
+
+
+def _jev_lane_ownership_questions(
+    base_questions: Dict[str, Any], candidates: Sequence[str]
+) -> Dict[str, Any]:
+    """Clone registry questions with owner.criteria filled from candidate lane IDs."""
+    owner = dict(base_questions.get("owner") or {})
+    owner["criteria"] = {
+        lane_id: f"Candidate repair lane: {lane_id}" for lane_id in candidates
+    }
+    return {"owner": owner}
+
+
+def _jev_ownership_state(
+    command: str, files: Sequence[str], failure_summary: str, candidates: Sequence[str]
+) -> str:
+    """Bounded state text for graph.lane-ownership (never re-expands raw logs)."""
+    parts = [
+        f"command: {command}",
+        f"files: {', '.join(files)}",
+        f"candidates: {', '.join(candidates)}",
+        f"summary: {failure_summary}",
+    ]
+    return _summarize("\n".join(parts))
+
+
+def _try_jev_assign_owner(
+    candidates: Sequence[str], state_text: str
+) -> Optional[Tuple[str, float]]:
+    """Ask graph.lane-ownership; return (owner, confidence) only on confident in-scope act.
+
+    Unavailable / gather / fallback / shadow / out-of-candidate answers return None
+    so the finding stays ambiguous for the existing router-agent path.
+    """
+    if len(candidates) < 2:
+        return None
+    try:
+        import jev_client as jev
+    except ImportError:
+        return None
+    try:
+        if not jev.available():
+            return None
+        base_questions, q_code = jev.policy_questions(_JEV_QUESTION_SET_ID)
+        if q_code != 0 or not isinstance(base_questions, dict):
+            return None
+        questions = _jev_lane_ownership_questions(base_questions, candidates)
+        request, b_code = jev.build_request(state_text, questions)
+        if b_code != 0 or request is None:
+            return None
+        request = dict(request)
+        request["questionSetId"] = _JEV_QUESTION_SET_ID
+        response, p_code = jev.post_systemone(request)
+        if p_code != 0 or not isinstance(response, dict):
+            return None
+        answers = response.get("answers")
+        if not isinstance(answers, dict):
+            return None
+        decision, d_code = jev.policy_decide(_JEV_QUESTION_SET_ID, answers)
+        if d_code != 0 or not isinstance(decision, dict):
+            return None
+        if decision.get("decision") != "act":
+            return None
+        owner_ans = answers.get("owner")
+        chosen = ""
+        if isinstance(owner_ans, dict):
+            chosen = str(owner_ans.get("choice") or "")
+        if not chosen:
+            chosen = str(decision.get("chosen") or "")
+        # Defense in depth: registry criteria for this set are empty (filled at
+        # call time), so policy_decide cannot enforce option-not-offered itself.
+        if chosen not in candidates:
+            return None
+        conf_raw = decision.get("confidence")
+        try:
+            confidence = float(conf_raw) if conf_raw is not None else _ladder_confidence("ambiguous")
+        except (TypeError, ValueError):
+            confidence = _ladder_confidence("ambiguous")
+        return chosen, confidence
+    except Exception:
+        return None
+
+
 def analyze(
     gate_result: dict,
     lanes: Sequence[dict],
@@ -148,7 +274,7 @@ def analyze(
                 "failureSummary": _summarize(str(gate_result.get("errorReason", "gate infrastructure error"))),
                 "files": [],
                 "changesets": [],
-                "confidence": 0.0,
+                "confidence": _ladder_confidence("no-files"),
                 "owner": None,
                 "ownerReason": "infrastructure-error",
             }
@@ -166,24 +292,33 @@ def analyze(
             bounded_log = _read_bounded_log(log_path)
             files = _extract_files(bounded_log)
             candidates = _candidate_lanes(files, lane_scopes)
+            failure_summary = _summarize(bounded_log)
+            command = str(step.get("command", ""))
 
             if not files:
                 owner, owner_reason = None, "no-owner"
-                confidence = 0.0
+                confidence = _ladder_confidence("no-files")
             elif len(candidates) == 1:
                 owner, owner_reason = candidates[0], "deterministic-path-match"
-                confidence = 0.6
+                confidence = _ladder_confidence("deterministic")
             elif len(candidates) == 0:
                 owner, owner_reason = None, "no-owner"
-                confidence = 0.2
+                confidence = _ladder_confidence("zero-candidates")
             else:
+                # Ambiguous ladder tier: optional Jev choice over candidate lanes.
+                # Confident in-scope act assigns the owner and skips router dispatch.
                 owner, owner_reason = None, "ambiguous"
-                confidence = 0.4
+                confidence = _ladder_confidence("ambiguous")
+                state_text = _jev_ownership_state(command, files, failure_summary, candidates)
+                jev_hit = _try_jev_assign_owner(candidates, state_text)
+                if jev_hit is not None:
+                    owner, confidence = jev_hit
+                    owner_reason = "jev"
 
             findings.append(
                 {
-                    "command": str(step.get("command", "")),
-                    "failureSummary": _summarize(bounded_log),
+                    "command": command,
+                    "failureSummary": failure_summary,
                     "files": files,
                     "changesets": _changesets_for_files(files, changesets),
                     "confidence": confidence,

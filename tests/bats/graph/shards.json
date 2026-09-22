@@ -18,6 +18,7 @@
         "tests/bats/graph/graph-checkpoint.bats",
         "tests/bats/graph/graph-edges.bats",
         "tests/bats/graph/graph-router.bats",
+        "tests/bats/graph/graph-jev-surfaces.bats",
         "tests/bats/graph/graph-conditional-edges.bats",
         "tests/bats/graph/graph-consensus.bats",
         "tests/bats/graph/graph-repair-epochs.bats",
@@ -38,7 +39,8 @@
         "tests/bats/graph/graph-authoring-roundtrip.bats",
         "tests/bats/graph/graph-schema-valid-fixtures.bats",
         "tests/bats/graph/graph-agent-review-outcome.bats",
-        "tests/bats/graph/graph-dispatch-rework-feedback.bats"
+        "tests/bats/graph/graph-dispatch-rework-feedback.bats",
+        "tests/bats/graph/graph-exec-image.bats"
       ]
     },
     {
@@ -90,7 +92,9 @@
         "tests/bats/graph/graph-dispatch-tooling-profile.bats",
         "tests/bats/graph/graph-retention.bats",
         "tests/bats/graph/graph-runtime-capabilities.bats",
-        "tests/bats/graph/graph-run-logs.bats"
+        "tests/bats/graph/graph-run-logs.bats",
+        "tests/bats/graph/graph-candidate-binding.bats",
+        "tests/bats/graph/graph-storage-compaction.bats"
       ]
     },
     {

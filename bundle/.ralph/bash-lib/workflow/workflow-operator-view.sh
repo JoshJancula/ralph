@@ -44,6 +44,188 @@ if ! declare -F workflow_action_request_display_state >/dev/null 2>&1; then
   source "$_WORKFLOW_OPVIEW_SCRIPT_DIR/workflow-actions.sh"
 fi
 
+# ---------------------------------------------------------------------------
+# Logical-stage projection (compiler provenance: logicalStage + attempt)
+# ---------------------------------------------------------------------------
+
+WORKFLOW_OPERATOR_COMPILED_BEFORE_PROVENANCE_NOTE="compiled before logical stage provenance"
+
+# workflow_operator_graph_has_logical_provenance <graph-json>
+# Returns 0 when every node has string logicalStage and numeric attempt.
+workflow_operator_graph_has_logical_provenance() {
+  local graph="${1:-}"
+  [[ -n "$graph" ]] || return 1
+  printf '%s' "$graph" | jq -e '
+    (.nodes | type) == "array"
+    and (.nodes | length) > 0
+    and (all(.nodes[];
+      (.logicalStage | type) == "string"
+      and (.attempt | type) == "number"))
+  ' >/dev/null 2>&1
+}
+
+# workflow_operator_attach_compiled_graph <status-json> <graph-json-or-empty>
+# Adds compiledGraph (+ optional note) for status --expanded. Empty/missing
+# graph yields compiledGraph:null with the legacy-provenance note.
+workflow_operator_attach_compiled_graph() {
+  local status="${1:-}" graph="${2:-}"
+  local note="$WORKFLOW_OPERATOR_COMPILED_BEFORE_PROVENANCE_NOTE"
+  [[ -n "$status" ]] || return 1
+  if [[ -z "$graph" ]] || ! printf '%s' "$graph" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    printf '%s' "$status" | jq -c --arg note "$note" \
+      '. + {compiledGraph: null, compiledGraphNote: $note}'
+    return 0
+  fi
+  if workflow_operator_graph_has_logical_provenance "$graph"; then
+    printf '%s' "$status" | jq -c --argjson graph "$graph" '. + {compiledGraph: $graph}'
+  else
+    printf '%s' "$status" | jq -c --argjson graph "$graph" --arg note "$note" \
+      '. + {compiledGraph: $graph, compiledGraphNote: $note}'
+  fi
+}
+
+# workflow_operator_project_logical_stages <graph-json> <ledger-json>
+# Pure projection from frozen graph + node ledger (object keyed by nodeId, or
+# {nodes:[{nodeId,status}]} / array of ledger rows). Does not start a run.
+#
+# Prints:
+#   {
+#     mode: "logical"|"expanded",
+#     note: null|string,
+#     stages: [{id, state, attempts:[{nodeId,attempt,state}], ...}],
+#     completion: {completed, total, percent}
+#   }
+#
+# With provenance: group by logicalStage; rework clones become attempts.
+# Unreached clones (queued attempt>0) are omitted from completion totals.
+# Terminally skipped conditional branches surface as state "not selected".
+# Without provenance: expand every node and set the legacy note (Decision 10).
+workflow_operator_project_logical_stages() {
+  local graph="${1:-}" ledger="${2:-}"
+  local note="$WORKFLOW_OPERATOR_COMPILED_BEFORE_PROVENANCE_NOTE"
+  [[ -n "$graph" && -n "$ledger" ]] || {
+    echo "Error: workflow_operator_project_logical_stages requires graph-json and ledger-json" >&2
+    return 1
+  }
+  command -v jq >/dev/null 2>&1 || return 1
+
+  if ! workflow_operator_graph_has_logical_provenance "$graph"; then
+    printf '%s' "$graph" | jq -c --argjson ledger "$ledger" --arg note "$note" '
+      def ledger_map:
+        if ($ledger | type) == "object" and ($ledger.nodes | type) == "array" then
+          reduce $ledger.nodes[] as $n ({}; .[$n.nodeId // $n.id // ""] = $n)
+        elif ($ledger | type) == "array" then
+          reduce $ledger[] as $n ({}; .[$n.nodeId // $n.id // ""] = $n)
+        else $ledger end;
+      def status_of($id; $map):
+        (($map[$id] // {}) | .status // .state // "queued");
+      (ledger_map) as $map
+      | {
+          mode: "expanded",
+          note: $note,
+          stages: [(.nodes // [])[] | {
+            id: .id,
+            state: status_of(.id; $map),
+            attempts: [{
+              nodeId: .id,
+              attempt: (if (.attempt | type) == "number" then .attempt else 0 end),
+              state: status_of(.id; $map)
+            }]
+          }],
+          completion: (
+            [(.nodes // [])[] | status_of(.id; $map)] as $states
+            | ($states | map(select(. == "succeeded")) | length) as $done
+            | ($states | length) as $total
+            | {
+                completed: $done,
+                total: $total,
+                percent: (if $total == 0 then 0 else (($done * 100) / $total | floor) end)
+              }
+          )
+        }
+    '
+    return 0
+  fi
+
+  printf '%s' "$graph" | jq -c --argjson ledger "$ledger" '
+    def ledger_map:
+      if ($ledger | type) == "object" and ($ledger.nodes | type) == "array" then
+        reduce $ledger.nodes[] as $n ({}; .[$n.nodeId // $n.id // ""] = $n)
+      elif ($ledger | type) == "array" then
+        reduce $ledger[] as $n ({}; .[$n.nodeId // $n.id // ""] = $n)
+      else $ledger end;
+    def status_of($id; $map):
+      (($map[$id] // {}) | .status // .state // "queued");
+    def public_state($node; $st; $edges):
+      if $st == "skipped" and (
+           ($node.derivedFrom // "") == "rework"
+           or any($edges[]?;
+             (.to == $node.id)
+             and ((.condition // "") != null)
+             and ((.condition // "") != "")
+             and ((.condition // "") != "passed"))
+         )
+      then "not selected"
+      else $st end;
+    def is_unreached_clone($node; $st):
+      ($node.attempt > 0)
+      and ($st == "queued" or $st == "pending" or $st == "ready");
+    def rank($st):
+      if $st == "failed" then 6
+      elif $st == "cancelled" then 5
+      elif $st == "blocked" or $st == "stale" then 4
+      elif $st == "waiting" then 3
+      elif $st == "running" or $st == "retry-wait" then 2
+      elif $st == "succeeded" then 1
+      elif $st == "not selected" or $st == "skipped" then 0
+      else -1 end;
+    (ledger_map) as $map
+    | (.edges // []) as $edges
+    | [(.nodes // [])[] | . as $n | $n + {
+        _status: (public_state($n; status_of($n.id; $map); $edges))
+      }] as $annotated
+    | (
+        reduce $annotated[] as $n ({};
+          .[$n.logicalStage] += [$n]
+        )
+      ) as $by_logical
+    | [
+        ($by_logical | to_entries | sort_by(.key)[]) as $entry
+        | ($entry.value | sort_by(.attempt)) as $attempts_raw
+        | [
+            $attempts_raw[]
+            | select(is_unreached_clone(. ; ._status) | not)
+            | {nodeId: .id, attempt: .attempt, state: ._status}
+          ] as $attempts
+        | (if ($attempts | length) == 0 then
+             [$attempts_raw[0] | {nodeId: .id, attempt: .attempt, state: ._status}]
+           else $attempts end) as $shown
+        | ($shown | max_by(rank(.state))) as $head
+        | {
+            id: $entry.key,
+            state: $head.state,
+            attempts: $shown
+          }
+      ] as $stages
+    | (
+        [$stages[] | select(.state != "not selected")] as $required
+        | ($required | map(select(.state == "succeeded")) | length) as $done
+        | ($required | length) as $total
+        | {
+            completed: $done,
+            total: $total,
+            percent: (if $total == 0 then 0 else (($done * 100) / $total | floor) end)
+          }
+      ) as $completion
+    | {
+        mode: "logical",
+        note: null,
+        stages: $stages,
+        completion: $completion
+      }
+  '
+}
+
 # workflow_operator_view_next_action_text <nextAction-json|null>
 workflow_operator_view_next_action_text() {
   local raw="${1:-null}"

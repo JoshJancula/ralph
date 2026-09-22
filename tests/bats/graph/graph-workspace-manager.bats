@@ -571,7 +571,10 @@ PLAN
   mv "$prune_run/run.tmp" "$prune_run/run.json"
   graph_workspace_cleanup_run "$prune_run"
   [ ! -e "$prune_path" ]
-  [ -f "$prune_run/workspaces/changesets/$key.tar" ]
+  [ -f "$prune_run/workspaces/changesets/$key.tar.gz" ]
+  [ -f "$prune_run/workspaces/changesets/$key.fallback.json" ]
+  [ ! -e "$prune_run/workspaces/changesets/$key.reconstruction.json" ]
+  [ "$(jq -r '.reason' "$prune_run/workspaces/changesets/$key.fallback.json")" = "missing-changeset-manifest" ]
   [ "$(jq -r '.status' "$metadata")" = "pruned" ]
 
   jq '.workspacePath = "/tmp/not-owned-by-ralph"' "$metadata" >"$metadata.tmp"
@@ -605,7 +608,8 @@ PLAN
     "$(git -C "$project" rev-parse HEAD)"
   graph_workspace_cleanup_run "$run_dir"
   [ ! -e "$path" ]
-  [ -f "$run_dir/workspaces/changesets/$key.tar" ]
+  [ -f "$run_dir/workspaces/changesets/$key.tar.gz" ]
+  [ -f "$run_dir/workspaces/changesets/$key.fallback.json" ]
   [ "$(jq -r '.status' "$metadata")" = "pruned" ]
   [ "$(find "$run_dir/workspaces/git-journal/$key" -name '*-remove-completed.json' | wc -l | tr -d ' ')" -eq 1 ]
 }

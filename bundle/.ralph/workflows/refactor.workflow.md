@@ -82,6 +82,8 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      workspaceMode: snapshot
+      candidateFrom: implement
       sessionStrategy: fresh
       instructions: |
         Review the candidate snapshot for {{TASK}} without mutation. Inspect the
@@ -131,7 +133,7 @@ pipeline:
         the sole required planner JSON to
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/refactor-qa-plan.json.
         Successful integration is the approval boundary, so make checks read-only
-        against the integrated tree and give every TODO executable verification.
+        against the integrated candidate snapshot and give every TODO executable verification.
         {{INCLUDE:plan-budget}}
       dependsOn:
         - integrate
@@ -148,6 +150,14 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      workspaceMode: snapshot
+      candidateFrom: integrate
+      loopBackTo: implement
+      loopCheck:
+        path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-verdict.json
+        schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
+      onExhausted: fail
+      maxQaRepairRounds: 1
       sessionStrategy: fresh
       instructions: |
         Execute the entire generated QA plan for {{TASK}} TODO by TODO on the

@@ -213,8 +213,14 @@ def _windowing_log_for_summary(summary_path: str) -> Path | None:
     plan_key = log_dir.name
     if not plan_key:
         return None
-    candidate = log_dir.parent.parent / "runtime-config" / plan_key / "result-windowing.jsonl"
-    return candidate if candidate.is_file() else None
+    state_root = log_dir.parent.parent
+    for rel in (
+        state_root / "internal" / "runtime-config" / plan_key / "result-windowing.jsonl",
+        state_root / "runtime-config" / plan_key / "result-windowing.jsonl",
+    ):
+        if rel.is_file():
+            return rel
+    return None
 
 
 def _state_dir_for_summary(summary_path: str) -> Path | None:
@@ -222,8 +228,14 @@ def _state_dir_for_summary(summary_path: str) -> Path | None:
     plan_key = log_dir.name
     if not plan_key:
         return None
-    candidate = log_dir.parent.parent / "runtime-config" / plan_key
-    return candidate if candidate.is_dir() else None
+    state_root = log_dir.parent.parent
+    for rel in (
+        state_root / "internal" / "runtime-config" / plan_key,
+        state_root / "runtime-config" / plan_key,
+    ):
+        if rel.is_dir():
+            return rel
+    return None
 
 
 def _empty_channels() -> dict[str, dict[str, int | float | str]]:

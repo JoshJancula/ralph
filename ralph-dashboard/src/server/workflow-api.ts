@@ -39,6 +39,7 @@ import {
   buildDisplayGraphFromInspect,
 } from './workflow-display-graph';
 import { enrichWorkflowRunDetail } from './workflow-run-detail';
+import { workflowRunPath } from './state-paths';
 import {
   emitWorkflowFrontmatter,
   parseWorkflowFrontmatter,
@@ -76,6 +77,11 @@ function isValidWorkflowId(id: string): boolean {
 
 function isValidRunId(id: string): boolean {
   return RUN_ID_PATTERN.test(id);
+}
+
+/** Resolve a workflow registry directory through state-paths (layout-aware). */
+export function resolveWorkflowRunDir(workspaceRoot: string, runId: string): string {
+  return workflowRunPath(workspaceRoot, runId);
 }
 
 type WorkflowRequest = Request & { ralphWorkflowWorkspace?: DashboardRoots };
@@ -570,7 +576,15 @@ async function handleWorkflowRunDetail(req: Request, res: Response): Promise<voi
       // Status remains usable when actions listing fails; detail.actions stays empty.
       actions = [];
     }
-    res.json(enrichWorkflowRunDetail(status, actions));
+    const detail = enrichWorkflowRunDetail(status, actions) as unknown as Record<string, unknown>;
+    if (options.workspaceRoot) {
+      try {
+        detail['registryPath'] = resolveWorkflowRunDir(options.workspaceRoot, runId);
+      } catch {
+        // Invalid run id segments are already rejected above.
+      }
+    }
+    res.json(detail);
   } catch (error: unknown) {
     handleCliError(res, error, `Run "${runId}" not found`);
   }

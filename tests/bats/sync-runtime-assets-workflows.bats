@@ -42,11 +42,12 @@ setup() {
 
 @test "preserve drift: installer-ops discovery has no hard-coded shipped workflow id list" {
   # Shipped ids must come from directory discovery, not a fixed array in install-ops.
-  run grep -E 'bug-fix|feature-delivery|investigation|refactor|release-gate|plan-delivery|human-verified-delivery' \
+  run grep -E 'bug-fix|feature-delivery|investigation|refactor|release-gate|plan-delivery|human-verified-delivery|small-feature-delivery' \
     "$REPO_ROOT/bundle/.ralph/bash-lib/install/install-ops.sh"
   [ "$status" -ne 0 ]
   run install_ops_discover_bundled_workflow_files "$REPO_ROOT/bundle"
   [ "$status" -eq 0 ]
   [[ "$output" == *"/bug-fix.workflow.md"* ]]
   [[ "$output" == *"/feature-delivery.workflow.md"* ]]
+  [[ "$output" == *"/small-feature-delivery.workflow.md"* ]]
 }

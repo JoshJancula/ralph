@@ -217,14 +217,14 @@ EOF
   local wrap="$TEST_TMPDIR/wrap-native-leak.sh"
   cat > "$wrap" <<EOF
 #!/usr/bin/env bash
-env RALPH_MODE=native bash "$MCP_SERVER" "\$@" | jq -c --unbuffered 'if (.result and (.result|type=="object") and (.result|has("tools"))) then .result.tools += [{"name":"ralph_proxy_read","description":"leak","inputSchema":{"type":"object","properties":{},"required":[]}}] else . end'
+env RALPH_MODE=native bash "$MCP_SERVER" "\$@" | jq -c --unbuffered 'if (.result and (.result|type=="object") and (.result|has("tools"))) then .result.tools += [{"name":"ralph_proxy_shell","description":"leak","inputSchema":{"type":"object","properties":{},"required":[]}}] else . end'
 EOF
   chmod +x "$wrap"
 
   run bash -c 'source "$1" && RALPH_MODE=native ralph_mcp_proxy_preflight "$2" "$3"' _ "$SETUP_FILE" "$wrap" "$REPO_ROOT"
   [ "$status" -eq 1 ]
   [[ "$output" == *"native mode"* ]]
-  [[ "$output" == *"ralph_proxy_read"* ]]
+  [[ "$output" == *"ralph_proxy_shell"* ]]
 }
 
 @test "resolved default MCP server handles initialize then tool call then tools list" {
@@ -249,7 +249,7 @@ EOF
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | jq -s -e '.[0].result.capabilities.tools.listChanged == false'
   printf '%s\n' "$output" | jq -s -e '.[1].result.structuredContent.total >= 1'
-  printf '%s\n' "$output" | jq -s -e '[.[2].result.tools[]?.name] | index("ralph_proxy_read") != null'
+  printf '%s\n' "$output" | jq -s -e '[.[2].result.tools[]?.name] | index("ralph_proxy_shell") != null'
   printf '%s\n' "$output" | jq -s -e '[.[2].result.tools[]?.name] | index("ralph_complete_todo") != null'
   printf '%s\n' "$output" | jq -s -e '.[3].result.status == "exiting"'
 }
@@ -415,4 +415,195 @@ EOF
   [ -f "$out" ]
   grep -q '"RALPH_PROXY_SHELL_COMPACT": "1"' "$out"
   grep -q '"RALPH_PROXY_SHELL_COMPACT_LOG": "/tmp/proxy.log"' "$out"
+}
+
+@test "ralph_mcp_proxy_generate_config omits ralph-jev when RALPH_JEV unset (all five runtimes)" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq >/dev/null || skip "jq required"
+
+  local ws runtime out
+  ws="$TEST_TMPDIR/ws_jev_off"
+  mkdir -p "$ws/.ralph"
+  cp "$MCP_SERVER" "$ws/.ralph/mcp-server.sh"
+  printf '#!/usr/bin/env bash\n' > "$ws/.ralph/jev-mcp-server.sh"
+
+  for runtime in claude codex cursor opencode antigravity; do
+    out="$ws/ephemeral-$runtime.json"
+    run env -u RALPH_JEV -u RALPH_JEV_MCP bash -c \
+      'source "$1" && RALPH_DIR="$3/.ralph" && ralph_mcp_proxy_generate_config "$4" "$2" "$3"' \
+      _ "$SETUP_FILE" "$out" "$ws" "$runtime"
+    [ "$status" -eq 0 ]
+    [ -f "$out" ]
+    case "$runtime" in
+      opencode)
+        jq -e '.mcp | has("ralph") and (has("ralph-jev") | not)' "$out"
+        ;;
+      *)
+        jq -e '.mcpServers | has("ralph") and (has("ralph-jev") | not)' "$out"
+        ;;
+    esac
+  done
+}
+
+@test "ralph_mcp_proxy_generate_config adds ralph-jev when Jev MCP enabled (all five runtimes)" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq >/dev/null || skip "jq required"
+
+  local ws runtime out jev_script
+  ws="$TEST_TMPDIR/ws_jev_on"
+  mkdir -p "$ws/.ralph"
+  cp "$MCP_SERVER" "$ws/.ralph/mcp-server.sh"
+  jev_script="$ws/.ralph/jev-mcp-server.sh"
+  printf '#!/usr/bin/env bash\n' > "$jev_script"
+
+  for runtime in claude codex cursor opencode antigravity; do
+    out="$ws/ephemeral-$runtime.json"
+    run env RALPH_JEV=1 RALPH_JEV_MCP=1 bash -c \
+      'source "$1" && RALPH_DIR="$3/.ralph" && ralph_mcp_proxy_generate_config "$4" "$2" "$3"' \
+      _ "$SETUP_FILE" "$out" "$ws" "$runtime"
+    [ "$status" -eq 0 ]
+    [ -f "$out" ]
+    case "$runtime" in
+      opencode)
+        jq -e --arg jev "$jev_script" '
+          (.mcp | has("ralph") and has("ralph-jev"))
+          and (.mcp["ralph-jev"].type == "local")
+          and (.mcp["ralph-jev"].command | index($jev) != null)
+        ' "$out"
+        ;;
+      cursor|antigravity)
+        jq -e --arg jev "$jev_script" '
+          (.mcpServers | has("ralph") and has("ralph-jev"))
+          and (.mcpServers["ralph-jev"].type == "stdio")
+          and (.mcpServers["ralph-jev"].args[0] == $jev)
+        ' "$out"
+        ;;
+      *)
+        jq -e --arg jev "$jev_script" '
+          (.mcpServers | has("ralph") and has("ralph-jev"))
+          and (.mcpServers["ralph-jev"].args[0] == $jev)
+          and (.mcpServers["ralph-jev"] | has("type") | not)
+        ' "$out"
+        ;;
+    esac
+  done
+}
+
+@test "ralph_mcp_jev_server_script_path honors RALPH_JEV_MCP_SERVER_SCRIPT override" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+
+  local ws override
+  ws="$TEST_TMPDIR/ws_jev_override"
+  override="$TEST_TMPDIR/custom-jev-mcp-server.sh"
+  mkdir -p "$ws/.ralph"
+  printf '#!/usr/bin/env bash\n' > "$override"
+
+  run bash -c 'source "$1" && RALPH_JEV_MCP_SERVER_SCRIPT="$2" ralph_mcp_jev_server_script_path "$3"' \
+    _ "$SETUP_FILE" "$override" "$ws"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$override" ]
+}
+
+@test "ralph_mcp_proxy_preflight disables Jev non-fatally when jev server is broken" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq >/dev/null || skip "jq required"
+
+  local broken_jev out_cfg
+  broken_jev="$TEST_TMPDIR/broken-jev-mcp-server.sh"
+  out_cfg="$TEST_TMPDIR/ephemeral-after-disable.json"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$broken_jev"
+  chmod +x "$broken_jev"
+
+  # Preflight must succeed (ralph OK), disable Jev MCP, and record a reason.
+  # Subsequent generate_config in the same process must omit ralph-jev.
+  run bash -c '
+    source "$1"
+    export RALPH_MODE=ralph RALPH_JEV=1 RALPH_JEV_MCP=1
+    export RALPH_JEV_MCP_SERVER_SCRIPT="$4"
+    ralph_mcp_proxy_preflight "$2" "$3" || exit $?
+    printf "jev_mcp=%s\n" "${RALPH_JEV_MCP:-}"
+    printf "reason=%s\n" "${RALPH_JEV_MCP_DISABLE_REASON:-}"
+    if ralph_mcp_jev_mcp_enabled; then
+      printf "gate=enabled\n"
+    else
+      printf "gate=disabled\n"
+    fi
+    ralph_mcp_proxy_generate_config claude "$5" "$3" || exit $?
+    jq -e ".mcpServers | has(\"ralph\") and (has(\"ralph-jev\") | not)" "$5" >/dev/null || exit 2
+    printf "config=ralph-only\n"
+  ' _ "$SETUP_FILE" "$MCP_SERVER" "$REPO_ROOT" "$broken_jev" "$out_cfg"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+  [[ "$output" == *"jev_mcp=0"* ]]
+  [[ "$output" == *"reason=ralph-jev preflight failed:"* ]]
+  [[ "$output" == *"gate=disabled"* ]]
+  [[ "$output" == *"config=ralph-only"* ]]
+  # Warning / handshake detail goes to stderr; bats merges it into $output for `run`.
+  [[ "$output" == *"Warning:"* ]]
+  [[ "$output" == *"Disabling Jev MCP"* ]]
+  [[ "$output" == *"ralph-jev MCP server process exited"* ]]
+}
+
+@test "ralph_mcp_proxy_preflight still fails fatally when ralph server is broken with Jev enabled" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+
+  local broken_ralph healthy_jev
+  broken_ralph="$TEST_TMPDIR/broken-ralph-mcp-server.sh"
+  healthy_jev="$TEST_TMPDIR/healthy-jev-mcp-server.sh"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$broken_ralph"
+  chmod +x "$broken_ralph"
+  # Healthy enough that a non-fatal jev path would succeed if ralph did not fail first.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$healthy_jev"
+  chmod +x "$healthy_jev"
+
+  run bash -c '
+    source "$1"
+    export RALPH_MODE=ralph RALPH_JEV=1 RALPH_JEV_MCP=1
+    export RALPH_JEV_MCP_SERVER_SCRIPT="$4"
+    ralph_mcp_proxy_preflight "$2" "$3"
+  ' _ "$SETUP_FILE" "$broken_ralph" "$REPO_ROOT" "$healthy_jev"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"exited with code"* ]]
+  # Must not claim success or leave a "OK" primary outcome.
+  [[ "$output" != $'OK\n'* ]]
+  [[ "$output" != "OK" ]]
+}
+
+@test "ralph_mcp_proxy_preflight with healthy Jev succeeds and leaves gate enabled" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+  command -v jq >/dev/null || skip "jq required"
+  [ -f "$REPO_ROOT/bundle/.ralph/jev-mcp-server.sh" ] || skip "jev-mcp-server.sh missing"
+
+  run bash -c '
+    source "$1"
+    export RALPH_MODE=ralph RALPH_JEV=1 RALPH_JEV_MCP=1
+    export RALPH_JEV_MCP_SERVER_SCRIPT="$4"
+    ralph_mcp_proxy_preflight "$2" "$3" || exit $?
+    printf "jev_mcp=%s\n" "${RALPH_JEV_MCP:-}"
+    if ralph_mcp_jev_mcp_enabled; then
+      printf "gate=enabled\n"
+    else
+      printf "gate=disabled\n"
+      printf "reason=%s\n" "${RALPH_JEV_MCP_DISABLE_REASON:-}"
+      exit 3
+    fi
+  ' _ "$SETUP_FILE" "$MCP_SERVER" "$REPO_ROOT" "$REPO_ROOT/bundle/.ralph/jev-mcp-server.sh"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+  [[ "$output" == *"jev_mcp=1"* ]]
+  [[ "$output" == *"gate=enabled"* ]]
+}
+
+@test "ralph_mcp_proxy_required_tool_names has no jev_ tools" {
+  [ -f "$SETUP_FILE" ] || skip "mcp-setup.sh missing"
+
+  run bash -c '
+    source "$1"
+    ralph_mcp_proxy_required_tool_names
+  ' _ "$SETUP_FILE"
+  [ "$status" -eq 0 ]
+  ! printf '%s\n' "$output" | grep -q '^jev_'
 }

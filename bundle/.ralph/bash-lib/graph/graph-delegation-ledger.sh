@@ -2,8 +2,9 @@
 # Durable storage for Ralph delegated runs.
 #
 # A delegated run is deliberately independent of the graph-node ledger. Its
-# identity is the directory name under <state-root>/delegated-runs and every
-# JSON record is written through the shared atomic writer.
+# identity is the directory name under delegated-runs/ (layout 1) or
+# runs/<parent>/engine/delegation/ (layout 2). Every JSON record is written
+# through the shared atomic writer.
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   echo "This file is meant to be sourced, not executed." >&2
@@ -25,6 +26,10 @@ fi
 if ! declare -F graph_state_state_root >/dev/null 2>&1; then
   # shellcheck source=graph-state.sh
   source "$_GRAPH_DELEGATION_LEDGER_DIR/graph-state.sh"
+fi
+if ! declare -F ralph_state_delegation_root >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_GRAPH_DELEGATION_LEDGER_DIR/../state-paths.sh"
 fi
 if ! declare -F graph_state_now_iso >/dev/null 2>&1; then
   graph_state_now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
@@ -55,18 +60,31 @@ graph_delegation_ledger_valid_id() {
   [[ "${1:-}" =~ ^delegated-run-[0-9a-f]{24}$ ]]
 }
 
+# graph_delegation_ledger_root <workspace> [parent-run-id]
+# Parent defaults to RALPH_GRAPH_RUN_ID. Layout 1 keeps top-level
+# delegated-runs/; layout 2 uses runs/<parent>/engine/delegation/.
 graph_delegation_ledger_root() {
-  local workspace="$1" state_root
+  local workspace="$1" parent_run_id="${2:-${RALPH_GRAPH_RUN_ID:-}}" state_root
   [[ -n "$workspace" ]] || return 1
   state_root="$(graph_state_state_root "$workspace")" || return 1
-  printf '%s/delegated-runs\n' "$state_root"
+  if [[ -z "$parent_run_id" ]]; then
+    # No parent context: layout 1 only (existing tests and standalone readers).
+    if [[ "$(ralph_state_layout_for_new_run)" == 2 ]]; then
+      echo "Error: parent run id required for layout 2 delegation root" >&2
+      return 1
+    fi
+    ralph_state_path_resolve "$state_root" "delegated-runs"
+    return $?
+  fi
+  ralph_state_delegation_root "$state_root" "$parent_run_id"
 }
 
+# graph_delegation_ledger_dir <workspace> <delegated-run-id> [parent-run-id]
 graph_delegation_ledger_dir() {
-  local root id
-  root="$(graph_delegation_ledger_root "$1")" || return 1
-  id="$(graph_delegation_ledger_safe_component "${2:-}")" || return 1
+  local workspace="$1" id="$2" parent_run_id="${3:-${RALPH_GRAPH_RUN_ID:-}}" root
+  id="$(graph_delegation_ledger_safe_component "${id:-}")" || return 1
   graph_delegation_ledger_valid_id "$id" || return 1
+  root="$(graph_delegation_ledger_root "$workspace" "$parent_run_id")" || return 1
   printf '%s/%s\n' "$root" "$id"
 }
 

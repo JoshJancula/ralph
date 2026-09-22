@@ -85,7 +85,7 @@ PY
   run env RALPH_WORKSPACES_FILE="$REGISTRY_FILE" RALPH_WORKSPACE_PRUNE_DAYS=60 bash "$WORKSPACES_CLI" prune
 
   [ "$status" -eq 0 ]
-  [[ "$output" == "Pruned 2 workspace(s); kept 1." ]]
+  [[ "$output" == *"Removed 2 registry entries; kept 1."* ]]
 
   run env RALPH_WORKSPACES_FILE="$REGISTRY_FILE" bash "$WORKSPACES_CLI" list
 
@@ -93,4 +93,82 @@ PY
   [[ "$output" == *"$keep"* ]]
   [[ "$output" != *"$missing"* ]]
   [[ "$output" != *"$old"* ]]
+}
+
+@test "workspaces prune --dry-run reports entries without rewriting the registry" {
+  local kept
+  kept="$TEST_TMPDIR/kept"
+  mkdir -p "$kept"
+  python3 - "$REGISTRY_FILE" "$kept" "$TEST_TMPDIR/gone" <<'PY'
+import json, sys
+registry, kept, gone = sys.argv[1:]
+records = [
+    {"path": gone, "lastSeen": "2099-01-01T00:00:00Z", "planKey": "p", "runtime": "codex"},
+    {"path": kept, "lastSeen": "2099-01-01T00:00:00Z", "planKey": "p", "runtime": "codex"},
+]
+json.dump(records, open(registry, "w"))
+PY
+  before="$(cat "$REGISTRY_FILE")"
+
+  run env RALPH_WORKSPACES_FILE="$REGISTRY_FILE" bash "$WORKSPACES_CLI" prune --dry-run
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Would remove: $TEST_TMPDIR/gone (directory no longer exists)"* ]]
+  [[ "$output" == *"No project files were touched."* ]]
+  [ "$(cat "$REGISTRY_FILE")" = "$before" ]
+}
+
+@test "workspaces clean previews by default and deletes only with --yes" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local proj="$TEST_TMPDIR/proj"
+  mkdir -p "$proj/.ralph-workspace/logs" "$proj/.ralph-workspace/plans"
+  echo x >"$proj/.ralph-workspace/logs/old.log"
+  touch -t 202001010000 "$proj/.ralph-workspace/logs/old.log"
+  echo keep >"$proj/.ralph-workspace/plans/keep.md"
+  touch -t 202001010000 "$proj/.ralph-workspace/plans/keep.md"
+
+  run bash "$WORKSPACES_CLI" clean "$proj"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Would remove 1 file(s)"* ]]
+  [ -f "$proj/.ralph-workspace/logs/old.log" ]
+
+  run bash "$WORKSPACES_CLI" clean "$proj" --yes
+  [ "$status" -eq 0 ]
+  [ ! -e "$proj/.ralph-workspace/logs/old.log" ]
+  [ -f "$proj/.ralph-workspace/plans/keep.md" ]
+}
+
+@test "workspaces clean --all refuses while a graph run is awaiting-ack" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local proj="$TEST_TMPDIR/proj"
+  mkdir -p "$proj/.ralph-workspace/graph-runs/ns/r1"
+  echo '{"status":"awaiting-ack"}' >"$proj/.ralph-workspace/graph-runs/ns/r1/run.json"
+
+  run bash "$WORKSPACES_CLI" clean "$proj" --all --yes
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Refusing to delete"* ]]
+  [ -d "$proj/.ralph-workspace" ]
+}
+
+@test "workspaces doctor reports then fixes a run whose owner died" {
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+  local proj="$TEST_TMPDIR/proj"
+  mkdir -p "$proj/.ralph-workspace/graph-runs/ns/r1"
+  echo '{"status":"running","supervisorPid":999999}' >"$proj/.ralph-workspace/graph-runs/ns/r1/run.json"
+
+  run bash "$WORKSPACES_CLI" doctor "$proj"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PROBLEM  graph run stuck as running"* ]]
+
+  run bash "$WORKSPACES_CLI" doctor "$proj" --fix
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .status "$proj/.ralph-workspace/graph-runs/ns/r1/run.json")" = "failed" ]
+}
+
+@test "workspaces status fails clearly outside a Ralph project" {
+  run bash "$WORKSPACES_CLI" status "$TEST_TMPDIR"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no .ralph-workspace directory"* ]]
 }

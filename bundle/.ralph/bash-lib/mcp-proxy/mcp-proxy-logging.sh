@@ -17,6 +17,16 @@ ralph_mcp_proxy_state_root() {
   fi
 }
 
+ralph_mcp_proxy_ensure_state_paths() {
+  if declare -F ralph_state_path_resolve >/dev/null 2>&1; then
+    return 0
+  fi
+  local _dir
+  _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || return 1
+  # shellcheck source=../state-paths.sh
+  source "$_dir/state-paths.sh"
+}
+
 # Derive the per-plan MCP log file path from RALPH_PLAN_KEY and workspace env
 # vars. Returns nothing when RALPH_PLAN_KEY or a state root is absent.
 ralph_mcp_proxy_plan_log_path() {
@@ -24,7 +34,9 @@ ralph_mcp_proxy_plan_log_path() {
   [[ -n "$plan_key" ]] || return 0
   local state_root
   state_root="$(ralph_mcp_proxy_state_root)" || return 0
-  printf '%s/logs/%s/mcp.log\n' "$state_root" "$plan_key"
+  ralph_mcp_proxy_ensure_state_paths || return 0
+  # Plan-scoped MCP log sits beside the plan run tree under logs/<key>/.
+  ralph_state_path_resolve "$state_root" "logs/$plan_key/mcp.log"
 }
 
 ralph_mcp_proxy_log_line() {

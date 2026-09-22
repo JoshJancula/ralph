@@ -180,7 +180,7 @@ graph_events_redact_details() {
 graph_events_validate_event() {
   local event="$1"
   case "$event" in
-    run-started|run-status-changed|node-ready|node-spawn|node-running-update|node-terminal|node-retry-wait|node-awaiting-operator|node-needs-plan-repair|node-interrupted|node-recovered|node-cancelled|node-skipped|operator-request|operator-decision|budget-warning|budget-exhausted|recovery-start|recovery-finish|integration-start|integration-complete|integration-failed|gate-start|gate-passed|gate-changes-required|gate-error|publish-ready|publish-blocked|native-subagent-reservation|native-subagent-spawn|native-subagent-running-update|native-subagent-finished|native-subagent-cancelled|native-subagent-failed) return 0 ;;
+    run-started|run-status-changed|node-ready|node-spawn|node-running-update|node-terminal|node-retry-wait|node-awaiting-operator|node-needs-plan-repair|node-interrupted|node-recovered|node-cancelled|node-skipped|operator-request|operator-decision|budget-warning|budget-exhausted|recovery-start|recovery-finish|integration-start|integration-complete|integration-failed|gate-start|gate-passed|gate-changes-required|gate-error|publish-ready|publish-blocked|native-subagent-reservation|native-subagent-spawn|native-subagent-running-update|native-subagent-finished|native-subagent-cancelled|native-subagent-failed|routing-decision) return 0 ;;
     *) return 1 ;;
   esac
 }

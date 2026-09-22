@@ -20,6 +20,13 @@ if [[ -n "${RALPH_SETUP_JOURNAL_LOADED:-}" ]]; then
 fi
 RALPH_SETUP_JOURNAL_LOADED=1
 
+_SETUP_JOURNAL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_state_shared_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_SETUP_JOURNAL_LIB_DIR/../state-paths.sh"
+fi
+unset _SETUP_JOURNAL_LIB_DIR
+
 SETUP_JOURNAL_DIR=""
 SETUP_JOURNAL_ID=""
 SETUP_JOURNAL_SEQ=0
@@ -88,7 +95,7 @@ setup_journal_begin() {
   fi
 
   SETUP_JOURNAL_ID="$operation_id"
-  SETUP_JOURNAL_DIR="${state_root%/}/setup-journal/${operation_id}"
+  SETUP_JOURNAL_DIR="$(ralph_state_shared_dir "${state_root%/}" setup-journal)/${operation_id}"
   SETUP_JOURNAL_FILE="$SETUP_JOURNAL_DIR/journal.jsonl"
   mkdir -p "$SETUP_JOURNAL_DIR"
   : >"$SETUP_JOURNAL_FILE"

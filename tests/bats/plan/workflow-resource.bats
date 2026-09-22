@@ -262,7 +262,7 @@ write_wf() {
 
 # Real-bundle discovery (shell resolver only). Python list/path coverage lives
 # in tests/python/test_wizard_workflow_template.py.
-@test "exact seven bundled workflow ids from real repo bundle" {
+@test "exact eleven bundled workflow ids from real repo bundle" {
   unset RALPH_WORKFLOW_RESOURCE_LOADED
   source "$WR_LIB"
   local empty="$WR_TMP/empty-scopes"
@@ -271,17 +271,19 @@ write_wf() {
 
   run workflow_resource_list_winning
   [ "$status" -eq 0 ]
-  [[ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" == "10" ]]
-  [[ "${lines[0]}" == $'assessment\tbundled\t'* ]]
-  [[ "${lines[1]}" == $'bug-fix\tbundled\t'* ]]
-  [[ "${lines[2]}" == $'feature-delivery\tbundled\t'* ]]
-  [[ "${lines[3]}" == $'human-verified-delivery\tbundled\t'* ]]
-  [[ "${lines[4]}" == $'investigation\tbundled\t'* ]]
-  [[ "${lines[5]}" == $'plan-delivery\tbundled\t'* ]]
-  [[ "${lines[6]}" == $'refactor\tbundled\t'* ]]
-  [[ "${lines[7]}" == $'release-gate\tbundled\t'* ]]
-  [[ "${lines[8]}" == $'review-jury\tbundled\t'* ]]
-  [[ "${lines[9]}" == $'triage\tbundled\t'* ]]
+  [[ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" == "12" ]]
+  [[ "${lines[0]}" == $'adaptive-delivery\tbundled\t'* ]]
+  [[ "${lines[1]}" == $'assessment\tbundled\t'* ]]
+  [[ "${lines[2]}" == $'bug-fix\tbundled\t'* ]]
+  [[ "${lines[3]}" == $'feature-delivery\tbundled\t'* ]]
+  [[ "${lines[4]}" == $'human-verified-delivery\tbundled\t'* ]]
+  [[ "${lines[5]}" == $'investigation\tbundled\t'* ]]
+  [[ "${lines[6]}" == $'plan-delivery\tbundled\t'* ]]
+  [[ "${lines[7]}" == $'refactor\tbundled\t'* ]]
+  [[ "${lines[8]}" == $'release-gate\tbundled\t'* ]]
+  [[ "${lines[9]}" == $'review-jury\tbundled\t'* ]]
+  [[ "${lines[10]}" == $'small-feature-delivery\tbundled\t'* ]]
+  [[ "${lines[11]}" == $'triage\tbundled\t'* ]]
 }
 
 @test "canonical bundled path is under .ralph/workflows" {

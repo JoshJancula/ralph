@@ -81,9 +81,21 @@ bats_target_file_count() {
 # successful `1..0` run. Expand directories ourselves so the files counted by
 # bats_target_file_count are exactly the files handed to Bats.
 expand_bats_directory_args() {
-  local arg file
+  local arg file preserve_next=0
   local -a expanded=()
   for arg in "${BATS_ARGS[@]}"; do
+    if [[ "$preserve_next" -eq 1 ]]; then
+      expanded+=("$arg")
+      preserve_next=0
+      continue
+    fi
+    case "$arg" in
+      -o | --output)
+        expanded+=("$arg")
+        preserve_next=1
+        continue
+        ;;
+    esac
     if [[ -d "$arg" ]]; then
       while IFS= read -r file; do
         [[ -n "$file" ]] && expanded+=("$file")
@@ -357,7 +369,7 @@ cd "$REPO_ROOT"
 # exports do not leak into test subprocesses.
 unset WORKSPACE OUTPUT_LOG LOG_FILE PROMPT_STATIC SESSION_ID_FILE SESSION_ID_FILE_LEGACY USAGE_FILE EXIT_CODE_FILE
 unset RALPH_AGENT_TOOL_ACCESS RALPH_NATIVE_HOOKS RALPH_MCP_TOOLS_ENABLED RALPH_TOOL_ACCESS_FLAG_SET
-unset RALPH_PLAN_SESSION_HOME RALPH_SESSION_DIR RALPH_PLAN_KEY RALPH_ARTIFACT_NS RALPH_PROJECT_ROOT RALPH_AGENT_WORKSPACE RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT RALPH_RUNTIME_ROOT
+unset RALPH_PLAN_SESSION_HOME RALPH_SESSION_DIR RALPH_PLAN_KEY RALPH_ARTIFACT_NS RALPH_PROJECT_ROOT RALPH_AGENT_WORKSPACE RALPH_PLAN_WORKSPACE_ROOT RALPH_GRAPH_STATE_ROOT RALPH_RUNTIME_ROOT RALPH_STATE_LAYOUT
 unset RALPH_SHARED_RALPH_DIR RALPH_DIR RALPH_LAUNCHER_PID RALPH_BASH_COMPACT_LOG RALPH_BASH_REWRITE_LOG
 unset RALPH_PROXY_SHELL_COMPACT_LOG RALPH_MCP_PREFLIGHT_PASSED RALPH_NATIVE_SHELL_WRAPPER RALPH_SKIP_MCP_PREFLIGHT
 unset RALPH_PLAN_ALLOW_UNSAFE_RESUME RALPH_PLAN_CAFFEINATED RALPH_PLAN_CLI_RESUME RALPH_PLAN_CONTEXT_BUDGET
@@ -383,6 +395,10 @@ unset CODEX_PLAN_DANGEROUSLY_BYPASS_APPROVALS_AND_SANDBOX CODEX_CI CODEX_MANAGED
 unset OPENCODE_PLAN_CAFFEINATED OPENCODE_PLAN_CLI OPENCODE_PLAN_MODEL OPENCODE_PLAN_VERBOSE OPENCODE_PLAN_NO_COLOR
 unset OPENCODE_PLAN_MAX_ITER OPENCODE_PLAN_GUTTER_ITER OPENCODE_PLAN_PROGRESS_INTERVAL OPENCODE_PLAN_NO_CAFFEINATE
 unset OPENCODE_PLAN_DISABLE_HUMAN_PROMPT OPENCODE_PLAN_NO_OPEN OPENCODE_PLAN_LOG OPENCODE_PLAN_OUTPUT_LOG
+
+# Existing tests assert pre-plan paths, so the suite pins layout 1; layout 2 is
+# covered by tests that set RALPH_STATE_LAYOUT=2 explicitly.
+export RALPH_STATE_LAYOUT=1
 
 if [[ "$SETUP_FIXTURES" -eq 1 ]]; then
   bash scripts/setup-test-fixtures.sh

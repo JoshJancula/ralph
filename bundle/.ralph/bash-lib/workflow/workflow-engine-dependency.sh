@@ -93,7 +93,11 @@ workflow_dep_engine_state_path() {
     return 1
   fi
   root="$(workflow_state_ensure_state_root "$state_root")" || return 1
-  printf '%s/graph-runs/%s/%s\n' "$root" "$namespace" "$run_id"
+  if ! declare -F ralph_state_graph_run_dir >/dev/null 2>&1; then
+    # shellcheck source=../state-paths.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../state-paths.sh"
+  fi
+  ralph_state_graph_run_dir "$root" "$namespace" "$run_id"
 }
 
 # workflow_dep_resolve_pointer <state-root> <run-id>
@@ -314,11 +318,11 @@ workflow_dep_operator_cancel() {
 # Resolve graph state root for projection. When RALPH_PLAN_WORKSPACE_ROOT is set
 # (workflow CLI / registry adapters), align RALPH_GRAPH_STATE_ROOT to that root so
 # a stale operator-shell RALPH_GRAPH_STATE_ROOT cannot hide ledgers. Otherwise honor
-# RALPH_GRAPH_STATE_ROOT, or treat <workspace> as the state root when
-# graph-runs/<namespace>/<run-id> exists there.
+# RALPH_GRAPH_STATE_ROOT, or treat <workspace> as the state root when the layout-
+# aware graph ledger exists there.
 _workflow_dep_ensure_graph_state_root() {
   local workspace="$1" namespace="$2" run_id="$3"
-  local resolved
+  local resolved ledger
   if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
     resolved="$(workflow_state_ensure_state_root "${RALPH_PLAN_WORKSPACE_ROOT}")" || return 1
     export RALPH_GRAPH_STATE_ROOT="$resolved"
@@ -326,6 +330,16 @@ _workflow_dep_ensure_graph_state_root() {
   fi
   if [[ -n "${RALPH_GRAPH_STATE_ROOT:-}" ]]; then
     return 0
+  fi
+  if declare -F ralph_state_graph_run_dir >/dev/null 2>&1 \
+    || { source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../state-paths.sh" 2>/dev/null; }; then
+    ledger="$(ralph_state_graph_run_dir "$workspace" "$namespace" "$run_id" 2>/dev/null || true)"
+    if [[ -n "$ledger" && -f "$ledger/run.json" ]]; then
+      resolved="$(workflow_state_ensure_state_root "$workspace")" || return 1
+      export RALPH_GRAPH_STATE_ROOT="$resolved"
+      export RALPH_PLAN_WORKSPACE_ROOT="$resolved"
+      return 0
+    fi
   fi
   if [[ -f "$workspace/graph-runs/$namespace/$run_id/run.json" ]]; then
     resolved="$(workflow_state_ensure_state_root "$workspace")" || return 1
@@ -465,6 +479,33 @@ workflow_dep_project_stage() {
         sourcePlanPath: (if $supervisor == 1 then null else ($node.sourcePlanPath | abs_or_null) end),
         controlPlanPath: (if $supervisor == 1 then null else ($node.controlPlanPath | abs_or_null) end),
         currentTodoId: (if $supervisor == 1 then null else ($node.currentTodoId // null) end),
+        # Keep parity with workflow_dep_project_snapshot stage rows so public
+        # status and the legacy single-stage projector stay byte-equivalent.
+        workspaceMode: (
+          if $supervisor == 1 then null
+          else (
+            $node.workspaceMode
+            // (($node.attempts // []) | last | .workspaceMode)
+            // null
+          )
+          end
+        ),
+        workspacePath: (
+          if $supervisor == 1 then null
+          else (
+            $node.workspacePath
+            // (($node.attempts // []) | last | .workspacePath)
+            // null
+            | abs_or_null
+          )
+          end
+        ),
+        workspaceAvailable: false,
+        baseRevision: null,
+        changesetManifest: (
+          if $supervisor == 1 then null else ($node.changesetManifest | abs_or_null) end
+        ),
+        changedFiles: [],
         wave: ($node.wave // null),
         terminalResult: (
           if $state == "succeeded" or $state == "failed" or $state == "cancelled"

@@ -9,8 +9,6 @@ target, template = sys.argv[1:]
 
 RALPH_BASES = {
     "pre-tool-shell-policy.sh",
-    "pre-tool-exploration-policy.sh",
-    "pre-tool-proxy-read-handoff.sh",
     "post-tool-shell-telemetry.sh",
     "post-tool-native-result-compact.sh",
     "after-shell-telemetry.sh",

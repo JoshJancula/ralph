@@ -62,7 +62,12 @@ orch_stage_write_contract() {
     state_root="${workspace%/}/.ralph-workspace"
   fi
 
-  local contract_dir="${state_root}/runtime-config/${plan_key}-${stage_id}"
+  local contract_dir
+  if declare -F ralph_state_runtime_config_dir >/dev/null 2>&1; then
+    contract_dir="$(ralph_state_runtime_config_dir "$state_root" "${plan_key}-${stage_id}")"
+  else
+    contract_dir="${state_root}/runtime-config/${plan_key}-${stage_id}"
+  fi
   local contract_path="${contract_dir}/stage-contract.json"
 
   if ! python3 "$schema_py" stage-contract \

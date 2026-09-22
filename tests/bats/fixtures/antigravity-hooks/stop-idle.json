@@ -1,0 +1,9 @@
+{
+  "conversationId": "conv-0001",
+  "workspacePaths": ["/tmp/ralph-agy-workspace"],
+  "transcriptPath": "/tmp/ralph-agy-workspace/.transcript.jsonl",
+  "modelName": "gemini-test",
+  "executionNum": 1,
+  "terminationReason": "TERMINATION_REASON_COMPLETED",
+  "fullyIdle": true
+}

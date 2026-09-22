@@ -1,97 +1,42 @@
 #!/usr/bin/env bash
-# preToolUse Shell adapter for Cursor: wrapper-based native shell compaction via
-# shared native-shell-wrapper (pre-tool command rewrite).
+# PreToolUse run_command adapter for Antigravity (agy): wrapper-based native shell
+# compaction via the shared native-shell-wrapper (pre-tool command rewrite).
 #
-# Proven on Cursor Agent 2026.06.03-0bbb28e (2026-06-04):
-# - PreToolUse Shell input rewrite via updated_input.command is agent-visible.
-# - Wrapper-based compaction (T3, T1): eligible commands rewrite to native-shell-wrapper
-#   invocation; wrapper captures/compacts output and stores originals in
-#   .ralph-workspace/tool-results/<plan-key>/ for retrieval via ralph_proxy_result_*.
-# - PostToolUse Shell output replacement (updated_tool_output) is NOT agent-visible;
-#   no native Shell output mutation claim. post-tool-shell-telemetry.sh is observability only.
+# agy contract: stdin carries camelCase JSON (toolCall.name, toolCall.args.CommandLine,
+# workspacePaths[0]); stdout carries {"decision":"allow"|"deny", "overwrite":{...}}.
+# Cursor payload keys (tool_name, tool_input.command, workspace_roots) are not accepted.
 #
-# Gates: RALPH_NATIVE_SHELL_WRAPPER=1 (default on when Ralph enables Cursor native hooks)
-#        RALPH_BASH_REWRITE=1 for fallback simple rewrite when wrapper is off.
-# Fail-open: wrapper load/storage failures or gate off -> raw command execution.
+# Gates: RALPH_NATIVE_SHELL_WRAPPER=1 (wrapper) or RALPH_BASH_REWRITE=1 (simple rewrite).
+# Fail-open: any failure or gate off prints {"decision":"allow"} and exits 0.
+#
+# Telemetry decision: agy PostToolUse carries only stepIdx and error (no output
+# bytes, duration, or command), so byte-count and command-hash telemetry cannot be
+# produced there. There is no PostToolUse hook; rewrite telemetry is recorded here,
+# on the PreToolUse side, via ralph_native_hook_append_rewrite_log.
 
 set -uo pipefail
 
-ralph_cursor_pre_tool_workspace() {
-  if [[ -n "${WORKSPACE:-}" ]]; then
-    printf '%s\n' "$WORKSPACE"
-    return 0
+# The shared fail-open helper exits 0 silently; agy requires a JSON decision on
+# stdout, so an EXIT trap answers allow whenever no decision was emitted.
+ralph_antigravity_pre_tool_exit_guard() {
+  if [[ "${_RALPH_AGY_PRE_TOOL_EMITTED:-0}" != "1" ]]; then
+    printf '{"decision":"allow"}\n'
   fi
-  local root
-  root="$(jq -r '.workspace_roots[0] // .cwd // empty' <<<"${RALPH_CURSOR_PRE_TOOL_INPUT:-{}}")"
-  [[ -n "$root" ]] || return 1
-  printf '%s\n' "$root"
+}
+trap ralph_antigravity_pre_tool_exit_guard EXIT
+
+ralph_antigravity_pre_tool_emit_deny() {
+  local reason="${1:-blocked by killswitch}"
+  _RALPH_AGY_PRE_TOOL_EMITTED=1
+  jq -nc --arg reason "$reason" '{decision: "deny", reason: $reason}'
 }
 
-ralph_cursor_pre_tool_emit_updated_command() {
+ralph_antigravity_pre_tool_emit_updated_command() {
   local command="${1:-}"
+  _RALPH_AGY_PRE_TOOL_EMITTED=1
   jq -nc \
     --arg command "$command" \
-    '{permission: "allow", updated_input: {command: $command}}'
-}
-
-ralph_cursor_pre_tool_rewrite_only() {
-  local workspace="${1:-}" command="${2:-}" rewriter_lib="${3:-}"
-  local rewrite_json rewritten_command rule_id plan_key
-
-  # shellcheck source=/dev/null
-  source "$rewriter_lib"
-
-  rewrite_json="$(ralph_rewrite_shell_command "$command")"
-  if ! ralph_rewrite_shell_command_applied "$rewrite_json"; then
-    ralph_native_hook_fail_open
-  fi
-
-  rewritten_command="$(jq -r '.rewritten_command // empty' <<<"$rewrite_json")"
-  rule_id="$(jq -r '.rule_id // empty' <<<"$rewrite_json")"
-  [[ -n "$rewritten_command" ]] || ralph_native_hook_fail_open
-
-  plan_key="$(ralph_native_hook_plan_key cursor-hook)"
-  ralph_native_hook_append_rewrite_log \
-    "$workspace" \
-    "$plan_key" \
-    "$command" \
-    "$rewritten_command" \
-    "$rule_id"
-
-  ralph_cursor_pre_tool_emit_updated_command "$rewritten_command"
-}
-
-ralph_cursor_pre_tool_wrapper_path() {
-  local workspace="${1:-}" command="${2:-}" rewriter_lib="${3:-}"
-  local rewrite_json rewritten_command rule_id plan_key wrapper_command
-
-  # shellcheck source=/dev/null
-  source "$rewriter_lib"
-
-  rewrite_json="$(ralph_rewrite_shell_command "$command")"
-  if ! ralph_rewrite_shell_command_applied "$rewrite_json"; then
-    ralph_native_hook_fail_open
-  fi
-
-  rewritten_command="$(jq -r '.rewritten_command // empty' <<<"$rewrite_json")"
-  rule_id="$(jq -r '.rule_id // empty' <<<"$rewrite_json")"
-  [[ -n "$rewritten_command" ]] || ralph_native_hook_fail_open
-
-  plan_key="$(ralph_native_hook_plan_key cursor-hook)"
-  wrapper_command="$(ralph_native_hook_build_wrapper_command \
-    "$workspace" \
-    "$rewritten_command" \
-    "cursor" \
-    "$plan_key")" || ralph_native_hook_fail_open
-
-  ralph_native_hook_append_rewrite_log \
-    "$workspace" \
-    "$plan_key" \
-    "$command" \
-    "$wrapper_command" \
-    "$rule_id"
-
-  ralph_cursor_pre_tool_emit_updated_command "$wrapper_command"
+    '{decision: "allow", overwrite: {CommandLine: $command}}'
 }
 
 ralph_antigravity_killswitch_mode_off() {
@@ -143,24 +88,18 @@ ralph_antigravity_killswitch_event_json() {
 }
 
 ralph_antigravity_killswitch_from_input() {
-  local input_json="${1:-}"
-  local workspace="${2:-}"
-  local tool="${3:-}"
-  local command="${4:-}"
+  local workspace="${1:-}"
+  local tool="${2:-}"
+  local command="${3:-}"
   local event_json core
 
   ralph_antigravity_killswitch_mode_off && {
     ralph_antigravity_killswitch_record "${tool:-}" "skip" false
     return 0
   }
-
-  if [[ -z "$tool" || -z "$command" ]]; then
-    tool="$(jq -r '.tool_name // ""' <<<"$input_json")"
-    command="$(jq -r '.tool_input.command // ""' <<<"$input_json")"
-  fi
   [[ -n "$workspace" && -n "$tool" ]] || return 0
 
-  # (b) Skip killswitch evaluation when no operator config exists and the
+  # Skip killswitch evaluation when no operator config exists and the
   # stock bundle rules clearly do not match (or no bundle config at all).
   if ! ralph_native_hook_killswitch_needs_full_evaluate "$workspace" "$command"; then
     ralph_antigravity_killswitch_record "$tool" "skip" false
@@ -176,32 +115,38 @@ ralph_antigravity_killswitch_from_input() {
   killswitch_evaluate "$event_json" >/dev/null
   ralph_antigravity_killswitch_record "$tool" "${KILLSWITCH_DECISION:-allow}" "$([ "${KILLSWITCH_DECISION:-allow}" = "fatal" ] && echo true || echo false)"
   if [[ "${KILLSWITCH_DECISION:-allow}" == "fatal" ]]; then
-    killswitch_apply_decision fatal
+    # killswitch_trigger exits 77 after recording the sentinel; contain it so the
+    # hook can still answer agy with a deny decision.
+    (killswitch_apply_decision fatal) >/dev/null 2>&1
+    ralph_antigravity_pre_tool_emit_deny "${KILLSWITCH_DECISION_REASON:-blocked by killswitch policy}"
+    return 1
   fi
   return 0
 }
 
-ralph_cursor_pre_tool_main() {
+ralph_antigravity_pre_tool_main() {
   command -v jq >/dev/null 2>&1 || ralph_native_hook_fail_open
 
-  RALPH_CURSOR_PRE_TOOL_INPUT="$(cat)" || ralph_native_hook_fail_open
+  RALPH_AGY_PRE_TOOL_INPUT="$(cat)" || ralph_native_hook_fail_open
 
-  local event tool_name command workspace rewriter_lib use_wrapper=0 use_rewrite=0
+  local tool_name="" command="" workspace="" rewriter_lib use_wrapper=0 use_rewrite=0
+  local parsed
   local final_command rewritten_command="" rule_id="" rewrite_applied=false rewrite_json
-  eval "$(jq -r '
-    "event=\(.hook_event_name // "" | @sh)\n" +
-    "tool_name=\(.tool_name // "" | @sh)\n" +
-    "command=\(.tool_input.command // "" | @sh)"
-  ' <<<"$RALPH_CURSOR_PRE_TOOL_INPUT")" || ralph_native_hook_fail_open
-  if [[ "$event" != "preToolUse" || "$tool_name" != "Shell" ]]; then
+  parsed="$(jq -r '
+    "tool_name=\(.toolCall.name // "" | tostring | @sh)\n" +
+    "command=\(.toolCall.args.CommandLine // "" | tostring | @sh)\n" +
+    "workspace=\(.workspacePaths[0] // "" | tostring | @sh)"
+  ' <<<"$RALPH_AGY_PRE_TOOL_INPUT" 2>/dev/null)" || ralph_native_hook_fail_open
+  eval "$parsed"
+  if [[ "$tool_name" != "run_command" ]]; then
     ralph_antigravity_killswitch_record "$tool_name" "nudge" false
     ralph_native_hook_fail_open
   fi
 
   [[ -n "$command" ]] || ralph_native_hook_fail_open
 
-  workspace="$(ralph_cursor_pre_tool_workspace)" || ralph_native_hook_fail_open
-  ralph_antigravity_killswitch_from_input "$RALPH_CURSOR_PRE_TOOL_INPUT" "$workspace" "$tool_name" "$command"
+  [[ -n "$workspace" ]] || ralph_native_hook_fail_open
+  ralph_antigravity_killswitch_from_input "$workspace" "$tool_name" "$command" || return 0
 
   if ralph_native_hook_truthy "${RALPH_NATIVE_SHELL_WRAPPER:-}"; then
     use_wrapper=1
@@ -232,7 +177,7 @@ ralph_cursor_pre_tool_main() {
         final_command="$rewritten_command"
         ralph_native_hook_append_rewrite_log \
           "$workspace" \
-          "$(ralph_native_hook_plan_key cursor-hook)" \
+          "$(ralph_native_hook_plan_key antigravity-hook)" \
           "$command" \
           "$rewritten_command" \
           "$rule_id"
@@ -242,14 +187,14 @@ ralph_cursor_pre_tool_main() {
 
   if [[ "$use_wrapper" == "1" ]]; then
     local plan_key wrapper_command
-    plan_key="$(ralph_native_hook_plan_key cursor-hook)"
+    plan_key="$(ralph_native_hook_plan_key antigravity-hook)"
     wrapper_command="$(ralph_native_hook_build_wrapper_command \
       "$workspace" \
       "$final_command" \
-      "cursor" \
+      "antigravity" \
       "$plan_key")" || {
       if [[ "$rewrite_applied" == "true" ]]; then
-        ralph_cursor_pre_tool_emit_updated_command "$final_command"
+        ralph_antigravity_pre_tool_emit_updated_command "$final_command"
         return 0
       fi
       ralph_native_hook_fail_open
@@ -262,12 +207,12 @@ ralph_cursor_pre_tool_main() {
         "$wrapper_command" \
         "${rule_id:-wrapper}"
     fi
-    ralph_cursor_pre_tool_emit_updated_command "$wrapper_command"
+    ralph_antigravity_pre_tool_emit_updated_command "$wrapper_command"
     return 0
   fi
 
   if [[ "$rewrite_applied" == "true" ]]; then
-    ralph_cursor_pre_tool_emit_updated_command "$final_command"
+    ralph_antigravity_pre_tool_emit_updated_command "$final_command"
     return 0
   fi
   ralph_native_hook_fail_open
@@ -285,4 +230,4 @@ source "$_NATIVE_HOOK_BOOTSTRAP"
 ralph_native_hook_bootstrap_source_lib || exit 0
 unset _NATIVE_HOOK_BOOTSTRAP
 
-ralph_cursor_pre_tool_main
+ralph_antigravity_pre_tool_main

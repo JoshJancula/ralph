@@ -1,0 +1,39 @@
+{
+  "publishMode": "on-verified",
+  "stages": [
+    {
+      "id": "implement",
+      "dependsOn": []
+    },
+    {
+      "id": "integrate",
+      "dependsOn": [
+        "review-approved"
+      ]
+    },
+    {
+      "id": "plan-qa",
+      "dependsOn": [
+        "integrate"
+      ]
+    },
+    {
+      "id": "qa",
+      "dependsOn": [
+        "plan-qa"
+      ]
+    },
+    {
+      "id": "qa-gate",
+      "dependsOn": [
+        "qa"
+      ]
+    },
+    {
+      "id": "review",
+      "dependsOn": [
+        "implement"
+      ]
+    }
+  ]
+}

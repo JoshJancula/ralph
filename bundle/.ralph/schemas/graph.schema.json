@@ -154,8 +154,21 @@
               "stage",
               "consensus",
               "repair-epoch",
-              "rework"
+              "rework",
+              "qa-repair"
             ]
+          },
+          "logicalStage": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "qaRound": {
+            "type": "integer",
+            "minimum": 1
           },
           "stage": {
             "type": "object",
@@ -192,6 +205,14 @@
               "workspaceMode": {
                 "type": "string",
                 "enum": ["shared", "snapshot", "worktree"]
+              },
+              "candidateFrom": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "seedFrom": {
+                "type": "string",
+                "pattern": "^.+$"
               },
               "setupProfile": {
                 "type": "string",
@@ -442,6 +463,9 @@
                   "path": {"type": "string", "pattern": "^.+$"},
                   "schema": {"type": "string", "pattern": "^.+$"}
                 }
+              },
+              "qaRepair": {
+                "type": "boolean"
               }
             }
           }

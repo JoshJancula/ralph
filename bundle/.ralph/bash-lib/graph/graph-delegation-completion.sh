@@ -9,11 +9,18 @@ if ! declare -F graph_delegation_ledger_read_status >/dev/null 2>&1; then source
 if ! declare -F graph_delegation_queue_file >/dev/null 2>&1; then source "$_GRAPH_DELEGATION_COMPLETION_DIR/graph-delegation-queue.sh"; fi
 
 _graph_delegation_completion_path() {
-  local state_root="$1" id="$2" path="$3" candidate real_root real_path
+  local state_root="$1" id="$2" path="$3" parent_run_id="${4:-${RALPH_GRAPH_RUN_ID:-}}" candidate real_root real_path base
   [[ -n "$path" && "$path" != *$'\n'* ]] || return 1
   real_root="$(cd "$state_root" 2>/dev/null && pwd -P)" || return 1
   if [[ "$path" = /* ]]; then candidate="$path"; else
-    candidate="$state_root/delegated-runs/$id/$path"
+    if [[ -n "$parent_run_id" ]] && declare -F ralph_state_delegation_dir >/dev/null 2>&1; then
+      base="$(ralph_state_delegation_dir "$state_root" "$parent_run_id" "$id" 2>/dev/null || true)"
+    fi
+    if [[ -n "${base:-}" ]]; then
+      candidate="$base/$path"
+    else
+      candidate="$state_root/delegated-runs/$id/$path"
+    fi
     [[ -e "$candidate" ]] || candidate="$state_root/$path"
   fi
   [[ -f "$candidate" && -s "$candidate" && ! -L "$candidate" ]] || return 1

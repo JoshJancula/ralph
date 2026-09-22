@@ -1,42 +1,19 @@
 {
-  "version": 1,
-  "hooks": {
-    "preToolUse": [
+  "ralph-native": {
+    "PreToolUse": [
       {
-        "command": ".agents/hooks/pre-tool-shell-policy.sh",
-        "matcher": "Shell"
-      },
-      {
-        "command": ".agents/hooks/pre-tool-proxy-read-handoff.sh",
-        "matcher": "MCP:ralph_proxy_read"
-      },
-      {
-        "command": ".agents/hooks/pre-tool-exploration-policy.sh",
-        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
-      }
-    ],
-    "postToolUse": [
-      {
-        "command": ".agents/hooks/post-tool-shell-telemetry.sh",
-        "matcher": "Shell"
-      },
-      {
-        "command": ".agents/hooks/post-tool-native-result-compact.sh",
-        "matcher": "Read|read|readToolCall|Grep|grep|grepToolCall|Glob|glob|globToolCall|SemanticSearch|semanticSearch"
-      },
-      {
-        "command": ".agents/hooks/post-tool-mcp-compact.sh",
-        "matcher": "MCP:*"
-      }
-    ],
-    "afterShellExecution": [
-      {
-        "command": ".agents/hooks/after-shell-telemetry.sh"
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "command": "hooks/pre-tool-shell-policy.sh",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "command": ".agents/hooks/stop-continuation.sh",
+        "command": "hooks/stop-continuation.sh",
         "timeout": 5400
       }
     ]

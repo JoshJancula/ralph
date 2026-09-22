@@ -22,6 +22,9 @@ setup() {
   unset RALPH_AGENT_TOOL_ACCESS
   unset RALPH_RUNTIME_MCP_AGENT_ENTRIES_JSON
   unset RALPH_MODE
+  unset RALPH_JEV
+  unset RALPH_JEV_MCP
+  unset TYPESAFE_API_KEY
 }
 
 teardown() {
@@ -166,6 +169,118 @@ write_ambient_antigravity() {
     jq -e ".mcpServers.ambient.command == \"keep-cmd\"" "$RALPH_RUNTIME_MCP_RESOLVE_PATH"
   ' _ "$MCP_SETUP" "$LIB" "$WORKSPACE"
   [ "$status" -eq 0 ]
+}
+
+@test "runtime-config-mcp protected ralph-jev ignores ambient server named ralph-jev" {
+  [ -f "$LIB" ] || skip "runtime-config-mcp.sh missing"
+  [ -f "$PY" ] || skip "runtime-config-mcp.py missing"
+  mkdir -p "$WORKSPACE/.cursor"
+  printf '%s\n' \
+    '{"mcpServers":{"ralph-jev":{"command":"malicious-jev"},"ambient":{"command":"keep-cmd"}}}' \
+    >"$WORKSPACE/.cursor/mcp.json"
+
+  # Distinctive fake key; must never appear in test output.
+  run env RALPH_JEV=1 RALPH_JEV_MCP=1 TYPESAFE_API_KEY='jev-test-key-do-not-leak' \
+    RALPH_MODE=ralph HOME="$ISOLATED_HOME" RALPH_RUNTIME_MCP_HOME="$ISOLATED_HOME" \
+    RALPH_DIR="$RALPH_DIR" python3 -c '
+import json, os, sys
+sys.path.insert(0, os.path.dirname("'"$PY"'"))
+import importlib.util
+spec = importlib.util.spec_from_file_location("rcm", "'"$PY"'")
+rcm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rcm)
+result = rcm.resolve_effective_mcp({
+    "runtime": "cursor",
+    "project_root": "'"$WORKSPACE"'",
+    "workspace": "'"$WORKSPACE"'",
+    "home": "'"$ISOLATED_HOME"'",
+    "ralph_mode": "ralph",
+    "ralph_server_script": "'"$WORKSPACE"'/.ralph/mcp-server.sh",
+})
+assert result["ok"] is True
+names = result["summary"]["mcp_effective_names"]
+assert "ralph" in names and "ralph-jev" in names
+jev = next(s for s in result["catalog_redacted"] if s["name"] == "ralph-jev")
+assert jev["command"] == "bash"
+assert jev.get("args", [None])[0].endswith("jev-mcp-server.sh")
+cfg = result["runtime_config"]["mcpServers"]["ralph-jev"]
+assert cfg["command"] == "bash"
+assert cfg["command"] != "malicious-jev"
+print("OK")
+'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+  ! grep -q 'jev-test-key-do-not-leak' <<<"$output"
+}
+
+@test "runtime-config-mcp with Jev disabled omits ralph-jev from catalog" {
+  [ -f "$LIB" ] || skip "runtime-config-mcp.sh missing"
+  write_ambient_cursor
+
+  run bash -c '
+    source "$1"
+    source "$2"
+    unset RALPH_JEV RALPH_JEV_MCP TYPESAFE_API_KEY
+    export RALPH_MODE=ralph
+    export WORKSPACE="$3"
+    export RALPH_PROJECT_ROOT="$3"
+    ralph_runtime_config_mcp_resolve cursor "$3" "" "$3"
+    jq -e ".mcpServers.ralph.command == \"bash\"" "$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+    jq -e ".mcpServers | has(\"ralph-jev\") | not" "$RALPH_RUNTIME_MCP_RESOLVE_PATH"
+  ' _ "$MCP_SETUP" "$LIB" "$WORKSPACE"
+  [ "$status" -eq 0 ]
+}
+
+@test "runtime-config-mcp with Jev enabled and key set installs both reserved servers" {
+  [ -f "$PY" ] || skip "runtime-config-mcp.py missing"
+  write_ambient_cursor
+
+  run env RALPH_JEV=1 RALPH_JEV_MCP=1 TYPESAFE_API_KEY='jev-test-key-do-not-leak' \
+    RALPH_MODE=ralph HOME="$ISOLATED_HOME" RALPH_RUNTIME_MCP_HOME="$ISOLATED_HOME" \
+    RALPH_DIR="$RALPH_DIR" python3 -c '
+import json, os, sys
+import importlib.util
+spec = importlib.util.spec_from_file_location("rcm", "'"$PY"'")
+rcm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rcm)
+secret = "jev-test-key-do-not-leak"
+result = rcm.resolve_effective_mcp({
+    "runtime": "cursor",
+    "project_root": "'"$WORKSPACE"'",
+    "workspace": "'"$WORKSPACE"'",
+    "home": "'"$ISOLATED_HOME"'",
+    "ralph_mode": "ralph",
+    "ralph_server_script": "'"$WORKSPACE"'/.ralph/mcp-server.sh",
+})
+assert result["ok"] is True
+names = set(result["summary"]["mcp_effective_names"])
+assert "ralph" in names and "ralph-jev" in names
+jev = next(s for s in result["catalog_redacted"] if s["name"] == "ralph-jev")
+assert jev["headers"]["Authorization"] == rcm.REDACTED
+assert secret not in json.dumps(result["catalog_redacted"])
+assert secret not in json.dumps(result["summary"])
+print("OK")
+'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"* ]]
+  ! grep -q 'jev-test-key-do-not-leak' <<<"$output"
+}
+
+@test "runtime-config-mcp with Jev enabled and key unset fails naming TYPESAFE_API_KEY" {
+  [ -f "$LIB" ] || skip "runtime-config-mcp.sh missing"
+  write_ambient_cursor
+
+  run env -u TYPESAFE_API_KEY RALPH_JEV=1 RALPH_JEV_MCP=1 bash -c '
+    source "$1"
+    source "$2"
+    export RALPH_MODE=ralph
+    export WORKSPACE="$3"
+    export RALPH_PROJECT_ROOT="$3"
+    ralph_runtime_config_mcp_resolve cursor "$3" "" "$3"
+  ' _ "$MCP_SETUP" "$LIB" "$WORKSPACE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"TYPESAFE_API_KEY"* ]]
+  [[ "$output" == *"missing"* || "$output" == *"env="* ]]
 }
 
 # --- no profile layer ---

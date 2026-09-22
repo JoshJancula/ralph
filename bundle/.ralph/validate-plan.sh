@@ -37,6 +37,13 @@ if [[ ! -f "$plan_path" ]]; then
   exit 1
 fi
 
+# Workflow definitions are templates, not runnable graph plans. Validate their
+# authored workflow contract directly before the execution-mode dispatch below.
+if awk 'NR == 1 { next } $1 == "kind:" && $2 == "workflow" { found = 1; exit } END { exit !found }' "$plan_path"; then
+  plan_workflow_validate "$plan_path"
+  exit $?
+fi
+
 execution="$(awk '
   BEGIN { in_frontmatter = 0; seen_open = 0 }
   NR == 1 && $0 == "---" { in_frontmatter = 1; seen_open = 1; next }

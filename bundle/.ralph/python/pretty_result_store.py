@@ -19,7 +19,7 @@ _PLAN_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _RESULT_ID_RE = re.compile(r"^[a-f0-9]{16}$")
 _ENVELOPE_RESULT_ID_RE = re.compile(r'"resultId"\s*:\s*"([A-Za-z0-9_-]{4,})"')
 _STORAGE_PATH_RE = re.compile(
-    r"\.ralph-workspace/tool-results/([^/]+)/results/([a-f0-9]{16})\.txt"
+    r"\.ralph-workspace/(?:cache/)?tool-results/([^/]+)/results/([a-f0-9]{16})\.txt"
 )
 _ERROR_LINE_RE = re.compile(
     r"error|fail|warning|traceback|exception", re.IGNORECASE
@@ -64,19 +64,45 @@ def workspace_root() -> Path:
 
 
 def tool_results_root() -> Path:
+    root = workspace_root()
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return root / "tool-results"
+    return root / "cache" / "tool-results"
+
+
+def tool_results_legacy_root() -> Path:
     return workspace_root() / "tool-results"
 
 
 def result_rel_path(plan: str, result_id: str) -> str:
-    return f".ralph-workspace/tool-results/{plan}/results/{result_id}.txt"
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return f".ralph-workspace/tool-results/{plan}/results/{result_id}.txt"
+    return f".ralph-workspace/cache/tool-results/{plan}/results/{result_id}.txt"
 
 
 def compact_rel_path(plan: str, result_id: str) -> str:
-    return f".ralph-workspace/tool-results/{plan}/results/{result_id}.compact.txt"
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return f".ralph-workspace/tool-results/{plan}/results/{result_id}.compact.txt"
+    return f".ralph-workspace/cache/tool-results/{plan}/results/{result_id}.compact.txt"
+
+
+def _result_file(plan: str, result_id: str, suffix: str = ".txt") -> Optional[Path]:
+    """Resolve a stored result, preferring the layout-aware root then the legacy path."""
+    primary = tool_results_root() / plan / "results" / f"{result_id}{suffix}"
+    if primary.is_file():
+        return primary
+    legacy = tool_results_legacy_root() / plan / "results" / f"{result_id}{suffix}"
+    if legacy.is_file():
+        return legacy
+    return primary if tool_results_root() != tool_results_legacy_root() else legacy
 
 
 def has_compact_view(plan: str, result_id: str) -> bool:
-    return (workspace_dir() / compact_rel_path(plan, result_id)).is_file()
+    path = _result_file(plan, result_id, ".compact.txt")
+    return bool(path and path.is_file())
 
 
 def full_output_pointer(plan: str, result_id: str) -> str:

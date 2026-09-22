@@ -36,7 +36,7 @@
 #     fresh (default): strict isolation between TODO invocations.
 #     resume: continue same CLI session context between TODOs.
 #     reset: reuse session ids and prefix a runtime reset command before each reset TODO (Claude defaults to `/clear`).
-#     compact: reuse session ids and prefix a compact command before each TODO (Codex=/compact, Cursor=/compress).
+  #     compact: reuse session ids and run a standalone compact turn (`/compact`) once at the start of each TODO.
 #   Cross-run TODO sessions: RALPH_PLAN_RESUME_RUN or --resume-run <run-id|last> (opt-in; fresh remains default).
 #   CLI session resume compatibility: RALPH_PLAN_CLI_RESUME=1 or --cli-resume stores a session id under
 #     .ralph-workspace/sessions/<RALPH_PLAN_KEY>/session-id.<runtime>.txt and, when that file exists, passes --resume <id> (or runtime
@@ -53,9 +53,17 @@
 #     standard: lowers human context byte cap (RALPH_HUMAN_CONTEXT_MAX_BYTES_NO_RESUME, default 2048).
 #     lean: standard + skips downstream stage context (RALPH_DOWNSTREAM_STAGE_LIMIT_NO_RESUME, default 0).
 #     full: no trimming applied. Set per-stage via contextBudget in .orch.json (orchestrator injects automatically).
+#   Jev (TypeSafe AI): optional, off by default, and independent of RALPH_MODE - no mode value enables it.
+#     Resolution order: RALPH_JEV env, saved jev_default in .ralph-workspace/preferences.json
+#     (none|compaction|mcp|both), interactive "Enable Jev (TypeSafe AI) for this run?" on TTY runs
+#     without --non-interactive, then 0.
+#     The prompt appears ONLY when a TypeSafe key is already configured (see: ralph jev key status);
+#     with no key it never fires. Choices: none (default), compaction (RALPH_JEV=1 + RALPH_JEV_COMPACT=1),
+#     mcp (RALPH_JEV=1 + RALPH_JEV_MCP=1), or both.
 #   Ralph mode: use --ralph-mode <no|native|ralph|hybrid> (or RALPH_MODE) to control Ralph MCP tools and native hook adapters.
-#     Resolution order: --ralph-mode flag, RALPH_MODE env, saved ralph_mode_default in .ralph-workspace/preferences.json,
-#     interactive prompt (TTY runs without --non-interactive), then default no.
+#     Recommended opt-in is hybrid. Resolution order: --ralph-mode flag, RALPH_MODE env, saved ralph_mode_default in
+#     .ralph-workspace/preferences.json, interactive "Enable Ralph tooling?" (yes=hybrid, no=no) on TTY runs without
+#     --non-interactive, then default no. Expert cells native/ralph are flag/env/preference only.
 # Optional tooling:
 #   fzf: Install for arrow-key menus in interactive prompts (brew install fzf / apt install fzf).
 #        Set RALPH_SKIP_FZF_HINT=1 to silence the install hint.
@@ -152,6 +160,8 @@ source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-compaction-provenance.sh"
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-effective-hook-config.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-hooks-config-snapshot.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-hooks-config-snapshot.sh"
+# shellcheck source=bash-lib/state-paths.sh
+source "$SCRIPT_DIR/bash-lib/state-paths.sh"
 # shellcheck source=bash-lib/run-plan/run-plan-session.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-session.sh"
 # shellcheck source=bash-lib/runtime-overlay/runtime-overlay.sh

@@ -10,7 +10,11 @@ ever enters the diagnosis artifact.
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -246,10 +250,8 @@ class MaliciousLogTest(unittest.TestCase):
 
 class ChangesetCrossReferenceTest(unittest.TestCase):
     def test_originating_changesets_are_matched_by_overlapping_file_path(self):
-        import tempfile
-
         tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         rel = write_log(tmp, "artifacts/ns/gate/g/step-0.log", "FAIL src/lane_a/thing.py:1 broke")
         result = gate_result(steps=[{"name": "test", "command": "pytest", "outcome": "failed", "artifactPath": rel}])
         lanes = [{"id": "lane-a", "writeScopes": ["src/lane_a/**"]}]
@@ -259,6 +261,163 @@ class ChangesetCrossReferenceTest(unittest.TestCase):
         ]
         diagnosis = gd.analyze(result, lanes, changesets, tmp)
         self.assertEqual(diagnosis["findings"][0]["changesets"], ["implement#att-1"])
+
+
+class LadderConfidenceRegistryTest(unittest.TestCase):
+    def test_ladder_confidence_matches_historical_values_from_registry(self):
+        # escalateThreshold 0.6 -> deterministic 0.6, zero 0.2, ambiguous 0.4.
+        self.assertEqual(gd._ladder_confidence("no-files"), 0.0)
+        self.assertEqual(gd._ladder_confidence("deterministic"), 0.6)
+        self.assertEqual(gd._ladder_confidence("zero-candidates"), 0.2)
+        self.assertEqual(gd._ladder_confidence("ambiguous"), 0.4)
+
+
+class JevLaneOwnershipTest(unittest.TestCase):
+    """Optional Jev at the ambiguous ladder tier only."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="ralph-diagnose-jev.")
+        self._fixture_dir = Path(self._tmpdir) / "fixtures"
+        self._fixture_dir.mkdir(parents=True)
+        self._prior_env = {
+            key: os.environ.get(key)
+            for key in (
+                "RALPH_JEV",
+                "RALPH_JEV_ENV_FILE",
+                "RALPH_JEV_REGISTRY",
+                "RALPH_JEV_STATE_DIR",
+                "RALPH_DIR",
+                "TYPESAFE_API_KEY",
+                "JEV_TRANSPORT",
+                "JEV_FIXTURE_DIR",
+                "RALPH_JEV_SHADOW",
+                "HOME",
+                "RALPH_CONFIG_HOME",
+            )
+        }
+        os.environ["RALPH_DIR"] = str(REPO_ROOT / "bundle" / ".ralph")
+        os.environ["RALPH_JEV_REGISTRY"] = str(
+            REPO_ROOT / "bundle" / ".ralph" / "jev" / "questions.registry.json"
+        )
+        os.environ["RALPH_JEV"] = "1"
+        os.environ["RALPH_JEV_ENV_FILE"] = "0"
+        os.environ["TYPESAFE_API_KEY"] = "test-key-diagnose-jev"
+        os.environ["JEV_TRANSPORT"] = "fixture"
+        os.environ["JEV_FIXTURE_DIR"] = str(self._fixture_dir)
+        os.environ["RALPH_JEV_STATE_DIR"] = os.path.join(self._tmpdir, "jev-state")
+        os.environ["RALPH_CONFIG_HOME"] = os.path.join(self._tmpdir, "config")
+        os.environ["HOME"] = os.path.join(self._tmpdir, "home")
+        os.environ.pop("RALPH_JEV_SHADOW", None)
+        Path(os.environ["RALPH_JEV_STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        for key, value in self._prior_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _write_fixture(self, choice: str, confidence: float) -> None:
+        doc = {
+            "model": "jev-1.13.0",
+            "answers": {
+                "owner": {
+                    "choice": choice,
+                    "probabilities": {choice: confidence, "other": max(0.0, 1.0 - confidence)},
+                    "confidence": confidence,
+                }
+            },
+            "usage": {"input_tokens": 40, "output_tokens": 8},
+        }
+        (self._fixture_dir / "graph.lane-ownership.json").write_text(
+            json.dumps(doc), encoding="utf-8"
+        )
+
+    def _ambiguous_case(self):
+        tmp = Path(tempfile.mkdtemp(dir=self._tmpdir))
+        rel = write_log(tmp, "artifacts/ns/gate/g/step-0.log", "FAIL src/shared/thing.py:1 broke")
+        result = gate_result(
+            steps=[{"name": "test", "command": "pytest", "outcome": "failed", "artifactPath": rel}]
+        )
+        lanes = [
+            {"id": "lane-a", "writeScopes": ["src/shared/**"]},
+            {"id": "lane-b", "writeScopes": ["src/shared/**"]},
+        ]
+        return result, lanes, tmp
+
+    def test_jev_disabled_ambiguous_output_matches_deterministic_path(self):
+        # Explicitly disable Jev and compare against a fresh analyze under the
+        # same disabled env (acceptance: identical when Jev is off).
+        for key in ("RALPH_JEV", "TYPESAFE_API_KEY"):
+            os.environ.pop(key, None)
+        result, lanes, tmp = self._ambiguous_case()
+        first = gd.analyze(result, lanes, [], tmp)
+        second = gd.analyze(result, lanes, [], tmp)
+        self.assertEqual(first, second)
+        self.assertEqual(first["findings"][0]["ownerReason"], "ambiguous")
+        self.assertIsNone(first["findings"][0]["owner"])
+        self.assertEqual(first["ambiguous"], [0])
+
+    def test_confident_jev_assigns_owner_and_skips_router_dispatch(self):
+        self._write_fixture("lane-a", 0.91)
+        result, lanes, tmp = self._ambiguous_case()
+        diagnosis = gd.analyze(result, lanes, [], tmp)
+        finding = diagnosis["findings"][0]
+        self.assertEqual(finding["owner"], "lane-a")
+        self.assertEqual(finding["ownerReason"], "jev")
+        self.assertEqual(diagnosis["ambiguous"], [])
+        self.assertEqual(diagnosis["laneAssignments"]["lane-a"], [0])
+        # Exit-2 router dispatch is driven by ambiguous[]; empty means skip.
+
+    def test_low_confidence_jev_leaves_finding_ambiguous(self):
+        self._write_fixture("lane-a", 0.40)
+        result, lanes, tmp = self._ambiguous_case()
+        diagnosis = gd.analyze(result, lanes, [], tmp)
+        finding = diagnosis["findings"][0]
+        self.assertIsNone(finding["owner"])
+        self.assertEqual(finding["ownerReason"], "ambiguous")
+        self.assertEqual(diagnosis["ambiguous"], [0])
+
+    def test_non_candidate_jev_choice_is_rejected(self):
+        self._write_fixture("lane-nonexistent", 0.95)
+        result, lanes, tmp = self._ambiguous_case()
+        diagnosis = gd.analyze(result, lanes, [], tmp)
+        finding = diagnosis["findings"][0]
+        self.assertIsNone(finding["owner"])
+        self.assertEqual(finding["ownerReason"], "ambiguous")
+        self.assertEqual(diagnosis["ambiguous"], [0])
+
+    def test_deterministic_single_owner_never_consults_jev(self):
+        # Fixture would claim lane-b; single-scope match must stay deterministic.
+        self._write_fixture("lane-b", 0.99)
+        tmp = Path(tempfile.mkdtemp(dir=self._tmpdir))
+        rel = write_log(tmp, "artifacts/ns/gate/g/step-0.log", "FAIL src/lane_a/thing.py:1 broke")
+        result = gate_result(
+            steps=[{"name": "test", "command": "pytest", "outcome": "failed", "artifactPath": rel}]
+        )
+        lanes = [
+            {"id": "lane-a", "writeScopes": ["src/lane_a/**"]},
+            {"id": "lane-b", "writeScopes": ["src/lane_b/**"]},
+        ]
+        # If Jev were consulted for this non-ambiguous case, the fixture would
+        # assign lane-b. Deterministic path must win without asking.
+        called = []
+        original = gd._try_jev_assign_owner
+
+        def _guard(*args, **kwargs):
+            called.append(True)
+            return original(*args, **kwargs)
+
+        gd._try_jev_assign_owner = _guard  # type: ignore[assignment]
+        try:
+            diagnosis = gd.analyze(result, lanes, [], tmp)
+        finally:
+            gd._try_jev_assign_owner = original  # type: ignore[assignment]
+        self.assertEqual(called, [])
+        self.assertEqual(diagnosis["findings"][0]["owner"], "lane-a")
+        self.assertEqual(diagnosis["findings"][0]["ownerReason"], "deterministic-path-match")
 
 
 if __name__ == "__main__":

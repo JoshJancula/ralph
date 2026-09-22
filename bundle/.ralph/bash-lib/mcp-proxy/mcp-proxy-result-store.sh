@@ -5,8 +5,16 @@ if [[ -n "${RALPH_MCP_PROXY_RESULT_STORE_LOADED:-}" ]]; then
 fi
 RALPH_MCP_PROXY_RESULT_STORE_LOADED=1
 
+_MCP_PROXY_RESULT_STORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F ralph_state_shared_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_MCP_PROXY_RESULT_STORE_DIR/../state-paths.sh"
+fi
+unset _MCP_PROXY_RESULT_STORE_DIR
+
 # Public interface:
-#   ralph_mcp_proxy_result_store_root -- resolve .ralph-workspace/tool-results path.
+#   ralph_mcp_proxy_result_store_root -- layout-aware tool-results root (cache/ under v2).
+#   ralph_mcp_proxy_result_store_legacy_root -- pre-layout-2 tool-results path (read fallback).
 #   ralph_mcp_proxy_result_store_plan_dir -- path for one plan key under tool-results.
 #   ralph_mcp_proxy_result_store_init -- create plan-key storage directory layout.
 #   ralph_mcp_proxy_result_store_generate_id -- deterministic 16-char hex id from content.
@@ -59,7 +67,34 @@ ralph_mcp_proxy_result_store_root() {
   local workspace="${1:-}"
   local workspace_root
   workspace_root="$(ralph_mcp_proxy_result_store_workspace_root "$workspace")" || return 1
+  ralph_state_shared_dir "$workspace_root" tool-results
+}
+
+# Historical top-level tool-results/ used before layout 2 moved the category under cache/.
+ralph_mcp_proxy_result_store_legacy_root() {
+  local workspace="${1:-}"
+  local workspace_root
+  workspace_root="$(ralph_mcp_proxy_result_store_workspace_root "$workspace")" || return 1
   printf '%s/tool-results\n' "$workspace_root"
+}
+
+# Relative display path for footers/envelopes (layout-aware).
+ralph_mcp_proxy_result_store_display_rel_path() {
+  local plan_key="${1:-}" result_id="${2:-}" store_root workspace_root rel=".ralph-workspace/tool-results"
+  ralph_mcp_proxy_result_store_validate_plan_key "$plan_key" || return 1
+  ralph_mcp_proxy_result_store_validate_result_id "$result_id" || return 1
+  workspace_root="$(ralph_mcp_proxy_result_store_workspace_root "${RALPH_MCP_WORKSPACE:-${WORKSPACE:-.}}" 2>/dev/null)" || workspace_root=""
+  if [[ -n "$workspace_root" ]]; then
+    store_root="$(ralph_state_shared_dir "$workspace_root" tool-results 2>/dev/null || true)"
+    case "$store_root" in
+      */cache/tool-results) rel=".ralph-workspace/cache/tool-results" ;;
+    esac
+  else
+    case "$(ralph_state_layout_for_new_run 2>/dev/null || printf '2')" in
+      2) rel=".ralph-workspace/cache/tool-results" ;;
+    esac
+  fi
+  printf '%s/%s/results/%s\n' "$rel" "$plan_key" "$result_id"
 }
 
 ralph_mcp_proxy_result_store_canonicalize_path() {
@@ -154,15 +189,36 @@ ralph_mcp_proxy_result_store_resolve_result_path() {
   local plan_key="${2:-}"
   local result_id="${3:-}"
   local view="${4:-raw}"
+  ralph_mcp_proxy_result_store_validate_plan_key "$plan_key" || return 1
   ralph_mcp_proxy_result_store_validate_result_id "$result_id" || return 1
-  local results_dir store_root candidate suffix=".txt"
+  local store_root legacy_root candidate legacy_candidate suffix=".txt"
   case "$view" in
     compacted) suffix=".compact.txt" ;;
     raw|*) suffix=".txt" ;;
   esac
-  results_dir="$(ralph_mcp_proxy_result_store_results_dir "$workspace" "$plan_key")" || return 1
-  candidate="${results_dir%/}/${result_id}${suffix}"
   store_root="$(ralph_mcp_proxy_result_store_root "$workspace")" || return 1
+  candidate="${store_root%/}/${plan_key}/results/${result_id}${suffix}"
+  if [[ -f "$candidate" ]]; then
+    if [[ -d "$store_root" ]]; then
+      ralph_mcp_proxy_result_store_path_under_dir "$store_root" "$candidate" || return 1
+      return 0
+    fi
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  legacy_root="$(ralph_mcp_proxy_result_store_legacy_root "$workspace")" || return 1
+  if [[ "$legacy_root" != "$store_root" ]]; then
+    legacy_candidate="${legacy_root%/}/${plan_key}/results/${result_id}${suffix}"
+    if [[ -f "$legacy_candidate" ]]; then
+      if [[ -d "$legacy_root" ]]; then
+        ralph_mcp_proxy_result_store_path_under_dir "$legacy_root" "$legacy_candidate" || return 1
+        return 0
+      fi
+      printf '%s\n' "$legacy_candidate"
+      return 0
+    fi
+  fi
+  # Prefer the current layout path for new writes / missing results.
   if [[ -d "$store_root" ]]; then
     ralph_mcp_proxy_result_store_path_under_dir "$store_root" "$candidate" || return 1
     return 0
@@ -485,15 +541,25 @@ ralph_mcp_proxy_result_store_search() {
     [[ -f "$result_path" ]] || return 1
     search_paths+=("$result_path")
   else
-    local results_dir
+    local results_dir legacy_root legacy_results entry
     results_dir="$(ralph_mcp_proxy_result_store_results_dir "$workspace" "$plan_key")" || return 1
-    [[ -d "$results_dir" ]] || return 0
-    local entry
     shopt -s nullglob
-    for entry in "$results_dir"/*.txt; do
-      [[ "$entry" == *.compact.txt ]] && continue
-      search_paths+=("$entry")
-    done
+    if [[ -d "$results_dir" ]]; then
+      for entry in "$results_dir"/*.txt; do
+        [[ "$entry" == *.compact.txt ]] && continue
+        search_paths+=("$entry")
+      done
+    fi
+    legacy_root="$(ralph_mcp_proxy_result_store_legacy_root "$workspace")" || true
+    if [[ -n "$legacy_root" && "$legacy_root" != "$(ralph_mcp_proxy_result_store_root "$workspace")" ]]; then
+      legacy_results="${legacy_root%/}/${plan_key}/results"
+      if [[ -d "$legacy_results" ]]; then
+        for entry in "$legacy_results"/*.txt; do
+          [[ "$entry" == *.compact.txt ]] && continue
+          search_paths+=("$entry")
+        done
+      fi
+    fi
     shopt -u nullglob
   fi
 

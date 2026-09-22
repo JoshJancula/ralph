@@ -23,7 +23,7 @@ Task or specification ->  ralph workflow start <id> --task|--plan ...
 | Page | What it contains |
 | --- | --- |
 | [Environment](ENVIRONMENT.md) | Flags, environment variables, model selection, session controls, and the three-root model |
-| [Workspace](WORKSPACE.md) | `.ralph-workspace/` layout, run kinds, manifests, retention, and `ralph state` |
+| [Workspace](WORKSPACE.md) | `.ralph-workspace/` layout versions, run kinds, manifests, retention, and `ralph state` |
 | [Tooling](TOOLING.md) | Ralph modes, MCP proxy tools, compaction, hooks, and runtime adapters |
 | [MCP](MCP.md) | MCP server setup, host wiring, and third-party MCP behavior |
 | [Hooks](HOOKS.md) | Installed hook inventory and channel behavior |
@@ -50,15 +50,16 @@ ralph workflow actions list <run-id>
 
 Open tasks use `- [ ]`; completed tasks use `- [x]`. Ralph ignores `- []`.
 Logs and outputs live under `.ralph-workspace/` as described in
-[Workspace](WORKSPACE.md). Plan logs are under `.ralph-workspace/logs/`;
-generated files under `.ralph-workspace/artifacts/`.
+[Workspace](WORKSPACE.md). New runs default to layout 2 under
+`runs/<run-id>/` (with `cache/` and `internal/`); existing layout 1 paths stay
+readable. Declared artifacts remain under `.ralph-workspace/artifacts/`.
 
 ## Three directories, three jobs
 
 | Root | Default | Purpose |
 | --- | --- | --- |
 | Project root | current project | Ralph install and native runtime configuration |
-| State root | `<project>/.ralph-workspace` | logs, artifacts, sessions, and workflow registry |
+| State root | `<project>/.ralph-workspace` | logs, artifacts, sessions, workflow registry, and (layout 2) `runs/`, `cache/`, `internal/` |
 | Agent workspace | invoking directory | files the assistant may read and change |
 
 Use `--workspace`, `--workspace-root`, and `--agent-workspace` when these are

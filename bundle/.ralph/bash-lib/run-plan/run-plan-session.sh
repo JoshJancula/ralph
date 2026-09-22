@@ -35,6 +35,27 @@ ralph_session_strategy_is_truthy() {
   esac
 }
 
+# Single source of truth for compact session strategy support per runtime.
+ralph_session_runtime_supports_compact() {
+  case "${1:-}" in
+    claude|codex) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Refuse an explicit non-interactive compact selection on a runtime that cannot compact.
+# Interactive menus omit the option instead. Per-TODO overrides fall back separately.
+# Args: $1 runtime (defaults to RUNTIME)
+# Returns: calls ralph_die when refused; 0 otherwise.
+ralph_session_reject_explicit_unsupported_compact() {
+  local runtime="${1:-${RUNTIME:-}}"
+  if [[ "${RALPH_PLAN_SESSION_STRATEGY:-}" == "compact" ]] \
+    && ! ralph_session_runtime_supports_compact "$runtime" \
+    && { [[ -n "${SESSION_STRATEGY_FLAG:-}" ]] || [[ "${RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED:-0}" == "1" ]]; }; then
+    ralph_die "Error: runtime '${runtime}' does not support the compact session strategy when configured non-interactively; use fresh, resume, or reset instead."
+  fi
+}
+
 ralph_session_effective_strategy() {
   local strategy="${RALPH_PLAN_SESSION_STRATEGY:-}"
   case "$strategy" in
@@ -76,7 +97,11 @@ ralph_session_init() {
     else
       local _workspace_sessions_root="${RALPH_PLAN_WORKSPACE_ROOT:-${_workspace_root}/.ralph-workspace}"
       _workspace_sessions_root="${_workspace_sessions_root%/}"
-      _plan_session_home="${_workspace_sessions_root}/sessions"
+      ralph_session_ensure_state_paths || return 1
+      # Ensure the state root exists before resolve so layout-aware paths
+      # canonicalize (pwd -P) the same way later readers do.
+      mkdir -p "$_workspace_sessions_root" || return 1
+      _plan_session_home="$(ralph_state_sessions_home "$_workspace_sessions_root" "${RALPH_PLAN_KEY:-}")" || return 1
     fi
   fi
   RALPH_PLAN_SESSION_HOME="$_plan_session_home"
@@ -265,7 +290,8 @@ ralph_session_prior_run_resume_summary() {
   local plan_key="${RALPH_PLAN_KEY:-}"
   local dir exact=0 total=0 f capture rec_hash plan_path hashes=""
   [[ -n "$state_root" && -n "$plan_key" ]] || return 1
-  dir="${state_root%/}/sessions/${plan_key}/todo-sessions"
+  ralph_session_ensure_state_paths || return 1
+  dir="$(ralph_state_sessions_dir "$state_root" "$plan_key")/todo-sessions"
   [[ -d "$dir" ]] || return 1
   plan_path="${PLAN_PATH:-}"
   if [[ -n "$plan_path" && -f "$plan_path" ]]; then
@@ -295,6 +321,10 @@ ralph_session_prior_run_resume_summary() {
     exact=$((exact + 1))
   done
   [[ "$exact" -gt 0 ]] || return 1
+  local _prior_settings _prior_runtime
+  _prior_settings="$(ralph_session_prior_run_settings 2>/dev/null)" || return 1
+  _prior_runtime="${_prior_settings%%$'\t'*}"
+  [[ -n "$_prior_runtime" && "$_prior_runtime" == "${RUNTIME:-}" ]] || return 1
   if [[ "$total" -eq 0 ]]; then
     total="$exact"
   fi
@@ -331,27 +361,41 @@ ralph_session_prompt_cli_resume() {
   echo -e "${C_C}${C_BOLD}Session Strategy${C_RST}" >&2
   echo -e "${C_BOLD}How should ${_cr_runtime_label} handle sessions between TODOs?${C_RST}" >&2
   echo "" >&2
-  echo -e "  ${C_G}1${C_RST}  ${C_BOLD}fresh${C_RST}  ${C_DIM}(recommended default) new session behavior per TODO${C_RST}" >&2
-  echo -e "  ${C_G}2${C_RST}  ${C_BOLD}resume${C_RST} ${C_DIM}continue exact prior session context${C_RST}" >&2
-  echo -e "  ${C_G}3${C_RST}  ${C_BOLD}reset${C_RST}  ${C_DIM}reuse session id with reset command + reset-oriented TODO prompts${C_RST}" >&2
-  echo -e "  ${C_G}4${C_RST}  ${C_BOLD}compact${C_RST} ${C_DIM}reuse session id with a compact command prefix before each TODO${C_RST}" >&2
+  local _cr_options=() _cr_opt_idx=1 _cr_opt_compact=""
+  _cr_options+=("fresh")
+  echo -e "  ${C_G}${_cr_opt_idx}${C_RST}  ${C_BOLD}fresh${C_RST}  ${C_DIM}(recommended default) new session behavior per TODO${C_RST}" >&2
+  _cr_opt_idx=$((_cr_opt_idx + 1))
+  _cr_options+=("resume")
+  echo -e "  ${C_G}${_cr_opt_idx}${C_RST}  ${C_BOLD}resume${C_RST} ${C_DIM}continue exact prior session context${C_RST}" >&2
+  _cr_opt_idx=$((_cr_opt_idx + 1))
+  _cr_options+=("reset")
+  echo -e "  ${C_G}${_cr_opt_idx}${C_RST}  ${C_BOLD}reset${C_RST}  ${C_DIM}reuse session id with reset command + reset-oriented TODO prompts${C_RST}" >&2
+  _cr_opt_idx=$((_cr_opt_idx + 1))
+  if ralph_session_runtime_supports_compact "$RUNTIME"; then
+    _cr_opt_compact="${_cr_opt_idx}"
+    _cr_options+=("compact")
+    echo -e "  ${C_G}${_cr_opt_compact}${C_RST}  ${C_BOLD}compact${C_RST} ${C_DIM}reuse session id and run a standalone compact turn before each TODO${C_RST}" >&2
+    _cr_opt_idx=$((_cr_opt_idx + 1))
+  fi
   if [[ -n "$_resume_run_summary" ]]; then
-    echo -e "  ${C_G}5${C_RST}  ${C_BOLD}resume previous run${C_RST} ${C_DIM}(${_resume_run_summary})${C_RST}" >&2
+    _cr_options+=("resume previous run")
+    echo -e "  ${C_G}${_cr_opt_idx}${C_RST}  ${C_BOLD}resume previous run${C_RST} ${C_DIM}(${_resume_run_summary})${C_RST}" >&2
   fi
   echo "" >&2
   echo -e "${C_DIM}Session ids are stored at:${C_RST}" >&2
   echo -e "${C_DIM}  ${SESSION_ID_FILE}${C_RST}" >&2
   echo -e "${C_DIM}Python 3 on PATH is required to capture/update ids from JSON output.${C_RST}" >&2
   echo "" >&2
-  local _cr_choice _cr_strategy
-  if declare -F ralph_menu_select >/dev/null 2>&1; then
-    if [[ -n "$_resume_run_summary" ]]; then
-      _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset" "compact" "resume previous run")"
-    else
-      _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "fresh" "resume" "reset" "compact")"
-    fi
+  local _cr_choice _cr_strategy _cr_prompt_default="fresh"
+  if ralph_session_runtime_supports_compact "$RUNTIME"; then
+    _cr_prompt_default="fresh/resume/reset/compact"
   else
-    _cr_choice="$(ralph_prompt_text "Session strategy (fresh/resume/reset/compact)" "fresh")"
+    _cr_prompt_default="fresh/resume/reset"
+  fi
+  if declare -F ralph_menu_select >/dev/null 2>&1; then
+    _cr_choice="$(ralph_menu_select --prompt "Session strategy" --default 1 -- "${_cr_options[@]}")"
+  else
+    _cr_choice="$(ralph_prompt_text "Session strategy (${_cr_prompt_default})" "fresh")"
   fi
   case "$_cr_choice" in
     resume|reset|compact) _cr_strategy="$_cr_choice" ;;
@@ -359,6 +403,23 @@ ralph_session_prompt_cli_resume() {
       _cr_strategy="fresh"
       RALPH_PLAN_RESUME_RUN="last"
       export RALPH_PLAN_RESUME_RUN
+      local _prior_line _prior_model _prior_mode _prior_rest
+      _prior_line="$(ralph_session_prior_run_settings 2>/dev/null)" || _prior_line=""
+      if [[ -n "$_prior_line" ]]; then
+        _prior_rest="${_prior_line#*$'\t'}"
+        _prior_model="${_prior_rest%%$'\t'*}"
+        _prior_mode="${_prior_rest#*$'\t'}"
+        if [[ -z "${RALPH_MODE:-}" && -n "$_prior_mode" ]]; then
+          RALPH_MODE="$_prior_mode"
+          export RALPH_MODE
+          ralph_run_plan_log "resume previous run: restored RALPH_MODE=${RALPH_MODE}"
+        fi
+        if [[ -z "${PLAN_MODEL_CLI:-}" && -z "${_plan_model_from_cli:-}" && -n "$_prior_model" ]]; then
+          PLAN_MODEL_CLI="$_prior_model"
+          export PLAN_MODEL_CLI
+          ralph_run_plan_log "resume previous run: restored model=${PLAN_MODEL_CLI}"
+        fi
+      fi
       ;;
     *) _cr_strategy="fresh" ;;
   esac
@@ -990,6 +1051,16 @@ ralph_session_todo_export_paths() {
   export RALPH_TODO_SESSION_MANIFEST_PATH
 }
 
+ralph_session_ensure_state_paths() {
+  if declare -F ralph_state_plan_attempt_dir >/dev/null 2>&1; then
+    return 0
+  fi
+  local _dir
+  _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || return 1
+  # shellcheck source=../state-paths.sh
+  source "$_dir/state-paths.sh"
+}
+
 ralph_session_resume_run_sanitize() {
   local raw="${1:-}"
   [[ -n "$raw" ]] || return 1
@@ -997,57 +1068,145 @@ ralph_session_resume_run_sanitize() {
   printf '%s\n' "$raw"
 }
 
+# Append-only plan-run index: layout 1 beside attempts, layout 2 under cache/indexes.
 ralph_session_resume_run_index_path() {
   local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
-  local plan_key="${RALPH_PLAN_KEY:-}"
+  local plan_key="${RALPH_PLAN_KEY:-}" layout2_index layout1_index
   [[ -n "$state_root" && -n "$plan_key" ]] || return 1
-  printf '%s/logs/%s/runs/index.jsonl\n' "${state_root%/}" "$plan_key"
+  ralph_session_ensure_state_paths || return 1
+  layout2_index="$(ralph_state_path_resolve "$state_root" "cache/indexes/runs.jsonl")" || return 1
+  if [[ -f "$layout2_index" ]]; then
+    printf '%s\n' "$layout2_index"
+    return 0
+  fi
+  layout1_index="$(ralph_state_path_resolve "$state_root" "logs/$plan_key/runs/index.jsonl")" || return 1
+  printf '%s\n' "$layout1_index"
+}
+
+# Resolve the run-manifest directory for one plan attempt through state-paths.
+ralph_session_resume_run_manifest_path() {
+  local state_root="${1:-${RALPH_PLAN_WORKSPACE_ROOT:-}}"
+  local plan_key="${2:-${RALPH_PLAN_KEY:-}}"
+  local run_id="${3:-}"
+  local attempt_dir
+  [[ -n "$state_root" && -n "$plan_key" && -n "$run_id" ]] || return 1
+  ralph_session_ensure_state_paths || return 1
+  attempt_dir="$(ralph_state_plan_attempt_dir "$state_root" "$plan_key" "$run_id")" || return 1
+  printf '%s/run-manifest.json\n' "$attempt_dir"
+}
+
+# Most recent terminal plan run for this plan key. Same order as --resume-run last:
+# run index, then the layout-1 runs directory, then layout-2 catalogs.
+# Prints the run id. Returns 1 when none qualifies.
+ralph_session_locate_prior_terminal_run() {
+  local current_run resolved="" candidate index_path run_id status
+  local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}" plan_key="${RALPH_PLAN_KEY:-}"
+  [[ -n "$state_root" && -n "$plan_key" ]] || return 1
+  ralph_session_ensure_state_paths || return 1
+  current_run="$(ralph_session_todo_run_id)"
+
+  index_path="$(ralph_session_resume_run_index_path 2>/dev/null)" || true
+  if [[ -n "$index_path" && -f "$index_path" ]]; then
+    while IFS= read -r candidate; do
+      run_id="$(jq -r '.run_id // empty' <<<"$candidate" 2>/dev/null)" || continue
+      status="$(jq -r '.status // empty' <<<"$candidate" 2>/dev/null)"
+      [[ -n "$run_id" ]] || continue
+      [[ "$run_id" != "$current_run" ]] || continue
+      case "$status" in
+        running|incomplete|unknown|'') continue ;;
+      esac
+      resolved="$run_id"
+    done < "$index_path"
+  fi
+  if [[ -z "$resolved" ]]; then
+    local runs_dir manifest
+    runs_dir="$(ralph_state_path_resolve "$state_root" "logs/${plan_key}/runs" 2>/dev/null)" || runs_dir=""
+    if [[ -n "$runs_dir" && -d "$runs_dir" ]]; then
+      while IFS= read -r run_id; do
+        [[ "$run_id" != "$current_run" ]] || continue
+        manifest="$(ralph_session_resume_run_manifest_path "$state_root" "$plan_key" "$run_id" 2>/dev/null)" || continue
+        [[ -f "$manifest" ]] || continue
+        status="$(jq -r '.status // empty' "$manifest" 2>/dev/null)"
+        case "$status" in
+          running|incomplete|unknown|'') continue ;;
+        esac
+        resolved="$run_id"
+        break
+      done < <(ls -1t "$runs_dir" 2>/dev/null)
+    fi
+    if [[ -z "$resolved" ]]; then
+      local catalog attempt_dir
+      for catalog in "$state_root"/runs/*/run.json; do
+        [[ -f "$catalog" ]] || continue
+        run_id="$(jq -r '.runId // empty' "$catalog" 2>/dev/null)" || continue
+        [[ -n "$run_id" && "$run_id" != "$current_run" ]] || continue
+        attempt_dir="$(ralph_state_plan_attempt_dir "$state_root" "$plan_key" "$run_id" 2>/dev/null)" || continue
+        manifest="$attempt_dir/run-manifest.json"
+        [[ -f "$manifest" ]] || continue
+        status="$(jq -r '.status // empty' "$manifest" 2>/dev/null)"
+        case "$status" in
+          running|incomplete|unknown|'') continue ;;
+        esac
+        resolved="$run_id"
+        break
+      done
+    fi
+  fi
+  [[ -n "$resolved" ]] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# Runtime, model, and ralph_mode of the prior terminal run, tab-separated.
+# Cached for the process so menu gating and apply cannot disagree.
+# Returns 1 when no prior terminal run exists.
+ralph_session_prior_run_settings() {
+  if [[ -n "${_RALPH_SESSION_PRIOR_SETTINGS_READY:-}" ]]; then
+    [[ "${_RALPH_SESSION_PRIOR_SETTINGS_READY}" == "1" ]] || return 1
+    printf '%s\t%s\t%s\n' \
+      "${_RALPH_SESSION_PRIOR_RUNTIME:-}" \
+      "${_RALPH_SESSION_PRIOR_MODEL:-}" \
+      "${_RALPH_SESSION_PRIOR_MODE:-}"
+    return 0
+  fi
+  local run_id manifest state_root plan_key runtime model mode
+  state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}"
+  plan_key="${RALPH_PLAN_KEY:-}"
+  run_id="$(ralph_session_locate_prior_terminal_run)" || {
+    _RALPH_SESSION_PRIOR_SETTINGS_READY=0
+    return 1
+  }
+  manifest="$(ralph_session_resume_run_manifest_path "$state_root" "$plan_key" "$run_id" 2>/dev/null)" || {
+    _RALPH_SESSION_PRIOR_SETTINGS_READY=0
+    return 1
+  }
+  [[ -f "$manifest" ]] || {
+    _RALPH_SESSION_PRIOR_SETTINGS_READY=0
+    return 1
+  }
+  runtime="$(jq -r '.runtime // empty' "$manifest" 2>/dev/null)"
+  model="$(jq -r '.model // empty' "$manifest" 2>/dev/null)"
+  mode="$(jq -r '.ralph_mode // empty' "$manifest" 2>/dev/null)"
+  _RALPH_SESSION_PRIOR_RUN_ID="$run_id"
+  _RALPH_SESSION_PRIOR_RUNTIME="$runtime"
+  _RALPH_SESSION_PRIOR_MODEL="$model"
+  _RALPH_SESSION_PRIOR_MODE="$mode"
+  _RALPH_SESSION_PRIOR_SETTINGS_READY=1
+  printf '%s\t%s\t%s\n' "$runtime" "$model" "$mode"
 }
 
 ralph_session_resolve_resume_run() {
   local requested="${RALPH_PLAN_RESUME_RUN:-}"
-  local resolved="" current_run candidate index_path run_id status status
+  local resolved=""
 
   unset RALPH_PLAN_RESUME_RUN_RESOLVED
   RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID=0
   export RALPH_SESSION_TODO_ALLOW_FOREIGN_RUN_ID
 
   [[ -n "$requested" ]] || return 0
-  current_run="$(ralph_session_todo_run_id)"
+  ralph_session_ensure_state_paths || return 1
 
   if [[ "$requested" == "last" ]]; then
-    index_path="$(ralph_session_resume_run_index_path 2>/dev/null)" || true
-    if [[ -n "$index_path" && -f "$index_path" ]]; then
-      while IFS= read -r candidate; do
-        run_id="$(jq -r '.run_id // empty' <<<"$candidate" 2>/dev/null)" || continue
-        status="$(jq -r '.status // empty' <<<"$candidate" 2>/dev/null)"
-        [[ -n "$run_id" ]] || continue
-        [[ "$run_id" != "$current_run" ]] || continue
-        case "$status" in
-          running|incomplete|unknown|'') continue ;;
-        esac
-        resolved="$run_id"
-      done < "$index_path"
-    fi
-    if [[ -z "$resolved" ]]; then
-      local state_root="${RALPH_PLAN_WORKSPACE_ROOT:-}" plan_key="${RALPH_PLAN_KEY:-}" runs_dir manifest status
-      if [[ -n "$state_root" && -n "$plan_key" ]]; then
-        runs_dir="${state_root%/}/logs/${plan_key}/runs"
-        if [[ -d "$runs_dir" ]]; then
-          while IFS= read -r run_id; do
-            [[ "$run_id" != "$current_run" ]] || continue
-            manifest="$runs_dir/$run_id/run-manifest.json"
-            [[ -f "$manifest" ]] || continue
-            status="$(jq -r '.status // empty' "$manifest" 2>/dev/null)"
-            case "$status" in
-              running|incomplete|unknown|'') continue ;;
-            esac
-            resolved="$run_id"
-            break
-          done < <(ls -1t "$runs_dir" 2>/dev/null)
-        fi
-      fi
-    fi
+    resolved="$(ralph_session_locate_prior_terminal_run 2>/dev/null)" || resolved=""
     if [[ -z "$resolved" ]]; then
       if declare -F ralph_run_plan_log >/dev/null 2>&1; then
         ralph_run_plan_log "resume-run last: no prior plan run found; starting fresh TODO sessions"

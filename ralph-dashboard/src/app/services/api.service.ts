@@ -378,6 +378,23 @@ export interface AmbientUsageResponse {
   providers: AmbientProviderReport[];
 }
 
+export interface JevUsageResponse {
+  /** True only when at least one live Jev call was recorded in scope. */
+  enabled: boolean;
+  calls: number;
+  calls_measured: number;
+  calls_unavailable: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_usd: number;
+  by_question_set: Array<{
+    question_set_id: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+  }>;
+}
+
 /** Optional AbortSignal for request cancellation on route/filter changes. */
 export interface ApiRequestOptions {
   signal?: AbortSignal;
@@ -568,6 +585,20 @@ export interface GraphNodeState {
   nativeSubagentEvents?: NativeSubagentEvent[];
 }
 
+/** One routing or conditional edge selection from events.jsonl. */
+export interface GraphRoutingDecision {
+  nodeId: string;
+  selectedTarget: string;
+  alternatives: string[];
+  reason: string;
+  confidence: number | null;
+  source: string;
+  registryVersion: string;
+  questionSetId: string;
+  timestamp: string;
+  sequence: number | null;
+}
+
 export interface GraphRunDetail {
   namespace: string;
   runId: string;
@@ -576,6 +607,10 @@ export interface GraphRunDetail {
   graph: Record<string, unknown>;
   usage?: GraphUsageSummary;
   concurrencyReductions?: string[];
+  routingDecisions?: GraphRoutingDecision[];
+  files?: { summary: Array<{ path: string; label: string }>; raw: string[] };
+  timeline?: Array<{ at: string; prose: string }>;
+  operatorNext?: { label: string; description: string; enabled: boolean; disabledReason?: string };
 }
 
 export interface GraphRunsResponse {
@@ -715,6 +750,28 @@ export interface PlanRunListItem {
   inputTokens: number;
   outputTokens: number;
   elapsedSeconds: number | null;
+  parentRunId?: string | null;
+  stageId?: string | null;
+  children?: PlanRunListItem[];
+}
+
+export interface PlanRunFailedCheck {
+  id: string;
+  path: string;
+  command: string;
+  output: string;
+  relatedArtifact: string | null;
+}
+
+export interface PlanRunNavigation {
+  runId: string;
+  task: string | null;
+  status: string;
+  currentWork: { stageId: string; attemptId: string | null; status: string } | null;
+  results: Array<{ label: string; path: string }>;
+  decisions: Array<{ label: string; path: string }>;
+  verification: Array<{ label: string; path: string }>;
+  failedChecks: PlanRunFailedCheck[];
 }
 
 export interface PlanRunFileSummary {
@@ -781,6 +838,9 @@ export interface PlanRunDetail {
     outputTokens: number;
     elapsedSeconds: number | null;
   };
+  parentRunId?: string | null;
+  stageId?: string | null;
+  navigation?: PlanRunNavigation | null;
 }
 
 @Injectable({
@@ -923,6 +983,26 @@ export class ApiService {
     }
     return this.withAbort(
       this.http.get<AmbientUsageResponse>('/api/metrics/ambient-usage', { params }),
+      options?.signal,
+    );
+  }
+
+  fetchJevUsage(
+    filters?: Pick<MetricsQueryFilters, 'workspaceRoot' | 'dateFrom' | 'dateTo'>,
+    options?: ApiRequestOptions,
+  ): Observable<JevUsageResponse> {
+    const params: Record<string, string> = {};
+    if (filters?.workspaceRoot) {
+      params['workspaceRoot'] = filters.workspaceRoot;
+    }
+    if (filters?.dateFrom) {
+      params['dateFrom'] = filters.dateFrom;
+    }
+    if (filters?.dateTo) {
+      params['dateTo'] = filters.dateTo;
+    }
+    return this.withAbort(
+      this.http.get<JevUsageResponse>('/api/metrics/jev-usage', { params }),
       options?.signal,
     );
   }

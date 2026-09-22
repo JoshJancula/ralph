@@ -84,6 +84,20 @@ describe('WorkflowCardComponent', () => {
     expect(fixture.nativeElement.querySelector('[data-has-human-gates="true"]')).not.toBeNull();
   });
 
+  it('renders small-feature-delivery as a five-stage bundled template', () => {
+    fixture.componentRef.setInput('workflow', {
+      ...workflow,
+      id: 'small-feature-delivery',
+      scope: 'bundled',
+      effectiveScope: 'bundled',
+      editable: false,
+      catalog: { ...workflow.catalog!, stageCount: 5 },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('small-feature-delivery');
+    expect(fixture.nativeElement.querySelector('[data-testid="workflow-catalog-badges"]')?.textContent).toContain('5 stages');
+  });
+
   it('shows a Start button for bundled (non-editable) workflows without implying editability', () => {
     fixture.componentRef.setInput('workflow', {
       ...workflow,

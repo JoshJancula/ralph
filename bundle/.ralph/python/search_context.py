@@ -83,6 +83,32 @@ def _project_slug(project_root: Path) -> str:
     return digest[:16]
 
 
+def _layout_version() -> str:
+    layout = (os.environ.get("RALPH_STATE_LAYOUT") or "").strip()
+    if layout == "1":
+        return "1"
+    return "2"
+
+
+def search_context_root(state_root: Path) -> Path:
+    """Layout-aware write root (cache/search-context under layout 2)."""
+    if _layout_version() == "1":
+        return Path(state_root) / "search-context"
+    return Path(state_root) / "cache" / "search-context"
+
+
+def search_context_legacy_root(state_root: Path) -> Path:
+    """Pre-layout-2 top-level search-context/ used as a read fallback."""
+    return Path(state_root) / "search-context"
+
+
+def _cache_entry_name(project_root: Path, relpath: str, mtime: int, backend: str) -> tuple[str, str]:
+    slug = _project_slug(project_root)
+    safe_name = relpath.replace("/", "__").replace("\\", "__")
+    name = f"{safe_name}.{mtime}.{backend}.json"
+    return slug, name
+
+
 def _cache_path(
     state_root: Path,
     project_root: Path,
@@ -90,10 +116,26 @@ def _cache_path(
     mtime: int,
     backend: str,
 ) -> Path:
-    slug = _project_slug(project_root)
-    safe_name = relpath.replace("/", "__").replace("\\", "__")
-    name = f"{safe_name}.{mtime}.{backend}.json"
-    return state_root / "search-context" / slug / name
+    slug, name = _cache_entry_name(project_root, relpath, mtime, backend)
+    return search_context_root(state_root) / slug / name
+
+
+def _resolve_cache_path(
+    state_root: Path,
+    project_root: Path,
+    relpath: str,
+    mtime: int,
+    backend: str,
+) -> Path:
+    """Prefer the layout-aware cache file; fall back to the legacy location."""
+    primary = _cache_path(state_root, project_root, relpath, mtime, backend)
+    if primary.is_file():
+        return primary
+    slug, name = _cache_entry_name(project_root, relpath, mtime, backend)
+    legacy = search_context_legacy_root(state_root) / slug / name
+    if legacy.is_file():
+        return legacy
+    return primary
 
 
 def _is_doc_file(relpath: str) -> bool:
@@ -151,7 +193,7 @@ def load_file_index(
     force_refresh: bool = False,
 ) -> dict[str, Any]:
     mtime, content, backend = _read_file_entry(project_root, relpath)
-    cache_file = _cache_path(state_root, project_root, relpath, mtime, backend)
+    cache_file = _resolve_cache_path(state_root, project_root, relpath, mtime, backend)
     if not force_refresh and cache_file.is_file():
         try:
             payload = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -177,8 +219,9 @@ def load_file_index(
         "symbols": symbols,
         "headings": headings,
     }
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    write_path = _cache_path(state_root, project_root, relpath, mtime, backend)
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    write_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     return payload
 
 

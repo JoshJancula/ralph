@@ -1,5 +1,5 @@
 import { collectAntigravityAmbientUsage, type AgyUsageRunner } from './antigravity';
-import { collectClaudeAmbientUsage } from './claude';
+import { collectClaudeAmbientUsage, type ClaudeAmbientUsageOptions } from './claude';
 import { collectCodexAmbientUsage } from './codex';
 import { buildAmbientDateScope } from './date-scope';
 import { resolveAmbientCollectorPaths } from './paths';
@@ -42,6 +42,7 @@ export async function collectAmbientUsage(
   options?: {
     homeDir?: string;
     bypassCache?: boolean;
+    claude?: ClaudeAmbientUsageOptions;
     antigravity?: { binary?: string | null; runner?: AgyUsageRunner };
   },
 ): Promise<AmbientUsageResponse> {
@@ -65,7 +66,7 @@ export async function collectAmbientUsage(
   }
 
   const [claude, codex, antigravity] = await Promise.all([
-    collectClaudeAmbientUsage(paths, date_scope, query),
+    collectClaudeAmbientUsage(paths, date_scope, query, options?.claude),
     collectCodexAmbientUsage(paths, date_scope, query),
     collectAntigravityAmbientUsage(date_scope, query, options?.antigravity),
   ]);

@@ -452,10 +452,13 @@ export function buildDisplayGraphFromInspect(
           addNode({
             id: dep,
             label: dep,
-            kind: dep.endsWith('-approved') ? 'join' : 'stage',
-            stageType: dep.endsWith('-approved') ? 'join' : 'stage',
+            // Inspect does not carry frozen-node provenance. Never guess a
+            // join from an id suffix: real run graphs supply the compiler's
+            // logicalStage/attempt fields instead.
+            kind: 'stage',
+            stageType: 'stage',
             authored: false,
-            derivedFrom: dep.endsWith('-approved') ? 'join' : 'stage',
+            derivedFrom: 'stage',
             planRole: null,
             waveIndex: waveIndexById.get(dep) ?? -1,
             loopBackTo: null,

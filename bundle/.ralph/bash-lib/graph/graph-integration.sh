@@ -46,11 +46,16 @@ graph_integration_inspect_command() {
 # Resolve the nearest succeeded mutating predecessor on every active incoming
 # branch. Supervisor and read-only agent nodes are passthroughs: they cannot
 # own a changeset, so integration walks through them. Traversal stops at the
-# first mutating node on each branch so rework integrates the selected repair
-# rather than replaying every earlier mutation in that branch.
+# first mutating node on each branch.
+#
+# Rework rounds of one logical stage (implement, implement-r1, ...) all reach
+# a rework join, so several of them can be found. Each round is seeded from
+# the previous one and its changeset is cumulative against the run base, so
+# only the most recently finished round per logicalStage is integrated;
+# applying an earlier round as well would conflict on every file both touched.
 graph_integration_source_node_ids() {
   local run_dir="$1" graph_json="$2" node_id="$3"
-  local active='{}' node_file row
+  local active='{}' finished='{}' node_file row
   local -a node_files=()
   local nullglob_was_set=0
 
@@ -65,9 +70,11 @@ graph_integration_source_node_ids() {
     row="$(jq -c '{key:(.nodeId // ""), value:((.status // "") == "succeeded")}' "$node_file" 2>/dev/null || true)"
     [[ -n "$row" && "$(printf '%s' "$row" | jq -r '.key // empty')" != "" ]] || continue
     active="$(jq -cn --argjson base "$active" --argjson row "$row" '$base + {($row.key):$row.value}')"
+    row="$(jq -c '{key:(.nodeId // ""), value:((.attempts // [])[-1].finishedAt // "")}' "$node_file" 2>/dev/null || true)"
+    [[ -n "$row" ]] && finished="$(jq -cn --argjson base "$finished" --argjson row "$row" '$base + {($row.key):$row.value}')"
   done
 
-  jq -r --arg id "$node_id" --argjson active "$active" '
+  jq -r --arg id "$node_id" --argjson active "$active" --argjson finished "$finished" '
     def graph_node($node_id): .nodes[] | select(.id == $node_id);
     def predecessors($node_id):
       ([graph_node($node_id).dependsOn[]?]
@@ -81,9 +88,14 @@ graph_integration_source_node_ids() {
         else sources($predecessor)
         end;
     ([sources($id)] | unique) as $source_ids
-    | .nodes[]
-    | select(.id as $candidate | $source_ids | index($candidate))
-    | .id
+    | [.nodes | to_entries[]
+       | select(.value.id as $candidate | $source_ids | index($candidate))
+       | {id: .value.id, order: .key, logical: (.value.logicalStage // .value.id),
+          finished: ($finished[.value.id] // "")}]
+    | group_by(.logical)
+    | map(max_by([.finished, .order]))
+    | sort_by(.order)
+    | .[].id
   ' "$graph_json"
 }
 

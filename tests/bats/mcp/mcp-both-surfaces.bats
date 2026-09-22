@@ -91,11 +91,11 @@ STUB
       ralph_run_plan_invoke_claude_proxy_tool_names
     ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
   )"
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__ralph__ralph_proxy_read" \
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__ralph__ralph_proxy_shell" \
     || { echo "mcp__ralph__ prefix not in allowedTools: $tools"; return 1; }
   # Confirm no bare tool names without prefix
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -qE "^ralph_proxy_read$" \
-    && { echo "bare ralph_proxy_read should not appear when namespace is mcp__ralph__"; return 1; } || true
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -qE "^ralph_proxy_shell$" \
+    && { echo "bare ralph_proxy_shell should not appear when namespace is mcp__ralph__"; return 1; } || true
 }
 
 # ---- allowedTools surface: fallback when namespace unset ----------------------
@@ -111,7 +111,7 @@ STUB
       ralph_run_plan_invoke_claude_proxy_tool_names
     ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
   )"
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__ralph__ralph_proxy_read" \
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__ralph__ralph_proxy_shell" \
     || { echo "expected fallback mcp__ralph__ prefix in allowedTools, got: $tools"; return 1; }
 }
 
@@ -125,7 +125,7 @@ STUB
       ralph_run_plan_invoke_claude_proxy_tool_names
     ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
   )"
-  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__myserver__ralph_proxy_read" \
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q "mcp__myserver__ralph_proxy_shell" \
     || { echo "expected custom namespace prefix in allowedTools, got: $tools"; return 1; }
 }
 
@@ -163,7 +163,7 @@ STUB
     env RALPH_MCP_SCOPE=graph-node RALPH_MCP_TOOL_NAMESPACE=mcp__ralph__ RALPH_MODE=hybrid \
     bash -c '
       source "$1"
-      ralph_run_plan_invoke_claude_allowed_tools_list "Bash,Read" 0 0
+      ralph_run_plan_invoke_claude_allowed_tools_list "Bash,Read"
     ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
   )"
   # The broker tools are namespaced ralph_delegated_run_* on the delegated-run surface.
@@ -182,11 +182,11 @@ STUB
     env RALPH_MCP_TOOL_NAMESPACE="mcp__ralph__" \
     bash -c '
       ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
-      printf "%s\n" "${ns}ralph_proxy_read"
+      printf "%s\n" "${ns}ralph_proxy_shell"
     '
   )"
-  [[ "$probe" == "mcp__ralph__ralph_proxy_read" ]] \
-    || { echo "expected mcp__ralph__ralph_proxy_read, got: $probe"; return 1; }
+  [[ "$probe" == "mcp__ralph__ralph_proxy_shell" ]] \
+    || { echo "expected mcp__ralph__ralph_proxy_shell, got: $probe"; return 1; }
 }
 
 @test "live preflight probe tool falls back to mcp__ralph__ when namespace unset" {
@@ -195,9 +195,43 @@ STUB
     env -u RALPH_MCP_TOOL_NAMESPACE \
     bash -c '
       ns="${RALPH_MCP_TOOL_NAMESPACE:-mcp__ralph__}"
-      printf "%s\n" "${ns}ralph_proxy_read"
+      printf "%s\n" "${ns}ralph_proxy_shell"
     '
   )"
-  [[ "$probe" == "mcp__ralph__ralph_proxy_read" ]] \
-    || { echo "expected fallback mcp__ralph__ralph_proxy_read, got: $probe"; return 1; }
+  [[ "$probe" == "mcp__ralph__ralph_proxy_shell" ]] \
+    || { echo "expected fallback mcp__ralph__ralph_proxy_shell, got: $probe"; return 1; }
+}
+
+@test "allowedTools includes mcp__ralph-jev__ namespace when Jev MCP enabled" {
+  local tools
+  tools="$(
+    env RALPH_MCP_TOOL_NAMESPACE="mcp__ralph__" RALPH_MODE=native \
+      RALPH_JEV=1 RALPH_JEV_MCP=1 \
+    bash -c '
+      source "$1"
+      ralph_run_plan_invoke_claude_allowed_tools_list "Read"
+    ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
+  )"
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_proxy_shell$' \
+    || { echo "ralph namespace missing from allowedTools: $tools"; return 1; }
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph-jev__jev_ask$' \
+    || { echo "jev namespace missing from allowedTools: $tools"; return 1; }
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph-jev__jev_classify_request$' \
+    || { echo "jev_classify_request missing from allowedTools: $tools"; return 1; }
+}
+
+@test "allowedTools omits mcp__ralph-jev__ when Jev MCP disabled" {
+  local tools
+  tools="$(
+    env -u RALPH_JEV -u RALPH_JEV_MCP \
+      RALPH_MCP_TOOL_NAMESPACE="mcp__ralph__" RALPH_MODE=native \
+    bash -c '
+      source "$1"
+      ralph_run_plan_invoke_claude_allowed_tools_list "Read"
+    ' _ "$INVOKE_CLAUDE_LIB" 2>/dev/null
+  )"
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q 'mcp__ralph-jev__' \
+    && { echo "jev namespace should be absent when Jev off: $tools"; return 1; } || true
+  printf '%s\n' "$tools" | tr ',' '\n' | grep -q '^mcp__ralph__ralph_proxy_shell$' \
+    || { echo "ralph namespace missing from allowedTools: $tools"; return 1; }
 }

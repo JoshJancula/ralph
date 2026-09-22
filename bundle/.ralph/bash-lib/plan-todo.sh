@@ -787,6 +787,7 @@ APPROVAL_STAGE_FORBIDDEN_FIELDS = frozenset(
         "loopBackTo",
         "loopCheck",
         "maxIterations",
+        "maxQaRepairRounds",
         "onExhausted",
         "profile",
         "overlapOwner",
@@ -1417,10 +1418,10 @@ def parse_scalar_field(lines: list[str], idx: int, key_indent: int, raw: str, ke
     if raw in BLOCK_INDICATORS:
         value, next_idx = parse_block_scalar(lines, idx, key_indent)
         return next_idx, value
-    if key == "maxIterations":
+    if key in {"maxIterations", "maxQaRepairRounds"}:
         value = parse_scalar_text(raw)
         if not value:
-            fail("maxIterations must not be empty")
+            fail(f"{key} must not be empty")
         return idx + 1, parse_int_text(value)
     if key in {"quorum", "minRuntimes"}:
         value = parse_scalar_text(raw)
@@ -1526,9 +1527,9 @@ def parse_list_item(lines: list[str], start_idx: int, item_indent: int, kind: st
             return parse_instructions_field(
                 lines, line_idx, line_indent, raw, f"{kind} instructions"
             )
-        if key in {"content", "verification", "status", "id", "stage", "runtime", "agent", "agentSource", "model", "sessionStrategy", "contextBudget", "subagents", "nativeSubagents", "type", "policy", "onVoterError", "verdictSchema", "quorum", "minRuntimes", "loopBackTo", "onExhausted", "planFile", "planFrom", "grader", "rubric", "workspaceMode", "setupProfile", "agentGitAccess", "parallelMutation", "acknowledgeSharedMutationRisk", "profile", "overlapOwner", "ownershipRole", "toolingProfile", "question", "changesTarget", "addressesFinding"}:
+        if key in {"content", "verification", "status", "id", "stage", "runtime", "agent", "agentSource", "model", "sessionStrategy", "contextBudget", "subagents", "nativeSubagents", "type", "policy", "onVoterError", "verdictSchema", "quorum", "minRuntimes", "loopBackTo", "onExhausted", "planFile", "planFrom", "candidateFrom", "grader", "rubric", "workspaceMode", "setupProfile", "agentGitAccess", "parallelMutation", "acknowledgeSharedMutationRisk", "profile", "overlapOwner", "ownershipRole", "toolingProfile", "question", "changesTarget", "addressesFinding"}:
             return parse_scalar_field(lines, line_idx, line_indent, raw, key)
-        if key == "maxIterations":
+        if key in {"maxIterations", "maxQaRepairRounds"}:
             return parse_scalar_field(lines, line_idx, line_indent, raw, key)
         if key == "requires" or key == "produces":
             if raw.strip() not in {"", "[]"}:
@@ -3766,6 +3767,7 @@ def validate_loop_rules(
     stage_id = as_text(stage.get("id", ""))
     loop_back = as_text(stage.get("loopBackTo", ""))
     max_iterations = stage.get("maxIterations", "")
+    max_qa_repair_rounds = stage.get("maxQaRepairRounds", "")
     loop_check = normalize_loop_check(stage.get("loopCheck", {}))
 
     on_exhausted = as_text(stage.get("onExhausted", ""))
@@ -3781,31 +3783,54 @@ def validate_loop_rules(
         if not loop_check.get("path"):
             fail(f"{prefix} loopCheck.path: required when loopBackTo is set")
 
-        effective_max_iterations = max_iterations
-        if execution == "graph" and effective_max_iterations == "":
-            if max_rework_iterations != "":
-                effective_max_iterations = max_rework_iterations
-            else:
-                fail(
-                    f"{prefix} maxIterations: required when loopBackTo is set; set "
-                    "maxIterations on the stage or pipeline.maxReworkIterations as a "
-                    "plan-wide default"
-                )
-        if (
-            not isinstance(effective_max_iterations, int)
-            or isinstance(effective_max_iterations, bool)
-            or effective_max_iterations <= 0
+        qa_repair_enabled = isinstance(max_qa_repair_rounds, int) and not isinstance(max_qa_repair_rounds, bool) and max_qa_repair_rounds >= 1
+        qa_repair_disabled = isinstance(max_qa_repair_rounds, int) and not isinstance(max_qa_repair_rounds, bool) and max_qa_repair_rounds == 0
+        if max_qa_repair_rounds != "" and (
+            not isinstance(max_qa_repair_rounds, int)
+            or isinstance(max_qa_repair_rounds, bool)
+            or max_qa_repair_rounds < 0
+            or max_qa_repair_rounds > 3
         ):
-            fail(f"{prefix} maxIterations: must be a positive integer")
-        if execution == "graph" and effective_max_iterations > REWORK_ITERATIONS_HARD_MAX:
-            fail(
-                f"{prefix} maxIterations: effective rework iteration count "
-                f"{effective_max_iterations} exceeds the hard maximum of "
-                f"{REWORK_ITERATIONS_HARD_MAX}"
-            )
-        if on_exhausted and on_exhausted not in ("proceed", "fail"):
-            fail(f"{prefix} onExhausted: must be 'proceed' or 'fail'")
+            fail(f"{prefix} maxQaRepairRounds: must be an integer from 0 to 3")
+        if max_qa_repair_rounds != "" and execution != "graph":
+            fail(f"{prefix} maxQaRepairRounds: is supported only in dependency workflows")
+        if qa_repair_enabled and on_exhausted != "fail":
+            fail(f"{prefix} onExhausted: must be 'fail' when maxQaRepairRounds is set")
+
+        # maxQaRepairRounds 0 keeps the authoring fields but expands neither
+        # QA repair nor ordinary rework (the pre-plan graph).
+        if not qa_repair_disabled:
+            effective_max_iterations = max_iterations
+            if execution == "graph" and effective_max_iterations == "":
+                if qa_repair_enabled:
+                    # QA repair has its own outer budget. The nested review loop
+                    # receives the pipeline rework budget during expansion.
+                    effective_max_iterations = 1
+                elif max_rework_iterations != "":
+                    effective_max_iterations = max_rework_iterations
+                else:
+                    fail(
+                        f"{prefix} maxIterations: required when loopBackTo is set; set "
+                        "maxIterations on the stage or pipeline.maxReworkIterations as a "
+                        "plan-wide default"
+                    )
+            if (
+                not isinstance(effective_max_iterations, int)
+                or isinstance(effective_max_iterations, bool)
+                or effective_max_iterations <= 0
+            ):
+                fail(f"{prefix} maxIterations: must be a positive integer")
+            if execution == "graph" and effective_max_iterations > REWORK_ITERATIONS_HARD_MAX:
+                fail(
+                    f"{prefix} maxIterations: effective rework iteration count "
+                    f"{effective_max_iterations} exceeds the hard maximum of "
+                    f"{REWORK_ITERATIONS_HARD_MAX}"
+                )
+            if on_exhausted and on_exhausted not in ("proceed", "fail"):
+                fail(f"{prefix} onExhausted: must be 'proceed' or 'fail'")
     else:
+        if max_qa_repair_rounds != "":
+            fail(f"{prefix} maxQaRepairRounds: requires loopBackTo")
         if max_iterations != "":
             fail(f"{prefix} maxIterations: requires loopBackTo")
         if loop_check.get("path"):
@@ -3824,18 +3849,54 @@ def validate_loop_rules(
         if loop_check["path"] not in required_paths:
             fail(f"{prefix} loopCheck.path: missing from required effective produces")
 
+    # Explicit 0: no QA repair expansion and no ordinary rework expansion.
+    if isinstance(max_qa_repair_rounds, int) and not isinstance(max_qa_repair_rounds, bool) and max_qa_repair_rounds == 0:
+        return
+
     if not (loop_back and execution == "graph"):
         return
 
     target = stages_by_id[loop_back]
 
     dep_ids = {_parse_dep_entry(item)[0] for item in (stage.get("dependsOn") or [])}
-    if loop_back not in dep_ids:
+    qa_repair_enabled = isinstance(max_qa_repair_rounds, int) and not isinstance(max_qa_repair_rounds, bool) and max_qa_repair_rounds >= 1
+    if loop_back not in dep_ids and not qa_repair_enabled:
         fail(
             f"{prefix} loopBackTo: {loop_back!r} must be a direct dependsOn dependency of "
             f"{stage_id!r} for graph rework; a transitive ancestor is not enough "
             "(direct dependency is required)"
         )
+
+    if qa_repair_enabled:
+        # QA repair deliberately loops back over the reviewed/integrated
+        # candidate, so its implement target is a transitive ancestor.  Keep
+        # that exception narrow and prove the delivery shape here.
+        ancestors = set()
+        pending = [stage_id]
+        while pending:
+            current = pending.pop()
+            current_stage = stages_by_id.get(current, {})
+            for item in current_stage.get("dependsOn", []) or []:
+                dep_id, _ = _parse_dep_entry(item)
+                if dep_id not in stages_by_id and dep_id.endswith("-approved"):
+                    possible_review = dep_id[: -len("-approved")]
+                    if possible_review in stages_by_id:
+                        dep_id = possible_review
+                if dep_id and dep_id not in ancestors:
+                    ancestors.add(dep_id)
+                    pending.append(dep_id)
+        if loop_back not in ancestors or loop_back in dep_ids:
+            fail(f"{prefix} loopBackTo: QA repair target must be a transitive (not direct) ancestor")
+        review_ids = [
+            sid for sid in ancestors
+            if as_text(stages_by_id.get(sid, {}).get("loopBackTo", "")) == loop_back
+        ]
+        integrate_ids = [
+            sid for sid in ancestors
+            if as_text(stages_by_id.get(sid, {}).get("type", "")) == "integrate"
+        ]
+        if len(review_ids) != 1 or len(integrate_ids) != 1:
+            fail(f"{prefix} maxQaRepairRounds: requires exactly one review loop and one integrate stage between target and QA")
 
     if as_text(stage.get("planFile", "")):
         fail(
@@ -3905,10 +3966,19 @@ def validate_loop_rules(
                 )
 
     candidate_ids = []
-    for n in range(1, effective_max_iterations + 1):
-        candidate_ids.append(f"{loop_back}-r{n}")
-        candidate_ids.append(f"{stage_id}-r{n}")
-    candidate_ids.append(f"{stage_id}-approved")
+    if qa_repair_enabled:
+        review_id = review_ids[0]
+        nested_iterations = max_rework_iterations if isinstance(max_rework_iterations, int) else 1
+        for n in range(1, max_qa_repair_rounds + 1):
+            candidate_ids.extend([f"{loop_back}-q{n}", f"{review_id}-q{n}", f"{review_id}-q{n}-approved", f"{integrate_ids[0]}-q{n}", f"{stage_id}-q{n}"])
+            for r in range(1, nested_iterations + 1):
+                candidate_ids.extend([f"{loop_back}-q{n}-r{r}", f"{review_id}-q{n}-r{r}"])
+        candidate_ids.append(f"{stage_id}-approved")
+    else:
+        for n in range(1, effective_max_iterations + 1):
+            candidate_ids.append(f"{loop_back}-r{n}")
+            candidate_ids.append(f"{stage_id}-r{n}")
+        candidate_ids.append(f"{stage_id}-approved")
     for candidate in candidate_ids:
         if candidate in reserved_ids:
             fail(
@@ -3996,6 +4066,42 @@ def validate_pipeline_plan(frontmatter: dict, stages_by_id=None, todos=None, wor
 
     validate_planner_plan_from_graph(stages_by_id)
     validate_approval_graph(stages_by_id, todos if todos is not None else frontmatter.get("todos", []))
+
+    # A candidate is an immutable, scheduler-owned workspace identity.  It may
+    # only be consumed from an ancestor which can actually produce one: an
+    # integration node or a mutating ordinary stage.  This is deliberately
+    # graph validation rather than a new status list.
+    if frontmatter.get("execution") == "graph":
+        def _candidate_reaches(src: str, dst: str, seen=None) -> bool:
+            seen = seen or set()
+            if dst in seen:
+                return False
+            seen.add(dst)
+            stage = stages_by_id.get(dst, {})
+            for dep in stage.get("dependsOn", []) or []:
+                dep_id = _parse_dep_entry(dep)[0]
+                # <review>-approved is the join the rework macro compiles for
+                # a loopBackTo review; walk through it to the review stage.
+                if dep_id not in stages_by_id and dep_id.endswith("-approved") and dep_id[: -len("-approved")] in stages_by_id:
+                    dep_id = dep_id[: -len("-approved")]
+                if dep_id == src or _candidate_reaches(src, dep_id, seen):
+                    return True
+            return False
+        for consumer_id, consumer in stages_by_id.items():
+            source_id = as_text(consumer.get("candidateFrom", ""))
+            if not source_id:
+                continue
+            if source_id not in stages_by_id:
+                fail(f"stage {consumer_id} candidateFrom: unknown stage {source_id!r}")
+            if not _candidate_reaches(source_id, consumer_id):
+                fail(f"stage {consumer_id} candidateFrom: {source_id!r} must be an ancestor")
+            if as_text(consumer.get("workspaceMode", "")) != "snapshot":
+                fail(f"stage {consumer_id} candidateFrom: requires workspaceMode snapshot")
+            if consumer.get("writeScopes") or []:
+                fail(f"stage {consumer_id} candidateFrom: must be read-only (no writeScopes); a writer's changes would be recorded against the run base and drop the candidate")
+            source = stages_by_id[source_id]
+            if as_text(source.get("type", "")) != "integrate" and not (source.get("writeScopes") or []):
+                fail(f"stage {consumer_id} candidateFrom: {source_id!r} is read-only and cannot produce a candidate")
 
     profiles = pipeline.get("verificationProfiles", []) or []
     profile_names: set[str] = set()
@@ -4285,6 +4391,10 @@ def build_orch_stage(stage: dict, stage_todos: list) -> dict:
         out["workspaceMode"] = as_text(stage.get("workspaceMode", ""))
         if as_text(stage.get("workspaceMode", "")) == "worktree" and "agentGitAccess" not in out:
             out["agentGitAccess"] = "off"
+    if as_text(stage.get("candidateFrom", "")):
+        out["candidateFrom"] = as_text(stage.get("candidateFrom", ""))
+    if as_text(stage.get("seedFrom", "")):
+        out["seedFrom"] = as_text(stage.get("seedFrom", ""))
     if as_text(stage.get("setupProfile", "")):
         out["setupProfile"] = as_text(stage.get("setupProfile", ""))
     write_scopes = stage.get("writeScopes", [])
@@ -4684,6 +4794,11 @@ def write_plan_exclusively(output_path: str, text: str, source: str) -> None:
 
 
 WORKFLOW_INCLUDE_RE = re.compile(r"\{\{INCLUDE:([A-Za-z0-9][A-Za-z0-9-]*)\}\}")
+# Any include token except placeholder prose such as {{INCLUDE:...}} or
+# {{INCLUDE:<name>}}, so plans and workflows can describe the syntax. A
+# malformed or traversal-style name still matches and is reported instead of
+# silently passing through.
+WORKFLOW_INCLUDE_CANDIDATE_RE = re.compile(r"\{\{INCLUDE:(?!\.\.\.\}\}|<)")
 
 
 def expand_workflow_includes(text: str, source: str) -> str:
@@ -4699,7 +4814,7 @@ def expand_workflow_includes(text: str, source: str) -> str:
     name is a bare slug, never a path, so a workflow cannot pull in an
     arbitrary file.
     """
-    if "{{INCLUDE:" not in text:
+    if WORKFLOW_INCLUDE_CANDIDATE_RE.search(text) is None:
         return text
     fragments_dir = os.environ.get("RALPH_WORKFLOW_FRAGMENTS_DIR", "").strip()
     if not fragments_dir or not os.path.isdir(fragments_dir):
@@ -4717,7 +4832,7 @@ def expand_workflow_includes(text: str, source: str) -> str:
             fail(f"{source}: unknown instruction fragment {name!r} (expected {candidate})")
         with open(candidate, encoding="utf-8") as handle:
             body = handle.read().strip("\n")
-        if "{{INCLUDE:" in body:
+        if WORKFLOW_INCLUDE_CANDIDATE_RE.search(body):
             fail(f"{source}: instruction fragment {name!r} may not include another fragment")
         cache[name] = body
         return body
@@ -4736,8 +4851,8 @@ def expand_workflow_includes(text: str, source: str) -> str:
 
         out_lines.extend(WORKFLOW_INCLUDE_RE.sub(_replace, line).split("\n"))
     expanded = "\n".join(out_lines)
-    if "{{INCLUDE:" in expanded:
-        fail(f"{source}: unresolved {{{{INCLUDE:...}}}} token after fragment expansion")
+    if WORKFLOW_INCLUDE_CANDIDATE_RE.search(expanded):
+        fail(f"{source}: malformed or unresolved {{{{INCLUDE:<name>}}}} token after fragment expansion")
     return expanded
 
 
@@ -5314,7 +5429,8 @@ def expand_repair_rounds_nodes(rr: dict) -> tuple[list, list]:
     return nodes, edges
 
 
-def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, iterations: int) -> tuple[list, list]:
+def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, iterations: int,
+                        qa_round: int = 0) -> tuple[list, list]:
     """Expand a graph-mode loopBackTo review stage into its bounded acyclic
     rework node/edge sequence (v2-graph-rework). Purely additive: never
     mutates pipeline.stages. This assumes the authoring-time constraints
@@ -5335,6 +5451,10 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
     """
     review_id = as_text(stage.get("id", ""))
     target_id = as_text(stage.get("loopBackTo", ""))
+    # QA repair passes source identities explicitly. Do not recover them from
+    # compiled ids: ids are implementation details, provenance is public.
+    logical_review_id = as_text(stage.get("_logicalStage", "")) or review_id
+    logical_target_id = as_text(stages_by_id[target_id].get("_logicalStage", "")) or target_id
     target = stages_by_id[target_id]
     loop_check = normalize_loop_check(stage.get("loopCheck", {}))
     verdict_path_template = loop_check.get("path", "")
@@ -5386,7 +5506,7 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
     approved_id = f"{review_id}-approved"
     approved_stage = build_orch_stage({"id": approved_id, "type": "join"}, [])
     approved_stage["delegation"] = resolved_delegation({"id": approved_id})
-    nodes.append({"id": approved_id, "type": "join", "dependsOn": [], "derivedFrom": "rework", "stage": approved_stage})
+    nodes.append({"id": approved_id, "type": "join", "dependsOn": [], "derivedFrom": "rework", "logicalStage": logical_review_id, "attempt": 0, **({"qaRound": qa_round} if qa_round else {}), "stage": approved_stage})
     _add_edge(review_id, approved_id, "passed")
 
     prev_review_id = review_id
@@ -5405,6 +5525,12 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
             verdict_requirement["schema"] = verdict_schema
 
         target_stage = _clone_stage(target, target_round_id)
+        # A rework implementation is a new candidate seeded (Decision 2) from
+        # the candidate the triggering review evaluated: the previous round.
+        # candidateFrom is reserved for read-only evaluators; a writer's seed
+        # is applied after baseline capture so its changeset stays cumulative.
+        target_stage.pop("candidateFrom", None)
+        target_stage["seedFrom"] = target_id if n == 1 else f"{target_id}-r{n - 1}"
         target_stage["requires"] = raw_artifacts(target.get("requires", []) or []) + [verdict_requirement]
         target_compiled = build_orch_stage(target_stage, _clone_todos(target_id, target_round_id))
         target_compiled["delegation"] = resolved_delegation(target_stage)
@@ -5414,12 +5540,20 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
                 "type": "agent",
                 "dependsOn": [prev_review_id],
                 "derivedFrom": "rework",
+                "logicalStage": logical_target_id,
+                "attempt": n,
+                **({"qaRound": qa_round} if qa_round else {}),
                 "stage": target_compiled,
             }
         )
         _add_edge(prev_review_id, target_round_id, "changes-required")
 
         review_stage = _clone_stage(stage, review_round_id)
+        # When the review binds the same stage it loops back to, each round
+        # evaluates that round's implement clone, not the first-pass candidate.
+        _review_cf = as_text(stage.get("candidateFrom", ""))
+        if _review_cf and _review_cf == target_id:
+            review_stage["candidateFrom"] = target_round_id
         review_compiled = build_orch_stage(review_stage, _clone_todos(review_id, review_round_id))
         review_compiled["delegation"] = resolved_delegation(review_stage)
         nodes.append(
@@ -5428,6 +5562,9 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
                 "type": "agent",
                 "dependsOn": [target_round_id],
                 "derivedFrom": "rework",
+                "logicalStage": logical_review_id,
+                "attempt": n,
+                **({"qaRound": qa_round} if qa_round else {}),
                 "stage": review_compiled,
             }
         )
@@ -5440,6 +5577,113 @@ def expand_rework_nodes(stage: dict, stages_by_id: dict, todos_by_stage: dict, i
             _add_edge(review_round_id, approved_id, "changes-required")
 
     return nodes, edges
+
+
+def expand_qa_repair_nodes(qa: dict, stages_by_id: dict, todos_by_stage: dict, review_iterations: int) -> tuple[list, list, set]:
+    """Compile bounded QA repair epochs without consuming ordinary retries.
+
+    A QA failure repairs the implementation, reruns the normal bounded review
+    loop, integrates the repaired candidate, then reruns the frozen QA plan.
+    The final QA failure intentionally has no successor: scheduler failure is
+    annotated as qa-repair-exhausted below.
+    """
+    qa_id = as_text(qa["id"])
+    target_id = as_text(qa["loopBackTo"])
+    rounds = qa["maxQaRepairRounds"]
+    ancestors, pending = set(), [qa_id]
+    while pending:
+        current = pending.pop()
+        for item in stages_by_id[current].get("dependsOn", []) or []:
+            dep, _ = _parse_dep_entry(item)
+            if dep not in stages_by_id and dep.endswith("-approved") and dep[: -len("-approved")] in stages_by_id:
+                dep = dep[: -len("-approved")]
+            if dep and dep not in ancestors:
+                ancestors.add(dep); pending.append(dep)
+    review_id = next(sid for sid in ancestors if as_text(stages_by_id[sid].get("loopBackTo", "")) == target_id)
+    integrate_id = next(sid for sid in ancestors if as_text(stages_by_id[sid].get("type", "")) == "integrate")
+    loop_check = normalize_loop_check(qa.get("loopCheck", {}))
+    verdict_requirement = {"path": loop_check["path"], "required": True, "schema": loop_check.get("schema", "")}
+    verdict_requirement = {k: v for k, v in verdict_requirement.items() if v}
+    nodes, edges = [], []
+
+    def edge(src, dst, condition=""):
+        value = {"from": src, "to": dst, "reasons": ["qa-repair"]}
+        if condition: value["condition"] = condition
+        edges.append(value)
+
+    def clone(stage, node_id):
+        result = dict(stage); result["id"] = node_id
+        for key in ("dependsOn", "loopBackTo", "loopCheck", "onExhausted", "maxIterations", "maxQaRepairRounds"):
+            result.pop(key, None)
+        return result
+
+    def add_agent(stage, node_id, depends, loop=None, qa_round=0):
+        compiled = build_orch_stage(stage, [
+            {**todo, "id": f"{node_id}-{idx}"}
+            for idx, todo in enumerate(todos_by_stage.get(as_text(stage.get("_sourceId", stage.get("id", ""))), []), 1)
+        ])
+        compiled["delegation"] = resolved_delegation(stage)
+        if loop: compiled["loopCheck"] = loop
+        if stage.get("qaRepair") is True: compiled["qaRepair"] = True
+        nodes.append({"id": node_id, "type": "agent", "dependsOn": depends, "derivedFrom": "qa-repair", "logicalStage": as_text(stage.get("_logicalStage", "")) or node_id, "attempt": 0, **({"qaRound": qa_round} if qa_round else {}), "stage": compiled})
+
+    approved_id = f"{qa_id}-approved"
+    approved = build_orch_stage({"id": approved_id, "type": "join"}, [])
+    approved["delegation"] = resolved_delegation({"id": approved_id})
+    nodes.append({"id": approved_id, "type": "join", "dependsOn": [], "derivedFrom": "qa-repair", "logicalStage": qa_id, "attempt": 0, "stage": approved})
+    edge(qa_id, approved_id, "passed")
+    previous_qa = qa_id
+    for q in range(1, rounds + 1):
+        implement_q = f"{target_id}-q{q}"
+        review_q = f"{review_id}-q{q}"
+        integrate_q = f"{integrate_id}-q{q}"
+        qa_q = f"{qa_id}-q{q}"
+        implementation = clone(stages_by_id[target_id], implement_q)
+        implementation["_logicalStage"] = target_id
+        implementation["_sourceId"] = target_id
+        # Seed from what the triggering QA evaluated: the integrated candidate
+        # (which already holds the latest review-approved round), never the
+        # first-pass implementation.
+        implementation.pop("candidateFrom", None)
+        implementation["seedFrom"] = (as_text(qa.get("candidateFrom", "")) or integrate_id) if q == 1 else f"{integrate_id}-q{q - 1}"
+        implementation["requires"] = raw_artifacts(implementation.get("requires", []) or []) + [verdict_requirement]
+        add_agent(implementation, implement_q, [previous_qa], qa_round=q)
+        edge(previous_qa, implement_q, "changes-required")
+
+        review = clone(stages_by_id[review_id], review_q)
+        review["_logicalStage"] = review_id
+        review["_sourceId"] = review_id
+        review["loopBackTo"] = implement_q
+        review["loopCheck"] = stages_by_id[review_id].get("loopCheck", {})
+        review["onExhausted"] = stages_by_id[review_id].get("onExhausted", "fail")
+        review["candidateFrom"] = implement_q
+        add_agent(review, review_q, [implement_q], review["loopCheck"], q)
+        nested_stages = dict(stages_by_id); nested_stages[implement_q] = implementation
+        nested_todos = dict(todos_by_stage)
+        nested_todos[implement_q] = todos_by_stage.get(target_id, [])
+        nested_todos[review_q] = todos_by_stage.get(review_id, [])
+        nested_nodes, nested_edges = expand_rework_nodes(review, nested_stages, nested_todos, review_iterations, q)
+        nodes.extend(nested_nodes); edges.extend(nested_edges)
+        edge(implement_q, review_q)
+
+        integration = clone(stages_by_id[integrate_id], integrate_q)
+        integration.pop("candidateFrom", None)
+        compiled_integration = build_orch_stage(integration, [])
+        compiled_integration["delegation"] = resolved_delegation(integration)
+        nodes.append({"id": integrate_q, "type": "integrate", "dependsOn": [f"{review_q}-approved"], "derivedFrom": "qa-repair", "logicalStage": integrate_id, "attempt": 0, "qaRound": q, "stage": compiled_integration})
+        edge(f"{review_q}-approved", integrate_q)
+
+        qa_round = clone(qa, qa_q)
+        qa_round["_logicalStage"] = qa_id
+        qa_round["_sourceId"] = qa_id
+        qa_round["candidateFrom"] = integrate_q
+        qa_round["qaRepair"] = True
+        add_agent(qa_round, qa_q, list(qa.get("dependsOn", []) or []) + [integrate_q], loop_check, q)
+        edge(integrate_q, qa_q)
+        edge(qa_q, approved_id, "passed")
+        if q < rounds:
+            previous_qa = qa_q
+    return nodes, edges, {qa_id, integrate_id, f"{review_id}-approved"}
 
 
 if mode == "rework-debug":
@@ -5545,6 +5789,8 @@ if mode == "graph":
                         "type": "consensus-voter",
                         "dependsOn": [stage_id],
                         "derivedFrom": "consensus",
+                        "logicalStage": stage_id,
+                        "attempt": 0,
                         "stage": compiled_voter_stage,
                     }
                 )
@@ -5554,6 +5800,8 @@ if mode == "graph":
                     "type": "consensus-barrier",
                     "dependsOn": [f"{stage_id}:{as_text(voter.get('id', ''))}" for voter in voters if as_text(voter.get("id", ""))],
                     "derivedFrom": "consensus",
+                    "logicalStage": stage_id,
+                    "attempt": 0,
                     "stage": build_orch_stage(
                         {
                             **stage,
@@ -5587,6 +5835,8 @@ if mode == "graph":
             "type": stage_type,
             "dependsOn": [_parse_dep_entry(item)[0] for item in stage.get("dependsOn", []) if _parse_dep_entry(item)[0]],
             "derivedFrom": "stage",
+            "logicalStage": stage_id,
+            "attempt": 0,
             "stage": compiled_stage,
         }
         graph_nodes.append(node)
@@ -5613,10 +5863,18 @@ if mode == "graph":
     rework_nodes: list = []
     rework_edges: list = []
     rework_review_ids: set = set()
+    qa_repair_stages: list = []
     rework_loop_checks: dict = {}
     for _rw_stage in stages:
         _rw_stage_id = as_text(_rw_stage.get("id", ""))
         if not as_text(_rw_stage.get("loopBackTo", "")):
+            continue
+        _rw_qa_rounds = _rw_stage.get("maxQaRepairRounds", "")
+        if isinstance(_rw_qa_rounds, int) and not isinstance(_rw_qa_rounds, bool) and _rw_qa_rounds == 0:
+            # Explicitly disabled: compile the pre-plan graph (no QA repair nodes).
+            continue
+        if isinstance(_rw_qa_rounds, int) and not isinstance(_rw_qa_rounds, bool) and _rw_qa_rounds >= 1:
+            qa_repair_stages.append(_rw_stage)
             continue
         _rw_max_iterations = _rw_stage.get("maxIterations", "")
         _rw_iterations = (
@@ -5641,6 +5899,49 @@ if mode == "graph":
             ]
     graph_nodes.extend(rework_nodes)
 
+    # QA repair is an outer epoch around the existing review macro.  It is
+    # intentionally separate from ordinary attempt retries: only a valid QA
+    # changes-required verdict consumes one of these bounded repair rounds.
+    qa_repair_nodes: list = []
+    qa_repair_edges: list = []
+    qa_repair_rewrites: dict = {}
+    for _qa_stage in qa_repair_stages:
+        rework_loop_checks[as_text(_qa_stage.get("id", ""))] = normalize_loop_check(_qa_stage.get("loopCheck", {}))
+        _nested_iterations = pipeline_max_rework_iterations if isinstance(pipeline_max_rework_iterations, int) else 1
+        _qa_nodes, _qa_edges, _qa_rewrites = expand_qa_repair_nodes(
+            _qa_stage, stages_by_id, todos_by_stage, _nested_iterations
+        )
+        qa_repair_nodes.extend(_qa_nodes)
+        qa_repair_edges.extend(_qa_edges)
+        for _old in _qa_rewrites:
+            qa_repair_rewrites[_old] = f"{as_text(_qa_stage.get('id', ''))}-approved"
+    if qa_repair_rewrites:
+        def _is_downstream_of_qa(_node_id: str, _qa_id: str) -> bool:
+            seen, stack = set(), [_node_id]
+            while stack:
+                _current = stack.pop()
+                if _current in seen:
+                    continue
+                seen.add(_current)
+                for _dep in stages_by_id.get(_current, {}).get("dependsOn", []) or []:
+                    _dep_id, _ = _parse_dep_entry(_dep)
+                    if _dep_id == _qa_id:
+                        return True
+                    if _dep_id:
+                        stack.append(_dep_id)
+            return False
+        for _node in graph_nodes:
+            _node["dependsOn"] = [
+                qa_repair_rewrites.get(_dep, _dep)
+                if any(_is_downstream_of_qa(_node["id"], _qa["id"]) for _qa in qa_repair_stages)
+                else _dep
+                for _dep in _node.get("dependsOn", [])
+            ]
+        graph_nodes.extend(qa_repair_nodes)
+        for _node in graph_nodes:
+            if _node["id"] in {as_text(_qa.get("id", "")) for _qa in qa_repair_stages}:
+                _node["stage"]["qaRepair"] = True
+
     # Graph node stages never carry loopControl: the scheduler does not read
     # it, and its orchestration-only shape is misleading in the frozen
     # graph. Loop-check verdict gating for review nodes is instead expressed
@@ -5662,6 +5963,11 @@ if mode == "graph":
         _node["stage"].setdefault("delegation", resolved_delegation(_node["stage"]))
         if as_text(_node.get("type", "")) in {"agent", "stage"}:
             _node["stage"].setdefault("nativeSubagents", "off")
+        # Every frozen node is self-describing. Macro constructors provide
+        # source identity where one exists; this conservative fallback covers
+        # independent synthetic nodes without parsing their compiled ids.
+        _node.setdefault("logicalStage", as_text(_node.get("stage", {}).get("id", "")) or _node["id"])
+        _node.setdefault("attempt", 0)
     graph_nodes.sort(key=lambda item: item["id"])
 
     raw_edges = build_graph_edges(
@@ -5677,6 +5983,26 @@ if mode == "graph":
             if _edge.get("from") in rework_review_ids:
                 _edge["from"] = f"{_edge['from']}-approved"
     raw_edges.extend(rework_edges)
+    if qa_repair_rewrites:
+        for _edge in raw_edges:
+            for _qa in qa_repair_stages:
+                _qa_id = as_text(_qa.get("id", ""))
+                # Only edges into stages below QA are retargeted.  In
+                # particular, plan-qa remains an upstream frozen-plan source.
+                if _edge.get("from") in qa_repair_rewrites and _edge.get("to") in stages_by_id:
+                    _seen, _stack, _below = set(), [_edge["to"]], False
+                    while _stack:
+                        _current = _stack.pop()
+                        if _current in _seen: continue
+                        _seen.add(_current)
+                        for _dep in stages_by_id.get(_current, {}).get("dependsOn", []) or []:
+                            _dep_id, _ = _parse_dep_entry(_dep)
+                            if _dep_id == _qa_id: _below = True
+                            if _dep_id: _stack.append(_dep_id)
+                    if _below:
+                        _edge["from"] = qa_repair_rewrites[_edge["from"]]
+                        break
+    raw_edges.extend(qa_repair_edges)
     # Inject synthetic voter->barrier edges for every consensus stage.
     # build_graph_edges only processes the original pipeline.stages list and has
     # no knowledge of the synthetic voter/barrier nodes created during consensus

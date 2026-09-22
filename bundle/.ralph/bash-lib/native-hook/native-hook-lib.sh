@@ -286,7 +286,14 @@ ralph_native_hook_store_original() {
   fi
   result_id="$(ralph_mcp_proxy_result_store_write "$workspace" "$plan_key" "$storage_text" "$store_tool" 2>/dev/null || true)"
   [[ -n "$result_id" ]] || return 1
-  printf '.ralph-workspace/tool-results/%s/results/%s\n' "$plan_key" "$result_id"
+  if declare -F ralph_mcp_proxy_result_store_display_rel_path >/dev/null 2>&1; then
+    ralph_mcp_proxy_result_store_display_rel_path "$plan_key" "$result_id"
+  else
+    case "$(ralph_state_layout_for_new_run 2>/dev/null || printf '2')" in
+      1) printf '.ralph-workspace/tool-results/%s/results/%s\n' "$plan_key" "$result_id" ;;
+      *) printf '.ralph-workspace/cache/tool-results/%s/results/%s\n' "$plan_key" "$result_id" ;;
+    esac
+  fi
 }
 
 ralph_native_hook_bash_compact_footer() {
@@ -504,8 +511,16 @@ ralph_native_hook_command_profiles_registry_ready() {
   local state_root profiles
   state_root="$(ralph_native_hook_state_root "$workspace" 2>/dev/null || true)"
   [[ -n "$state_root" ]] || return 1
-  profiles="${state_root}/command-profiles/profiles.json"
-  [[ -f "$profiles" && -s "$profiles" ]] || return 1
+  if declare -F ralph_state_shared_dir >/dev/null 2>&1; then
+    profiles="$(ralph_state_shared_dir "$state_root" command-profiles)/profiles.json"
+  else
+    profiles="${state_root}/command-profiles/profiles.json"
+  fi
+  [[ -f "$profiles" && -s "$profiles" ]] || {
+    # Layout-1 sticky fallback when only the historical store exists.
+    profiles="${state_root}/command-profiles/profiles.json"
+    [[ -f "$profiles" && -s "$profiles" ]] || return 1
+  }
   # Cheap scan: avoid python3/jq on the PreToolUse hot path.
   grep -Eq '"long_running"[[:space:]]*:[[:space:]]*true' "$profiles"
 }

@@ -1,7 +1,11 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
+import { resolveRuntimeBinary } from '../ralph-cli';
 import { timestampInDateScope } from './date-scope';
 import { forEachJsonlLine } from './jsonl';
 import { buildRateWindow, sortRateLimits } from './rate-limits';
@@ -9,11 +13,41 @@ import type {
   AmbientCollectorPaths,
   AmbientModelBreakdownRow,
   AmbientProviderReport,
+  AmbientRateLimitWindow,
   AmbientUsageDateScope,
   AmbientUsageQuery,
 } from './types';
 
+const execFileAsync = promisify(execFile);
 const MAX_JSONL_FILES = 500;
+const USAGE_REFRESH_TIMEOUT_MS = 20_000;
+const USAGE_REFRESH_MAX_BUFFER = 1024 * 1024;
+/** Refresh Claude's on-disk quota cache when older than this (default 5 minutes). */
+const DEFAULT_QUOTA_MAX_AGE_MS = 5 * 60_000;
+
+export type ClaudeUsageRefreshRunner = (binary: string) => Promise<{ stdout: string; stderr: string }>;
+
+export interface ClaudeAmbientUsageOptions {
+  /** Override PATH lookup. `null` disables live quota refresh. */
+  binary?: string | null;
+  /** Injected refresh command. `null` disables refresh. */
+  refresh?: ClaudeUsageRefreshRunner | null;
+  /** Max age of `cachedUsageUtilization.fetchedAtMs` before refresh. */
+  maxAgeMs?: number;
+}
+
+const defaultClaudeUsageRefreshRunner: ClaudeUsageRefreshRunner = async (binary) => {
+  const result = await execFileAsync(binary, ['--print', '/usage'], {
+    timeout: USAGE_REFRESH_TIMEOUT_MS,
+    maxBuffer: USAGE_REFRESH_MAX_BUFFER,
+    windowsHide: true,
+    env: process.env,
+  });
+  return {
+    stdout: String(result.stdout ?? ''),
+    stderr: String(result.stderr ?? ''),
+  };
+};
 
 function toInt(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -30,6 +64,186 @@ function toInt(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function quotaMaxAgeMs(override?: number): number {
+  if (typeof override === 'number' && Number.isFinite(override) && override >= 0) {
+    return override;
+  }
+  const raw = process.env['RALPH_DASHBOARD_CLAUDE_QUOTA_MAX_AGE_MS']?.trim();
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) {
+      return n;
+    }
+  }
+  return DEFAULT_QUOTA_MAX_AGE_MS;
+}
+
+function isLiveClaudeHome(paths: AmbientCollectorPaths): boolean {
+  return paths.claudeJsonPath === join(homedir(), '.claude.json');
+}
+
+async function readCachedFetchedAtMs(claudeJsonPath: string): Promise<number | null> {
+  if (!existsSync(claudeJsonPath)) {
+    return null;
+  }
+  try {
+    const text = await readFile(claudeJsonPath, 'utf8');
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const cached = parsed['cachedUsageUtilization'];
+    if (!isRecord(cached)) {
+      return null;
+    }
+    const fetchedMs = cached['fetchedAtMs'];
+    return typeof fetchedMs === 'number' && Number.isFinite(fetchedMs) ? fetchedMs : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Claude Code writes quota into `~/.claude.json` (`cachedUsageUtilization`), but
+ * that blob can sit unchanged for hours. `claude --print /usage` forces a live
+ * OAuth fetch and rewrites the cache — same pattern as Antigravity's `agy /usage`.
+ */
+export async function refreshClaudeQuotaCacheIfStale(
+  paths: AmbientCollectorPaths,
+  options?: ClaudeAmbientUsageOptions,
+): Promise<boolean> {
+  if (options?.refresh === null || options?.binary === null) {
+    return false;
+  }
+  if (options?.refresh === undefined && !isLiveClaudeHome(paths)) {
+    // Fixture / override homes: the real CLI always writes the operator home
+    // cache, so skip unless a test injects a refresh runner.
+    return false;
+  }
+
+  const maxAge = quotaMaxAgeMs(options?.maxAgeMs);
+  const fetchedAtMs = await readCachedFetchedAtMs(paths.claudeJsonPath);
+  if (fetchedAtMs !== null && Date.now() - fetchedAtMs < maxAge) {
+    return false;
+  }
+
+  const binary =
+    options?.binary !== undefined ? options.binary : resolveRuntimeBinary('claude');
+  if (!binary) {
+    return false;
+  }
+
+  const runner = options?.refresh ?? defaultClaudeUsageRefreshRunner;
+  try {
+    await runner(binary);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pushUniqueWindow(
+  windows: AmbientRateLimitWindow[],
+  window: AmbientRateLimitWindow | null,
+): void {
+  if (!window) {
+    return;
+  }
+  if (windows.some((existing) => existing.id === window.id)) {
+    return;
+  }
+  // Session and five_hour describe the same Claude Code window.
+  if (
+    (window.id === 'session' && windows.some((existing) => existing.id === 'five_hour')) ||
+    (window.id === 'five_hour' && windows.some((existing) => existing.id === 'session'))
+  ) {
+    return;
+  }
+  windows.push(window);
+}
+
+function appendLimitWindows(
+  windows: AmbientRateLimitWindow[],
+  limits: unknown,
+): void {
+  if (!Array.isArray(limits)) {
+    return;
+  }
+  for (const entry of limits) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const kind = String(entry['kind'] ?? '').trim();
+    const id =
+      kind === 'session'
+        ? 'session'
+        : kind === 'weekly_all'
+          ? 'seven_day'
+          : kind || 'limit';
+    const label =
+      id === 'session' ? 'Session' : id === 'seven_day' ? 'Weekly' : kind || 'Limit';
+    pushUniqueWindow(
+      windows,
+      buildRateWindow(id, label, entry['percent'], entry['resets_at'] ?? entry['resetsAt']),
+    );
+  }
+}
+
+async function readClaudeRateLimits(claudeJsonPath: string): Promise<{
+  windows: AmbientProviderReport['rate_limits'];
+  quota_fetched_at: string | null;
+}> {
+  if (!existsSync(claudeJsonPath)) {
+    return { windows: [], quota_fetched_at: null };
+  }
+  try {
+    const text = await readFile(claudeJsonPath, 'utf8');
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const cached = parsed['cachedUsageUtilization'];
+    if (!isRecord(cached)) {
+      return { windows: [], quota_fetched_at: null };
+    }
+    const fetchedMs = cached['fetchedAtMs'];
+    const quota_fetched_at =
+      typeof fetchedMs === 'number' && Number.isFinite(fetchedMs)
+        ? new Date(fetchedMs).toISOString()
+        : null;
+    const windows: AmbientProviderReport['rate_limits'] = [];
+    const utilization = cached['utilization'];
+
+    // Prefer structured limits (Claude UI "Current session" / weekly). Newer
+    // Claude Code nests them under utilization; older caches kept them top-level.
+    appendLimitWindows(windows, cached['limits']);
+    if (isRecord(utilization)) {
+      appendLimitWindows(windows, utilization['limits']);
+      const five = utilization['five_hour'];
+      if (isRecord(five)) {
+        pushUniqueWindow(
+          windows,
+          buildRateWindow(
+            'five_hour',
+            'Session',
+            five['utilization'],
+            five['resets_at'] ?? five['resetsAt'],
+          ),
+        );
+      }
+      const seven = utilization['seven_day'];
+      if (isRecord(seven)) {
+        pushUniqueWindow(
+          windows,
+          buildRateWindow(
+            'seven_day',
+            'Weekly',
+            seven['utilization'],
+            seven['resets_at'] ?? seven['resetsAt'],
+          ),
+        );
+      }
+    }
+    return { windows: sortRateLimits(windows), quota_fetched_at };
+  } catch {
+    return { windows: [], quota_fetched_at: null };
+  }
 }
 
 async function collectJsonlPaths(projectsDir: string): Promise<{ paths: string[]; truncated: boolean }> {
@@ -67,84 +281,11 @@ async function collectJsonlPaths(projectsDir: string): Promise<{ paths: string[]
   return { paths, truncated };
 }
 
-async function readClaudeRateLimits(claudeJsonPath: string): Promise<{
-  windows: AmbientProviderReport['rate_limits'];
-  quota_fetched_at: string | null;
-}> {
-  if (!existsSync(claudeJsonPath)) {
-    return { windows: [], quota_fetched_at: null };
-  }
-  try {
-    const text = await readFile(claudeJsonPath, 'utf8');
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    const cached = parsed['cachedUsageUtilization'];
-    if (!isRecord(cached)) {
-      return { windows: [], quota_fetched_at: null };
-    }
-    const fetchedMs = cached['fetchedAtMs'];
-    const quota_fetched_at =
-      typeof fetchedMs === 'number' && Number.isFinite(fetchedMs)
-        ? new Date(fetchedMs).toISOString()
-        : null;
-    const windows: AmbientProviderReport['rate_limits'] = [];
-    const utilization = cached['utilization'];
-    if (isRecord(utilization)) {
-      const five = utilization['five_hour'];
-      if (isRecord(five)) {
-        const w = buildRateWindow(
-          'five_hour',
-          '5h',
-          five['utilization'],
-          five['resets_at'] ?? five['resetsAt'],
-        );
-        if (w) {
-          windows.push(w);
-        }
-      }
-      const seven = utilization['seven_day'];
-      if (isRecord(seven)) {
-        const w = buildRateWindow(
-          'seven_day',
-          'Weekly',
-          seven['utilization'],
-          seven['resets_at'] ?? seven['resetsAt'],
-        );
-        if (w) {
-          windows.push(w);
-        }
-      }
-    }
-    const limits = cached['limits'];
-    if (Array.isArray(limits)) {
-      for (const entry of limits) {
-        if (!isRecord(entry)) {
-          continue;
-        }
-        const kind = String(entry['kind'] ?? '').trim();
-        const id =
-          kind === 'session'
-            ? 'session'
-            : kind === 'weekly_all'
-              ? 'seven_day'
-              : kind || 'limit';
-        const label =
-          id === 'session' ? 'Session' : id === 'seven_day' ? 'Weekly' : kind || 'Limit';
-        const w = buildRateWindow(id, label, entry['percent'], entry['resets_at'] ?? entry['resetsAt']);
-        if (w && !windows.some((existing) => existing.id === w.id)) {
-          windows.push(w);
-        }
-      }
-    }
-    return { windows: sortRateLimits(windows), quota_fetched_at };
-  } catch {
-    return { windows: [], quota_fetched_at: null };
-  }
-}
-
 export async function collectClaudeAmbientUsage(
   paths: AmbientCollectorPaths,
   scope: AmbientUsageDateScope,
   _query: AmbientUsageQuery,
+  options?: ClaudeAmbientUsageOptions,
 ): Promise<AmbientProviderReport> {
   const projectsDir = join(paths.claudeDir, 'projects');
   const claudeInstalled = existsSync(paths.claudeDir);
@@ -160,6 +301,9 @@ export async function collectClaudeAmbientUsage(
       updated_at: new Date().toISOString(),
     };
   }
+
+  // Refresh quota in parallel with transcript scan when the on-disk snapshot is stale.
+  const refreshPromise = refreshClaudeQuotaCacheIfStale(paths, options);
 
   const { paths: jsonlPaths, truncated } = await collectJsonlPaths(projectsDir);
   const modelBuckets = new Map<string, AmbientModelBreakdownRow>();
@@ -226,6 +370,8 @@ export async function collectClaudeAmbientUsage(
       modelBuckets.set(model, bucket);
     });
   }
+
+  await refreshPromise;
 
   const model_breakdown = Array.from(modelBuckets.values()).sort(
     (a, b) => b.total_tokens - a.total_tokens,

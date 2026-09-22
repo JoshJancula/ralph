@@ -75,6 +75,8 @@ pipeline:
         - path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md
           required: true
     - id: review
+      workspaceMode: snapshot
+      candidateFrom: implement
       sessionStrategy: fresh
       instructions: |
         Review the candidate for {{TASK}} without mutation. Inspect the supervisor
@@ -131,9 +133,17 @@ pipeline:
           required: true
           schema: bundle/.ralph/schemas/planner-output.schema.json
     - id: qa
+      workspaceMode: snapshot
+      candidateFrom: integrate
+      loopBackTo: implement
+      loopCheck:
+        path: .ralph-workspace/artifacts/{{ARTIFACT_NS}}/qa-verdict.json
+        schema: bundle/.ralph/schemas/evaluator-verdict.schema.json
+      onExhausted: fail
+      maxQaRepairRounds: 1
       sessionStrategy: fresh
       instructions: |
-        Execute the generated QA plan for {{TASK}} on the integrated tree. Read
+        Execute the generated QA plan for {{TASK}} on the integrated candidate snapshot. Read
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/investigation.md,
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/implementation-handoff.md, and
         .ralph-workspace/artifacts/{{ARTIFACT_NS}}/bug-fix-qa-plan.json. Do not

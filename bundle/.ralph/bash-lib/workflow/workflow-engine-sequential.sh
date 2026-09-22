@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Sequential-mode engine ledger under <registry-run>/engine/.
+# Sequential-mode engine ledger under layout-aware engine state.
+# Layout 1: <registry-run>/engine/. Layout 2: runs/<id>/engine/sequential/.
 #
 # Persists run.json, events.jsonl, and stages/<id>.json matching
 # workflow-sequential-{run,stage,event}.schema.json. Journals stage
@@ -52,8 +53,10 @@ WORKFLOW_SEQ_OWNER_TTL_SECONDS="${WORKFLOW_SEQ_OWNER_TTL_SECONDS:-60}"
 # ---------------------------------------------------------------------------
 
 # workflow_seq_engine_dir <registry-run>
+# Layout-aware Sequential engine ledger directory. Layout 1 keeps
+# <registry-run>/engine; layout 2 uses runs/<id>/engine/sequential.
 workflow_seq_engine_dir() {
-  local registry_run="${1:-}"
+  local registry_run="${1:-}" run_id="" state_root="" legacy=""
   [[ -n "$registry_run" ]] || {
     echo "Error: workflow_seq_engine_dir requires registry-run" >&2
     return 1
@@ -65,7 +68,31 @@ workflow_seq_engine_dir() {
       return 1
       ;;
   esac
-  printf '%s/engine\n' "${registry_run%/}"
+  registry_run="${registry_run%/}"
+  legacy="$registry_run/engine"
+  if [[ -f "$registry_run/run.json" ]]; then
+    run_id="$(jq -r '.runId // empty' "$registry_run/run.json" 2>/dev/null || true)"
+  fi
+  if [[ -z "$run_id" && "$registry_run" == */runs/*/engine/workflow ]]; then
+    run_id="$(basename -- "$(dirname -- "$(dirname -- "$registry_run")")")"
+  fi
+  [[ -n "$run_id" ]] || run_id="$(basename -- "$registry_run")"
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  elif [[ "$registry_run" == */runs/"$run_id"/engine/workflow ]]; then
+    # .../runs/<id>/engine/workflow -> state root is four levels up
+    state_root="$(dirname -- "$(dirname -- "$(dirname -- "$(dirname -- "$registry_run")")")")"
+  elif [[ "$registry_run" == */workflow-runs/"$run_id" ]]; then
+    state_root="$(dirname -- "$(dirname -- "$registry_run")")"
+  else
+    printf '%s\n' "$legacy"
+    return 0
+  fi
+  if ! declare -F ralph_state_sequential_run_dir >/dev/null 2>&1; then
+    # shellcheck source=../state-paths.sh
+    source "$_WORKFLOW_SEQ_SCRIPT_DIR/../state-paths.sh"
+  fi
+  ralph_state_sequential_run_dir "$state_root" "$run_id" "$legacy"
 }
 
 # workflow_seq_run_file <registry-run>

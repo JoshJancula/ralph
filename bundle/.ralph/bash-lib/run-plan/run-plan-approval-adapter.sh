@@ -959,7 +959,7 @@ ralph_approval_adapter_select_continuation() {
 # ralph_approval_adapter_overlay_state_path
 # Run-local state file so apply/restore survive command-substitution subshells.
 ralph_approval_adapter_overlay_state_path() {
-  local plan_key="${RALPH_PLAN_KEY:-}" state_dir
+  local plan_key="${RALPH_PLAN_KEY:-}" state_dir state_root
   ralph_approval_adapter_ensure_overlay_lib || return 1
   if [[ -n "${RUNTIME_OVERLAY_STATE_DIR:-}" ]]; then
     printf '%s/approval-overlay-state.json' "$RUNTIME_OVERLAY_STATE_DIR"
@@ -967,9 +967,14 @@ ralph_approval_adapter_overlay_state_path() {
   fi
   [[ -n "$plan_key" ]] || return 1
   if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
-    state_dir="$(_runtime_overlay_workspace_root)/runtime-config/${plan_key}"
+    state_root="$(_runtime_overlay_workspace_root)"
   else
-    state_dir="$(_runtime_overlay_project_root)/.ralph-workspace/runtime-config/${plan_key}"
+    state_root="$(_runtime_overlay_project_root)/.ralph-workspace"
+  fi
+  if declare -F ralph_state_runtime_config_dir >/dev/null 2>&1; then
+    state_dir="$(ralph_state_runtime_config_dir "$state_root" "$plan_key")"
+  else
+    state_dir="$state_root/runtime-config/${plan_key}"
   fi
   printf '%s/approval-overlay-state.json' "$state_dir"
 }
@@ -1262,7 +1267,7 @@ ralph_approval_adapter_iso_now() {
 # ralph_approval_adapter_continuation_root
 # Run-local directory for continuation / consume / active-tuple state.
 ralph_approval_adapter_continuation_root() {
-  local plan_key="${RALPH_PLAN_KEY:-}" state_dir
+  local plan_key="${RALPH_PLAN_KEY:-}" state_dir state_root
   ralph_approval_adapter_ensure_overlay_lib || return 1
   if [[ -n "${RUNTIME_OVERLAY_STATE_DIR:-}" ]]; then
     printf '%s/approval-continuation' "$RUNTIME_OVERLAY_STATE_DIR"
@@ -1270,9 +1275,14 @@ ralph_approval_adapter_continuation_root() {
   fi
   [[ -n "$plan_key" ]] || return 1
   if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
-    state_dir="$(_runtime_overlay_workspace_root)/runtime-config/${plan_key}"
+    state_root="$(_runtime_overlay_workspace_root)"
   else
-    state_dir="$(_runtime_overlay_project_root)/.ralph-workspace/runtime-config/${plan_key}"
+    state_root="$(_runtime_overlay_project_root)/.ralph-workspace"
+  fi
+  if declare -F ralph_state_runtime_config_dir >/dev/null 2>&1; then
+    state_dir="$(ralph_state_runtime_config_dir "$state_root" "$plan_key")"
+  else
+    state_dir="$state_root/runtime-config/${plan_key}"
   fi
   printf '%s/approval-continuation' "$state_dir"
 }

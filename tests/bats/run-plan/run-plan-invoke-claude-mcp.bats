@@ -191,7 +191,7 @@ EOF
   [[ "$captured" != *"--strict-mcp-config"* ]]
   grep -q '"ralph"' "$record"
   ! grep -q '"ambient"' "$record"
-  [[ "$captured" == *"mcp__ralph__ralph_proxy_read"* ]]
+  [[ "$captured" == *"mcp__ralph__ralph_proxy_shell"* ]]
 }
 
 @test "claude hybrid mode layers ralph-only MCP config without rebuilding ambient servers" {

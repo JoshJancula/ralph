@@ -13,7 +13,7 @@
 ##   RALPH_TODO_SESSION_MANIFEST_KEY -- sanitized manifest key for the active TODO.
 ##   RALPH_TODO_SESSION_MANIFEST_DIR -- todo-sessions directory under RALPH_SESSION_DIR.
 ##   RALPH_PLAN_RESET_COMMAND(_<RUNTIME>) -- optional reset command prefix for reset strategy prompts.
-##   RALPH_PLAN_COMPACT_COMMAND(_<RUNTIME>) -- optional prefix for compact strategy prompts
+##   RALPH_PLAN_COMPACT_COMMAND / RALPH_PLAN_COMPACT_COMMAND_CLAUDE / RALPH_PLAN_COMPACT_COMMAND_CODEX -- slash command sent as a standalone compact turn once per TODO (Claude and Codex only)
 ##
 ## Public interface (functions): ralph_run_plan_log, ralph_ensure_*_cli, ralph_path_to_file_uri,
 ## ralph_human_* / ralph_operator_* for human-in-the-loop flows, and related helpers below.
@@ -200,7 +200,7 @@ EOF
 
 ralph_mode_prompt_guidance_tool_batch_footer() {
   cat <<'EOF'
-When you need two or more independent read/search/glob/result operations, batch them with `ralph_proxy_batch` (or `mcp__ralph__ralph_proxy_batch` when only MCP-qualified names are registered) instead of issuing serial proxy calls. `ralph_proxy_batch` is read-only: shell, async shell, edit, write, and repomap operations are rejected inside a batch; keep shell calls as separate `ralph_proxy_shell` invocations for policy and side-effect safety.
+When you need two or more independent read/grep/glob or result follow-ups, batch them with `ralph_proxy_batch` (or `mcp__ralph__ralph_proxy_batch` when only MCP-qualified names are registered) instead of issuing serial proxy calls. Exploration op names inside a batch (`ralph_proxy_read` / `_grep` / `_glob`) are batch-internal only — they are not standalone tools. `ralph_proxy_batch` is read-only: shell, async shell, edit, and write operations are rejected inside a batch; keep shell calls as separate `ralph_proxy_shell` invocations for policy and side-effect safety.
 Avoid rereading the same file window; when a prior read was truncated or deduped, page stored results with `ralph_proxy_result_read` (`view=compacted` by default; `view=raw` only when the compacted view is insufficient). Prefer compacted/search follow-ups for logs and command output; reserve raw follow-ups for exact source, generated code, structured data, or missing details. Do not read the active plan file unless the current TODO explicitly requires it—the runner already injects the open TODO.
 EOF
 }
@@ -275,7 +275,7 @@ ralph_mode_prompt_guidance_ralph_catalog() {
 Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
 - Run every shell command through `mcp__ralph__ralph_proxy_shell` (native `Bash` is unavailable in ralph mode; in hybrid it is discouraged for noisy output).
 - Use `mcp__ralph__ralph_proxy_result_*` to page stored shell output.
-- `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `mcp__ralph__ralph_proxy_batch`.
+- Batch two or more independent reads/greps/globs (or `result_*` follow-ups) with `mcp__ralph__ralph_proxy_batch` instead of serial MCP calls. Those exploration op names are batch-internal only — they are not standalone tools.
 - The async shell tools (`mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `mcp__ralph__ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `mcp__ralph__ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
@@ -291,7 +291,7 @@ EOF
 Ralph tooling is preflight-checked before this invocation. Cursor registers Ralph tools as `ralph_proxy_*` (or `mcp__ralph__ralph_proxy_*` when only MCP-qualified names appear). Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
 - Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native `Shell` is discouraged for noisy output in ralph/hybrid.
 - Use `ralph_proxy_result_*` to page stored shell output.
-- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- Batch two or more independent reads/greps/globs (or `result_*` follow-ups) with `ralph_proxy_batch` instead of serial MCP calls. Those exploration op names are batch-internal only — they are not standalone tools.
 - The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
@@ -307,7 +307,7 @@ EOF
 Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
 - Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only MCP-qualified names appear); native shell is discouraged for noisy output in ralph/hybrid.
 - Use `ralph_proxy_result_*` to page stored shell output.
-- `ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- Batch two or more independent reads/greps/globs (or `result_*` follow-ups) with `ralph_proxy_batch` instead of serial MCP calls. Those exploration op names are batch-internal only — they are not standalone tools.
 - The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol \
@@ -327,7 +327,7 @@ EOF
 Ralph tooling is preflight-checked before this invocation. The host may expose Ralph tools with direct names (`ralph_proxy_*`) or MCP-qualified names (`mcp__ralph__ralph_proxy_*`); use whichever names the host registers. Native `Read`, `Grep`, and `Glob` are the primary exploration tools.
 - Run every shell command through `ralph_proxy_shell` (or `mcp__ralph__ralph_proxy_shell` when only namespaced tools exist); native `Bash` is unavailable in ralph mode and discouraged for noisy output in hybrid.
 - Use `ralph_proxy_result_*` (or `mcp__ralph__ralph_proxy_result_*`) to page stored shell output.
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch` / `mcp__ralph__ralph_proxy_batch`.
+- Batch two or more independent reads/greps/globs (or `result_*` follow-ups) with `ralph_proxy_batch` / `mcp__ralph__ralph_proxy_batch`. Those exploration op names are batch-internal only — they are not standalone tools.
 - The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel` or `mcp__ralph__ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` (or the MCP-qualified wait tool) and pass `waitSeconds` near its 600 cap (default is only 60); status tools are an occasional spot check, never a polling loop.
 EOF
       ralph_mode_prompt_guidance_stored_result_protocol
@@ -348,7 +348,7 @@ ralph_mode_prompt_guidance_ralph_catalog_codex() {
 Ralph tooling is preflight-checked before this invocation. Native `Read`, `Grep`, and `Glob` (including `read_file` where the host exposes that name) are the primary exploration tools.
 - Run every shell command through `ralph_proxy_shell` / `mcp__ralph__ralph_proxy_shell` (native `command_execution` is discouraged for noisy output in ralph/hybrid).
 - Use `ralph_proxy_result_*` to page stored shell output.
-- `ralph_proxy_read` / `mcp__ralph__ralph_proxy_read` is for files outside the agent workspace (the read-only plan roots) and for batched multi-file reads via `ralph_proxy_batch`.
+- Batch two or more independent reads/greps/globs (or `result_*` follow-ups) with `ralph_proxy_batch`. Those exploration op names are batch-internal only — they are not standalone tools.
 - The async shell tools (`ralph_proxy_shell_start/wait/status/read/cancel`) are a manual human-monitoring fallback only—not the primary automation path. Prefer runner-first `verify:` and one blocking call. When async tools are needed, block with `ralph_proxy_shell_wait` and pass `waitSeconds` near its 600 cap (default is only 60); `ralph_proxy_shell_status` is an occasional spot check, never a polling loop.
 EOF
   if [[ "$mode" == "hybrid" ]]; then
@@ -1624,10 +1624,7 @@ if [[ -z "$RUNTIME" ]]; then
     RUNTIME="$(prompt_select_runtime)" || exit 1
   fi
 fi
-if [[ "$RUNTIME" == "opencode" && "${RALPH_PLAN_SESSION_STRATEGY:-}" == "compact" \
-  && ( -n "$SESSION_STRATEGY_FLAG" || "${RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED:-0}" == "1" ) ]]; then
-  ralph_die "Error: OpenCode does not support the compact session strategy when configured non-interactively; use fresh/resume/reset instead."
-fi
+ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
 HUMAN_ACTION_FILE="$WORKSPACE/HUMAN_ACTION_REQUIRED.md"
 
 RUNTIME_ROOT="$(ralph_resolve_runtime_root "$RUNTIME" "$WORKSPACE")" || {
@@ -2100,26 +2097,19 @@ unset _ralph_gutter_default
 # Cache the effective compact command for this runtime so the post-verification
 # reopen retry path can quickly decide whether compact resume is available.
 _ralph_compact_command_for_runtime=""
-case "$RUNTIME" in
-  claude)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_RESET_COMMAND:-${RALPH_PLAN_RESET_COMMAND_CLAUDE:-/clear}}}"
-    ;;
-  cursor)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_CURSOR:-/compress}}"
-    ;;
-  codex)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_CODEX:-/compact}}"
-    ;;
-  opencode)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_OPENCODE:-}}"
-    ;;
-  antigravity)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_ANTIGRAVITY:-}}"
-    ;;
-  *)
-    _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-}"
-    ;;
-esac
+if ralph_session_runtime_supports_compact "$RUNTIME"; then
+  case "$RUNTIME" in
+    claude)
+      _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_CLAUDE:-/compact}}"
+      ;;
+    codex)
+      _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-${RALPH_PLAN_COMPACT_COMMAND_CODEX:-/compact}}"
+      ;;
+    *)
+      _ralph_compact_command_for_runtime="${RALPH_PLAN_COMPACT_COMMAND:-}"
+      ;;
+  esac
+fi
 
 RALPH_PLAN_RESUME_HINT_EMITTED=0
 
@@ -2886,6 +2876,11 @@ export RALPH_PLAN_SESSION_STRATEGY
 ralph_session_derive_cli_resume
 export RALPH_PLAN_CLI_RESUME
 
+# An explicit --jev choice wins: enable the surfaces now so the Jev prompt is skipped.
+if [[ -n "${RALPH_JEV_CLI_CHOICE:-}" ]]; then
+  ralph_jev_apply_cli_choice "$RALPH_JEV_CLI_CHOICE" || exit 2
+fi
+
 # Load workspace preferences if RALPH_MODE is not yet resolved.
 if [[ -z "${RALPH_MODE:-}" ]]; then
   ralph_load_workspace_preferences "$WORKSPACE" "$RALPH_PLAN_WORKSPACE_ROOT"
@@ -2904,6 +2899,22 @@ if [[ -z "${RALPH_MODE:-}" ]]; then
 fi
 export RALPH_MODE
 
+# Jev is independent of RALPH_MODE: no mode value turns it on. Ask only on an
+# attended TTY, and only when a TypeSafe key is already configured.
+if [[ -z "${RALPH_JEV:-}" && -t 0 && -t 1 && "$NON_INTERACTIVE_FLAG" != "1" ]]; then
+  if declare -F prompt_ralph_jev >/dev/null 2>&1; then
+    prompt_ralph_jev || true
+  fi
+fi
+if [[ -z "${RALPH_JEV:-}" ]]; then
+  RALPH_JEV=0
+fi
+export RALPH_JEV
+
+if declare -F prompt_runtime_tool_access >/dev/null 2>&1; then
+  prompt_runtime_tool_access || true
+fi
+
 # Derive internal knobs from RALPH_MODE for downstream code compatibility.
 if declare -F ralph_apply_ralph_mode_to_knobs >/dev/null 2>&1; then
   ralph_apply_ralph_mode_to_knobs "$RALPH_MODE"
@@ -2918,7 +2929,34 @@ else
 fi
 export RALPH_MCP_TOOLS_ENABLED
 
-ralph_run_plan_log "Ralph Mode: $RALPH_MODE"
+ralph_run_plan_log "Ralph Mode: $RALPH_MODE (tool_access=${RALPH_AGENT_TOOL_ACCESS:-native}, native_hooks=${RALPH_NATIVE_HOOKS:-off})"
+if [[ "${RALPH_JEV:-0}" == "1" ]]; then
+  ralph_run_plan_log "Jev: enabled (mcp=${RALPH_JEV_MCP:-0}, routing=${RALPH_JEV_ROUTING:-0}, compact=${RALPH_JEV_COMPACT:-0})"
+else
+  ralph_run_plan_log "Jev: disabled"
+fi
+case "${RUNTIME:-}" in
+  claude)
+    if [[ "${CLAUDE_PLAN_NO_ALLOWED_TOOLS:-0}" == "1" ]]; then
+      ralph_run_plan_log "Claude allowed tools: none (CLAUDE_PLAN_NO_ALLOWED_TOOLS=1)"
+    else
+      ralph_run_plan_log "Claude allowed tools: ${CLAUDE_PLAN_ALLOWED_TOOLS-${RALPH_CLAUDE_DEFAULT_ALLOWED_TOOLS:-Bash,Read,Edit,Write}}"
+    fi
+    ;;
+  codex)
+    ralph_run_plan_log "Codex tool access: sandbox=${CODEX_PLAN_SANDBOX:-workspace-write}, web_search=${CODEX_PLAN_WEB_SEARCH:-0}"
+    ;;
+  opencode)
+    ralph_run_plan_log "OpenCode tool access: permission_overlay=${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-none}"
+    ;;
+  cursor)
+    ralph_run_plan_log "Cursor tool access: auto_approve=${CURSOR_PLAN_FORCE:-1}"
+    ;;
+  antigravity)
+    ralph_run_plan_log "Antigravity tool access: skip_permissions=${ANTIGRAVITY_PLAN_SKIP_PERMISSIONS:-1}"
+    ;;
+esac
+ralph_run_plan_log "Ralph tooling intent: mcp_tools=${RALPH_MCP_TOOLS_ENABLED:-0} (mcp_effective/native_hooks_effective are recorded in the runtime overlay summary after adapters run)"
 
 # Apply default shell compaction based on Ralph mode.
 # Must be called after RALPH_MODE is finalized.
@@ -3179,6 +3217,10 @@ CLEANUP_SCRIPT="$SCRIPT_DIR/cleanup-plan.sh"
 EXIT_STATUS="incomplete"
 # shellcheck source=bash-lib/run-plan/run-plan-cleanup.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-manifest.sh"
+# Layout 2 admits the attempt before the first invocation so an interrupted run
+# still leaves a locatable manifest and catalog. Layout 1 keeps its single
+# exit-time write and append-only run index.
+ralph_run_plan_write_manifest running || true
 # shellcheck source=bash-lib/run-plan/run-plan-cleanup.sh
 source "$SCRIPT_DIR/bash-lib/run-plan/run-plan-cleanup.sh"
 if [[ "${_RALPH_RUNTIME_OVERLAY_ACTIVE:-0}" == "1" ]]; then
@@ -3276,6 +3318,11 @@ if [[ -n "${PLAN_REASONING_EFFORT_CLI:-}" ]]; then
 elif [[ -n "$(ralph_reasoning_effort_runtime_env_value "$RUNTIME" 2>/dev/null || true)" ]]; then
   ralph_run_plan_log "runtime env reasoning_effort: $SELECTED_REASONING_EFFORT"
 fi
+
+# Admission writes "running" before model and reasoning resolve. Rewrite so a
+# run that dies mid-plan still records the resolved model, mode, and effort.
+# Layout 1 ignores this running rewrite and records the same fields at exit.
+ralph_run_plan_write_manifest running || true
 
 ralph_run_plan_routing_capture_baseline
 
@@ -3707,6 +3754,20 @@ try:
     hook_config_by_runtime = aggregate_hook_config_by_runtime(hooks_config_path, plan_key)
     if hook_config_by_runtime:
         summary["hook_config_by_runtime"] = hook_config_by_runtime
+
+    # Jev (TypeSafe AI) is an HTTP adapter, so its usage stays out of the runtime
+    # token/cache buckets and rides along as its own optional object.
+    try:
+        import jev_usage
+
+        jev_summary = jev_usage.aggregate(
+            jev_usage.read_records(os.path.join(jev_usage.state_dir(), "usage.jsonl")),
+            os.environ.get("RALPH_ARTIFACT_NS") or plan_key,
+        )
+        if jev_summary["calls"]:
+            summary["jev"] = jev_summary
+    except Exception:
+        pass
 
     tmp = f"{summary_path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -4359,6 +4420,12 @@ while true; do
   _opencode_empty_resume_retry_done_for_line=0
   _claude_empty_resume_retry_done_for_line=0
   _post_verify_reopen_retry_active=0
+  _agent_verify_compact_done_for_line=0
+  _compact_turn_done_for_line=0
+  _compact_turn_active=0
+  _compact_inline_active=0
+  _agent_verify_strategy_restore=0
+  _agent_verify_prior_strategy=""
   # Same checklist line: re-invoke assistant if the box stayed [ ], pending-human was cleared, or gutter retry.
   while true; do
     total_invocations=$((total_invocations + 1))
@@ -4685,6 +4752,12 @@ while true; do
     _prompt_mode="fresh"
     RALPH_RUN_PLAN_RESET_COMMAND_USED=0
     export RALPH_RUN_PLAN_RESET_COMMAND_USED
+    # Safety net: an override left over from an iteration that skipped the post-invocation restore.
+    if [[ "$_agent_verify_strategy_restore" == "1" ]]; then
+      _agent_verify_strategy_restore=0
+      RALPH_PLAN_SESSION_STRATEGY="$_agent_verify_prior_strategy"
+      export RALPH_PLAN_SESSION_STRATEGY
+    fi
     _session_strategy="${RALPH_PLAN_SESSION_STRATEGY:-fresh}"
     _agent_verify_strategy_override=0
 
@@ -4694,11 +4767,16 @@ while true; do
     if [[ "$_post_verify_reopen_retry_active" == "1" ]]; then
       _post_verify_reopen_retry_active=0
       _agent_verify_strategy_override=1
-      if [[ -n "${_ralph_compact_command_for_runtime:-}" ]]; then
+      # One-shot: remember the configured strategy so it is restored after this invocation,
+      # and compact at most once per TODO (later retries fall back to plain resume).
+      _agent_verify_prior_strategy="$_session_strategy"
+      _agent_verify_strategy_restore=1
+      if [[ "$_agent_verify_compact_done_for_line" == "0" && "$_compact_turn_done_for_line" == "0" ]] && ralph_session_runtime_supports_compact "$RUNTIME" && [[ -n "${_ralph_compact_command_for_runtime:-}" ]]; then
+        _agent_verify_compact_done_for_line=1
         ralph_run_plan_log "agent verification reopen retry line=$line_num: forcing compact resume (strategy=$_session_strategy -> compact) with prior failure context"
         _session_strategy="compact"
       else
-        ralph_run_plan_log "agent verification reopen retry line=$line_num: compact resume unavailable for runtime=$RUNTIME; falling back to plain resume (strategy=$_session_strategy -> resume) with prior failure context"
+        ralph_run_plan_log "agent verification reopen retry line=$line_num: compact resume unavailable (unsupported for runtime=$RUNTIME or already used for this TODO); using plain resume (strategy=$_session_strategy -> resume) with prior failure context"
         _session_strategy="resume"
       fi
       RALPH_PLAN_SESSION_STRATEGY="$_session_strategy"
@@ -4708,6 +4786,18 @@ while true; do
       # Recompute effective strategy in case apply changed it (e.g. no stored id and bare not allowed).
       _session_strategy="${RALPH_PLAN_SESSION_STRATEGY:-$_session_strategy}"
     fi
+    # Claude compacts inside the same invocation: the invoker feeds "/compact" and then the TODO
+    # prompt as two stream-json messages, so no second process is needed. Once per TODO.
+    RALPH_CLAUDE_COMPACT_FIRST=""
+    _compact_inline_active=0
+    if [[ "$RUNTIME" == "claude" && "$_session_strategy" == "compact" && "$_compact_turn_done_for_line" == "0" ]] \
+        && [[ -n "${_ralph_compact_command_for_runtime:-}" && -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
+      RALPH_CLAUDE_COMPACT_FIRST="$_ralph_compact_command_for_runtime"
+      _compact_inline_active=1
+      _compact_turn_done_for_line=1
+      ralph_run_plan_log "compact line=$line_num: sending ${RALPH_CLAUDE_COMPACT_FIRST} ahead of the TODO prompt in the same invocation"
+    fi
+    export RALPH_CLAUDE_COMPACT_FIRST
     if [[ "$_session_strategy" == "reset" ]] && ([[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]])); then
       _prompt_mode="reset"
       _reset_command=""
@@ -4767,70 +4857,16 @@ $(ralph_run_plan_agent_completion_prompt_block "$line_num" "$PLAN_PATH" "$PENDIN
 Start with the exact files or commands named in the TODO. Do not reread README/AGENTS or remap the repo unless the TODO requires missing context.
 Cost model: prefer strict \`verify:\` for final proof; use one blocking call for anything that fits; never author polling loops (\`while grep -c ...; sleep\` over a log). Async proxy shell tools are a manual human-monitoring fallback only—when used, block with \`ralph_proxy_shell_wait\` and pass \`waitSeconds\` near its 600 cap (default is only 60); \`shell_status\` is an occasional spot check, never a polling loop. Continuation prompts stay compact: continue this TODO from the evidence above; do not redo it from scratch."
 
-    elif [[ "$_session_strategy" == "compact" ]] && ([[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]])); then
+    elif [[ "$_session_strategy" == "compact" && "$_compact_turn_done_for_line" == "0" && "$RUNTIME" != "claude" ]] && [[ -n "${_ralph_compact_command_for_runtime:-}" ]] && ([[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]])); then
+      # Compact runs as its own resume turn: a slash command consumes the whole turn, so the
+      # TODO prompt cannot share it. Once per TODO; the next iteration resumes with the real prompt.
       _prompt_mode="compact"
-      _compact_command=""
-      if [[ -n "${RALPH_PLAN_COMPACT_COMMAND:-}" ]]; then
-        _compact_command="${RALPH_PLAN_COMPACT_COMMAND}"
-      else
-        case "$RUNTIME" in
-          claude)
-            if [[ -n "${RALPH_PLAN_RESET_COMMAND:-}" ]]; then
-              _compact_command="${RALPH_PLAN_RESET_COMMAND}"
-            else
-              _compact_command="${RALPH_PLAN_RESET_COMMAND_CLAUDE:-/clear}"
-            fi
-            ;;
-          cursor)
-            _compact_command="${RALPH_PLAN_COMPACT_COMMAND_CURSOR:-/compress}"
-            ;;
-          codex)
-            _compact_command="${RALPH_PLAN_COMPACT_COMMAND_CODEX:-/compact}"
-            ;;
-          opencode)
-            _compact_command="${RALPH_PLAN_COMPACT_COMMAND_OPENCODE:-}"
-            ;;
-          *)
-            _compact_command=""
-            ;;
-        esac
-      fi
-      _compact_prefix=""
-      if [[ -n "$_compact_command" ]]; then
-        _compact_prefix="${_compact_command}"$'\n\n'
-        RALPH_RUN_PLAN_RESET_COMMAND_USED=1
-        export RALPH_RUN_PLAN_RESET_COMMAND_USED
-      fi
-      if [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]]; then
-        if [[ -n "$_compact_command" ]]; then
-          _resume_intro="Reusing the same CLI session id in compact mode (--resume) and issuing ${_compact_command} first."
-        else
-          _resume_intro="Reusing the same CLI session id in compact mode (--resume)."
-        fi
-      else
-        if [[ -n "$_compact_command" ]]; then
-          _resume_intro="Reusing bare CLI resume in compact mode (last-session semantics; isolated CI only) and issuing ${_compact_command} first."
-        else
-          _resume_intro="Reusing bare CLI resume in compact mode (last-session semantics; isolated CI only)."
-        fi
-      fi
-      _resume_intro="$(ralph_run_plan_resume_intro_with_reason "$_resume_intro")"
+      _compact_turn_active=1
+      _compact_turn_done_for_line=1
+      _compact_command="${_ralph_compact_command_for_runtime}"
       PROMPT_STATIC="$(ralph_run_plan_rebuild_prompt_static)"
-      _compact_label="${_compact_command:-the compact command}"
-      PROMPT="${_compact_prefix}$_resume_intro
-
-**TODO (line $line_num):** $todo_prompt_body
-
-Compact contract:
-- Treat this as a fresh task.
-- Ignore previous task-specific conversation state unless re-verified from files.
-- Keep only durable system/tool constraints that still apply.
-- Issue ${_compact_label} before continuing.
-
-$(ralph_run_plan_agent_completion_prompt_block "$line_num" "$PLAN_PATH" "$PENDING_ABS" "$_request_verify_verdict")
-
-Start with the exact files or commands named in the TODO. Do not reread README/AGENTS.md or remap the repo unless the TODO requires missing context.
-Cost model: prefer strict \`verify:\` for final proof; use one blocking call for anything that fits; never author polling loops (\`while grep -c ...; sleep\` over a log). Async proxy shell tools are a manual human-monitoring fallback only—when used, block with \`ralph_proxy_shell_wait\` and pass \`waitSeconds\` near its 600 cap (default is only 60); \`shell_status\` is an occasional spot check, never a polling loop. Continuation prompts stay compact: continue this TODO from the evidence above; do not redo it from scratch."
+      PROMPT="$_compact_command"
+      ralph_run_plan_log "compact turn line=$line_num: sending ${_compact_command} as a standalone resume turn before the TODO prompt"
 
     elif [[ -n "${RALPH_RUN_PLAN_RESUME_SESSION_ID:-}" ]] || ([[ "${RALPH_RUN_PLAN_RESUME_BARE:-0}" == "1" ]] && [[ "${RALPH_PLAN_ALLOW_UNSAFE_RESUME:-0}" == "1" ]]); then
       _prompt_mode="resume"
@@ -4996,6 +5032,10 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       _preamble="$_mode_guidance"
     fi
     ralph_run_plan_apply_ordered_prompt_assembly "$RUNTIME" "$_preamble" "$_ns_block"
+    if [[ "$_compact_turn_active" == "1" ]]; then
+      # The compact turn must be the bare slash command; no preamble or contracts around it.
+      PROMPT="$_compact_command"
+    fi
 
     # Preamble (mode/runtime guidance) is applied above in ordered assembly.
 
@@ -5023,7 +5063,14 @@ $(ralph_run_plan_fresh_completion_rules_block "$line_num" "$PENDING_ABS" "$_requ
       _invoke_resume_note=" resume=bare"
       _banner_resume_note=", bare resume"
     fi
-    if [[ "$_agent_verify_strategy_override" == "1" && "$_prompt_mode" == "compact" ]]; then
+    if [[ "$_compact_inline_active" == "1" ]]; then
+      _invoke_resume_note+=" compact_first=1"
+      _banner_resume_note+=", compacting first"
+    fi
+    if [[ "$_compact_turn_active" == "1" ]]; then
+      _invoke_resume_note+=" compact_turn=1"
+      _banner_resume_note+=", compact turn"
+    elif [[ "$_agent_verify_strategy_override" == "1" && "$_prompt_mode" == "compact" ]]; then
       _invoke_resume_note+=" strategy_override=agent-verify-compact"
       _banner_resume_note+=", agent-verify compact retry"
     elif [[ "$_agent_verify_strategy_override" == "1" && "$_prompt_mode" == "resume" ]]; then
@@ -5402,6 +5449,27 @@ print('\\x1f'.join(str(d.get(k, 0)) for k in keys))
       fi
     fi
 
+    if [[ "$_agent_verify_strategy_restore" == "1" ]]; then
+      _agent_verify_strategy_restore=0
+      RALPH_PLAN_SESSION_STRATEGY="$_agent_verify_prior_strategy"
+      export RALPH_PLAN_SESSION_STRATEGY
+    fi
+
+    if [[ "$_compact_turn_active" == "1" ]]; then
+      _compact_turn_active=0
+      if [[ "$exit_code" -ne 0 ]]; then
+        ralph_run_plan_log "compact turn line=$line_num exited $exit_code; continuing with the TODO prompt uncompacted"
+      else
+        ralph_run_plan_log "compact turn line=$line_num complete; resuming with the TODO prompt"
+      fi
+      # Verification-failure retry: re-arm the override so the follow-up resumes with the failure context.
+      if [[ "$_agent_verify_strategy_override" == "1" ]]; then
+        _post_verify_reopen_retry_active=1
+      fi
+      # A compact turn reports zero turns/usage by design; skip completion, gutter and empty-resume handling.
+      ralph_wait 1
+      continue
+    fi
     if [[ "$exit_code" -ne 0 ]] && [[ "${RALPH_PLAN_SESSION_STRATEGY:-fresh}" == "reset" ]] && [[ "$_inv_used_resume_session_id" == "1" ]] && [[ "$_reset_retry_done_for_line" -eq 0 ]] && [[ -z "${RESUME_SESSION_ID_OVERRIDE:-}" ]]; then
       if ralph_session_reset_resume_error_detected "$_inv_effective_runtime" "$OUTPUT_LOG"; then
         ralph_run_plan_log "reset strategy detected stale session id ($_inv_resume_session_id) after failed invocation; clearing stored id and retrying once fresh"

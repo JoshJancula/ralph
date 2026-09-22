@@ -19,14 +19,17 @@ test.describe('Plan view logs journeys', () => {
     await expect(page.locator('[data-testid="run-evidence"]')).toBeVisible();
     await expect(page.locator('[data-testid="run-legacy-badge"]')).toBeVisible();
     await expect(page.locator('[data-testid="run-evidence-group-metadata"]')).toBeVisible();
-    await expect(page.locator('[data-testid="run-evidence-group-execution"]')).toBeVisible();
+    await expect(page.locator('[data-testid="run-details-disclosure"]')).toBeVisible();
 
-    const evidenceButtons = page.locator('[data-testid="run-evidence-open"]');
+    await page.locator('[data-testid="run-details-disclosure"] summary').click();
+    await expect(page.locator('[data-testid="run-raw-files"]')).toBeVisible();
+
+    const evidenceButtons = page.locator('[data-testid="run-raw-open"]');
     await expect(evidenceButtons.first()).toBeVisible();
-    expect(await evidenceButtons.count()).toBeGreaterThanOrEqual(5);
+    expect(await evidenceButtons.count()).toBeGreaterThanOrEqual(1);
 
     const outputRow = page.locator('.evidence-row').filter({ hasText: 'plan-runner-e2e-output.log' });
-    await outputRow.locator('[data-testid="run-evidence-open"]').click();
+    await outputRow.locator('[data-testid="run-raw-open"]').click();
     await page.waitForSelector('ralph-log-viewer');
     await expect(page.getByText('E2E FIXTURE OUTPUT LINE')).toBeVisible();
 

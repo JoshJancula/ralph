@@ -49,9 +49,11 @@ The production server runs `dist/ralph-dashboard/server/server.mjs`.
 ## State ownership
 
 The CLI is the sole writer for durable Ralph run state beneath the state root
-(`.ralph-workspace/`): `plans`, `graph-runs`, `logs`, `artifacts`,
-`processes`, `sessions`, and `workflows`. The dashboard reads that state but
-does not rewrite it.
+(`.ralph-workspace/`): `plans`, `artifacts`, `workflows`, layout 1 homes such
+as `logs`, `sessions`, `graph-runs`, and `workflow-runs`, and layout 2 homes
+under `runs/`, `cache/`, and `internal/`. The dashboard reads that state but
+does not rewrite it. Layout is recorded per run at admission
+(`RALPH_STATE_LAYOUT`, default `2`); resume uses the recorded layout.
 
 The dashboard alone writes its task and schedule records at
 `<workspaceRoot>/dashboard/tasks-schedules.json` and its local endpoint record
@@ -128,15 +130,18 @@ primary sidebar navigation, not a filesystem tree:
   inspector, and a guided creation/editing flow per workflow.
 - **Insights** (`/insights`) — usage and telemetry for Ralph runs (token
   spend, trends, breakdown tables) plus a separate **IDE & CLI activity**
-  section for machine-local Claude Code, Codex, and Antigravity quota (5h /
+  section for machine-local Claude Code, Codex, and Antigravity quota (session /
   weekly bars, reset timers, transcript token totals in the selected date
   range). IDE data is read-only from `~/.claude` / `~/.claude.json`,
-  `~/.codex/sessions`, and `agy --print /usage --output-format json`;
-  it is not scoped to the selected Ralph workspace. Set
+  `~/.codex/sessions`, and `agy --print /usage --output-format json`. When
+  Claude's on-disk quota snapshot is older than
+  `RALPH_DASHBOARD_CLAUDE_QUOTA_MAX_AGE_MS` (default 5 minutes), the dashboard
+  refreshes it with `claude --print /usage` before reading. Collection is not
+  scoped to the selected Ralph workspace. Set
   `RALPH_DASHBOARD_AMBIENT_USAGE=0` to hide IDE & CLI collection. Optional
   `RALPH_DASHBOARD_AMBIENT_USAGE_TTL_MS` controls rescan cache (default
   60000). Nothing on Home, Plans, Runs, or Workflows requests usage data;
-  it loads only once you open Insights.
+  it loads only once you open Insights or Runtimes.
 - **Runtimes** (`/runtimes`) — connection status for Claude, Codex,
   Antigravity, Cursor, and OpenCode (in that order), with plan / provider
   hints when available. Cursor links to the Cursor billing dashboard;
@@ -151,11 +156,13 @@ to the selected project's root:
 
 | Root        | Path on disk                          |
 |------------|----------------------------------------|
-| Logs       | `.ralph-workspace/logs`                |
+| Logs       | `.ralph-workspace/logs` (layout 1) or attempt dirs under `.ralph-workspace/runs/<run-id>/` (layout 2) |
 | Artifacts  | `.ralph-workspace/artifacts`           |
-| Sessions   | `.ralph-workspace/sessions`            |
+| Sessions   | `.ralph-workspace/sessions` (layout 1) or `.ralph-workspace/internal/sessions` (layout 2) |
 | Docs       | `docs`                                 |
 | Plans      | `.ralph-workspace/plans` (and the project root) |
+
+Runs are discovered from layout 2 catalogs at `.ralph-workspace/runs/<run-id>/run.json` when present, otherwise from the legacy layout 1 readers. The workflow graph defaults to authored logical stages (compiled rework clones appear as attempt history).
 
 If a path does not exist yet, it may not appear in listings until it is created by Ralph or the project.
 

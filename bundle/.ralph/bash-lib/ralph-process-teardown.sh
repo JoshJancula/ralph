@@ -346,28 +346,44 @@ ralph_run_plan_reap_agent_group_guard() {
 # Cancel runner-owned async shell jobs recorded under the plan tool-results tree.
 ralph_run_plan_async_shell_jobs_teardown() {
   local plan_key="${RALPH_PLAN_KEY:-${RALPH_ARTIFACT_NS:-}}"
-  local root state_file pid pgid isolated status
+  local state_root root legacy_root candidate status state_file pid pgid isolated
+  local -a roots=()
   [[ -n "$plan_key" && -n "${WORKSPACE:-}" ]] || return 0
   [[ "$plan_key" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
-  root="$WORKSPACE/.ralph-workspace/tool-results/$plan_key/shell-jobs"
-  [[ -d "$root" ]] || return 0
+  if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
+    state_root="${RALPH_PLAN_WORKSPACE_ROOT%/}"
+  else
+    state_root="$WORKSPACE/.ralph-workspace"
+  fi
+  if declare -F ralph_state_shared_dir >/dev/null 2>&1; then
+    root="$(ralph_state_shared_dir "$state_root" tool-results 2>/dev/null || true)"
+  fi
+  [[ -n "${root:-}" ]] || root="$state_root/tool-results"
+  roots+=("$root/$plan_key/shell-jobs")
+  legacy_root="$state_root/tool-results/$plan_key/shell-jobs"
+  if [[ "$legacy_root" != "${roots[0]}" ]]; then
+    roots+=("$legacy_root")
+  fi
   command -v jq >/dev/null 2>&1 || return 0
-  while IFS= read -r state_file; do
-    [[ -f "$state_file" ]] || continue
-    status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
-    [[ "$status" == "running" ]] || continue
-    pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
-    pgid="$(jq -r '.pgid // empty' "$state_file" 2>/dev/null || true)"
-    isolated="$(jq -r '.isolatedProcessGroup // false' "$state_file" 2>/dev/null || true)"
-    if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
-      ralph_kill_process_group "$pgid" 1
-    elif [[ "$pid" =~ ^[0-9]+$ ]]; then
-      ralph_kill_tree_and_reap "$pid"
-    else
-      continue
-    fi
-    jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt | .terminationReason = "cancelled"' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
-  done < <(find "$root" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
+  for candidate in "${roots[@]}"; do
+    [[ -d "$candidate" ]] || continue
+    while IFS= read -r state_file; do
+      [[ -f "$state_file" ]] || continue
+      status="$(jq -r '.status // empty' "$state_file" 2>/dev/null || true)"
+      [[ "$status" == "running" ]] || continue
+      pid="$(jq -r '.pid // empty' "$state_file" 2>/dev/null || true)"
+      pgid="$(jq -r '.pgid // empty' "$state_file" 2>/dev/null || true)"
+      isolated="$(jq -r '.isolatedProcessGroup // false' "$state_file" 2>/dev/null || true)"
+      if [[ "$isolated" == "true" && "$pgid" =~ ^[0-9]+$ ]]; then
+        ralph_kill_process_group "$pgid" 1
+      elif [[ "$pid" =~ ^[0-9]+$ ]]; then
+        ralph_kill_tree_and_reap "$pid"
+      else
+        continue
+      fi
+      jq -c --arg endedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.status = "cancelled" | .endedAt = $endedAt | .terminationReason = "cancelled"' "$state_file" >"${state_file}.tmp" 2>/dev/null && mv "${state_file}.tmp" "$state_file"
+    done < <(find "$candidate" -mindepth 2 -maxdepth 2 -name state.json -type f 2>/dev/null)
+  done
 }
 
 # Idempotent run-plan agent teardown: process group, escaped CLI, watchdog, async jobs.

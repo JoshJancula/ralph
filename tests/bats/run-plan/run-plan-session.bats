@@ -115,7 +115,7 @@ create_shared_layout() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"How should Codex handle sessions between TODOs?"* ]]
-  [[ "$output" == *"reuse session id with a compact command prefix before each TODO"* ]]
+  [[ "$output" == *"reuse session id and run a standalone compact turn before each TODO"* ]]
   [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset compact"* ]]
   [[ "$(cat "$menu_file")" != *"resume previous run"* ]]
   [[ "$output" == *"STATE=compact:1"* ]]
@@ -138,6 +138,9 @@ create_shared_layout() {
   keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
   printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
     >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+  mkdir -p "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' \
+    >"$tmp_dir/state/logs/picker-plan/runs/run-old/run-manifest.json"
 
   run bash -c '
     set -euo pipefail
@@ -164,6 +167,299 @@ create_shared_layout() {
   [[ "$output" == *"resume previous run"* ]]
 
   rm -rf "$tmp_dir"
+}
+
+@test "prior run resume summary requires a matching recorded runtime" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib
+  tmp_dir="$(mktemp -d)"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions" "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+
+  _prior_summary() {
+    local runtime_field="$1"
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      export RALPH_PLAN_WORKSPACE_ROOT="$2"
+      export RALPH_PLAN_KEY=picker-plan
+      export PLAN_PATH="$3"
+      RUNTIME=codex
+      if [[ -n "$4" ]]; then
+        printf "%s\n" "$4" >"$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      else
+        rm -f "$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      fi
+      if ralph_session_prior_run_resume_summary; then
+        printf "SHOWN\n"
+      else
+        printf "HIDDEN\n"
+      fi
+    ' _ "$session_lib" "$tmp_dir/state" "$tmp_dir/plan.md" "$runtime_field"
+  }
+
+  _prior_summary '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SHOWN"* ]]
+  [[ "$output" == *"exact sessions"* ]]
+
+  _prior_summary '{"status":"complete","runtime":"claude","model":"other","ralph_mode":"no"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HIDDEN"* ]]
+  [[ "$output" != *"exact sessions"* ]]
+
+  _prior_summary '{"status":"complete","model":"legacy"}'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HIDDEN"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "resume previous run restores prior model and mode unless overridden" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+  command -v jq >/dev/null 2>&1 || skip "jq unavailable"
+
+  local tmp_dir session_lib
+  tmp_dir="$(mktemp -d)"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  mkdir -p "$tmp_dir/state/sessions/picker-plan/todo-sessions" "$tmp_dir/state/logs/picker-plan/runs/run-old"
+  printf '%s\n' "- [ ] Keep this todo" >"$tmp_dir/plan.md"
+  local keep_hash
+  keep_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "Keep this todo")"
+  printf '%s\n' "{\"schema_version\":1,\"manifest_key\":\"keep\",\"state\":\"active\",\"runtime\":\"codex\",\"session_id\":\"s1\",\"capture\":\"exact\",\"identity\":{\"runId\":\"run-old\",\"todoId\":\"keep\",\"todoHash\":\"$keep_hash\"},\"created_at\":\"t\",\"updated_at\":\"t\"}" \
+    >"$tmp_dir/state/sessions/picker-plan/todo-sessions/keep.json"
+
+  _resume_prev() {
+    local manifest_json="$1" preset_mode="$2" preset_model="$3"
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+      export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+      export RALPH_PLAN_WORKSPACE_ROOT="$2"
+      export RALPH_PLAN_KEY=picker-plan
+      export PLAN_PATH="$3"
+      NON_INTERACTIVE_FLAG=0
+      RUNTIME=codex
+      SESSION_ID_FILE="$2/session-id.codex.txt"
+      C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+      printf "%s\n" "$4" >"$2/logs/picker-plan/runs/run-old/run-manifest.json"
+      if [[ -n "$5" ]]; then RALPH_MODE="$5"; export RALPH_MODE; else unset RALPH_MODE; fi
+      if [[ -n "$6" ]]; then PLAN_MODEL_CLI="$6"; _plan_model_from_cli="$6"; export PLAN_MODEL_CLI; else unset PLAN_MODEL_CLI; _plan_model_from_cli=""; fi
+      ralph_menu_select() { printf "%s" "resume previous run"; }
+      ralph_run_plan_log() { printf "LOG %s\n" "$*"; }
+      ralph_session_prompt_cli_resume
+      printf "MODE=%s\n" "${RALPH_MODE-unset}"
+      printf "MODEL=%s\n" "${PLAN_MODEL_CLI-unset}"
+      printf "RESUME=%s\n" "${RALPH_PLAN_RESUME_RUN-unset}"
+    ' _ "$session_lib" "$tmp_dir/state" "$tmp_dir/plan.md" "$manifest_json" "$preset_mode" "$preset_model"
+  }
+
+  _resume_prev '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=hybrid"* ]]
+  [[ "$output" == *"MODEL=prior-model"* ]]
+  [[ "$output" == *"RESUME=last"* ]]
+  [[ "$output" == *"restored RALPH_MODE=hybrid"* ]]
+  [[ "$output" == *"restored model=prior-model"* ]]
+
+  _resume_prev '{"status":"complete","runtime":"codex","model":"prior-model","ralph_mode":"hybrid"}' "no" "explicit-model"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=no"* ]]
+  [[ "$output" == *"MODEL=explicit-model"* ]]
+  [[ "$output" != *"restored RALPH_MODE"* ]]
+  [[ "$output" != *"restored model"* ]]
+
+  _resume_prev '{"status":"complete","runtime":"codex"}' "" ""
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MODE=unset"* ]]
+  [[ "$output" == *"MODEL=unset"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume omits compact option for cursor" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.cursor.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=cursor
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "fresh"
+    }
+    ralph_session_prompt_cli_resume
+  ' _ "$session_lib" "$session_file" "$menu_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset"* ]]
+  [[ "$(cat "$menu_file")" != *"compact"* ]]
+  [[ "$output" != *"reuse session id and run a standalone compact turn before each TODO"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "ralph_session_prompt_cli_resume exposes compact option for claude" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local tmp_dir session_lib session_file menu_file
+  tmp_dir="$(mktemp -d)"
+  session_file="$tmp_dir/session-id.claude.txt"
+  menu_file="$tmp_dir/menu-args.txt"
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+
+  run bash -c '
+    set -euo pipefail
+    export _RALPH_PROMPT_SESSION_STRATEGY_INTERACTIVE=1
+    export RALPH_SESSION_STRATEGY_PROMPT_ASSUME_TTY=1
+    NON_INTERACTIVE_FLAG=0
+    RUNTIME=claude
+    SESSION_ID_FILE="$2"
+    menu_file="$3"
+    C_C="" C_BOLD="" C_RST="" C_DIM="" C_G=""
+    source "$1"
+    ralph_menu_select() {
+      printf "%s\n" "$*" >"$menu_file"
+      printf "%s" "compact"
+    }
+    ralph_session_prompt_cli_resume
+    printf "STATE=%s:%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}" "${RALPH_PLAN_CLI_RESUME:-unset}"
+  ' _ "$session_lib" "$session_file" "$menu_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$menu_file")" == *"--prompt Session strategy --default 1 -- fresh resume reset compact"* ]]
+  [[ "$output" == *"How should Claude Code handle sessions between TODOs?"* ]]
+  [[ "$output" == *"STATE=compact:1"* ]]
+
+  rm -rf "$tmp_dir"
+}
+
+@test "explicit non-interactive compact is rejected for runtimes that cannot compact" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local session_lib err_lib runtime
+  session_lib="$REPO_ROOT/bundle/.ralph/bash-lib/run-plan/run-plan-session.sh"
+  err_lib="$REPO_ROOT/bundle/.ralph/bash-lib/error-handling.sh"
+
+  for runtime in cursor opencode antigravity; do
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      source "$2"
+      RUNTIME="$3"
+      RALPH_PLAN_SESSION_STRATEGY=compact
+      SESSION_STRATEGY_FLAG=compact
+      ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+    ' _ "$err_lib" "$session_lib" "$runtime"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$runtime"* ]]
+    [[ "$output" == *"does not support the compact session strategy"* ]]
+  done
+
+  for runtime in claude codex; do
+    run bash -c '
+      set -euo pipefail
+      source "$1"
+      source "$2"
+      RUNTIME="$3"
+      RALPH_PLAN_SESSION_STRATEGY=compact
+      SESSION_STRATEGY_FLAG=compact
+      ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+      printf "allowed\n"
+    ' _ "$err_lib" "$session_lib" "$runtime"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"allowed"* ]]
+  done
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=compact
+    SESSION_STRATEGY_FLAG=""
+    RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=1
+    ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+  ' _ "$err_lib" "$session_lib"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cursor"* ]]
+
+  run bash -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=compact
+    SESSION_STRATEGY_FLAG=""
+    RALPH_PLAN_SESSION_STRATEGY_ENV_SPECIFIED=0
+    ralph_session_reject_explicit_unsupported_compact "$RUNTIME"
+    printf "not-explicit\n"
+  ' _ "$err_lib" "$session_lib"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not-explicit"* ]]
+}
+
+@test "per-TODO compact sessionStrategy on cursor falls back to fresh" {
+  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
+
+  local plan_file
+  plan_file="$(mktemp)"
+  cat >"$plan_file" <<'EOF'
+---
+execution: orchestration
+pipeline:
+  stages:
+    - id: alpha
+      runtime: cursor
+todos:
+  - id: first
+    stage: alpha
+    runtime: cursor
+    sessionStrategy: compact
+    status: open
+    content: Compact override on cursor
+---
+EOF
+
+  run bash -c '
+    set -euo pipefail
+    source "$1/bundle/.ralph/bash-lib/plan-todo.sh"
+    source "$1/bundle/.ralph/bash-lib/run-plan/run-plan-routing.sh"
+    ralph_run_plan_routing_resolve_current_context() { :; }
+    ralph_run_plan_routing_set_session_context() { :; }
+    ralph_run_plan_log() { printf "%s\n" "$*"; }
+    RUNTIME=cursor
+    RALPH_PLAN_SESSION_STRATEGY=fresh
+    ralph_run_plan_routing_capture_baseline
+    ralph_run_plan_routing_apply_effective_todo_context "$2" yaml 1 first first
+    printf "STRATEGY=%s\n" "${RALPH_PLAN_SESSION_STRATEGY:-unset}"
+  ' _ "$REPO_ROOT" "$plan_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rejected compact sessionStrategy for runtime cursor"* ]]
+  [[ "$output" == *"STRATEGY=fresh"* ]]
+
+  rm -f "$plan_file"
 }
 
 @test "ralph_write_human_action_file renders the template with pending question and history" {

@@ -9,13 +9,13 @@ This page covers Ralph mode on plan runs (`.ralph/run-plan.sh` / `ralph run-plan
 | Mode | Ralph MCP tools | Native adapters (hooks) | When to use it |
 |------|-----------------|-------------------------|----------------|
 | `no` (default) | None | Off | You want the assistant's stock behavior |
-| `native` | Result-retrieval tools only | On | You want hook-based compaction but the assistant's own tools |
-| `ralph` | Full catalog | Off | You want Ralph's bounded tools without touching runtime config |
-| `hybrid` | Full catalog | On | You want the full Ralph contract: bounded MCP tools, native adapters, and the default strict-proxy policy |
+| `native` | Result-retrieval tools only | On | Expert: hook-based compaction with the assistant's own tools |
+| `ralph` | Full catalog | Off | Expert: Ralph MCP without touching runtime hook config |
+| `hybrid` | Full catalog | On | **Recommended opt-in:** MCP tools + native adapters (and the default strict-proxy policy where applicable) |
 
 Two ideas to keep apart:
 
-- **Ralph MCP tools** are extra tools served over MCP: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_shell`, and friends. They bound how much output reaches the model and store full originals for later retrieval.
+- **Ralph MCP tools** are extra tools served over MCP: `ralph_proxy_shell`, the async shell lifecycle tools, stored-result tools, and `ralph_proxy_batch` (which can run read/grep/glob ops server-side without advertising those as standalone tools). They bound how much output reaches the model and store full originals for later retrieval.
 - **Native adapters** are runtime-specific hooks (Claude settings hooks, Cursor `hooks.json`, Codex `--config` hooks, an OpenCode plugin) that Ralph merges in for one run and restores afterward. What they can actually do differs per runtime; see [Native adapters per runtime](#native-adapters-per-runtime).
 
 The plan log header shows `Ralph Mode: <mode>` so you always know what a run used.
@@ -23,13 +23,13 @@ The plan log header shows `Ralph Mode: <mode>` so you always know what a run use
 ## Turning it on
 
 ```bash
-# Everything: Ralph MCP + native adapters (recommended when opting in)
+# Recommended opt-in: Ralph MCP + native adapters
 .ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --ralph-mode hybrid
 
-# Ralph MCP tools only
+# Expert: Ralph MCP tools only (no native adapters)
 .ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --ralph-mode ralph
 
-# Native adapters only; result tools available for stored output
+# Expert: native adapters only; result tools available for stored output
 .ralph/run-plan.sh --runtime claude --plan PLAN.md --workspace . --ralph-mode native
 ```
 
@@ -44,7 +44,44 @@ You can also save a default in `.ralph-workspace/preferences.json`:
 { "ralph_mode_default": "no" }
 ```
 
-Interactive terminal runs prompt for a mode when nothing chose one (no flag, no env, no saved preference). Non-interactive runs never prompt; with nothing set they use `no`.
+Interactive terminal runs ask **Enable Ralph tooling?** when nothing chose a mode (no flag, no env, no saved preference): **yes** selects `hybrid`, **no** selects `no`. Expert cells (`native`, `ralph`) are only via `--ralph-mode` / `RALPH_MODE` / a saved preference. Non-interactive runs never prompt; with nothing set they use `no`.
+
+### Tool access prompt
+
+On an attended run, Ralph asks about the tool or permission setting the chosen runtime actually has; only Claude has a tool allowlist. Every question is skipped by its environment variable or a `preferences.json` key, and non-interactive runs never prompt.
+
+**Claude:** Ralph shows the default permission allowlist (`Bash, Read, Edit, Write`), notes that it appends its own `mcp__ralph__*` tools automatically, and lists further tools you can grant (`WebSearch`, `WebFetch`, `Grep`, `Glob`, `Skill`, `TodoWrite`, `NotebookEdit`, `Task`). Choose **leave as is** or **set my own** and enter the full comma-separated list. These are permission grants, not capability switches: un-granted tools are not removed, they are left to Claude's own permission rules. The answer sets `CLAUDE_PLAN_ALLOWED_TOOLS`. Set that variable (or `CLAUDE_PLAN_NO_ALLOWED_TOOLS=1`), or save `claude_allowed_tools_default` in `.ralph-workspace/preferences.json`, to skip the question. Non-interactive runs never prompt.
+
+| Runtime | What the prompt sets | Variable | Preference key |
+|---------|---------------------|----------|----------------|
+| Codex | Sandbox mode (`read-only`, `workspace-write`, `danger-full-access`) | `CODEX_PLAN_SANDBOX` | `codex_sandbox_default` |
+| Codex | Live web search (off by default) | `CODEX_PLAN_WEB_SEARCH` | `codex_web_search_default` |
+| OpenCode | Per-tool `allow`/`ask`/`deny` map over `bash read edit glob grep webfetch websearch task todowrite lsp skill`, merged through the permission overlay | `OPENCODE_PLAN_PERMISSION_CONFIG_PATH` | `opencode_permission_default` |
+| Cursor | Auto-approve on or off (no per-tool list) | `CURSOR_PLAN_FORCE` | `cursor_force_default` |
+| Antigravity | Auto-approve on or off (no per-tool list) | `ANTIGRAVITY_PLAN_SKIP_PERMISSIONS` | `antigravity_skip_permissions_default` |
+
+Turning approvals off for Cursor or Antigravity makes every tool call wait for an answer, so unattended runs stall. "Leave as is" changes nothing for any runtime.
+
+### Enabling Jev (TypeSafe AI)
+
+Jev is optional, off by default, and **independent of `RALPH_MODE`** - no mode value turns it on. Resolution order:
+
+1. `RALPH_JEV` in the environment (`1` or `0`)
+2. `jev_default` in `.ralph-workspace/preferences.json` (`"none"`, `"compaction"`, `"mcp"`, or `"both"`; `"yes"` is an alias for `both`, `"no"` for `none`)
+3. The interactive prompt on an attended TTY run
+4. Off
+
+```json
+{ "ralph_mode_default": "no", "jev_default": "none" }
+```
+
+The prompt **only appears when a TypeSafe API key is already configured** - check with `ralph jev key status`. With no key there is nothing to enable, so Ralph stays silent rather than advertising it. Non-interactive runs never prompt.
+
+The prompt offers **none** (default), **compaction**, **mcp**, or **both**. `compaction` sets `RALPH_JEV=1` plus `RALPH_JEV_COMPACT=1` (ranked-line selection on large tool output, which sends repo and log content to a third party); `mcp` sets `RALPH_JEV=1` plus `RALPH_JEV_MCP=1` (the `ralph-jev` MCP tools, which add a second MCP server); `both` sets all three. The prompt never sets `RALPH_JEV_ROUTING`. Any surface variable you set yourself is left untouched.
+
+To enable graph routing (pre-agent router classification) use `--jev routing`, or `--jev` for routing plus tooling, on `ralph run` or `ralph workflow start`. `--jev [routing|tooling|all]` skips the prompt and is independent of `RALPH_MODE`.
+
+The prompt never reads or prints the key - it reports only which source supplies it.
 
 **Compaction defaults by mode:** in `ralph` or `hybrid` mode, Ralph sets `RALPH_PROXY_SHELL_COMPACT=1` (MCP shell compaction) unless you already exported the variable. In `native` or `hybrid` mode, it sets `RALPH_BASH_COMPACT=1` (Claude native Bash compaction) the same way. Export either as `0` to opt out. In `no` mode both stay off unless you enable them yourself.
 
@@ -52,21 +89,20 @@ Interactive terminal runs prompt for a mode when nothing chose one (no flag, no 
 
 ## What tools you get
 
-When Ralph MCP is active, `tools/list` always includes the orchestration and result tools. The proxy read/search/shell tools appear in `ralph` and `hybrid` modes only. Tool order is deterministic (sorted by name).
+When Ralph MCP is active, `tools/list` always includes the orchestration and result tools. The proxy shell tools (and `ralph_proxy_batch`) appear in `ralph` and `hybrid` modes only. Exploration remains native `Read`/`Grep`/`Glob`; batch may run read/grep/glob ops server-side without advertising those as standalone tools. Tool order is deterministic (sorted by name).
 
 | Tool | Purpose | Modes |
 |------|---------|-------|
 | `ralph_run_plan`, `ralph_plan_status`, `ralph_orchestrator_run` | Run plans and pipelines, check plan status | `native`, `ralph`, `hybrid` |
 | `ralph_proxy_result_read` / `_search` / `_summary` | Read, search, or summarize stored full outputs by `resultId` | `native`, `ralph`, `hybrid` |
-| `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob` | Bounded file read, search, and glob | `ralph`, `hybrid` |
 | `ralph_proxy_shell` | Run a shell command with policy checks and bounded output | `ralph`, `hybrid` |
 | `ralph_proxy_shell_start` / `_wait` / `_status` / `_read` / `_cancel` | Async job lifecycle for long-running commands (avoids MCP timeouts). Manual fallback when a human is monitoring a job — not the automation path for durable TODO waits (use opt-in `RALPH_BG_JOBS` + `.ralph/ralph-bg.sh` / Stop hooks; see [Background jobs and Stop hook continuation](#background-jobs-and-stop-hook-continuation)). Prefer `_wait` for blocking waits, treat `_status` as a manual follow-up, never short-interval polling loops. Hide with `RALPH_PROXY_SHELL_ASYNC=0`. Runner-first `verify:` remains the default completion path. | `ralph`, `hybrid` |
 
 There are no `ralph_proxy_edit` or `ralph_proxy_write` tools; agents keep using runtime-native edit tools for modifications. The standalone MCP server refuses to start with `RALPH_MODE=no`.
 
-MCP hosts namespace these names, so Claude and Codex advertise them as `mcp__ralph__ralph_proxy_read` and so on. Script against the names the runtime exposes.
+MCP hosts namespace these names, so Claude and Codex advertise them as `mcp__ralph__ralph_proxy_shell` and so on. Script against the names the runtime exposes.
 
-In `ralph` and `hybrid` modes, the prompt steers agents to native `Read`/`Grep`/`Glob` for exploration, `ralph_proxy_shell` for shell (where compaction helps), and the result tools whenever a response is truncated or contains a `resultId` (preview-first, then `view=compacted`, then `view=raw` only when needed). Proxy read/grep/glob remain available for read-only plan roots and batched multi-file reads; native edit/write tools stay the modification path. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path.
+In `ralph` and `hybrid` modes, the prompt steers agents to native `Read`/`Grep`/`Glob` for exploration, `ralph_proxy_shell` for shell (where compaction helps), and the result tools whenever a response is truncated or contains a `resultId` (preview-first, then `view=compacted`, then `view=raw` only when needed). Exploration is always native; Ralph shapes its output through native hooks rather than through MCP tools. Native edit/write tools stay the modification path. In `hybrid`, native hook compaction is an optimization layer, not the source of truth: if a runtime cannot prove its native hook path, MCP compaction remains the authoritative path for shell output.
 
 ## How injection works per runtime
 
@@ -83,13 +119,13 @@ adds only its protected server; native ambient MCP remains runtime-owned.
 
 | Runtime | Mechanism | Notes |
 |---------|-----------|-------|
-| Claude | Temp config containing only the `ralph` server via `--mcp-config <temp>`, without `--strict-mcp-config`, so native MCP discovery stays on and ambient servers are never rebuilt into the temp file | Incompatible with `CLAUDE_PLAN_BARE=1`. In strict proxy mode, a successful preflight enables `--disallowedTools Bash` so commands use `ralph_proxy_shell` (`RALPH_CLAUDE_RALPH_STRICT_PROXY=0` keeps Bash). Other native tools, including `Skill`, remain available. MCP lockdown requires explicit `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1`; raw/native profiles preserve native MCP discovery by default. |
+| Claude | Temp config containing only the `ralph` server via `--mcp-config <temp>`, without `--strict-mcp-config`, so native MCP discovery stays on and ambient servers are never rebuilt into the temp file | Incompatible with `CLAUDE_PLAN_BARE=1`. Other native tools, including `Skill`, remain available. MCP lockdown requires explicit `CLAUDE_PLAN_MINIMAL_DISABLE_MCP=1`; raw/native profiles preserve native MCP discovery by default. |
 | Cursor | Merges only `mcpServers.ralph` into `<workspace>/.cursor/mcp.json`, restores on exit | Requires `jq` when an existing config must be validated; invalid existing JSON fails before the run starts and is never modified. Runs with `--approve-mcps`. |
 | Codex | Per-run `--config mcp_servers.ralph.*` overrides after native config load | Sets `enabled=true`, `required=true`, and the configured tools approval mode. Native tools and native MCP remain alongside Ralph tools. |
 | OpenCode | Temp config via `OPENCODE_CONFIG` merging only Ralph's server with native config | JSONC comments survive. In `hybrid`, native OpenCode tools and Ralph MCP tools are both available; Ralph does not deny native tools to control context. Strict proxy enforcement is unsupported unless `RALPH_OPENCODE_ALLOW_STRICT_PROXY_BESTEFFORT=1` enables a post-run audit. See [OpenCode hybrid contract](#opencode-hybrid-contract). |
 | Antigravity | Temp config via `ANTIGRAVITY_CONFIG` only when Ralph's server is needed | Preserves native `.agents/agents.md`, rules, skills, workflows, and existing `.agents/mcp_config.json`. |
 
-**Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses Ralph proxy tools with native reads or searches, instead of just logging a warning. Codex strict runs add a live preflight that proves a real `ralph_proxy_read` works before the plan starts.
+**Strict proxy mode:** `RALPH_AGENT_TOOL_ACCESS_REQUIRE_PROXY=1` (alias `RALPH_STRICT_PROXY=1`) fails a run that bypasses `ralph_proxy_shell` with native shell calls, instead of just logging a warning. It does not constrain exploration: native `Read`/`Grep`/`Glob` are always allowed. Codex strict runs add a live preflight that proves a real `ralph_proxy_shell` call works before the plan starts.
 
 **Kill switch:** a fatal policy violation writes a sentinel under `.ralph-workspace/security/kill-switch.<plan-key>.json` and the run exits non-zero, so orchestrator stages fail instead of advancing. Stale sentinels from earlier runs are logged and ignored. See [SECURITY.md](SECURITY.md).
 
@@ -212,9 +248,22 @@ When no command is known at all (for example a stored result with no attached co
 | `RALPH_BASH_COMPACT=0` | Turn off Claude native Bash compaction even in `native`/`hybrid` |
 | `RALPH_COMPACT_GENERIC_FALLBACK=1` | Opt into generic compaction for unknown large shell output |
 | `RALPH_COMPACT_GENERIC_THRESHOLD_BYTES=<n>` | Resize the generic fallback threshold |
+| `RALPH_JEV_COMPACT=1` | Opt into Jev ranked-line selection for large unknown-family output (default off; never set by `RALPH_MODE`) |
 | `--ralph-mode no` | Everything off unless you set the variables yourself |
 
 Native adapter compaction stores originals in the same place as MCP compaction, and the same retrieval tools work on both. That shared storage is what makes `hybrid` safe when a runtime's native hook path is only partially proven: the compacted transcript still points at the same stored originals.
+
+### Jev ranked-line compaction
+
+`RALPH_JEV_COMPACT` is default off (unset). Unlike `RALPH_BASH_COMPACT` and `RALPH_PROXY_SHELL_COMPACT`, which `ralph_apply_mode_compaction_defaults` in `bundle/.ralph/bash-lib/run-plan/run-plan-args.sh` turns on for certain `RALPH_MODE` values, **no `RALPH_MODE` value enables `RALPH_JEV_COMPACT`**. Export `RALPH_JEV_COMPACT=1` yourself (with Jev available via `RALPH_JEV` and a key); see [Jev (TypeSafe AI) adapter](#jev-typesafe-ai-adapter).
+
+Jev **selects** which surviving lines are most relevant. It cannot summarize, rewrite, or invent text. Ralph collapses repetitive runs, windows candidates at the choice-question ceiling, asks Jev for line rankings, then assembles head / ranked-middle / tail under Ralph's byte budget. Candidates are advisory: they must still pass the safety gate (and, on real failure output, the preserve-line round-trip). Any abort delivers the deterministic compaction path unchanged.
+
+Source-output families (`git diff`, `git show`, `git log`, `grep`/`rg`, `find`, `ls`, `tree`, and related) are never sent to Jev. They remain hard passthrough on every shell path, including when `RALPH_JEV_COMPACT=1`.
+
+**Cost profile.** At 0.042 USD per million input tokens, a 32k-token log costs about 0.0013 USD. Money is not the concern; **latency on the hot path** is. That is why every live call has a timeout (`RALPH_JEV_TIMEOUT_MS`, default 4000) and a circuit breaker under `RALPH_JEV_STATE_DIR`.
+
+**Known limitation (Claude PostToolUse path; documented, not fixed).** The Claude `PostToolUse:Bash` hook (`bundle/.claude/hooks/compact-bash-output.sh`) passes a hardcoded `exit_status` of `0` into the compactors, because Claude Code does not deliver `tool_response` on a failed command (failures fire `PostToolUseFailure` with no replaceable output). Failure-aware judgment — including Jev's preserve-line check on non-zero exits — is therefore reachable only through the native shell wrapper `bundle/.ralph/bash-lib/native-hook/native-shell-wrapper.sh`, which passes the real exit code via `ralph_native_shell_compact_pipeline_json`. On the Claude PostToolUse path, Jev compaction can still select lines from large successful unknown-family output; it cannot apply failure-aware ranking for failed Bash commands on that path. MCP `ralph_proxy_shell` and wrapper-based runtimes that forward the real exit status keep the failure-aware path available.
 
 ## Named tooling profiles
 
@@ -537,15 +586,13 @@ Defaults when no policy is supplied:
 | Setting | Default |
 |---------|---------|
 | `resultByteCap` | `16384` |
-| `proxyOwnedTools.maxReadBytes` / `maxReadLines` | `32768` / `250` |
-| `proxyOwnedTools.maxGrepMatches` / `maxGlobResults` | `50` / `100` |
 | `proxyOwnedTools.maxShellOutputBytes` | `8192` |
 | `proxyOwnedTools.shellTimeoutSeconds` | `600` |
 | `proxyOwnedTools.allowAllCommands` / `allowShellOperators` | `true` / `true` |
 
 The default is deliberately permissive: the proxy's promise is **output bounding, not sandboxing**, so in a trusted workspace `ralph_proxy_shell` runs arbitrary commands and pipelines while responses stay capped and stored. The kill switch still fires on real tripwires (tool denylists, denied argument patterns, path traversal). To tighten things, set `allowAllCommands: false` with an explicit `shellAllowlist`, or start from the `readonly` / `minimal` / `trusted-local` profiles in [`bundle/.ralph/mcp-proxy-policy.example.json`](../bundle/.ralph/mcp-proxy-policy.example.json).
 
-Policy field names are camelCase; keys inside `toolResultByteCaps` are exact MCP identifiers (`ralph_proxy_read`, `resources/read`, ...).
+Policy field names are camelCase; keys inside `toolResultByteCaps` are exact MCP identifiers (`ralph_proxy_shell`, `resources/read`, ...). The keys `ralph_proxy_read`, `ralph_proxy_grep`, and `ralph_proxy_glob` remain valid: native hooks reuse them to look up caps for native Read/Grep/Glob output.
 
 ### Three roots
 
@@ -583,8 +630,6 @@ New plan runs record **exact** optimization channels in overlay summaries and be
 | `proxy_shell` | `ralph_proxy_shell` compacted allowlisted command output |
 | `native_result_hook` | Native exploration hook windowed read/grep/glob/bash output |
 | `native_result_mcp_fallback` | MCP fallback windowing when native result hooks are unproven |
-| `proxy_read_windowing` | `ralph_proxy_read` bounded preview with stored full output |
-| `proxy_search_windowing` | `ralph_proxy_grep` / search windowing with stored full output |
 | `stored_result_readback` | Follow-up `ralph_proxy_result_*` reads after an envelope preview |
 
 Channel buckets carry `attribution: exact` on new runs. **Historical runs** recorded before per-channel telemetry may appear with `attribution: legacy`; benchmark Markdown groups those under **Legacy / unknown attribution**. Treat legacy rows as approximate totals, not authoritative channel splits. Re-run the plan (or wait for new invocations) to get exact attribution.
@@ -607,11 +652,134 @@ Runner-first policy: long-running verification commands belong in the plan/TODO 
 
 The experimental knowledge-graph tools (`ralph_knowledge_*`) are hidden unless the master gate `RALPH_KNOWLEDGE_FEATURE=on` is set, in addition to `--knowledge-tools on`. With the gate off (the default), `--knowledge-tools on` is ignored. Per-capability variables: [ENVIRONMENT.md](ENVIRONMENT.md#knowledge-graph-experimental-disabled-by-default).
 
+## Jev (TypeSafe AI) adapter
+
+Jev is an optional TypeSafe AI adapter for small, bounded, typed judgments: Ralph POSTs redacted state plus a map of closed-set questions, and Jev returns only pre-declared typed answers with calibrated probabilities. It is not an LLM and not a coding agent.
+
+Jev **cannot generate text** and therefore cannot summarize, rewrite, or author anything. All arithmetic, byte budgets, thresholds, ordering, and policy stay in Ralph code; Jev supplies only the uncertain semantic input for closed-set questions (`noul`, `choice`, `score`).
+
+Every Jev environment variable is off or unset by default. **No `RALPH_MODE` value enables Jev** — setting `--ralph-mode hybrid` (or any other mode) does not turn it on. Call sites ask availability first and fall back to today's deterministic behavior when Jev is absent.
+
+### Environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RALPH_JEV` | unset | `"1"` enables the adapter. No `RALPH_MODE` value sets this. |
+| `RALPH_JEV_COMPACT` | unset | `"1"` enables ranked-line selection for large unknown-family shell output. Default off; unlike `RALPH_BASH_COMPACT` / `RALPH_PROXY_SHELL_COMPACT`, no `RALPH_MODE` value sets this. See [Jev ranked-line compaction](#jev-ranked-line-compaction). |
+| `RALPH_JEV_ROUTING` | unset | `"1"` enables the graph pre-agent router classifier (`graph.router-confidence`) before router agent turns. Default off; no `RALPH_MODE` value and no interactive prompt sets this. Enable with `--jev routing` (or bare `--jev`). Applies to any stage with `.stage.router` metadata, including the `adaptive-delivery` entry router. When unset, the router agent always decides. |
+| `TYPESAFE_API_KEY` | unset | Highest-precedence key source when already exported. Prefer `ralph jev key set` for ordinary setup (see below). |
+| `RALPH_JEV_KEY_SOURCE` | (resolver-set) | Read-only diagnostic: the winning source token (`env`, `env-file`, `command`, `keychain`, `file`, or `none`). Never set this yourself. |
+| `RALPH_JEV_ENV_FILE` | `1` | `"0"` disables reading the workspace `.env` for the key. |
+| `RALPH_JEV_MODEL` | `jev-latest` | Model alias sent on each request. |
+| `RALPH_JEV_ENDPOINT` | `https://api.typesafe.ai/v1/systemone` | SystemOne HTTP endpoint. |
+| `RALPH_JEV_TIMEOUT_MS` | `4000` | Per-request timeout in milliseconds. |
+| `RALPH_JEV_MAX_RETRIES` | `2` | Retries for HTTP 429 and 529 only. |
+| `RALPH_JEV_SHADOW` | unset | `"1"` still calls and records, but always returns the deterministic fallback decision. |
+| `RALPH_JEV_REGISTRY` | `<RALPH_DIR>/jev/questions.registry.json` | Path to the question-set registry. |
+| `JEV_TRANSPORT` | `https` | `"fixture"` replays recorded responses under `JEV_FIXTURE_DIR` and never makes a live call. |
+| `JEV_FIXTURE_DIR` | `tests/fixtures/jev` | Offline fixture directory when `JEV_TRANSPORT=fixture`. |
+| `RALPH_JEV_STATE_DIR` | `<state_root>/jev` | Holds the circuit breaker file, `decisions.jsonl`, and `usage.jsonl`. |
+
+### Key configuration
+
+Primary path: store a key with the CLI, then check provenance:
+
+```bash
+ralph jev key set          # interactive (echo off) or piped stdin; never pass the key as an argv
+ralph jev key status       # which source wins, without printing the key
+ralph jev doctor           # RALPH_JEV, key source, curl, registry, breaker, MCP registration
+```
+
+`ralph jev key set --command '<cmd>'` stores a credential command (no secret on disk). `ralph jev key test` is the only command that deliberately makes a live API call; invoke it explicitly when you want to verify a key.
+
+**Resolution chain** (first hit wins; never falls through after a hit). `RALPH_JEV_KEY_SOURCE` / `ralph jev key status` report exactly one of these tokens:
+
+1. `env` — `TYPESAFE_API_KEY` already exported (CI and one-off runs).
+2. `env-file` — `TYPESAFE_API_KEY` in the workspace `.env` (project-scoped; beats the global backends below).
+3. `command` — a stored command whose stdout is the key (preferred durable backend; stores no secret).
+4. `keychain` — OS keychain (`security` on macOS; `secret-tool` on Linux when present). Skipped silently when unavailable.
+5. `file` — plaintext at mode `0600` under the Ralph global config dir. **Last resort**; the CLI warns at set time that this is a plaintext key on disk.
+
+**.env carve-out:** Ralph may extract **only** `TYPESAFE_API_KEY` from `<workspace>/.env`. It **parses** the file; it does not `source` or eval it, so no other secret is imported and no code in the file executes. Agent reads of `.env` remain blocked by `block-env-reads.sh` and related guards. Set `RALPH_JEV_ENV_FILE=0` to opt out of the `.env` backend entirely.
+
+### Question-set registry
+
+The registry is a reviewed repository file (default `bundle/.ralph/jev/questions.registry.json`, overridable with `RALPH_JEV_REGISTRY`). Shape:
+
+```json
+{
+  "registryVersion": "1",
+  "questionSets": {
+    "<id>": {
+      "id": "<id>",
+      "version": 1,
+      "surface": "compaction|mcp|graph",
+      "description": "...",
+      "questions": {
+        "<qid>": { "type": "noul|choice|score", "instructions": "...", "criteria": ... }
+      },
+      "policy": {
+        "primaryQuestion": "<qid>",
+        "actThreshold": 0.85,
+        "escalateThreshold": 0.6,
+        "fallback": "<name of the deterministic behavior>"
+      },
+      "calibration": "placeholder - uncalibrated"
+    }
+  }
+}
+```
+
+Adding or changing a question set is a **reviewed repository change**, not a runtime decision. Thresholds and closed option sets come only from the registry; callers cannot pass their own.
+
+### Exit codes
+
+Every `jev_*` function uses the same exit contract. A non-zero code never propagates as a plan or workflow run failure; callers fall back.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Declined / unavailable. Normal. Silent (no stdout, no stderr). Caller falls back. |
+| `2` | Transport, HTTP, or protocol error. Recorded to telemetry. Caller falls back. |
+| `3` | Input rejected before any network use (for example redaction failed or state too large). |
+
+### Data policy
+
+Before any network call, Ralph redacts state: credential-assignment patterns, bearer/`sk-`/cloud tokens, env-dump `NAME=VALUE` values, home-directory paths, and the live `TYPESAFE_API_KEY` value itself. Redaction failure aborts the call (exit `3`); **unredacted state is never sent**. Decision log lines also pass through inline secret redaction before write.
+
+TypeSafe states that it does not train on customer data and offers zero data retention for enterprise customers via `privacy@typesafe.ai`.
+
+### Cost and latency
+
+At **0.042 USD per million input tokens** (output tokens free), a 32k-token log costs about **0.0013 USD** — money is negligible for Ralph's call sizes. The meaningful cost is **latency on the hot path** (a network round trip), which is why every live call has a timeout (`RALPH_JEV_TIMEOUT_MS`, default 4000) and a file-persisted circuit breaker under `RALPH_JEV_STATE_DIR` that opens after consecutive failures and skips further HTTP attempts until success resets it.
+
+### Usage tracking
+
+Every successful SystemOne call appends one line to `usage.jsonl` in `RALPH_JEV_STATE_DIR`. It is written by the transport itself (`jev_post_systemone` in `jev-client.sh` and `post_systemone` in `jev_client.py`), so every call site is covered: the MCP tools, graph routing, failure classification, graph diagnosis, and ranked-line compaction. Failed calls and retried 429/529 attempts are not recorded.
+
+Each line has `timestamp`, `model` (the resolved version such as `jev-1.13.0`, never the `jev-latest` alias), `questionSetId`, `input_tokens`, `output_tokens`, `usageSource`, `transport`, and `planKey`. `usageSource` is `measured` when the response carried a `usage` object and `unavailable` when it did not.
+
+Jev is an HTTP adapter, not a CLI runtime, so this is reported separately from the runtime token and cache buckets in `ralph usage`:
+
+```bash
+ralph jev usage                       # calls, tokens, estimated cost, by question set
+ralph jev usage --plan-key <key>      # one plan only
+ralph jev usage --format json
+ralph usage                           # appends a Jev block only when Jev has been used
+```
+
+Where it shows up:
+
+- `plan-usage-summary.json` gets an optional top-level `jev` object (calls, tokens, per-question-set rows, estimated cost) counting only calls made under that plan. It is absent when the plan made no Jev calls. The runtime token and cache totals are never changed by it.
+- The dashboard Insights page shows a "Jev (TypeSafe AI)" panel, fed by `/api/metrics/jev-usage`, only when the workspace has recorded calls.
+
+Offline fixture-transport calls (`JEV_TRANSPORT=fixture`) are written but ignored unless `--include-fixture` is passed. Cost is an estimate from `RALPH_JEV_INPUT_USD_PER_MTOK` (default `0.042`) and `RALPH_JEV_OUTPUT_USD_PER_MTOK` (default `0`). `decisions.jsonl` is separate: it records decisions, not API usage.
+
 ## Troubleshooting
 
 **MCP preflight failed / Claude: "Failed to connect: ralph".** Ralph runs an MCP handshake before each `ralph`-mode invocation and exits before the CLI starts if it fails. Check that `jq` is installed, the workspace path is valid, and `.ralph/mcp-server.sh` exists. Manual check: `RALPH_MCP_WORKSPACE="$PWD" bash .ralph/mcp-server.sh`. The preflight also rejects a `tools/list` response with a present-but-null `nextCursor`, because Claude Code 2.1.x silently drops every tool from such a server while still reporting it connected. For a true end-to-end check on Claude, `RALPH_MCP_CLI_PREFLIGHT=1` spawns the real CLI and aborts if it never calls a proxy tool.
 
-**Claude says it cannot Edit/Write files.** Claude's `Edit`/`Write` require a prior native `Read` of the file; `ralph_proxy_read` does not satisfy that gate. Ralph keeps native `Read` precisely so edits work. If edits fail, confirm you have not set `RALPH_CLAUDE_RALPH_STRICT_PROXY_STRIP_READ=1` (read-only plans only).
+**Claude says it cannot Edit/Write files.** Claude's `Edit`/`Write` require a prior native `Read` of the file. Ralph never strips native `Read`, so this should not happen; if it does, check whether project or local settings deny `Read`.
 
 ## Ralph optimizations (Ralph/hybrid)
 
@@ -625,7 +793,7 @@ Offline regression: `tests/python/test_cookbook_offline_e2e.py`, retrieval eval 
 
 **Cursor: "existing Cursor MCP config is invalid JSON".** Fix `<workspace>/.cursor/mcp.json` by hand and re-run; Ralph never modifies an invalid config.
 
-**Ralph mode is on but logs show only native Read calls.** That is expected for exploration: native Read/Grep/Glob are the primary path; proxy shell is where compaction helps. Plan logs include a per-invocation `Ralph mode breakdown: proxy=... native_read=...`. Strict proxy still governs whether native shell/search fallback is allowed.
+**Ralph mode is on but logs show only native Read calls.** That is expected: native Read/Grep/Glob are the only exploration path, and proxy shell is where compaction helps. Plan logs include a per-invocation `Ralph mode breakdown: proxy=... native_read=...`. Strict proxy governs only whether native shell fallback is allowed.
 
 **Stale files under `.ralph-workspace/runtime-config/`.** See [Overlay state and cleanup](#overlay-state-and-cleanup).
 

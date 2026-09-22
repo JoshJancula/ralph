@@ -329,7 +329,7 @@ setup() {
     ralph_root="$2"
     source "$ralph_root/bash-lib/run-plan/run-plan-runtime.sh"
     source "$ralph_root/bash-lib/run-plan/run-plan-args.sh"
-    ralph_menu_select() { printf "%s" "hybrid"; }
+    ralph_menu_select() { printf "%s" "yes"; }
     ralph_run_plan_parse_args --runtime cursor --plan "$plan"
     if [[ -z "${RALPH_MODE:-}" ]]; then
       prompt_ralph_mode
@@ -677,7 +677,7 @@ setup() {
   [[ "$output" == *"skipped_interactive"* ]]
 }
 
-@test "prompt_ralph_mode sets hybrid mode interactively" {
+@test "prompt_ralph_mode sets hybrid mode when yes is selected" {
   [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
 
   run bash -c '
@@ -685,7 +685,7 @@ setup() {
     unset RALPH_MODE
     C_Y="" C_DIM="" C_RST=""
     source "$1/bash-lib/run-plan/run-plan-runtime.sh"
-    ralph_menu_select() { printf "%s" "hybrid"; }
+    ralph_menu_select() { printf "%s" "yes"; }
     prompt_ralph_mode
     printf "%s" "${RALPH_MODE:-unset}"
   ' _ "$(dirname "$RUN_PLAN_SH")"
@@ -704,14 +704,12 @@ setup() {
     source "$1/bash-lib/run-plan/run-plan-runtime.sh"
     ralph_menu_select() {
       [[ "$1" == "--prompt" ]]
-      [[ "$2" == "Ralph mode" ]]
+      [[ "$2" == "Enable Ralph tooling" ]]
       [[ "$3" == "--default" ]]
       [[ "$4" == "1" ]]
       shift 5
       [[ "$1" == "no" ]]
-      [[ "$2" == "native" ]]
-      [[ "$3" == "ralph" ]]
-      [[ "$4" == "hybrid" ]]
+      [[ "$2" == "yes" ]]
       printf "%s" "no"
     }
     prompt_ralph_mode
@@ -720,23 +718,6 @@ setup() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"no"* ]]
-}
-
-@test "prompt_ralph_mode sets ralph mode interactively" {
-  [ -f "$RUN_PLAN_SH" ] || skip "bundle run-plan missing"
-
-  run bash -c '
-    export RALPH_MODE_PROMPT_ASSUME_TTY=1
-    unset RALPH_MODE
-    C_Y="" C_DIM="" C_RST=""
-    source "$1/bash-lib/run-plan/run-plan-runtime.sh"
-    ralph_menu_select() { printf "%s" "ralph"; }
-    prompt_ralph_mode
-    printf "%s" "${RALPH_MODE:-unset}"
-  ' _ "$(dirname "$RUN_PLAN_SH")"
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"ralph"* ]]
 }
 
 @test "run-plan --session-strategy compact parses correctly" {

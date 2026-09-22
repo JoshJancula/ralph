@@ -117,7 +117,14 @@ ralph_mcp_proxy_shell_original_storage_text() {
 
 ralph_mcp_proxy_shell_compact_result_path_display() {
   local plan_key="${1-}" result_id="${2-}"
-  printf '.ralph-workspace/tool-results/%s/results/%s' "$plan_key" "$result_id"
+  if declare -F ralph_mcp_proxy_result_store_display_rel_path >/dev/null 2>&1; then
+    ralph_mcp_proxy_result_store_display_rel_path "$plan_key" "$result_id"
+    return $?
+  fi
+  case "$(ralph_state_layout_for_new_run 2>/dev/null || printf '2')" in
+    1) printf '.ralph-workspace/tool-results/%s/results/%s' "$plan_key" "$result_id" ;;
+    *) printf '.ralph-workspace/cache/tool-results/%s/results/%s' "$plan_key" "$result_id" ;;
+  esac
 }
 
 ralph_mcp_proxy_shell_compact_envelope_build_json() {

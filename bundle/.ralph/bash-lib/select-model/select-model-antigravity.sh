@@ -2,10 +2,13 @@
 #
 # Antigravity model selection helper.
 #
-# Contract: Ralph lists available models via `agy models`, preserves the exact
-# display string returned by that command, and invokes `agy` with
-# `--model "<exact model string from agy models>"`. The model id is never
-# normalized or remapped.
+# Contract: Ralph lists available models via `agy models`. Each line from
+# that command is "<slug><whitespace><Display Name>" (for example
+# "claude-sonnet-4-6	Claude Sonnet 4.6 (Thinking)"). The picker shows the
+# full line so the operator can read the human-readable name, but only the
+# first whitespace-delimited token (the slug) is ever passed to
+# `agy --model`. Passing the whole line fails: agy rejects a --model value
+# that still has the display name and whitespace embedded in it.
 
 _SELECT_MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTERACTIVE_LIB="${RALPH_SHARED_RALPH_DIR:-$_SELECT_MODEL_DIR/../../.ralph}/bash-lib/interactive-select.sh"
@@ -55,23 +58,27 @@ _antigravity_select_model_interactive() {
   echo "" >&2
   echo -e "${C_C:-}${C_BOLD:-}--- Antigravity (.agents/agents.md + Ralph metadata) ---${C_RST:-}" >&2
   echo -e "${C_DIM:-}Pick a model for the Antigravity CLI (from agy models when available).${C_RST:-}" >&2
-  local models=() m
-  models+=("auto")
+  # model_slugs[i] is the actual --model value; model_labels[i] is what the
+  # menu displays (slug + human-readable name). They stay index-aligned.
+  local model_slugs=() model_labels=() m slug
+  model_slugs+=("auto")
+  model_labels+=("auto")
   while IFS= read -r m || [[ -n "$m" ]]; do
     [[ -z "$m" || "$m" == "auto" ]] && continue
-    models+=("$m")
+    slug="${m%%[[:space:]]*}"
+    [[ -z "$slug" ]] && continue
+    model_slugs+=("$slug")
+    model_labels+=("$m")
   done <<<"$(_antigravity_list_models)"
 
-  if [[ ${#models[@]} -le 1 ]]; then
-    models=(
-      "auto"
-      "antigravity/default"
-    )
+  if [[ ${#model_slugs[@]} -le 1 ]]; then
+    model_slugs=("auto" "antigravity/default")
+    model_labels=("auto" "antigravity/default")
   fi
 
   local default_index=1 i
-  for ((i = 0; i < ${#models[@]}; i++)); do
-    if [[ "${models[$i]}" == "auto" ]]; then
+  for ((i = 0; i < ${#model_labels[@]}; i++)); do
+    if [[ "${model_labels[$i]}" == "auto" ]]; then
       default_index=$((i + 1))
       break
     fi
@@ -80,7 +87,7 @@ _antigravity_select_model_interactive() {
   local placeholder="Enter custom model id"
   local selection custom_model
   while true; do
-    selection="$(ralph_menu_select --prompt "Model for Antigravity CLI agent (from agy models when available)" --default "$default_index" -- "${models[@]}" "$placeholder")"
+    selection="$(ralph_menu_select --prompt "Model for Antigravity CLI agent (from agy models when available)" --default "$default_index" -- "${model_labels[@]}" "$placeholder")"
     if [[ -z "$selection" ]]; then
       echo ""
       return 0
@@ -97,7 +104,18 @@ _antigravity_select_model_interactive() {
       echo "$custom_model"
       return 0
     fi
-    echo "$selection"
+    # Map the chosen label back to its slug. Labels are not guaranteed
+    # unique in pathological input, so take the first match.
+    for ((i = 0; i < ${#model_labels[@]}; i++)); do
+      if [[ "${model_labels[$i]}" == "$selection" ]]; then
+        echo "${model_slugs[$i]}"
+        return 0
+      fi
+    done
+    # Should not happen (selection always comes from model_labels), but
+    # fail safe by echoing the slug portion of whatever was picked rather
+    # than passing the raw display string through to --model.
+    echo "${selection%%[[:space:]]*}"
     return 0
   done
 }

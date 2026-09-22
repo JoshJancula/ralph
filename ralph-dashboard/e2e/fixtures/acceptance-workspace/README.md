@@ -21,3 +21,7 @@ npm run test:e2e plan-view-logs
 ```
 
 Requires Playwright browsers (`npx playwright install` once per machine).
+
+## State navigation (layout 2)
+
+`runs/run-nav-v2-failed/` — failed plan run with `failed-check.json`, child attempt, and related artifact for `e2e/state-navigation.spec.ts`.

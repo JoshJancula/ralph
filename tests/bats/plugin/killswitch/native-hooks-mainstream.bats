@@ -6,7 +6,6 @@ KILLSWITCH_CORE="$REPO_ROOT/bundle/.ralph/bash-lib/killswitch/killswitch-core.sh
 CLAUDE_HOOK="$REPO_ROOT/bundle/.claude/hooks/rewrite-bash-command.sh"
 CODEX_HOOK="$REPO_ROOT/bundle/.codex/hooks/pre-tool-bash-policy.sh"
 CURSOR_SHELL_HOOK="$REPO_ROOT/bundle/.cursor/hooks/pre-tool-shell-policy.sh"
-CURSOR_NUDGE_HOOK="$REPO_ROOT/bundle/.cursor/hooks/pre-tool-exploration-policy.sh"
 
 setup() {
   WS="$(mktemp -d)"
@@ -175,11 +174,10 @@ sentinel_path() {
   [ ! -f "$(sentinel_path)" ]
 }
 
-@test "nudge does not write a sentinel for claude, codex, or cursor" {
-  local claude_nudge codex_nudge cursor_nudge
+@test "nudge does not write a sentinel for claude or codex" {
+  local claude_nudge codex_nudge
   claude_nudge="$(read_nudge_json PreToolUse Grep)"
   codex_nudge="$(read_nudge_json PreToolUse grep)"
-  cursor_nudge="$(read_nudge_json preToolUse Grep)"
 
   run bash -c "$(hook_env native) bash '$CLAUDE_HOOK'" <<<"$claude_nudge"
   [ "$status" -eq 0 ]
@@ -191,18 +189,4 @@ sentinel_path() {
   [ "$status" -eq 0 ]
   [ ! -f "$(sentinel_path)" ]
   jq -e '.runtime == "codex" and .decision == "nudge" and .applied == false' "$RECORD"
-
-  : >"$RECORD"
-  run bash -c "$(hook_env ralph) RALPH_NATIVE_EXPLORATION_NUDGE=1 bash '$CURSOR_NUDGE_HOOK'" <<<"$cursor_nudge"
-  [ "$status" -eq 0 ]
-  [ ! -f "$(sentinel_path)" ]
-  jq -e '.permission == "deny"' <<<"$output"
-  jq -e '.runtime == "cursor" and .decision == "nudge" and .applied == false' "$RECORD"
-
-  : >"$RECORD"
-  run bash -c "$(hook_env ralph) bash '$CURSOR_NUDGE_HOOK'" <<<"$cursor_nudge"
-  [ "$status" -eq 0 ]
-  [ "$output" = "" ]
-  [ ! -f "$(sentinel_path)" ]
-  ! grep -qi 'deny' "$RECORD"
 }

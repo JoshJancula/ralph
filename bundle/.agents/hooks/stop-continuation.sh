@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Antigravity Stop hook adapter: wait for Ralph background jobs and emit decision:continue.
+# agy stdin: workspacePaths[], fullyIdle, terminationReason. Stdout is always one JSON
+# object: {"decision":"continue","reason":...} or {}.
 
 set -uo pipefail
 
 ralph_antigravity_stop_hook_fail_open() {
+  printf '{}\n'
   exit 0
 }
 
@@ -12,7 +15,10 @@ ralph_antigravity_stop_hook_workspace() {
     printf '%s\n' "$WORKSPACE"
     return 0
   fi
-  jq -r '.workspacePaths[0] // .workspace_roots[0] // .cwd // empty' <<<"${RALPH_ANTIGRAVITY_STOP_HOOK_INPUT:-{}}"
+  # Not "${VAR:-{}}": bash closes that expansion one brace early and corrupts the JSON.
+  local input="${RALPH_ANTIGRAVITY_STOP_HOOK_INPUT:-}"
+  [[ -n "$input" ]] || input='{}'
+  jq -r '.workspacePaths[0] // empty' <<<"$input"
 }
 
 ralph_antigravity_stop_hook_main() {
@@ -22,6 +28,12 @@ ralph_antigravity_stop_hook_main() {
 
   hook_input="$(cat)" || hook_input="{}"
   RALPH_ANTIGRAVITY_STOP_HOOK_INPUT="$hook_input"
+
+  # Only continue when the agent is fully idle; a busy stop must not be extended.
+  if [[ "$(jq -r '.fullyIdle' <<<"$hook_input" 2>/dev/null || true)" == "false" ]]; then
+    printf '{}\n'
+    exit 0
+  fi
 
   if [[ -n "${RALPH_HOME:-}" && -f "${RALPH_HOME}/bundle/.ralph/bash-lib/native-hook/native-hook-lib.sh" ]]; then
     # shellcheck source=/dev/null
@@ -51,7 +63,13 @@ ralph_antigravity_stop_hook_main() {
   # shellcheck source=/dev/null
   source "$adapter_lib"
   RALPH_BG_STOP_CORE_SCRIPT="$core_script"
-  ralph_bg_stop_continue_adapter_main <<<"$hook_input"
+  local out
+  out="$(ralph_bg_stop_continue_adapter_main <<<"$hook_input")" || out=""
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+  else
+    printf '{}\n'
+  fi
 }
 
 ralph_antigravity_stop_hook_main

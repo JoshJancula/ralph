@@ -36,7 +36,7 @@ bundle/
   .agents/              # runtime-owned Antigravity rules, skills, hooks, and settings
 ```
 
-Runtime state (logs, artifacts, sessions, workflow registry runs) lives under `.ralph-workspace/` at the **state root** (default: `<project-root>/.ralph-workspace`). The **agent workspace** defaults to the directory that invoked `run-plan.sh` and may differ from both the project and state roots.
+Runtime state (logs, artifacts, sessions, workflow registry runs) lives under `.ralph-workspace/` at the **state root** (default: `<project-root>/.ralph-workspace`). New runs default to layout 2 under `runs/<run-id>/` (with `cache/` and `internal/`); set `RALPH_STATE_LAYOUT=1` to keep the pre-existing top-level paths. Layout is recorded per run at admission and is not re-derived on resume. The **agent workspace** defaults to the directory that invoked `run-plan.sh` and may differ from both the project and state roots.
 
 ### How plans and workflows work
 
@@ -44,9 +44,9 @@ Runtime state (logs, artifacts, sessions, workflow registry runs) lives under `.
 
 **Workflow:** A reusable definition under project, global, or bundled resolution (`kind: workflow`). `ralph workflow start <id> --task "..."` or `--plan <file>` (auto-detects: no TODOs = task text, has TODOs = leaf plan) materializes a registry run, freezes immutable input, and dispatches to the Sequential (`orchestrator.sh`) or Dependency (`graph-run.sh`) engine. Stages declare `id`, optional `runtime` / `model`, inline `instructions:`, artifacts, `planner` / `planFrom` / `planInput`, and supervisor nodes (`integrate`, `join`, `gate`, `approval`, and related). Public create routes are only `ralph create plan` and `ralph create workflow` (`--mode sequential|dependency`).
 
-**Session resume (leaf):** `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1` reuses CLI context via `session-id.<runtime>.txt` under `.ralph-workspace/sessions/<plan-key>/`. Workflow outer-run resume is `ralph workflow resume <run-id>` (same control plan). See Reference map → [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) and [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
+**Session resume (leaf):** `--cli-resume` or `RALPH_PLAN_CLI_RESUME=1` reuses CLI context via `session-id.<runtime>.txt` under the plan's session home (`sessions/<plan-key>/` in layout 1; `internal/sessions/<plan-key>/` in layout 2). Workflow outer-run resume is `ralph workflow resume <run-id>` (same control plan). See Reference map → [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) and [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
-**Outputs:** Plan logs under `.ralph-workspace/logs/`; generated files under `.ralph-workspace/artifacts/`. Path templates support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` (see table below).
+**Outputs:** Declared artifacts under `.ralph-workspace/artifacts/`. Plan attempt logs under layout 1 `logs/` or layout 2 `runs/<run-id>/stages/...`. Path templates support `{{ARTIFACT_NS}}`, `{{PLAN_KEY}}`, and `{{STAGE_ID}}` (see table below).
 
 ### Developer invariants
 
@@ -194,7 +194,7 @@ cd /path/to/monorepo/packages/api
 - **Do** end a delivery workflow with a model-free `type: gate` node that asserts an evaluator verdict. Every bundled delivery workflow now does: `qa` writes `qa-verdict.json` next to its prose handoff, and `qa-gate` runs `python3 .ralph/python/evaluator_contract.py require-approved` against it, so a QA failure makes the run non-zero instead of exiting `0`.
 - **Do** use `{{ARTIFACT_NS}}` / `{{STAGE_ID}}` in a `verificationProfiles` step command; gate steps resolve them before execution.
 - **Don't** rely on a stage's prose handoff to gate anything. `qa-handoff.md` had no schema and no consumer, which is why a run reporting FAIL on every check still succeeded.
-- **Known residual:** `integrate` publishes on `review-approved`, so the QA gate fails the run *after* publication. Pre-publish QA needs a downstream node to run inside an upstream node's candidate snapshot, which no authoring surface exposes yet.
+- **Candidate binding:** publication happens only after every node, including QA and approvals, succeeds, and it publishes only the candidate whose identity matches the QA and approval receipts.
 
 ### Claude cost and session defaults
 
@@ -236,9 +236,9 @@ Open these only when the task requires detail beyond this file.
 
 | Read this | Only when |
 |-----------|-----------|
-| [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | Workflow authoring, Sequential vs Dependency, planner/planFrom/planInput, approvals, status/resume/reset/recover, exit 3 |
-| [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Env vars, session/resume flags, `RALPH_BG_*` background-job vars (opt-in), runtime `*_PLAN_*` chains, orchestrator knobs, and named tooling profiles |
-| [docs/WORKSPACE.md](docs/WORKSPACE.md) | `.ralph-workspace/` layout, three run kinds, run manifests, retention, `ralph state` |
+| [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | Workflow authoring, Sequential vs Dependency, planner/planFrom/planInput, `candidateFrom`, `maxQaRepairRounds`, logical stages, approvals, status/resume/reset/recover, exit 3 |
+| [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Env vars, session/resume flags, `RALPH_STATE_LAYOUT`, `RALPH_BG_*` background-job vars (opt-in), runtime `*_PLAN_*` chains, orchestrator knobs, and named tooling profiles |
+| [docs/WORKSPACE.md](docs/WORKSPACE.md) | `.ralph-workspace/` layout versions, three run kinds, run manifests, retention, `ralph state` prune/orphans |
 | [docs/TOOLING.md](docs/TOOLING.md) | Ralph mode (`--ralph-mode`, `RALPH_MODE`), prompt layering, named tooling profiles, MCP proxy tools, Stop hook continuation contract, shell compaction policy, native adapters, overlay journals, and cleanup |
 | [docs/MCP.md](docs/MCP.md) | Standalone Ralph MCP server, host wiring, third-party MCP for plan agents (background continuation adds no MCP tools) |
 | [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | Leaf-plan loop, human input, session strategies, durable TODO continuations, outputs |
@@ -263,7 +263,7 @@ Examples:
 
 ### Ralph proxy batching (ralph/hybrid mode)
 
-When Ralph MCP owned tools are active, batch two or more independent read/search/glob/result operations with `ralph_proxy_batch` instead of serial proxy calls. The tool accepts up to **8 read-only operations per call** (override with `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS`). Allowed operations: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, `ralph_proxy_search`, and `ralph_proxy_result_*`. Shell, async shell, edit, write, and repomap calls must stay outside the batch. After an invocation with consecutive native reads or grep-then-read sequences, the runner may feed forward a telemetry hint recommending batching on the next prompt.
+When Ralph MCP owned tools are active, batch two or more independent read-only operations with `ralph_proxy_batch` instead of serial proxy calls. Allowed batch ops: `ralph_proxy_read`, `ralph_proxy_grep`, `ralph_proxy_glob`, and `ralph_proxy_result_*`. Those exploration names are **batch-internal only** — they do not appear in `tools/list` and cannot be called as standalone MCP tools; agents explore with the runtime's native `Read`/`Grep`/`Glob` outside the batch. The tool accepts up to **8 read-only operations per call** (override with `RALPH_MCP_PROXY_BATCH_MAX_OPERATIONS`). Shell, async shell, edit, and write calls must stay outside the batch. After an invocation with consecutive native reads or grep-then-read sequences, the runner may feed forward a telemetry hint recommending batching on the next prompt.
 
 ### MCP server
 

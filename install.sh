@@ -139,6 +139,8 @@ Commands:
   create       Primary: create a leaf plan or reusable workflow
   mcp          Manage the Ralph MCP server (see: ralph mcp --help)
   models       Manage saved Claude/Codex models (see: ralph models --help)
+  jev          Manage the optional Jev adapter, its API key, and the ralph-jev
+               MCP server (see: ralph jev --help)
   usage        Show token-usage report (delegates to usage-report.sh)
   benchmark    Build the token/compaction benchmark report (delegates to benchmark-report.sh)
   dashboard    Start the Ralph dashboard (global); aliases: dash, ui. Options: --yes|-y (skip prompts),
@@ -146,7 +148,7 @@ Commands:
                Use -- before args for npm start.
   install      Run the global Ralph installer
   update       Update an existing global install (see: ralph update --help)
-  workspaces   Manage the Ralph workspace registry
+  workspaces   Inspect, clean, and repair .ralph-workspace; manage the registry (alias: ws)
   setup        Set up durable compaction hooks and MCP (see: ralph setup --help)
   doctor       Report host/runtime environment readiness (read-only; see: ralph doctor --help)
   safety       Inspect and validate safety/killswitch config (see: ralph safety --help)
@@ -451,6 +453,9 @@ case "$cmd" in
   models)
     exec bash "$RALPH_HOME/bundle/.ralph/models.sh" "$@"
     ;;
+  jev)
+    exec bash "$RALPH_HOME/bundle/.ralph/jev.sh" "$@"
+    ;;
   dashboard|dash|ui)
     if [[ "${1:-}" == "status" ]]; then
       dashboard_status_cli_path="$RALPH_HOME/bundle/.ralph/bash-lib/dashboard/status-cli.sh"
@@ -578,7 +583,7 @@ case "$cmd" in
     fi
     exec bash "$setup_script" "$@"
     ;;
-  workspaces)
+  workspaces|ws)
     workspaces_cli="$RALPH_HOME/bundle/.ralph/bash-lib/workspaces-cli.sh"
     if [[ ! -f "$workspaces_cli" ]]; then
       echo "Error: workspace registry CLI is not installed yet: $workspaces_cli" >&2

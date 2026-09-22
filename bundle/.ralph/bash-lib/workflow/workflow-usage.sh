@@ -17,7 +17,11 @@ workflow_usage_print_run_report() {
 
   [[ "${RALPH_WORKFLOW_USAGE_REPORT:-1}" != "0" ]] || return 0
   [[ -n "$state_root" && -n "$run_id" && -n "$workspace" ]] || return 0
-  run_file="$state_root/workflow-runs/$run_id/run.json"
+  if ! declare -F ralph_state_workflow_run_dir >/dev/null 2>&1; then
+    # shellcheck source=../state-paths.sh
+    source "$_WORKFLOW_USAGE_LIB_DIR/../state-paths.sh"
+  fi
+  run_file="$(ralph_state_workflow_run_dir "$state_root" "$run_id" 2>/dev/null)/run.json" || return 0
   [[ -f "$run_file" && ! -L "$run_file" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   command -v python3 >/dev/null 2>&1 || return 0

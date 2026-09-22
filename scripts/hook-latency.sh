@@ -343,8 +343,6 @@ payload_for_hook() {
     bundle/.claude/hooks/block-env-reads.sh) printf '%s\n' "$PAYLOAD_DIR/read-pre-claude.json" ;;
     bundle/.claude/hooks/stop-continuation.sh) printf '%s\n' "$PAYLOAD_DIR/stop-claude.json" ;;
     bundle/.cursor/hooks/pre-tool-shell-policy.sh) printf '%s\n' "$PAYLOAD_DIR/shell-pre-cursor.json" ;;
-    bundle/.cursor/hooks/pre-tool-exploration-policy.sh) printf '%s\n' "$PAYLOAD_DIR/read-pre-cursor.json" ;;
-    bundle/.cursor/hooks/pre-tool-proxy-read-handoff.sh) printf '%s\n' "$PAYLOAD_DIR/mcp-read-pre.json" ;;
     bundle/.cursor/hooks/post-tool-shell-telemetry.sh) printf '%s\n' "$PAYLOAD_DIR/shell-post-cursor.json" ;;
     bundle/.cursor/hooks/post-tool-native-result-compact.sh) printf '%s\n' "$PAYLOAD_DIR/read-post-cursor.json" ;;
     bundle/.cursor/hooks/post-tool-mcp-compact.sh) printf '%s\n' "$PAYLOAD_DIR/mcp-post.json" ;;
@@ -370,7 +368,6 @@ clear_compaction_env() {
     RALPH_CURSOR_MCP_HOOK_COMPACT \
     RALPH_COMPACT_GENERIC_FALLBACK \
     RALPH_BASH_TELEMETRY_LOG \
-    RALPH_NATIVE_EXPLORATION_NUDGE \
     RALPH_MCP_TOOLS_ENABLED \
     RALPH_AGENT_TOOL_ACCESS \
     || true

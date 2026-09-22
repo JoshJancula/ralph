@@ -1561,18 +1561,23 @@ run_plan_invoke_opencode_graph_approval_overlay_for_grant() {
 # run_plan_invoke_opencode_graph_approval_config_target
 # Run-local OpenCode permission override path (never ambient user/home).
 run_plan_invoke_opencode_graph_approval_config_target() {
-  local plan_key="${RALPH_PLAN_KEY:-opencode-approval}" root
+  local plan_key="${RALPH_PLAN_KEY:-opencode-approval}" root state_root
   if [[ -n "${OPENCODE_PLAN_PERMISSION_CONFIG_PATH:-}" ]]; then
     printf '%s' "$OPENCODE_PLAN_PERMISSION_CONFIG_PATH"
     return 0
   fi
   if [[ -n "${RALPH_PLAN_WORKSPACE_ROOT:-}" ]]; then
-    root="${RALPH_PLAN_WORKSPACE_ROOT}/runtime-config/${plan_key}"
+    state_root="${RALPH_PLAN_WORKSPACE_ROOT}"
   elif [[ -n "${RALPH_PROJECT_ROOT:-${WORKSPACE:-}}" ]]; then
-    root="${RALPH_PROJECT_ROOT:-$WORKSPACE}/.ralph-workspace/runtime-config/${plan_key}"
+    state_root="${RALPH_PROJECT_ROOT:-$WORKSPACE}/.ralph-workspace"
   else
     echo "Error: OpenCode graph approval apply requires a project or workspace root" >&2
     return 1
+  fi
+  if declare -F ralph_state_runtime_config_dir >/dev/null 2>&1; then
+    root="$(ralph_state_runtime_config_dir "$state_root" "$plan_key")" || return 1
+  else
+    root="${state_root}/runtime-config/${plan_key}"
   fi
   mkdir -p "$root" || return 1
   printf '%s/opencode-permission-override.json' "$root"

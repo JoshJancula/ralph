@@ -411,3 +411,340 @@ PY
 
   rm -rf "$tmpd"
 }
+
+# ---------------------------------------------------------------------------
+# Jev pre-agent router classifier (RALPH_JEV_ROUTING)
+# ---------------------------------------------------------------------------
+
+_jev_router_write_triage_graph() {
+  local out_path="$1"
+  python3 - "$out_path" <<'PY'
+import json, sys
+out_path = sys.argv[1]
+nodes = [
+    {
+        "id": "classify",
+        "type": "router",
+        "dependsOn": [],
+        "derivedFrom": "stage",
+        "stage": {
+            "id": "classify",
+            "runtime": "cursor",
+            "router": {
+                "allowedTargets": ["scope-request", "deep-investigation"],
+                "defaultTarget": "deep-investigation",
+                "onInvalid": "default",
+            },
+            "artifacts": [
+                {
+                    "path": ".ralph-workspace/artifacts/test/triage-classification.md",
+                    "required": True,
+                },
+                {
+                    "path": ".ralph-workspace/artifacts/test/triage-decision.json",
+                    "required": True,
+                    "schema": "bundle/.ralph/schemas/router-decision.schema.json",
+                },
+            ],
+            "_inlineTodos": [],
+        },
+    },
+    {
+        "id": "scope-request",
+        "type": "agent",
+        "dependsOn": ["classify"],
+        "derivedFrom": "stage",
+        "stage": {"id": "scope-request", "runtime": "cursor", "_inlineTodos": []},
+    },
+    {
+        "id": "deep-investigation",
+        "type": "agent",
+        "dependsOn": ["classify"],
+        "derivedFrom": "stage",
+        "stage": {"id": "deep-investigation", "runtime": "cursor", "_inlineTodos": []},
+    },
+]
+edges = [
+    {"from": "classify", "to": "scope-request", "reasons": ["declared"]},
+    {"from": "classify", "to": "deep-investigation", "reasons": ["declared"]},
+]
+doc = {
+    "schemaVersion": 2,
+    "ralphVersion": "1.0.0",
+    "name": "jev-router-test",
+    "namespace": "test",
+    "maxParallel": 2,
+    "failurePolicy": "drain",
+    "nodes": nodes,
+    "edges": edges,
+}
+with open(out_path, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+PY
+}
+
+_jev_router_fixture() {
+  local out_path="$1"
+  local choice="$2"
+  local confidence="$3"
+  python3 - "$out_path" "$choice" "$confidence" <<'PY'
+import json, sys
+out, choice, conf = sys.argv[1], sys.argv[2], float(sys.argv[3])
+doc = {
+    "model": "jev-1.13.0",
+    "answers": {
+        "target": {
+            "choice": choice,
+            "probabilities": {choice: conf, "other": max(0.0, 1.0 - conf)},
+            "confidence": conf,
+        },
+        "sufficiently_specified": {"noul": conf},
+    },
+    "usage": {"input_tokens": 40, "output_tokens": 8},
+}
+with open(out, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+PY
+}
+
+@test "jev router questions populate criteria from allowedTargets at call time" {
+  command -v jq >/dev/null || skip "jq required"
+  local questions
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-policy.sh"
+  questions="$(_graph_schedule_jev_router_questions '["scope-request","deep-investigation"]')"
+  echo "$questions" | jq -e '
+    (.target.criteria | has("scope-request"))
+    and (.target.criteria | has("deep-investigation"))
+    and ((.target.criteria | keys | length) == 2)
+    and (.sufficiently_specified.type == "noul")
+  '
+}
+
+@test "jev router: RALPH_JEV_ROUTING unset falls through without consulting Jev" {
+  command -v python3 >/dev/null || skip "python3 required"
+  local tmpd graph_file
+  tmpd="$(mktemp -d)"
+  graph_file="$tmpd/triage.graph.json"
+  _jev_router_write_triage_graph "$graph_file"
+
+  graph_schedule_load_index "$graph_file"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
+  GRAPH_SCHEDULE_WORKSPACE="$tmpd/ws"
+  mkdir -p "$GRAPH_SCHEDULE_WORKSPACE"
+
+  unset RALPH_JEV_ROUTING RALPH_JEV TYPESAFE_API_KEY
+  run _graph_schedule_try_jev_router_node "classify"
+  [ "$status" -eq 1 ]
+  [ ! -f "$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-decision.json" ]
+
+  rm -rf "$tmpd"
+}
+
+@test "jev router: high-confidence ask_act returns act payload" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd fixture_dir
+  tmpd="$(mktemp -d)"
+  fixture_dir="$tmpd/fixtures"
+  mkdir -p "$fixture_dir" "$tmpd/jev-state" "$tmpd/config" "$tmpd/home"
+  _jev_router_fixture "$fixture_dir/graph.router-confidence.json" "scope-request" "0.92"
+
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  export RALPH_JEV=1
+  export RALPH_JEV_ROUTING=1
+  export RALPH_JEV_ENV_FILE=0
+  export TYPESAFE_API_KEY="test-key-jev-router"
+  export JEV_TRANSPORT=fixture
+  export JEV_FIXTURE_DIR="$fixture_dir"
+  export RALPH_JEV_STATE_DIR="$tmpd/jev-state"
+  export RALPH_CONFIG_HOME="$tmpd/config"
+  export HOME="$tmpd/home"
+  export RALPH_WAIT_SCALE=0
+
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-key-store.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-client.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-policy.sh"
+
+  run _graph_schedule_jev_router_ask_act "classify" '["scope-request","deep-investigation"]'
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.target == "scope-request" and (.confidence | tonumber) >= 0.85 and (.reason | test("^jev:"))'
+
+  unset RALPH_JEV RALPH_JEV_ROUTING TYPESAFE_API_KEY JEV_TRANSPORT JEV_FIXTURE_DIR
+  rm -rf "$tmpd"
+}
+
+@test "jev router: high-confidence fixture writes schema-valid artifact and source=jev event" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd graph_file fixture_dir run_dir
+  tmpd="$(mktemp -d)"
+  graph_file="$tmpd/triage.graph.json"
+  fixture_dir="$tmpd/fixtures"
+  run_dir="$tmpd/run"
+  mkdir -p "$fixture_dir" "$run_dir" "$tmpd/ws" "$tmpd/jev-state" "$tmpd/config" "$tmpd/home"
+  _jev_router_write_triage_graph "$graph_file"
+  _jev_router_fixture "$fixture_dir/graph.router-confidence.json" "scope-request" "0.92"
+
+  graph_schedule_load_index "$graph_file"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
+  GRAPH_SCHEDULE_WORKSPACE="$tmpd/ws"
+  GRAPH_SCHEDULE_NAMESPACE="test"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR="$run_dir"
+  GRAPH_SCHEDULE_RUN_ID="jev-router-high"
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  export RALPH_JEV=1
+  export RALPH_JEV_ROUTING=1
+  export RALPH_JEV_ENV_FILE=0
+  export TYPESAFE_API_KEY="test-key-jev-router"
+  export JEV_TRANSPORT=fixture
+  export JEV_FIXTURE_DIR="$fixture_dir"
+  export RALPH_JEV_STATE_DIR="$tmpd/jev-state"
+  export RALPH_CONFIG_HOME="$tmpd/config"
+  export HOME="$tmpd/home"
+  export RALPH_WAIT_SCALE=0
+
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-key-store.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-client.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-policy.sh"
+
+  # Call in-process (not via `run`) so GRAPH_NODE_STATES mutations stick.
+  _graph_schedule_try_jev_router_node "classify"
+
+  local decision_path="$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-decision.json"
+  [ -f "$decision_path" ]
+  jq -e '
+    .target == "scope-request"
+    and (.confidence | tonumber) >= 0.85
+    and (.reason | test("^jev:"))
+  ' "$decision_path"
+
+  # Machine stub for the prose artifact (Jev cannot author prose).
+  [ -f "$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-classification.md" ]
+  grep -q 'jev: graph.router-confidence' \
+    "$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-classification.md"
+
+  classify_idx="$(graph_schedule_index_map_get "classify")"
+  [ "${GRAPH_NODE_STATES[$classify_idx]}" = "succeeded" ]
+
+  deep_idx="$(graph_schedule_index_map_get "deep-investigation")"
+  [ "${GRAPH_NODE_STATES[$deep_idx]}" = "skipped" ]
+
+  [ -f "$run_dir/events.jsonl" ]
+  jq -s -e '
+    map(select(.event == "routing-decision"))
+    | length == 1
+    and .[0].details.source == "jev"
+    and .[0].details.selectedTarget == "scope-request"
+    and .[0].details.questionSetId == "graph.router-confidence"
+    and (.[0].details | has("alternatives"))
+    and (.[0].details | has("reason"))
+    and (.[0].details | has("confidence"))
+    and (.[0].details | has("registryVersion"))
+  ' "$run_dir/events.jsonl"
+
+  unset RALPH_JEV RALPH_JEV_ROUTING TYPESAFE_API_KEY JEV_TRANSPORT JEV_FIXTURE_DIR
+  rm -rf "$tmpd"
+}
+
+@test "jev router: low-confidence fixture falls through to agent (no artifact)" {
+  command -v python3 >/dev/null || skip "python3 required"
+  local tmpd graph_file fixture_dir
+  tmpd="$(mktemp -d)"
+  graph_file="$tmpd/triage.graph.json"
+  fixture_dir="$tmpd/fixtures"
+  mkdir -p "$fixture_dir" "$tmpd/ws" "$tmpd/jev-state" "$tmpd/config" "$tmpd/home"
+  _jev_router_write_triage_graph "$graph_file"
+  _jev_router_fixture "$fixture_dir/graph.router-confidence.json" "scope-request" "0.40"
+
+  graph_schedule_load_index "$graph_file"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
+  GRAPH_SCHEDULE_WORKSPACE="$tmpd/ws"
+  GRAPH_SCHEDULE_NAMESPACE="test"
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  export RALPH_JEV=1
+  export RALPH_JEV_ROUTING=1
+  export RALPH_JEV_ENV_FILE=0
+  export TYPESAFE_API_KEY="test-key-jev-router"
+  export JEV_TRANSPORT=fixture
+  export JEV_FIXTURE_DIR="$fixture_dir"
+  export RALPH_JEV_STATE_DIR="$tmpd/jev-state"
+  export RALPH_CONFIG_HOME="$tmpd/config"
+  export HOME="$tmpd/home"
+  export RALPH_WAIT_SCALE=0
+
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-key-store.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-client.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-policy.sh"
+
+  # In-process: fall-through must leave the node pending for agent spawn.
+  if _graph_schedule_try_jev_router_node "classify"; then
+    echo "expected fall-through (non-zero) for low confidence" >&2
+    return 1
+  fi
+  [ ! -f "$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-decision.json" ]
+  classify_idx="$(graph_schedule_index_map_get "classify")"
+  [ "${GRAPH_NODE_STATES[$classify_idx]}" = "pending" ]
+
+  unset RALPH_JEV RALPH_JEV_ROUTING TYPESAFE_API_KEY JEV_TRANSPORT JEV_FIXTURE_DIR
+  rm -rf "$tmpd"
+}
+
+@test "jev router: target outside allowedTargets is rejected like an agent invalid target" {
+  command -v python3 >/dev/null || skip "python3 required"
+  command -v jq >/dev/null || skip "jq required"
+  local tmpd graph_file fixture_dir run_dir decision_path
+  tmpd="$(mktemp -d)"
+  graph_file="$tmpd/triage.graph.json"
+  fixture_dir="$tmpd/fixtures"
+  run_dir="$tmpd/run"
+  mkdir -p "$fixture_dir" "$run_dir" "$tmpd/ws" "$tmpd/jev-state" "$tmpd/config" "$tmpd/home"
+  _jev_router_write_triage_graph "$graph_file"
+  # Fixture names a target not in allowedTargets.
+  _jev_router_fixture "$fixture_dir/graph.router-confidence.json" "not-an-allowed-target" "0.95"
+
+  graph_schedule_load_index "$graph_file"
+  GRAPH_SCHEDULE_GRAPH_JSON="$graph_file"
+  GRAPH_SCHEDULE_WORKSPACE="$tmpd/ws"
+  GRAPH_SCHEDULE_NAMESPACE="test"
+  GRAPH_SCHEDULE_LEDGER_RUN_DIR="$run_dir"
+  GRAPH_SCHEDULE_RUN_ID="jev-router-invalid"
+  export RALPH_DIR="$REPO_ROOT/bundle/.ralph"
+  export RALPH_JEV_REGISTRY="$REPO_ROOT/bundle/.ralph/jev/questions.registry.json"
+  export RALPH_JEV=1
+  export RALPH_JEV_ROUTING=1
+  export RALPH_JEV_ENV_FILE=0
+  export TYPESAFE_API_KEY="test-key-jev-router"
+  export JEV_TRANSPORT=fixture
+  export JEV_FIXTURE_DIR="$fixture_dir"
+  export RALPH_JEV_STATE_DIR="$tmpd/jev-state"
+  export RALPH_CONFIG_HOME="$tmpd/config"
+  export HOME="$tmpd/home"
+  export RALPH_WAIT_SCALE=0
+
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-key-store.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-client.sh"
+  source "$REPO_ROOT/bundle/.ralph/bash-lib/jev/jev-policy.sh"
+
+  _graph_schedule_try_jev_router_node "classify"
+
+  decision_path="$GRAPH_SCHEDULE_WORKSPACE/.ralph-workspace/artifacts/test/triage-decision.json"
+  [ -f "$decision_path" ]
+  # Artifact still records Jev's raw pick; resolve-target with onInvalid:default
+  # selects defaultTarget (deep-investigation), same as an invalid agent pick.
+  jq -e '.target == "not-an-allowed-target"' "$decision_path"
+
+  [ -f "$run_dir/events.jsonl" ]
+  jq -s -e '
+    map(select(.event == "routing-decision"))
+    | length == 1
+    and .[0].details.selectedTarget == "deep-investigation"
+  ' "$run_dir/events.jsonl"
+
+  unset RALPH_JEV RALPH_JEV_ROUTING TYPESAFE_API_KEY JEV_TRANSPORT JEV_FIXTURE_DIR
+  rm -rf "$tmpd"
+}

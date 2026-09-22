@@ -28,36 +28,6 @@
       "mode": "0755"
     },
     {
-      "source": "bundle/.agents/hooks/pre-tool-proxy-read-handoff.sh",
-      "destination": "hooks/pre-tool-proxy-read-handoff.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.agents/hooks/pre-tool-exploration-policy.sh",
-      "destination": "hooks/pre-tool-exploration-policy.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.agents/hooks/post-tool-shell-telemetry.sh",
-      "destination": "hooks/post-tool-shell-telemetry.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.agents/hooks/post-tool-native-result-compact.sh",
-      "destination": "hooks/post-tool-native-result-compact.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.agents/hooks/post-tool-mcp-compact.sh",
-      "destination": "hooks/post-tool-mcp-compact.sh",
-      "mode": "0755"
-    },
-    {
-      "source": "bundle/.agents/hooks/after-shell-telemetry.sh",
-      "destination": "hooks/after-shell-telemetry.sh",
-      "mode": "0755"
-    },
-    {
       "source": "bundle/.ralph/plugin-inputs/shared/ralph-plugin-bootstrap.sh",
       "destination": "shared/ralph-plugin-bootstrap.sh",
       "mode": "0755"

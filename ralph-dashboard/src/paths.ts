@@ -2,6 +2,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { Dirent, existsSync, readFileSync, readdirSync, realpathSync, statSync, promises as fsPromises } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { stateSharedPath } from './server/state-paths';
 
 export interface RootConfig {
   label: string;
@@ -47,7 +48,11 @@ const WORKSPACE_CONTENT_ENTRIES = ['logs', 'artifacts', 'sessions', 'orchestrati
 const HOME_WORKSPACE_SEARCH_DEPTH = 5;
 
 function isPopulatedWorkspace(workspaceDir: string): boolean {
-  return WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry));
+  if (WORKSPACE_CONTENT_ENTRIES.some((entry) => hasEntry(workspaceDir, entry))) {
+    return true;
+  }
+  // Layout 2 keeps sessions under internal/sessions/.
+  return hasEntry(join(workspaceDir, 'internal'), 'sessions');
 }
 
 function walkUpForEntry(startDir: string, entry: string): string | null {
@@ -396,7 +401,7 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
     },
     sessions: {
       label: 'Sessions',
-      basePath: join(roots.workspaceRoot, 'sessions'),
+      basePath: stateSharedPath(roots.workspaceRoot, 'sessions'),
       writable: false,
     },
     'orchestration-plans': {
@@ -416,12 +421,12 @@ export function getAllowedRoots(roots: DashboardRoots): Record<string, RootConfi
     },
     'runtime-config': {
       label: 'Runtime Config',
-      basePath: join(roots.workspaceRoot, 'runtime-config'),
+      basePath: stateSharedPath(roots.workspaceRoot, 'runtime-config'),
       writable: false,
     },
     'tool-results': {
       label: 'Tool Results',
-      basePath: join(roots.workspaceRoot, 'tool-results'),
+      basePath: stateSharedPath(roots.workspaceRoot, 'tool-results'),
       writable: false,
     },
     docs: {

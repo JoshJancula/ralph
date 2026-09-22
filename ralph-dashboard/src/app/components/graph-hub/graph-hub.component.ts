@@ -16,6 +16,7 @@ import {
   GraphDiffNodeResult,
   GraphNodeAttempt,
   GraphNodeState,
+  GraphRoutingDecision,
   GraphRunDetail,
   GraphRunDiffResponse,
   GraphRunSummary,
@@ -46,6 +47,17 @@ interface GraphNodeRow {
   admissionSummary?: Record<string, unknown>;
   publishReadiness?: Record<string, unknown>;
   delegatedRuns?: DelegatedRunRecord[];
+}
+
+function formatRoutingConfidence(value: number | null): string {
+  if (value === null) {
+    return '-';
+  }
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function formatRoutingAlternatives(alternatives: string[]): string {
+  return alternatives.length > 0 ? alternatives.join(', ') : '(none)';
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -252,6 +264,49 @@ function buildMermaid(detail: GraphRunDetail): string {
                 }
               </div>
             }
+
+            <section class="routing-panel" data-testid="routing-decisions-panel">
+              <div class="dag-header">
+                <h4>Routing decisions</h4>
+                <span class="muted">Router and conditional edge selections from events.jsonl</span>
+              </div>
+              @if (!detail.routingDecisions || detail.routingDecisions.length === 0) {
+                <p class="routing-empty" data-testid="routing-decisions-empty">
+                  No routing-decision events recorded for this run.
+                </p>
+              } @else {
+                <div class="routing-table-wrap scroll-contain">
+                  <table class="node-table routing-table" aria-label="Routing decisions" data-testid="routing-decisions-table">
+                    <thead>
+                      <tr>
+                        <th>Node</th>
+                        <th>Selected</th>
+                        <th>Skipped</th>
+                        <th>Reason</th>
+                        <th>Confidence</th>
+                        <th>Source</th>
+                        <th>Registry</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (decision of detail.routingDecisions; track decisionTrack(decision)) {
+                        <tr [attr.data-testid]="'routing-decision-' + decision.nodeId">
+                          <td class="cell-mono">{{ decision.nodeId }}</td>
+                          <td class="cell-mono">{{ decision.selectedTarget || '-' }}</td>
+                          <td class="cell-mono">{{ formatAlternatives(decision.alternatives) }}</td>
+                          <td>{{ decision.reason || '-' }}</td>
+                          <td>{{ formatConfidence(decision.confidence) }}</td>
+                          <td>
+                            <span class="routing-source" [attr.data-source]="decision.source">{{ decision.source }}</span>
+                          </td>
+                          <td class="cell-mono">{{ decision.registryVersion }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+            </section>
 
             <div class="node-table-wrap scroll-contain">
               <table class="node-table" aria-label="Node status table">
@@ -605,6 +660,45 @@ function buildMermaid(detail: GraphRunDetail): string {
       color: var(--text-muted);
       font-size: 0.78rem;
       font-family: var(--monospace-font);
+    }
+    .routing-panel {
+      margin-bottom: 1.5rem;
+      min-width: 0;
+    }
+    .routing-empty {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      background: var(--surface-hover);
+    }
+    .routing-table-wrap {
+      max-width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .routing-source {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      background: var(--surface-hover);
+      border: 1px solid var(--border);
+      font-size: 0.78rem;
+      text-transform: lowercase;
+    }
+    .routing-source[data-source='jev'] {
+      border-color: #2a8a2a;
+      color: #2a8a2a;
+    }
+    .routing-source[data-source='agent'] {
+      border-color: #2255cc;
+      color: #2255cc;
+    }
+    .routing-source[data-source='default'] {
+      border-color: #cc7700;
+      color: #cc7700;
     }
     .detail-title {
       margin: 0 0 1rem;
@@ -1103,6 +1197,18 @@ export class GraphHubComponent {
   formatUsage(usage: Record<string, number>): string {
     const entries = Object.entries(usage);
     return entries.length === 0 ? '-' : entries.map(([key, value]) => `${key}=${value}`).join(', ');
+  }
+
+  formatConfidence(value: number | null): string {
+    return formatRoutingConfidence(value);
+  }
+
+  formatAlternatives(alternatives: string[]): string {
+    return formatRoutingAlternatives(alternatives);
+  }
+
+  decisionTrack(decision: GraphRoutingDecision): string {
+    return `${decision.sequence ?? 'x'}:${decision.nodeId}:${decision.selectedTarget}:${decision.timestamp}`;
   }
 
   statusColor(status: string): string {

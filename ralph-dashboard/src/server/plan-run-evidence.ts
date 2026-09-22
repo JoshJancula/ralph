@@ -1,7 +1,8 @@
-import { statSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { basename, relative, resolve } from 'node:path';
 
 import { FILE_ROLE_LABELS } from './plan-run-detail';
+import { resolveStatePath } from './state-paths';
 
 export type PlanRunEvidenceCategory =
   | 'run-metadata'
@@ -39,8 +40,12 @@ export interface PlanRunFilesModel {
 
 const EXPLORER_ROOT_PREFIXES = [
   'logs/',
+  'runs/',
   'runtime-config/',
+  'internal/runtime-config/',
+  'internal/sessions/',
   'sessions/',
+  'cache/tool-results/',
   'tool-results/',
 ] as const;
 
@@ -64,7 +69,21 @@ export function isSafePlanRunStatePath(path: string): boolean {
 }
 
 export function isPathUnderWorkspaceRoot(absPath: string, workspaceRoot: string): boolean {
-  const rel = relative(resolve(workspaceRoot), resolve(absPath));
+  const rootResolved = resolve(workspaceRoot);
+  const rootReal = existsSync(rootResolved) ? realpathSync(rootResolved) : rootResolved;
+  const absResolved = resolve(absPath);
+  let absNorm = absResolved;
+  if (absResolved === rootResolved || absResolved.startsWith(`${rootResolved}/`)) {
+    // join()/resolve() keep the pre-realpath root; map onto the physical root.
+    absNorm = `${rootReal}${absResolved.slice(rootResolved.length)}`;
+  } else if (existsSync(absResolved)) {
+    try {
+      absNorm = realpathSync(absResolved);
+    } catch {
+      // keep absResolved
+    }
+  }
+  const rel = relative(rootReal, absNorm);
   return rel !== '' && !rel.startsWith('..') && !rel.split(/[/\\]/).includes('..');
 }
 
@@ -73,7 +92,23 @@ export function planRunOpenTarget(stateRelativePath: string): PlanRunOpenTarget 
   if (!isSafePlanRunStatePath(normalized)) {
     return null;
   }
+  if (normalized.startsWith('cache/tool-results/')) {
+    return { root: 'tool-results', path: normalized.slice('cache/tool-results/'.length) };
+  }
+  if (normalized.startsWith('internal/sessions/')) {
+    return { root: 'sessions', path: normalized.slice('internal/sessions/'.length) };
+  }
+  if (normalized.startsWith('internal/runtime-config/')) {
+    return { root: 'runtime-config', path: normalized.slice('internal/runtime-config/'.length) };
+  }
   for (const prefix of EXPLORER_ROOT_PREFIXES) {
+    if (
+      prefix === 'cache/tool-results/' ||
+      prefix === 'internal/sessions/' ||
+      prefix === 'internal/runtime-config/'
+    ) {
+      continue;
+    }
     if (normalized.startsWith(prefix)) {
       return { root: prefix.slice(0, -1), path: normalized.slice(prefix.length) };
     }
@@ -146,6 +181,14 @@ export function classifyPlanRunEvidencePath(stateRelativePath: string): {
       format,
     };
   }
+  if (normalized.startsWith('internal/runtime-config/')) {
+    return {
+      label: name || 'Runtime config file',
+      category: 'runtime-config',
+      kind: 'runtime-config',
+      format,
+    };
+  }
   if (name === 'discover-report.json') {
     return { label: 'Discover report', category: 'usage-summary', kind: 'discover-report', format: 'json' };
   }
@@ -187,12 +230,16 @@ export function classifyPlanRunEvidencePath(stateRelativePath: string): {
   };
 }
 
+function absUnderStateRoot(workspaceRoot: string, stateRelativePath: string): string {
+  return resolveStatePath(workspaceRoot, normalizePlanRunStatePath(stateRelativePath));
+}
+
 function statEvidenceFile(workspaceRoot: string, stateRelativePath: string): {
   sizeBytes: number | null;
   mtimeMs: number | null;
 } {
   try {
-    const stat = statSync(join(workspaceRoot, stateRelativePath));
+    const stat = statSync(absUnderStateRoot(workspaceRoot, stateRelativePath));
     if (!stat.isFile()) {
       return { sizeBytes: null, mtimeMs: null };
     }
@@ -210,7 +257,12 @@ export function buildPlanRunEvidenceEntry(
   if (!isSafePlanRunStatePath(path)) {
     return null;
   }
-  const abs = join(workspaceRoot, path);
+  let abs: string;
+  try {
+    abs = absUnderStateRoot(workspaceRoot, path);
+  } catch {
+    return null;
+  }
   if (!isPathUnderWorkspaceRoot(abs, workspaceRoot)) {
     return null;
   }
@@ -267,7 +319,13 @@ export function filterSafePlanRunStatePaths(workspaceRoot: string, paths: Iterab
     if (!isSafePlanRunStatePath(normalized)) {
       continue;
     }
-    if (!isPathUnderWorkspaceRoot(join(workspaceRoot, normalized), workspaceRoot)) {
+    let abs: string;
+    try {
+      abs = absUnderStateRoot(workspaceRoot, normalized);
+    } catch {
+      continue;
+    }
+    if (!isPathUnderWorkspaceRoot(abs, workspaceRoot)) {
       continue;
     }
     if (seen.has(normalized)) {

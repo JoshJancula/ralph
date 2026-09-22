@@ -155,6 +155,7 @@
         "produces": {"required": false, "help": "Artifact paths this node must write before finishing."},
         "workspaceMode": {"enum": ["snapshot", "worktree", "shared"], "default": "snapshot", "help": "Isolation mode for file edits."},
         "writeScopes": {"required": false, "help": "Writable path globs when using snapshot or worktree isolation."},
+        "candidateFrom": {"required": false, "help": "Bind this read-only snapshot evaluator to a mutating or integrate ancestor's retained candidate. Requires workspaceMode snapshot."},
         "sessionStrategy": {"enum": ["fresh", "resume", "reset", "compact"], "default": "fresh"},
         "contextBudget": {"enum": ["full", "standard", "lean"], "default": "standard"}
       },

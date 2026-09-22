@@ -161,10 +161,11 @@ EOF
   [ -f "$target/.ralph/workflows/release-gate.workflow.md" ]
   [ -f "$target/.ralph/workflows/plan-delivery.workflow.md" ]
   [ -f "$target/.ralph/workflows/human-verified-delivery.workflow.md" ]
+  [ -f "$target/.ralph/workflows/small-feature-delivery.workflow.md" ]
   [ -f "$target/.ralph/workflows/assessment.workflow.md" ]
   [ -f "$target/.ralph/workflows/review-jury.workflow.md" ]
   [ -f "$target/.ralph/workflows/triage.workflow.md" ]
-  [ "$(find "$target/.ralph/workflows" -maxdepth 1 -name '*.workflow.md' | wc -l | tr -d ' ')" = "10" ]
+  [ "$(find "$target/.ralph/workflows" -maxdepth 1 -name '*.workflow.md' | wc -l | tr -d ' ')" = "12" ]
   [ ! -e "$target/.ralph/workflow-templates" ]
   cmp -s "$REPO_ROOT/bundle/.ralph/workflows/bug-fix.workflow.md" \
     "$target/.ralph/workflows/bug-fix.workflow.md"

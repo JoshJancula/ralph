@@ -1121,3 +1121,16 @@ dep_wait_for_file() {
   [ "$(jq -r '.state' "$DEP_REGISTRY_RUN/run.json")" = "cancelled" ]
   [ "$(jq -r '.status' "$DEP_GRAPH_RUN/run.json")" = "cancelled" ]
 }
+
+@test "layout-2 graph runs under a symlinked state root get no layout-1 latest symlink" {
+  local real link
+  real="$(mktemp -d)"
+  link="$real-link"
+  ln -s "$real" "$link"
+  mkdir -p "$real/state"
+  RALPH_STATE_LAYOUT=2 RALPH_GRAPH_STATE_ROOT="$link/state" \
+    graph_state_update_latest "$link/ws" myns run-v2
+  [ ! -e "$real/state/graph-runs/myns/latest" ]
+  [ ! -L "$real/state/graph-runs/myns/latest" ]
+  rm -rf "$real" "$link"
+}

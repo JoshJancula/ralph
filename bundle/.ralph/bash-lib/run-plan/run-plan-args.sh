@@ -305,6 +305,8 @@ _print_run_plan_help_body() {
 
   ralph_help_section 'Run behavior'
   ralph_help_option '--non-interactive, --no-interactive' '' 'Skip interactive prompts.'
+  ralph_help_option '--jev' '[routing|tooling|all]' \
+    'Enable the Jev adapter and skip its prompt. routing = graph routing; tooling = Jev MCP server and output compaction; all (default when bare) = both. Also accepts --jev=<choice>.'
   ralph_help_option '--model' '<id>' 'CLI model id (overrides saved/runtime default).'
   ralph_help_option '--reasoning-effort' '<low|medium|high|xhigh|max|inherit>' \
     'Portable reasoning effort (overrides stage defaults).'
@@ -314,7 +316,7 @@ _print_run_plan_help_body() {
 
   ralph_help_section 'Session'
   ralph_help_option '--session-strategy' '<fresh|resume|reset|compact>' \
-    'Session behavior between TODOs. fresh: default strict isolation. resume: keep the same conversation. reset: reuse session id with reset-oriented prompts. compact: reuse session id with a compact command prefix (Codex=/compact, Cursor=/compress).'
+    'Session behavior between TODOs. fresh: default strict isolation. resume: keep the same conversation. reset: reuse session id with reset-oriented prompts. compact: reuse session id and run a standalone /compact turn once at the start of each TODO; only supported on Claude and Codex.'
   ralph_help_option '--resume-run' '<run-id|last>' \
     'Opt-in: reuse exact per-TODO session ids from a previous plan run. last uses the most recent terminal run for this plan. Does not change the default fresh strategy. Foreign-run identity still refuses mismatched todoHash, runtime, or todoId.'
   ralph_help_option '--cli-resume, --no-cli-resume' '' 'Enable or disable CLI resume prompts.'
@@ -338,7 +340,7 @@ _print_run_plan_help_body() {
 
   ralph_help_section 'Ralph tooling'
   ralph_help_option '--ralph-mode' '<no|native|ralph|hybrid>' \
-    'Set Ralph tooling and native adapter mode (sets RALPH_MODE). no: no Ralph MCP injection and no native adapters. native: native tools primary with result tools only. ralph: full Ralph MCP catalog; native adapters disabled. hybrid: full Ralph MCP catalog plus native adapters. Interactive runs prompt when no flag, env, or preference exists.'
+    'Set Ralph tooling mode (sets RALPH_MODE). Recommended opt-in: hybrid (Ralph MCP + native adapters). no: stock tools only. native: hooks/adapters with result tools only (expert). ralph: MCP catalog without native adapters (expert). Interactive TTY asks Enable Ralph tooling? (yes=hybrid, no=no) when no flag, env, or preference exists.'
   ralph_help_option '--skip-mcp-preflight' '' 'Skip Ralph MCP handshake preflight when Ralph MCP is active (CI/stubs only).'
 
   ralph_help_section 'Other'
@@ -348,7 +350,7 @@ _print_run_plan_help_body() {
   ralph_help_note 'RALPH_PLAN_CONSOLIDATE=1'
   ralph_help_note '  Collapse adjacent unchecked todos once at run start (off by default).'
   ralph_help_note 'RALPH_MODE=<no|native|ralph|hybrid>'
-  ralph_help_note '  Same as --ralph-mode (default: no unless a prompt or preference selects otherwise).'
+  ralph_help_note '  Same as --ralph-mode. Default: no. Interactive yes maps to hybrid; native/ralph remain expert overrides.'
   ralph_help_note 'RALPH_SKIP_MCP_PREFLIGHT=1'
   ralph_help_note '  Skip MCP preflight when Ralph MCP is active.'
   ralph_help_note 'RALPH_AGENT_WORKSPACE=<path>'
@@ -543,6 +545,30 @@ ralph_run_plan_parse_args() {
         ;;
       --non-interactive | --no-interactive)
         NON_INTERACTIVE_FLAG=1
+        shift
+        ;;
+      --jev)
+        # Optional value: peek for routing|tooling|all; bare --jev means all.
+        case "${2:-}" in
+          routing | tooling | all)
+            RALPH_JEV_CLI_CHOICE="$2"
+            shift 2
+            ;;
+          "" | -*)
+            RALPH_JEV_CLI_CHOICE="all"
+            shift
+            ;;
+          *)
+            ralph_die "Error: --jev value must be one of routing, tooling, or all (got \"$2\")." 2
+            ;;
+        esac
+        ;;
+      --jev=*)
+        RALPH_JEV_CLI_CHOICE="${1#--jev=}"
+        case "$RALPH_JEV_CLI_CHOICE" in
+          routing | tooling | all) ;;
+          *) ralph_die "Error: --jev value must be one of routing, tooling, or all (got \"${RALPH_JEV_CLI_CHOICE}\")." 2 ;;
+        esac
         shift
         ;;
       --cli-resume)

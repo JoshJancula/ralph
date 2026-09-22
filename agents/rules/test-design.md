@@ -43,6 +43,20 @@ When you remove a feature, remove its tests in the same change. A suite full of
 tests for deleted behavior is worse than no tests: it fails for reasons that
 teach nothing, and people learn to ignore red.
 
+## Regression-test restraint
+
+A regression test is justified by a **defect that actually shipped and could
+silently return**. It is not justified by every code change, and not by every
+bug you caught before merge.
+
+- One test per contract, not one per fix. When a single test covers the
+  behavior, do not add a second. Prefer extending an existing test over adding
+  a near-duplicate.
+- A removed feature takes its tests with it. Replacing one test with three
+  during a removal is a net loss: you deleted a feature and grew the suite.
+- Every test is permanent shared cost: suite time paid by every person and every
+  agent run, forever. Adding one is a decision you justify, not a reflex.
+
 ## Where it belongs
 
 Pick the cheapest level that can actually observe the behavior:

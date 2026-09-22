@@ -190,6 +190,17 @@ describe('WorkflowsFacade', () => {
           hasHumanGates: true,
         },
       },
+      {
+        id: 'small-feature-delivery',
+        scope: 'bundled',
+        overview: 'Localized feature',
+        editable: false,
+        catalog: {
+          purpose: 'Localized feature', expectedOutcome: 'Independently verified delivery', mode: 'dependency',
+          stageCount: 5, executableStageCount: 3, supervisorStageCount: 2,
+          requiresSuppliedPlan: false, writes: true, hasHumanGates: false,
+        },
+      },
     ];
     const promise = facade.load();
     httpMock.expectOne((r) => r.url === '/api/workflows').flush(list);
@@ -199,6 +210,8 @@ describe('WorkflowsFacade', () => {
     expect(facade.filteredWorkflows().map((w) => w.id)).toEqual(['plan-delivery']);
     facade.setCatalogSearch('human gates');
     expect(facade.filteredWorkflows().map((w) => w.id)).toEqual(['human-verified-delivery']);
+    facade.setCatalogSearch('localized feature');
+    expect(facade.filteredWorkflows().map((w) => w.id)).toEqual(['small-feature-delivery']);
   });
 
   it('load() surfaces an error and still marks loaded on failure', async () => {

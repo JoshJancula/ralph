@@ -163,6 +163,31 @@ if bad:
 PY
 }
 
+# graph_publish_approval_integration_source <run-dir> <graph-json> <approval-node-id>
+# The integrate node whose candidate an approval certifies: the last succeeded
+# integrate node (graph order, as publish selects) among the approval's
+# transitive predecessors through dependsOn and edges, joins included. Prints
+# nothing for an approval upstream of every integration (for example
+# approve-plan); publish does not require a receipt from those.
+graph_publish_approval_integration_source() {
+  local run_dir="$1" graph_json="$2" node_id="$3" candidate candidate_key source=""
+  while IFS= read -r candidate || [[ -n "$candidate" ]]; do
+    [[ -n "$candidate" ]] || continue
+    candidate_key="$(printf '%s' "$candidate" | sed 's/[^A-Za-z0-9._-]/_/g')"
+    if [[ "$(jq -r '.status // empty' "$run_dir/nodes/$candidate_key.json" 2>/dev/null)" == "succeeded" ]]; then
+      source="$candidate"
+    fi
+  done < <(jq -r --arg id "$node_id" '
+    . as $g
+    | def preds($n): ([($g.nodes[] | select(.id == $n) | .dependsOn // [])[] | if type == "string" then . else (.id // .node // empty) end]
+                      + [($g.edges // [])[] | select(.to == $n) | .from]) | unique;
+      ([$id | recurse(preds(.)[])] | unique) as $anc
+    | $g.nodes[] | select(.type == "integrate" and (.id as $i | $anc | index($i)) != null) | .id
+  ' "$graph_json")
+  [[ -n "$source" ]] && printf '%s\n' "$source"
+  return 0
+}
+
 # graph_publish_finalize <run-dir> <graph-json> <caller-workspace>
 graph_publish_finalize() {
   local run_dir="$1" graph_json="$2" caller="$3"
@@ -273,6 +298,55 @@ graph_publish_finalize() {
       "$recovery" "$command" "unresolved integration conflict artifact exists" "$log_file"
     return
   fi
+
+  # Publication is bound to the integrated candidate, not merely a green
+  # scheduler. Evaluators bound to this integration and approval receipts that
+  # sit downstream of it must carry the exact identity. Plan-time approvals
+  # (for example approve-plan) are upstream of implementation and are not
+  # required. Missing evidence fails closed.
+  local receipt_node receipt_key receipt_identity receipt_kind receipt_ids
+  receipt_ids="$(jq -r --arg integration "$integration_id" '
+    . as $root
+    | def ancestors($start):
+        {seen: [], frontier: [$start]}
+        | until(
+            (.frontier | length) == 0;
+            . as $s
+            | (
+                [ $s.frontier[] as $n
+                  | ($root.edges // [])[]
+                  | select(.to == $n)
+                  | .from ]
+                + [ $s.frontier[] as $n
+                    | ($root.nodes[] | select(.id == $n) | .dependsOn // [])[]
+                    | if type == "string" then .
+                      else (.id // .node // empty) end ]
+              ) as $next
+            | (($s.seen + $s.frontier) | unique) as $seen2
+            | {seen: $seen2, frontier: ($next | unique | map(select(. != "")) | . - $seen2)}
+          )
+        | .seen;
+    $root.nodes[]
+    | select(
+        (.stage.candidateFrom // "") == $integration
+        or (
+          .type == "approval"
+          and ((ancestors(.id) | index($integration)) != null)
+        )
+      )
+    | .id
+  ' "$graph_json")"
+  while IFS= read -r receipt_node || [[ -n "$receipt_node" ]]; do
+    [[ -n "$receipt_node" ]] || continue
+    receipt_key="$(printf '%s' "$receipt_node" | sed 's/[^A-Za-z0-9._-]/_/g')"
+    receipt_kind="$(jq -r --arg id "$receipt_node" '.nodes[] | select(.id == $id) | .type' "$graph_json")"
+    receipt_identity="$(jq -r '.candidateIdentity // .attempts[-1].candidateIdentity // empty' "$run_dir/nodes/$receipt_key.json" 2>/dev/null)"
+    if [[ -z "$receipt_identity" || "$receipt_identity" != "$result_identity" ]]; then
+      graph_publish_refuse "$run_dir" "$mode" "$handoff" "$caller" "$integration_workspace" "" "" \
+        "$recovery" "$command" "publish-candidate-mismatch: required $receipt_kind receipt missing or differs for $receipt_node" "$log_file"
+      return
+    fi
+  done <<<"$receipt_ids"
 
   base_identity="$(jq -r '.sourceBase.filesystemIdentity // empty' "$run_file")"
   base_manifest="$(jq -r '.sourceBase.manifestPath // empty' "$run_file")"

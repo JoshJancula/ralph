@@ -401,7 +401,7 @@ def stage_inspection_state_label(view: wt.WorkflowViewModel, stage: wt.Stage) ->
         if stage.state == "queued":
             return "conditional"
         if stage.state == "skipped":
-            return "not needed"
+            return "not selected"
     return public_state_label(stage.state)
 
 

@@ -36,8 +36,23 @@ const GRAPH: WorkflowDisplayGraph = {
       loopBackTo: null,
       changesTarget: null,
     },
+    {
+      id: 'investigate-r1',
+      label: 'investigate-r1',
+      kind: 'plan-consumer',
+      stageType: 'agent',
+      authored: false,
+      derivedFrom: 'rework',
+      planRole: 'execute',
+      waveIndex: -1,
+      loopBackTo: null,
+      changesTarget: null,
+    },
   ],
-  edges: [{ from: 'investigate', to: 'qa-gate', kind: 'dependency', label: null, scheduleEdge: true }],
+  edges: [
+    { from: 'investigate', to: 'qa-gate', kind: 'dependency', label: null, scheduleEdge: true },
+    { from: 'investigate', to: 'investigate-r1', kind: 'rework-changes-required', label: 'changes-required', scheduleEdge: true },
+  ],
   waves: [['investigate'], ['qa-gate']],
 };
 
@@ -52,6 +67,36 @@ describe('WorkflowGraphComponent', () => {
     }).compileComponents();
     store = TestBed.inject(SelectedStageStore);
     fixture = TestBed.createComponent(WorkflowGraphComponent);
+  });
+
+  it('defaults to logical stages and hides compiled rework clones', () => {
+    fixture.componentRef.setInput('graph', GRAPH);
+    fixture.componentRef.setInput('error', null);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    const root = el.querySelector('[data-testid="workflow-display-graph"]');
+    expect(root?.getAttribute('data-graph-view')).toBe('logical');
+    expect(el.querySelector('[data-node-id="investigate"]')).not.toBeNull();
+    expect(el.querySelector('[data-node-id="qa-gate"]')).not.toBeNull();
+    expect(el.querySelector('[data-node-id="investigate-r1"]')).toBeNull();
+    const toggle = el.querySelector('[data-testid="compiled-graph-toggle"]') as HTMLLabelElement | null;
+    expect(toggle?.textContent).toContain('Compiled graph');
+    expect((toggle?.querySelector('input') as HTMLInputElement | null)?.checked).toBe(false);
+  });
+
+  it('toggles to the expanded compiled graph', () => {
+    fixture.componentRef.setInput('graph', GRAPH);
+    fixture.componentRef.setInput('error', null);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    const input = el.querySelector('[data-testid="compiled-graph-toggle"] input') as HTMLInputElement;
+    input.checked = true;
+    input.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    const root = el.querySelector('[data-testid="workflow-display-graph"]');
+    expect(root?.getAttribute('data-graph-view')).toBe('compiled');
+    expect(el.querySelector('[data-node-id="investigate-r1"]')).not.toBeNull();
+    expect(el.querySelectorAll('[data-testid="graph-node"]').length).toBe(3);
   });
 
   it('renders nodes and selects a stage into the shared store', () => {

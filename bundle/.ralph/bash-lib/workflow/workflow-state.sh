@@ -29,6 +29,11 @@ fi
 
 _WORKFLOW_STATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if ! declare -F ralph_state_workflow_run_dir >/dev/null 2>&1; then
+  # shellcheck source=../state-paths.sh
+  source "$_WORKFLOW_STATE_SCRIPT_DIR/../state-paths.sh"
+fi
+
 if ! declare -F ralph_atomic_write_json >/dev/null 2>&1; then
   # shellcheck source=../atomic-json.sh
   source "$_WORKFLOW_STATE_SCRIPT_DIR/../atomic-json.sh"
@@ -237,7 +242,18 @@ workflow_state_runs_root() {
     return 1
   }
   state_root="$(_workflow_state_abs_path "$state_root")" || return 1
-  printf '%s/workflow-runs\n' "${state_root%/}"
+  printf '%s/%s\n' "${state_root%/}" "$(_workflow_state_runs_root_name)"
+}
+
+# _workflow_state_runs_root_name
+# Layout 2 mints outer runs into the shared runs/ root; layout 1 keeps the
+# workflow-only workflow-runs/ root.
+_workflow_state_runs_root_name() {
+  if [[ "$(ralph_state_layout_for_new_run)" == 2 ]]; then
+    printf 'runs\n'
+  else
+    printf 'workflow-runs\n'
+  fi
 }
 
 # workflow_state_ensure_state_root <state_root>
@@ -349,7 +365,7 @@ workflow_state_run_dir() {
       return 1
       ;;
   esac
-  workflow_state_resolve_under_state_root "$state_root" "workflow-runs/$run_id"
+  ralph_state_workflow_run_dir "$state_root" "$run_id"
 }
 
 # workflow_state_run_file <state_root> <run-id>
@@ -357,6 +373,28 @@ workflow_state_run_file() {
   local run_dir
   run_dir="$(workflow_state_run_dir "$@")" || return 1
   printf '%s/run.json\n' "$run_dir"
+}
+
+# _workflow_state_control_dir <registry-run-dir> <stage-id> <attempt>
+# Layout 1 keeps control copies under the registry plans/ tree. Layout 2 places
+# them at runs/<id>/stages/<stage>/controls/attempt-<n>/ via state-paths.
+_workflow_state_control_dir() {
+  local registry_run="${1:-}" stage_id="${2:-}" attempt="${3:-}"
+  local run_dir state_root outer_run_id controls_parent
+  [[ -n "$registry_run" && -n "$stage_id" && -n "$attempt" ]] || return 1
+  run_dir="$(_workflow_state_real_dir "$registry_run")" || return 1
+  case "$run_dir" in
+    */runs/*/engine/workflow)
+      # .../<state-root>/runs/<run-id>/engine/workflow
+      outer_run_id="$(basename -- "$(dirname -- "$(dirname -- "$run_dir")")")"
+      state_root="$(dirname -- "$(dirname -- "$(dirname -- "$(dirname -- "$run_dir")")")")"
+      controls_parent="$(ralph_state_stage_controls_dir "$state_root" "$outer_run_id" "$stage_id")" || return 1
+      printf '%s/attempt-%s\n' "$controls_parent" "$attempt"
+      ;;
+    *)
+      printf '%s/plans/%s/attempt-%s\n' "$run_dir" "$stage_id" "$attempt"
+      ;;
+  esac
 }
 
 # workflow_state_export_operator_input_identity
@@ -390,7 +428,7 @@ workflow_state_export_operator_input_identity() {
 # workflow_state_create_lock_path <state_root>
 workflow_state_create_lock_path() {
   local state_root="${1:-}"
-  workflow_state_resolve_under_state_root "$state_root" "workflow-runs/.create.lock"
+  workflow_state_resolve_under_state_root "$state_root" "$(_workflow_state_runs_root_name)/.create.lock"
 }
 
 # workflow_state_update_lock_path <state_root> <run_id>
@@ -671,13 +709,13 @@ _workflow_state_default_engine_json() {
   case "$mode" in
     sequential)
       kind="orchestration"
-      state_path="$run_dir/engine"
+      state_path="$(ralph_state_sequential_run_dir "$state_root" "$run_id" "$run_dir/engine")" || return 1
       namespace=""
       ;;
     dependency)
       kind="graph"
       [[ -n "$namespace" ]] || namespace="workflow"
-      state_path="$(workflow_state_ensure_state_root "$state_root")/graph-runs/$namespace/$run_id"
+      state_path="$(ralph_state_graph_run_dir "$state_root" "$namespace" "$run_id")"
       ;;
     *)
       return 1
@@ -735,7 +773,7 @@ workflow_state_create() {
   local task="" task_provenance="" task_file="" input_file="" workflow_id=""
   local input_plan_json="null" engine_json="" engine_namespace=""
   local owner_json="null" state="queued"
-  local runs_root lock_path run_id run_dir run_file input_name input_path
+  local runs_root lock_path run_id run_root run_dir run_file input_name input_path
   local now attempt=0 created=0
 
   while [[ $# -gt 0 ]]; do
@@ -856,12 +894,12 @@ workflow_state_create() {
         return 1
         ;;
     esac
-    run_dir="$runs_root/$run_id"
-    if [[ -L "$run_dir" ]]; then
+    run_root="$runs_root/$run_id"
+    if [[ -L "$run_root" ]]; then
       # Existing symlink at the mint target is always a collision; remint.
       continue
     fi
-    if mkdir "$run_dir" 2>/dev/null; then
+    if mkdir "$run_root" 2>/dev/null; then
       created=1
       break
     fi
@@ -873,29 +911,47 @@ workflow_state_create() {
     return 1
   fi
 
+  # Layout 2 records the catalog first so every later resolution (including one
+  # made under a different RALPH_STATE_LAYOUT) routes to the v2 subtree.
+  if [[ "$(ralph_state_layout_for_new_run)" == 2 ]]; then
+    if ! ralph_state_catalog_update "$state_root" "$run_id" \
+      '.runKind = "workflow" | .status = $state | .task = $task | .engine = {kind: $mode}' \
+      --arg state "$state" --arg task "$task" --arg mode "$mode"; then
+      rm -rf "$run_root" 2>/dev/null || true
+      _workflow_state_release_lock "$lock_path"
+      echo "Error: failed to write the run catalog for $run_id" >&2
+      return 1
+    fi
+  fi
+
   # Re-resolve through containment after create.
   run_dir="$(workflow_state_run_dir "$state_root" "$run_id")" || {
-    rm -rf "$runs_root/$run_id" 2>/dev/null || true
+    rm -rf "$run_root" 2>/dev/null || true
+    _workflow_state_release_lock "$lock_path"
+    return 1
+  }
+  mkdir -p "$run_dir" || {
+    rm -rf "$run_root" 2>/dev/null || true
     _workflow_state_release_lock "$lock_path"
     return 1
   }
   run_file="$run_dir/run.json"
   input_name="$(_workflow_state_input_basename_for_mode "$mode")" || {
-    rm -rf "$run_dir"
+    rm -rf "$run_root"
     _workflow_state_release_lock "$lock_path"
     return 1
   }
   input_path="$run_dir/$input_name"
 
   if ! _workflow_state_copy_immutable_input "$input_file" "$input_path"; then
-    rm -rf "$run_dir"
+    rm -rf "$run_root"
     _workflow_state_release_lock "$lock_path"
     return 1
   fi
 
   if [[ -z "$engine_json" ]]; then
     engine_json="$(_workflow_state_default_engine_json "$mode" "$state_root" "$run_id" "$engine_namespace")" || {
-      rm -rf "$run_dir"
+      rm -rf "$run_root"
       _workflow_state_release_lock "$lock_path"
       return 1
     }
@@ -908,6 +964,7 @@ workflow_state_create() {
   if ! _workflow_state_atomic_write_json "$run_file" \
     '{
       runId: $runId,
+      layoutVersion: $layoutVersion,
       workflowId: (if $workflowId == "" then null else $workflowId end),
       sourcePath: $sourcePath,
       sourceKind: $sourceKind,
@@ -926,6 +983,7 @@ workflow_state_create() {
       engine: $engine
     }' \
     --arg runId "$run_id" \
+    --argjson layoutVersion "$(ralph_state_layout_version "$state_root")" \
     --arg workflowId "$workflow_id" \
     --arg sourcePath "$source_path" \
     --arg sourceKind "$source_kind" \
@@ -942,7 +1000,7 @@ workflow_state_create() {
     --arg updatedAt "$now" \
     --argjson owner "$owner_json" \
     --argjson engine "$engine_json"; then
-    rm -rf "$run_dir"
+    rm -rf "$run_root"
     _workflow_state_release_lock "$lock_path"
     echo "Error: failed to write run.json for $run_id" >&2
     return 1
@@ -951,7 +1009,7 @@ workflow_state_create() {
   # Create path already assembled required fields; cheap sanity check only.
   # Full schema validation runs on read/update.
   if ! jq -e '.runId and .inputPath and .createdAt' "$run_file" >/dev/null 2>&1; then
-    rm -rf "$run_dir"
+    rm -rf "$run_root"
     _workflow_state_release_lock "$lock_path"
     echo "Error: failed to persist a readable run.json for $run_id" >&2
     return 1
@@ -1068,7 +1126,22 @@ workflow_state_update() {
   fi
   _workflow_state_fsync "$run_dir"
   _workflow_state_release_lock "$lock_path"
-  return 0
+  _workflow_state_sync_catalog "$state_root" "$run_id" "$merged"
+}
+
+# _workflow_state_sync_catalog <state_root> <run_id> <registry-json>
+# Mirrors the registry state onto the run catalog so a reader can see a run's
+# status without knowing which engine owns it. Layout 1 has no catalog.
+_workflow_state_sync_catalog() {
+  local state_root="$1" run_id="$2" registry="$3" state
+  [[ "$(ralph_state_run_layout "$state_root" "$run_id")" == 2 ]] || return 0
+  state="$(printf '%s' "$registry" | jq -r '.state // empty')" || return 1
+  [[ -n "$state" ]] || return 0
+  ralph_state_catalog_update "$state_root" "$run_id" \
+    '.runKind = (.runKind // "workflow")
+     | .status = $state
+     | .endedAt = (if ($state | IN("succeeded","failed","cancelled")) then (.endedAt // $now) else null end)' \
+    --arg state "$state" --arg now "$(ralph_state_now_iso)"
 }
 
 # workflow_state_list <state_root> [--state <s>] [--workflow <id>] [--limit N|--all] [--json|--tsv]
@@ -1114,19 +1187,16 @@ workflow_state_list() {
 
   state_root="$(workflow_state_ensure_state_root "$state_root")" || return 1
   runs_root="$(workflow_state_runs_root "$state_root")" || return 1
-  if [[ ! -d "$runs_root" ]]; then
-    if [[ "$as_json" -eq 1 ]]; then
-      printf '[]\n'
-    elif [[ "$as_tsv" -eq 1 ]] || [[ ! -t 1 && "${WORKFLOW_RUNS_FORCE_TABLE:-0}" != "1" ]]; then
-      :
-    else
-      _workflow_state_render_runs_table '[]'
-    fi
-    return 0
+  # Under layout 2 the v1 root still holds real history, so listing spans both.
+  local -a search_roots=("$runs_root")
+  if [[ "$runs_root" != "${state_root%/}/workflow-runs" ]]; then
+    search_roots+=("${state_root%/}/workflow-runs")
   fi
-  if [[ -L "$runs_root" ]]; then
-    local real
-    real="$(_workflow_state_real_dir "$runs_root")" || {
+
+  local root real
+  for root in "${search_roots[@]}"; do
+    [[ -L "$root" ]] || continue
+    real="$(_workflow_state_real_dir "$root")" || {
       echo "Error: workflow-runs escapes the state root via symlink" >&2
       return 1
     }
@@ -1134,27 +1204,36 @@ workflow_state_list() {
       echo "Error: workflow-runs escapes the state root via symlink" >&2
       return 1
     fi
-  fi
+  done
 
-  for entry in "$runs_root"/run-*; do
-    [[ -d "$entry" && ! -L "$entry" ]] || continue
-    run_file="$entry/run.json"
-    [[ -f "$run_file" && ! -L "$run_file" ]] || continue
-    if ! jq -e '.runId and .createdAt and .state' "$run_file" >/dev/null 2>&1; then
-      continue
-    fi
-    row="$(jq -c '{
-      runId, workflowId, mode, entryKind, state, createdAt, updatedAt, task, sourceKind
-    }' "$run_file" 2>/dev/null)" || continue
-    if [[ -n "$filter_state" ]]; then
-      [[ "$(printf '%s' "$row" | jq -r '.state')" == "$filter_state" ]] || continue
-    fi
-    if [[ -n "$filter_workflow" ]]; then
-      [[ "$(printf '%s' "$row" | jq -r '.workflowId // empty')" == "$filter_workflow" ]] || continue
-    fi
-    created="$(printf '%s' "$row" | jq -r '.createdAt')"
-    rid="$(printf '%s' "$row" | jq -r '.runId')"
-    rows+=("${created}"$'\t'"${rid}"$'\t'"${row}")
+  for root in "${search_roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    for entry in "$root"/run-*; do
+      [[ -d "$entry" && ! -L "$entry" ]] || continue
+      # Layout 2 keeps the registry under engine/workflow and leaves a thin
+      # catalog at the run root; layout 1 has the registry at the run root.
+      if [[ -f "$entry/engine/workflow/run.json" && ! -L "$entry/engine/workflow/run.json" ]]; then
+        run_file="$entry/engine/workflow/run.json"
+      else
+        run_file="$entry/run.json"
+      fi
+      [[ -f "$run_file" && ! -L "$run_file" ]] || continue
+      if ! jq -e '.runId and .createdAt and .state' "$run_file" >/dev/null 2>&1; then
+        continue
+      fi
+      row="$(jq -c '{
+        runId, workflowId, mode, entryKind, state, createdAt, updatedAt, task, sourceKind
+      }' "$run_file" 2>/dev/null)" || continue
+      if [[ -n "$filter_state" ]]; then
+        [[ "$(printf '%s' "$row" | jq -r '.state')" == "$filter_state" ]] || continue
+      fi
+      if [[ -n "$filter_workflow" ]]; then
+        [[ "$(printf '%s' "$row" | jq -r '.workflowId // empty')" == "$filter_workflow" ]] || continue
+      fi
+      created="$(printf '%s' "$row" | jq -r '.createdAt')"
+      rid="$(printf '%s' "$row" | jq -r '.runId')"
+      rows+=("${created}"$'\t'"${rid}"$'\t'"${row}")
+    done
   done
 
   if [[ "${#rows[@]}" -eq 0 ]]; then
@@ -2422,7 +2501,8 @@ workflow_state_validate_generated_plan_evidence() {
 #
 # At first dispatch for this consumer attempt: resolve + validate planner
 # evidence, then byte-copy the immutable source into
-#   <registry-run>/plans/<consumer>/attempt-<n>/control.plan.md
+#   layout 1: <registry-run>/plans/<consumer>/attempt-<n>/control.plan.md
+#   layout 2: runs/<id>/stages/<consumer>/controls/attempt-<n>/control.plan.md
 # Resume reuses that control copy. Consumer reset and each bounded rework clone
 # pass --force-fresh for a new byte-copy from the same frozen source (never
 # mutates planner JSON or the immutable generated source/manifest). Prints
@@ -2487,14 +2567,21 @@ workflow_state_bind_generated_plan_control() {
 
   source_plan="$(jq -r '.planPath' "$manifest_path")"
   source_sha="$(jq -r '.planSha256' "$manifest_path")"
-  control_dir="$run_dir/plans/$consumer_stage_id/attempt-${consumer_attempt}"
+  control_dir="$(_workflow_state_control_dir "$run_dir" "$consumer_stage_id" "$consumer_attempt")" || return 1
   control_path="$control_dir/control.plan.md"
+  local control_root="$run_dir"
+  case "$control_dir" in
+    */stages/*/controls/attempt-*)
+      # runs/<id>/stages/<stage>/controls/attempt-N -> runs/<id>
+      control_root="$(dirname -- "$(dirname -- "$(dirname -- "$(dirname -- "$control_dir")")")")"
+      ;;
+  esac
 
-  # Containment: control must stay under registry-run/plans/<consumer>/
+  # Containment: control stays under the owning run root (registry or runs/<id>).
   case "$control_path" in
-    "$run_dir/plans/$consumer_stage_id/"*) ;;
+    "$control_root"/*) ;;
     *)
-      echo "Error: control path escaped registry run: $control_path" >&2
+      echo "Error: control path escaped run root: $control_path" >&2
       return 1
       ;;
   esac
@@ -2718,7 +2805,8 @@ workflow_state_validate_provided_plan_evidence() {
 #
 # Validates the common input manifest/hash/frozen plan, then creates or reuses
 # a durable mutable control copy at:
-#   <registry-run>/plans/<consumer>/attempt-<n>/control.plan.md
+#   layout 1: <registry-run>/plans/<consumer>/attempt-<n>/control.plan.md
+#   layout 2: runs/<id>/stages/<consumer>/controls/attempt-<n>/control.plan.md
 # Resume (same consumer attempt) reuses the existing control. Consumer reset
 # and each bounded rework clone pass --force-fresh for a new byte-copy from the
 # same frozen source (never mutates original or frozen source/manifest).
@@ -2768,13 +2856,19 @@ workflow_state_bind_provided_plan_control() {
   source_plan="$(jq -r '.copiedPath' "$manifest_path")"
   original_path="$(jq -r '.originalPath' "$manifest_path")"
   source_sha="$(jq -r '.copiedSha256' "$manifest_path")"
-  control_dir="$run_dir/plans/$consumer_stage_id/attempt-${consumer_attempt}"
+  control_dir="$(_workflow_state_control_dir "$run_dir" "$consumer_stage_id" "$consumer_attempt")" || return 1
   control_path="$control_dir/control.plan.md"
+  local control_root="$run_dir"
+  case "$control_dir" in
+    */stages/*/controls/attempt-*)
+      control_root="$(dirname -- "$(dirname -- "$(dirname -- "$(dirname -- "$control_dir")")")")"
+      ;;
+  esac
 
   case "$control_path" in
-    "$run_dir/plans/$consumer_stage_id/"*) ;;
+    "$control_root"/*) ;;
     *)
-      echo "Error: control path escaped registry run: $control_path" >&2
+      echo "Error: control path escaped run root: $control_path" >&2
       return 1
       ;;
   esac
